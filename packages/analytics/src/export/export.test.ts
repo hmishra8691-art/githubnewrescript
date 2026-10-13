@@ -197,3 +197,74 @@ test("pptx: an insights / executive-summary block with no analysisIds exports (a
   const bufX = await buildXlsx({ report: ragged, results, meta: { Survey: "Synthetic" } });
   assert.equal(bufX.subarray(0, 2).toString("latin1"), "PK");
 });
+
+/* ------------------------------------------------------------- chart geometry in the deck (audit C-1, C-2) */
+
+import { inflateRawSync } from "node:zlib";
+/** a minimal zip reader (central directory) — enough to look inside a .pptx without a dependency */
+function unzip(buf: Buffer): Map<string, string> {
+  const out = new Map<string, string>();
+  let eocd = buf.length - 22; while (eocd >= 0 && buf.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  const count = buf.readUInt16LE(eocd + 10); let p = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    const method = buf.readUInt16LE(p + 10), csize = buf.readUInt32LE(p + 20), nlen = buf.readUInt16LE(p + 28), elen = buf.readUInt16LE(p + 30), clen = buf.readUInt16LE(p + 32), off = buf.readUInt32LE(p + 42);
+    const name = buf.subarray(p + 46, p + 46 + nlen).toString("utf8");
+    const lh = off + 30 + buf.readUInt16LE(off + 26) + buf.readUInt16LE(off + 28);
+    const raw = buf.subarray(lh, lh + csize);
+    out.set(name, (method === 8 ? inflateRawSync(raw) : raw).toString("utf8"));
+    p += 46 + nlen + elen + clen;
+  }
+  return out;
+}
+const chartXml = async (type: "bar_stacked_100" | "diverging_likert", analysisId = "a5") => {
+  const r: ReportDefinition = { title: "t", mode: "snapshot", blocks: [{ id: "c", type: "chart", analysisId, chart: { type, options: {} } }] };
+  const buf = await buildPptx({ report: r, results: { [analysisId]: runAnalysis(D("descriptive", ["ITEMS_a", "ITEMS_b", "ITEMS_c"]), ds) }, meta: { survey: "S", environment: "LIVE" } });
+  const files = unzip(buf);
+  const name = [...files.keys()].find((k) => /^ppt\/charts\/chart\d+\.xml$/.test(k));
+  assert.ok(name, "the deck has a native chart");
+  return files.get(name!)!;
+};
+
+test("C-2: a 100% stacked bar in the deck has no fixed axis maximum that squeezes it to 1%", async () => {
+  const xml = await chartXml("bar_stacked_100");
+  assert.match(xml, /<c:grouping val="percentStacked"\/>/);
+  assert.doesNotMatch(xml, /<c:max val="100"\/>/);
+});
+
+test("C-1: a diverging bar in the deck is a signed stack, centred on zero, with a symmetric axis", async () => {
+  const xml = await chartXml("diverging_likert");
+  assert.match(xml, /<c:grouping val="stacked"\/>/);
+  const min = Number(/<c:min val="(-?[\d.]+)"\/>/.exec(xml)?.[1]), max = Number(/<c:max val="(-?[\d.]+)"\/>/.exec(xml)?.[1]);
+  assert.ok(min < 0 && max > 0 && Math.abs(min + max) < 1e-9, `symmetric axis, got ${min}..${max}`);
+  const vals = [...xml.matchAll(/<c:v>(-?[\d.]+)<\/c:v>/g)].map((m) => Number(m[1]));
+  assert.ok(vals.some((v) => v < 0) && vals.some((v) => v > 0), "negative values for the lower half of the scale");
+});
+
+/* ------------------------------------------------------------- R-1: a dashboard exports like a report */
+import { ExportUnsupportedError } from "./shared.js";
+import type { DashboardDefinition } from "../types.js";
+
+const dash = (widgets: DashboardDefinition["widgets"]): DashboardDefinition => ({ title: "Dash", widgets });
+const W = { w: 4, h: 3 };
+test("R-1: a dashboard exports to PowerPoint and Excel — its charts, tables and KPIs in reading order", async () => {
+  const d = dash([
+    { id: "w2", type: "table", analysisId: "a1", x: 0, y: 3, ...W },
+    { id: "w1", type: "chart", analysisId: "a3", chart: { type: "pie", options: {} }, title: "Regions", x: 0, y: 0, ...W },
+    { id: "w3", type: "kpi", analysisId: "a2", x: 4, y: 0, ...W },
+    { id: "w4", type: "photo", imageUrl: "x", x: 8, y: 0, ...W },
+    { id: "w5", type: "chart", x: 8, y: 3, ...W },                       // an empty template slot: left out, not a crash
+  ]);
+  const buf = await buildPptx({ report: d as never, results, meta: { survey: "Synthetic", environment: "LIVE" } });
+  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
+  const x = await buildXlsx({ report: d as never, results, meta: { Survey: "Synthetic" } });
+  assert.equal(x.subarray(0, 2).toString("latin1"), "PK");
+  const slides = [...unzip(buf).keys()].filter((k) => /^ppt\/slides\/slide\d+\.xml$/.test(k));
+  assert.ok(slides.length >= 4, `cover plus three widgets, got ${slides.length} slides`);
+});
+
+test("R-1: a dashboard with nothing to show says so in a sentence", async () => {
+  const empty = dash([{ id: "w", type: "chart", x: 0, y: 0, ...W }, { id: "p", type: "photo", x: 4, y: 0, ...W }]);
+  await assert.rejects(buildPptx({ report: empty as never, results, meta: {} }), (e: unknown) => e instanceof ExportUnsupportedError && /nothing to export/.test((e as Error).message));
+  await assert.rejects(buildXlsx({ report: empty as never, results, meta: {} }), ExportUnsupportedError);
+  await assert.rejects(buildPptx({ report: { title: "x" } as never, results, meta: {} }), ExportUnsupportedError);
+});

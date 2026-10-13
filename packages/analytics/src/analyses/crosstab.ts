@@ -3,6 +3,7 @@ import { categoricalColumn, categoriesOf, labelOf, numericColumn, weights, type 
 import { chiSquare, oneWayAnova, type TestResult } from "../stats/tests.js";
 import { normalCdf } from "../stats/distributions.js";
 import { fmtNum, fmtPct, makeResult, opt, pct, round } from "./common.js";
+import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js";
 
 /**
  * THE CROSSTAB — the table a research studio lives in.
@@ -111,6 +112,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const measure = def.measure ?? "pct_col";
   const alpha = opt(def, "alpha", 0.05) as number;
   const showSig = opt(def, "significance", true) as boolean;
+  /** letters are adjusted for the number of column pairs compared in a row (Holm by default); "none" restores raw pairwise tests */
+  const correction = opt(def, "correction", "holm") as CorrectionMethod | "none";
+  const correctionWords = correction === "none" ? "" : `, ${CORRECTION_WORDS[correction]}-adjusted for the columns compared in each row`;
   const sigVsTotal = opt(def, "sigVsTotal", false) as boolean;
   const layout = opt(def, "layout", "separate") as "separate" | "banner";
   const stackRows = layout === "banner" && (opt(def, "stackRows", false) as boolean);
@@ -197,30 +201,35 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   };
 
   const cellType = measure === "mean" ? "number" as const : measure === "count" ? "count" as const : "pct" as const;
-  const sigNote = `Letters mark columns significantly lower at the ${Math.round((1 - alpha) * 100)}% level (column proportion z-test${ds.weighted ? ", weighted, effective bases" : ""}).`;
+  const sigNote = `Letters mark columns significantly lower at the ${Math.round((1 - alpha) * 100)}% level (column proportion z-test${ds.weighted ? ", weighted, effective bases" : ""}${correctionWords}).`;
 
+  /**
+   * Letters for one row: every pair of columns of one column variable is tested once, the family of p-values
+   * is adjusted together, and a column gets the letter of each column it is significantly HIGHER than.
+   */
+  const letterMarks = (cols: ColumnDef[], suppressed: Set<string>, test: (a: ColumnDef, b: ColumnDef) => { p: number | null; aHigher: boolean } | null): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const families = new Map<string, ColumnDef[]>();
+    for (const c of cols) { if (!c.variable || suppressed.has(c.key)) continue; const f = families.get(c.variable) ?? []; f.push(c); families.set(c.variable, f); }
+    for (const fam of families.values()) {
+      const pairs: { a: ColumnDef; b: ColumnDef; p: number | null; aHigher: boolean }[] = [];
+      for (let i = 0; i < fam.length; i++) for (let j = i + 1; j < fam.length; j++) { const r = test(fam[i], fam[j]); if (r) pairs.push({ a: fam[i], b: fam[j], p: r.p, aHigher: r.aHigher }); }
+      const adj = correction === "none" ? pairs.map((x) => x.p) : adjustP(pairs.map((x) => x.p), correction);
+      const lower = new Map<string, Set<string>>();
+      pairs.forEach((x, k) => { const p = adj[k]; if (p == null || !(p < alpha)) return; const hi = x.aHigher ? x.a : x.b, lo = x.aHigher ? x.b : x.a; const set = lower.get(hi.key) ?? new Set<string>(); set.add(lo.key); lower.set(hi.key, set); });
+      for (const c of fam) out[c.key] = fam.filter((o) => lower.get(c.key)?.has(o.key)).map((o) => o.letter).join("");
+    }
+    return out;
+  };
   /** turn one block into table rows */
   const emitRows = (b: Block, cols: ColumnDef[], out: Record<string, unknown>[], suppressed: Set<string>) => {
     const rCats = categoriesOf(ds, b.rv);
     const tot = b.colBase.get("__total")?.w ?? 0;
     const val = (v: number | null) => (v == null ? null : cellType === "pct" ? pct(v, decimals) : round(v, decimals));
-    const letters = (prop: (ck: string) => { p: number; n: number } | null) => {
-      // within each column variable's group, the columns whose proportion is significantly LOWER than this one
-      const out: Record<string, string> = {};
-      for (const c of cols) {
-        if (!c.variable || suppressed.has(c.key)) continue;
-        const me = prop(c.key); if (!me) continue;
-        const marks: string[] = [];
-        for (const o of cols) {
-          if (o.key === c.key || o.variable !== c.variable || suppressed.has(o.key)) continue;
-          const them = prop(o.key); if (!them) continue;
-          const p = zProportions(me.p, me.n, them.p, them.n);
-          if (p != null && p < alpha && me.p > them.p) marks.push(o.letter);
-        }
-        out[c.key] = marks.join("");
-      }
-      return out;
-    };
+    const letters = (prop: (ck: string) => { p: number; n: number } | null) => letterMarks(cols, suppressed, (a, o) => {
+      const x = prop(a.key), y = prop(o.key); if (!x || !y) return null;
+      return { p: zProportions(x.p, x.n, y.p, y.n), aHigher: x.p > y.p };
+    });
     const vsTotal = (prop: (ck: string) => { p: number; n: number } | null) => {
       const out: Record<string, string> = {};
       const t = prop("__total"); if (!t) return out;
@@ -240,7 +249,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       const meanRow = mark({ row: b.rowsIsNumeric ? "Mean" : `Mean (${b.label})`, __format: "number" }, "summary");
       const sdRow = mark({ row: "Std. deviation", __format: "number" }, "summary");
       const nRow = mark({ row: "n", __format: "count" }, "summary");
-      const sig = showSig ? (() => { const out: Record<string, string> = {}; for (const c of cols) { if (!c.variable || suppressed.has(c.key)) continue; const a = b.nums.get(c.key); if (!a) continue; const marks: string[] = []; for (const o of cols) { if (o.key === c.key || o.variable !== c.variable || suppressed.has(o.key)) continue; const bb = b.nums.get(o.key); if (!bb) continue; const p = zMeans(a, bb); if (p != null && p < alpha && a.sum / a.w > bb.sum / bb.w) marks.push(o.letter); } out[c.key] = marks.join(""); } return out; })() : {};
+      const sig = showSig ? letterMarks(cols, suppressed, (x, y) => { const m1 = b.nums.get(x.key), m2 = b.nums.get(y.key); if (!m1 || !m2 || !m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
       for (const c of cols) {
         const s = b.nums.get(c.key);
         if (suppressed.has(c.key)) { meanRow[c.key] = null; sdRow[c.key] = null; nRow[c.key] = s?.count ?? 0; continue; }
@@ -322,11 +331,12 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
           const row = mark({ row: "Mean", __format: "number" }, "summary");
           const moments = new Map<string, Acc>();
           for (const c of cols) { const a = acc(); for (const rc of rCats) { const cell = b.grid.get(rc.code)?.get(c.key); if (!cell) continue; const v = Number(rc.code); a.count += cell.count; a.w += cell.w; a.w2 += cell.w2; a.sum += v * cell.w; a.sumSq += v * v * cell.w; } moments.set(c.key, a); }
+          const momentSig = showSig ? letterMarks(cols, suppressed, (x, y) => { const m1 = moments.get(x.key)!, m2 = moments.get(y.key)!; if (!m1.w || !m2.w) return null; return { p: zMeans(m1, m2), aHigher: m1.sum / m1.w > m2.sum / m2.w }; }) : {};
           for (const c of cols) {
             const a = moments.get(c.key)!;
             row[c.key] = suppressed.has(c.key) || !a.w ? null : round(a.sum / a.w, Math.max(decimals, 2));
             row[`${c.key}__n`] = a.count;
-            if (showSig && c.variable && !suppressed.has(c.key)) { const marks: string[] = []; for (const o of cols) { if (o.key === c.key || o.variable !== c.variable || suppressed.has(o.key)) continue; const bb = moments.get(o.key)!; const p = zMeans(a, bb); if (p != null && p < alpha && a.w && bb.w && a.sum / a.w > bb.sum / bb.w) marks.push(o.letter); } if (marks.length) row[`${c.key}__sig`] = marks.join(""); }
+            if (momentSig[c.key]) row[`${c.key}__sig`] = momentSig[c.key];
           }
           out.push(row);
         }
@@ -355,7 +365,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const rCats = categoriesOf(ds, b.rv);
     if (b.meanMode) {
       const groups = cc.map((c) => ({ label: c.label, values: b.nums.get(c.key)?.vals ?? [] })).filter((g) => g.values.length > 1);
-      if (groups.length >= 2) tests.push({ ...oneWayAnova(groups), note: `${labelOf(ds, b.rv)} by ${labelOf(ds, cv)}${ds.weighted ? " (unweighted)" : ""}` });
+      if (groups.length >= 2) { const an = oneWayAnova(groups); tests.push({ ...an, note: `${labelOf(ds, b.rv)} by ${labelOf(ds, cv)}${ds.weighted ? " (unweighted)" : ""}`, detail: { ...(an.detail ?? {}), rowVariable: b.rv, columnVariable: cv } }); }
       return;
     }
     // chi-square over the raw counts — single-response rows and columns, and no empty rows or columns
@@ -364,7 +374,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const table = rowKeys.map((rk) => liveCols.map((c) => b.grid.get(rk)?.get(c.key)?.count ?? 0)).filter((r) => r.some((x) => x));
     if (table.length >= 2 && liveCols.length >= 2 && ds.byName.get(b.rv)?.role !== "multi" && ds.byName.get(cv)?.role !== "multi") {
       const cs = chiSquare(table);
-      tests.push({ ...cs, note: `${labelOf(ds, b.rv)} × ${labelOf(ds, cv)}${ds.weighted ? " (unweighted counts)" : ""}` });
+      tests.push({ ...cs, note: `${labelOf(ds, b.rv)} × ${labelOf(ds, cv)}${ds.weighted ? " (unweighted counts)" : ""}`, detail: { ...(cs.detail ?? {}), rowVariable: b.rv, columnVariable: cv } });
       if (cs.p != null) insights.push(`${labelOf(ds, b.rv)} ${cs.p < alpha ? "differs significantly" : "does not differ significantly"} by ${labelOf(ds, cv)} (χ² = ${fmtNum(cs.statistic, 2)}, p ${cs.p < 0.001 ? "< .001" : "= " + cs.p.toFixed(3)}${cs.effectSize?.value != null ? `, Cramér's V = ${cs.effectSize.value.toFixed(2)}` : ""}).`);
     }
     // the biggest gap to the total

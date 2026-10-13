@@ -10,7 +10,7 @@ import ExcelJS from "exceljs";
 import type { AnalysisResult, ChartSpec, ExportSettings, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
-import { seriesForChart } from "./shared.js";
+import { reportForExport, seriesForChart } from "./shared.js";
 import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
 export interface XlsxInput {
@@ -62,7 +62,8 @@ function writeTable(ws: ExcelJS.Worksheet, table: ResultTable, theme: ReportThem
   return r + 1;
 }
 
-export async function buildXlsx(input: XlsxInput): Promise<Buffer> {
+export async function buildXlsx(rawInput: XlsxInput): Promise<Buffer> {
+  const input = { ...rawInput, report: reportForExport(rawInput.report) };
   const theme = input.theme ?? DEFAULT_THEME;
   const settings: ExportSettings = { ...DEFAULT_EXPORT_SETTINGS, format: "xlsx", ...input.settings, include: { ...DEFAULT_EXPORT_SETTINGS.include, ...input.settings?.include }, xlsx: { ...DEFAULT_EXPORT_SETTINGS.xlsx, ...input.settings?.xlsx } };
   const x = settings.xlsx!;

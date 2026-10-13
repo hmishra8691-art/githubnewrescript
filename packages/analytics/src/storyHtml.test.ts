@@ -100,3 +100,19 @@ test("durations are bounded and autoplay is opt-in", () => {
   assert.ok(!/show\(0\);toggle\(\)/.test(html));
   assert.match(storyHtml(s, { results, autoplay: true }), /show\(0\);toggle\(\)/);
 });
+
+test("C-1: the animated story's diverging bar is centred, stays inside the frame and puts the lowest point farthest left", () => {
+  const svg = storyChart(battery.result, "diverging_likert").svg;
+  const rects = [...svg.matchAll(/<rect class="bar h"[^>]*x="(-?[\d.]+)" y="([\d.]+)" width="([\d.]+)"/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), w: Number(m[3]) }));
+  assert.ok(rects.length >= 10);
+  for (const r of rects) { assert.ok(r.x >= 149.9 && r.x + r.w <= 780, `bar inside the plot area: ${r.x}..${r.x + r.w}`); }
+  // per category (same y): five series, the first starts farthest left and the 3rd (neutral) straddles the centre line
+  const byY = new Map<number, typeof rects>(); for (const r of rects) byY.set(r.y, [...(byY.get(r.y) ?? []), r]);
+  const centre = Number(/<line x1="([\d.]+)" x2="[\d.]+" y1="22"/.exec(svg)?.[1]);
+  for (const row of byY.values()) {
+    const sorted = [...row].sort((a, b) => a.x - b.x);
+    assert.deepEqual(row.map((r) => r.x), sorted.map((r) => r.x), "series run left to right in scale order");
+    const neutral = row[Math.floor(row.length / 2)];
+    assert.ok(Math.abs(neutral.x + neutral.w / 2 - centre) < 0.5, "the neutral is centred on the centre line");
+  }
+});

@@ -17,7 +17,8 @@ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock,
 import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { summaryAnalysisIds } from "../blockRefs.js";
-import { chartTitleFor, seriesForChart } from "./shared.js";
+import { chartTitleFor, reportForExport, seriesForChart } from "./shared.js";
+import { divergingLayout, divergingSeriesOrder, stackShares } from "../chartLayout.js";
 import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
 export interface ExportItem { title: string; result: AnalysisResult; chart?: ChartSpec; caption?: string; tableId?: string }
@@ -129,7 +130,8 @@ export function drawAnalysisVisual(
     if (table) addTable(s, table, theme, { x: tb.x, y: box.y, w: tb.w }, opts.maxRows ?? 14, opts.fontSize ?? 9);
     return;
   }
-  const { type, opts: chartOpts } = pptChartType(p, spec.type);
+  const { type, opts: chartOptsBase } = pptChartType(p, spec.type);
+  let chartOpts: Record<string, unknown> = chartOptsBase;
   /*
    * §39 — PowerPoint has no map. A geographic chart therefore leaves this
    * export as ranked bars of the same numbers, which is a fair substitute but
@@ -152,10 +154,29 @@ export function drawAnalysisVisual(
   const chartData = isScatter && result.chart.points?.length
     ? [{ name: "X", values: result.chart.points.map((pt) => pt.x) }, { name: spec.options.yLabel ?? "Y", values: result.chart.points.map((pt) => pt.y) }]
     : data.map((d) => ({ name: d.name, labels: d.labels, values: d.values.map((v) => v ?? 0) }));
+  /*
+   * A diverging bar has no PowerPoint chart type. It is built from a normal stacked bar with SIGNED values (the lower
+   * half of the scale negative, the neutral split in two halves either side of zero), with the axis labels printed as
+   * absolute values — the same geometry the browser chart draws (chartLayout.ts). The neutral therefore shows twice in
+   * the legend. A single series cannot diverge and stays an ordinary bar.
+   */
+  let seriesColors = spec.options.colors?.map(hex) ?? ctx.palette;
+  let axisFormat: string | undefined, axisMin: number | undefined, axisMax: number | undefined;
+  let finalData = chartData;
+  if (spec.type === "diverging_likert" && data.length >= 2) {
+    const labels = data[0].labels;
+    const shares = labels.map((_, i) => stackShares(data.map((d) => d.values[i])));
+    const order = divergingSeriesOrder(data.length);
+    finalData = order.map((o) => ({ name: data[o.index].name, labels, values: shares.map((row) => (o.half ? row[o.index] / 2 : row[o.index]) * o.sign) })) as typeof chartData;
+    seriesColors = order.map((o) => seriesColors[o.index % seriesColors.length]);
+    const reach = Math.max(1, ...shares.map((row) => { const l = divergingLayout(row)!; return Math.max(l.left, l.right); }));
+    axisMax = Math.min(100, Math.ceil(reach / 10) * 10); axisMin = -axisMax; axisFormat = '0"%";0"%"';
+    chartOpts = { ...chartOptsBase, barGrouping: "stacked" };
+  }
   const fs = opts.fontSize ?? 9;
-  s.addChart(type, chartData as never, {
+  s.addChart(type, finalData as never, {
     x: box.x, y: box.y, w: box.w, h: box.h, ...chartOpts,
-    chartColors: spec.options.colors?.map(hex) ?? ctx.palette,
+    chartColors: seriesColors,
     showValue: spec.options.dataLabels ?? theme.chart?.dataLabels ?? true,
     dataLabelFormatCode: pctAxis ? '0.0"%"' : `0${(spec.options.decimals ?? theme.chart?.decimals ?? 0) > 0 ? "." + "0".repeat(spec.options.decimals ?? theme.chart?.decimals ?? 1) : ""}`,
     dataLabelFontSize: fs, dataLabelColor: ctx.text, dataLabelFontFace: ctx.font,
@@ -163,7 +184,8 @@ export function drawAnalysisVisual(
     catAxisLabelFontSize: fs + 1, valAxisLabelFontSize: fs, catAxisLabelFontFace: ctx.font, valAxisLabelFontFace: ctx.font,
     valGridLine: (spec.options.gridLines ?? theme.chart?.gridLines) === false ? { style: "none" } : { color: "E5E9F0", style: "solid", size: 0.5 },
     catAxisTitle: spec.options.xLabel, showCatAxisTitle: !!spec.options.xLabel, valAxisTitle: spec.options.yLabel, showValAxisTitle: !!spec.options.yLabel,
-    valAxisMaxVal: pctAxis && ["bar_stacked_100", "diverging_likert"].includes(spec.type) ? 100 : undefined,
+    /* a percent-stacked axis in PowerPoint is already a 0-100% scale: forcing a maximum of 100 on it made every bar fill about 1% of the axis (audit C-2) */
+    ...(axisMax !== undefined ? { valAxisMaxVal: axisMax, valAxisMinVal: axisMin, valAxisLabelFormatCode: axisFormat, dataLabelFormatCode: '0"%";0"%"' } : {}),
     ...(type === p.ChartType.pie || type === p.ChartType.doughnut ? { showLegend: true, legendPos: "r" as const, showValue: !!pctAxis, showPercent: !pctAxis, dataLabelPosition: "bestFit", dataLabelFormatCode: pctAxis ? '0"%"' : "0%" } : {}),
   } as never);
 }
@@ -222,7 +244,8 @@ function panelGridSlide(
   });
 }
 
-export async function buildPptx(input: PptxInput): Promise<Buffer> {
+export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
+  const input = { ...rawInput, report: reportForExport(rawInput.report) };
   const theme = input.theme ?? DEFAULT_THEME;
   const settings: ExportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...input.settings, include: { ...DEFAULT_EXPORT_SETTINGS.include, ...input.settings?.include }, pptx: { ...DEFAULT_EXPORT_SETTINGS.pptx, ...input.settings?.pptx } };
   const px = settings.pptx!;

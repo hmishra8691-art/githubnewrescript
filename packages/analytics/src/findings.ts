@@ -188,7 +188,17 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
   switch (def.kind) {
     case "crosstab": {
       const gap = result.insights.find((s) => /^Largest gap/.test(s));
-      testFindings(result.tests, (t, i) => `${L(outcome)} by ${L(by[i] ?? by[0] ?? "the banner")}`, (i) => (by[i] ? [outcome, by[i]] : vars));
+      /*
+       * Each test says which row variable it compared against which column variable (a crosstab with several rows
+       * emits one test per row × column pair). Before the audit's I-1 the outcome was always the first variable and
+       * the banner was picked by the test's position, so the second row's result was headlined with the first row's name.
+       */
+      const pairOf = (t: TestResult, i: number): { row: string; col: string } => {
+        const d = t.detail as { rowVariable?: unknown; columnVariable?: unknown } | undefined;
+        if (typeof d?.rowVariable === "string" && typeof d?.columnVariable === "string") return { row: d.rowVariable, col: d.columnVariable };
+        return { row: outcome, col: by[i] ?? by[0] ?? "" };
+      };
+      testFindings(result.tests, (t, i) => { const q = pairOf(t, i); return `${L(q.row)} by ${L(q.col || "the banner")}`; }, (i) => { const q = pairOf(result.tests[i], i); return q.col ? [q.row, q.col] : vars; });
       if (gap && out.length) out[out.length - 1].detail = gap;
       break;
     }

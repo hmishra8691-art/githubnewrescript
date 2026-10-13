@@ -221,3 +221,37 @@ test("weighted numeric cells: SD is corrected on the effective base, not the raw
   // finer than the ~0.005 gap between the two corrections
   assert.ok(Math.abs(got - expected) < 5e-5, `SD ${got} should be the Kish-corrected ${expected}, not the raw-count ${rawCount}`);
 });
+
+/** a deterministic stream for the null-data simulation (mulberry32) */
+const stream = (seed: number) => () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+const letterCount = (r: ReturnType<typeof runAnalysis>) => {
+  const t = r.tables[0]; const perRow: number[] = [];
+  for (const row of t.rows.filter((x) => x.__kind === "category")) { let n = 0; for (const c of t.columns) { const s = row[`${c.key}__sig`]; if (s) n += String(s).length; } perRow.push(n); }
+  return perRow;
+};
+
+test("S-1: letters are adjusted for the pairs compared in a row, so null data rarely earns one", () => {
+  const dsb = buildDataset(def, synthRows(600, 5), { spec: dsSpec });
+  const R = stream(123);
+  let rowsTested = 0, rowsWithLetter = 0, rawRowsWithLetter = 0;
+  for (let rep = 0; rep < 150; rep++) {
+    for (const c of dsb.cases) { c.vars.COUNTRY = String(1 + Math.floor(R() * 8)); c.vars.SAT = String(1 + Math.floor(R() * 5)); }
+    const adj = letterCount(runAnalysis(XT({ rows: ["SAT"], columns: ["COUNTRY"] }), dsb));
+    const raw = letterCount(runAnalysis(XT({ rows: ["SAT"], columns: ["COUNTRY"] }, { correction: "none" }), dsb));
+    rowsTested += adj.length; rowsWithLetter += adj.filter((n) => n > 0).length; rawRowsWithLetter += raw.filter((n) => n > 0).length;
+  }
+  const adjRate = rowsWithLetter / rowsTested, rawRate = rawRowsWithLetter / rowsTested;
+  assert.ok(adjRate <= 0.08, `adjusted false-letter rate per row was ${adjRate.toFixed(3)}`);
+  assert.ok(rawRate > 0.2, `the unadjusted option should still show the old behaviour (${rawRate.toFixed(3)})`);
+});
+
+test("S-1: a planted effect keeps its letter after adjustment, and the note says the letters are adjusted", () => {
+  const r = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }), ds);
+  const letters = r.tables[0].rows.filter((x) => x.__kind === "category").map((x) => `${x["1__sig"] ?? ""}${x["2__sig"] ?? ""}`);
+  const raw = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }, { correction: "none" }), ds);
+  const rawLetters = raw.tables[0].rows.filter((x) => x.__kind === "category").map((x) => `${x["1__sig"] ?? ""}${x["2__sig"] ?? ""}`);
+  assert.deepEqual(letters, rawLetters, "with two columns there is one pair, so Holm leaves it unchanged");
+  assert.ok(letters.some((l) => l.length), "the planted gender effect keeps a letter");
+  assert.match((r.tables[0].notes ?? []).join(" "), /Holm-adjusted/);
+  assert.doesNotMatch((raw.tables[0].notes ?? []).join(" "), /adjusted/);
+});

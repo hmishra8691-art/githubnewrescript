@@ -1,4 +1,5 @@
 import type { AnalysisResult, ChartType, StoryDefinition, StoryScene } from "./types.js";
+import { divergingLayout, stackShares } from "./chartLayout.js";
 
 /**
  * THE ANIMATED STORY, AS ONE SELF-CONTAINED HTML FILE.
@@ -93,21 +94,28 @@ function bars(r: AnalysisResult, horizontal: boolean, pct: boolean): string {
   return frame(out);
 }
 
-/** stacked bars to 100% — or the same split around the midpoint of an ordered scale (a diverging bar) */
+/** stacked bars to 100% — or the same split around the middle of an ordered scale (a diverging bar, laid out by chartLayout.ts) */
 function stacked(r: AnalysisResult, pct: boolean, diverging: boolean): string {
   const cats = r.chart.categories!.slice(0, 10), S = r.chart.series!;
   const label = 150, rowH = (H - 40) / cats.length, bh = Math.min(30, rowH - 8), span = W - label - 20;
   let out = legend(S.map((s) => s.name), 4);
-  const k = S.length;
+  const rows = cats.map((_, i) => { const vals = S.map((s) => Math.max(0, s.values[i] ?? 0)); return { vals, shares: stackShares(vals) }; });
+  const layouts = diverging && S.length >= 2 ? rows.map((x) => divergingLayout(x.shares)!) : null;
+  const reach = layouts ? Math.max(1, ...layouts.map((l) => Math.max(l.left, l.right))) : 100;
+  const centre = label + span / 2;
   cats.forEach((cat, i) => {
-    const vals = S.map((s) => Math.max(0, s.values[i] ?? 0)); const tot = vals.reduce((a, b) => a + b, 0) || 1;
-    const shares = vals.map((v) => (v / tot) * 100);
-    const left = diverging ? shares.slice(0, Math.floor(k / 2)).reduce((a, b) => a + b, 0) + (k % 2 ? shares[Math.floor(k / 2)] / 2 : 0) : 0;
-    const y = 28 + i * rowH + (rowH - bh) / 2; let x = diverging ? label + (50 - left) / 100 * span : label;
+    const { vals, shares } = rows[i];
+    const y = 28 + i * rowH + (rowH - bh) / 2;
     out += `<text x="${label - 8}" y="${y + bh / 2 + 4}" text-anchor="end" class="lbl">${esc(cat.slice(0, 26))}</text>`;
-    shares.forEach((sh, j) => { const w = (sh / 100) * span; out += `<rect class="bar h" style="animation-delay:${i * 60 + j * 25}ms" x="${x}" y="${y}" width="${w}" height="${bh}" fill="${PALETTE[j % PALETTE.length]}"><title>${esc(S[j].name)}: ${num(vals[j], pct)}</title></rect>${w > 30 ? `<text x="${x + w / 2}" y="${y + bh / 2 + 4}" text-anchor="middle" class="inbar">${num(vals[j], false)}</text>` : ""}`; x += w; });
+    let x = label;
+    shares.forEach((sh, j) => {
+      let x0: number, w: number;
+      if (layouts) { const sg = layouts[i].segments[j]; x0 = centre + (sg.from / reach) * (span / 2); w = ((sg.to - sg.from) / reach) * (span / 2); }
+      else { x0 = x; w = (sh / 100) * span; x += w; }
+      out += `<rect class="bar h" style="animation-delay:${i * 60 + j * 25}ms" x="${x0}" y="${y}" width="${w}" height="${bh}" fill="${PALETTE[j % PALETTE.length]}"><title>${esc(S[j].name)}: ${num(vals[j], pct)}</title></rect>${w > 30 ? `<text x="${x0 + w / 2}" y="${y + bh / 2 + 4}" text-anchor="middle" class="inbar">${num(vals[j], false)}</text>` : ""}`;
+    });
   });
-  if (diverging) out += `<line x1="${label + span / 2}" x2="${label + span / 2}" y1="22" y2="${H - 8}" stroke="#94a3b8" stroke-dasharray="3 3"/>`;
+  if (layouts) out += `<line x1="${centre}" x2="${centre}" y1="22" y2="${H - 8}" stroke="#94a3b8" stroke-dasharray="3 3"/>`;
   return frame(out);
 }
 

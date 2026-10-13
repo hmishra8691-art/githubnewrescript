@@ -456,6 +456,23 @@ export function textColumn(ds: Dataset, name: string): (string | null)[] {
   });
 }
 
+/**
+ * Which cases answered at least one of `vars` — the respondents an analysis of those variables can actually use.
+ * A skipped question, an empty multi-select and a non-finite number are not answers. Returns null when none of the
+ * names is a variable of this dataset (the analysis is not about dataset variables, so no valid base is knowable).
+ */
+export function answeredCases(ds: Dataset, vars: string[]): boolean[] | null {
+  const known = vars.filter((v) => ds.byName.has(v));
+  if (!known.length) return null;
+  const answered = ds.cases.map(() => false);
+  for (const v of known) {
+    const numeric = ds.byName.get(v)?.role === "numeric";
+    const col = numeric ? numericColumn(ds, v) : categoricalColumn(ds, v);
+    col.forEach((x, i) => { if (x != null && !(Array.isArray(x) && !x.length)) answered[i] = true; });
+  }
+  return answered;
+}
+
 export function weights(ds: Dataset): number[] | undefined {
   return ds.weighted ? ds.cases.map((c) => c.weight) : undefined;
 }

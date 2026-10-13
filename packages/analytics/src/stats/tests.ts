@@ -3,8 +3,9 @@
  * the two-sided p-value and, where it is standard, an effect size — so a table
  * can print "χ² = 12.4, df 3, p = .006, Cramér's V = .21" from one object.
  */
-import { chiSquareP, fTestP, normalCdf, tTestP, logGamma } from "./distributions.js";
+import { chiSquareP, fTestP, normalCdf, normalQuantile, tTestP, logGamma } from "./distributions.js";
 import { describe } from "./descriptive.js";
+import { solve } from "./matrix.js";
 
 export interface TestResult {
   test: string;
@@ -122,30 +123,47 @@ export function oneWayAnova(groups: { label: string; values: (number | null | un
     detail: { groups: gs.map((g) => ({ label: g.label, n: g.xs.length, mean: g.xs.reduce((a, b) => a + b, 0) / g.xs.length })), ssBetween: ssb, ssWithin: ssw } };
 }
 
-/** Two-way ANOVA (balanced or not, Type I sums) with interaction; also serves ANCOVA when B is a covariate regressed out first. */
+/**
+ * Two-way ANOVA with interaction, by TYPE II sums of squares: each main effect is tested after the other factor
+ * (SS(A | B) = RSS(B) − RSS(A + B)) and the interaction after both main effects, so the answer does not depend on
+ * which factor is listed first and is right when the cells are unbalanced. (It used to compare marginal means, which
+ * is right only for equal cell sizes: with cells of 30, 5, 8 and 40 the interaction F was 59 where numpy gives 6.4.)
+ * Reference values are checked against numpy least squares in the test suite.
+ */
 export function twoWayAnova(rows: { a: string; b: string; y: number | null | undefined }[]): { factorA: TestResult; factorB: TestResult; interaction: TestResult } {
   const data = rows.filter((r) => r.y != null && Number.isFinite(r.y)) as { a: string; b: string; y: number }[];
   const N = data.length;
-  const A = [...new Set(data.map((r) => r.a))], B = [...new Set(data.map((r) => r.b))];
-  const grand = data.reduce((t, r) => t + r.y, 0) / N;
-  const meanOf = (f: (r: { a: string; b: string; y: number }) => boolean) => { const xs = data.filter(f); return xs.length ? xs.reduce((t, r) => t + r.y, 0) / xs.length : grand; };
-  let ssA = 0, ssB = 0, ssAB = 0, ssE = 0;
-  for (const a of A) ssA += data.filter((r) => r.a === a).length * (meanOf((r) => r.a === a) - grand) ** 2;
-  for (const b of B) ssB += data.filter((r) => r.b === b).length * (meanOf((r) => r.b === b) - grand) ** 2;
-  for (const a of A) for (const b of B) {
-    const cell = data.filter((r) => r.a === a && r.b === b);
-    if (!cell.length) continue;
-    const cm = cell.reduce((t, r) => t + r.y, 0) / cell.length;
-    ssAB += cell.length * (cm - meanOf((r) => r.a === a) - meanOf((r) => r.b === b) + grand) ** 2;
-    ssE += cell.reduce((t, r) => t + (r.y - cm) ** 2, 0);
-  }
-  const dfA = A.length - 1, dfB = B.length - 1, dfAB = dfA * dfB, dfE = N - A.length * B.length;
-  const mk = (name: string, ss: number, df: number): TestResult => {
-    if (df <= 0 || dfE <= 0) return { test: name, statistic: null, p: null, note: "not enough cells" };
-    const f = (ss / df) / (ssE / dfE);
-    return { test: name, statistic: f, df: [df, dfE], p: fTestP(f, df, dfE), effectSize: { name: "partial η²", value: ss / (ss + ssE) } };
+  const A = [...new Set(data.map((r) => r.a))].sort(), B = [...new Set(data.map((r) => r.b))].sort();
+  const bad = (note: string): { factorA: TestResult; factorB: TestResult; interaction: TestResult } => ({ factorA: { test: "anova_factor_a", statistic: null, p: null, note }, factorB: { test: "anova_factor_b", statistic: null, p: null, note }, interaction: { test: "anova_interaction", statistic: null, p: null, note } });
+  if (A.length < 2 || B.length < 2) return bad("needs at least two levels of each factor");
+  // residual sum of squares of the least-squares fit of y on the given dummy columns (plus an intercept)
+  const rss = (cols: (r: { a: string; b: string }) => number[]): number | null => {
+    const X = data.map((r) => [1, ...cols(r)]);
+    const k = X[0].length;
+    const xtx = Array.from({ length: k }, () => new Array(k).fill(0)), xty = new Array(k).fill(0);
+    X.forEach((x, i) => { for (let p = 0; p < k; p++) { xty[p] += x[p] * data[i].y; for (let q = 0; q < k; q++) xtx[p][q] += x[p] * x[q]; } });
+    const beta = solve(xtx, xty);
+    if (!beta) return null;
+    return X.reduce((t, x, i) => { const fit = x.reduce((u, v, p) => u + v * beta[p], 0); return t + (data[i].y - fit) ** 2; }, 0);
   };
-  return { factorA: mk("anova_factor_a", ssA, dfA), factorB: mk("anova_factor_b", ssB, dfB), interaction: mk("anova_interaction", ssAB, dfAB) };
+  const dumA = (r: { a: string }) => A.slice(1).map((l) => (r.a === l ? 1 : 0));
+  const dumB = (r: { b: string }) => B.slice(1).map((l) => (r.b === l ? 1 : 0));
+  const dumAB = (r: { a: string; b: string }) => { const da = dumA(r), db = dumB(r); return da.flatMap((x) => db.map((y) => x * y)); };
+  const rssA = rss(dumA), rssB = rss(dumB), rssAplusB = rss((r) => [...dumA(r), ...dumB(r)]);
+  // the full (cell-means) model's RSS is the within-cell sum of squares, and its df the number of occupied cells
+  const cells = new Map<string, number[]>();
+  for (const r of data) { const k = `${r.a}\u0000${r.b}`; (cells.get(k) ?? cells.set(k, []).get(k)!).push(r.y); }
+  let ssE = 0; for (const ys of cells.values()) { const m = ys.reduce((t, v) => t + v, 0) / ys.length; ssE += ys.reduce((t, v) => t + (v - m) ** 2, 0); }
+  const dfE = N - cells.size;
+  if (rssA == null || rssB == null || rssAplusB == null) return bad("the design cannot be fitted (a level has no data)");
+  if (cells.size < A.length * B.length) return bad("some combinations of the two factors have no respondents, so the interaction cannot be separated from the main effects");
+  if (dfE <= 0 || ssE <= 0) return bad("not enough observations within the cells");
+  const dfA = A.length - 1, dfB = B.length - 1, dfAB = dfA * dfB;
+  const mk = (name: string, ss: number, df: number): TestResult => {
+    const f = (ss / df) / (ssE / dfE);
+    return { test: name, statistic: f, df: [df, dfE], p: fTestP(f, df, dfE), effectSize: { name: "partial η²", value: ss / (ss + ssE) }, detail: { sumOfSquares: ss, type: "II" } };
+  };
+  return { factorA: mk("anova_factor_a", rssB - rssAplusB, dfA), factorB: mk("anova_factor_b", rssA - rssAplusB, dfB), interaction: mk("anova_interaction", rssAplusB - ssE, dfAB) };
 }
 
 /* ------------------------------------------------------------ rank tests */
@@ -215,10 +233,14 @@ export function proportionTest(x1: number, n1: number, x2?: number, n2?: number,
   return { test: "proportion_two_sample", statistic: z, p: 2 * (1 - normalCdf(Math.abs(z))), effectSize: { name: "Cohen's h", value: 2 * Math.asin(Math.sqrt(p1)) - 2 * Math.asin(Math.sqrt(p2)) }, detail: { p1, p2, n1, n2, difference: p1 - p2 } };
 }
 
-/** Wilson score interval for a proportion. */
+/**
+ * Wilson score interval for a proportion, at any confidence level (it used to fall back to 90% for anything but
+ * 95% or 99%). For weighted data pass the weighted proportion's successes on the Kish effective n, so the interval
+ * is built from the weighted estimate: x = p × nEff, n = nEff (x need not be an integer).
+ */
 export function proportionCI(x: number, n: number, confidence = 0.95): [number, number] | null {
-  if (!n) return null;
-  const z = confidence === 0.95 ? 1.959964 : confidence === 0.99 ? 2.575829 : 1.644854;
+  if (!n || !(confidence > 0 && confidence < 1)) return null;
+  const z = normalQuantile(1 - (1 - confidence) / 2);
   const p = x / n, denom = 1 + (z * z) / n, centre = p + (z * z) / (2 * n), half = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
   return [(centre - half) / denom, (centre + half) / denom];
 }

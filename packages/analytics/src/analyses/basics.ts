@@ -82,7 +82,7 @@ export function descriptive(def: AnalysisDefinition, ds: Dataset, totalCases: nu
       const top = [...f.rows].sort((a, b) => b.validPct - a.validPct)[0];
       if (top && f.valid) insights.push(`${label}: the most common response is “${top.label}” (${fmtPct(top.validPct, 1)} of ${f.valid}).`);
       if (def.variables.length === 1 || !chart.categories) {
-        chart = { categories: f.rows.map((r) => r.label), series: [{ name: label, values: f.rows.map((r) => pct(r.validPct)), ci: f.rows.map((r) => { const c = proportionCI(r.count, f.valid); return c ? [round(c[0] * 100, 1)!, round(c[1] * 100, 1)!] : null; }) }], valueFormat: "pct" };
+        chart = { categories: f.rows.map((r) => r.label), series: [{ name: label, values: f.rows.map((r) => pct(r.validPct)), ci: f.rows.map((r) => { const nEff = f.effectiveValid; const c = proportionCI((r.validPct / 100) * nEff, nEff, ci); return c ? [round(c[0] * 100, 1)!, round(c[1] * 100, 1)!] : null; }) }], valueFormat: "pct" };
         recommended.push(f.rows.length <= 6 && meta.role !== "multi" ? "pie" : "bar_horizontal", "bar_vertical", "donut", "lollipop");
         if (meta.role === "scale") recommended.unshift("diverging_likert");
       } else {

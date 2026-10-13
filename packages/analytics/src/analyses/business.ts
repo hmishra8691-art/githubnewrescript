@@ -87,7 +87,7 @@ export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
     const fit = ols(vals, { predictors: drivers.map((d) => ({ name: labelOf(ds, d), values: numericColumn(ds, d) })) });
     if (!("error" in fit)) {
       const rows = fit.coefficients.slice(1).map((c) => ({ driver: c.term, beta: round(c.standardized, 3), estimate: round(c.estimate, 3), p: fmtP(c.p), r: round(correlate(numericColumn(ds, drivers[fit.coefficients.indexOf(c) - 1]), vals).r, 3) })).sort((a, b) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0));
-      tables.push({ id: "drivers", title: "Key drivers of recommendation", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "r", label: "Correlation", type: "number", decimals: 3 }, { key: "estimate", label: "Estimate", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows, notes: [`R² = ${fmtNum(fit.r2, 3)}`] });
+      tables.push({ id: "drivers", title: "Key drivers of recommendation", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "r", label: "Correlation", type: "number", decimals: 3 }, { key: "estimate", label: "Estimate", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...fit.warnings] });
       if (rows[0]) insights.push(`Strongest driver of likelihood to recommend: ${rows[0].driver} (β = ${fmtNum(rows[0].beta, 2)}); the drivers explain ${fmtPct(fit.r2 * 100, 0)} of the variance.`);
     }
   }
@@ -137,7 +137,7 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
     const fit = ols(y, { predictors: drivers.map((d) => ({ name: labelOf(ds, d), values: numericColumn(ds, d) })) });
     if (!("error" in fit)) {
       const drows = fit.coefficients.slice(1).map((c) => ({ driver: c.term, beta: round(c.standardized, 3), p: fmtP(c.p) })).sort((a, b) => Math.abs(b.beta ?? 0) - Math.abs(a.beta ?? 0));
-      tables.push({ id: "drivers", title: "Key drivers", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: drows, notes: [`R² = ${fmtNum(fit.r2, 3)}`] });
+      tables.push({ id: "drivers", title: "Key drivers", columns: [{ key: "driver", label: "Driver" }, { key: "beta", label: "Standardized β", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: drows, notes: [`R² = ${fmtNum(fit.r2, 3)}`, ...fit.warnings] });
       if (drows[0]) insights.push(`Strongest driver: ${drows[0].driver} (β = ${fmtNum(drows[0].beta, 2)}).`);
     }
   }

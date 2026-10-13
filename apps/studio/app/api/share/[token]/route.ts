@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { buildPptx, buildXlsx } from "@rescript/analytics/export";
+import { buildPptx, buildXlsx, ExportUnsupportedError } from "@rescript/analytics/export";
 import { DEFAULT_THEME, type AnalysisResult, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
@@ -124,9 +124,18 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // a viewer may pick what to include, never restyle or recompute
   const include = body.settings?.include && typeof body.settings.include === "object" ? (body.settings.include as Record<string, boolean>) : undefined;
   const settings = include ? { include } : undefined;
-  const buf = format === "pptx"
-    ? await buildPptx({ report: { ...report, date: r.published_at?.slice(0, 10) }, results, theme, settings: settings as never, meta: { dataset: `Published snapshot v${r.version}` } })
-    : await buildXlsx({ report, results, theme, settings: settings as never, meta: { "Report version": r.version, "Published at": r.published_at, Mode: "snapshot" } });
+  /* a build that fails is answered in a sentence (and logged with a reference), never an unhandled 500 the viewer sees as "Download not permitted" */
+  let buf: Buffer;
+  try {
+    buf = format === "pptx"
+      ? await buildPptx({ report: { ...report, date: r.published_at?.slice(0, 10) }, results, theme, settings: settings as never, meta: { dataset: `Published snapshot v${r.version}` } })
+      : await buildXlsx({ report, results, theme, settings: settings as never, meta: { "Report version": r.version, "Published at": r.published_at, Mode: "snapshot" } });
+  } catch (e) {
+    if (e instanceof ExportUnsupportedError) return NextResponse.json({ error: e.message, status: "nothing_to_export" }, { status: 422, headers: noStore });
+    const ref = Math.random().toString(36).slice(2, 8);
+    console.error(`[rescript:share] download (${format}) failed (${ref}):`, e);
+    return NextResponse.json({ error: `The download could not be built. Nothing was downloaded. Try again, or ask the owner of the report; quote reference ${ref}.`, status: "build_failed" }, { status: 500, headers: noStore });
+  }
   await record(format === "pptx" ? "download_pptx" : "download_xlsx", user);
   await db.from("analytics_exports").insert({ survey_id: r.survey_id, report_id: r.report_id, format, settings: settings ?? {}, report_version: r.version, bytes: buf.length, created_by: user?.userId ?? null, share_id: r.share_id });
   void audit({ action: "analytics.report_downloaded", userId: user?.userId ?? null, surveyId: r.survey_id, entity: "analytics", entityId: r.share_id, detail: { name: r.report_name, format, version: r.version, viewer: user?.email ?? "share link" } });

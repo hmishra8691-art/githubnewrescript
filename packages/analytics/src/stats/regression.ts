@@ -4,7 +4,7 @@
  * moderation (interaction) and mediation (Baron–Kenny with a Sobel test)
  * wrappers built on them.
  */
-import { inverse, multiplyVec, transpose, zeros, type Matrix } from "./matrix.js";
+import { inverse, multiplyVec, scaledInverse, transpose, zeros, type Matrix } from "./matrix.js";
 import { fTestP, normalCdf, tQuantile, tTestP, chiSquareP } from "./distributions.js";
 
 export interface Coefficient {
@@ -32,6 +32,10 @@ export interface LinearModel {
   fitted: number[];
   residuals: number[];
   terms: string[];
+  /** variance inflation factor of each predictor (intercept excluded); values above 10 mean the predictors overlap strongly */
+  vif: Record<string, number>;
+  /** plain-language cautions about the fit (strong overlap between predictors) */
+  warnings: string[];
 }
 
 export interface DesignSpec {
@@ -67,8 +71,18 @@ export function ols(y: (number | null | undefined)[], spec: DesignSpec): LinearM
   if (n <= k) return { error: `needs more than ${k} complete cases, has ${n}` };
   const Xt = transpose(X);
   const XtX = Xt.map((row) => Xt.map((col) => row.reduce((t, v, i) => t + v * col[i], 0)));
-  const inv = inverse(XtX);
-  if (!inv) return { error: "predictors are collinear — drop one" };
+  const inv = scaledInverse(XtX);
+  if (!inv) return { error: "predictors are collinear (one is a combination of the others) — drop one" };
+  // variance inflation: the diagonal of the inverse correlation matrix of the predictors
+  const vif: Record<string, number> = {}, vifWarnings: string[] = [];
+  if (k > 2) {
+    const P = Xt.slice(1), means = P.map((c) => c.reduce((t, v) => t + v, 0) / n);
+    const S = P.map((ci, a) => P.map((cj, b) => ci.reduce((t, v, i) => t + (v - means[a]) * (cj[i] - means[b]), 0)));
+    const R = S.map((row, a) => row.map((v, b) => (S[a][a] && S[b][b] ? v / Math.sqrt(S[a][a] * S[b][b]) : 0)));
+    const Rinv = inverse(R, 1e-12);
+    if (Rinv) terms.slice(1).forEach((t, j) => { vif[t] = Rinv[j][j]; if (Rinv[j][j] > 10) vifWarnings.push(`${t} overlaps strongly with the other predictors (VIF ${Rinv[j][j].toFixed(1)}), so its coefficient is unstable.`); });
+    else vifWarnings.push("The predictors overlap almost completely, so individual coefficients cannot be told apart.");
+  }
   const Xty = Xt.map((row) => row.reduce((t, v, i) => t + v * Y[i], 0));
   const beta = multiplyVec(inv, Xty);
   const fitted = X.map((row) => row.reduce((t, v, j) => t + v * beta[j], 0));
@@ -90,7 +104,7 @@ export function ols(y: (number | null | undefined)[], spec: DesignSpec): LinearM
       standardized: j === 0 ? null : sdY ? (b * sdX) / sdY : null };
   });
   const f = df[0] > 0 && ssRes > 0 ? ((ssTot - ssRes) / df[0]) / (ssRes / df[1]) : null;
-  return { kind: "linear", n, coefficients, r2, adjustedR2, f, fP: f == null ? null : fTestP(f, df[0], df[1]), df, residualSe: Math.sqrt(sigma2), fitted, residuals, terms };
+  return { kind: "linear", n, coefficients, r2, adjustedR2, f, fP: f == null ? null : fTestP(f, df[0], df[1]), df, residualSe: Math.sqrt(sigma2), fitted, residuals, terms, vif, warnings: vifWarnings };
 }
 
 export interface LogisticModel {
@@ -133,12 +147,15 @@ export function logistic(y: (number | null | undefined)[], spec: DesignSpec, max
         for (let b = 0; b < k; b++) XtWX[a][b] += X[i][a] * w[i] * X[i][b];
       }
     }
-    cov = inverse(XtWX);
-    if (!cov) return { error: "predictors are collinear or separation occurred" };
+    cov = scaledInverse(XtWX, 1e-11);
+    if (!cov) return { error: "the model cannot be fitted: predictors are collinear, or an outcome group is perfectly predicted (separation)" };
     const step = multiplyVec(cov, grad);
     beta = beta.map((b, j) => b + step[j]);
     if (Math.max(...step.map(Math.abs)) < 1e-8) { converged = true; break; }
   }
+  if (!converged) return { error: `the logistic model did not converge in ${maxIter} iterations — usually a sign of separation (a predictor that almost perfectly splits the outcome) or too few cases in one outcome group; its odds ratios would not be reliable, so none are shown` };
+  const huge = beta.findIndex((b, j) => j > 0 && Math.abs(b) > 12);
+  if (huge > 0) return { error: `the logistic model has an extreme coefficient for ${terms[huge]} (odds ratio beyond 150 000), which means a predictor almost perfectly splits the outcome (quasi-separation); no odds ratios are shown` };
   const eta = X.map((row) => row.reduce((t, v, j) => t + v * beta[j], 0));
   const fitted = eta.map((e) => 1 / (1 + Math.exp(-e)));
   const ll = Y.reduce((t, yi, i) => t + (yi ? Math.log(Math.max(fitted[i], 1e-12)) : Math.log(Math.max(1 - fitted[i], 1e-12))), 0);

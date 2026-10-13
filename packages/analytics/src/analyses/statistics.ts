@@ -273,6 +273,7 @@ export function regression(def: AnalysisDefinition, ds: Dataset, totalCases: num
     const yv = numericColumn(ds, y);
     const fit = ols(yv, spec);
     if ("error" in fit) return makeResult(def, ds, { tables, chart, warnings: [fit.error], recommendedCharts: ["coefficient_plot"], totalCases });
+    warnings.push(...fit.warnings);
     tables.push({ id: "fit", title: "Model fit", columns: [{ key: "stat", label: "Statistic" }, { key: "value", label: "Value", type: "number", decimals: 3 }], rows: [{ stat: "R²", value: round(fit.r2, 3) }, { stat: "Adjusted R²", value: round(fit.adjustedR2, 3) }, { stat: "F", value: round(fit.f, 3) }, { stat: "F p-value", value: fmtP(fit.fP) }, { stat: "Residual SE", value: round(fit.residualSe, 3) }, { stat: "n", value: fit.fitted.length }, { stat: "df", value: Array.isArray(fit.df) ? fit.df.join(", ") : fit.df }] });
     tables.push(coefTable("coef", `Coefficients — ${labelOf(ds, y)}`, fit.coefficients));
     tests.push({ test: "f_model", statistic: fit.f, df: fit.df, p: fit.fP, note: "Overall model" });

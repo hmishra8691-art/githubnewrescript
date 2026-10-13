@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
-import { DEFAULT_THEME, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
+import { DEFAULT_THEME, divergingLayout, stackShares, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
 import { ProTable } from "../ProTable";
 
 /**
@@ -135,18 +135,25 @@ function Legend({ ctx, series, hidden, toggle, x, y, vertical }: { ctx: Ctx; ser
 function BarChart({ ctx, inner, series, type, tight, note }: { ctx: Ctx; inner: { x: number; y: number; w: number; h: number }; series: ReturnType<typeof seriesForChart>; type: ChartType | string; tight?: boolean; note?: string }) {
   if (!series.length || !series[0].labels.length) return <Empty ctx={ctx} inner={inner} />;
   const horizontal = ["bar_horizontal", "ranking_bar", "lollipop", "dot_plot", "diverging_likert", "bar_stacked_100", "maxdiff_utility", "maxdiff_preference", "attribute_importance", "coefficient_plot", "forest", "keyword_bar", "maxdiff_best_worst"].includes(type as string) || ctx.opts.orientation === "horizontal";
-  const stacked = ["bar_stacked", "bar_stacked_100", "diverging_likert", "funnel"].includes(type as string);
-  const pct100 = type === "bar_stacked_100" || type === "diverging_likert";
+  /* a diverging bar needs at least two series (a lower and an upper side); one series is drawn as an ordinary bar */
+  const diverging = type === "diverging_likert" && series.length >= 2;
+  const stacked = ["bar_stacked", "bar_stacked_100", "funnel"].includes(type as string) || diverging;
+  const pct100 = type === "bar_stacked_100" || diverging;
   const lollipop = type === "lollipop" || type === "dot_plot";
   const labels = series[0].labels;
   const n = labels.length, k = series.length;
   const ci = series.length === 1 ? (ctx.opts.showCI ?? ["mean_ci", "ci_plot", "error_bar", "forest", "coefficient_plot", "diff_means", "diff_proportions"].includes(type as string)) : false;
   const rawCI = ci ? series[0].ci ?? null : null;
   const totals = labels.map((_, i) => series.reduce((t, s) => t + Math.max(0, s.values[i] ?? 0), 0));
+  /* 100% and diverging stacks are drawn from each category's own shares: a category whose parts add to 22 or 78 (a crosstab
+     of column percentages, a multi-select) is stretched to a full bar, never drawn short or past the axis (audit C-1, C-2) */
+  const shares = pct100 ? labels.map((_, i) => stackShares(series.map((s) => s.values[i]))) : null;
+  const layouts = diverging && shares ? shares.map((row) => divergingLayout(row)!) : null;
   let maxV = stacked ? Math.max(...totals) : Math.max(...series.flatMap((s) => s.values.map((v) => v ?? 0)), ...(rawCI ? rawCI.map((c) => c?.[1] ?? 0) : []));
   let minV = Math.min(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0)), ...(rawCI ? rawCI.map((c) => c?.[0] ?? 0) : []));
   if (pct100) { maxV = 100; minV = 0; }
-  maxV = niceMax(maxV || 1); if (minV < 0) minV = -niceMax(-minV);
+  if (layouts) { const reach = Math.max(...layouts.map((l) => Math.max(l.left, l.right)), 1); maxV = niceMax(reach); minV = -maxV; }
+  else { maxV = niceMax(maxV || 1); if (minV < 0) minV = -niceMax(-minV); }
   const labelW = horizontal ? clamp(Math.max(...labels.map((l) => l.length)) * (ctx.fs - 1) * 0.55, 60, inner.w * 0.35) : 0;
   const pad = { l: horizontal ? labelW + 8 : 44, r: 12, t: 8, b: horizontal ? 22 : 40 };
   const px = inner.x + pad.l, py = inner.y + pad.t, pw = inner.w - pad.l - pad.r, ph = inner.h - pad.t - pad.b;
@@ -166,11 +173,11 @@ function BarChart({ ctx, inner, series, type, tight, note }: { ctx: Ctx; inner: 
         ? <line key={i} x1={scale(v)} x2={scale(v)} y1={py} y2={py + ph} stroke={ctx.grid} />
         : <line key={i} x1={px} x2={px + pw} y1={scale(v)} y2={scale(v)} stroke={ctx.grid} />)}
       {tk.map((v, i) => horizontal
-        ? <text key={i} x={scale(v)} y={py + ph + 14} textAnchor="middle" fill={ctx.subtle}>{fmt(v, 0, pct100 || ctx.pct)}</text>
-        : <text key={i} x={px - 6} y={scale(v) + 4} textAnchor="end" fill={ctx.subtle}>{fmt(v, 0, ctx.pct)}</text>)}
+        ? <text key={i} x={scale(v)} y={py + ph + 14} textAnchor="middle" fill={ctx.subtle}>{fmt(diverging ? Math.abs(v) : v, 0, pct100 || ctx.pct)}</text>
+        : <text key={i} x={px - 6} y={scale(v) + 4} textAnchor="end" fill={ctx.subtle}>{fmt(v, 0, pct100 || ctx.pct)}</text>)}
       {labels.map((lab, i) => {
         const b0 = (horizontal ? py : px) + i * band + gap / 2;
-        let acc = 0, accNeg = 0;
+        let acc = 0;
         const selected = ctx.sel === lab;
         return (
           <g key={lab} opacity={ctx.sel && !selected ? 0.45 : 1} style={{ cursor: ctx.onSelect ? "pointer" : "default" }} onClick={() => ctx.onSelect?.(selected ? null : lab)}>
@@ -178,17 +185,17 @@ function BarChart({ ctx, inner, series, type, tight, note }: { ctx: Ctx; inner: 
               ? <text x={px - 8} y={b0 + inner_ / 2 + 4} textAnchor="end" fill={ctx.textColor} fontWeight={selected ? 700 : 400}>{trunc(lab, Math.floor(labelW / ((ctx.fs - 1) * 0.55)))}</text>
               : <text x={b0 + inner_ / 2} y={py + ph + 14} textAnchor="middle" fill={ctx.textColor} fontWeight={selected ? 700 : 400} transform={n > 8 ? `rotate(-30 ${b0 + inner_ / 2} ${py + ph + 14})` : undefined}>{trunc(lab, n > 8 ? 14 : Math.max(6, Math.floor(inner_ / 6)))}</text>}
             {series.map((s, j) => {
-              const v = s.values[i] ?? 0;
+              const v = shares ? shares[i][j] : (s.values[i] ?? 0);
               const color = ctx.colors[j % ctx.colors.length];
               let a: number, b: number;
               if (stacked) {
-                if (type === "diverging_likert") { const half = Math.floor(k / 2); const neg = j < half || (k % 2 === 1 && j === half && false); if (neg) { a = 50 - accNeg - v; b = 50 - accNeg; accNeg += v; } else { a = 50 + acc; b = 50 + acc + v; acc += v; } if (j === Math.floor(k / 2) && k % 2 === 1) { a = 50 - v / 2 + acc - v / 2; } }
+                if (layouts) { const sg = layouts[i].segments[j]; a = sg.from; b = sg.to; }
                 else { a = acc; b = acc + v; acc += v; }
               } else { a = Math.min(0, v); b = Math.max(0, v); }
               const s0 = scale(a), s1 = scale(b);
               const off = stacked || lollipop ? 0 : j * bw;
               const rect = horizontal ? { x: Math.min(s0, s1), y: b0 + off, w: Math.abs(s1 - s0), h: bw } : { x: b0 + off, y: Math.min(s0, s1), w: bw, h: Math.abs(s1 - s0) };
-              const label = `${s.name}: ${fmt(v, ctx.decimals, ctx.pct)}`;
+              const label = `${s.name}: ${fmt(v, ctx.decimals, pct100 || ctx.pct)}`;
               const midX = horizontal ? scale(v) : rect.x + rect.w / 2, midY = horizontal ? rect.y + rect.h / 2 : scale(v);
               return (
                 <g key={s.name} onMouseEnter={() => setHover(`${lab} — ${label}`)} onMouseLeave={() => setHover(null)}>
@@ -198,7 +205,7 @@ function BarChart({ ctx, inner, series, type, tight, note }: { ctx: Ctx; inner: 
                   {dataLabels && !stacked && (() => { const letter = showSig ? (series.length === 1 ? sig?.[i] : s.sig?.[i]) : ""; return horizontal
                     ? <text x={scale(v) + 4} y={midY + 4} fill={ctx.textColor} fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, ctx.pct)}{letter ? <tspan fill={ctx.theme.colors.accent} fontWeight={700}> {letter}</tspan> : null}</text>
                     : <text x={midX} y={scale(v) - 4} textAnchor="middle" fill={ctx.textColor} fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, ctx.pct)}{letter ? <tspan fill={ctx.theme.colors.accent} fontWeight={700}> {letter}</tspan> : null}</text>; })()}
-                  {dataLabels && stacked && Math.abs(s1 - s0) > 22 && <text x={rect.x + rect.w / 2} y={rect.y + rect.h / 2 + 4} textAnchor="middle" fill="#fff" fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, ctx.pct)}</text>}
+                  {dataLabels && stacked && Math.abs(s1 - s0) > 22 && <text x={rect.x + rect.w / 2} y={rect.y + rect.h / 2 + 4} textAnchor="middle" fill="#fff" fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, pct100 || ctx.pct)}</text>}
                 </g>
               );
             })}

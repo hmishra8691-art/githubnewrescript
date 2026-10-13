@@ -22,13 +22,13 @@ export function multiply(a: Matrix, b: Matrix): Matrix {
 export const multiplyVec = (a: Matrix, v: number[]): number[] => a.map((row) => row.reduce((t, x, j) => t + x * v[j], 0));
 
 /** Inverse via Gauss-Jordan with partial pivoting; null when singular. */
-export function inverse(a: Matrix): Matrix | null {
+export function inverse(a: Matrix, tol = 1e-12): Matrix | null {
   const n = a.length;
   const m = a.map((row, i) => [...row, ...identity(n)[i]]);
   for (let col = 0; col < n; col++) {
     let piv = col;
     for (let r = col + 1; r < n; r++) if (Math.abs(m[r][col]) > Math.abs(m[piv][col])) piv = r;
-    if (Math.abs(m[piv][col]) < 1e-12) return null;
+    if (Math.abs(m[piv][col]) < tol) return null;
     [m[col], m[piv]] = [m[piv], m[col]];
     const d = m[col][col];
     for (let j = 0; j < 2 * n; j++) m[col][j] /= d;
@@ -39,6 +39,20 @@ export function inverse(a: Matrix): Matrix | null {
     }
   }
   return m.map((row) => row.slice(n));
+}
+
+/**
+ * Inverse of a symmetric positive-semidefinite cross-product matrix (X'X) that does not depend on the units of its
+ * columns. The pivot test in `inverse` is absolute, so a predictor measured in millions looked "non-singular" while
+ * one measured in fractions looked collinear. Here the matrix is first scaled to unit diagonal (a correlation-like
+ * matrix), tested against a relative tolerance, and the scaling is undone afterwards. Null when singular or nearly so.
+ */
+export function scaledInverse(a: Matrix, tol = 1e-9): Matrix | null {
+  const n = a.length;
+  const d = a.map((row, i) => (row[i] > 0 ? 1 / Math.sqrt(row[i]) : 0));
+  if (d.some((x) => x === 0)) return null;
+  const inv = inverse(a.map((row, i) => row.map((v, j) => v * d[i] * d[j])), tol);
+  return inv ? inv.map((row, i) => row.map((v, j) => v * d[i] * d[j])) : null;
 }
 
 /** Solve A x = b (least squares safe when A is X'X); null when singular. */

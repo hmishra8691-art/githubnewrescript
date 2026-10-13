@@ -188,3 +188,24 @@ test("matrix helpers: inverse and symmetric eigen", () => {
   close(e.values[0], 3, 1e-9); close(e.values[1], 1, 1e-9);
   assert.equal(inverse([[1, 2], [2, 4]]), null, "singular");
 });
+
+test("S-3: two-way ANOVA uses Type II sums of squares and matches numpy least squares on unbalanced cells (30, 5, 8, 40)", () => {
+  /* reference: numpy.linalg.lstsq on dummy-coded models; F(A|B) = 7.0320, F(B|A) = 80.5414, F(A×B) = 20.4489, dfE = 79
+     (the previous marginal-means code gave an interaction F several times too large on this design) */
+  const rows = [{a:"m",b:"x",y:10.0},{a:"m",b:"x",y:10.6},{a:"m",b:"x",y:9.45},{a:"m",b:"x",y:8.22},{a:"m",b:"x",y:9.09},{a:"m",b:"x",y:8.02},{a:"m",b:"x",y:10.12},{a:"m",b:"x",y:12.68},{a:"m",b:"x",y:9.02},{a:"m",b:"x",y:8.76},{a:"m",b:"x",y:10.98},{a:"m",b:"x",y:10.71},{a:"m",b:"x",y:10.21},{a:"m",b:"x",y:8.14},{a:"m",b:"x",y:9.94},{a:"m",b:"x",y:11.39},{a:"m",b:"x",y:7.31},{a:"m",b:"x",y:9.08},{a:"m",b:"x",y:6.2},{a:"m",b:"x",y:7.42},{a:"m",b:"x",y:6.32},{a:"m",b:"x",y:9.53},{a:"m",b:"x",y:7.47},{a:"m",b:"x",y:10.54},{a:"m",b:"x",y:10.31},{a:"m",b:"x",y:9.63},{a:"m",b:"x",y:4.97},{a:"m",b:"x",y:8.92},{a:"m",b:"x",y:9.9},{a:"m",b:"x",y:10.23},{a:"m",b:"y",y:8.94},{a:"m",b:"y",y:11.04},{a:"m",b:"y",y:10.04},{a:"m",b:"y",y:10.38},{a:"m",b:"y",y:14.12},{a:"f",b:"x",y:7.38},{a:"f",b:"x",y:8.93},{a:"f",b:"x",y:10.77},{a:"f",b:"x",y:7.83},{a:"f",b:"x",y:8.78},{a:"f",b:"x",y:9.22},{a:"f",b:"x",y:9.13},{a:"f",b:"x",y:6.55},{a:"f",b:"y",y:15.15},{a:"f",b:"y",y:17.72},{a:"f",b:"y",y:11.91},{a:"f",b:"y",y:16.72},{a:"f",b:"y",y:15.24},{a:"f",b:"y",y:13.72},{a:"f",b:"y",y:19.0},{a:"f",b:"y",y:16.52},{a:"f",b:"y",y:12.6},{a:"f",b:"y",y:15.15},{a:"f",b:"y",y:16.15},{a:"f",b:"y",y:14.62},{a:"f",b:"y",y:16.37},{a:"f",b:"y",y:14.87},{a:"f",b:"y",y:16.33},{a:"f",b:"y",y:17.88},{a:"f",b:"y",y:13.65},{a:"f",b:"y",y:15.41},{a:"f",b:"y",y:14.07},{a:"f",b:"y",y:15.25},{a:"f",b:"y",y:12.63},{a:"f",b:"y",y:13.84},{a:"f",b:"y",y:14.61},{a:"f",b:"y",y:16.8},{a:"f",b:"y",y:17.29},{a:"f",b:"y",y:12.35},{a:"f",b:"y",y:13.41},{a:"f",b:"y",y:16.29},{a:"f",b:"y",y:11.02},{a:"f",b:"y",y:14.07},{a:"f",b:"y",y:14.81},{a:"f",b:"y",y:17.51},{a:"f",b:"y",y:16.38},{a:"f",b:"y",y:14.35},{a:"f",b:"y",y:14.26},{a:"f",b:"y",y:14.5},{a:"f",b:"y",y:18.05},{a:"f",b:"y",y:14.14},{a:"f",b:"y",y:14.39},{a:"f",b:"y",y:15.71}];
+  const tw = twoWayAnova(rows);
+  close(tw.factorA.statistic, 7.031954095611397, 1e-6);
+  close(tw.factorB.statistic, 80.54136681371453, 1e-6);
+  close(tw.interaction.statistic, 20.448859773069127, 1e-6);
+  assert.deepEqual(tw.interaction.df, [1, 79]);
+  // order of the factors does not change a Type II result
+  const sw = twoWayAnova(rows.map((r) => ({ a: r.b, b: r.a, y: r.y })));
+  close(sw.factorA.statistic, tw.factorB.statistic!, 1e-9);
+  close(sw.interaction.statistic, tw.interaction.statistic!, 1e-9);
+});
+
+test("S-3: a design with an empty cell says so instead of returning numbers", () => {
+  const tw = twoWayAnova([{ a: "m", b: "x", y: 1 }, { a: "m", b: "x", y: 2 }, { a: "m", b: "y", y: 3 }, { a: "m", b: "y", y: 4 }, { a: "f", b: "x", y: 2 }, { a: "f", b: "x", y: 3 }]);
+  assert.equal(tw.interaction.statistic, null);
+  assert.match(String(tw.interaction.note), /no respondents/);
+});

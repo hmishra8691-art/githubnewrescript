@@ -167,10 +167,10 @@ export function frequencies(
   values: (string | number | null | undefined | (string | number)[])[],
   weights: number[] | undefined,
   categories: { code: string; label: string }[] | null,
-): { rows: FrequencyRow[]; n: number; valid: number; missing: number; weightedN: number; weightedValid: number } {
+): { rows: FrequencyRow[]; n: number; valid: number; missing: number; weightedN: number; weightedValid: number; /** Kish effective n of the valid cases (equals `valid` when unweighted) */ effectiveValid: number } {
   checkWeights(values, weights);
   const counts = new Map<string, { count: number; w: number }>();
-  let valid = 0, weightedValid = 0, weightedN = 0;
+  let valid = 0, weightedValid = 0, weightedN = 0, weightedValidSq = 0;
   /*
    * Missingness means the same thing here as it does in `describe`.
    *
@@ -187,7 +187,7 @@ export function frequencies(
     weightedN += w;
     const codes = Array.isArray(v) ? v.filter((x) => !missingValue(x)).map(String) : missingValue(v) ? [] : [String(v)];
     if (!codes.length) return;
-    valid += 1; weightedValid += w;
+    valid += 1; weightedValid += w; weightedValidSq += w * w;
     for (const c of codes) { const cur = counts.get(c) ?? { count: 0, w: 0 }; cur.count += 1; cur.w += w; counts.set(c, cur); }
   });
   const keys = categories ? categories.map((c) => c.code) : [...counts.keys()].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
@@ -201,7 +201,7 @@ export function frequencies(
   // `n` counts the cases in the base, so valid + missing still reconciles
   // once zero-weight cases are excluded above
   const inBase = weights ? weights.reduce((t, w) => t + (w > 0 ? 1 : 0), 0) : values.length;
-  return { rows, n: inBase, valid, missing: inBase - valid, weightedN, weightedValid };
+  return { rows, n: inBase, valid, missing: inBase - valid, weightedN, weightedValid, effectiveValid: weightedValidSq ? (weightedValid * weightedValid) / weightedValidSq : 0 };
 }
 
 /** Top/bottom box shares for an ordered scale (codes sorted ascending numerically). */
