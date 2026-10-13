@@ -2,6 +2,7 @@
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, ChartType, DatasetSpec, VariableMeta } from "@rescript/analytics";
 import { ANALYSIS_METHODS, type AnalysisMethod, type PlannedCrosstab, type PlannedTest } from "@rescript/schema";
+import { timingLine } from "./runTimingText";
 import { AxApi, type ApplyResponse, type PlanPayload, type Row, type RunResult, timeAgo } from "./api";
 import { Chart, ResultTableView } from "./charts/Chart";
 import { Icon } from "../ui/Icon";
@@ -207,6 +208,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
                 <li><b>Saved</b> — {plan.updatedAt ? `last edited ${new Date(plan.updatedAt).toLocaleString()}` : "in the survey definition"}{data.definition.source === "draft" ? " (draft)" : " (version)"}.</li>
                 <li><b>Applied</b> — {applied ? `${new Date(applied.startedAt).toLocaleString()} on ${applied.environment.toLowerCase()} data · ${applied.status}${applied.current ? "" : " · the plan has changed since"}` : data.applyAvailable ? "never" : "not recorded on this database (migration 0050)"}.</li>
                 <li><b>Computed</b> — {data.run ? `${data.run.items} analyses run ${timeAgo(data.run.computedAt)} on ${data.run.n} ${data.run.environment.toLowerCase()} completes (${data.run.trigger})` : "no run yet"}{data.dataChangedSinceApply ? ` · ${dataN - (data.run?.n ?? 0)} new completes since — apply again to refresh` : ""}.</li>
+                {timingLine(data.run?.timing, data.run?.items ?? 0) && <li data-testid="ap-run-timing"><b>Took</b> — {timingLine(data.run?.timing, data.run?.items ?? 0)}.</li>}
                 <li><b>Data</b> — {dataN.toLocaleString()} complete {p.dataset.environment === "ALL" ? "" : p.dataset.environment.toLowerCase() + " "}responses{p.dataset.dataset === "clean" ? " (clean only)" : ""}{dataN ? "" : " — outputs are configured now and fill when data arrives"}.</li>
                 <li><b>Outputs</b> — {data.report ? "findings report" : "no report yet"}{data.dashboard ? ", dashboard" : ", no dashboard yet"}, {ov.charts} chart{ov.charts === 1 ? "" : "s"}.</li>
               </ul>

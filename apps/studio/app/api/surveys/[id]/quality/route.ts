@@ -133,6 +133,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     q = q
       .neq("status", "in_progress")
       .order("started_at", { ascending: false })
+      .order("id", { ascending: false })
       .range(start, start + CHUNK - 1);
     if (include !== "all") q = q.eq("is_test", isTest);
     return q;

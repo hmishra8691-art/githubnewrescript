@@ -16,6 +16,7 @@ import { Chart, ResultTableView } from "./charts/Chart";
 import { PlanWorkspace } from "./PlanWorkspace";
 import { FindingsView } from "./FindingsView";
 import { PLACES, DEFAULT_VIEW, placeOf, type PlaceKey, type WsTab } from "./navigation";
+import { CHART_PAGE, analysisIdsFor, hiddenCount, visibleCharts } from "./chartPaging";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
@@ -334,11 +335,12 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
   const [editing, setEditing] = React.useState<Row | null>(null);
   const [spec, setSpec] = React.useState<ChartSpec | null>(null);
   /*
-   * Every saved chart's analysis is computed, a few at a time, and each one ends in
-   * either a result or a visible failure with a retry. Before, a failed run left
-   * the card on "Computing…" for ever, only the first 12 charts were ever
-   * requested, and `load` depended on `results` — so each arriving result re-fired
-   * the effect and re-requested every chart that had not arrived yet.
+   * The analysis behind each chart on screen is computed, a few at a time, and each
+   * one ends in either a result or a visible failure with a retry. Only the page of
+   * charts being shown is computed (see chartPaging.ts); "Show more" brings the next
+   * page. Before, a failed run left the card on "Computing…" for ever, and `load`
+   * depended on `results` — so each arriving result re-fired the effect and
+   * re-requested every chart that had not arrived yet.
    */
   const [status, setStatus] = React.useState<Record<string, "loading" | "error">>({});
   const inFlight = React.useRef(new Set<string>());
@@ -354,13 +356,15 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
       setStatus((s) => { const { [analysisId]: _x, ...rest } = s; void _x; return rest; });
     } catch { setStatus((s) => ({ ...s, [analysisId]: "error" })); } finally { inFlight.current.delete(analysisId); }
   }, [api]);
+  const [pages, setPages] = React.useState(1);
+  const shown = React.useMemo(() => visibleCharts(charts, pages), [charts, pages]);
   React.useEffect(() => {
-    const ids = [...new Set(charts.map((c) => String(c.analysis_id)))];
+    const ids = analysisIdsFor(shown);
     let cancelled = false; let next = 0;
     const worker = async () => { while (!cancelled && next < ids.length) { const id = ids[next++]; await load(id); } };
     void Promise.all([worker(), worker(), worker()]);
     return () => { cancelled = true; };
-  }, [charts, load]);
+  }, [shown, load]);
   return (
     <div className="ax-panel" data-testid="ax-charts">
       <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Saved charts</h2><span className="muted" style={{ fontSize: 13 }}>Each chart is linked to its analysis definition — the data is recomputed, the styling is yours.</span></div>
@@ -371,7 +375,7 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
         </div>
       )}
       <div className="ax-chart-grid">
-        {charts.map((c) => { const r = results[c.analysis_id]; const a = analyses.find((x) => x.id === c.analysis_id); return (
+        {shown.map((c) => { const r = results[c.analysis_id]; const a = analyses.find((x) => x.id === c.analysis_id); return (
           <div key={c.id} className="card ax-chart-card" data-testid="ax-chart-card">
             <div className="card-title">{c.name}<span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>style v{c.style_version}</span></div>
             <div className="muted" style={{ fontSize: 13 }}>{a?.name ?? "analysis removed"} · {(c.spec as ChartSpec).type}</div>
@@ -380,6 +384,9 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
           </div>); })}
         {!charts.length && <div className="muted">No saved charts yet. Run an analysis and click “Save chart”.</div>}
       </div>
+      {hiddenCount(charts.length, pages) > 0 && (
+        <div className="row" style={{ marginTop: 10 }}><button className="btn" data-testid="ax-charts-more" onClick={() => setPages((p) => p + 1)}>Show {Math.min(CHART_PAGE, hiddenCount(charts.length, pages))} more</button><span className="muted" style={{ fontSize: 13 }}>{hiddenCount(charts.length, pages)} more saved charts — each is computed only when shown.</span></div>
+      )}
     </div>
   );
 }

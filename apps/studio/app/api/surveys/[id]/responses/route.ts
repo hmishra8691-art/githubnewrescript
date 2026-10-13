@@ -111,7 +111,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       for (let start = 0; start < MAX_EXPORT_ROWS; start += CHUNK) {
         let q = db.from("responses").select("status, is_test").eq("survey_id", params.id);
         if (softDelete) q = q.is("deleted_at", null);
-        const { data, error } = (await q.range(start, start + CHUNK - 1)) as {
+        const { data, error } = (await q.order("id", { ascending: true }).range(start, start + CHUNK - 1)) as {
           data: { status: string; is_test: boolean }[] | null;
           error: { message: string } | null;
         };
@@ -184,7 +184,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (softDelete) q = q.is("deleted_at", null);
     if (include === "live") q = q.eq("is_test", false);
     else if (include === "test") q = q.eq("is_test", true);
-    return q.order("started_at").range(start, start + CHUNK - 1);
+    return q.order("started_at").order("id").range(start, start + CHUNK - 1);
   };
 
   const readAll = async (columns: string, softDelete: boolean): Promise<{ rows: any[]; error: { message: string } | null; capped: boolean }> => {

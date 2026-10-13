@@ -235,7 +235,7 @@ export async function queryResponses(db: SupabaseClient, def: SurveyDefinition, 
   // Fast path: the database can answer both the page and the count.
   if (!needsEngine && !needsText) {
     let sel = applyClauses(baseQuery(db, q, ROW_COLUMNS, true), clauses);
-    const { data, error, count } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).range(offset, offset + limit - 1);
+    const { data, error, count } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).order("id", { ascending: sort.dir === "asc" }).range(offset, offset + limit - 1);
     if (error) throw new Error(error.message);
     const defFor = await rowDefinitions(db, def, (data ?? []) as unknown as { version_id?: string | null }[]);
     return {
@@ -249,7 +249,7 @@ export async function queryResponses(db: SupabaseClient, def: SurveyDefinition, 
   let total = 0;
   for (let start = 0; ; start += CHUNK) {
     let sel = applyClauses(baseQuery(db, q, ROW_COLUMNS, false), clauses);
-    const { data, error } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).range(start, start + CHUNK - 1);
+    const { data, error } = await sel.order(sort.field, { ascending: sort.dir === "asc", nullsFirst: false }).order("id", { ascending: sort.dir === "asc" }).range(start, start + CHUNK - 1);
     if (error) throw new Error(error.message);
     const chunk = data ?? [];
     const defForScan = await rowDefinitions(db, def, chunk as unknown as { version_id?: string | null }[]);
@@ -277,7 +277,7 @@ export async function countResponses(db: SupabaseClient, def: SurveyDefinition, 
   }
   let total = 0;
   for (let start = 0; ; start += CHUNK) {
-    const { data, error } = await applyClauses(baseQuery(db, q, FILTER_COLUMNS, false), clauses).order("started_at", { ascending: false }).range(start, start + CHUNK - 1);
+    const { data, error } = await applyClauses(baseQuery(db, q, FILTER_COLUMNS, false), clauses).order("started_at", { ascending: false }).order("id", { ascending: false }).range(start, start + CHUNK - 1);
     if (error) throw new Error(error.message);
     const chunk = data ?? [];
     for (const raw of chunk) {
@@ -302,7 +302,7 @@ export async function matchingResponseIds(db: SupabaseClient, def: SurveyDefinit
   const ids: string[] = [];
   const codes: string[] = [];
   for (let start = 0; ; start += CHUNK) {
-    const { data, error } = await applyClauses(baseQuery(db, q, FILTER_COLUMNS, false), clauses).order("started_at", { ascending: false }).range(start, start + CHUNK - 1);
+    const { data, error } = await applyClauses(baseQuery(db, q, FILTER_COLUMNS, false), clauses).order("started_at", { ascending: false }).order("id", { ascending: false }).range(start, start + CHUNK - 1);
     if (error) throw new Error(error.message);
     const chunk = data ?? [];
     for (const raw of chunk as any[]) {

@@ -3,7 +3,7 @@ import type { AnalysisPlan, SurveyDefinition } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, droppedFieldPaths, ensureElementIds, hypothesisCoverage, isAnalysisOp, type SurveyAction } from "@rescript/engine";
 import { planTrace,
-  variableMetadata, reportFromRun, planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, stampedDefinition, summarizeApply, withOrigin, editedSinceApply, plannedIdOf,
+  variableMetadata, reportFromRun, planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, stampedDefinition, summarizeApply, withOrigin, editedSinceApply, plannedIdOf, runTiming,
   planRelinks, relinkedDefinition, analysisSignature, surveyKnownNames, plannedAnalyses, reviewAgainstSaved,
   type AnalysisDefinition, type ChartSpec, type DashboardDefinition, type DatasetSpec, type ReportDefinition, type PlanItemView, type ApplyItemResult, type ApplySummary, type SavedAnalysisRow, type SavedChartRow, type StoredRunLike, type HypothesisVerdict,
 } from "@rescript/analytics";
@@ -145,7 +145,7 @@ export async function planPayload(db: SupabaseClient, surveyId: string, ctx: Loa
     items, variables, overview, hypotheses,
     /* objective → hypothesis → item → result → claim, with every broken link named */
     trace: plan ? planTrace(def, items, run) : null,
-    run: run ? { id: run.id, computedAt: run.computedAt, trigger: run.trigger, environment: run.environment, n: run.n, items: run.items.length, findings: run.findings, verdicts: run.verdicts, warnings: run.warnings, discoveries: run.discoveries ?? null, kpis: run.kpis ?? null, since: run.since ?? null } : null,
+    run: run ? { id: run.id, computedAt: run.computedAt, trigger: run.trigger, environment: run.environment, n: run.n, items: run.items.length, findings: run.findings, verdicts: run.verdicts, warnings: run.warnings, discoveries: run.discoveries ?? null, kpis: run.kpis ?? null, since: run.since ?? null, timing: runTiming(run) } : null,
     apply: apply ? { ...apply, current: !!apply.planHash && apply.planHash === hash && (apply.status === "applied" || apply.status === "partial" || apply.status === "no_data") } : null,
     applyAvailable: applied.available,
     /* the run's data was gathered before responses arrived or after a new wave: say so */

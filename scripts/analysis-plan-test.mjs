@@ -372,6 +372,8 @@ await page.waitForFunction(() => /^Applied$/.test(document.querySelector('[data-
 await page.click('[data-testid="ap-section-overview"]');
 assert.equal(await text('[data-testid="ap-kpi-attention"] .metric-v'), "0");
 ok("the retried apply runs every item — status Applied, nothing needing attention");
+assert.match(await text('[data-testid="ap-run-timing"]'), /Took — .* of compute across \d+ of \d+ analyses/);
+ok("the Plan place says how long the latest run took (from what each analysis recorded)");
 
 console.log("\n§9 NO DATA — outputs are configured, nothing is computed, nothing is faked");
 await page.selectOption('[data-testid="ax-dataset"]', "TEST");

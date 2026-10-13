@@ -62,6 +62,7 @@ export async function recountQuotas(
         .in("status", COUNTED_STATUSES)
         .is("deleted_at", null)
         .order("started_at", { ascending: true })
+        .order("id", { ascending: true })
         .range(start, start + CHUNK - 1);
       if (error) throw new Error(error.message);
       const chunk = data ?? [];
@@ -121,6 +122,7 @@ export async function generateQuotaFromData(
       .eq("is_test", isTest)
       .in("status", COUNTED_STATUSES)
       .is("deleted_at", null)
+      .order("id", { ascending: true })
       .range(start, start + CHUNK - 1);
     if (error) throw new Error(error.message);
     const chunk = data ?? [];

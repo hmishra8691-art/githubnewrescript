@@ -12,6 +12,7 @@ import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
 import { ensurePlannedAnalyses as ensureCore } from "./analysisPlanCore";
 import { surveyStamp, withResultCache } from "./resultCache";
+import { readAllRows, stableOrder } from "./rowPaging";
 import { insertRun, pickPrevious, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
 
 /**
@@ -106,43 +107,31 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
   const stamp = await dataStamp(db, surveyId, spec);
   const hit = rowCache.get(key);
   if (hit && hit.stamp === stamp && Date.now() - hit.at < TTL_MS) return hit.rows;
-  const rows: AnalyticsRow[] = [];
-  for (let start = 0; start < MAX_ROWS; start += CHUNK) {
-    let q = db.from("responses").select(COLUMNS).eq("survey_id", surveyId).is("deleted_at", null).in("status", statuses).order("started_at", { ascending: true }).range(start, start + CHUNK - 1);
+  const { rows, truncated } = await readAllRows<AnalyticsRow>((from, to, columns) => {
+    let q = db.from("responses").select(columns).eq("survey_id", surveyId).is("deleted_at", null).in("status", statuses);
     if (spec.environment === "TEST") q = q.eq("is_test", true);
     else if (spec.environment === "LIVE") q = q.eq("is_test", false);
     if (spec.from) q = q.gte("started_at", spec.from);
     if (spec.to) q = q.lte("started_at", spec.to);
     /*
-     * The dataset rule is applied in `buildDataset`, not here.
-     *
-     * It used to be half here — `quality.is.null,quality->>classification.eq.CLEAN`
-     * — and half absent, which is how it came to disagree with the export: a
-     * KEEP decision on a SUSPICIOUS response never reached the loader, so the
-     * row was gone before anything could honour it. `custom` was already
-     * filtered downstream only. One rule, one place; the cost is reading rows
-     * that are then dropped, which is what `MAX_ROWS` bounds.
+     * The dataset rule is applied in `buildDataset`, not here: one rule, one
+     * place (audit finding 12). The cost is reading rows that are then dropped,
+     * which is what `MAX_ROWS` bounds. The order never ties (F-5), so a page
+     * boundary cannot lose or repeat a response.
      */
-    const { data, error } = await q;
-    if (error) throw new Error(error.message);
-    const chunk = (data ?? []) as unknown as AnalyticsRow[];
-    rows.push(...chunk);
-    if (chunk.length < CHUNK) break;
-  }
+    return stableOrder(q, "started_at").range(from, to);
+  }, { chunk: CHUNK, max: MAX_ROWS, columns: COLUMNS });
   /*
-   * TRUNCATION IS RECORDED, NOT SWALLOWED.
-   *
-   * The loop stops at MAX_ROWS and used to return quietly, so a survey with
-   * 300,000 responses produced a report computed on the first 250,000 that
-   * looked exactly like a complete one. That is a correctness bug wearing a
-   * performance costume: every base, every percentage and every significance
-   * test in it is wrong, and nothing on the screen says so.
+   * TRUNCATION IS RECORDED, NOT SWALLOWED — and only when it happened. A
+   * survey with 300,000 responses used to produce a report computed on the
+   * first 250,000 that looked complete; a survey of exactly 250,000 used to be
+   * flagged although nothing was left out (F-5). The read asks for one row past
+   * the limit, so the flag means rows were left out.
    *
    * A side table rather than a field, so the array stays a plain
-   * `AnalyticsRow[]` for its one caller and for the row cache's byte
-   * accounting.
+   * `AnalyticsRow[]` for its one caller and for the row cache's byte accounting.
    */
-  if (rows.length >= MAX_ROWS) truncatedRows.add(rows);
+  if (truncated) truncatedRows.add(rows);
   remember(key, { at: Date.now(), stamp, rows });
   return rows;
 }

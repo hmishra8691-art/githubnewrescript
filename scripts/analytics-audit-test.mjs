@@ -101,7 +101,7 @@ async function fakeApi(route) {
   }
   if (head === "variables") return json(route, { variables: variableMetadata(def).filter((v) => !v.hidden), counts: { LIVE: rows.length, TEST: 0 }, surveyVersion: "1.0", revision: 3 });
   if (head === "home") return json(route, { analyses: store.analyses.filter((a) => !a.deleted_at), charts: store.charts, reports: store.reports.filter((r) => !r.deleted_at), shares: store.shares.filter((s) => !s.revoked_at) });
-  if (head === "run") { try { if (store.failRunNames?.has(body.definition?.name)) throw new Error("boom"); return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: "The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref abc123)" }, 500); } }
+  if (head === "run") { (store.runNames ??= []).push(body.definition?.name); try { if (store.failRunNames?.has(body.definition?.name)) throw new Error("boom"); return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: "The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref abc123)" }, 500); } }
   if (head === "export") {
     store.exports++;
     let report, results;
@@ -364,6 +364,25 @@ store.failRunNames = new Set();
 await page.click('[data-testid="ax-chart-failed"] button');
 await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-chart-failed"]').length === 0);
 ok("Try again recomputes it");
+
+/* §5b — the library computes only the page of charts on screen */
+console.log("\n§5b SAVED CHARTS — only the shown page is computed");
+for (let i = 0; i < 16; i++) { const a = mkAnalysis(`Paged analysis ${i}`); store.charts.push({ id: uid(), survey_id: SURVEY, analysis_id: a.id, name: `Paged chart ${i}`, spec: { type: "bar_vertical", options: {} }, theme_id: null, style_version: 1, created_at: new Date(Date.now() + 1000 + i).toISOString(), updated_at: now() }); }
+store.runNames = [];
+await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
+await axTab(page, "charts");
+await page.waitForSelector('[data-testid="ax-charts-more"]');
+assert.equal(await count('[data-testid="ax-chart-card"]'), 12);
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-chart-card"] canvas, [data-testid="ax-chart-card"] svg').length >= 1);
+assert.ok(store.runNames.length <= 12, `only the visible charts were computed (${store.runNames.length})`);
+const firstPageRuns = new Set(store.runNames).size;
+ok("opening the library computes only the first page of charts");
+await page.click('[data-testid="ax-charts-more"]');
+await page.waitForFunction((n) => document.querySelectorAll('[data-testid="ax-chart-card"]').length === n, Math.min(24, store.charts.length));
+await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-chart-card"] .ax-chart-wait, [data-testid="ax-chart-card"]').length > 12);
+await new Promise((r) => setTimeout(r, 600));
+assert.ok(new Set(store.runNames).size > firstPageRuns, "the next page was computed on request");
+ok("Show more reveals the next page and computes it");
 
 /* ------------------------------------------------------------------ 6 */
 console.log("\n§6 SAVE — one click, one analysis");
