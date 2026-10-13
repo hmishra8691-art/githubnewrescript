@@ -191,7 +191,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
         <div className="ap-overview" data-testid="ap-overview">
           <div className="ax-kpis">
             {[
-              { l: "Planned analyses", v: items.length, s: `${counts.crosstabs} crosstabs · ${counts.tests} tests`, t: "ap-kpi-items" },
+              { l: "Planned analyses", v: items.length, s: `${ov.tiers.essential} essential · ${ov.tiers.recommended} recommended · ${ov.tiers.exploratory} exploratory`, t: "ap-kpi-items" },
               { l: "Hypotheses", v: ov.hypotheses, s: `${data.hypotheses.filter((h) => h.status === "testable").length} testable`, t: "ap-kpi-hypotheses" },
               { l: "Cross-tabs", v: ov.crosstabs, s: `${items.filter((i) => i.kind === "crosstab" && i.hypotheses.length).length} serve a hypothesis`, t: "ap-kpi-crosstabs" },
               { l: "Variables", v: ov.variables, s: ov.missingVariables ? `${ov.missingVariables} missing` : "all in the survey", t: "ap-kpi-variables" },
@@ -215,11 +215,21 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
               <div className="card-title">Needs attention <span className="ax-rail-count">{attention.length}</span></div>
               {!attention.length && <div className="muted" style={{ fontSize: 13 }}>Every planned analysis reads variables the survey has{ov.configured ? " and matches its saved analysis" : ""}.</div>}
               <ul className="ap-attention" data-testid="ap-attention">
-                {attention.map((it) => <li key={it.id}><span className={`badge ${STATE_TONE[it.state]}`}>{STATE_WORD[it.state]}</span> <button className="ax-linkbtn" onClick={() => openEditorFor(it.id)}>{it.title}</button><div className="muted" style={{ fontSize: 12.5 }}>{it.issues[0]?.message ?? "the plan changed after its analysis was written"}</div></li>)}
+                {attention.map((it) => <li key={it.id}><span className={`badge ${STATE_TONE[it.state]}`}>{STATE_WORD[it.state]}</span> <button className="ax-linkbtn" onClick={() => openEditorFor(it.id)}>{it.title}</button><div className="muted" style={{ fontSize: 12.5 }}>{it.issues[0]?.message ?? it.staleBecause ?? "the plan changed after its analysis was written"}</div></li>)}
               </ul>
               {data.hypotheses.some((h) => h.status !== "testable") && <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{data.hypotheses.filter((h) => h.status !== "testable").map((h) => `${h.label}: ${COVERAGE_WORD[h.status].toLowerCase()}`).join(" · ")} — see Hypotheses.</div>}
             </div>
           </div>
+          {ov.notShown.length > 0 && (
+            <div className="card" data-testid="ap-not-shown">
+              <div className="card-title">Not applied by default <span className="ax-rail-count">{ov.notShown.length}</span></div>
+              <div className="muted" style={{ fontSize: 13 }}>The plan applies every essential item and then the most useful of the rest, up to a cap, so a report stays readable. These stay in the plan — open one to edit or remove it, or raise its tier to include it.</div>
+              <ul className="ap-attention">
+                {ov.notShown.slice(0, 12).map((n) => <li key={n.id}><span className="badge neutral">{n.tier}</span> <button className="ax-linkbtn" onClick={() => openEditorFor(n.id)}>{n.title}</button></li>)}
+              </ul>
+              {ov.notShown.length > 12 && <div className="muted" style={{ fontSize: 12.5 }}>…and {ov.notShown.length - 12} more (see Cross-tabs and Tests &amp; models).</div>}
+            </div>
+          )}
           <div className="card ap-flow" data-testid="ap-flow">
             <div className="card-title">What applying does</div>
             <ol className="ap-steps">
@@ -234,6 +244,12 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
 
       {section === "hypotheses" && (
         <div className="ap-list" data-testid="ap-hypotheses">
+          {data.trace && data.trace.objective && (
+            <div className="muted" style={{ fontSize: 13 }} data-testid="ap-trace-objective">
+              <b>Objective</b> — {data.trace.objective}. Each hypothesis below traces to the planned items that read both of its sides, their results, and the claim the run made.
+              {data.trace.gaps.length > 0 && <ul style={{ margin: "4px 0 0 18px" }} data-testid="ap-trace-gaps">{data.trace.gaps.map((g) => <li key={g}>{g}</li>)}</ul>}
+            </div>
+          )}
           {!data.hypotheses.length && <div className="ax-empty"><div className="ax-empty-t">No hypotheses recorded</div><div className="ax-empty-d">Record the objective and hypotheses in the research design (Intelligent → Analysis, or Survey Settings); the plan's items then say which hypothesis they serve.</div></div>}
           {data.hypotheses.map((h) => (
             <div key={h.label} className="card ap-hyp" data-testid="ap-hyp" data-status={h.status}>
@@ -243,6 +259,9 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
                 {h.items.length ? items.filter((i) => h.items.includes(i.id)).map((it) => <button key={it.id} className="ax-chip" onClick={() => openEditorFor(it.id)} title={it.title}>{it.kind === "crosstab" ? "⊞" : "ƒ"} {it.title}{it.run ? ` · ${it.run.significant} sig.` : ""}</button>)
                   : <span className="muted" style={{ fontSize: 13 }}>Nothing planned for it yet{p.canEditPlan ? " — add a crosstab or test and tick this hypothesis." : "."}</span>}
               </div>
+              {(data.trace?.hypotheses.find((t) => t.label === h.label)?.items ?? []).filter((t) => t.findings.length).map((t) => (
+                <ul key={t.id} className="ax-insights" data-testid="ap-hyp-results" style={{ margin: "4px 0" }}>{t.findings.slice(0, 2).map((f) => <li key={f.id}>{f.headline}{t.outOfDate ? <span className="muted"> · from an out-of-date analysis</span> : null}</li>)}</ul>
+              ))}
               {h.verdict ? <div className="ap-verdict" data-testid="ap-hyp-reason"><b>{VERDICT_WORD[h.verdict.verdict]}</b> — {h.verdict.reason}{h.verdict.corrected ? <span className="muted"> · {h.verdict.corrected.note}</span> : null}</div>
                 : <div className="muted" style={{ fontSize: 12.5 }}>Not tested yet — a verdict appears once the plan has been applied on responses.</div>}
             </div>
@@ -283,6 +302,9 @@ function planStatus(d: PlanPayload): { key: string; label: string; tone: string;
   if (a.status === "no_data") return { key: "no_data", label: "Applied · waiting for data", tone: "neutral", detail: "The outputs are configured; nothing could be computed because there are no complete responses in this dataset yet." };
   if (d.dataChangedSinceApply) return { key: "data_changed", label: "Applied · new data since", tone: "warning", detail: `More completes have arrived since the run of ${run ? timeAgo(run.computedAt) : "the apply"} — apply again to refresh the results.` };
   if (a.status === "partial") return { key: "partial", label: "Applied · some analyses failed", tone: "warning", detail: "Some planned analyses were skipped or could not be computed — see Needs attention and the items marked below." };
+  const bad = (d.overview?.invalid ?? 0) + (d.overview?.stale ?? 0);
+  /* "Applied" with an item that cannot run, or whose analysis is out of date, is not the whole truth (audit P-10) */
+  if (bad) return { key: "applied_attention", label: `Applied · ${bad} item${bad === 1 ? "" : "s"} need${bad === 1 ? "s" : ""} attention`, tone: "warning", detail: `Applied ${timeAgo(a.startedAt)}, but ${d.overview!.invalid ? `${d.overview!.invalid} planned item${d.overview!.invalid === 1 ? "" : "s"} cannot run` : ""}${d.overview!.invalid && d.overview!.stale ? " and " : ""}${d.overview!.stale ? `${d.overview!.stale} ${d.overview!.stale === 1 ? "has" : "have"} an out-of-date analysis` : ""} — see Needs attention.` };
   return { key: "applied", label: "Applied", tone: "success", detail: `Applied ${timeAgo(a.startedAt)}${run ? ` · ${run.items} analyses computed on ${run.n} completes` : ""}.` };
 }
 
@@ -313,15 +335,19 @@ function ItemsSection(p: {
 }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const [preview, setPreview] = React.useState<Record<string, { busy: boolean; result?: RunResult; error?: string }>>({});
-  const previewOf = async (it: Item) => {
-    if (preview[it.id]?.result || preview[it.id]?.busy) return;
-    setPreview((s) => ({ ...s, [it.id]: { busy: true } }));
+  /* a preview belongs to the item as it is NOW: the plan item, what it reads, and the dataset — change any and it is gone (audit P-10) */
+  const previewKey = (it: Item) => `${it.id}|${it.hash}|${it.readsHash}|${p.dataset.environment}|${p.dataset.dataset ?? ""}`;
+  const previewOf = async (it: Item, force = false) => {
+    const key = previewKey(it);
+    const cur = preview[key];
+    if (cur?.busy || (cur?.result && !force)) return;
+    setPreview((s) => ({ ...s, [key]: { busy: true } }));
     try {
       const saved = p.analysisRow(it);
       const def: AnalysisDefinition = saved ? { ...(saved.definition as AnalysisDefinition), name: saved.name as string, dataset: p.dataset } : { ...(it.derived as AnalysisDefinition), dataset: p.dataset };
-      const { result } = await p.api.run(def);
-      setPreview((s) => ({ ...s, [it.id]: { busy: false, result } }));
-    } catch (e) { setPreview((s) => ({ ...s, [it.id]: { busy: false, error: (e as Error).message } })); }
+      const { result } = await p.api.run(def, force ? { fresh: true } : undefined);
+      setPreview((s) => ({ ...s, [key]: { busy: false, result } }));
+    } catch (e) { setPreview((s) => ({ ...s, [key]: { busy: false, error: (e as Error).message } })); }
   };
   const editorOpen = p.editor && p.editor.kind === p.kind;
   return (
@@ -337,7 +363,7 @@ function ItemsSection(p: {
         {p.items.map((it, idx) => {
           const expanded = open === it.id;
           const editing = p.editor?.item?.id === it.id;
-          const pv = preview[it.id];
+          const pv = preview[previewKey(it)];
           const saved = p.analysisRow(it);
           return (
             <div key={it.id} className={`card ap-item ${expanded ? "open" : ""}`} data-testid={`ap-${p.kind}`} data-id={it.id} data-state={it.state}>
@@ -352,7 +378,8 @@ function ItemsSection(p: {
                   </div>
                 </div>
                 <div className="ap-item-badges">
-                  <span className={`badge ${STATE_TONE[it.state]}`} data-testid="ap-item-state">{STATE_WORD[it.state]}</span>
+                  <span className="badge neutral" title={it.inScope ? `${it.tier} tier` : `${it.tier} tier — beyond the items the plan applies by default`} data-testid="ap-item-tier" data-tier={it.tier} data-inscope={it.inScope ? "1" : "0"}>{it.inScope ? it.tier : `${it.tier} · not applied`}</span>
+                  <span className={`badge ${STATE_TONE[it.state]}`} data-testid="ap-item-state" title={it.staleBecause}>{STATE_WORD[it.state]}</span>
                   {it.run && <span className="badge neutral" title="Findings from the latest run">{it.run.significant} sig. of {it.run.findings.length}</span>}
                   {it.chart && <span className="badge neutral" title={`Chart: ${it.chart.type}`}><Icon name="chart" size={11} /> {words(it.chart.type)}</span>}
                 </div>
@@ -377,7 +404,7 @@ function ItemsSection(p: {
                     {it.run && <><dt>Findings</dt><dd>{it.run.findings.length ? <ul className="ax-insights">{it.run.findings.slice(0, 4).map((f) => <li key={f.id}>{f.headline}</li>)}</ul> : <span className="muted">no finding on this base</span>}</dd></>}
                   </dl>
                   <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                    {p.dataN > 0 && it.state !== "invalid" && <button className="btn small" disabled={pv?.busy} onClick={() => void previewOf(it)} data-testid="ap-item-preview">{pv?.busy ? "Computing…" : pv?.result ? "Recompute preview" : "Preview the table"}</button>}
+                    {p.dataN > 0 && it.state !== "invalid" && <button className="btn small" disabled={pv?.busy} onClick={() => void previewOf(it, !!pv?.result)} data-testid="ap-item-preview">{pv?.busy ? "Computing…" : pv?.result ? "Recompute preview" : "Preview the table"}</button>}
                     {p.dataN === 0 && <span className="muted" style={{ fontSize: 12.5 }} data-testid="ap-item-pending">Waiting for data — no complete responses in this dataset yet, so there is nothing to tabulate.</span>}
                     {it.state === "invalid" && <span className="muted" style={{ fontSize: 12.5 }}>Fix the variables above before it can run.</span>}
                   </div>
@@ -543,14 +570,16 @@ function ChartsSection(p: { items: Item[]; api: AxApi; dataN: number; dataset: D
   const [results, setResults] = React.useState<Record<string, { busy: boolean; result?: RunResult; error?: string }>>({});
   const [limit, setLimit] = React.useState(8);
   const shown = p.items.slice(0, limit);
-  const load = React.useCallback(async (it: Item) => {
-    setResults((s) => (s[it.id] ? s : { ...s, [it.id]: { busy: true } }));
+  /* a drawn result is for the item as it is now (what it computes, what it reads) on this dataset; when any of that changes the old one is not shown (audit P-10) */
+  const keyOf = (it: Item) => `${it.id}|${it.hash}|${it.readsHash}|${p.dataset.environment}|${p.dataset.dataset ?? ""}|${p.analysisRow(it)?.version ?? 0}`;
+  const load = React.useCallback(async (it: Item, key: string) => {
+    setResults((s) => (s[key] ? s : { ...s, [key]: { busy: true } }));
     const saved = p.analysisRow(it);
     const def: AnalysisDefinition = saved ? { ...(saved.definition as AnalysisDefinition), name: saved.name as string, dataset: p.dataset } : { ...(it.derived as AnalysisDefinition), dataset: p.dataset };
-    try { const { result } = await p.api.run(def); setResults((s) => ({ ...s, [it.id]: { busy: false, result } })); }
-    catch (e) { setResults((s) => ({ ...s, [it.id]: { busy: false, error: (e as Error).message } })); }
+    try { const { result } = await p.api.run(def); setResults((s) => ({ ...s, [key]: { busy: false, result } })); }
+    catch (e) { setResults((s) => ({ ...s, [key]: { busy: false, error: (e as Error).message } })); }
   }, [p.api, p.analysisRow, p.dataset]);
-  React.useEffect(() => { if (p.dataN > 0) for (const it of shown) if (!results[it.id]) void load(it); }, [shown, p.dataN, load, results]);
+  React.useEffect(() => { if (p.dataN > 0) for (const it of shown) { const key = keyOf(it); if (!results[key]) void load(it, key); } }, [shown, p.dataN, load, results]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!p.items.length) return <div className="ax-empty"><div className="ax-empty-t">Nothing to chart</div><div className="ax-empty-d">Every planned analysis that can run appears here as a chart.</div></div>;
   if (p.dataN === 0) return (
     <div className="ax-empty" data-testid="ap-charts-pending">
@@ -567,10 +596,11 @@ function ChartsSection(p: { items: Item[]; api: AxApi; dataN: number; dataset: D
       </div>
       <div className="ax-chart-grid">
         {shown.map((it) => {
-          const r = results[it.id];
+          const r = results[keyOf(it)];
           const saved = p.analysisRow(it);
           const type: ChartType = it.chart?.type ?? it.run?.chart ?? r?.result?.recommendations?.[0]?.type ?? r?.result?.recommendedCharts?.[0] ?? "bar_vertical";
-          const spec: ChartSpec = { type, options: { title: it.title, dataLabels: true } };
+          /* a saved chart is drawn as saved — its title, labels, colours, decimals — not as a fresh default (audit P-10) */
+          const spec: ChartSpec = it.chart?.spec ?? { type, options: { title: it.title, dataLabels: true } };
           return (
             <div key={it.id} className="card ax-chart-card" data-testid="ap-chart-card" data-id={it.id}>
               <div className="card-title">{it.title}<span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>{words(type)}{it.chart ? "" : " · not saved yet"}</span></div>

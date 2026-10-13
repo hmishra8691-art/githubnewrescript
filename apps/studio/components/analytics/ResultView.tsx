@@ -2,7 +2,7 @@
 import { Warnings } from "./Warnings";
 import React from "react";
 import type { AnalysisResult, ChartAdvice, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
-import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable } from "@rescript/analytics";
+import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable, isOwnPicture } from "@rescript/analytics";
 import { Chart } from "./charts/Chart";
 import { ProTable, tableToTsv, type TableFormatting } from "./ProTable";
 import { downloadBlob } from "./api";
@@ -45,7 +45,11 @@ export function ChartCustomizer({ spec, onChange, themes, result }: { spec: Char
           <Field label="Target line"><input className="input small" type="number" value={o.target?.value ?? ""} onChange={(e) => set({ target: e.target.value === "" ? null : { value: Number(e.target.value), label: o.target?.label } })} placeholder="none" /></Field>
         </div>
         <div className="ax-toggles">
-          {([["dataLabels", "Data labels"], ["gridLines", "Grid lines"], ["percent", "Show as %"], ["showSignificance", "Significance letters"], ["showCI", "Confidence intervals"], ["showBase", "Base size"]] as [keyof ChartSpec["options"], string][]).map(([k, label]) => (
+          {([["dataLabels", "Data labels"], ["gridLines", "Grid lines"], ["showSignificance", "Significance letters"], ["showCI", "Confidence intervals"], ["showBase", "Base size"]] as [keyof ChartSpec["options"], string][])
+            /* a switch that changes nothing is not shown (C-9): letters exist only where the result carries them, intervals only where it has them */
+            .filter(([k]) => k !== "showSignificance" || (result.chart.series ?? []).some((s) => s.sig?.some(Boolean)))
+            .filter(([k]) => k !== "showCI" || (result.chart.series ?? []).some((s) => s.ci?.some(Boolean) || s.errors?.some((e) => e != null)))
+            .map(([k, label]) => (
             <label key={k} className="ax-toggle"><input type="checkbox" checked={(o[k] as boolean | undefined) ?? (k === "showBase" || k === "dataLabels" || k === "gridLines" || k === "showSignificance")} onChange={(e) => set({ [k]: e.target.checked } as Partial<ChartSpec["options"]>)} /> {label}</label>
           ))}
         </div>
@@ -82,7 +86,9 @@ export function ChartCustomizer({ spec, onChange, themes, result }: { spec: Char
 export function ChartGallery({ result, current, onPick, recommendations }: { result: AnalysisResult; current: ChartType; onPick: (t: ChartType) => void; recommendations: ChartRecommendation[] }) {
   const available = new Set(chartsAvailable(result));
   const [family, setFamily] = React.useState<string>("recommended");
-  const items = family === "recommended" ? recommendations.map((r) => CHART_CATALOG.find((c) => c.type === r.type)!).filter(Boolean) : CHART_CATALOG.filter((c) => c.family === family);
+  /* one entry per drawing (C-7): a type that is only another type's picture under a different name is not offered as a second chart — unless it is the one in use */
+  const offered = (t: ChartType) => isOwnPicture(t) || t === current;
+  const items = family === "recommended" ? recommendations.map((r) => CHART_CATALOG.find((c) => c.type === r.type)!).filter(Boolean) : CHART_CATALOG.filter((c) => c.family === family && offered(c.type));
   return (
     <div className="ax-gallery" data-testid="ax-gallery">
       <div className="ax-gallery-fams">

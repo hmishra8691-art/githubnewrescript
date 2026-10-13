@@ -19,7 +19,7 @@ export class AxApi {
   }
   variables() { return this.req<{ variables: VariableMeta[]; counts: Record<string, number>; surveyVersion: string | null; revision: number | null }>("variables"); }
   home() { return this.req<{ analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] }>("home"); }
-  run(definition: AnalysisDefinition) { return this.req<{ result: RunResult }>("run", { method: "POST", body: JSON.stringify({ definition }) }); }
+  run(definition: AnalysisDefinition, opts?: { /** compute again instead of finding the stored result */ fresh?: boolean }) { return this.req<{ result: RunResult }>("run", { method: "POST", body: JSON.stringify({ definition, ...(opts?.fresh ? { fresh: true } : {}) }) }); }
   list(coll: string, query = "") { return this.req<{ items: Row[] }>(`${coll}${query ? `?${query}` : ""}`); }
   get(coll: string, id: string) { return this.req<{ item: Row }>(`${coll}/${id}`); }
   create(coll: string, body: unknown) { return this.req<{ item: Row }>(coll, { method: "POST", body: JSON.stringify(body) }); }

@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AnalysisPlan, SurveyDefinition } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, droppedFieldPaths, ensureElementIds, hypothesisCoverage, isAnalysisOp, type SurveyAction } from "@rescript/engine";
-import {
+import { planTrace,
   variableMetadata, reportFromRun, planItemViews, planVariableViews, planOverview, planAnalysisSync, planChartSync, planChartSpec, planDashboard, stampedDefinition, summarizeApply, withOrigin, editedSinceApply, plannedIdOf,
   planRelinks, relinkedDefinition, analysisSignature, surveyKnownNames, plannedAnalyses, reviewAgainstSaved,
   type AnalysisDefinition, type ChartSpec, type DashboardDefinition, type DatasetSpec, type ReportDefinition, type PlanItemView, type ApplyItemResult, type ApplySummary, type SavedAnalysisRow, type SavedChartRow, type StoredRunLike, type HypothesisVerdict,
@@ -143,6 +143,8 @@ export async function planPayload(db: SupabaseClient, surveyId: string, ctx: Loa
     survey: { objective: def.research?.objective ?? null, hypotheses: def.research?.hypotheses ?? [] },
     dataset, counts,
     items, variables, overview, hypotheses,
+    /* objective → hypothesis → item → result → claim, with every broken link named */
+    trace: plan ? planTrace(def, items, run) : null,
     run: run ? { id: run.id, computedAt: run.computedAt, trigger: run.trigger, environment: run.environment, n: run.n, items: run.items.length, findings: run.findings, verdicts: run.verdicts, warnings: run.warnings, discoveries: run.discoveries ?? null, kpis: run.kpis ?? null, since: run.since ?? null } : null,
     apply: apply ? { ...apply, current: !!apply.planHash && apply.planHash === hash && (apply.status === "applied" || apply.status === "partial" || apply.status === "no_data") } : null,
     applyAvailable: applied.available,
@@ -271,7 +273,7 @@ export async function syncPlannedAnalyses(db: SupabaseClient, surveyId: string, 
   for (const s of syncs) {
     const it = s.item;
     /* `status` is what happens on the data, decided later; until then every configured item is waiting */
-    if (s.kind === "skip") { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "skipped", reason: s.reason, ...(it.analysis ? { analysisId: it.analysis.id } : {}) }); continue; }
+    if (s.kind === "skip") { results.set(it.id, { id: it.id, title: it.title, sync: s.notApplied ? "not_applied" : "skipped_invalid", status: "skipped", reason: s.reason, ...(it.analysis ? { analysisId: it.analysis.id } : {}) }); continue; }
     if (s.kind === "keep") { idFor.set(it.id, s.analysisId); results.set(it.id, { id: it.id, title: it.title, sync: s.refined ? "kept_refined" : "unchanged", status: "pending_data", analysisId: s.analysisId }); if (it.analysis) planned.set(analysisSignature(rows.analyses.find((r) => r.id === s.analysisId)?.definition ?? it.derived), { id: s.analysisId, name: it.analysis.name }); continue; }
     if (s.kind === "create") {
       const sig = analysisSignature(s.definition);

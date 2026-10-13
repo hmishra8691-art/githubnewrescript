@@ -67,6 +67,12 @@ export const PlannedCrosstab = z.object({
   measure: z.enum(["pct_col", "pct_row", "count", "mean"]).optional(),
   /** 1 = answers a hypothesis or the objective directly; 2 = profiling; 3 = exploratory */
   priority: z.number().int().min(1).max(3).default(2),
+  /**
+   * How much the plan leans on it (audit P-7): "essential" answers a hypothesis or what the design demands,
+   * "recommended" profiles the outcome, "exploratory" is worth a look but not worth a place in every report.
+   * Absent = derived from the priority and the hypotheses it serves.
+   */
+  tier: z.enum(["essential", "recommended", "exploratory"]).optional(),
   hypotheses: z.array(z.string()).default([]),
   reason: z.string().optional(),
 });
@@ -86,6 +92,12 @@ export const PlannedTest = z.object({
   /** a mediator the model routes through */
   mediator: z.string().optional(),
   priority: z.number().int().min(1).max(3).default(2),
+  /**
+   * How much the plan leans on it (audit P-7): "essential" answers a hypothesis or what the design demands,
+   * "recommended" profiles the outcome, "exploratory" is worth a look but not worth a place in every report.
+   * Absent = derived from the priority and the hypotheses it serves.
+   */
+  tier: z.enum(["essential", "recommended", "exploratory"]).optional(),
   hypotheses: z.array(z.string()).default([]),
   reason: z.string().optional(),
 });

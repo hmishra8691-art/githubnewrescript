@@ -8,8 +8,9 @@ import { hashDefinition } from "./analyses/common.js";
  * served as if it were current.
  *
  *   2026.10.1  Phase 0 of the audit — Holm-adjusted letters, weighted CIs, Type II ANOVA, answered bases, regression checks
+ *   2026.10.2  Phase 3 — a result carries the one question-aware chart choice (advice) every surface reads; chart rules, small bases
  */
-export const ANALYTICS_ENGINE_VERSION = "2026.10.1";
+export const ANALYTICS_ENGINE_VERSION = "2026.10.2";
 
 export interface InputsOf { dataVersion?: string | null; surveyVersion?: string | null }
 

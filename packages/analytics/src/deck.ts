@@ -1,7 +1,8 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { AnalysisResult, ChartSpec } from "./types.js";
 import type { AnalysisRun, Finding, HypothesisVerdict, RunItem } from "./findings.js";
-import { chooseChart, type Audience } from "./chartPurpose.js";
+import type { Audience } from "./chartPurpose.js";
+import { rankedCharts } from "./questionChart.js";
 import { reportNarrative } from "./findingsReport.js";
 import { CORRECTION_WORDS } from "./posthoc.js";
 
@@ -111,7 +112,7 @@ export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOp
   const resultOf = (it: RunForDeck["items"][number] | undefined, id: string | undefined) => it?.result ?? (id ? opts.results?.[id] : undefined);
   const chartFor = (it: RunForDeck["items"][number] | undefined, id: string | undefined, titleText: string): ChartSpec => {
     const result = resultOf(it, id);
-    const type = it && result ? chooseChart(it.definition, result, { audience })[0]?.type ?? (it.chart ?? "bar_vertical") : (it?.chart ?? "bar_vertical");
+    const type = it && result ? rankedCharts(it.definition, result, { audience })[0]?.type ?? (it.chart ?? "bar_vertical") : (it?.chart ?? "bar_vertical");
     return { type, options: { title: titleText, dataLabels: true } };
   };
 

@@ -200,6 +200,8 @@ export interface AnalysisResult {
   insights: string[];
   warnings: string[];
   recommendedCharts: ChartType[];
+  /** the question-aware chart choice this result was run with — the one every surface (app, report, deck, story, export) reads (audit C-5) */
+  advice?: import("./questionChart.js").ChartAdvice;
   /** per-segment sub-results for segment switching */
   segments?: { name: string; n: number; chart: ChartData }[];
   computedAt: string;
@@ -341,7 +343,7 @@ export const DEFAULT_THEME: ReportTheme = {
   colors: { primary: "#4f46e5", secondary: "#131a2b", accent: "#06b6d4", background: "#ffffff", text: "#131a2b", subtle: "#6b7690",
     palette: ["#4f46e5", "#06b6d4", "#f59e0b", "#10b981", "#f43f5e", "#8b5cf6", "#f97316", "#84cc16", "#ec4899", "#64748b"] },
   fontFamily: "Inter, system-ui, sans-serif",
-  chart: { gridLines: true, dataLabels: true, decimals: 0 },
+  chart: { gridLines: true, dataLabels: true },
   typography: { baseSize: 12, titleSize: 16 },
 };
 

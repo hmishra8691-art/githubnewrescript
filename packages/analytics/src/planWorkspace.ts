@@ -1,5 +1,5 @@
 import type { AnalysisPlan, PlannedCrosstab, PlannedTest, SurveyDefinition } from "@rescript/schema";
-import { isNonQuestionVariable, inferQuestionAnalysis, planItemTitle, reviewAnalysisPlan, sampleSizeReview, segmentVariableName, type AnalysisPlanIssue } from "@rescript/engine";
+import { isNonQuestionVariable, inferQuestionAnalysis, planItemTitle, planScope, planTierOf, reviewAnalysisPlan, sampleSizeReview, segmentVariableName, type AnalysisPlanIssue, type PlanTier } from "@rescript/engine";
 import type { AnalysisDefinition, ChartSpec, ChartType, DashboardDefinition, DashboardWidget, DatasetSpec, OutputOrigin, ReportDefinition } from "./types.js";
 import type { VariableMeta } from "./dataset.js";
 import { hashDefinition } from "./analyses/common.js";
@@ -47,8 +47,8 @@ export const plannedIdOf = (def: AnalysisDefinition | null | undefined): string 
  * other columns, another measure, a different grouping — does not.
  */
 export function plannedHash(def: AnalysisDefinition): string {
-  const { plannedHash: _h, ...options } = (def.options ?? {}) as Record<string, unknown>;
-  void _h;
+  const { plannedHash: _h, plannedReads: _r, ...options } = (def.options ?? {}) as Record<string, unknown>;
+  void _h; void _r;
   const { dataset: _d, surveyVersion: _v, id: _i, version: _n, ...rest } = def;
   void _d; void _v; void _i; void _n;
   return fnv(JSON.stringify(sortKeys({ ...rest, options })));
@@ -71,6 +71,37 @@ export const savedPlannedHash = (def: AnalysisDefinition | null | undefined): st
   const h = def?.options?.plannedHash;
   return typeof h === "string" && h ? h : null;
 };
+
+/** the record of what the item's variables and hypotheses were when the analysis was last written from the plan (audit P-6) */
+export const savedPlannedReads = (def: AnalysisDefinition | null | undefined): string | null => {
+  const h = def?.options?.plannedReads;
+  return typeof h === "string" && h ? h : null;
+};
+
+/**
+ * WHAT A PLAN ITEM'S RESULT DEPENDS ON BEYOND ITS OWN DEFINITION (audit P-6).
+ * The item's definition names variables; it does not say what they ARE. Retype
+ * a question (a rating becomes a category list), reorder or relabel its
+ * answers, or reword a hypothesis the item serves, and the saved analysis
+ * still matches the plan — yet it no longer says what it was written to say.
+ * This hash covers exactly the variables the item reads (through a derived
+ * variable, the items it is built from) and the hypotheses it serves, so a
+ * change touches the items that read it and no others.
+ */
+export function planReadsHash(def: SurveyDefinition, plan: AnalysisPlan | undefined, variables: readonly string[], hypotheses: readonly string[], dictionary: readonly VariableMeta[]): string {
+  const byName = new Map(dictionary.map((v) => [v.name, v]));
+  const spec = (name: string, depth = 0): unknown => {
+    const m = byName.get(name);
+    if (m) return { n: name, r: m.role, t: m.questionType ?? null, c: (m.categories ?? []).map((c) => [c.code, c.label]), h: m.hidden || undefined };
+    const d = plan?.derived.find((x) => x.name === name);
+    if (d) return { n: name, derived: d.kind, expression: d.expression ?? null, from: depth < 4 ? d.from.map((f) => spec(f, depth + 1)) : d.from };
+    const calc = (def.calculations ?? []).find((c) => c.targetVariable === name);
+    if (calc) return { n: name, calculation: JSON.stringify(calc) };
+    return { n: name, absent: true };
+  };
+  const texts = hypotheses.map((label) => { const i = Number(/\d+/.exec(label)?.[0]) - 1; return [label, def.research?.hypotheses[i] ?? null]; });
+  return fnv(JSON.stringify(sortKeys({ v: [...variables].sort().map((n) => spec(n)), h: texts })));
+}
 
 /* ------------------------------------------------------------ the view */
 
@@ -111,10 +142,18 @@ export interface PlanItemView {
   /** the definition the plan derives — what the apply saves (dataset-less until applied) */
   derived: AnalysisDefinition;
   hash: string;
+  /** a hash of the variables it reads (as the dictionary describes them) and the hypotheses it serves — what the saved analysis was written against */
+  readsHash: string;
   issues: PlanItemIssue[];
   state: PlanItemState;
+  /** why it is stale, when the plan did not change but what it reads did */
+  staleBecause?: string;
+  /** essential (answers a hypothesis or what the design demands), recommended or exploratory */
+  tier: PlanTier;
+  /** false when the plan's cap leaves it out of "apply" — it is listed under "not shown" instead of silently dropped */
+  inScope: boolean;
   analysis?: { id: string; name: string; version: number; updatedAt: string | null; hash: string | null; definitionHash: string };
-  chart?: { id: string; type: ChartType; name: string };
+  chart?: { id: string; type: ChartType; name: string; /** the saved chart as the researcher styled it — the plan's own pages draw from this, not from a fresh default (audit P-10) */ spec: ChartSpec; styleVersion: number };
   /** what the latest run made of it */
   run?: { findings: Finding[]; chart?: ChartType; significant: number; adaptedFrom?: string };
   /** the raw plan item, for the editor */
@@ -154,6 +193,9 @@ export interface PlanOverview {
   charts: number;
   /** items the latest run produced findings for */
   run: number;
+  /** items by tier, and the ones the cap leaves out of "apply" */
+  tiers: Record<PlanTier, number>;
+  notShown: { id: string; title: string; tier: PlanTier; why: string }[];
   attention: { id: string; title: string; why: string }[];
 }
 
@@ -195,6 +237,8 @@ export function planItemViews(def: SurveyDefinition, dataset: DatasetSpec, ctx: 
   const runByPlanned = new Map<string, StoredRunItem>();
   for (const it of ctx.run?.items ?? []) { const id = plannedIdOf(it.definition); if (id && !it.adaptedFrom && !runByPlanned.has(id)) runByPlanned.set(id, it); }
 
+  /* what the cap applies: every essential item, the rest by tier — and whatever already has a saved analysis stays */
+  const scope = planScope(plan, { keep: new Set(analysisByPlanned.keys()) });
   const view = (item: PlannedCrosstab | PlannedTest, kind: "crosstab" | "test"): PlanItemView => {
     const p = byPlanned.get(item.id);
     const variables = kind === "crosstab" ? [...new Set([...(item as PlannedCrosstab).rows, ...(item as PlannedCrosstab).columns])] : names(item as PlannedTest);
@@ -211,18 +255,23 @@ export function planItemViews(def: SurveyDefinition, dataset: DatasetSpec, ctx: 
     const chartRow = saved ? (chartsByAnalysis.get(saved.id) ?? []).find((c) => c.spec?.id === `plan:${item.id}`) ?? (chartsByAnalysis.get(saved.id) ?? [])[0] : undefined;
     const runItem = runByPlanned.get(item.id);
     const invalid = missing.length > 0 || issues.some((i) => i.level === "critical");
+    const readsHash = planReadsHash(def, plan, variables, item.hypotheses, ctx.dictionary);
     let state: PlanItemState = "planned";
+    let staleBecause: string | undefined;
     if (invalid) state = "invalid";
     else if (saved) {
       const savedHash = savedPlannedHash(saved.definition);
       const matches = plannedHash({ ...saved.definition, name: derived.name }) === hash;
       state = matches ? "configured" : savedHash && savedHash !== hash ? "stale" : "refined";
+      /* the plan did not move, but a variable it reads or a hypothesis it serves did — only this item's analysis is out of date (an analysis written before this was recorded is left alone) */
+      const savedReads = savedPlannedReads(saved.definition);
+      if (state !== "stale" && savedReads && savedReads !== readsHash) { state = "stale"; staleBecause = "a variable it reads, or a hypothesis it serves, changed since it was written"; }
     }
     return {
       id: item.id, kind, title: derived.name, method: kind === "crosstab" ? "crosstab" : words((item as PlannedTest).method), priority: item.priority, hypotheses: item.hypotheses,
-      ...(item.reason ? { reason: item.reason } : {}), variables, missing, derived, hash, issues, state,
+      ...(item.reason ? { reason: item.reason } : {}), variables, missing, derived, hash, readsHash, issues, state, ...(staleBecause ? { staleBecause } : {}), tier: planTierOf(item), inScope: scope.inScope.has(item.id),
       ...(saved ? { analysis: { id: saved.id, name: saved.name, version: saved.version, updatedAt: saved.updated_at ?? null, hash: savedPlannedHash(saved.definition), definitionHash: hashDefinition(saved.definition) } } : {}),
-      ...(chartRow ? { chart: { id: chartRow.id, type: chartRow.spec.type, name: chartRow.name } } : {}),
+      ...(chartRow ? { chart: { id: chartRow.id, type: chartRow.spec.type, name: chartRow.name, spec: chartRow.spec, styleVersion: chartRow.style_version ?? 1 } } : {}),
       ...(runItem ? { run: { findings: runItem.findings, ...(runItem.chart ? { chart: runItem.chart } : {}), significant: runItem.findings.filter((f) => f.significant).length, ...(runItem.adaptedFrom ? { adaptedFrom: runItem.adaptedFrom } : {}) } } : {}),
       item,
     };
@@ -267,8 +316,11 @@ export function planOverview(def: SurveyDefinition, items: PlanItemView[], varia
   const attention: PlanOverview["attention"] = [];
   for (const it of items) {
     if (it.state === "invalid") attention.push({ id: it.id, title: it.title, why: it.issues[0]?.message ?? "cannot run" });
-    else if (it.state === "stale") attention.push({ id: it.id, title: it.title, why: "the plan changed after its analysis was written — apply the plan to update it" });
+    else if (it.state === "stale") attention.push({ id: it.id, title: it.title, why: it.staleBecause ? `${it.staleBecause} — apply the plan to update it` : "the plan changed after its analysis was written — apply the plan to update it" });
   }
+  const tiers: Record<PlanTier, number> = { essential: 0, recommended: 0, exploratory: 0 };
+  for (const it of items) tiers[it.tier]++;
+  const notShown = items.filter((i) => !i.inScope).map((i) => ({ id: i.id, title: i.title, tier: i.tier, why: `${i.tier} — beyond the items the plan applies by default` }));
   return {
     crosstabs: plan?.crosstabs.length ?? 0, tests: plan?.tests.length ?? 0, derived: plan?.derived.length ?? 0, segments: plan?.segments.length ?? 0,
     hypotheses: def.research?.hypotheses.length ?? 0,
@@ -279,6 +331,7 @@ export function planOverview(def: SurveyDefinition, items: PlanItemView[], varia
     invalid: items.filter((i) => i.state === "invalid").length,
     charts: items.filter((i) => i.chart).length,
     run: items.filter((i) => i.run).length,
+    tiers, notShown,
     attention,
   };
 }
@@ -286,14 +339,14 @@ export function planOverview(def: SurveyDefinition, items: PlanItemView[], varia
 /* ------------------------------------------------------------ applying */
 
 /** what the apply did to the item's saved analysis */
-export type ApplySyncStatus = "created" | "updated" | "repointed" | "unchanged" | "kept_refined" | "skipped_invalid";
+export type ApplySyncStatus = "created" | "updated" | "repointed" | "unchanged" | "kept_refined" | "skipped_invalid" | "not_applied";
 /** what happened to it on the data: run, failed to compute, waiting for data, or not run at all (skipped) */
 export type ApplyItemStatus = "run" | "failed" | "pending_data" | "skipped";
 export interface ApplyItemResult { id: string; title: string; sync: ApplySyncStatus; status: ApplyItemStatus; reason?: string; analysisId?: string; chartId?: string }
 
 /** what the apply has to do to one planned item's saved analysis, before anything runs */
 export type AnalysisSync =
-  | { kind: "skip"; item: PlanItemView; reason: string }
+  | { kind: "skip"; item: PlanItemView; reason: string; /** left out by the cap, not invalid */ notApplied?: boolean }
   | { kind: "create"; item: PlanItemView; definition: AnalysisDefinition; tags: string[] }
   | { kind: "update"; item: PlanItemView; analysisId: string; definition: AnalysisDefinition; tags: string[]; summary: string; /** the dataset it was reading before, when the apply moved it (audit P-5) */ repointedFrom?: DatasetSpec }
   | { kind: "keep"; item: PlanItemView; analysisId: string; refined: boolean };
@@ -301,7 +354,7 @@ export type AnalysisSync =
 /** the definition as it is saved — the plan's, stamped with the hash it came from */
 export function stampedDefinition(view: PlanItemView, dataset: DatasetSpec, surveyVersion: string | null): AnalysisDefinition {
   const name = view.derived.name.slice(0, 160);
-  return { ...view.derived, name, dataset, ...(surveyVersion ? { surveyVersion } : {}), options: { ...(view.derived.options ?? {}), planned: view.id, plannedHash: view.hash } };
+  return { ...view.derived, name, dataset, ...(surveyVersion ? { surveyVersion } : {}), options: { ...(view.derived.options ?? {}), planned: view.id, plannedHash: view.hash, plannedReads: view.readsHash } };
 }
 
 /*
@@ -315,7 +368,7 @@ export function stampedDefinition(view: PlanItemView, dataset: DatasetSpec, surv
  * analysis from a changed plan used to replace the whole definition, so a
  * researcher's filter and weighting vanished the next time the plan moved.
  */
-const PLAN_OPTION_KEYS = ["planned", "plannedHash", "hypotheses", "layout", "significance", "test", "model", "moderation", "interactions", "method", "primaryBox"];
+const PLAN_OPTION_KEYS = ["planned", "plannedHash", "plannedReads", "hypotheses", "layout", "significance", "test", "model", "moderation", "interactions", "method", "primaryBox"];
 
 /** the saved definition with the plan's part replaced and the researcher's part kept */
 export function mergePlanUpdate(saved: AnalysisDefinition, fromPlan: AnalysisDefinition): AnalysisDefinition {
@@ -359,6 +412,8 @@ export function planAnalysisSync(items: PlanItemView[], dataset: DatasetSpec, su
   const byId = new Map(analyses.map((a) => [a.id, a.definition]));
   return items.map((item): AnalysisSync => {
     if (item.state === "invalid") return { kind: "skip", item, reason: item.issues[0]?.message ?? "cannot run" };
+    /* beyond the cap (audit P-7): not applied, and listed — an analysis that already exists is never touched by the cap */
+    if (!item.inScope && !item.analysis) return { kind: "skip", item, reason: `${item.tier} — beyond the items the plan applies by default; it stays in the plan and is listed as not shown`, notApplied: true };
     const definition = stampedDefinition(item, dataset, surveyVersion);
     if (!item.analysis) return { kind: "create", item, definition, tags: item.hypotheses };
     const saved = byId.get(item.analysis.id);
@@ -438,6 +493,13 @@ export function planChartSync(items: PlanItemView[], analysisIdFor: (plannedId: 
 
 export const planChartSpec = (item: PlanItemView, type: ChartType): ChartSpec => ({ id: `plan:${item.id}`, type, options: { title: item.title, dataLabels: true } });
 
+/** one line on the dashboard for the planned charts it has no room for — the count and the first few by name */
+export function omittedNote(left: readonly Pick<PlanItemView, "title">[]): string {
+  if (!left.length) return "";
+  const names = left.slice(0, 4).map((i) => i.title).join("; ");
+  return `\n\nNot on this dashboard (${left.length} more planned chart${left.length === 1 ? "" : "s"}): ${names}${left.length > 4 ? "; …" : ""}. They are in the plan, and in the report.`;
+}
+
 /**
  * THE DASHBOARD the apply maintains. Widgets made from the plan carry
  * `plan:<id>` ids; those are added, retyped (never moved) and removed as the
@@ -447,8 +509,11 @@ export const planChartSpec = (item: PlanItemView, type: ChartType): ChartSpec =>
  */
 export function planDashboard(existing: DashboardDefinition | null, title: string, items: PlanItemView[], ctx: { analysisIdFor: (plannedId: string) => string | undefined; chartSpecFor: (plannedId: string) => ChartSpec | undefined; run: StoredRunLike | null; max?: number }): DashboardDefinition {
   const max = ctx.max ?? 16;
-  const wanted = items.filter((i) => i.state !== "invalid" && ctx.analysisIdFor(i.id) && ctx.chartSpecFor(i.id))
-    .sort((a, b) => (b.hypotheses.length ? 1 : 0) - (a.hypotheses.length ? 1 : 0) || a.priority - b.priority).slice(0, max);
+  const eligible = items.filter((i) => i.state !== "invalid" && ctx.analysisIdFor(i.id) && ctx.chartSpecFor(i.id))
+    .sort((a, b) => (b.hypotheses.length ? 1 : 0) - (a.hypotheses.length ? 1 : 0) || a.priority - b.priority);
+  const wanted = eligible.slice(0, max);
+  /* what the dashboard has no room for is said on the dashboard, not dropped (audit P-7) */
+  const left = eligible.slice(max);
   const wantedIds = new Set(wanted.map((i) => `plan:${i.id}`));
   const keep = (existing?.widgets ?? []).filter((w) => !w.id.startsWith("plan:") || wantedIds.has(w.id) || w.id === "plan:summary");
   let widgets: DashboardWidget[] = keep.map((w) => {
@@ -457,7 +522,7 @@ export function planDashboard(existing: DashboardDefinition | null, title: strin
     const spec = ctx.chartSpecFor(item.id)!;
     return { ...w, title: item.title, analysisId: ctx.analysisIdFor(item.id), chart: w.chart && w.chart.type !== spec.type && (w.chart.version ?? 1) <= 1 ? { ...w.chart, type: spec.type } : w.chart ?? spec };
   });
-  const summaryText = ctx.run ? briefText(ctx.run, { maxFindings: 6 }) : "The plan has not been run on responses yet — apply it once completes exist and the findings appear here.";
+  const summaryText = (ctx.run ? briefText(ctx.run, { maxFindings: 6 }) : "The plan has not been run on responses yet — apply it once completes exist and the findings appear here.") + omittedNote(left);
   const summary = widgets.find((w) => w.id === "plan:summary");
   if (summary) widgets = widgets.map((w) => (w.id === "plan:summary" ? { ...w, text: summaryText } : w));
   else widgets = [{ id: "plan:summary", type: "text", title: "Findings", text: summaryText, x: 0, y: 0, w: 12, h: 2 }, ...widgets.map((w) => ({ ...w, y: w.y + 2 }))];
@@ -496,14 +561,14 @@ export interface ApplySummary {
   n: number;
   environment: DatasetSpec["environment"];
   items: ApplyItemResult[];
-  counts: { created: number; updated: number; repointed: number; unchanged: number; keptRefined: number; skipped: number; run: number; failed: number; charts: number };
+  counts: { created: number; updated: number; repointed: number; unchanged: number; keptRefined: number; skipped: number; notApplied: number; run: number; failed: number; charts: number };
   message: string;
 }
 
 export function summarizeApply(env: DatasetSpec["environment"], n: number, items: ApplyItemResult[], extra: { charts: number; planned: number; relinked?: number; adopted?: number }): ApplySummary {
   const sync = (s: ApplySyncStatus) => items.filter((i) => i.sync === s).length;
   const count = (s: ApplyItemStatus) => items.filter((i) => i.status === s).length;
-  const counts = { created: sync("created"), updated: sync("updated"), repointed: sync("repointed"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), run: count("run"), failed: count("failed"), charts: extra.charts };
+  const counts = { created: sync("created"), updated: sync("updated"), repointed: sync("repointed"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), notApplied: sync("not_applied"), run: count("run"), failed: count("failed"), charts: extra.charts };
   const words: string[] = [];
   if (counts.created) words.push(`${counts.created} created`);
   if (counts.updated) words.push(`${counts.updated} updated from the plan`);
@@ -512,6 +577,7 @@ export function summarizeApply(env: DatasetSpec["environment"], n: number, items
   if (extra.adopted) words.push(`${extra.adopted} use${extra.adopted === 1 ? "s" : ""} an analysis you already had`);
   if (counts.keptRefined) words.push(`${counts.keptRefined} kept as refined in Analytics`);
   if (counts.skipped) words.push(`${counts.skipped} skipped (invalid)`);
+  if (counts.notApplied) words.push(`${counts.notApplied} not applied (beyond the plan's cap; listed as not shown)`);
   if (counts.failed) words.push(`${counts.failed} failed to compute`);
   const configured = `${extra.planned} planned ${extra.planned === 1 ? "analysis" : "analyses"}${words.length ? ` — ${words.join(", ")}` : ""}`;
   if (!extra.planned) return { status: "nothing_planned", n, environment: env, items, counts, message: "Nothing is planned yet." };

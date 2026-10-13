@@ -101,8 +101,9 @@ test("the framework the design implies: banner crosstabs per outcome, IV × DV t
   assert.equal(plan.source, "engine");
   const banner = plan.crosstabs.find((x) => x.rows[0] === "PURCHASE_INT" && x.columns.length > 1)!;
   assert.deepEqual(banner.columns, ["GENDER", "COUNTRY"]);
-  assert.equal(banner.priority, 1, "a hypothesis names purchase intention");
-  assert.deepEqual(banner.hypotheses, ["H1", "H2"]);
+  /* the banner reads purchase intention and the sample profile: it serves no hypothesis, so it is profiling (audit P-8) — naming a construct is not testing it */
+  assert.equal(banner.priority, 2, "profiling, not testing");
+  assert.deepEqual(banner.hypotheses, []);
   assert.ok(plan.crosstabs.some((x) => x.rows[0] === "AWARE" && x.columns[0] === "AD_EXPOSE"), "awareness by exposure: categorical × categorical");
   assert.ok(!plan.crosstabs.some((x) => x.rows[0] === "PURCHASE_INT" && x.columns[0] === "TRUST_1"), "ordinal scale × scale is a correlation, not a table");
   assert.ok(plan.crosstabs.some((x) => x.priority === 3 && x.reason === "sample profile"));
@@ -124,7 +125,8 @@ test("the framework the design implies: banner crosstabs per outcome, IV × DV t
   assert.deepEqual(plan.segments.map((s) => s.by[0]), ["GENDER", "COUNTRY"]);
   /* the most important tables: hypothesis-linked first, then by priority */
   const top = prioritizeCrosstabs(def, 3, plan);
-  assert.equal(top[0].rows[0], "PURCHASE_INT");
+  assert.equal(top[0].rows[0], "AWARE", "the table that serves a hypothesis (H3: exposure → awareness) comes before the outcome's sample profile");
+  assert.deepEqual(top[0].hypotheses, ["H3"]);
   assert.ok(top.every((x) => x.priority <= 2));
   assert.ok(!top.some((x) => x.reason === "sample profile"));
 });

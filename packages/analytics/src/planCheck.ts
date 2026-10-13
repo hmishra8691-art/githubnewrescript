@@ -80,7 +80,7 @@ const symmetric = (def: AnalysisDefinition): boolean => def.kind === "correlatio
 export function analysisSignature(def: AnalysisDefinition): string {
   const o = { ...(def.options ?? {}) } as Record<string, unknown>;
   /* presentation and bookkeeping — they change how the table looks or where it came from, not a number in it */
-  for (const k of ["planned", "plannedHash", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
+  for (const k of ["planned", "plannedHash", "plannedReads", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
   const scope = `${canon(o)}:${canon(def.filter ?? null)}:${sorted(def.filterIds)}:${canon(def.weighting ?? null)}:${sorted(def.layers)}:${canon(def.segments ?? null)}:${canon(def.dataset ?? null)}`;
   if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${scope}`;
   return `${def.kind}:${symmetric(def) ? sorted(def.variables) : (def.variables ?? []).join("|")}:${scope}`;

@@ -319,7 +319,7 @@ export type ComputeOutput = AnalysisResult & { recommendations: ReturnType<typeo
  * same hash is the same numbers, so it is looked up before anything is loaded (memory, then the persisted cache of
  * migration 0052) and stored after. A new response, an edit or a new engine version is a different hash.
  */
-export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<ComputeOutput> {
+export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition, opts: { fresh?: boolean } = {}): Promise<ComputeOutput> {
   const def = await resolveSaved(db, surveyId, definition);
   const runDef: AnalysisDefinition = { ...def, surveyVersion: def.surveyVersion ?? ctx.version ?? undefined };
   const dataVersion = await dataStamp(db, surveyId, def.dataset);
@@ -335,7 +335,7 @@ export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedC
       console.error("[analytics] chart advice failed, using shape-based recommendations:", e);
       return { ...result, recommendations: recommendCharts(result) };
     }
-  }, (cached) => ({ ...cached, name: runDef.name }));
+  }, (cached) => ({ ...cached, name: runDef.name }), opts);
 }
 
 /** Variable picker payload: dictionary-derived metadata, grouped by question, plus dataset counts. */

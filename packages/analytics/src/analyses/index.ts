@@ -1,4 +1,5 @@
 import { provenanceOf } from "../provenance.js";
+import { adviseChart } from "../questionChart.js";
 import type { AnalysisDefinition, AnalysisResult } from "../types.js";
 import { filterDataset, type Dataset } from "../dataset.js";
 import { allocation, crosstab, descriptive, ranking, topbox } from "./basics.js";
@@ -49,7 +50,20 @@ const clock = (): number => { const p = (globalThis as { performance?: { now(): 
 /** Run one analysis. The result records what it was computed from and how long it took (audit S-14): `provenance`. */
 export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
   const t0 = clock();
-  const result = runAnalysisCore(def, dataset);
+  const core = runAnalysisCore(def, dataset);
+  /*
+   * ONE CHART CHOICE (audit C-5). The question-aware advice is made here, once, from the question's structure, and travels
+   * with the result: the app's gallery, a report block with no saved chart, the deck, the story, the findings and the export
+   * all read it, instead of each ranking the shape in its own way. The runner's own list is reordered to lead with it.
+   */
+  let result = core;
+  if (!core.error) {
+    try {
+      const advice = adviseChart(def, core, [...dataset.byName.values()]);
+      const ruledOut = new Set(advice.avoided.map((a) => a.type));
+      result = { ...core, advice, recommendedCharts: [advice.type, ...core.recommendedCharts.filter((t) => t !== advice.type && !ruledOut.has(t))] };
+    } catch { result = core; }
+  }
   /* recording where a result came from must never be what stops a result: a definition that cannot be read for the record still gets its (failure) result */
   try { return { ...result, provenance: provenanceOf(def, dataset, result, clock() - t0) }; } catch { return result; }
 }

@@ -426,7 +426,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (!["TEST", "LIVE", "ALL"].includes(def.dataset.environment)) return bad("dataset.environment must be TEST, LIVE or ALL.");
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     try {
-      const result = await compute(db, surveyId, loaded, { ...def, name: def.name || def.kind });
+      const result = await compute(db, surveyId, loaded, { ...def, name: def.name || def.kind }, { fresh: body.fresh === true });
       return json({ result });
     } catch (e) { const ref = Math.random().toString(36).slice(2, 8); console.error(`[analytics] run failed (${ref}):`, e); return bad(`The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref ${ref})`, 500); }
   }
@@ -802,8 +802,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     if (!src) return bad("Unknown item.", 404);
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : `${src.name} (copy)`;
     /* a copy is the researcher's own: it must not carry the planned id, or the plan would take it for its analysis */
-    const { planned: _p, plannedHash: _h, ...options } = ((src.definition as AnalysisDefinition).options ?? {}) as Record<string, unknown>;
-    void _p; void _h;
+    const { planned: _p, plannedHash: _h, plannedReads: _r, ...options } = ((src.definition as AnalysisDefinition).options ?? {}) as Record<string, unknown>;
+    void _p; void _h; void _r;
     const definition = { ...(src.definition as AnalysisDefinition), name, options };
     const row = { survey_id: surveyId, name, kind: src.kind, definition, version: 1, folder: src.folder ?? null, tags: src.tags ?? [], position: null, created_by: ctx.user.userId, updated_by: ctx.user.userId };
     const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();

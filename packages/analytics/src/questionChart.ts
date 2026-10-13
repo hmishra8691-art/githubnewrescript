@@ -2,6 +2,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartType } from "./types.js";
 import type { VariableMeta } from "./dataset.js";
 import { chooseChart, type Audience } from "./chartPurpose.js";
 import { chartsAvailable, recommendCharts, type ChartRecommendation } from "./recommend.js";
+import { onePerPicture } from "./chartPictures.js";
 
 /**
  * QUESTION-AWARE CHART SELECTION (Data Analytics audit, Oct 2026).
@@ -53,6 +54,8 @@ export interface ChartAdvice {
   reason: string;
   /** what the percentages / means are of: "% of the 212 respondents who answered; several answers allowed" */
   denominator: string;
+  /** the same, short enough for the line under a chart */
+  basis?: string;
   scale: Scale;
   /** ranked, best first — the one above is the first */
   alternatives: ChartRecommendation[];
@@ -69,17 +72,38 @@ const SMALL = 30;
 
 const firstVars = (def: Pick<AnalysisDefinition, "variables" | "rows" | "columns">): string[] => [...(def.rows ?? []), ...(def.variables ?? []), ...(def.columns ?? [])].filter(Boolean);
 
-/** what the figures are a share / mean OF — never left for the reader to guess */
-export function denominatorFor(result: Pick<AnalysisResult, "base" | "kind">, scale: Scale): string {
+/**
+ * What the figures are a share / mean OF — never left for the reader to guess.
+ * In a cross-tabulation the answer depends on the measure the table is in
+ * (audit C-4): column percentages are shares of each column's respondents, row
+ * percentages of each row's, counts are not shares at all.
+ */
+export function denominatorFor(result: Pick<AnalysisResult, "base" | "kind">, scale: Scale, measure?: string): string {
   const b = result.base;
   const who = b.label && b.label !== "All respondents" ? b.label.toLowerCase() : "respondents";
   const n = b.n ?? 0;
   if (n === 0) return `No ${who} in the selected data.`;
   const answered = b.total && n < b.total ? `the ${n} of ${b.total} ${who} who answered` : `all ${n} ${who}`;
+  if (result.kind === "crosstab" && measure) {
+    if (measure === "count") return `Numbers of ${who}, not shares; ${answered}.`;
+    if (measure === "pct_row") return `% of the ${who} in each row; ${answered}.`;
+    if (measure === "pct_col") return `% of the ${who} in each column; ${answered}.`;
+    if (measure === "pct_total") return `% of ${answered}.`;
+    if (measure === "mean") return `Means within each column; ${answered}.`;
+  }
   if (scale === "multi") return `% of ${answered}; several answers were allowed, so the bars add to more than 100%.`;
   if (scale === "numeric") return `Based on ${answered}.`;
   if (scale === "ranking") return `Based on ${answered}; each ranked the items.`;
   return `% of ${answered}.`;
+}
+
+/** the short line under a chart: what the figures are of, and the base — "Column % · n = 212 of 400 answered" */
+export function basisLine(result: Pick<AnalysisResult, "base" | "kind">, measure?: string): string {
+  const b = result.base;
+  const of = b.total && b.n < b.total ? `${b.n} of ${b.total} answered` : `${b.n}`;
+  const w = b.weightedN !== b.n && b.weightedN ? ` (weighted ${b.weightedN})` : "";
+  const what = result.kind === "crosstab" && measure ? ({ pct_col: "Column %", pct_row: "Row %", pct_total: "% of total", count: "Counts", mean: "Means" } as Record<string, string>)[measure] : undefined;
+  return `${what ? `${what} · ` : ""}n = ${of}${w}`;
 }
 
 export function adviseChart(
@@ -129,8 +153,16 @@ export function adviseChart(
   if (!ordered && def.kind !== "trend") forbid(LINE_LIKE, "there is no time or order to draw a line through");
   if (def.kind === "crosstab") {
     const cells = nCat * nSer;
-    if (nSer <= 4 && cells <= 40) bump("bar_grouped", 10);
-    if (cells > 40 && cells <= 120) bump("heatmap_crosstab", 22), bump("heatmap", 14);
+    if (nSer <= 4 && cells <= 24) bump("bar_grouped", 10);
+    /*
+     * A MATRIX READ AS BARS (audit C-7): 12 rows × 8 columns drew 96 bars the eye cannot compare, because the heatmap
+     * rule added too little to beat the grouped bar the runner suggests first. Past 24 cells (three or more series)
+     * grouped bars are ruled out and the heatmap leads; past 120 a table does.
+     */
+    if (cells > 24 && nSer >= 3) {
+      forbid(["bar_grouped", "bar_vertical", "column_clustered", "bar_horizontal"], `${cells} bars cannot be compared by eye — ${cells <= 120 ? "a heatmap shows every cell" : "a table shows every cell"}`);
+      if (cells <= 120) { bump("heatmap_crosstab", 40); bump("heatmap", 30); }
+    }
     if (cells > 120) { bump("table", 60); notes.push(`${cells} cells — a table reads better than any chart.`); }
     if (nSer > 6) forbid(["radar"], "too many series for a radar");
   }
@@ -146,7 +178,7 @@ export function adviseChart(
     .map((c) => ({ ...c, score: c.score + (adjust.get(c.type) ?? 0) }));
   /* a lifted chart the shape-based pass did not list is still a candidate when the data can draw it */
   for (const [t, by] of adjust) if (by > 0 && avail.has(t) && !vetoed.has(t) && !scored.some((s) => s.type === t)) {
-    const base = recommendCharts(result, 80).find((r) => r.type === t);
+    const base = recommendCharts(result, 80, { aliases: true }).find((r) => r.type === t);
     if (base) scored.push({ ...base, score: base.score + by, purpose: candidates[0]?.purpose ?? "comparison", audience: opts.audience ?? "client", purposeWhy: candidates[0]?.purposeWhy ?? "" });
   }
   scored.sort((a, b) => b.score - a.score);
@@ -167,8 +199,9 @@ export function adviseChart(
   })();
 
   return {
-    type, reason: why, denominator: denominatorFor(result, scale), scale,
-    alternatives: scored.slice(0, 6).map(({ purpose: _p, audience: _a, purposeWhy: _w, ...r }) => (void _p, void _a, void _w, r)),
+    type, reason: why, denominator: denominatorFor(result, scale, def.kind === "crosstab" ? def.measure ?? "pct_col" : undefined), basis: basisLine(result, def.kind === "crosstab" ? def.measure ?? "pct_col" : undefined), scale,
+    /* each picture once: "spider" beside "radar" is one choice, not two (audit C-8) */
+    alternatives: onePerPicture(scored).slice(0, 6).map(({ purpose: _p, audience: _a, purposeWhy: _w, ...r }) => (void _p, void _a, void _w, r)),
     avoided, notes,
   };
 }
@@ -185,4 +218,21 @@ export function checkChartChoice(result: AnalysisResult, type: ChartType): { val
   if (avail.includes(type)) return { valid: true };
   const fb = recommendCharts(result, 1)[0]?.type ?? "table";
   return { valid: false, fallback: fb, reason: `${type.replace(/_/g, " ")} cannot draw this result (it needs a different data shape), so it is shown as ${fb.replace(/_/g, " ")}.` };
+}
+
+/**
+ * The ranked chart list every consumer reads — the deck, the story, the report builder, the findings — so that one analysis is
+ * drawn as one chart wherever it appears (audit C-5). When the result carries the question-aware advice it was run with, that
+ * advice decides the order and what is ruled out; the purpose/audience fields come from the shape ranking beside it.
+ */
+export function rankedCharts(def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "rows" | "measure" | "options">, result: AnalysisResult, opts: { audience?: Audience; limit?: number } = {}) {
+  const base = chooseChart(def, result, { audience: opts.audience, limit: opts.limit ?? 40 });
+  const adv = result.advice;
+  if (!adv) return base;
+  const order = [adv.type, ...adv.alternatives.map((a) => a.type)];
+  const avoided = new Set(adv.avoided.map((a) => a.type));
+  const rank = (t: ChartType) => { const i = order.indexOf(t); return i < 0 ? order.length : i; };
+  const kept = base.filter((b) => !avoided.has(b.type));
+  if (!kept.some((b) => b.type === adv.type) && base[0]) kept.push({ ...base[0], type: adv.type, reason: adv.reason });
+  return kept.sort((a, b) => rank(a.type) - rank(b.type) || b.score - a.score);
 }

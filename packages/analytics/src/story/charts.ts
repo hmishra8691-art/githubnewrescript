@@ -13,7 +13,8 @@
  * the default was chosen and why each alternative is or is not allowed.
  */
 import type { AnalysisDefinition, AnalysisResult, ChartType } from "../types.js";
-import { chooseChart, type Audience } from "../chartPurpose.js";
+import type { Audience } from "../chartPurpose.js";
+import { rankedCharts } from "../questionChart.js";
 import type { ChartRecommendationNote, FrozenChartData, FrozenTable, StoryChartType } from "./types.js";
 import { STORY_CHART_TYPES } from "./types.js";
 
@@ -119,7 +120,7 @@ export function chartAllowed(type: StoryChartType, data: FrozenChartData): { ok:
  * horizontal bars (they stay readable without being cut).
  */
 export function recommendStoryChart(def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "measure" | "options"> | null, result: AnalysisResult, data: FrozenChartData, audience: Audience = "client"): ChartRecommendationNote {
-  const ranked = def ? chooseChart(def, result, { audience, limit: 40 }) : [];
+  const ranked = def ? rankedCharts(def, result, { audience, limit: 40 }) : [];
   const longLabels = data.categories.some((c) => c.length > 18) || data.categories.length > 7;
   const order: { type: StoryChartType; why: string }[] = [];
   for (const r of ranked) { const t = storyTypeFor(r.type); if (t && !order.some((o) => o.type === t)) order.push({ type: t, why: r.reason }); }

@@ -65,9 +65,9 @@ export async function cachePut(db: SupabaseClient, surveyId: string, inputHash: 
  * Not kept when it failed, or when the hash it was computed under is not the one it was looked up under (the data moved).
  */
 export async function withResultCache<T extends { error?: unknown; provenance?: { inputHash: string } }>(
-  db: SupabaseClient, surveyId: string, key: string, produce: () => Promise<T>, relabel: (cached: T) => T = (x) => x,
+  db: SupabaseClient, surveyId: string, key: string, produce: () => Promise<T>, relabel: (cached: T) => T = (x) => x, opts: { /** the researcher asked for it to be computed again — skip the lookup, store the new result over the old (audit P-10) */ fresh?: boolean } = {},
 ): Promise<T & { fromCache?: CacheSource }> {
-  const hit = await cacheGet<T>(db, surveyId, key);
+  const hit = opts.fresh ? null : await cacheGet<T>(db, surveyId, key);
   if (hit) return { ...relabel(hit.payload), fromCache: hit.from };
   const out = await produce();
   if (!out.error && out.provenance?.inputHash === key) await cachePut(db, surveyId, key, out);

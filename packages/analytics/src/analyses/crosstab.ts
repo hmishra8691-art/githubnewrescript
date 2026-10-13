@@ -344,18 +344,35 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     }
   };
 
-  /** the chart follows the first row × first column pair of the first layer */
-  const chartFrom = (b: Block, cols: ColumnDef[], cv: string) => {
+  /**
+   * The chart follows the first row × first column pair of the first layer, in
+   * the measure the table is in (C-6: a table of row percentages was drawn from
+   * column percentages) and without the columns the table suppresses for a
+   * small base (C-13: the table showed a dash, the chart drew the bar).
+   */
+  const chartFrom = (b: Block, cols: ColumnDef[], cv: string, suppressed: ReadonlySet<string> = new Set()) => {
     if (chart.categories?.length) return;
-    const cc = cols.filter((c) => c.variable === cv);
+    const all = cols.filter((c) => c.variable === cv);
+    const cc = all.filter((c) => !suppressed.has(c.key));
+    const dropped = all.length - cc.length;
+    if (dropped) warnings.push(`${dropped} column${dropped === 1 ? "" : "s"} with fewer than ${minBase} respondents ${dropped === 1 ? "is" : "are"} left out of the chart, as in the table.`);
+    if (!cc.length) return;
     if (b.meanMode) { chart = { categories: cc.map((c) => c.label), series: [{ name: `Mean ${labelOf(ds, b.rv)}`, values: cc.map((c) => { const s = b.nums.get(c.key); return s && s.w ? round(s.sum / s.w) : null; }) }] }; return; }
     const rCats = categoriesOf(ds, b.rv);
-    const p = (rk: string, ck: string) => { const base = b.colBase.get(ck)?.w ?? 0; return pct(base ? ((b.grid.get(rk)?.get(ck)?.w ?? 0) / base) * 100 : 0); };
+    const tot = b.colBase.get("__total")?.w ?? 0;
+    const cellOf = (rk: string, ck: string) => b.grid.get(rk)?.get(ck)?.w ?? 0;
+    const p = (rk: string, ck: string): number | null => {
+      if (measure === "count") return round(cellOf(rk, ck), ds.weighted ? 1 : 0);
+      if (measure === "pct_row") { const rb = b.rowBase.get(rk)?.w ?? 0; return rb ? pct((cellOf(rk, ck) / rb) * 100) : null; }
+      if (measure === "pct_total") return tot ? pct((cellOf(rk, ck) / tot) * 100) : null;
+      const base = b.colBase.get(ck)?.w ?? 0;
+      return pct(base ? (cellOf(rk, ck) / base) * 100 : 0);
+    };
     chart = {
       categories: rCats.map((c) => c.label),
       series: cc.map((c) => ({ name: c.label, values: rCats.map((r) => p(r.code, c.key)) })),
       matrix: { rows: rCats.map((c) => c.label), columns: cc.map((c) => c.label), values: rCats.map((r) => cc.map((c) => p(r.code, c.key))) },
-      valueFormat: "pct",
+      valueFormat: measure === "count" ? "number" : "pct",
     };
   };
 
@@ -450,7 +467,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     for (const c of cols) { const b = colBases[c.key]; if (c.variable && b > 0 && b < 30 && !suppressed.has(c.key)) lowCols.set(`${c.group || labelOf(ds, c.variable)}\u0000${c.label}`, { label: c.label, group: c.group || labelOf(ds, c.variable), n: b }); }
     const id = `xt_${rvs.join("+")}_${cvs.join("+")}${layerVar ? "_" + layer.label : ""}`;
     tables.push({ id, title, columns, rows: out, base: { n: top.colBase.get("__total")?.count ?? 0, weightedN: round(top.colBase.get("__total")?.w, 1) ?? 0 }, columnBases: colBases, notes });
-    for (const cv of cvs) { testsFor(top, cols, cv); chartFrom(top, cols, cv); }
+    for (const cv of cvs) { testsFor(top, cols, cv); chartFrom(top, cols, cv, suppressed); }
   };
 
   for (const layer of layers) {

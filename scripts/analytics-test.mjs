@@ -291,8 +291,10 @@ ok("insight sentence is tied to the computed test");
 console.log("\n§3 CHART GALLERY & CUSTOMISATION");
 await page.click('.ax-tab:has-text("Chart")');
 await page.click('.ax-fam:has-text("Heatmaps")');
-await page.click('[data-testid="ax-chart-heatmap_crosstab"]');
-assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="heatmap_crosstab"]'));
+/* one entry per drawing (C-7): the crosstab heat-map is the heat-map, not a second chart */
+assert.equal(await page.$('[data-testid="ax-chart-heatmap_crosstab"]'), null, "an alias of another chart is not offered as a second chart");
+await page.click('[data-testid="ax-chart-heatmap"]');
+assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="heatmap"]'));
 await page.click('.ax-fam:has-text("Text")');
 assert.ok(await page.$('[data-testid="ax-chart-word_cloud"][disabled]'), "word cloud disabled for a crosstab");
 ok("chart families browsable; unsuitable charts (word cloud) are disabled, heatmap renders");
@@ -302,14 +304,14 @@ ok("chart families browsable; unsuitable charts (word cloud) are disabled, heatm
  * empty world that reads as "no respondents anywhere".
  */
 await page.click('.ax-fam:text-is("Maps")');
-await page.click('[data-testid="ax-chart-map_country"]');
-await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_country"]');
+await page.click('[data-testid="ax-chart-choropleth"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="choropleth"]');
 assert.match(await text('[data-testid="ax-chart"]'), /No category matched a country or state/);
 ok("a map whose categories are not places says so instead of drawing an empty world");
 // put the heatmap back: the rest of this suite saves and asserts on THAT chart
 await page.click('.ax-fam:text-is("Heatmaps")');
-await page.click('[data-testid="ax-chart-heatmap_crosstab"]');
-await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="heatmap_crosstab"]');
+await page.click('[data-testid="ax-chart-heatmap"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="heatmap"]');
 await page.click('[data-testid="ax-customize-toggle"]');
 await page.waitForSelector('[data-testid="ax-customize"]');
 await page.fill('.ax-customize input[placeholder="Satisfaction by gender"]', "Satisfaction × Gender (25+)");
@@ -325,7 +327,7 @@ assert.equal(store.analyses[0].definition.filter.type, "group");
 ok("saved analysis remembers dataset, rows, columns, measure and filter (reproducible definition)");
 await page.click('[data-testid="ax-save-chart"]');
 await page.waitForSelector('[data-testid="ax-msg"]:has-text("Chart saved")');
-assert.equal(store.charts.length, 1); assert.equal(store.charts[0].spec.type, "heatmap_crosstab"); assert.equal(store.charts[0].spec.options.title, "Satisfaction × Gender (25+)");
+assert.equal(store.charts.length, 1); assert.equal(store.charts[0].spec.type, "heatmap"); assert.equal(store.charts[0].spec.options.title, "Satisfaction × Gender (25+)");
 ok("saved chart is a spec linked to the analysis, not an image");
 // change a styling option → no new analysis version; change definition → new version
 await page.click('[data-testid="ax-save"]');
@@ -353,10 +355,11 @@ const runKind = async (kind, name, vars, after) => {
   await page.click('[data-testid="ax-save"]'); await page.waitForSelector('[data-testid="ax-msg"]:has-text("Analysis saved")');
 };
 await runKind("nps", "NPS", ["NPS · Scale"], async () => { await page.click('[data-testid="ax-step-4"]'); await page.selectOption('.ax-options select >> nth=0', { label: "Gender" }); });
-assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="gauge"]'));
+/* one chooser (C-5): a single score opens on the KPI card the question-aware chooser picks; the gauge stays among the recommended charts */
+assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="kpi_card"]'));
 await page.click('.ax-tab:has-text("Tables")');
 assert.match(await text('.ax-tables'), /Net Promoter Score.*NPS by Gender/s);
-ok("NPS: gauge recommended, NPS by gender table");
+ok("NPS: KPI card first, NPS by gender table");
 await runKind("conjoint", "Choice model", ["CBC_TASKS · Question"]);
 await page.click('.ax-tab:has-text("Tables")');
 const cj = await text('.ax-tables');
@@ -377,8 +380,8 @@ await page.click('.ax-var:has-text("GENDER · Categorical") input');
 await page.click('[data-testid="ax-run"]'); await page.waitForSelector('[data-testid="ax-result"]');
 await page.click('.ax-tab:has-text("Chart")');
 await page.click('.ax-fam:text-is("Maps")');
-await page.click('[data-testid="ax-chart-map_country"]');
-await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="map_country"]');
+await page.click('[data-testid="ax-chart-choropleth"]');
+await page.waitForSelector('[data-testid="ax-chart"][data-chart-type="choropleth"]');
 const mapPaths = await count('[data-testid="ax-chart"] path');
 assert.ok(mapPaths > 100, `a country map draws the whole basemap, got ${mapPaths} paths`);
 // the eight surveyed countries are shaded; the rest of the world is the basemap

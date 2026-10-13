@@ -65,8 +65,9 @@ test("explainPlanItem — a crosstab: the objective, the variables with their le
   const e = explainPlanItem(def, banner, plan);
   assert.equal(e.kind, "crosstab");
   assert.equal(e.title, "Q6 by S2, S3");
-  assert.match(e.objective, /^The study's objective: Why consumers choose Brand A over Brand B\. This serves H1 \(“Brand trust increases purchase intention”\) and H2/);
-  assert.deepEqual(e.hypotheses.map((h) => h.label), ["H1", "H2"]);
+  /* the outcome by the sample profile reads neither side of H1 (trust → intention) nor H2 (the price moderator) — it profiles, and says so (audit P-8) */
+  assert.match(e.objective, /^The study's objective: Why consumers choose Brand A over Brand B\. No hypothesis is tagged on it — it profiles the results\./);
+  assert.deepEqual(e.hypotheses.map((h) => h.label), []);
   assert.deepEqual(e.variables.map((v) => [v.code, v.role, v.level, v.categories]), [["Q6", "row", "ordinal", 5], ["S2", "column", "nominal", 3], ["S3", "column", "nominal", 2]]);
   assert.match(e.why, /^Q6 is an ordinal 5-point scale and S2 is nominal with 3 groups, S3 is nominal with 2 groups: groups across the top and categories down the side/);
   assert.match(e.expectedOutput, /^a crosstab of Q6 by S2, S3 \(column percentages, one banner\) with significance letters between columns and a chi-square test per column variable; a stacked bar chart$/);

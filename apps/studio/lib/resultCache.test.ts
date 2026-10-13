@@ -91,3 +91,18 @@ test("a real result is cacheable end to end: its recorded hash is the key it is 
   assert.equal(runs, 1); assert.equal(second.fromCache, "memory"); assert.equal(first.provenance!.inputHash, k);
   assert.deepEqual(second.tables, first.tables);
 });
+
+test("P-10: a fresh ask skips the lookup, computes again and stores the new result over the old", async () => {
+  clearResultMemo();
+  const db = new FakeDb();
+  let computed = 0;
+  const produce = (name: string) => async () => { computed++; return { name, tables: [], provenance: { inputHash: key } }; };
+  await withResultCache(db.as(), S, key, produce("first"));
+  const again = await withResultCache(db.as(), S, key, produce("never"));
+  assert.equal(computed, 1); assert.equal(again.fromCache, "memory");
+  const fresh = await withResultCache(db.as(), S, key, produce("second"), (x) => x, { fresh: true });
+  assert.equal(computed, 2, "computed again although the same inputs were stored"); assert.equal(fresh.fromCache, undefined); assert.equal(fresh.name, "second");
+  assert.equal(db.tables.analytics_result_cache.length, 1, "one row per input hash — replaced, not added");
+  clearResultMemo();
+  assert.equal((await withResultCache(db.as(), S, key, produce("never"))).name, "second", "what is stored now is the recomputed result");
+});

@@ -18,6 +18,8 @@ import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
 import { executiveSummary } from "../summary.js";
 import { summaryAnalysisIds } from "../blockRefs.js";
 import { chartTitleFor, reportForExport, seriesForChart } from "./shared.js";
+import { chartPicture } from "../chartPictures.js";
+import { chartDecimals, chartFormatCode } from "../chartFormat.js";
 import { divergingLayout, divergingSeriesOrder, stackShares } from "../chartLayout.js";
 import { methodologyBlock, methodologyLines } from "../reportPages.js";
 
@@ -59,24 +61,51 @@ export function isEmbeddableImage(uri: unknown): uri is string {
 
 export const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
 
+/**
+ * What PowerPoint draws for each of our pictures (C-8). The chart system has
+ * one drawing per picture (`chartPicture`); this is the one place that says
+ * which pictures PowerPoint has natively, which it draws as something close,
+ * and which it can only show as a table. A "close" drawing says so on the
+ * slide — the old export mapped fifty names to six shapes and said nothing.
+ */
+export type PptxSubstitute = { as: "bars" | "stacked bars" | "points" | "lines" | "a table"; label: string };
+const PPTX_SUBSTITUTE: Partial<Record<ChartType, PptxSubstitute>> = {
+  lollipop: { as: "bars", label: "lollipop" }, dot_plot: { as: "bars", label: "dot plot" }, pareto: { as: "bars", label: "Pareto" },
+  donut_semi: { as: "bars", label: "semi-circle" }, donut_radial: { as: "bars", label: "radial" }, progress_circle: { as: "bars", label: "progress-circle" }, bullet: { as: "bars", label: "bullet" },
+  funnel: { as: "bars", label: "funnel" }, waterfall: { as: "bars", label: "waterfall" }, forest: { as: "bars", label: "forest" }, mean_ci: { as: "bars", label: "interval" }, part_worth: { as: "bars", label: "part-worth" },
+  box_plot: { as: "bars", label: "box plot" }, violin: { as: "bars", label: "violin" }, strip: { as: "bars", label: "strip" }, beeswarm: { as: "bars", label: "beeswarm" }, raincloud: { as: "bars", label: "raincloud" },
+  scatter_trendline: { as: "points", label: "trend-line" }, scatter_ci: { as: "points", label: "interval scatter" }, bubble: { as: "points", label: "bubble" }, heatmap_ipa: { as: "points", label: "importance–performance" },
+  spline: { as: "lines", label: "smoothed line" }, step_line: { as: "lines", label: "step" },
+  choropleth: { as: "bars", label: "map" }, map_bubble: { as: "bars", label: "map" }, map_heat: { as: "bars", label: "map" },
+  heatmap: { as: "a table", label: "heat-map" }, heatmap_correlation: { as: "a table", label: "correlation heat-map" }, correlogram: { as: "a table", label: "correlogram" },
+  word_cloud: { as: "a table", label: "word-cloud" }, treemap: { as: "a table", label: "treemap" }, sunburst: { as: "a table", label: "sunburst" }, dendrogram: { as: "a table", label: "dendrogram" },
+  network: { as: "a table", label: "network" }, sankey: { as: "a table", label: "flow" }, chord: { as: "a table", label: "chord" }, parallel_coordinates: { as: "a table", label: "parallel-coordinates" },
+  marimekko: { as: "a table", label: "Marimekko" }, kpi_card: { as: "a table", label: "KPI card" }, gauge: { as: "a table", label: "gauge" },
+};
+
+/** what PowerPoint will draw for a chart type, or null when it draws the picture itself */
+export function pptxSubstitute(type: ChartType): PptxSubstitute | null {
+  if (type === "table") return null;
+  return PPTX_SUBSTITUTE[chartPicture(type)] ?? null;
+}
+
 function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record<string, unknown> } {
   const T = p.ChartType;
-  switch (type) {
-    case "bar_horizontal": case "ranking_bar": case "lollipop": case "dot_plot": case "maxdiff_utility": case "maxdiff_preference": case "attribute_importance": case "coefficient_plot": case "forest": case "keyword_bar":
+  switch (chartPicture(type)) {
+    case "bar_horizontal": case "lollipop": case "dot_plot": case "forest": case "mean_ci": case "part_worth": case "funnel": case "choropleth": case "map_bubble": case "map_heat":
       return { type: T.bar, opts: { barDir: "bar" } };
-    case "bar_grouped": case "column_clustered": case "bar_vertical": case "histogram": case "target_actual": case "segment_comparison": case "segment_profile": case "preference_share": case "maxdiff_best_worst": case "diff_means": case "diff_proportions": case "mean_ci": case "error_bar": case "ci_plot": case "sentiment_distribution": case "wave_trend":
+    case "bar_vertical": case "histogram": case "pareto": case "waterfall": case "bullet": case "progress_circle": case "box_plot": case "violin": case "strip": case "beeswarm": case "raincloud":
       return { type: T.bar, opts: { barDir: "col", barGrouping: "clustered" } };
-    case "bar_stacked": case "funnel": case "funnel_brand": case "funnel_purchase": case "funnel_awareness": case "funnel_dropout": case "waterfall":
+    case "bar_stacked":
       return { type: T.bar, opts: { barDir: "col", barGrouping: "stacked" } };
     case "bar_stacked_100": case "diverging_likert":
       return { type: T.bar, opts: { barDir: "bar", barGrouping: "percentStacked" } };
     case "pie": return { type: T.pie, opts: {} };
-    case "donut": case "donut_semi": case "donut_nested": case "donut_radial": case "segment_size": return { type: T.doughnut, opts: { holeSize: 55 } };
-    case "line": case "line_multi": case "spline": case "step_line": case "rolling_average": case "yoy_trend": case "mom_trend": case "trend" as never: case "sentiment_trend": case "demand_curve": case "purchase_probability": case "revenue_curve": case "price_elasticity": case "price_sensitivity": case "bump":
-      return { type: T.line, opts: { lineSize: 2, lineDataSymbolSize: 6 } };
+    case "donut": case "donut_semi": case "donut_radial": return { type: T.doughnut, opts: { holeSize: 55 } };
+    case "line": case "spline": case "step_line": return { type: T.line, opts: { lineSize: 2, lineDataSymbolSize: 6 } };
     case "area": case "area_stacked": return { type: T.area, opts: {} };
-    case "radar": case "spider": case "radar_multi": case "radar_brand": case "radar_segment": return { type: T.radar, opts: { radarStyle: "marker" } };
-    case "scatter": case "scatter_trendline": case "scatter_ci": case "bubble": case "heatmap_ipa": case "segment_bubble": return { type: T.scatter, opts: { lineSize: 0, lineDataSymbolSize: 8 } };
+    case "radar": return { type: T.radar, opts: { radarStyle: "marker" } };
+    case "scatter": case "scatter_trendline": case "scatter_ci": case "bubble": case "heatmap_ipa": return { type: T.scatter, opts: { lineSize: 0, lineDataSymbolSize: 8 } };
     default: return { type: T.bar, opts: { barDir: "col" } };
   }
 }
@@ -123,8 +152,12 @@ export function drawAnalysisVisual(
     return;
   }
   const data = seriesForChart(result, spec);
-  const isTable = spec.type === "table" || !data.length || ["heatmap", "heatmap_crosstab", "heatmap_correlation", "correlation_matrix", "word_cloud", "treemap", "sunburst", "dendrogram", "network", "sankey", "kpi_card", "gauge", "scorecard", "table"].includes(spec.type);
+  const substitute = pptxSubstitute(spec.type);
+  const isTable = spec.type === "table" || !data.length || substitute?.as === "a table";
+  /* a drawing that is not the picture the author chose says so on the slide (C-8) */
+  const substituteNote = (text: string) => s.addText(text, { x: box.x, y: Math.max(0.1, box.y - 0.22), w: box.w, h: 0.2, fontSize: 8, italic: true, color: ctx.subtle, fontFace: ctx.font });
   if (isTable) {
+    if (substitute) substituteNote(`Shown as a table — PowerPoint has no ${substitute.label} chart; the chart is on the dashboard.`);
     const table = result.tables[0];
     const tb = opts.tableBox ?? { x: 0.5, w: 9 };
     if (table) addTable(s, table, theme, { x: tb.x, y: box.y, w: tb.w }, opts.maxRows ?? 14, opts.fontSize ?? 9);
@@ -133,22 +166,21 @@ export function drawAnalysisVisual(
   const { type, opts: chartOptsBase } = pptChartType(p, spec.type);
   let chartOpts: Record<string, unknown> = chartOptsBase;
   /*
-   * §39 — PowerPoint has no map. A geographic chart therefore leaves this
-   * export as ranked bars of the same numbers, which is a fair substitute but
-   * NOT what the author laid out on screen. It says so on the slide: a reader
-   * handed a deck of bars, when the analyst was looking at a choropleth, has
-   * no other way to know the two are the same chart. (Drawing the map as a
-   * picture in the deck is the next step, not a silent one.)
+   * §39, C-8 — PowerPoint has no map, no forest plot, no box plot… Such a
+   * chart leaves this export as the nearest chart PowerPoint does have, drawn
+   * from the same numbers — a fair substitute but NOT what the author laid out
+   * on screen. It says so on the slide: a reader handed a deck of bars, when
+   * the analyst was looking at a choropleth, has no other way to know the two
+   * are the same chart. (§43 — with a picture from the renderer the slide
+   * carries the real chart and there is nothing to say; that case returned
+   * above.)
    */
-  const isGeo = ["map_country", "map_state", "choropleth", "map_bubble", "map_heat"].includes(spec.type);
-  // §43 — the note is only honest when the substitution actually happened; with
-  // a picture from the renderer the slide carries the real map.
-  if (isGeo) {
-    s.addText("Shown as ranked bars — PowerPoint has no map chart; the map is on the dashboard.", {
-      x: box.x, y: Math.max(0.1, box.y - 0.22), w: box.w, h: 0.2,
-      fontSize: 8, italic: true, color: ctx.subtle, fontFace: ctx.font,
-    });
+  if (substitute) {
+    substituteNote(chartPicture(spec.type) === "choropleth" || chartPicture(spec.type) === "map_bubble" || chartPicture(spec.type) === "map_heat"
+      ? "Shown as ranked bars — PowerPoint has no map chart; the map is on the dashboard."
+      : `Shown as ${substitute.as} — PowerPoint has no ${substitute.label} chart; the chart is on the dashboard.`);
   }
+  const decimals = chartDecimals(result.chart, spec.options.decimals, theme.chart?.decimals);
   const pctAxis = data[0]?.meta?.pct;
   const isScatter = type === p.ChartType.scatter;
   const chartData = isScatter && result.chart.points?.length
@@ -178,7 +210,7 @@ export function drawAnalysisVisual(
     x: box.x, y: box.y, w: box.w, h: box.h, ...chartOpts,
     chartColors: seriesColors,
     showValue: spec.options.dataLabels ?? theme.chart?.dataLabels ?? true,
-    dataLabelFormatCode: pctAxis ? '0.0"%"' : `0${(spec.options.decimals ?? theme.chart?.decimals ?? 0) > 0 ? "." + "0".repeat(spec.options.decimals ?? theme.chart?.decimals ?? 1) : ""}`,
+    dataLabelFormatCode: chartFormatCode(decimals, !!pctAxis),
     dataLabelFontSize: fs, dataLabelColor: ctx.text, dataLabelFontFace: ctx.font,
     showLegend: (spec.options.legend ?? (data.length > 1 ? "bottom" : "none")) !== "none", legendPos: (spec.options.legend === "right" ? "r" : spec.options.legend === "top" ? "t" : "b") as "r" | "t" | "b", legendFontSize: fs + 1, legendFontFace: ctx.font,
     catAxisLabelFontSize: fs + 1, valAxisLabelFontSize: fs, catAxisLabelFontFace: ctx.font, valAxisLabelFontFace: ctx.font,
@@ -240,7 +272,7 @@ function panelGridSlide(
     }
     const noteY = y + panelH - 0.19;
     if (panel.caption) s.addText(panel.caption, { x, y: noteY, w: panelW, h: 0.19, fontSize: 6.5, color: ctx.subtle, fontFace: ctx.font });
-    else if (result) s.addText(`n = ${result.base.n}`, { x, y: noteY, w: panelW, h: 0.19, fontSize: 6.5, color: ctx.subtle, fontFace: ctx.font });
+    else if (result) s.addText(result.advice?.basis ?? `n = ${result.base.n}`, { x, y: noteY, w: panelW, h: 0.19, fontSize: 6.5, color: ctx.subtle, fontFace: ctx.font });
   });
 }
 
@@ -328,7 +360,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
       const s = p.addSlide(); decorate(s, block.title ?? result.name);
       const kpis = result.chart.kpis ?? [];
       kpis.slice(0, 4).forEach((k, i) => { const x = 0.6 + i * ((W - 1.2) / Math.min(4, kpis.length)); s.addShape(p.ShapeType.roundRect, { x, y: 1.6, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1.8, fill: { color: "F5F7FA" }, line: { color: "D9DEE6" }, rectRadius: 0.1 }); s.addText(`${typeof k.value === "number" ? k.value.toLocaleString() : k.value}${k.unit ?? ""}`, { x, y: 1.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1, fontSize: 30, bold: true, color: primary, align: "center", fontFace: font }); s.addText(k.label, { x, y: 2.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 0.5, fontSize: 12, color: subtle, align: "center", fontFace: font }); });
-      s.addText(`Base: n = ${result.base.n}`, { x: 0.6, y: 4.8, w: W - 1.2, h: 0.3, fontSize: 9, color: subtle, fontFace: font });
+      s.addText(result.advice?.basis ?? `Base: n = ${result.base.n}`, { x: 0.6, y: 4.8, w: W - 1.2, h: 0.3, fontSize: 9, color: subtle, fontFace: font });
       return;
     }
     if (block.type === "chart" && settings.include.charts) {

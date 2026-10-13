@@ -7,6 +7,7 @@
  * pie never gets suggested.
  */
 import type { AnalysisResult, ChartFamily, ChartType } from "./types.js";
+import { onePerPicture } from "./chartPictures.js";
 
 export interface ChartRecommendation { type: ChartType; score: number; reason: string; family: ChartFamily }
 
@@ -150,7 +151,11 @@ export function chartsAvailable(result: AnalysisResult): ChartType[] {
   return CHART_CATALOG.filter((c) => c.needs.every((n) => has[n])).map((c) => c.type);
 }
 
-export function recommendCharts(result: AnalysisResult, limit = 6): ChartRecommendation[] {
+/**
+ * The shape-based ranking. By default each PICTURE appears once (audit C-8): the first-ranked of the types that draw the same thing.
+ * The chooser that scores candidates itself asks for the aliases too (`aliases: true`), because a question-aware lift can raise any name.
+ */
+export function recommendCharts(result: AnalysisResult, limit = 6, opts: { aliases?: boolean } = {}): ChartRecommendation[] {
   const d = result.chart;
   const nCat = d.categories?.length ?? 0, nSer = d.series?.length ?? 0;
   const isPct = d.valueFormat === "pct";
@@ -187,5 +192,6 @@ export function recommendCharts(result: AnalysisResult, limit = 6): ChartRecomme
   add("table", 20, "The exact numbers");
   const best = new Map<ChartType, ChartRecommendation>();
   for (const r of out) { const cur = best.get(r.type); if (!cur || r.score > cur.score) best.set(r.type, r); }
-  return [...best.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+  const ranked = [...best.values()].sort((a, b) => b.score - a.score);
+  return (opts.aliases ? ranked : onePerPicture(ranked)).slice(0, limit);
 }

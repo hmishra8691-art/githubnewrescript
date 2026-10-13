@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
-import { DEFAULT_THEME, divergingLayout, stackShares, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
+import { DEFAULT_THEME, chartDecimals, divergingLayout, stackShares, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
 import { ProTable } from "../ProTable";
 
 /**
@@ -54,7 +54,7 @@ export function Chart(props: ChartProps) {
   const shown = series.filter((s) => !hidden.has(s.name));
   const ctx: Ctx = {
     W, H, theme, colors: o.colors?.length ? o.colors : theme.colors.palette, font: o.fontFamily ?? theme.fontFamily, fs: o.fontSize ?? theme.typography?.baseSize ?? 12,
-    decimals: o.decimals ?? theme.chart?.decimals ?? (series[0]?.meta?.pct ? 0 : 1), pct: !!series[0]?.meta?.pct || props.result.chart.valueFormat === "pct", opts: o, sel: props.selected, onSelect: props.onSelect,
+    decimals: chartDecimals(props.result.chart, o.decimals, theme.chart?.decimals), pct: !!series[0]?.meta?.pct || props.result.chart.valueFormat === "pct", opts: o, sel: props.selected, onSelect: props.onSelect,
     hover: [hover, setHover], textColor: theme.colors.text,
     /* §42 — grid lines come from the theme. Hard-coding "#e5e9f0" drew a
        near-white cage over every chart on a dark theme. */
@@ -102,7 +102,7 @@ export function Chart(props: ChartProps) {
         )}
         {notesH > 0 && (
           <text x={0} y={H - 3} fontSize={ctx.fs - 3} fill={ctx.subtle} fontFamily={ctx.font}>
-            {[o.showBase === false ? null : `n = ${base.n}${base.weightedN !== base.n ? ` (weighted ${base.weightedN})` : ""}`, o.footnote, o.source ? `Source: ${o.source}` : null].filter(Boolean).join("  ·  ")}
+            {[o.showBase === false ? null : (props.result.advice?.basis ?? `n = ${base.n}${base.weightedN !== base.n ? ` (weighted ${base.weightedN})` : ""}`), o.footnote, o.source ? `Source: ${o.source}` : null].filter(Boolean).join("  ·  ")}
           </text>
         )}
       </svg>

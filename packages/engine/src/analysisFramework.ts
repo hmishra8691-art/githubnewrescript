@@ -1,5 +1,6 @@
 import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, PlannedCrosstab, PlannedDerived, PlannedSegment, PlannedTest, Question, QuestionAnalysis, SurveyDefinition } from "@rescript/schema";
 import { hypothesisConstructs, structuredHypotheses } from "./hypotheses.js";
+import { constructsRead, planTagIssues, retagPlanHypotheses } from "./planReads.js";
 import { hypothesisLabel } from "@rescript/schema";
 import { listBlocks } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
@@ -414,8 +415,37 @@ export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: stri
     }
   }
 
+  /*
+   * A MODERATED HYPOTHESIS GETS A MODERATION TEST (audit P-8). "The effect of
+   * price on switching is stronger for high earners" names a moderator; the
+   * model above only moderates by the question the ROLE inference calls a
+   * moderator, so a hypothesis that says so in words got no interaction. When
+   * the design resolves all three sides (independent, dependent, moderator)
+   * to something the run can compute — a single question, or the construct's
+   * own mean score — and no planned test already has that interaction, one is
+   * added, tagged with the hypothesis.
+   */
+  const sideVariable = (c: { questionIds: string[]; name: string } | undefined): { name: string; scale: boolean; binary: boolean } | undefined => {
+    if (!c) return undefined;
+    const qs = c.questionIds.map((qid) => asked.find((q) => q.id === qid)).filter((q): q is Question => !!q);
+    if (qs.length === 1) return { name: by(qs[0]), scale: isScaleLike(level(qs[0])), binary: isCategorical(level(qs[0])) && level(qs[0]) !== "multi" && (qs[0].options?.length ?? 0) === 2 };
+    const d = derived.find((x) => x.kind === "mean_score" && x.from.length === qs.length && qs.every((q) => x.from.includes(by(q))));
+    return d ? { name: d.name, scale: true, binary: false } : undefined;
+  };
+  for (const h of structuredHypotheses(def)) {
+    const iv = sideVariable(h.constructs.independent), dv = sideVariable(h.constructs.dependent), mod = sideVariable(h.constructs.moderator);
+    if (!iv || !dv || !mod || iv.name === dv.name || mod.name === dv.name || mod.name === iv.name) continue;
+    if (!(iv.scale || iv.binary) || !(mod.scale || mod.binary) || !(dv.scale || dv.binary)) continue;
+    const sofar = { crosstabs, tests, derived, segments: [] } as AnalysisPlan;
+    if (tests.some((t) => t.outcome === dv.name && t.moderator === mod.name && (t.variables.includes(iv.name) || constructsRead(def, sofar, t.variables).has(h.constructs.independent!.name)))) continue;
+    tests.push({ id: id("t"), method: !dv.scale ? "logistic_regression" : "regression", outcome: dv.name, variables: [iv.name], moderator: mod.name, priority: 1, hypotheses: [h.label], reason: `${h.label} says ${mod.name} changes how ${iv.name} affects ${dv.name} — tests that interaction` });
+  }
+
   const segs: PlannedSegment[] = segments.map((s) => ({ name: stripHtmlText(s.text).slice(0, 60) || s.variableName, by: [by(s)] }));
-  return stablePlanIds({ crosstabs, tests, derived, segments: segs, source: "engine", updatedAt: opts.now ?? new Date().toISOString() }, opts.previous);
+  const built: AnalysisPlan = { crosstabs, tests, derived, segments: segs, source: "engine", updatedAt: opts.now ?? new Date().toISOString() };
+  /* an item serves the hypotheses whose two sides it READS — not every hypothesis that names one of its variables (audit P-8) */
+  retagPlanHypotheses(def, built);
+  return stablePlanIds(built, opts.previous);
 }
 
 /** The plan's crosstabs by importance: the more hypotheses a table serves the higher, then by priority, then the wider banner. */
@@ -570,6 +600,47 @@ export interface AnalysisPlanIssue {
 const resolve = (def: SurveyDefinition, ref: string): Question | undefined => getQuestionByCodeOrVar(def, ref) ?? def.questions.find((q) => q.id === ref);
 
 /** The plan against the survey: dead references, tests on the wrong level, hypotheses nothing measures or tests. */
+export interface DerivedProblem { name: string; level: "critical" | "warning"; message: string; suggestion?: string }
+
+/**
+ * DERIVED VARIABLES THE RUN COULD NOT COMPUTE, found in the plan (audit P-9)
+ * instead of when the analysis that reads them fails: built from open text,
+ * a top box of something that is not a scale, a recode or index with no
+ * expression, a flag with nothing to flag, a variable built from itself or
+ * from a derived variable that loops back, one name defined twice. Averaging
+ * unordered categories is computable but meaningless — a warning.
+ */
+export function derivedProblems(def: SurveyDefinition, plan: AnalysisPlan): DerivedProblem[] {
+  const out: DerivedProblem[] = [];
+  const byName = new Map<string, PlannedDerived>();
+  for (const d of plan.derived) {
+    if (byName.has(d.name)) out.push({ name: d.name, level: "critical", message: `Derived variable ${d.name} is defined twice in the plan.`, suggestion: "Keep one definition, or rename one." });
+    byName.set(d.name, d);
+  }
+  const loops = (start: PlannedDerived): boolean => {
+    const seen = new Set<string>();
+    const walk = (d: PlannedDerived): boolean => { if (seen.has(d.name)) return false; seen.add(d.name); return d.from.some((f) => f === start.name || (byName.has(f) && walk(byName.get(f)!))); };
+    return walk(start);
+  };
+  const reported = new Set<string>();
+  for (const d of plan.derived) {
+    if (loops(d)) { out.push({ name: d.name, level: "critical", message: `Derived variable ${d.name} is built from itself${d.from.includes(d.name) ? "" : ", through other derived variables"} — it can never be computed.`, suggestion: "Build it from questions." }); continue; }
+    if ((d.kind === "recode" || d.kind === "index" || d.kind === "flag") && !d.expression?.trim()) out.push({ name: d.name, level: "critical", message: `Derived variable ${d.name} (${d.kind}) has no expression, so the run cannot compute it.`, suggestion: "Add the expression that defines it." });
+    for (const f of d.from) {
+      const q = resolve(def, f);
+      if (!q) continue;
+      const lvl = measurementOf(q);
+      const key = `${d.name}|${f}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      if (lvl === "text") { out.push({ name: d.name, level: "critical", message: `Derived variable ${d.name} is built from ${q.code}, an open text — there is nothing to compute from it.`, suggestion: "Code the text first, or build it from a closed question." }); continue; }
+      if ((d.kind === "top_box" || d.kind === "bottom_box") && lvl !== "ordinal" && !isScaleLike(lvl)) out.push({ name: d.name, level: "critical", message: `${d.name} is a ${d.kind.replace("_", " ")} of ${q.code}, which is ${lvl} — a top box needs a rating scale.`, suggestion: "Use a flag on the answer(s) you mean, or a scale question." });
+      else if ((d.kind === "mean_score" || d.kind === "sum_score") && (lvl === "multi" || (lvl === "nominal" && (q.options?.length ?? 0) > 2))) out.push({ name: d.name, level: "warning", message: `${d.name} takes the ${d.kind === "mean_score" ? "mean" : "sum"} of ${q.code}, whose answers are unordered categories — the number would mean nothing.`, suggestion: "Recode it to a score first, or leave it out of the construct." });
+    }
+  }
+  return out;
+}
+
 export function reviewAnalysisPlan(def: SurveyDefinition): AnalysisPlanIssue[] {
   const out: AnalysisPlanIssue[] = [];
   const plan = def.research?.analysisPlan;
@@ -601,6 +672,8 @@ export function reviewAnalysisPlan(def: SurveyDefinition): AnalysisPlanIssue[] {
       if (t.method === "maxdiff_scores" && refs.every((r) => resolve(def, r)?.type !== "maxdiff_task")) out.push({ level: "critical", message: `MaxDiff scores are planned on ${refs.join(", ")}, but none is a MaxDiff exercise.`, questionIds: ids(refs) });
       if (t.method === "conjoint_utilities" && refs.every((r) => !/conjoint|acbc/.test(resolve(def, r)?.type ?? ""))) out.push({ level: "critical", message: `Conjoint utilities are planned on ${refs.join(", ")}, but none is a conjoint exercise.`, questionIds: ids(refs) });
     }
+    for (const p of derivedProblems(def, plan)) out.push({ level: p.level, message: p.message, questionIds: ids(plan.derived.find((d) => d.name === p.name)?.from ?? []), ...(p.suggestion ? { suggestion: p.suggestion } : {}) });
+    for (const t of planTagIssues(def, plan)) out.push({ level: "suggestion", message: t.message, itemId: t.itemId, questionIds: [], suggestion: `Remove ${t.hypothesis} from the item, or make it read both sides of the hypothesis.` });
     for (const d of plan.derived) {
       const dead = d.from.filter(missing);
       if (dead.length) out.push({ level: "critical", message: `Derived variable ${d.name} is built from ${dead.join(", ")}, which ${dead.length === 1 ? "is" : "are"} not in the survey.`, questionIds: ids(d.from) });

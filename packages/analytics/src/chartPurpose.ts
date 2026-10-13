@@ -76,7 +76,7 @@ export interface ChartChoice extends ChartRecommendation { purpose: AnalyticalPu
 export function chooseChart(def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "measure" | "options">, result: AnalysisResult, opts: { purpose?: AnalyticalPurpose; audience?: Audience; limit?: number } = {}): ChartChoice[] {
   const audience = opts.audience ?? "client";
   const read = opts.purpose ? { purpose: opts.purpose, why: "as asked" } : purposeOf(def, result);
-  const base = recommendCharts(result, 40);
+  const base = recommendCharts(result, 40, { aliases: true });
   const fit = new Map(FIT[read.purpose]);
   const scored = base.map((r) => {
     const bonus = fit.get(r.type) ?? 0;

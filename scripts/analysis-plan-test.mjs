@@ -201,7 +201,7 @@ assert.equal(await count('[data-testid="ap-test"]'), plan().tests.length);
 ok("every planned crosstab and test is listed, in the plan's order, with the same ids Intelligent mode holds");
 await page.click('[data-testid="ap-section-hypotheses"]');
 assert.equal(await count('[data-testid="ap-hyp"]'), 2);
-assert.match(await text('[data-testid="ap-hyp"]:first-child'), /H1.*Region affects satisfaction.*Testable/);
+assert.match(await text('[data-testid="ap-hyp"]'), /H1.*Region affects satisfaction.*Testable/);
 assert.equal(await count('[data-testid="ap-hyp-verdict"]'), 0, "no verdict before a run");
 ok("hypotheses are listed with their coverage and the items that serve them — and no verdict is invented before a run");
 await page.click('[data-testid="ap-section-variables"]');

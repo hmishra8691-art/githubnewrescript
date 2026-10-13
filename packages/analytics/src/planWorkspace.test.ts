@@ -284,3 +284,116 @@ test("P-1: an analysis whose plan id now names another item is re-linked to the 
   /* an unshifted plan has nothing to relink */
   assert.deepEqual(planRelinks(planItemViews(def, spec, { dictionary, analyses: rows, charts: [] }), rows), []);
 });
+
+test("P-6: retyping a variable makes stale only the items that read it; rewording a hypothesis only the items that serve it; an analysis written before the record is left alone", () => {
+  const def = planned();
+  def.research!.analysisPlan!.crosstabs.splice(2, 1); // x3 reads a variable that does not exist
+  const dictionary = variableMetadata(def);
+  const views = planItemViews(def, spec, { dictionary, analyses: [], charts: [] });
+  const saved: SavedAnalysisRow[] = planAnalysisSync(views, spec, "1.0").flatMap((s, i) => (s.kind === "create" ? [{ id: `a${i}`, name: s.definition.name, kind: s.definition.kind, version: 1, definition: s.definition }] : []));
+  assert.equal(saved.length, 4);
+  assert.ok(saved.every((a) => typeof a.definition.options?.plannedReads === "string"), "the apply records what each item was written against");
+  const states = (d: typeof def, dict: typeof dictionary, rows = saved) => Object.fromEntries(planItemViews(d, spec, { dictionary: dict, analyses: rows, charts: [] }).map((v) => [v.id, v.state]));
+  assert.deepEqual(states(def, dictionary), { x1: "configured", x2: "configured", t1: "configured", t2: "configured" });
+
+  /* REGION becomes a different kind of variable: the items that read REGION — x1 and t1 — are stale, the rest are not */
+  const retyped = dictionary.map((v) => (v.name === "REGION" ? { ...v, role: "numeric" as const, questionType: "numeric", categories: undefined } : v));
+  assert.deepEqual(states(def, retyped), { x1: "stale", x2: "configured", t1: "stale", t2: "configured" });
+  const staleViews = planItemViews(def, spec, { dictionary: retyped, analyses: saved, charts: [] });
+  assert.match(staleViews.find((v) => v.id === "x1")!.staleBecause ?? "", /a variable it reads, or a hypothesis it serves, changed/);
+  assert.match(planOverview(def, staleViews, planVariableViews(def, staleViews, retyped)).attention.find((a) => a.id === "x1")!.why, /changed since it was written — apply the plan to update it/);
+  /* a relabelled answer is a change too; the same question with the same answers is not */
+  const relabelled = dictionary.map((v) => (v.name === "REGION" ? { ...v, categories: (v.categories ?? []).map((c, i) => (i === 0 ? { ...c, label: `${c.label} (renamed)` } : c)) } : v));
+  assert.equal(states(def, relabelled).x1, "stale");
+  assert.equal(states(def, dictionary.map((v) => ({ ...v }))).x1, "configured");
+
+  /* H2 is reworded: only the item that serves H2 (x2) is stale */
+  const reworded = structuredClone(def);
+  reworded.research!.hypotheses[1] = "Awareness of Alpha strongly raises consideration";
+  assert.deepEqual(states(reworded, dictionary), { x1: "configured", x2: "stale", t1: "configured", t2: "configured" });
+
+  /* the apply of a stale item updates only its own analysis, and records the new reads so the next look is clean */
+  const views2 = planItemViews(def, spec, { dictionary: retyped, analyses: saved, charts: [] });
+  const sync = planAnalysisSync(views2, spec, "1.0", saved);
+  assert.deepEqual(sync.map((s) => s.kind), ["update", "keep", "update", "keep"]);
+  const updated = saved.map((a) => { const s = sync.find((x) => x.kind === "update" && (x as { analysisId: string }).analysisId === a.id); return s ? { ...a, definition: (s as { definition: SavedAnalysisRow["definition"] }).definition } : a; });
+  assert.deepEqual(states(def, retyped, updated), { x1: "configured", x2: "configured", t1: "configured", t2: "configured" });
+
+  /* written before the record existed: never flagged on the reads alone */
+  const before = structuredClone(saved);
+  for (const a of before) { const { plannedReads: _r, ...o } = a.definition.options as Record<string, unknown>; void _r; a.definition = { ...a.definition, options: o }; }
+  assert.deepEqual(states(def, retyped, before), { x1: "configured", x2: "configured", t1: "configured", t2: "configured" });
+});
+
+test("P-7: the cap leaves exploratory items out of the apply, says which and why, never touches an analysis that exists — and the dashboard says what it has no room for", () => {
+  const def = planned();
+  def.research!.analysisPlan!.crosstabs.splice(2, 1);
+  const extra = Array.from({ length: 60 }, (_, i) => ({ id: `e${i}`, rows: ["SAT"], columns: [i % 2 ? "GENDER" : "REGION"], measure: i % 3 ? "pct_col" : "count", priority: 3, hypotheses: [] as string[], reason: `exploratory ${i}` }));
+  def.research!.analysisPlan!.crosstabs.push(...extra as never[]);
+  const dictionary = variableMetadata(def);
+  const views = planItemViews(def, spec, { dictionary, analyses: [], charts: [] });
+  const inScope = views.filter((v) => v.inScope);
+  assert.equal(inScope.length, 40);
+  assert.ok(["x1", "x2", "t1"].every((id) => views.find((v) => v.id === id)!.inScope), "essential items always");
+  const ov = planOverview(def, views, planVariableViews(def, views, dictionary));
+  assert.equal(ov.notShown.length, views.length - 40);
+  assert.ok(ov.notShown.every((n) => n.tier === "exploratory" || n.tier === "recommended"));
+  assert.equal(ov.tiers.essential + ov.tiers.recommended + ov.tiers.exploratory, views.length);
+  const sync = planAnalysisSync(views, spec, "1.0");
+  const skipped = sync.filter((s) => s.kind === "skip");
+  assert.equal(skipped.length, views.length - 40);
+  assert.ok(skipped.every((s) => (s as { notApplied?: boolean }).notApplied && /beyond the items the plan applies by default/.test((s as { reason: string }).reason)));
+  assert.equal(sync.filter((s) => s.kind === "create").length, 40);
+
+  /* an item that already has a saved analysis is kept in scope however far down it ranks */
+  const last = views[views.length - 1];
+  const savedLast: SavedAnalysisRow = { id: "keepme", name: "x", kind: "crosstab", version: 1, definition: stampedDefinition(last, spec, "1.0") };
+  const again = planItemViews(def, spec, { dictionary, analyses: [savedLast], charts: [] });
+  assert.equal(again.find((v) => v.id === last.id)!.inScope, true);
+  assert.equal(again.find((v) => v.id === last.id)!.state, "configured");
+
+  /* the summary counts them apart from the invalid ones */
+  const sum = summarizeApply("TEST", 10, sync.map((s) => ({ id: s.item.id, title: s.item.title, sync: s.kind === "skip" ? ((s as { notApplied?: boolean }).notApplied ? "not_applied" as const : "skipped_invalid" as const) : "created" as const, status: s.kind === "skip" ? "skipped" as const : "run" as const })), { charts: 0, planned: views.length });
+  assert.equal(sum.counts.notApplied, views.length - 40);
+  assert.equal(sum.counts.skipped, 0);
+  assert.equal(sum.status, "applied", "a cap is not a failure");
+  assert.match(sum.message, /not applied \(beyond the plan's cap; listed as not shown\)/);
+
+  /* the dashboard names what it has no room for */
+  const idFor = (p: string) => `analysis-${p}`;
+  const d = planDashboard(null, "Plan", views.slice(0, 8), { analysisIdFor: idFor, chartSpecFor: (p) => { const v = views.find((x) => x.id === p); return v ? planChartSpec(v, "bar_vertical") : undefined; }, run: null, max: 5 });
+  assert.match(d.widgets[0].text ?? "", /Not on this dashboard \(3 more planned charts\)/);
+  assert.equal(d.widgets.filter((w) => w.id !== "plan:summary").length, 5);
+});
+
+test("the trace: objective → hypothesis → item → result → claim, with every broken link named", async () => {
+  const { planTrace } = await import("./planTrace.js");
+  const def = planned();
+  def.research!.analysisPlan!.crosstabs.splice(2, 1);
+  def.research!.hypotheses.push("Nobody can test this one");
+  const dictionary = variableMetadata(def);
+  const views0 = planItemViews(def, spec, { dictionary, analyses: [], charts: [] });
+  const t0 = planTrace(def, views0, null);
+  assert.equal(t0.objective, "What drives satisfaction");
+  assert.deepEqual(t0.hypotheses.map((h) => [h.label, h.items.map((i) => i.id)]), [["H1", ["x1", "t1"]], ["H2", ["x2"]], ["H3", []]]);
+  assert.deepEqual(t0.profiling.map((i) => i.id), ["t2"], "an item that serves no hypothesis is listed as profiling");
+  assert.deepEqual(t0.hypotheses[2].gaps, ["nothing in the plan reads both sides of it"]);
+  assert.deepEqual(t0.hypotheses[0].gaps, ["its items have not been applied yet"]);
+  assert.ok(t0.gaps.includes("H3: nothing in the plan reads both sides of it"));
+  assert.ok(t0.hypotheses.every((h) => h.claim === null));
+  /* applied, run and judged: the claim and the findings sit under the hypothesis */
+  const saved: SavedAnalysisRow[] = planAnalysisSync(views0, spec, "1.0").flatMap((s, i) => (s.kind === "create" ? [{ id: `a${i}`, name: s.definition.name, kind: s.definition.kind, version: 1, definition: s.definition }] : []));
+  const views1 = planItemViews(def, spec, { dictionary, analyses: saved, charts: [] });
+  const run = { verdicts: [{ label: "H1", text: "t", verdict: "supported", reason: "region differs", findings: [], analyses: 2 }] as never[] };
+  const t1 = planTrace(def, views1, run);
+  assert.equal(t1.hypotheses[0].claim?.verdict, "supported");
+  assert.deepEqual(t1.hypotheses[0].gaps, []);
+  assert.ok(t1.hypotheses[1].gaps.includes("the latest run reached no verdict on it"));
+  assert.equal(t1.hypotheses[0].items[0].analysisId !== null, true);
+  /* a variable it reads changes: the result it rests on is flagged out of date */
+  const retyped = dictionary.map((v) => (v.name === "REGION" ? { ...v, role: "numeric" as const, categories: undefined } : v));
+  const t2 = planTrace(def, planItemViews(def, spec, { dictionary: retyped, analyses: saved, charts: [] }), run);
+  assert.ok(t2.hypotheses[0].items.some((i) => i.outOfDate));
+  assert.ok(t2.hypotheses[0].gaps.some((g) => /out-of-date analysis/.test(g)));
+  assert.ok(!t2.hypotheses[1].gaps.some((g) => /out-of-date/.test(g)), "H2's items read nothing that changed");
+});
