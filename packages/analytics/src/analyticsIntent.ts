@@ -60,7 +60,22 @@ export interface AskContext {
   /** computed results by analysis id — needed to choose charts and to judge a chart */
   results?: Readonly<Record<string, AnalysisResult | undefined>>;
   dataset: DatasetSpec;
+  /**
+   * What the person has open (Phase 5): the analysis in Explore. "this" in a
+   * request — "cross-tab this by region", "show this as a horizontal bar" —
+   * means that analysis's own question, and the proposal says so.
+   */
+  focus?: { analysisId: string };
 }
+
+/**
+ * "this", "this chart", "this analysis" … — a pointer at what is open, never a
+ * guess. A bare "this" counts only where it stands for a question ("cross-tab
+ * this by region", "show this as a bar"), not in "this study".
+ */
+const THIS_SRC = String.raw`\bthis\s+(?:analysis|question|variable|table|chart|graph|result|one|measure)\b|\bthis\b(?=\s*(?:by|across|against|vs\.?|versus|as|differ\w*|between|and|,|$))`;
+const THIS_REF = new RegExp(THIS_SRC, "g");
+const THIS_ANY = new RegExp(THIS_SRC);
 
 let seq = 0;
 const iid = () => `ask_${(++seq).toString(36)}${Date.now().toString(36).slice(-4)}`;
@@ -216,10 +231,26 @@ export function proposeFromText(request: string, ctx: AskContext): AskProposal {
   const originals = text.replace(NOISE, " ").split(CLAUSE_SPLIT).map((c) => c.trim()).filter(Boolean);
   const stems = (s: string) => s.replace(/\bcross[\s-]?tabs?(?:ulations?)?\b/g, "crosstab");
 
+  const focusAnalysis = ctx.focus ? ctx.analyses.find((a) => a.id === ctx.focus!.analysisId) : undefined;
+  const focusVariable = focusAnalysis ? (focusAnalysis.definition.variables?.[0] ?? focusAnalysis.definition.rows?.[0]) : undefined;
+  let focusSaid = false;
+
   clauses.forEach((raw, ci) => {
-    const c = stems(raw);
+    let c = stems(raw);
     const orig = originals[ci] ?? raw;
     let handled = false;
+
+    /* ---- "this": the analysis that is open. Read it as that analysis's own question, and say so. */
+    if (THIS_ANY.test(c)) {
+      if (focusAnalysis && focusVariable) {
+        c = c.replace(THIS_REF, focusVariable);
+        if (!focusSaid) { notes.push(`“this” was read as “${focusAnalysis.name}” (${focusVariable}), the analysis open in Explore.`); focusSaid = true; }
+      } else {
+        unread.push(`${orig} — “this” points at the analysis you have open, and none is open. Open one in Explore, or name the question.`);
+        read.push(orig);
+        return;
+      }
+    }
 
     /* ---- remove redundant / duplicate analyses */
     if (/\b(remove|delete|drop|clean\s*up|get rid of|prune)\b/.test(c) && /\b(redundant|duplicate[ds]?|repeated|repeat(?:s|ed)?|same|overlapping|unnecessary)\b/.test(c)) {

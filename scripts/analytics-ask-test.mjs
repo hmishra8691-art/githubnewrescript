@@ -31,6 +31,7 @@ import { memoryDb } from "./lib/memdb.mjs";
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
+import { axTab } from "./lib/axNav.mjs";
 
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
@@ -317,7 +318,7 @@ const mkReport = (name, definition) => {
   const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
   store.reports.push(row); return row;
 };
-const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
+const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await axTab(page, "reports"); };
 const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
 const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
 
@@ -331,7 +332,7 @@ const R = mkReport("Quarterly report", { title: "Quarterly report", mode: "live"
   { id: "b-brands", type: "chart", title: "Brands considered", analysisId: consider.id, chart: { type: "pie", options: {} } },
   { id: "b-sat", type: "chart", title: "Overall satisfaction", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } },
 ] });
-const openAsk = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-ask"]'); await page.waitForSelector('[data-testid="ax-ask"]'); };
+const openAsk = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await axTab(page, "ask"); await page.waitForSelector('[data-testid="ax-ask"]'); };
 const ask = async (t) => { await page.fill('[data-testid="ax-ask-input"]', t); await page.click('[data-testid="ax-ask-propose"]'); await page.waitForSelector('[data-testid="ax-ask-review"]'); await page.waitForFunction((x) => !document.querySelector('[data-testid="ax-ask-propose"]').textContent.includes("Reading"), null); };
 const items = () => page.$$eval('[data-testid="ax-ask-item"]', (es) => es.map((e) => ({ text: e.textContent.replace(/\s+/g, " ").trim(), status: e.getAttribute("data-status"), op: e.getAttribute("data-op") })));
 const live = () => store.analyses.filter((a) => !a.deleted_at);
@@ -381,11 +382,11 @@ assert.equal(await page.$eval('[data-testid="ax-ask-apply"]', (b) => b.disabled)
 ok("a cross-tab you already have is shown as blocked with the reason and cannot be applied");
 const catchAll = live().length;
 // the workspace shows what was applied without a reload
-await page.click('[data-testid="ax-tab-analysis"]');
+await axTab(page, "analysis");
 await page.waitForSelector('[data-testid="ax-rail"]');
 await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="ax-rail-item"]')].some((e) => /Overall satisfaction by Age/.test(e.textContent)));
 ok("the Analysis rail lists what was applied, with no reload");
-await page.click('[data-testid="ax-tab-ask"]');
+await axTab(page, "ask");
 
 /* ------------------------------------------------------------------ 3b */
 console.log("\n§3b A PROPOSAL THAT WENT STALE — the server's answer wins");

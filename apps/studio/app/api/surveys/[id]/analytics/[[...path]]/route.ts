@@ -404,7 +404,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";
       if (!request) return bad("Say what you want done, for example: “cross-tabs of satisfaction by age and gender”.");
       const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
-      return json(await proposeAsk(db, ctx.user, surveyId, loaded, request, dataset, { model: body.model !== false, fake: body.fake }));
+      /* what the person has open (Phase 5): only an id that is a uuid is read, and the proposal finds it among this survey's analyses or ignores it */
+      const focusId = typeof (body.focus as { analysisId?: unknown } | undefined)?.analysisId === "string" ? (body.focus as { analysisId: string }).analysisId : "";
+      return json(await proposeAsk(db, ctx.user, surveyId, loaded, request, dataset, { model: body.model !== false, fake: body.fake, ...(isUuid(focusId) ? { focus: { analysisId: focusId } } : {}) }));
     }
     if (itemId === "apply") {
       const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";

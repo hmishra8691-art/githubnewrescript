@@ -15,6 +15,7 @@ import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 import { buildDataset, runAnalysis, recommendCharts, variableMetadata } from "../packages/analytics/dist/index.js";
 import { def as synDef, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { sendPreview } from "./lib/preview.mjs";
+import { axTab } from "./lib/axNav.mjs";
 
 const OUT = process.argv[2] ?? "/tmp/ui-shots";
 fs.mkdirSync(OUT, { recursive: true });
@@ -80,7 +81,7 @@ const manage = await page.$('.center button:has-text("Manage")'); if (manage) { 
 // 4. analytics
 await page.goto(`${STUDIO}/analytics?survey=${SURVEY}`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await shot("12-analytics-home", { full: true });
 await page.click('[data-testid="ax-home-analysis"]'); await page.waitForSelector('[data-testid="ax-result"]', { timeout: 20000 }); await shot("13-analytics-result", { full: true });
-await page.click('[data-testid="ax-tab-reports"]'); await shot("14-analytics-reports");
+await axTab(page, "reports"); await shot("14-analytics-reports");
 // 5. profile
 await page.route("**/api/auth/sessions**", (r) => json(r, { sessions: [] }));
 await page.route("**/api/notifications**", (r) => json(r, { notifications: [] }));

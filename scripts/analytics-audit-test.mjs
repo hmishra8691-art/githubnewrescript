@@ -24,6 +24,7 @@ import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDatas
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
+import { axTab } from "./lib/axNav.mjs";
 
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
@@ -251,7 +252,7 @@ const mkReport = (name, definition) => {
   const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
   store.reports.push(row); return row;
 };
-const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
+const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await axTab(page, "reports"); };
 const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
 const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
 
@@ -334,7 +335,7 @@ ok("'N responses' is the largest base in the report, not whichever analysis came
 console.log("\n§4 SAVED ANALYSIS — opening it changes nothing");
 const testEnv = mkAnalysis("Saved on test data", { env: "TEST" });
 await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
-await page.click('[data-testid="ax-tab-analysis"]');
+await axTab(page, "analysis");
 await page.waitForSelector('[data-testid="ax-rail"]');
 await page.click(`[data-testid="ax-rail-item"][data-id="${testEnv.id}"]`);
 await page.waitForSelector('[data-testid="ax-builder"]');
@@ -354,7 +355,7 @@ const flaky = mkAnalysis("Flaky analysis");
 store.charts.push({ id: uid(), survey_id: SURVEY, analysis_id: flaky.id, name: "Flaky chart", spec: { type: "bar_vertical", options: {} }, theme_id: null, style_version: 1, created_at: now(), updated_at: now() });
 store.failRunNames = new Set(["Flaky analysis"]);
 await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
-await page.click('[data-testid="ax-tab-charts"]');
+await axTab(page, "charts");
 await page.waitForSelector('[data-testid="ax-chart-failed"]');
 const failedText = await text('[data-testid="ax-chart-failed"]');
 assert.match(failedText, /could not be computed/);
@@ -366,7 +367,7 @@ ok("Try again recomputes it");
 
 /* ------------------------------------------------------------------ 6 */
 console.log("\n§6 SAVE — one click, one analysis");
-await page.click('[data-testid="ax-tab-analysis"]');
+await axTab(page, "analysis");
 await page.click('[data-testid="ax-rail-new"]');
 await page.waitForSelector('[data-testid="ax-builder"]');
 await page.fill('[data-testid="ax-name"]', "Double-clicked");
@@ -398,7 +399,7 @@ ok("after a change that alters the numbers, Export refuses until the analysis is
 console.log("\n§8 CHARTS — chosen from what was asked, and the denominator is stated");
 const multi = mkAnalysis("Brands considered", { variables: ["CONSIDER"] });
 await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
-await page.click('[data-testid="ax-tab-analysis"]');
+await axTab(page, "analysis");
 await page.waitForSelector('[data-testid="ax-rail"]');
 await page.click(`[data-testid="ax-rail-item"][data-id="${multi.id}"]`);
 await page.waitForSelector('[data-testid="ax-chart-advice"]');
@@ -420,7 +421,7 @@ ok("a saved chart type that cannot draw the result falls back and says why (was:
 console.log("\n§9 RAIL — planned and your own analyses are kept apart");
 const planned = mkAnalysis("Planned crosstab", { kind: "crosstab", variables: ["SAT", "GENDER"], extra: { rows: ["SAT"], columns: ["GENDER"], options: { planned: "xt_1" } } });
 await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
-await page.click('[data-testid="ax-tab-analysis"]');
+await axTab(page, "analysis");
 await page.waitForSelector('[data-testid="ax-rail-scope"]');
 const all = await count('[data-testid="ax-rail-item"]');
 await page.click('[data-testid="ax-rail-scope-planned"]');

@@ -214,3 +214,36 @@ test("removing an analysis is blocked when the one it was a repeat of has gone �
   assert.match(validateAskOp({ op: "remove_analysis", name: "B", analysisId: b.id, keptId: "00000000-0000-4000-8000-00000000dead" }, c).blocked.join(" "), /no longer exists, so it is not a repeat/);
   assert.match(validateAskOp({ op: "remove_analysis", name: "x", analysisId: "00000000-0000-4000-8000-00000000beef" }, c).blocked.join(" "), /no longer exists/);
 });
+
+test("Phase 5: 'this' means the analysis that is open — read as its own question, and the proposal says so", () => {
+  const open = saved("Satisfaction", "descriptive", ["SAT"]);
+  const withFocus = { ...ctx([open]), focus: { analysisId: open.id } };
+  const p = proposeFromText("Cross-tab this by gender", withFocus);
+  const x = op(p, "add_crosstab");
+  assert.equal(x.length, 1);
+  assert.deepEqual([x[0].rows, x[0].columns], [["SAT"], ["GENDER"]]);
+  assert.ok(p.notes.some((t) => /“this” was read as “Satisfaction” \(SAT\), the analysis open in Explore/.test(t)), p.notes.join(" | "));
+  const t = proposeFromText("Test whether this differs by region", withFocus);
+  const tests = op(t, "add_test");
+  assert.equal(tests.length, 1);
+  assert.equal(tests[0].outcome, "SAT"); assert.equal(tests[0].groupBy, "REGION");
+  /* the note appears once however many clauses say "this" */
+  const both = proposeFromText("Cross-tab this by gender, then test whether this differs by region", withFocus);
+  assert.equal(both.notes.filter((n) => /“this” was read as/.test(n)).length, 1);
+  assert.equal(op(both, "add_crosstab").length + op(both, "add_test").length, 2);
+});
+
+test("Phase 5: 'this' with nothing open is not guessed — it asks for an open analysis, and a request that never says 'this' is unchanged", () => {
+  const none = proposeFromText("Cross-tab this by gender", ctx());
+  assert.equal(none.items.length, 0);
+  assert.equal(none.unread.length, 1);
+  assert.match(none.unread[0], /none is open\. Open one in Explore/);
+  /* a focus that is not one of this survey's analyses is ignored, never trusted */
+  const ghost = proposeFromText("Cross-tab this by gender", { ...ctx(), focus: { analysisId: "not-there" } });
+  assert.equal(ghost.items.length, 0);
+  assert.match(ghost.unread[0], /none is open/);
+  const open = saved("Satisfaction", "descriptive", ["SAT"]);
+  const same = proposeFromText("Create cross-tabs of satisfaction by age and gender", { ...ctx([open]), focus: { analysisId: open.id } });
+  assert.equal(op(same, "add_crosstab").length, 2);
+  assert.ok(!same.notes.some((n) => /“this” was read as/.test(n)));
+});

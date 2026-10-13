@@ -25,6 +25,7 @@ import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDatas
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
+import { axTab } from "./lib/axNav.mjs";
 
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
@@ -279,7 +280,7 @@ const mkReport = (name, definition) => {
   const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
   store.reports.push(row); return row;
 };
-const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
+const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await axTab(page, "reports"); };
 const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
 const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
 

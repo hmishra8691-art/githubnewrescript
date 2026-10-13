@@ -21,12 +21,14 @@ interface Shown { item: AskItem; status: Status; message?: string; checked: bool
 interface HistoryEntry { at: string; request: string; done: number; blocked: number; items: { title: string; status: Status }[] }
 
 const EXAMPLES = ["Create cross-tabs of satisfaction by age and gender", "Remove redundant analyses", "Choose the best chart for each question", "Prepare a management summary", "Make an animated report of the key findings"];
+const FOCUS_EXAMPLES = ["Cross-tab this by gender", "Test whether this differs by region", "Use a horizontal bar for this"];
 const histKey = (id: string) => `ax-ask-history:${id}`;
 const loadHistory = (id: string): HistoryEntry[] => { try { const r = JSON.parse(localStorage.getItem(histKey(id)) ?? "[]"); return Array.isArray(r) ? r.slice(0, 20) : []; } catch { return []; } };
 const saveHistory = (id: string, h: HistoryEntry[]) => { try { localStorage.setItem(histKey(id), JSON.stringify(h.slice(0, 20))); } catch { /* history is a convenience */ } };
 const BADGE: Record<Status, { text: string; color: string }> = { proposed: { text: "Proposed — not applied", color: "#2563eb" }, done: { text: "Done", color: "#15803d" }, blocked: { text: "Blocked", color: "#b45309" }, failed: { text: "Failed", color: "#b91c1c" } };
 
-export function AskPanel({ api, dataset, analyses, canEdit, onChanged }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void }) {
+export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = null, embedded = false }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void;
+  /** the analysis open in Explore: "this" in a request means it (Phase 5) */ focus?: { analysisId: string; name: string } | null; /** shown in the side panel, which has its own heading */ embedded?: boolean }) {
   const [request, setRequest] = React.useState("");
   const [proposal, setProposal] = React.useState<AskProposal & { model?: { status: string; detail: string } } | null>(null);
   const [shown, setShown] = React.useState<Shown[]>([]);
@@ -43,7 +45,7 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged }: { api: 
     if (!text.trim() || busy) return;
     setBusy("propose"); setError(null); setMsg(null); setUndo([]);
     try {
-      const p = await api.askPropose({ request: text, dataset });
+      const p = await api.askPropose({ request: text, dataset, ...(focus ? { focus: { analysisId: focus.analysisId } } : {}) });
       setProposal(p); setAsked(text);
       setShown(p.items.map((item) => ({ item, status: "proposed", checked: !item.blocked.length && item.op.op !== "build_report" })));
     } catch (e) { setError((e as Error).message); }
@@ -91,12 +93,13 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged }: { api: 
   const selected = shown.filter((s) => s.checked && s.status === "proposed" && !s.item.blocked.length && s.item.op.op !== "build_report").length;
   return (
     <div className="ax-panel" data-testid="ax-ask">
-      <h3 style={{ marginTop: 0 }}>Ask</h3>
+      {!embedded && <h3 style={{ marginTop: 0 }}>Ask</h3>}
+      <div className="ax-ask-focus muted" data-testid="ax-ask-focus" data-open={focus ? "1" : "0"} style={{ fontSize: 13, marginBottom: 6 }}>{focus ? <>Looking at <b>{focus.name}</b> — say “this” to mean it.</> : <>No analysis is open. Open one in Explore to say “this”, or name the question.</>}</div>
       <p className="muted" style={{ marginTop: 0 }}>Say what you want done with the analyses. You get a proposal to review first — nothing changes until you apply it, and no number is ever written for you: every statistic comes from your data.</p>
       <textarea className="input" rows={2} value={request} onChange={(e) => setRequest(e.target.value)} placeholder="e.g. Create cross-tabs of satisfaction by age and gender" disabled={!canEdit} data-testid="ax-ask-input"
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void propose(); }} />
       <div className="row" style={{ marginTop: 6, gap: 6, flexWrap: "wrap" }}>
-        {EXAMPLES.map((x) => <button key={x} type="button" className="ax-chip" onClick={() => setRequest(x)} disabled={!canEdit}>{x}</button>)}
+        {(focus ? FOCUS_EXAMPLES : EXAMPLES).map((x) => <button key={x} type="button" className="ax-chip" onClick={() => setRequest(x)} disabled={!canEdit}>{x}</button>)}
         <span className="grow" />
         <button className="btn primary" onClick={() => void propose()} disabled={!canEdit || !request.trim() || busy !== null} data-testid="ax-ask-propose">{busy === "propose" ? "Reading your request…" : "Propose"}</button>
       </div>

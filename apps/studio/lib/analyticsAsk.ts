@@ -55,8 +55,8 @@ export async function askContext(db: SupabaseClient, surveyId: string, loaded: L
 export type ModelAsk = "not_asked" | "no_model" | "nothing" | "used" | "ai_off";
 
 /** Rules first; a model only for a request the rules could not read at all, answering in the same closed vocabulary. */
-export async function propose(db: SupabaseClient, user: AuthedUser | null, surveyId: string, loaded: LoadedContext, request: string, dataset: DatasetSpec, opts: { model: boolean; fake?: unknown }): Promise<AskProposal & { model: { status: ModelAsk; detail: string } }> {
-  const ctx = await askContext(db, surveyId, loaded, dataset, { results: true });
+export async function propose(db: SupabaseClient, user: AuthedUser | null, surveyId: string, loaded: LoadedContext, request: string, dataset: DatasetSpec, opts: { model: boolean; fake?: unknown; focus?: { analysisId: string } }): Promise<AskProposal & { model: { status: ModelAsk; detail: string } }> {
+  const ctx = { ...(await askContext(db, surveyId, loaded, dataset, { results: true })), ...(opts.focus ? { focus: opts.focus } : {}) };
   const p = proposeFromText(request, ctx);
   if (!opts.model || !p.unread.length) return { ...p, model: { status: "not_asked", detail: "" } };
   if (!aiConfigured()) return { ...p, model: { status: "no_model", detail: "No AI model is configured, so only the parts that could be read by rules were proposed." } };

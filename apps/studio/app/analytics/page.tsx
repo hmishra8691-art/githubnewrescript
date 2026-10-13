@@ -3,6 +3,7 @@ import React from "react";
 import { can, isProjectRole } from "@rescript/access";
 import { useSession } from "@/lib/useSession";
 import { AnalyticsWorkspace, type WsTab } from "@/components/analytics/AnalyticsWorkspace";
+import { resolveTab } from "@/components/analytics/navigation";
 import { AppHeader } from "@/components/ui/AppHeader";
 
 /**
@@ -23,7 +24,7 @@ export default function AnalyticsPage() {
   React.useEffect(() => {
     const u = new URL(window.location.href);
     setSurveyId(u.searchParams.get("survey") ?? "");
-    const t = u.searchParams.get("tab") as WsTab | null; if (t) setInitialTab(t);
+    const t = resolveTab(u.searchParams.get("tab")); if (t) setInitialTab(t);
     fetch("/api/surveys", { cache: "no-store" }).then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error ?? "Could not load surveys"); setSurveys(j.surveys ?? []); }).catch((e) => setError(e.message));
   }, []);
   React.useEffect(() => {

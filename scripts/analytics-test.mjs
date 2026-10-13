@@ -21,6 +21,7 @@ import { buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REP
 import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
 import { variableMetadata } from "../packages/analytics/dist/dataset.js";
+import { axTab } from "./lib/axNav.mjs";
 
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
@@ -235,8 +236,9 @@ assert.match(await text('[data-testid="ax-survey"] option:checked'), /Synthetic 
 assert.match(await text('[data-testid="ax-dataset"] option:checked'), /Production responses \(400\)/);
 ok("Data Analytics page opens with survey and dataset selectors (400 production responses)");
 await page.waitForSelector('[data-testid="ax-home"]');
-assert.equal(await count('[data-testid="ax-tab-home"], [data-testid="ax-tab-analysis"], [data-testid="ax-tab-charts"], [data-testid="ax-tab-tables"], [data-testid="ax-tab-segments"], [data-testid="ax-tab-filters"], [data-testid="ax-tab-reports"], [data-testid="ax-tab-themes"], [data-testid="ax-tab-exports"], [data-testid="ax-tab-sharing"]'), 10);
-ok("home page with Recent analyses / Saved reports / Quick actions and all ten workspace tabs");
+assert.equal(await count('[data-testid^="ax-place-"]'), 5, "five places");
+assert.deepEqual(await page.$$eval('[data-testid^="ax-place-"]', (es) => es.map((e) => e.getAttribute("data-testid").replace("ax-place-", ""))), ["overview", "plan", "explore", "findings", "deliver"]);
+ok("home page with Recent analyses / Saved reports / Quick actions and the five places (Overview, Plan, Explore, Findings, Deliver)");
 await shot("01-home");
 
 console.log("\n§2 ANALYSIS BUILDER — crosstab with significance");
@@ -345,7 +347,7 @@ ok("changing the measure creates analysis version 2");
 
 console.log("\n§5 MORE ANALYSES — NPS with drivers, conjoint, text");
 const runKind = async (kind, name, vars, after) => {
-  await page.click('[data-testid="ax-tab-home"]'); await page.click('[data-testid="ax-quick-analysis"]');
+  await axTab(page, "home"); await page.click('[data-testid="ax-quick-analysis"]');
   await page.waitForSelector('[data-testid="ax-builder"]');
   await page.click(`[data-testid="ax-kind-${kind}"]`); await page.fill('[data-testid="ax-name"]', name);
   await page.click('[data-testid="ax-step-1"]');
@@ -371,7 +373,7 @@ ok("text analytics: word cloud recommended and drawn");
 assert.equal(store.analyses.length, 4);
 
 console.log("\n§5c GEOGRAPHIC CHARTS — a real map, not bars with a footnote (§39)");
-await page.click('[data-testid="ax-tab-home"]'); await page.click('[data-testid="ax-quick-analysis"]');
+await axTab(page, "home"); await page.click('[data-testid="ax-quick-analysis"]');
 await page.waitForSelector('[data-testid="ax-builder"]');
 await page.click('[data-testid="ax-kind-crosstab"]'); await page.fill('[data-testid="ax-name"]', "Satisfaction by country");
 await page.click('[data-testid="ax-step-1"]');
@@ -521,7 +523,7 @@ assert.equal(await text('[data-testid="ax-savestate"]'), "New analysis");
 ok("New from the rail starts a blank draft (the unsaved guard asked first)");
 
 console.log("\n§6 SEGMENTS");
-await page.click('[data-testid="ax-tab-segments"]');
+await axTab(page, "segments");
 await page.click('[data-testid="ax-new-segment"]');
 await page.fill('[data-testid="ax-segment-name"]', "Women");
 await page.click('[data-testid="ax-add-rule"]');
@@ -532,7 +534,7 @@ await page.waitForSelector('[data-testid="ax-segment-card"]:has-text("Women")');
 assert.equal(store.segments.length, 1);
 ok("segment “Women” saved as a reusable Condition");
 // use the segment in a topbox analysis
-await page.click('[data-testid="ax-tab-home"]'); await page.click('[data-testid="ax-quick-analysis"]');
+await axTab(page, "home"); await page.click('[data-testid="ax-quick-analysis"]');
 await page.waitForSelector('[data-testid="ax-builder"]'); await page.click('[data-testid="ax-kind-topbox"]'); await page.fill('[data-testid="ax-name"]', "Top box by segment");
 await page.click('[data-testid="ax-step-1"]'); await page.click('.ax-var:has-text("SAT · Scale") input');
 await page.click('[data-testid="ax-step-3"]'); await page.click('[data-testid="ax-segment-chip"]:has-text("Women")');
@@ -542,7 +544,7 @@ ok("saved segment appears in the builder and drives chart segment switching");
 await page.click('[data-testid="ax-save"]'); await page.waitForSelector('[data-testid="ax-msg"]');
 
 console.log("\n§7 REPORT BUILDER, PUBLISH, VERSIONS");
-await page.click('[data-testid="ax-tab-reports"]');
+await axTab(page, "reports");
 await page.click('[data-testid="ax-new-report"]');
 await page.fill('[data-testid="ax-report-name"]', "Executive Customer Report");
 await page.click('[data-testid="ax-report-create"]');
@@ -576,6 +578,8 @@ ok("publish froze v1: definition + theme + computed results (no response rows in
 // edit after publish → published snapshot unchanged
 await page.click('[data-testid="ax-add-text"]'); await page.fill('.modal textarea', "New paragraph after publishing"); await page.click('.modal .btn.primary:has-text("Done")');
 await page.click('[data-testid="ax-report-save"]');
+/* the save is a request: wait for the fake backend to have it rather than asserting in the same tick */
+for (let i = 0; i < 100 && store.reports[0].definition.blocks.length !== 7; i++) await page.waitForTimeout(50);
 assert.equal(store.reportVersions[0].definition.blocks.length, 6);
 assert.equal(store.reports[0].definition.blocks.length, 7);
 ok("editing the draft after publishing leaves v1 immutable (§35)");
@@ -719,7 +723,7 @@ const [dl2] = await Promise.all([pub.waitForEvent("download"), pub.click('[data-
 assert.match(dl2.suggestedFilename(), /\.xlsx$/);
 ok("viewer with Download permission gets PowerPoint and Excel of the snapshot");
 // revoke from Manage Shared Reports
-await page.click('[data-testid="ax-tab-sharing"]');
+await axTab(page, "sharing");
 await page.waitForSelector('[data-testid="ax-share-row"][data-status="Active"]');
 assert.match(await text('[data-testid="ax-shares-table"]'), /Executive Customer Report.*Anyone with link.*Public.*Download only.*v1 \(pinned\).*Active.*Never/);
 await page.click('[data-testid="ax-share-revoke"]');
@@ -747,27 +751,27 @@ ok("expired link is refused");
 await anon.close();
 
 console.log("\n§9 EXPORTS, TABLE BUILDER, THEMES, DASHBOARD");
-await page.click('[data-testid="ax-tab-exports"]');
+await axTab(page, "exports");
 await page.click('[data-testid="ax-exports"] .btn.primary:has-text("Export…")');
 await page.waitForSelector('[data-testid="ax-export-dialog"]');
 await page.click('[data-testid="ax-export-dialog"] input[type="radio"] >> nth=1');
 const [dl3] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-export-go"]')]);
 assert.match(dl3.suggestedFilename(), /\.xlsx$/); assert.equal(store.lastExport.format, "xlsx");
 ok("Export dialog (format / theme / include / Excel formatting) generates a workbook");
-await page.click('[data-testid="ax-tab-tables"]');
+await axTab(page, "tables");
 await page.selectOption('[data-testid="ax-table-analysis"]', { label: "Satisfaction by gender (crosstab)" });
 await page.waitForSelector('[data-testid="ax-builder-table"]');
 await page.click('[data-testid="ax-builder-table"] th >> nth=1');
 assert.match(await text('[data-testid="ax-builder-table"] th >> nth=1'), /↓/);
 ok("Table Builder shows the crosstab with sortable columns");
-await page.click('[data-testid="ax-tab-themes"]');
+await axTab(page, "themes");
 await page.click('[data-testid="ax-new-theme"]');
 await page.fill('[data-testid="ax-theme-name"]', "Client A Theme");
 await page.click('[data-testid="ax-theme-save"]');
 await page.waitForSelector('[data-testid="ax-theme-card"]:has-text("Client A Theme")');
 assert.equal(store.themes.length, 1);
 ok("report theme saved (company branding separate from survey branding)");
-await page.click('[data-testid="ax-tab-reports"]');
+await axTab(page, "reports");
 await page.click('[data-testid="ax-new-dashboard"]');
 await page.fill('[data-testid="ax-report-name"]', "Executive Dashboard"); await page.click('[data-testid="ax-report-create"]');
 await page.waitForSelector('[data-testid="ax-report-builder"]');
@@ -850,7 +854,7 @@ store.reports.push({
 });
 // the reports list was fetched before this row existed, so pick it up fresh
 await page.reload({ waitUntil: "networkidle" });
-await page.click('[data-testid="ax-tab-reports"]');
+await axTab(page, "reports");
 await page.waitForSelector('[data-testid="ax-report-card"]:has-text("Legacy Dashboard")');
 await page.click('[data-testid="ax-report-card"]:has-text("Legacy Dashboard")');
 await page.waitForSelector('[data-testid="ax-widget"]');
@@ -1118,7 +1122,7 @@ assert.equal(tplOverlaps, 0, "the template's layout plus the carried-over work s
 ok("the applied layout has nothing hidden — carried-over work is placed, not stacked");
 
 // theme presets, including the dark ones the surfaces exist for
-await page.click('[data-testid="ax-tab-themes"]');
+await axTab(page, "themes");
 await page.waitForSelector('[data-testid="ax-theme-presets"]');
 await page.click('[data-testid="ax-theme-preset-midnight"]');
 await page.waitForSelector('[data-testid="ax-theme-editor"]');
@@ -1131,7 +1135,7 @@ assert.ok(darkTheme, "the dark preset saved as a real theme");
 ok("a dark theme is one click from a preset, not eight colour pickers");
 
 // and a dark theme actually renders dark — surfaces and all
-await page.click('[data-testid="ax-tab-reports"]');
+await axTab(page, "reports");
 await page.click('[data-testid="ax-report-card"]:has-text("Executive Dashboard")');
 await page.waitForSelector('[data-testid="ax-widget"]');
 await page.selectOption('.ax-rb-bar select[title="Report theme"]', { label: "Client dark" });
@@ -1154,7 +1158,7 @@ console.log("\n§9g GETTING IT OUT — the map in the deck, and the dashboard on
  * so. The renderer on screen has already drawn the real map, so the export
  * rasterises it and the slide carries the picture instead.
  */
-await page.click('[data-testid="ax-tab-reports"]');
+await axTab(page, "reports");
 // we are inside a builder from the previous section; the list is where reports are made
 if (await page.$('.ax-rb-bar .btn:has-text("← Reports")')) await page.click('.ax-rb-bar .btn:has-text("← Reports")');
 await page.waitForSelector('[data-testid="ax-new-report"]');

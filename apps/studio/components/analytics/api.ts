@@ -54,7 +54,7 @@ export class AxApi {
     return { notes };
   }
   /** Intelligent Mode: words → a proposal (writes nothing) */
-  askPropose(body: { request: string; dataset: unknown; model?: boolean }) { return this.req<AskProposal & { model: { status: string; detail: string } }>("intelligent/propose", { method: "POST", body: JSON.stringify(body) }); }
+  askPropose(body: { request: string; dataset: unknown; model?: boolean; focus?: { analysisId: string } }) { return this.req<AskProposal & { model: { status: string; detail: string } }>("intelligent/propose", { method: "POST", body: JSON.stringify(body) }); }
   /** the chosen items, each validated again by the server; returns what was done and how to undo it */
   askApply(body: { request: string; dataset: unknown; ops: AskOp[] }) { return this.req<{ applied: { index: number; name: string; status: "done" | "blocked" | "failed"; message: string; undo?: UndoRecord; createdId?: string }[]; rejected: string[] }>("intelligent/apply", { method: "POST", body: JSON.stringify(body) }); }
   askUndo(records: UndoRecord[]) { return this.req<{ undone: { name: string; status: "undone" | "skipped"; message: string }[] }>("intelligent/undo", { method: "POST", body: JSON.stringify({ records }) }); }

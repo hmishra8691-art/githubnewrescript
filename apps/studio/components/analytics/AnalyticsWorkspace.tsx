@@ -14,12 +14,16 @@ import { ReportsPanel, ExportDialog } from "./ReportsPanel";
 import { SharingPanel } from "./SharingPanel";
 import { Chart, ResultTableView } from "./charts/Chart";
 import { PlanWorkspace } from "./PlanWorkspace";
+import { FindingsView } from "./FindingsView";
+import { PLACES, DEFAULT_VIEW, placeOf, type PlaceKey, type WsTab } from "./navigation";
 
 /**
  * THE DATA ANALYTICS WORKSPACE (§2, §40). Survey and dataset selectors on top;
- * Home · Analysis plan · Analysis · Charts · Tables · Segments · Filters ·
- * Reports · Themes · Exports · Sharing beneath. Everything it shows is fetched
- * from the analytics API; the browser never holds response rows.
+ * five places beneath — Overview · Plan · Explore · Findings · Deliver — each
+ * holding the views that used to be tabs (see ./navigation), and Ask as a panel
+ * that opens from every place and knows the analysis you have open. Everything
+ * it shows is fetched from the analytics API; the browser never holds response
+ * rows.
  *
  * ANALYSIS PLAN is where the plan written in Intelligent mode
  * (research.analysisPlan) is reviewed, edited and applied to these outputs —
@@ -27,17 +31,31 @@ import { PlanWorkspace } from "./PlanWorkspace";
  * plan's state; without one it offers to create an analysis by hand.
  */
 
-export type WsTab = "home" | "plan" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
-const TABS: { key: WsTab; label: string }[] = [
-  { key: "home", label: "Home" }, { key: "plan", label: "Analysis plan" }, { key: "analysis", label: "Analysis" }, { key: "charts", label: "Charts" }, { key: "tables", label: "Tables" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" },
-  { key: "reports", label: "Reports" }, { key: "ask", label: "Ask" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
-];
+export type { WsTab } from "./navigation";
 
 export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; /** may change the survey definition — the plan lives there */ canEditPlan?: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
 
 export function AnalyticsWorkspace(p: WorkspaceProps) {
   const api = React.useMemo(() => new AxApi(p.surveyId), [p.surveyId]);
-  const [tab, setTab] = React.useState<WsTab>(p.initialTab ?? "home");
+  /* the view on show. "ask" is not a view: it opens the Ask panel over whichever place you are in */
+  const [tab, setTabRaw] = React.useState<Exclude<WsTab, "ask">>(p.initialTab && p.initialTab !== "ask" ? p.initialTab : "home");
+  const [askOpen, setAskOpen] = React.useState(p.initialTab === "ask");
+  const [askMounted, setAskMounted] = React.useState(p.initialTab === "ask");
+  const [lastView, setLastView] = React.useState<Partial<Record<PlaceKey, Exclude<WsTab, "ask">>>>({});
+  const place = placeOf(tab);
+  /* the panel takes the keyboard when it opens, and gives it back to the Ask button when it closes from inside */
+  const drawerRef = React.useRef<HTMLElement | null>(null);
+  const askButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const wasOpen = React.useRef(false);
+  React.useEffect(() => {
+    if (askOpen && !wasOpen.current) drawerRef.current?.querySelector<HTMLElement>('[data-testid="ax-ask-input"]')?.focus({ preventScroll: true });
+    if (!askOpen && wasOpen.current && drawerRef.current?.contains(document.activeElement)) askButtonRef.current?.focus({ preventScroll: true });
+    wasOpen.current = askOpen;
+  }, [askOpen, askMounted]);
+  const setTab = (t: WsTab) => {
+    if (t === "ask") { setAskMounted(true); setAskOpen(true); return; }
+    setTabRaw(t); setLastView((m) => ({ ...m, [placeOf(t)]: t }));
+  };
   const [env, setEnv] = React.useState<DatasetSpec["environment"]>("LIVE");
   const [quality, setQuality] = React.useState<DatasetSpec["dataset"]>("all");
   const [vars, setVars] = React.useState<VariableMeta[]>([]);
@@ -119,7 +137,18 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         <span className="grow" />
         <div className="muted" style={{ fontSize: 12.5, textAlign: "right" }}>Analyses run server-side on stored responses.<br />Only results reach this page.</div>
       </div>
-      <div className="ax-ws-tabs">{TABS.map((t) => <button key={t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => { if (t.key === tab) return; if (tab === "analysis" && !guard()) return; setTab(t.key); }} data-testid={`ax-tab-${t.key}`}>{t.label}{t.key === "analysis" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</button>)}</div>
+      <div className="ax-places" role="navigation" aria-label="Places">
+        {PLACES.map((pl, i) => (
+          <button key={pl.key} className={`ax-place ${place === pl.key ? "on" : ""}`} aria-current={place === pl.key ? "page" : undefined} title={pl.question} data-testid={`ax-place-${pl.key}`}
+            onClick={() => { if (place === pl.key) return; if (tab === "analysis" && !guard()) return; setTab(lastView[pl.key] ?? DEFAULT_VIEW[pl.key]); }}>
+            <span className="ax-place-n">{i + 1}</span>{pl.label}{pl.key === "explore" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}
+          </button>))}
+        <span className="grow" />
+        <button ref={askButtonRef} className={`btn small ax-ask-open ${askOpen ? "on" : ""}`} onClick={() => { setAskMounted(true); setAskOpen((o) => !o); }} aria-expanded={askOpen} aria-controls="ax-ask-drawer" title="Ask in words — it proposes, you review" data-testid="ax-ask-open">Ask</button>
+      </div>
+      {(PLACES.find((x) => x.key === place)?.views.length ?? 0) > 1 && (
+        <div className="ax-ws-tabs" role="tablist" aria-label={`${PLACES.find((x) => x.key === place)?.label} views`}>{PLACES.find((x) => x.key === place)!.views.map((t) => <button key={t.key} role="tab" aria-selected={tab === t.key} className={`ax-wstab ${tab === t.key ? "on" : ""}`} onClick={() => { if (t.key === tab) return; if (tab === "analysis" && !guard()) return; setTab(t.key); }} data-testid={`ax-tab-${t.key}`}>{t.label}{t.key === "analysis" && dirty ? <span className="ax-dirty" title="Unsaved changes" /> : null}</button>)}</div>
+      )}
       {error && <div className="ax-error" style={{ margin: "6px 0" }}>{error}</div>}
       {notice && <div className="ax-notice" style={{ margin: "6px 0" }} data-testid="ax-notice" onClick={() => setNotice(null)}>{notice}</div>}
       {tab === "home" && <Kpis env={env} counts={counts} vars={vars.length} analyses={analyses.length} charts={charts.length} reports={reports} shares={shares.length} />}
@@ -140,12 +169,19 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
         {tab === "tables" && <TablesLibrary api={api} analyses={analyses} onOpen={(a) => openBuilder({ analysis: a })} onNew={() => openBuilder({ kind: "crosstab" })} />}
         {tab === "segments" && <SegmentsPanel api={api} variables={vars} items={segments} kind="segment" onChange={() => void refresh()} />}
         {tab === "filters" && <SegmentsPanel api={api} variables={vars} items={segments} kind="filter" onChange={() => void refresh()} />}
+        {tab === "findings" && <FindingsView api={api} dataset={dataset} analyses={analyses} onOpenAnalysis={(a) => openBuilder({ analysis: a })} onTab={(t) => setTab(t)} />}
         {tab === "reports" && <ReportsPanel api={api} analyses={analyses} themes={themes} items={reports} onChange={() => void refresh()} pendingAdd={pendingAdd} clearPending={() => setPendingAdd(null)} surveyTitle={p.surveyTitle} />}
-        {tab === "ask" && <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} />}
         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
       </div>
+      {askMounted && (
+        <aside ref={drawerRef} id="ax-ask-drawer" className="ax-ask-drawer" role="complementary" aria-label="Ask" hidden={!askOpen} data-testid="ax-ask-drawer" onKeyDown={(e) => { if (e.key === "Escape") setAskOpen(false); }}>
+          <div className="ax-ask-drawer-head"><b>Ask</b><span className="muted" style={{ fontSize: 12.5 }}>on {PLACES.find((x) => x.key === place)?.label}</span><span className="grow" /><button className="btn small" onClick={() => setAskOpen(false)} data-testid="ax-ask-close" aria-label="Close Ask">Close</button></div>
+          <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} embedded
+            focus={place === "explore" && currentAnalysisId ? { analysisId: currentAnalysisId, name: String(analyses.find((a) => a.id === currentAnalysisId)?.name ?? builder.initial?.analysis?.name ?? "this analysis") } : null} />
+        </aside>
+      )}
     </div>
   );
 }
