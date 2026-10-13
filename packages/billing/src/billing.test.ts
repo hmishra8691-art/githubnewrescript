@@ -676,3 +676,14 @@ test("reading a subject without saying its kind does not CREATE the wrong row", 
   assert.equal(forIv[0].subjectKind, "interview");
   assert.equal(forIv[0].surveyId, null, "and it does not claim to be a survey");
 });
+
+test("the current Claude models are priced at their own list rates, not the fallback", () => {
+  const price = (model: string, side: "input" | "output") => findRate(DEFAULT_RATES, { provider: "openai-compatible", service: "chat", model, side });
+  for (const [model, i, o] of [["claude-fable-5-1", 10, 50], ["claude-opus-5-5", 4, 20], ["claude-sonnet-5-5", 2, 10]] as const) {
+    assert.equal(price(model, "input")?.providerCost, i, `${model} input`);
+    assert.equal(price(model, "output")?.providerCost, o, `${model} output`);
+    assert.notEqual(price(model, "input")?.id, "ai.chat.*.in", `${model} has a row of its own`);
+  }
+  /* a model with no row still falls back */
+  assert.equal(price("some-new-model", "input")?.id, "ai.chat.*.in");
+});
