@@ -4,6 +4,7 @@ import {
   composeReport, renderFrame, sceneTiming, chartAllowed, chartWords, PRESETS, applyDesignPatch,
   type StoryReport, type Scene, type Measurer, type ComposedPage, type DesignConfig, type StoryChartType, type StoryOp, type PresetId, type BrandInput, type Composed,
 } from "@rescript/analytics/story";
+import { StoryShare } from "./StoryShare";
 import { StoryApi, ApiError, reportMeasurer, type StoryPayload, type StoryListItem, type RevisionPreview, type DesignReading, type BrandReading, type RenderView } from "./storyApi";
 
 /**
@@ -154,7 +155,7 @@ function Player({ pages, timings, measurer, width, startAt, onScene }: { pages: 
 
 /* ================================================================ the storyboard */
 
-type Tab = "scene" | "revise" | "design" | "export" | "versions";
+type Tab = "scene" | "revise" | "design" | "export" | "share" | "versions";
 
 export function StoryStudio({ api, id, onClose }: { api: StoryApi; id: string; onClose: () => void }) {
   const [payload, setPayload] = React.useState<StoryPayload | null>(null);
@@ -275,12 +276,13 @@ export function StoryStudio({ api, id, onClose }: { api: StoryApi; id: string; o
         {/* ---- side panel ---- */}
         <div className="st-side">
           <div className="st-tabs" role="tablist">
-            {(["scene", "revise", "design", "export", "versions"] as Tab[]).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={`btn small ${tab === t ? "primary" : ""}`} onClick={() => setTab(t)} data-testid={`st-tab-${t}`}>{t === "scene" ? "Scene" : t === "revise" ? "Revise" : t === "design" ? "Design" : t === "export" ? "Export" : "Versions"}</button>)}
+            {(["scene", "revise", "design", "export", "share", "versions"] as Tab[]).map((t) => <button key={t} role="tab" aria-selected={tab === t} className={`btn small ${tab === t ? "primary" : ""}`} onClick={() => setTab(t)} data-testid={`st-tab-${t}`}>{t === "scene" ? "Scene" : t === "revise" ? "Revise" : t === "design" ? "Design" : t === "export" ? "Export" : t === "share" ? "Share" : "Versions"}</button>)}
           </div>
           {tab === "scene" && <SceneInspector scene={scene} def={def} update={update} move={move} setSection={setSection} remove={removeScene} timing={timings[videoIndex]} regenerate={() => act(() => api.regenerate(id, scene.id), "Scene regenerated from a fresh run. Your edits to it were kept.")} busy={busy || dirty} />}
           {tab === "revise" && <RevisePanel api={api} id={id} version={payload.story.version} selected={scene.id} dirty={dirty} onApplied={(p, words) => { accept(p); setMsg(words); }} />}
           {tab === "design" && measurer && <DesignPanel api={api} id={id} payload={payload} def={def} measurer={measurer} dirty={dirty} onApplied={(p, words) => { accept(p); setMsg(words); }} />}
           {tab === "export" && <ExportPanel api={api} id={id} payload={payload} dirty={dirty} criticalCount={criticalCount} onChange={load} />}
+          {tab === "share" && <StoryShare api={api} id={id} payload={payload} dirty={dirty} onChange={load} />}
           {tab === "versions" && <VersionsPanel api={api} id={id} payload={payload} dirty={dirty} onReverted={(p, v) => { accept(p); setMsg(`Version ${v} restored as version ${p.story.version}.`); }} onRegenerate={() => act(() => api.regenerate(id), "Regenerated from a fresh run of the plan; your edits were kept.")} />}
         </div>
       </div>

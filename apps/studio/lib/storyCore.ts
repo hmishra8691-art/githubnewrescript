@@ -156,7 +156,7 @@ export function retentionDays(): number {
 }
 
 /** a file name for a download */
-export function downloadName(title: string, version: number, kind: "video" | "pptx" | "srt"): string {
+export function downloadName(title: string, version: number, kind: "video" | "pptx" | "srt" | "html"): string {
   const base = title.replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_").slice(0, 80) || "report";
   return `${base}_v${version}.${kind === "video" ? "mp4" : kind}`;
 }

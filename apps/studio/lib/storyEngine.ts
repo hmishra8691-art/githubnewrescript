@@ -27,7 +27,7 @@
  */
 import type { AnalysisDefinition, AnalysisResult, AnalysisRun, Audience, DatasetSpec } from "@rescript/analytics";
 import {
-  planStoryReport, composeReport, defaultDesign, applyDesignPatch, interpretDesignRequest, interpretRevision, applyOps, describeOp, mergeRegenerated, brandTheme, PRESETS, describeStory,
+  planStoryReport, composeReport, checkStoryForPublish, defaultDesign, applyDesignPatch, interpretDesignRequest, interpretRevision, applyOps, describeOp, mergeRegenerated, brandTheme, PRESETS, describeStory,
   type StoryReport, type DesignConfig, type DesignPatch, type StoryOp, type BrandInput, type PresetId, type Composed,
 } from "@rescript/analytics/story";
 import { buildStoryPptx } from "@rescript/analytics/export";
@@ -61,7 +61,7 @@ export interface StoryDeps {
 export type Fail = { ok: false; status: number; error: string; details?: unknown };
 const fail = (status: number, error: string, details?: unknown): Fail => ({ ok: false, status, error, ...(details !== undefined ? { details } : {}) });
 
-export interface StoryOptions { audience: Audience; maxFindings: number; exclude: string[]; environment: DatasetSpec["environment"]; dataset: "all" | "clean"; preset: PresetId }
+export interface StoryOptions { /** the report row this story is published through, and the version last published (Phase 4 sharing) */ published?: { reportId: string; version: number; storyVersion: number; at: string }; audience: Audience; maxFindings: number; exclude: string[]; environment: DatasetSpec["environment"]; dataset: "all" | "clean"; preset: PresetId }
 
 /* ------------------------------------------------------------------ reading */
 
@@ -110,7 +110,10 @@ export async function storyPayload(db: Db, row: StoryRow, deps: StoryDeps) {
   const { data: cachedRows } = await db.from("analytics_story_segments").select("hash").eq("survey_id", row.survey_id).in("hash", plan.segments.map((s) => s.hash));
   const cached = new Set(((cachedRows ?? []) as { hash: string }[]).map((x) => x.hash));
   const combinedCritical = [...qa.video.critical, ...qa.pptx.critical];
+  const newerData = await newerDataFor(db, row);
   return {
+    newerData,
+    published: row.options?.published ?? null,
     story: { id: row.id, title: row.title, version: row.version, outputs: row.outputs, options: row.options, runId: row.run_id, environment: row.environment, createdAt: row.created_at, updatedAt: row.updated_at, storedStatus: row.status },
     definition: report,
     status: statusFor({ stored: row.status, qa: { critical: combinedCritical }, activeRender: !!active, lastRender: last ? { status: String(last.status), version: Number(last.version) } : null, version: row.version }) as StoryStatus,
@@ -122,6 +125,55 @@ export async function storyPayload(db: Db, row: StoryRow, deps: StoryDeps) {
     summary: describeStory(report),
     presets: Object.entries(PRESETS).map(([id, d]) => ({ id, name: d.name })),
   };
+}
+
+/* ------------------------------------------------------------------ publishing (Phase 4) */
+
+/** responses that arrived after the story's data was frozen — said on the story, never applied to it */
+export async function newerDataFor(db: Db, row: StoryRow): Promise<{ since: string; responses: number } | null> {
+  const since = row.definition?.createdFrom?.computedAt;
+  if (!since) return null;
+  try {
+    let q = db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", row.survey_id).is("deleted_at", null).eq("status", "complete").gt("completed_at", since);
+    if (row.environment === "LIVE") q = q.eq("is_test", false); else if (row.environment === "TEST") q = q.eq("is_test", true);
+    const { count } = await q;
+    return count && count > 0 ? { since, responses: count } : null;
+  } catch { return null; }
+}
+
+/**
+ * PUBLISH A STORY VERSION. The story document is frozen — scenes, their numbers
+ * and their sources — into an immutable report version, so the existing share
+ * route serves it exactly as it serves a report: one link, a password if you
+ * set one, revocable, with every view recorded. Nothing is recomputed here and
+ * nothing the story holds can be changed by the viewer. A story that does not
+ * pass the publish check (headline, source, drawable numbers, contrast) is not
+ * published, and the answer names the scene.
+ */
+export async function publishStory(db: Db, row: StoryRow, o: { userId?: string | null; note?: string | null; now?: Date } = {}): Promise<{ ok: true; reportId: string; version: number; publishedAt: string; warnings: unknown[] } | Fail> {
+  const check = checkStoryForPublish(row.definition);
+  if (!check.ok) return fail(409, `Not published. ${check.problems.map((p) => p.message).join(" ")}`, { problems: check.problems, warnings: check.warnings });
+  const at = (o.now ?? new Date()).toISOString();
+  const doc = row.definition;
+  const shell = { title: doc.title, subtitle: doc.subtitle, mode: "snapshot", blocks: [], storyId: row.id, storyVersion: row.version, storyDoc: doc };
+  let reportId = row.options?.published?.reportId ?? null;
+  if (reportId) {
+    const { data } = await db.from("analytics_reports").select("id").eq("id", reportId).eq("survey_id", row.survey_id).is("deleted_at", null).maybeSingle();
+    if (!data) reportId = null;
+  }
+  if (!reportId) {
+    const { data, error } = await db.from("analytics_reports").insert({ survey_id: row.survey_id, kind: "report", name: `${row.title} (story)`, definition: shell, mode: "snapshot", created_by: o.userId ?? null, updated_by: o.userId ?? null }).select("id").single();
+    if (error || !data) return fail(500, error?.message ?? "The story could not be published.");
+    reportId = (data as { id: string }).id;
+  }
+  const { data: last } = await db.from("analytics_report_versions").select("version").eq("report_id", reportId).order("version", { ascending: false }).limit(1);
+  const version = ((last as { version: number }[] | null)?.[0]?.version ?? 0) + 1;
+  const dataset = { surveyVersion: doc.createdFrom.surveyVersion ?? null, responses: doc.createdFrom.n, environments: [doc.createdFrom.environment], computedAt: doc.createdFrom.computedAt, story: true };
+  const ins = await db.from("analytics_report_versions").insert({ report_id: reportId, survey_id: row.survey_id, version, definition: shell, theme: null, snapshot: {}, dataset, note: o.note ?? `Story version ${row.version}`, published_by: o.userId ?? null });
+  if (ins.error) return fail(500, ins.error.message);
+  await db.from("analytics_reports").update({ published_version: version, name: `${row.title} (story)`, definition: shell, updated_by: o.userId ?? null }).eq("id", reportId);
+  await db.from("analytics_story_reports").update({ options: { ...row.options, published: { reportId, version, storyVersion: row.version, at } } }).eq("id", row.id);
+  return { ok: true, reportId, version, publishedAt: at, warnings: check.warnings };
 }
 
 function publicRender(r: Record<string, any>) {

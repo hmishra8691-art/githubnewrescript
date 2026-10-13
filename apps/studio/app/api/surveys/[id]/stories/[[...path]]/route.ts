@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AuditEvent, Capability } from "@rescript/access";
-import type { DesignConfig, DesignPatch, StoryOp, BrandInput } from "@rescript/analytics/story";
+import { checkStoryForPublish, storyPlayerHtml, type DesignConfig, type DesignPatch, type StoryOp, type BrandInput } from "@rescript/analytics/story";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
+import { downloadName } from "@/lib/storyCore";
 import { assertNotReadOnly, getMeter, projectLookup } from "@/lib/metering";
 import { loadDefinition } from "@/lib/analytics";
 import { storyDeps } from "@/lib/storyService";
 import {
   listStories, loadStory, storyPayload, createStory, saveDefinition, setReviewStatus, versionDefinition, compareVersions, revertTo,
   previewRevision, applyRevision, interpretDesign, applyDesign, analyzeBrand, saveTheme, listThemes, regenerate,
-  startRender, stepRender, cancelRender, downloadLink, type Fail,
+  startRender, stepRender, cancelRender, downloadLink, publishStory, newerDataFor, type Fail,
 } from "@/lib/storyEngine";
 
 export const runtime = "nodejs";
@@ -28,12 +29,14 @@ export const maxDuration = 300;
  *   DELETE stories/<id>
  *   POST   stories/<id>/status                   draft | ready_for_review | ready_to_render
  *   GET    stories/<id>/versions/<n>             one version's definition
+ *   GET    stories/<id>/page                     the interactive page for this version, as one self-contained file to send or open offline (analytics.export; ?inline=1 shows it)
  *   GET    stories/<id>/compare?a=&b=            what changed between two versions
  *   POST   stories/<id>/revert                   { version } → a new version with that content
  *   POST   stories/<id>/revise                   { text, selected?, baseVersion } preview — or { apply: true, ops, text, baseVersion }
  *   POST   stories/<id>/design                   { text } preview — or { apply: true, patch | design, baseVersion }
  *   POST   stories/<id>/brand                    brand files (multipart) → colours, fonts, logo, six themes; nothing leaves this server
  *   POST   stories/<id>/regenerate               { sceneId? } from a fresh run; the person's edits survive
+ *   POST   stories/<id>/publish                  { note? } freeze this version as the interactive page a share link opens (analytics.publish); answers the report to share, or the scenes that stop it
  *   POST   stories/<id>/renders                  { kind: video | pptx } start an export of the current version (one at a time)
  *   GET    stories/<id>/renders/<rid>            its status
  *   POST   stories/<id>/renders/<rid>/step       advance it (the panel calls this while open; the scheduler does too)
@@ -64,6 +67,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   if (!isId(storyId)) return bad("Unknown report.", 404);
   const row = await loadStory(db, params.id, storyId); if (!row) return bad("Unknown report.", 404);
   if (!sub) return json(await storyPayload(db, row, deps));
+  if (sub === "page") {
+    const g = await gate(req, params.id, "analytics.export"); if (isFailure(g)) return g.response;
+    const blocked = await assertNotReadOnly(getMeter(), projectLookup(ctx), "export"); if (blocked) return blocked;
+    const check = checkStoryForPublish(row.definition);
+    if (!check.ok) return json({ error: `The page cannot be made yet: ${check.problems.map((p) => p.message).join(" ")}`, problems: check.problems }, 409);
+    const html = storyPlayerHtml(row.definition, { newerData: await newerDataFor(db, row) });
+    log(ctx, "analytics.export_generated", row.id, { name: row.title, format: "html", version: row.version });
+    const inline = new URL(req.url).searchParams.get("inline") === "1";
+    return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", ...(inline ? {} : { "content-disposition": `attachment; filename="${downloadName(row.title, row.version, "html")}"` }) } });
+  }
   if (sub === "versions" && a) { const d = await versionDefinition(db, row.id, Number(a)); return d ? json({ version: Number(a), definition: d }) : bad("Unknown version.", 404); }
   if (sub === "compare") { const u = new URL(req.url); const r = await compareVersions(db, row, Number(u.searchParams.get("a")), Number(u.searchParams.get("b"))); return "ok" in r && r.ok ? json(r) : failed(r as Fail); }
   if (sub === "renders" && isId(a) && !b) { const { data } = await db.from("analytics_story_renders").select("*").eq("id", a).eq("story_id", row.id).maybeSingle(); return data ? json({ render: { id: data.id, kind: data.kind, version: data.version, status: data.status, progress: data.progress, qa: data.qa, providers: data.providers, estimate: data.estimate, bytes: data.bytes, error: data.error, ready: data.status === "completed" } }) : bad("Unknown export.", 404); }
@@ -127,6 +140,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const baseVersion = typeof body.baseVersion === "number" ? body.baseVersion : row.version;
   const brand = (body.brand && typeof body.brand === "object" ? body.brand : null) as BrandInput | null;
 
+  if (sub === "publish") {
+    const denied = await needs("analytics.publish"); if (denied) return denied;
+    const blocked = await assertNotReadOnly(getMeter(), projectLookup(ctx), "export"); if (blocked) return blocked;
+    const r = await publishStory(db, row, { userId: ctx.user.userId, note: typeof body.note === "string" ? body.note.slice(0, 300) : null });
+    if (!r.ok) return failed(r);
+    log(ctx, "analytics.report_published", r.reportId, { name: row.title, kind: "story", version: r.version, storyVersion: row.version });
+    return json({ reportId: r.reportId, version: r.version, publishedAt: r.publishedAt, warnings: r.warnings }, 201);
+  }
   if (sub === "renders" && !renderId) {
     const denied = await needs("analytics.export"); if (denied) return denied;
     const blocked = await assertNotReadOnly(getMeter(), projectLookup(ctx), "export"); if (blocked) return blocked;

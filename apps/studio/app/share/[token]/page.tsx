@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { storyHtml, type AnalysisResult, type DashboardWidget, type ReportBlock, type ReportTheme, type DashboardBand, type DashboardHero, type StoryDefinition } from "@rescript/analytics";
+import { storyPlayerHtml, type StoryReport } from "@rescript/analytics/story";
 import { ReportView } from "@/components/analytics/ReportView";
 import { downloadBlob } from "@/components/analytics/api";
 
@@ -13,7 +14,7 @@ import { downloadBlob } from "@/components/analytics/api";
  */
 
 interface Payload {
-  report: { name: string | null; title: string; subtitle?: string; story?: StoryDefinition | null; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
+  report: { name: string | null; title: string; subtitle?: string; story?: StoryDefinition | null; /** a published interactive story (Phase 4): the page is the player, nothing else */ storyDoc?: StoryReport | null; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
   theme: ReportTheme; results: Record<string, AnalysisResult>; version: number; publishedAt: string; mode: "snapshot"; dataset: { responses?: number; surveyVersion?: string; computedAt?: string } | null; permission: "viewer" | "download";
   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
   viewerFilters?: { id: string; name: string }[];
@@ -65,6 +66,22 @@ export default function SharePage({ params }: { params: { token: string } }) {
   }
   if (!data) return <div className="ax-share-page"><div className="muted" style={{ padding: 40, textAlign: "center" }}>Loading report…</div></div>;
   const rep = data.report;
+  /*
+   * A shared STORY (Phase 4): one page, the player, from the frozen document.
+   * Sandboxed with scripts and modals only (print) and full screen allowed —
+   * no storage, no network (the page's own policy forbids both), no parent access.
+   */
+  if (rep.storyDoc) {
+    return (
+      <div className="ax-share-page" data-testid="ax-share-view" data-kind="story" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+        <iframe title={rep.title} sandbox="allow-scripts allow-modals" allowFullScreen srcDoc={storyPlayerHtml(rep.storyDoc)} data-testid="ax-share-story-page" style={{ width: "100%", flex: 1, border: 0, minHeight: 0 }} />
+        <div className="ax-share-foot muted" style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
+          <span>Read-only story · version {data.version} · Powered by Rescript Analytics</span>
+          {data.permission === "download" && <button className="btn small" disabled={busy} onClick={() => download("pptx")} data-testid="ax-share-ppt">Download PowerPoint</button>}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="ax-share-page" data-testid="ax-share-view">
       {/* the story plays from the SAME frozen snapshot as the report beside it — no live data, no second source of numbers */}

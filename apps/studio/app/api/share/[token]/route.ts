@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { buildPptx, buildXlsx, ExportUnsupportedError } from "@rescript/analytics/export";
+import { buildPptx, buildXlsx, buildStoryPptx, ExportUnsupportedError } from "@rescript/analytics/export";
+import { composeReport, type StoryReport } from "@rescript/analytics/story";
+import { loadReportFonts } from "@rescript/reportvideo";
+import { join } from "node:path";
 import { DEFAULT_THEME, type AnalysisResult, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
@@ -20,6 +23,7 @@ export const maxDuration = 60;
  *
  *   GET  /api/share/<token>[?password=…]        the snapshot (403 until the password is right)
  *   POST /api/share/<token>  { format }         PowerPoint / Excel of the same snapshot, if the share permits downloads
+ *                                               (a shared STORY: PowerPoint built from the story document itself)
  *
  * `access = users` additionally requires a signed-in platform user on the
  * allow-list (matched by user id, or by the email on their profile). Every
@@ -101,7 +105,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
   const definition = r.definition!;
   return NextResponse.json({
-    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, story: (definition as { story?: unknown }).story ?? null, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
+    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, story: (definition as { story?: unknown }).story ?? null, storyDoc: (definition as { storyDoc?: unknown }).storyDoc ?? null, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
     theme: r.theme ?? DEFAULT_THEME,
     results: r.snapshot,
     /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */
@@ -121,13 +125,20 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   if (r.permission !== "download") return deny("Downloads are not enabled for this shared report.", 403, { status: "no_download" });
   const format = body.format === "xlsx" ? "xlsx" : "pptx";
   const report = r.definition!, results = r.snapshot ?? {}, theme = r.theme ?? DEFAULT_THEME;
+  const storyDoc = (report as { storyDoc?: StoryReport }).storyDoc ?? null;
+  if (storyDoc && format === "xlsx") return NextResponse.json({ error: "A story has no workbook. Download the PowerPoint or the page instead.", status: "nothing_to_export" }, { status: 422, headers: noStore });
   // a viewer may pick what to include, never restyle or recompute
   const include = body.settings?.include && typeof body.settings.include === "object" ? (body.settings.include as Record<string, boolean>) : undefined;
   const settings = include ? { include } : undefined;
   /* a build that fails is answered in a sentence (and logged with a reference), never an unhandled 500 the viewer sees as "Download not permitted" */
   let buf: Buffer;
   try {
-    buf = format === "pptx"
+    if (storyDoc) {
+      /* a shared story is built from the story document the version froze — not from report blocks, which a story does not have */
+      const fonts = loadReportFonts(join(process.cwd(), "public", "report-fonts"));
+      const composed = composeReport(storyDoc, fonts.measurer, "pptx");
+      buf = await buildStoryPptx({ report: storyDoc, pages: composed.pages, version: r.version ?? undefined });
+    } else buf = format === "pptx"
       ? await buildPptx({ report: { ...report, date: r.published_at?.slice(0, 10) }, results, theme, settings: settings as never, meta: { dataset: `Published snapshot v${r.version}` } })
       : await buildXlsx({ report, results, theme, settings: settings as never, meta: { "Report version": r.version, "Published at": r.published_at, Mode: "snapshot" } });
   } catch (e) {

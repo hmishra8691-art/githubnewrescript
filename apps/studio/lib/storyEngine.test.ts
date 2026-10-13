@@ -266,3 +266,62 @@ test("narration: with a configured speech service the video carries narration; w
   assert.equal((r.render.qa as { video: { info: { audio?: { codec: string } } } }).video.info.audio?.codec, "aac");
   delete process.env.REPORT_NARRATION_ENABLED;
 });
+
+/* ------------------------------------------------------------------ Phase 4: publishing */
+
+test("publish: the story is frozen into a report version a share link can open; publishing again adds a version to the same report", async () => {
+  const { publishStory, newerDataFor } = await import("./storyEngine.ts");
+  const s = setup();
+  const id = ((await createStory(s.db as never, SURVEY, s.ctx, { userId: "u1" }, s.deps)) as { id: string }).id;
+  let row = (await loadStory(s.db as never, SURVEY, id))!;
+  const r1 = await publishStory(s.db as never, row, { userId: "u1", now: new Date("2026-10-13T09:00:00Z") });
+  assert.ok(r1.ok, JSON.stringify(r1));
+  const a = r1 as { reportId: string; version: number };
+  assert.equal(a.version, 1);
+  const rep = s.db.tables.analytics_reports.find((x: Record<string, unknown>) => x.id === a.reportId) as Record<string, any>;
+  assert.equal(rep.published_version, 1);
+  assert.equal(rep.definition.storyDoc.title, row.definition.title);
+  assert.equal(s.db.tables.analytics_report_versions.length, 1);
+  assert.equal((s.db.tables.analytics_report_versions[0] as Record<string, any>).definition.storyDoc.scenes.length, row.definition.scenes.length);
+  row = (await loadStory(s.db as never, SURVEY, id))!;
+  assert.equal(row.options?.published?.reportId, a.reportId);
+  const r2 = await publishStory(s.db as never, row, { userId: "u1" });
+  assert.ok(r2.ok);
+  assert.equal((r2 as { reportId: string }).reportId, a.reportId, "the same report, so the same links keep working");
+  assert.equal((r2 as { version: number }).version, 2);
+  assert.equal(s.db.tables.analytics_reports.filter((x: Record<string, unknown>) => x.survey_id === SURVEY).length, 1);
+  /* the payload says what is published, and nothing newer has arrived */
+  const p = await storyPayload(s.db as never, (await loadStory(s.db as never, SURVEY, id))!, s.deps);
+  assert.equal((p.published as { version: number }).version, 2);
+  assert.equal(await newerDataFor(s.db as never, row), null);
+});
+
+test("publish: a story that fails the checks is not published, and the answer names the scene", async () => {
+  const { publishStory } = await import("./storyEngine.ts");
+  const s = setup();
+  const id = ((await createStory(s.db as never, SURVEY, s.ctx, { userId: "u1" }, s.deps)) as { id: string }).id;
+  const row = (await loadStory(s.db as never, SURVEY, id))!;
+  const f = row.definition.scenes.find((x) => x.kind === "finding" && x.visual.type === "chart")!;
+  if (f.visual.type === "chart") f.visual.data.series = [];
+  const r = await publishStory(s.db as never, row, { userId: "u1" });
+  assert.equal(r.ok, false);
+  assert.equal((r as { status: number }).status, 409);
+  assert.ok(JSON.stringify(r).includes(f.id) || /scene/i.test(JSON.stringify(r)), JSON.stringify(r));
+  assert.equal(s.db.tables.analytics_report_versions.length, 0);
+  assert.equal(s.db.tables.analytics_reports.length, 0);
+});
+
+test("newer responses are said, never applied: counted after the data was frozen, in the same environment", async () => {
+  const { newerDataFor } = await import("./storyEngine.ts");
+  const s = setup();
+  const id = ((await createStory(s.db as never, SURVEY, s.ctx, { userId: "u1" }, s.deps)) as { id: string }).id;
+  const row = (await loadStory(s.db as never, SURVEY, id))!;
+  const since = row.definition.createdFrom.computedAt;
+  const after = new Date(Date.parse(since) + 60_000).toISOString();
+  const before = new Date(Date.parse(since) - 60_000).toISOString();
+  const mk = (over: Record<string, unknown>) => ({ id: uuid(), survey_id: SURVEY, status: "complete", is_test: false, deleted_at: null, completed_at: after, ...over });
+  s.db.tables.responses ??= [];
+  s.db.tables.responses.push(mk({}), mk({}), mk({ completed_at: before }), mk({ is_test: true }), mk({ status: "partial" }));
+  const n = await newerDataFor(s.db as never, row);
+  assert.deepEqual(n && n.responses, 2);
+});

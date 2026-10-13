@@ -7,3 +7,5 @@ export * from "./layout.js";
 export * from "./qa.js";
 export * from "./render.js";
 export * from "./revise.js";
+export * from "./player.js";
+export * from "./publishCheck.js";

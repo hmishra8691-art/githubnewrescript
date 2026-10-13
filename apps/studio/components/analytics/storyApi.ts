@@ -47,6 +47,18 @@ export class StoryApi {
   saveTheme(body: { name: string; design: DesignConfig; scope: "project" | "workspace"; brand?: unknown }) { return this.req<{ theme: { id: string } }>("themes", { method: "POST", body: JSON.stringify(body) }); }
   regenerate(id: string, sceneId?: string | null) { return this.req<StoryPayload>(`${id}/regenerate`, { method: "POST", body: JSON.stringify({ sceneId: sceneId ?? null }) }); }
   startRender(id: string, kind: "video" | "pptx") { return this.req<{ render: RenderView }>(`${id}/renders`, { method: "POST", body: JSON.stringify({ kind }) }); }
+  /** freeze this version as the page a share link opens; a 409 carries the scenes that stop it in `details.problems` */
+  publish(id: string, note?: string) { return this.req<{ reportId: string; version: number; publishedAt: string; warnings: { message: string; sceneId?: string }[] }>(`${id}/publish`, { method: "POST", body: JSON.stringify({ note }) }); }
+  /** a link to the published story: the analytics shares endpoint, the same one a report uses */
+  async shareLink(reportId: string, o: { access: "link" | "users"; permission: "viewer" | "download"; emails?: string[]; password?: string; pinVersion?: boolean }) {
+    const r = await fetch(`/api/surveys/${this.surveyId}/analytics/shares`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reportId, ...o }), cache: "no-store" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new ApiError((body as { error?: string }).error ?? `Request failed (${r.status})`, r.status);
+    const token = (body as { item?: { token?: string } }).item?.token;
+    if (typeof token !== "string" || token.length < 16) throw new ApiError("The link was created but could not be read back. Open Manage shared reports to copy it.", 500);
+    return { token };
+  }
+  pageUrl(id: string, inline = true) { return `${this.base()}/${id}/page${inline ? "?inline=1" : ""}`; }
   step(id: string, renderId: string) { return this.req<{ render: RenderView }>(`${id}/renders/${renderId}/step`, { method: "POST", body: "{}" }); }
   cancel(id: string, renderId: string) { return this.req<{ ok: true }>(`${id}/renders/${renderId}/cancel`, { method: "POST", body: "{}" }); }
   download(id: string, renderId: string, what: "file" | "subtitles" = "file") { return this.req<{ url: string; name: string }>(`${id}/renders/${renderId}/download${what === "subtitles" ? "?what=subtitles" : ""}`); }

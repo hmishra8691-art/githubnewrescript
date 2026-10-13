@@ -20,7 +20,7 @@ export function SharingPanel({ api, shares, reports, onChange }: { api: AxApi; s
           {shares.map((s) => (
             <tr key={s.id} data-testid="ax-share-row" data-status={status(s)}>
               <td>{name(s.report_id)}{s.label ? <span className="muted"> · {s.label}</span> : null}</td>
-              <td>{s.access === "link" ? "Anyone with link" : s.access === "users" ? (s.allowed_emails?.length ? s.allowed_emails.join(", ") : `${s.allowed_user_ids?.length ?? 0} users`) : "Project members"}</td>
+              <td>{s.access === "link" ? "Anyone with link" : s.access === "users" ? (s.allowed_emails?.length ? s.allowed_emails.join(", ") : `${s.allowed_count ?? s.allowed_user_ids?.length ?? 0} ${(s.allowed_count ?? 0) === 1 ? "person" : "people"}`) : "Project members"}</td>
               <td>{s.access === "link" ? "Public" : s.access === "users" ? "Specific users" : "Private"}{s.has_password ? " · password" : ""}</td>
               <td>{s.permission === "download" ? "Download only" : "Viewer"}</td>
               <td>{s.report_version ? `v${s.report_version} (pinned)` : "latest published"}</td>
@@ -28,10 +28,10 @@ export function SharingPanel({ api, shares, reports, onChange }: { api: AxApi; s
               <td>{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : "Never"}</td>
               <td className="num">{s.view_count ?? 0}</td>
               <td className="ax-actions">
-                {!s.revoked_at && <button className="btn small" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/share/${s.token}`)}>Copy link</button>}
-                {!s.revoked_at && <button className="btn small" onClick={() => setEditing(s)}>Edit</button>}
-                {!s.revoked_at ? <button className="btn small danger" onClick={() => act(() => api.patch("shares", s.id, { revoke: true }))} data-testid="ax-share-revoke">Revoke</button> : <button className="btn small" onClick={() => act(() => api.patch("shares", s.id, { reshare: true }))}>Reshare (new link)</button>}
-                <button className="btn small" onClick={async () => { const r = await api.access(s.id); setHistory({ id: s.id, events: r.events }); }}>History</button>
+                {!s.revoked_at && s.token && <button className="btn small" onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/share/${s.token}`)}>Copy link</button>}
+                {s.can_manage !== false && !s.revoked_at && <button className="btn small" onClick={() => setEditing(s)}>Edit</button>}
+                {s.can_manage === false ? null : !s.revoked_at ? <button className="btn small danger" onClick={() => act(() => api.patch("shares", s.id, { revoke: true }))} data-testid="ax-share-revoke">Revoke</button> : <button className="btn small" onClick={() => act(() => api.patch("shares", s.id, { reshare: true }))}>Reshare (new link)</button>}
+                {s.can_manage !== false && <button className="btn small" onClick={async () => { const r = await api.access(s.id); setHistory({ id: s.id, events: r.events }); }}>History</button>}
               </td>
             </tr>
           ))}

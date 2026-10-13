@@ -1,3 +1,4 @@
+import { shareView } from "@/lib/shareView";
 import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
@@ -196,7 +197,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
        * "download" link and take the deck through it.
        */
       const canLink = head === "shares" ? !isFailure(await gate(req, surveyId, "analytics.publish")) : true;
-      return json({ items: (data ?? []).map((row) => head === "shares" ? { ...row, password_hash: undefined, has_password: !!row.password_hash, ...(canLink ? {} : { token: undefined }) } : row) });
+      return json({ items: (data ?? []).map((row) => head === "shares" ? shareView(row, canLink) : row) });
     }
     if (!isUuid(itemId)) return bad("Unknown item.", 404);
     if (action === "versions" && (head === "analyses" || head === "reports")) {
@@ -221,6 +222,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
       return json({ mode: "live", definition: report.definition, theme: await loadTheme(db, report.theme_id, themeScope(ctx)), results, computedAt: new Date().toISOString() });
     }
     if (action === "access" && head === "shares") {
+      /* who opened a link, by email: for the people who manage links, not everyone who can read the project (audit R-10) */
+      const g = await gate(req, surveyId, "analytics.publish"); if (isFailure(g)) return g.response;
       const { data, error } = await db.from("analytics_share_access").select("id, viewer_user_id, viewer_email, event, created_at").eq("share_id", itemId).eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(200);
       if (error) return bad(error.message, 500);
       return json({ events: data ?? [] });
@@ -228,7 +231,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
     const { data, error } = await db.from(coll.table).select("*").eq("id", itemId).eq("survey_id", surveyId).maybeSingle();
     if (error) return bad(error.message, 500);
     if (!data || (head !== "shares" && data.deleted_at)) return bad("Unknown item.", 404);
-    return json({ item: head === "shares" ? { ...data, password_hash: undefined, has_password: !!data.password_hash } : data });
+    return json({ item: head === "shares" ? shareView(data, !isFailure(await gate(req, surveyId, "analytics.publish"))) : data });
   }
   return bad("Unknown analytics endpoint.", 404);
 }
@@ -367,6 +370,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     }
     if (itemId === "story") {
       const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
+      /* the same read-only gate every other export passes (audit R-6) */
+      const storyBlocked = await assertNotReadOnly(getMeter(), projectLookup(ctx), "export"); if (storyBlocked) return storyBlocked;
       const reportId = typeof body.reportId === "string" ? body.reportId : "";
       if (!isUuid(reportId)) return bad("reportId is required.");
       const { data: report } = await db.from("analytics_reports").select("name, definition").eq("id", reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();

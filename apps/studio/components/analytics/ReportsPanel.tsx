@@ -97,6 +97,8 @@ export function ShareDialog({ api, report, onClose, onCreated }: { api: AxApi; r
     setError(null);
     try {
       const r = await api.create("shares", { reportId: report.id, access, permission, emails: emails.split(/[,\s]+/).filter(Boolean), password: password || undefined, expiresAt: expires ? new Date(expires).toISOString() : null, pinVersion: pin, label: label || undefined });
+      /* a link is only ever shown when the server returned one — never /share/undefined (audit R-10) */
+      if (typeof r.item.token !== "string" || r.item.token.length < 16) throw new Error("The share was created but its link could not be read. Open Manage shared reports to copy it.");
       setLink(`${window.location.origin}/share/${r.item.token}`); onCreated();
     } catch (e) { setError((e as Error).message); }
   };
