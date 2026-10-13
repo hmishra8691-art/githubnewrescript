@@ -1,0 +1,48 @@
+The Research Engine audit's Phase 4 (automated analysis), on top of Phases
+1–3. The analysis layer is reachable by sentence and explains itself from
+the data. Nothing existing was removed: the plan, the runs, the verdicts
+and the findings read as they did; the new things sit beside them.
+
+Engine: tests planned by sentence ("run a t-test of X by Y", "test whether
+X differs by Y", "add a chi-square of X by Y", "correlate X with Y",
+"regress Y on X") through the action gate, the method named or chosen from
+the variables' levels, wrong pairings refused with the right method, a
+repeat a no-op; the plan queried for what reads a variable ("what analyses
+are planned for X", "is X in the plan"); planned items removed by sentence;
+data questions ("which groups prefer Brand A", "what share of women chose
+X", "what is the average X by Y", "does X differ by Y", "are women more
+satisfied than men", "which brand is most considered") read into a
+DataQuery — the option, the question, the cut, the population — as a new
+`query` Interpretation kind the Studio answers on the data.
+
+Analytics: posthoc.ts (Holm / Bonferroni / Benjamini–Hochberg; pairwise
+comparisons with the pairs' p adjusted as a family); dataAdvice.ts (the
+method's assumptions checked on the actual data and the method the data
+recommends); synthesis.ts (segment discovery beyond the plan, anomalies,
+trends across waves — corrected as one family, held to an effect);
+dataQuery.ts (a data question answered with the base, the interval, the
+test, the pairs, each group against the rest). runPlan carries the
+corrections by hypothesis family (adjusted p beside raw, a corrected
+verdict beside the verdict), the pairs behind a significant ANOVA, the
+advice (and runs the recommended test beside the planned one with
+`adapt`), and the discoveries; briefText prints them.
+
+Studio: POST /api/copilot/ask (analytics.read; the sandbox against the fake
+provider sends its own rows); the card's "Read from the data" line with the
+base, the test and the planned finding from the last run; the Findings tab
+shows the correction summary, each finding's adjusted p, a corrected
+verdict, the data advice with its recommendation, the discoveries, and
+puts a discovery in the plan with one click through the engine; the run
+brief carries the new fields; migration 0048 adds corrections / advice /
+discoveries to analytics_runs, and analyticsRunStore.ts inserts with them
+or, on an older database, without.
+
+Tests: analytics 247 (phase4.test 11), engine 1748 (nlPhase4.test 4),
+studio 284 (analyticsRunStore 3, copilot outline), scripts/
+phase4-analysis-test.mjs (10 checks); full browser corpus 122 green with
+the 10 known baseline failures only. Mutations: analytics 32/32 caught,
+engine 25/25 caught, Studio 11/12 caught and one equivalent. See
+docs/PHASE4-ANALYSIS-2026-10-09.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

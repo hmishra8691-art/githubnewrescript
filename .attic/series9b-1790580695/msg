@@ -1,0 +1,12 @@
+Anthropic's OpenAI-compatible endpoint answers response_format:
+json_object with a 400 ("response_format.type: Input should be
+'json_schema'"), so every model call from an installation pointed at it
+failed. JSON mode is now not sent to Anthropic; any other provider that
+refuses it with a 400 naming response_format is asked once more without
+it and not sent it again. completeJson reads a reply wrapped in prose
+(parseJsonReply), as complete already did.
+
+Tests: packages/ai/src/jsonmode.test.ts (3), mutation checked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

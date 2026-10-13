@@ -1,0 +1,2434 @@
+From fc63b4ee6702490144a69fedc9658f240bccfec9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 21:16:48 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?Intelligent=20mode:=20describe,=20review,?=
+ =?UTF-8?q?=20apply=20=E2=80=94=20over=20the=20one=20engine=20(Phase=204)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The fifth programming environment. A sentence ("Show Q5 only when Q3 = Yes
+and Q4 > 2", "screen out when Q1 < 18", "add a numeric question 'Age?'
+after Q1", "what depends on Q3?") becomes a PROPOSED CHANGE card — the
+summary in the Logic panel's words, the condition three ways (canonical
+text, sentence, structured tree), every change it will make, and the
+errors that block it — with [Review Logic] [Cancel] [Apply]. Nothing is
+written until Apply, and Apply is one labelled, undoable store.update.
+
+One engine, no second logic system:
+- packages/engine/src/logicProposal.ts: a closed, typed ProposalChange
+  vocabulary (set_display_logic, add_skip_rule, add_display_rule,
+  set_required, add_question, rename_variable), validateProposal (self
+  reads, reads of later questions, backward skips, missing targets, taken
+  names, duplicate ids), describeChange (conditionSummary's words) and
+  applyLogicProposal — all-or-nothing, in place, through addQuestion and
+  renameVariable. 7 tests, mutation-checked.
+- apps/studio/lib/intelligent/: Intent (provider-independent), the
+  deterministic grammar (display / hide / skip / terminate / required /
+  add question / rename / find / explain, with "unless" and everyday
+  operator spellings normalised, multi-word operands quoted), the planner
+  (resolves codes, variables, question text, page/block titles and
+  numbers; parses conditions with parseLogicExpression — the expression
+  editor's parser; builds changes; validates), a bounded survey context
+  serializer for the model, and coerceIntent as the gate on what a model
+  may say. 13 tests, mutation-checked.
+- POST /api/ai/logic (completeJson; key from env only; same gate and
+  metering as rephrase) returns an intent, never a change; the fake
+  provider answers with none so every proposal in tests is the grammar's.
+- components/intelligent/IntelligentView.tsx: the renderer — prompt,
+  examples ("How do you want to program your research?"), cards, review
+  tree, read-only answers as selectable chips, the Architect inspector on
+  the proposal's target, conversation kept per survey across mode
+  switches. Shared selection: Apply selects the target and Grid opens on
+  it.
+- MODES.intelligent.available = true; Studio.tsx renders it for the
+  questions tab; foundation tests updated (all five modes built).
+- scripts/intelligent-mode-test.mjs: 33 checks, against both no provider
+  (501 → "grammar only") and AI_API_URL=fake: ("grammar + model").
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/ai/logic/route.ts         |  46 ++
+ apps/studio/app/design-system.css             |  88 ++++
+ .../intelligent/IntelligentView.tsx           | 348 +++++++++++++++
+ apps/studio/components/studio/Studio.tsx      |   4 +-
+ apps/studio/lib/intelligent/ai.ts             |  89 ++++
+ apps/studio/lib/intelligent/context.ts        |  73 ++++
+ apps/studio/lib/intelligent/grammar.ts        | 160 +++++++
+ .../lib/intelligent/intelligent.test.ts       | 260 +++++++++++
+ apps/studio/lib/intelligent/proposal.ts       | 405 ++++++++++++++++++
+ apps/studio/lib/multimodalFoundation.test.ts  |  15 +-
+ apps/studio/lib/programmingMode.ts            |   2 +-
+ packages/engine/src/index.ts                  |   1 +
+ packages/engine/src/logicProposal.test.ts     | 130 ++++++
+ packages/engine/src/logicProposal.ts          | 235 ++++++++++
+ scripts/intelligent-mode-test.mjs             | 321 ++++++++++++++
+ scripts/multimodal-foundation-test.mjs        |  18 +-
+ 16 files changed, 2178 insertions(+), 17 deletions(-)
+ create mode 100644 apps/studio/app/api/ai/logic/route.ts
+ create mode 100644 apps/studio/components/intelligent/IntelligentView.tsx
+ create mode 100644 apps/studio/lib/intelligent/ai.ts
+ create mode 100644 apps/studio/lib/intelligent/context.ts
+ create mode 100644 apps/studio/lib/intelligent/grammar.ts
+ create mode 100644 apps/studio/lib/intelligent/intelligent.test.ts
+ create mode 100644 apps/studio/lib/intelligent/proposal.ts
+ create mode 100644 packages/engine/src/logicProposal.test.ts
+ create mode 100644 packages/engine/src/logicProposal.ts
+ create mode 100644 scripts/intelligent-mode-test.mjs
+
+diff --git a/apps/studio/app/api/ai/logic/route.ts b/apps/studio/app/api/ai/logic/route.ts
+new file mode 100644
+index 0000000..bae2156
+--- /dev/null
++++ b/apps/studio/app/api/ai/logic/route.ts
+@@ -0,0 +1,46 @@
++import { NextRequest, NextResponse } from "next/server";
++import { completeJson } from "@rescript/ai";
++import { requireAiCaller } from "@/lib/aiGate";
++import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
++import { LOGIC_SYSTEM_PROMPT, coerceIntent, logicUserPrompt } from "@/lib/intelligent/ai";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * A SENTENCE ABOUT THE SURVEY → A STRUCTURED INTENT, for the programmer to review.
++ *
++ * Body: { text, context, selected?, surveyId? } → { ok, intent } — the
++ * model's reading of the sentence in the Intelligent mode's intent shape, or
++ * null when it had nothing usable. `context` is the compact survey listing
++ * the Studio builds client-side (`surveyContext`); the route never loads a
++ * survey and never writes one. The intent is turned into a proposal and
++ * validated against the real survey in the browser, and applied only when
++ * the programmer presses Apply. This route cannot change a survey.
++ *
++ * Who may ask, and who pays, follow the rephrase route exactly: a signed-in
++ * Studio user; 501 when no provider is configured; the fake provider is
++ * open to the sandbox. The key is read by the ai package from the
++ * environment and never passes through here.
++ */
++export async function POST(req: NextRequest) {
++  const gate = await requireAiCaller(req);
++  if (!gate.ok) return gate.response;
++  let body: any;
++  try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
++  const text = typeof body?.text === "string" ? body.text.trim() : "";
++  if (!text) return NextResponse.json({ error: "text is required" }, { status: 400 });
++  const context = typeof body?.context === "string" ? body.context.slice(0, 60_000) : "";
++  const selected = typeof body?.selected === "string" ? body.selected : null;
++  const billing = await billingProjectFor(gate.user, body?.surveyId);
++  if ("response" in billing) return billing.response;
++  const user = logicUserPrompt(context, text, selected);
++  try {
++    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: LOGIC_SYSTEM_PROMPT + user, maxTokens: 300, operation: "logic_intent" },
++      () => completeJson(LOGIC_SYSTEM_PROMPT, user, 300, { timeoutMs: 20_000 }));
++    if (!m.ok) return refusalResponse(m);
++    return NextResponse.json({ ok: true, intent: coerceIntent(m.value), usage: m.event ? { charge: m.event.customerCharge, tokens: m.event.quantity } : null });
++  } catch (e) {
++    console.warn("[rescript:ai] logic intent failed", JSON.stringify({ error: (e as Error).message }));
++    return NextResponse.json({ ok: true, intent: null });
++  }
++}
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 0eebd2e..bd9afd0 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1073,3 +1073,91 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .fc-mm-node { fill: var(--c-border-strong); }
+ .fc-mm-node.lit { fill: var(--c-primary-600); }
+ .fc-mm-view { fill: rgba(79, 70, 229, .08); stroke: var(--c-primary-600); stroke-width: 6; }
++
++/* ======================================================================
++   INTELLIGENT MODE (.iq-*) — describe, review, apply
++   ====================================================================== */
++.center:has(> .iq) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
++.iq { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
++.iq-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--c-surface); }
++.iq-toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; min-height: 44px; }
++.iq-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--c-text); white-space: nowrap; }
++.iq-hint { color: var(--c-text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
++.iq-spacer { flex: 1 1 auto; }
++.iq-provider { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-4); border: 1px solid var(--c-border); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
++.iq-provider[data-ai="on"] { color: var(--c-primary-600); border-color: var(--c-primary-100); }
++.iq-btn { appearance: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface); font: inherit; font-size: 12px; padding: 5px 10px; color: var(--c-text-2); cursor: pointer; white-space: nowrap; }
++.iq-btn:hover { background: var(--c-surface-2); color: var(--c-text); }
++.iq-btn.on { background: var(--c-surface-2); color: var(--c-text); font-weight: 600; }
++.iq-btn.primary { background: var(--c-primary-600); border-color: var(--c-primary-600); color: #fff; font-weight: 600; }
++.iq-btn.primary:hover { background: var(--c-primary-700, #3730a3); }
++.iq-btn:disabled { opacity: .45; cursor: not-allowed; }
++
++.iq-log { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 18px; }
++.iq-welcome { max-width: 760px; margin: 24px auto 0; text-align: center; }
++.iq-welcome h2 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; color: var(--c-text); }
++.iq-welcome p { color: var(--c-text-3); margin: 0 0 20px; }
++.iq-examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; text-align: left; }
++.iq-example { appearance: none; display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); padding: 10px 12px; font: inherit; cursor: pointer; text-align: left; color: var(--c-text); }
++.iq-example:hover { border-color: var(--c-primary-300, #a5b4fc); background: var(--c-surface-2); }
++.iq-example-text { font-size: 13px; }
++.iq-example-about { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-4); }
++
++.iq-turn { display: flex; flex-direction: column; gap: 8px; max-width: 860px; width: 100%; margin: 0 auto; }
++.iq-said { display: flex; align-items: center; gap: 8px; color: var(--c-text-2); font-size: 13px; }
++.iq-said > span { background: var(--c-surface-2); border-radius: 10px; padding: 6px 10px; }
++.iq-card { border: 1px solid var(--c-border); border-left: 3px solid var(--c-primary-600); border-radius: 10px; background: var(--c-surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--sh-1, none); }
++.iq-card.answer { border-left-color: var(--c-border-strong); }
++.iq-card.blocked { border-left-color: var(--c-error); }
++.iq-turn.applied .iq-card.proposal { border-left-color: var(--c-success); }
++.iq-turn.cancelled .iq-card { opacity: .6; border-left-color: var(--c-border-strong); }
++.iq-card-head { display: flex; align-items: center; gap: 8px; }
++.iq-kicker { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--c-text-3); }
++.iq-card.blocked .iq-kicker { color: var(--c-error-fg); }
++.iq-turn.applied .iq-card.proposal .iq-kicker { color: var(--c-success-fg); }
++.iq-source { font-family: var(--mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-primary-600); border: 1px solid var(--c-primary-100); border-radius: 999px; padding: 1px 6px; }
++.iq-summary { margin: 0; font-size: 14px; font-weight: 600; color: var(--c-text); }
++.iq-expression { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--c-border); border-radius: 8px; padding: 8px 10px; background: var(--c-bg); }
++.iq-expression-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: baseline; }
++.iq-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-4); }
++.iq-expression code { font-size: 12.5px; color: var(--c-text); word-break: break-word; }
++.iq-changes { margin: 0; padding-left: 18px; color: var(--c-text-2); }
++.iq-changes li + li { margin-top: 3px; }
++.iq-error, .iq-warning { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 12.5px; border-radius: 6px; padding: 5px 8px; }
++.iq-error { color: var(--c-error-fg); background: var(--c-error-bg); }
++.iq-warning { color: var(--c-warning-fg); background: var(--c-warning-bg); }
++.iq-actions { display: flex; align-items: center; gap: 8px; padding-top: 4px; border-top: 1px solid var(--c-border); }
++.iq-answer-list { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
++.iq-chip { appearance: none; border: 1px solid var(--c-border); border-radius: 999px; background: var(--c-surface-2); font: inherit; font-family: var(--mono); font-size: 12px; padding: 3px 10px; color: var(--c-text); cursor: pointer; }
++.iq-chip:hover { border-color: var(--c-primary-600); color: var(--c-primary-600); }
++
++.iq-review { border-top: 1px dashed var(--c-border); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
++.iq-group { display: flex; flex-direction: column; gap: 4px; border-left: 2px solid var(--c-border-strong); padding-left: 10px; }
++.iq-group.and { border-left-color: var(--c-primary-600); }
++.iq-group.or { border-left-color: var(--c-warning); }
++.iq-group.not { border-left-color: var(--c-error); }
++.iq-op { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3); }
++.iq-group-body { display: flex; flex-direction: column; gap: 4px; }
++.iq-rule { display: inline-block; font-size: 12.5px; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 6px; padding: 2px 8px; color: var(--c-text); align-self: flex-start; }
++.iq-json { margin: 0; font-size: 11.5px; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: 6px; padding: 8px; max-height: 240px; overflow: auto; }
++
++.iq-thinking { display: inline-flex; gap: 5px; padding: 6px 2px; align-self: center; }
++.iq-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-text-4); animation: iq-pulse 1s infinite ease-in-out; }
++.iq-dot:nth-child(2) { animation-delay: .15s; } .iq-dot:nth-child(3) { animation-delay: .3s; }
++@keyframes iq-pulse { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
++
++.iq-ask { display: flex; gap: 8px; align-items: flex-end; padding: 10px 14px 14px; border-top: 1px solid var(--c-border); background: var(--c-surface); flex: none; }
++.iq-input { flex: 1 1 auto; min-width: 0; resize: none; border: 1px solid var(--c-border); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 13.5px; line-height: 1.4; color: var(--c-text); background: var(--c-bg); }
++.iq-input:focus { outline: none; border-color: var(--c-primary-600); box-shadow: 0 0 0 3px var(--c-primary-100); }
++.iq-send { appearance: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-primary-600); border-radius: 10px; background: var(--c-primary-600); color: #fff; font: inherit; font-size: 13px; font-weight: 600; padding: 9px 14px; cursor: pointer; white-space: nowrap; }
++.iq-send:disabled { opacity: .45; cursor: not-allowed; }
++
++.iq-divider { cursor: col-resize; background: transparent; position: relative; z-index: 2; }
++.iq-divider:hover, .iq-divider:active { background: var(--c-primary-100); }
++.iq-inspector { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--c-surface); border-left: 1px solid var(--c-border); }
++
++@media (max-width: 900px) {
++  .iq { grid-template-columns: minmax(0, 1fr) !important; }
++  .iq-divider, .iq-inspector { display: none; }
++  .iq-hint { display: none; }
++}
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+new file mode 100644
+index 0000000..54fdc47
+--- /dev/null
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -0,0 +1,348 @@
++"use client";
++import React from "react";
++import type { Condition, SurveyDefinition } from "@rescript/schema";
++import { variantRegistry } from "@rescript/schema";
++import {
++  buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
++  type ObjectKey,
++} from "@rescript/engine";
++import { useStudio, uid } from "../studio/store";
++import { useSelection } from "../studio/SelectionContext";
++import { useCommands } from "../studio/CommandContext";
++import { createFromVariant } from "../studio/VariantPicker";
++import { Inspector } from "../architect/Inspector";
++import { Icon } from "../ui/Icon";
++import { parseIntent, EXAMPLES } from "../../lib/intelligent/grammar";
++import { planProposal, type Proposal, type Intent } from "../../lib/intelligent/proposal";
++import { surveyContext } from "../../lib/intelligent/context";
++import { coerceIntent } from "../../lib/intelligent/ai";
++
++/**
++ * INTELLIGENT — describe the change; review it; apply it.
++ *
++ *   ┌──────────────────────────────────────────────┬─────────────────┐
++ *   │ "Show Q5 only when Q3 = Yes and Q4 > 2"      │ INSPECTOR       │
++ *   │                                              │ (the object the │
++ *   │ PROPOSED CHANGE                              │  proposal is    │
++ *   │  Show Q5 only when (Q3 is “Yes” AND Q4 > 2)  │  about — how it │
++ *   │  Q3 = Yes AND Q4 > 2          [structure]    │  is wired now)  │
++ *   │  [Review Logic]  [Cancel]  [Apply]           │                 │
++ *   └──────────────────────────────────────────────┴─────────────────┘
++ *
++ * This is an assistant over the same engine the other four modes use, not
++ * a fifth way to store logic. A sentence becomes an INTENT (the
++ * deterministic grammar first; the language model, when configured, for
++ * what the grammar does not catch), the intent becomes a PROPOSAL against
++ * the real survey (lib/intelligent/proposal.ts — the condition is parsed by
++ * the expression editor's parser, the changes are validated by the engine),
++ * and the proposal is SHOWN. Nothing is written until Apply, and Apply is
++ * one labelled, undoable `store.update` that calls `applyLogicProposal` —
++ * the same path a click in the Logic panel takes.
++ *
++ * Read-only questions ("what depends on Q3?") are answered from the
++ * dependency index and never produce an Apply button at all.
++ */
++
++interface Turn {
++  id: string;
++  text: string;
++  proposal: Proposal;
++  /** applied / cancelled / open */
++  state: "open" | "applied" | "cancelled";
++  reviewing?: boolean;
++}
++
++/**
++ * The conversation outlives the component. Switching to Grid to look at
++ * something and coming back must not wipe what was proposed — §9 says the
++ * switch feels magical, and a vanished history is the opposite. Kept per
++ * survey for the life of the page, never persisted: proposals are about
++ * the survey as it was when they were made.
++ */
++const sessions = new Map<string, Turn[]>();
++/** whether /api/ai/logic answered (true), refused (false) or has not been asked yet — for the page's lifetime */
++let aiKnown: boolean | null = null;
++
++const PREFS_KEY = "rescript.intelligent";
++function loadPrefs(): { inspector: number } {
++  try {
++    const raw = typeof window !== "undefined" ? window.localStorage.getItem(PREFS_KEY) : null;
++    if (raw) { const p = JSON.parse(raw); if (typeof p.inspector === "number") return p; }
++  } catch { /* fine */ }
++  return { inspector: 360 };
++}
++
++export function IntelligentView() {
++  const s = useStudio();
++  const sel = useSelection();
++  const cmd = useCommands();
++
++  const deferredDef = React.useDeferredValue(s.def);
++  const status = React.useMemo(() => objectStatus(deferredDef), [deferredDef]);
++  const index = React.useMemo(() => buildDependencyIndex(deferredDef), [deferredDef]);
++  const primary = (sel?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null)) as ObjectKey | null;
++
++  const [text, setText] = React.useState("");
++  const [turns, setTurns] = React.useState<Turn[]>(() => sessions.get(s.surveyDbId) ?? []);
++  React.useEffect(() => { sessions.set(s.surveyDbId, turns); }, [turns, s.surveyDbId]);
++  const [busy, setBusy] = React.useState(false);
++  /** null = unknown yet; false = 501 or no session; true = the route answered */
++  const [aiAvailable, setAiAvailableState] = React.useState<boolean | null>(aiKnown);
++  const setAiAvailable = React.useCallback((v: boolean) => { aiKnown = v; setAiAvailableState(v); }, []);
++  const [prefs, setPrefs] = React.useState(loadPrefs);
++  const [showInspector, setShowInspector] = React.useState(true);
++  const inputRef = React.useRef<HTMLTextAreaElement>(null);
++  const logRef = React.useRef<HTMLDivElement>(null);
++
++  React.useEffect(() => { try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* fine */ } }, [prefs]);
++  React.useEffect(() => { logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [turns.length, busy]);
++
++  const deps = React.useMemo(() => ({
++    uid,
++    makeQuestion(def: SurveyDefinition, variantId: string) {
++      const v = variantRegistry.get(variantId) ?? variantRegistry.get("single_select.radio")!;
++      return createFromVariant(v, nextQuestionNaming(def));
++    },
++    index,
++  }), [index]);
++
++  const selectKey = React.useCallback((key: ObjectKey) => {
++    if (sel) sel.dispatch({ type: "select", key });
++    else if (key.startsWith("question:")) s.select(key.slice("question:".length));
++  }, [sel, s]);
++
++  /* ---------------------------------------------------------------- ask */
++  const ask = React.useCallback(async (sentence: string) => {
++    const t = sentence.trim();
++    if (!t || busy) return;
++    setBusy(true);
++    setText("");
++    const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
++    let intent: Intent = parseIntent(t);
++    let source: Proposal["source"] = "grammar";
++    let plan = planProposal(s.def, intent, source, deps);
++    // the grammar did not understand, or understood but could not find the object: ask the model, if there is one
++    const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e));
++    if (askModel && aiAvailable !== false) {
++      try {
++        const r = await fetch("/api/ai/logic", {
++          method: "POST", headers: { "content-type": "application/json" },
++          body: JSON.stringify({ surveyId: s.surveyDbId, text: t, context: surveyContext(s.def, { selectedId: primary?.startsWith("question:") ? primary.slice(9) : null }), selected: selectedLabel }),
++        });
++        if (r.status === 501 || r.status === 401 || r.status === 403) setAiAvailable(false);
++        else if (r.ok) {
++          setAiAvailable(true);
++          const d = await r.json().catch(() => null) as { intent?: unknown } | null;
++          const ai = coerceIntent(d?.intent);
++          if (ai && ai.kind !== "unknown") {
++            const p2 = planProposal(s.def, ai, "ai", deps);
++            // prefer the model's reading when it produced something the survey accepts
++            if (!p2.errors.length || plan.errors.length) { intent = ai; source = "ai"; plan = p2; }
++          } else if (ai?.kind === "unknown" && intent.kind === "unknown") {
++            plan = { ...plan, errors: [ai.reason] };
++          }
++        }
++      } catch { /* offline: the grammar's answer stands */ }
++    }
++    setTurns((ts) => [...ts, { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open" }]);
++    if (plan.targetKey) selectKey(plan.targetKey);
++    setBusy(false);
++    inputRef.current?.focus();
++  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey]);
++
++  /* -------------------------------------------------------------- apply */
++  const apply = React.useCallback((turn: Turn) => {
++    const p = turn.proposal;
++    if (p.errors.length || p.readOnly || s.readOnly) { if (s.readOnly) s.toast("This project is read-only right now.", "err"); return; }
++    let outcome: string[] = [];
++    s.labelNextEdit(`Applied proposal: ${p.summary}`);
++    s.update((d) => {
++      const r = applyLogicProposal(d, p.changes);
++      outcome = r.errors;
++    });
++    if (outcome.length) {
++      s.toast(outcome[0], "err");
++      setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, proposal: { ...x.proposal, errors: outcome } } : x));
++      return;
++    }
++    setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "applied" } : x));
++    const targets = proposalTargets(p.changes);
++    if (targets[0]) selectKey(`question:${targets[0]}` as ObjectKey);
++    s.toast("Applied. Undo with ⌘Z.");
++  }, [s, selectKey]);
++
++  const cancel = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, state: "cancelled" } : x));
++  const review = (turn: Turn) => setTurns((ts) => ts.map((x) => x.id === turn.id ? { ...x, reviewing: !x.reviewing } : x));
++
++  /* -------------------------------------------------------------- resize */
++  const dragging = React.useRef<{ startX: number; start: number } | null>(null);
++  const onDividerDown = (e: React.PointerEvent) => {
++    dragging.current = { startX: e.clientX, start: prefs.inspector };
++    (e.target as HTMLElement).setPointerCapture(e.pointerId);
++  };
++  const onDividerMove = (e: React.PointerEvent) => {
++    if (!dragging.current) return;
++    const w = Math.max(260, Math.min(640, dragging.current.start - (e.clientX - dragging.current.startX)));
++    setPrefs({ inspector: w });
++  };
++  const onDividerUp = () => { dragging.current = null; };
++
++  const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
++    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(text); }
++  };
++
++  const open = turns.filter((t) => t.state === "open").length;
++
++  return (
++    <div className="iq" data-testid="intelligent-view" style={{ gridTemplateColumns: showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)" }}>
++      <section className="iq-main">
++        <div className="iq-toolbar">
++          <span className="iq-title"><Icon name="sparkle" size={14} /> Intelligent</span>
++          <span className="iq-hint">Describe a change in plain language. Every change is shown for review before it is applied — nothing is written until you press Apply.</span>
++          <span className="iq-spacer" />
++          <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null ? "unknown" : aiAvailable ? "on" : "off"} title={aiAvailable === false ? "No language model is configured on this Studio; the built-in grammar handles the common shapes." : aiAvailable ? "The built-in grammar first; the language model for what it does not catch." : "Built-in grammar; the language model is tried when a sentence is not recognised."}>
++            {aiAvailable === false ? "grammar only" : aiAvailable ? "grammar + model" : "grammar"}
++          </span>
++          <button type="button" className={`iq-btn${showInspector ? " on" : ""}`} onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} data-testid="iq-toggle-inspector" title="Inspector">
++            <Icon name="info" size={13} /> Inspector
++          </button>
++        </div>
++
++        <div className="iq-log" ref={logRef} data-testid="iq-log">
++          {turns.length === 0 && (
++            <div className="iq-welcome" data-testid="iq-welcome">
++              <h2>How do you want to program your research?</h2>
++              <p>Say it. The Studio proposes the exact rule, shows you what it will do, and waits for you to apply it.</p>
++              <div className="iq-examples">
++                {EXAMPLES.map((e) => (
++                  <button key={e.text} type="button" className="iq-example" onClick={() => setText(e.text)} data-testid="iq-example">
++                    <span className="iq-example-text">{e.text}</span>
++                    <span className="iq-example-about">{e.about}</span>
++                  </button>
++                ))}
++              </div>
++            </div>
++          )}
++          {turns.map((turn) => (
++            <TurnCard key={turn.id} turn={turn} def={s.def} onApply={() => apply(turn)} onCancel={() => cancel(turn)} onReview={() => review(turn)} onSelect={selectKey} readOnly={s.readOnly} />
++          ))}
++          {busy && <div className="iq-thinking" data-testid="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
++        </div>
++
++        <form className="iq-ask" onSubmit={(e) => { e.preventDefault(); void ask(text); }}>
++          <textarea
++            ref={inputRef} className="iq-input" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey}
++            placeholder={open ? "Apply or cancel the proposal above, or describe another change…" : "Show Q5 only when Q3 = Yes and Q4 > 2"}
++            rows={2} data-testid="iq-input" aria-label="Describe a change" disabled={busy}
++          />
++          <button type="submit" className="iq-send" disabled={busy || !text.trim()} data-testid="iq-send" title="Propose (Enter)">
++            <Icon name="chevron-right" size={14} /> Propose
++          </button>
++        </form>
++      </section>
++
++      {showInspector && (
++        <>
++          <div className="iq-divider" onPointerDown={onDividerDown} onPointerMove={onDividerMove} onPointerUp={onDividerUp} role="separator" aria-orientation="vertical" />
++          <aside className="iq-inspector" data-testid="iq-inspector">
++            <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
++            <div className="ar-inspector-body">
++              <Inspector primary={primary} index={index} status={status} onSelect={selectKey} />
++            </div>
++          </aside>
++        </>
++      )}
++      {/* the command registry is what Apply and the chips share with the other modes */}
++      <span hidden data-commands={cmd ? "on" : "off"} />
++    </div>
++  );
++}
++
++/* ------------------------------------------------------------- the card */
++
++function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly }: {
++  turn: Turn; def: SurveyDefinition;
++  onApply(): void; onCancel(): void; onReview(): void; onSelect(key: ObjectKey): void; readOnly: boolean;
++}) {
++  const p = turn.proposal;
++  const blocked = p.errors.length > 0;
++  return (
++    <article className={`iq-turn ${turn.state}`} data-testid="iq-turn" data-state={turn.state} data-kind={p.intent.kind} data-source={p.source}>
++      <div className="iq-said" data-testid="iq-said"><Icon name="user" size={13} /> <span>{turn.text}</span></div>
++
++      {p.readOnly ? (
++        <div className="iq-card answer" data-testid="iq-answer">
++          <div className="iq-card-head"><span className="iq-kicker">{blocked ? "NOT UNDERSTOOD" : "ANSWER"}</span>{p.source === "ai" && <span className="iq-source">model</span>}</div>
++          {p.summary && <p className="iq-summary">{p.summary}</p>}
++          {p.errors.map((e, i) => <p key={i} className="iq-error" data-testid="iq-error"><Icon name="warning" size={12} /> {e}</p>)}
++          {p.answer && p.answer.length > 0 && (
++            <ul className="iq-answer-list">
++              {p.answer.map((l, i) => (
++                <li key={i}>
++                  {l.key ? <button type="button" className="iq-chip" onClick={() => onSelect(l.key!)} data-testid="iq-chip" data-key={l.key}>{l.text}</button> : <span>{l.text}</span>}
++                </li>
++              ))}
++            </ul>
++          )}
++        </div>
++      ) : (
++        <div className={`iq-card proposal${blocked ? " blocked" : ""}`} data-testid="iq-proposal">
++          <div className="iq-card-head">
++            <span className="iq-kicker">{turn.state === "applied" ? "APPLIED" : turn.state === "cancelled" ? "CANCELLED" : blocked ? "PROPOSED CHANGE — NEEDS ATTENTION" : "PROPOSED CHANGE"}</span>
++            {p.source === "ai" && <span className="iq-source" title="Read by the language model, checked by the expression parser">model</span>}
++          </div>
++          {p.summary && <p className="iq-summary" data-testid="iq-summary">{p.summary}</p>}
++          {p.expression && (
++            <div className="iq-expression" data-testid="iq-expression">
++              <div className="iq-expression-row"><span className="iq-label">Condition</span><code className="mono">{p.expression.canonical || p.expression.text}</code></div>
++              {p.expression.summary && <div className="iq-expression-row"><span className="iq-label">Reads as</span><span>{p.expression.summary}</span></div>}
++              {p.expression.errors.map((e, i) => <p key={`e${i}`} className="iq-error" data-testid="iq-error"><Icon name="warning" size={12} /> {e.message}</p>)}
++              {p.expression.warnings.map((w, i) => <p key={`w${i}`} className="iq-warning"><Icon name="warning" size={12} /> {w.message}</p>)}
++            </div>
++          )}
++          {p.descriptions.length > 0 && (
++            <ul className="iq-changes" data-testid="iq-changes">
++              {p.descriptions.map((d, i) => <li key={i}>{d}</li>)}
++            </ul>
++          )}
++          {p.errors.map((e, i) => <p key={i} className="iq-error" data-testid="iq-error"><Icon name="warning" size={12} /> {e}</p>)}
++          {p.warnings.map((w, i) => <p key={i} className="iq-warning" data-testid="iq-warning"><Icon name="warning" size={12} /> {w}</p>)}
++          {turn.reviewing && p.expression?.condition && (
++            <div className="iq-review" data-testid="iq-review">
++              <div className="iq-label">Structure</div>
++              <RuleTree def={def} c={p.expression.condition} depth={0} />
++            </div>
++          )}
++          {turn.reviewing && !p.expression?.condition && p.changes.length > 0 && (
++            <div className="iq-review" data-testid="iq-review">
++              <div className="iq-label">Change</div>
++              <pre className="iq-json mono">{JSON.stringify(p.changes.map((c) => c.kind === "add_question" ? { ...c, question: { id: c.question.id, code: c.question.code, type: c.question.type, variant: c.question.variant, text: c.question.text, options: c.question.options?.map((o) => o.label) } } : c), null, 2)}</pre>
++            </div>
++          )}
++          {turn.state === "open" && (
++            <div className="iq-actions">
++              <button type="button" className={`iq-btn${turn.reviewing ? " on" : ""}`} onClick={onReview} data-testid="iq-review-btn" disabled={!p.changes.length}>Review Logic</button>
++              <span className="iq-spacer" />
++              <button type="button" className="iq-btn" onClick={onCancel} data-testid="iq-cancel">Cancel</button>
++              <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked || readOnly} data-testid="iq-apply" title={blocked ? "Fix the problems above first" : readOnly ? "Read-only" : "Apply this change (undoable)"}>Apply</button>
++            </div>
++          )}
++        </div>
++      )}
++    </article>
++  );
++}
++
++/** the condition as nested groups — the structured view the brief asks for */
++function RuleTree({ def, c, depth }: { def: SurveyDefinition; c: Condition; depth: number }) {
++  if (c.type === "rule") return <code className="iq-rule mono">{formatCondition(def, c)}</code>;
++  const label = c.op === "and" ? "ALL of" : c.op === "or" ? "ANY of" : c.children.length > 1 ? "NONE of" : "NOT";
++  return (
++    <div className={`iq-group ${c.op}`} data-depth={depth}>
++      <span className="iq-op">{label}</span>
++      <div className="iq-group-body">
++        {c.children.map((k, i) => <RuleTree key={i} def={def} c={k} depth={depth + 1} />)}
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 62e35d4..4594064 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -42,6 +42,7 @@ import { useMode } from "./ModeContext";
+ import { GridView } from "../grid/GridView";
+ import { ArchitectView } from "../architect/ArchitectView";
+ import { FlowCanvas } from "../flow/FlowCanvas";
++import { IntelligentView } from "../intelligent/IntelligentView";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -1054,6 +1055,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+             programmingMode === "grid" ? <GridView />
+             : programmingMode === "architect" ? <ArchitectView />
+             : programmingMode === "flow" ? <FlowCanvas />
++            : programmingMode === "intelligent" ? <IntelligentView />
+             : <QuestionsPanel />
+           )}
+           {tab === "settings" && (
+@@ -1111,7 +1113,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           )}
+         </main>
+         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
+-        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow") && tab === "questions"} />
++        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
+       </div>
+       </CanvasProvider>
+     </div>
+diff --git a/apps/studio/lib/intelligent/ai.ts b/apps/studio/lib/intelligent/ai.ts
+new file mode 100644
+index 0000000..87dc9ba
+--- /dev/null
++++ b/apps/studio/lib/intelligent/ai.ts
+@@ -0,0 +1,89 @@
++import type { Intent } from "./proposal.ts";
++
++/**
++ * THE LANGUAGE MODEL'S SIDE OF THE CONTRACT.
++ *
++ * The model is not asked to change the survey, write JSON logic, or invent
++ * question ids. It is asked for an INTENT — the same small structure the
++ * deterministic grammar produces — with the condition as EXPRESSION TEXT in
++ * the language the expression editor already speaks. The planner then
++ * parses that text against the real survey, so whatever the model writes is
++ * checked by the same parser a programmer's typing is checked by, and shown
++ * on the review card before anything is applied.
++ *
++ * `coerceIntent` is the gate: an object from the wire becomes an Intent only
++ * if its shape is one we know, with strings where strings are expected.
++ * Anything else is null, and the mode says it did not understand.
++ */
++
++export const LOGIC_SYSTEM_PROMPT = `You translate a survey programmer's sentence into ONE structured intent about their survey. Reply with a single JSON object and nothing else.
++
++Intent shapes (pick exactly one):
++{"kind":"display","target":"<question code, variable or 'page N'/'block NAME'>","action":"show"|"hide","expression":"<condition>"}
++{"kind":"skip","from":"<question the rule follows, optional>","to":"<question code | 'the end' | 'screened' | 'terminated' | 'quota full'>","expression":"<condition>"}
++{"kind":"required","target":"<question>","required":true|false}
++{"kind":"add_question","type":"<single choice|multiple choice|numeric|text|dropdown|nps|rating|email|...>","text":"<question text>","options":["A","B"],"after":"<question, optional>","required":false}
++{"kind":"rename","target":"<question or variable>","newName":"<NEW_NAME>"}
++{"kind":"find","target":"<question>","relation":"usedBy"|"dependsOn"|"affects"|"reach"}
++{"kind":"explain","target":"<question>"}
++{"kind":"unknown","reason":"<one short sentence: what is missing or ambiguous>"}
++
++Condition language ("expression"): reference questions by CODE (Q3) or variable name; compare with = != > >= < <= between, contains, selected, answered, unanswered, is empty; combine with AND, OR, NOT and parentheses; option values by code or label, e.g. Q3 = Yes AND (Q1 >= 18 OR Q2 contains Coke); COUNT(Q4) >= 2. Use only questions that appear in the survey listing. Never invent codes.
++
++"find" relations: usedBy = what depends on / reads the target; dependsOn = what the target reads; affects = everything downstream of the target; reach = everything upstream that can affect it.
++
++If the sentence asks for something outside these shapes, or you cannot tell which question is meant, answer with kind "unknown" and say why.`;
++
++const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
++
++export function coerceIntent(raw: unknown): Intent | null {
++  if (!raw || typeof raw !== "object") return null;
++  const o = raw as Record<string, unknown>;
++  const kind = str(o.kind);
++  switch (kind) {
++    case "display": {
++      const target = str(o.target), expression = str(o.expression);
++      if (!target || !expression) return null;
++      return { kind, target, action: o.action === "hide" ? "hide" : "show", expression };
++    }
++    case "skip": {
++      const to = str(o.to), expression = str(o.expression);
++      if (!to || !expression) return null;
++      return { kind, from: str(o.from), to, expression };
++    }
++    case "required": {
++      const target = str(o.target);
++      if (!target || typeof o.required !== "boolean") return null;
++      return { kind, target, required: o.required };
++    }
++    case "add_question": {
++      const text = typeof o.text === "string" ? o.text.trim() : "";
++      const options = Array.isArray(o.options) ? o.options.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : undefined;
++      return { kind, type: str(o.type), text, options: options?.length ? options : undefined, after: str(o.after), required: typeof o.required === "boolean" ? o.required : undefined };
++    }
++    case "rename": {
++      const target = str(o.target), newName = str(o.newName);
++      if (!target || !newName || !/^[A-Za-z_]\w*$/.test(newName)) return null;
++      return { kind, target, newName };
++    }
++    case "find": {
++      const target = str(o.target);
++      const relation = o.relation;
++      if (!target || (relation !== "usedBy" && relation !== "dependsOn" && relation !== "affects" && relation !== "reach")) return null;
++      return { kind, target, relation };
++    }
++    case "explain": {
++      const target = str(o.target);
++      return target ? { kind, target } : null;
++    }
++    case "unknown":
++      return { kind, reason: str(o.reason) ?? "I did not understand that." };
++    default:
++      return null;
++  }
++}
++
++/** the user turn: the survey listing, what is selected, then the sentence */
++export function logicUserPrompt(context: string, sentence: string, selected?: string | null): string {
++  return `${context}\n\n${selected ? `Selected: ${selected}\n` : ""}Sentence: ${sentence.trim()}`;
++}
+diff --git a/apps/studio/lib/intelligent/context.ts b/apps/studio/lib/intelligent/context.ts
+new file mode 100644
+index 0000000..43d1993
+--- /dev/null
++++ b/apps/studio/lib/intelligent/context.ts
+@@ -0,0 +1,73 @@
++import type { SurveyDefinition } from "@rescript/schema";
++import { listPages, questionsInFlowOrder, conditionSummary } from "@rescript/engine";
++
++/**
++ * THE SURVEY, COMPACTLY, FOR A LANGUAGE MODEL.
++ *
++ * A model that is to turn "show the income question when they said yes to
++ * owning a car" into `Q7 = Yes` needs to know that Q7 is the car question
++ * and that its options are Yes/No. It does not need the survey JSON — a
++ * 160-question survey is hundreds of kilobytes of it — so this writes one
++ * line per question, in flow order, with the code, variable, type, text and
++ * (for choice questions) the options, and a page header where the page
++ * changes. The selected question and its neighbours are always included;
++ * beyond `limit` questions the rest is listed by code only, so the prompt
++ * stays bounded on a 1,000-question survey and the model can still name
++ * any question.
++ *
++ * Text is stripped of markup and cut short. Nothing else about the survey
++ * — no answers, no respondents, no keys — is in here.
++ */
++export interface ContextOptions {
++  /** the question the programmer has selected, kept in full */
++  selectedId?: string | null;
++  /** full lines for at most this many questions */
++  limit?: number;
++  /** characters of question text per line */
++  textWidth?: number;
++}
++
++const plain = (s: string | undefined, width: number): string => {
++  const t = (s ?? "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
++  return t.length > width ? `${t.slice(0, width - 1)}…` : t;
++};
++
++export function surveyContext(def: SurveyDefinition, opts: ContextOptions = {}): string {
++  const limit = opts.limit ?? 120;
++  const width = opts.textWidth ?? 90;
++  const qs = questionsInFlowOrder(def);
++  const pageOf = new Map<string, { id: string; title?: string; n: number }>();
++  listPages(def.flow as unknown[]).forEach((p, i) => { for (const id of p.node.questionIds) pageOf.set(id, { id: p.node.id, title: p.node.title, n: i + 1 }); });
++
++  // which questions get a full line: the first `limit`, plus a window round the selection
++  const full = new Set<string>();
++  qs.slice(0, limit).forEach((q) => full.add(q.id));
++  if (opts.selectedId) {
++    const k = qs.findIndex((q) => q.id === opts.selectedId);
++    if (k >= 0) for (let i = Math.max(0, k - 5); i <= Math.min(qs.length - 1, k + 5); i++) full.add(qs[i].id);
++  }
++
++  const lines: string[] = [];
++  lines.push(`Survey: ${plain(def.meta.title, 80)} (${qs.length} questions)`);
++  let lastPage: string | null = null;
++  const brief: string[] = [];
++  for (const q of qs) {
++    if (!full.has(q.id)) { brief.push(q.code); continue; }
++    const p = pageOf.get(q.id);
++    if (p && p.id !== lastPage) { lines.push(`## Page ${p.n}${p.title ? `: ${plain(p.title, 60)}` : ""} [${p.id}]`); lastPage = p.id; }
++    const parts = [`${q.code} (${q.variableName})`, q.type.replace(/_/g, " "), `"${plain(q.text, width)}"`];
++    if (q.required) parts.push("required");
++    if (q.options?.length) {
++      const opts = q.options.slice(0, 12).map((o) => `${o.code}=${plain(o.label, 24)}`).join(", ");
++      parts.push(`options: ${opts}${q.options.length > 12 ? `, … (${q.options.length})` : ""}`);
++    }
++    if (q.rows?.length) parts.push(`${q.rows.length} rows`);
++    if (q.displayLogic) parts.push(`shown when ${conditionSummary(def, q.displayLogic)}`);
++    if (q.skipLogic?.length) parts.push(`${q.skipLogic.length} skip rule${q.skipLogic.length === 1 ? "" : "s"}`);
++    if (q.id === opts.selectedId) parts.push("← selected");
++    lines.push(parts.join(" · "));
++  }
++  if (brief.length) lines.push(`Other questions (by code): ${brief.join(", ")}`);
++  if (def.calculations?.length) lines.push(`Calculations: ${def.calculations.map((c) => `${c.targetVariable} = ${c.expression}`).slice(0, 30).join("; ")}`);
++  return lines.join("\n");
++}
+diff --git a/apps/studio/lib/intelligent/grammar.ts b/apps/studio/lib/intelligent/grammar.ts
+new file mode 100644
+index 0000000..cdbe3e2
+--- /dev/null
++++ b/apps/studio/lib/intelligent/grammar.ts
+@@ -0,0 +1,160 @@
++import type { Intent } from "./proposal.ts";
++
++/**
++ * THE DETERMINISTIC GRAMMAR — a sentence into an intent, with no network.
++ *
++ * This is what the Intelligent mode runs when no language model is
++ * configured, and what it runs FIRST even when one is: a sentence these
++ * patterns recognise never leaves the machine, costs nothing, and means the
++ * same thing every time. The model is for the sentences these do not catch.
++ *
++ * It recognises the shapes a survey programmer actually types —
++ *
++ *   show Q5 (only) when/if <expr>          hide Q5 when <expr>
++ *   ask Q5 only if <expr>                  don't show page 3 if <expr>
++ *   skip to Q9 when <expr>                 after Q3, go to the end if <expr>
++ *   terminate / screen out when <expr>     end the survey if <expr>
++ *   make Q4 required / optional            Q4 is mandatory
++ *   add a numeric question "How old…"      add a question after Q3: Age?
++ *     with options A, B, C
++ *   rename AGE to RESP_AGE                 rename Q3's variable to AGE
++ *   what depends on Q3 / uses Q3           what does Q3 depend on
++ *   what does Q3 affect                    what can affect Q3
++ *   explain Q3 / why is Q3 shown
++ *
++ * — and hands the CONDITION through as text, untouched: the expression
++ * parser decides what `Q3 = Yes and Q4 > 2` means, not this file.
++ */
++
++/**
++ * A thing a sentence names: `Q5`, `AGE`, `page 3`, `block Main`, `the income
++ * question`, or anything in quotes. Two bare words at most, and never one
++ * of the words that start the condition — `show Q5 only when …` names Q5,
++ * not "Q5 only".
++ */
++const OBJ = String.raw`((?:the\s+)?(?:(?:question|page|screen|block|section|group)\s+[\w.]+|[A-Za-z_][\w.]*(?:\s+(?!only\b|when\b|if\b|where\b|unless\b|then\b|question\b)[A-Za-z_]\w*)?)(?:\s+question)?|"[^"]+"|“[^”]+”)`;
++const WHEN = String.raw`\s+(?:only\s+)?(?:when|if|where|unless)\s+(.+)$`;
++
++const strip = (s: string) => s.replace(/^[“"]|[”"]$/g, "").trim();
++
++function unlessFlip(sentence: string, expression: string): string {
++  return /\bunless\s/i.test(sentence) && !/\b(?:when|if|where)\s/i.test(sentence) ? `NOT (${expression})` : expression;
++}
++
++export function parseIntent(input: string): Intent {
++  const text = input.trim().replace(/\s+/g, " ").replace(/[.!]+$/, "");
++  if (!text) return { kind: "unknown", reason: "Say what you want to change — for example “show Q5 only when Q3 = Yes”." };
++  let m: RegExpExecArray | null;
++
++  /* ------------------------------------------------------ find / explain */
++  if ((m = /^(?:what|which(?: questions| objects)?|who|find(?: everything| all)?|list(?: everything| all)?|show me(?: everything| all)?)\s+(?:questions?\s+|rules?\s+|things?\s+|objects?\s+)?(?:that\s+)?(?:depends?\s+on|uses?|references?|reads?|needs?|relies\s+on|is\s+using)\s+(.+?)(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "find", target: strip(m[1]), relation: "usedBy" };
++  }
++  if ((m = /^(?:what|which(?: questions| objects)?|find(?: everything| all)?|list(?: everything| all)?|show me(?: everything| all)?)\s+(?:questions?\s+|things?\s+|objects?\s+)?(?:that\s+)?(?:is|are|can\s+be|could\s+be|gets?|would\s+be)\s+affected\s+by\s+(.+?)(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "find", target: strip(m[1]), relation: "affects" };
++  }
++  if ((m = /^(?:what|which)\s+(?:does|do|can|could|will|would)\s+(.+?)\s+(?:depend\s+on|use|read|reference|rely\s+on|need)(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "find", target: strip(m[1]), relation: "dependsOn" };
++  }
++  if ((m = /^(?:what|which)\s+(?:does|do|can|could|will|would)\s+(.+?)\s+(?:affect|change|influence|impact|reach)(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "find", target: strip(m[1]), relation: "affects" };
++  }
++  if ((m = /^(?:what|which)\s+(?:can|could)\s+(?:affect|change|influence|impact|reach)\s+(.+?)(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "find", target: strip(m[1]), relation: "reach" };
++  }
++  if ((m = /^(?:explain|describe|tell me about|what is|what's|why is|why does|how does|how is)\s+(.+?)(?:\s+(?:shown|hidden|displayed|asked|skipped|work|do|behave|visible))?(?:\s*\?)?$/i.exec(text))) {
++    return { kind: "explain", target: strip(m[1]) };
++  }
++
++  /* ------------------------------------------------------------ required */
++  if ((m = /^(?:make|set|mark)\s+(.+?)\s+(?:as\s+)?(required|mandatory|compulsory|optional|not\s+required|non-?mandatory)$/i.exec(text))
++    || (m = /^(.+?)\s+(?:is|should\s+be|must\s+be|becomes?)\s+(?:now\s+)?(required|mandatory|compulsory|optional|not\s+required|non-?mandatory)$/i.exec(text))
++    || (m = /^(require|mandate)\s+(?:an?\s+answer\s+(?:to|for|on)\s+)?(.+)$/i.exec(text))) {
++    const isVerb = /^(require|mandate)$/i.test(m[1]);
++    const target = isVerb ? m[2] : m[1];
++    const word = isVerb ? "required" : m[2].toLowerCase();
++    return { kind: "required", target: strip(target), required: !/optional|not|non/.test(word) };
++  }
++
++  /* -------------------------------------------------------------- rename */
++  if ((m = /^rename\s+(?:the\s+)?(?:variable\s+)?(.+?)(?:'s\s+variable)?\s+(?:to|as|→|->)\s+([A-Za-z_][\w]*)$/i.exec(text))
++    || (m = /^(?:change|set)\s+(?:the\s+)?(?:variable\s+(?:name\s+)?(?:of|for)\s+)?(.+?)(?:'s)?\s+variable(?:\s+name)?\s+to\s+([A-Za-z_][\w]*)$/i.exec(text))
++    || (m = /^(?:call|name)\s+(.+?)\s+([A-Za-z_][\w]*)$/i.exec(text))) {
++    return { kind: "rename", target: strip(m[1]), newName: m[2] };
++  }
++
++  /* ---------------------------------------------------------- skip logic */
++  if ((m = /^(?:after\s+(.+?),?\s+)?(?:skip|jump|go|move|branch|send(?:\s+(?:them|respondents?|people))?)\s+(?:(?:straight|directly|forward)\s+)?(?:to|ahead\s+to)\s+(.+?)(?:\s+(?:when|if|where|unless)\s+(.+))?$/i.exec(text))) {
++    if (!m[3]) return { kind: "unknown", reason: "A skip needs a condition — “skip to Q9 when Q3 = No”." };
++    return { kind: "skip", from: m[1] ? strip(m[1]) : undefined, to: strip(m[2]), expression: unlessFlip(text, m[3]) };
++  }
++  if ((m = /^(?:(?:after|from)\s+(.+?),?\s+)?(?:terminate|screen\s*(?:them\s+)?out|disqualify|end\s+the\s+survey|end\s+the\s+interview|finish|close\s+the\s+survey|exit)(?:\s+(?:the\s+)?(?:survey|interview|respondent|them|as\s+(\w+(?:\s+\w+)?)))?\s*,?\s+(?:when|if|where|unless)\s+(.+)$/i.exec(text))) {
++    const verb = /terminate|screen|disqualify|exit/i.test(text.split(/\s+(?:when|if|where|unless)\s+/i)[0]) ? "terminate" : "end";
++    const status = m[2] ? m[2] : verb === "end" ? "the end" : (/screen|disqualif/i.test(text) ? "screened" : "terminated");
++    return { kind: "skip", from: m[1] ? strip(m[1]) : undefined, to: status, expression: unlessFlip(text, m[3]) };
++  }
++  if ((m = /^(?:when|if)\s+(.+?),?\s+(?:skip|jump|go|move|send(?:\s+(?:them|respondents?))?)\s+(?:to\s+)?(.+)$/i.exec(text))) {
++    return { kind: "skip", to: strip(m[2]), expression: m[1] };
++  }
++  if ((m = /^(?:when|if)\s+(.+?),?\s+(?:terminate|screen\s*(?:them\s+)?out|disqualify|end\s+the\s+survey)(?:\s+(?:them|as\s+(\w+)))?$/i.exec(text))) {
++    return { kind: "skip", to: m[2] ?? (/screen|disqualif/i.test(text) ? "screened" : /end the survey/i.test(text) ? "the end" : "terminated"), expression: m[1] };
++  }
++
++  /* ------------------------------------------------------- display logic */
++  if ((m = new RegExp(String.raw`^(?:only\s+)?(?:show|display|ask|present|include|enable)\s+${OBJ}${WHEN}`, "i").exec(text))) {
++    return { kind: "display", target: strip(m[1]), action: "show", expression: unlessFlip(text, m[2]) };
++  }
++  if ((m = new RegExp(String.raw`^(?:hide|suppress|don't\s+(?:show|ask|display)|do\s+not\s+(?:show|ask|display)|never\s+(?:show|ask)|remove|exclude|disable)\s+${OBJ}${WHEN}`, "i").exec(text))) {
++    return { kind: "display", target: strip(m[1]), action: "hide", expression: unlessFlip(text, m[2]) };
++  }
++  if ((m = new RegExp(String.raw`^${OBJ}\s+(?:should\s+(?:only\s+)?(?:be\s+)?|is\s+(?:only\s+)?|must\s+(?:only\s+)?(?:be\s+)?|(?:will|can)\s+(?:only\s+)?(?:be\s+)?)?(?:shown|displayed|asked|visible|appears?)(?:\s+only)?\s+(?:when|if|where)\s+(.+)$`, "i").exec(text))) {
++    return { kind: "display", target: strip(m[1]), action: "show", expression: m[2] };
++  }
++  if ((m = new RegExp(String.raw`^${OBJ}\s+(?:should\s+(?:be\s+)?|is\s+|must\s+(?:be\s+)?|(?:will|can)\s+(?:be\s+)?)?(?:hidden|skipped|suppressed|not\s+(?:shown|asked|displayed))\s+(?:when|if|where)\s+(.+)$`, "i").exec(text))) {
++    return { kind: "display", target: strip(m[1]), action: "hide", expression: m[2] };
++  }
++  if ((m = new RegExp(String.raw`^(?:when|if)\s+(.+?),?\s+(?:then\s+)?(show|display|ask|hide|skip|suppress|don't\s+show|do\s+not\s+show)\s+${OBJ}$`, "i").exec(text))) {
++    return { kind: "display", target: strip(m[3]), action: /^(?:show|display|ask)$/i.test(m[2]) ? "show" : "hide", expression: m[1] };
++  }
++
++  /* ------------------------------------------------------- add question */
++  if ((m = /^(?:add|create|insert|new|append|put)\s+(?:an?\s+|another\s+|one\s+more\s+)?(?:new\s+)?(.*?)\s*question\b(.*)$/i.exec(text))) {
++    const type = m[1].trim() || undefined;
++    let rest = m[2].trim();
++    let after: string | undefined;
++    let options: string[] | undefined;
++    let required: boolean | undefined;
++    const opt = /\s*(?:,\s*)?(?:with|having|offering)\s+(?:the\s+)?(?:options?|answers?|choices?|answer\s+options?)\s*[:=]?\s*(.+)$/i.exec(rest);
++    if (opt) {
++      options = opt[1].split(/\s*(?:,|;|\/|\bor\b|\band\b)\s*/i).map(strip).filter(Boolean);
++      rest = rest.slice(0, opt.index).trim();
++    }
++    const req = /\s*,?\s*(?:\(|,\s*)?(required|mandatory|optional)\)?\s*$/i.exec(rest);
++    if (req) { required = !/optional/i.test(req[1]); rest = rest.slice(0, req.index).trim(); }
++    const pos = /\s*(?:,\s*)?(?:after|below|following|under|behind)\s+(.+?)\s*$/i.exec(rest);
++    const posFront = /^(?:after|below|following)\s+(.+?)(?:\s*[:,-]\s*|\s+(?:asking|saying|that\s+says|with\s+(?:the\s+)?text|titled|reading)\s+)(.+)$/i.exec(rest);
++    let body = rest;
++    if (posFront) { after = strip(posFront[1]); body = posFront[2]; }
++    else if (pos && !/["“]/.test(pos[1])) { after = strip(pos[1]); body = rest.slice(0, pos.index); }
++    body = body.replace(/^(?:[:,-]\s*|(?:asking|saying|that\s+says|with\s+(?:the\s+)?text|titled|reading)\s+)/i, "").trim();
++    const quoted = /^[“"](.+)[”"]$/.exec(body);
++    const qtext = quoted ? quoted[1] : body;
++    return { kind: "add_question", type, text: qtext.trim(), options, after, required };
++  }
++
++  return { kind: "unknown", reason: "I did not understand that. Try “show Q5 only when Q3 = Yes”, “skip to Q9 if Q2 = No”, “make Q4 required”, “add a numeric question ‘How old are you?’ after Q2”, or “what depends on Q3”." };
++}
++
++/** the shapes the grammar knows, for the mode's help and for the model's prompt */
++export const EXAMPLES: { text: string; about: string }[] = [
++  { text: "Show Q5 only when Q3 = Yes and Q4 > 2", about: "display logic" },
++  { text: "Hide page 3 if Q2 is Business", about: "a display rule on a page" },
++  { text: "After Q2, skip to Q9 when Q2 = No", about: "a skip rule" },
++  { text: "Screen out when Q1 < 18", about: "a termination" },
++  { text: "Make Q4 required", about: "required" },
++  { text: "Add a numeric question “How old are you?” after Q1", about: "a new question" },
++  { text: "Add a single choice question “Do you own a car?” with options Yes, No", about: "a new question with options" },
++  { text: "Rename AGE to RESP_AGE", about: "a variable rename" },
++  { text: "What depends on Q3?", about: "dependencies" },
++  { text: "Explain Q5", about: "how a question behaves" },
++];
+diff --git a/apps/studio/lib/intelligent/intelligent.test.ts b/apps/studio/lib/intelligent/intelligent.test.ts
+new file mode 100644
+index 0000000..94da9bf
+--- /dev/null
++++ b/apps/studio/lib/intelligent/intelligent.test.ts
+@@ -0,0 +1,260 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond, type Question } from "@rescript/schema";
++import { buildDependencyIndex, applyLogicProposal } from "@rescript/engine";
++import { parseIntent, EXAMPLES } from "./grammar.ts";
++import { planProposal, normaliseExpression, resolveTarget, variantForWords, type PlannerDeps } from "./proposal.ts";
++import { surveyContext } from "./context.ts";
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Intelligent" },
++    questions: [
++      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++      { id: "q_type", code: "Q2", variableName: "TYPE", type: "single_select", text: "Type", options: [{ code: "A", label: "Consumer" }, { code: "B", label: "Business" }] },
++      { id: "q_car", code: "Q3", variableName: "CAR", type: "single_select", text: "Do you own a car?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
++      { id: "q_income", code: "Q4", variableName: "INCOME", type: "numeric", text: "Household income", displayLogic: cond.rule("q_car", "eq", 1) },
++      { id: "q_end", code: "Q5", variableName: "E", type: "text", text: "Anything else?" },
++    ],
++    flow: [
++      { type: "page", id: "p1", title: "Screener", questionIds: ["q_age", "q_type"] },
++      { type: "block", id: "b_main", title: "Main", children: [
++        { type: "page", id: "p2", questionIds: ["q_car", "q_income"] },
++      ] },
++      { type: "page", id: "p3", title: "Wrap up", questionIds: ["q_end"] },
++      { type: "end", id: "e_ok", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++let n = 0;
++const deps = (def: SurveyDefinition): PlannerDeps => ({
++  uid: (p) => `${p}_${++n}`,
++  makeQuestion: (d, variant) => ({
++    id: `q_new_${++n}`, code: `Q${d.questions.length + 1}`, variableName: `Q${d.questions.length + 1}`,
++    type: variant.startsWith("multi") ? "multi_select" : variant.startsWith("numeric") ? "numeric" : variant.startsWith("text") ? "open_text" : "single_select",
++    variant, text: "", options: [], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [], listLogic: [],
++  } as unknown as Question),
++  index: buildDependencyIndex(def),
++});
++
++/* ---------------------------------------------------------------- grammar */
++
++test("grammar: display logic in its everyday spellings", () => {
++  assert.deepEqual(parseIntent("Show Q5 only when Q3 = Yes and Q4 > 2"), { kind: "display", target: "Q5", action: "show", expression: "Q3 = Yes and Q4 > 2" });
++  assert.deepEqual(parseIntent("hide page 3 if Q2 is Business."), { kind: "display", target: "page 3", action: "hide", expression: "Q2 is Business" });
++  assert.deepEqual(parseIntent("Don't show Q4 unless Q3 = Yes"), { kind: "display", target: "Q4", action: "hide", expression: "NOT (Q3 = Yes)" });
++  assert.deepEqual(parseIntent("Q4 should only be shown when Q3 = 1"), { kind: "display", target: "Q4", action: "show", expression: "Q3 = 1" });
++  assert.deepEqual(parseIntent("if Q3 = No then hide Q4"), { kind: "display", target: "Q4", action: "hide", expression: "Q3 = No" });
++  assert.deepEqual(parseIntent("ask the income question only if Q3 = Yes"), { kind: "display", target: "the income question", action: "show", expression: "Q3 = Yes" });
++});
++
++test("grammar: skips, terminations, required, rename", () => {
++  assert.deepEqual(parseIntent("After Q2, skip to Q5 when Q2 = B"), { kind: "skip", from: "Q2", to: "Q5", expression: "Q2 = B" });
++  assert.deepEqual(parseIntent("skip to the end if Q1 > 99"), { kind: "skip", from: undefined, to: "the end", expression: "Q1 > 99" });
++  assert.deepEqual(parseIntent("Screen out when Q1 < 18"), { kind: "skip", from: undefined, to: "screened", expression: "Q1 < 18" });
++  assert.deepEqual(parseIntent("terminate the survey if Q2 is not answered"), { kind: "skip", from: undefined, to: "terminated", expression: "Q2 is not answered" });
++  assert.deepEqual(parseIntent("if Q1 < 18, screen them out"), { kind: "skip", to: "screened", expression: "Q1 < 18" });
++  assert.equal(parseIntent("skip to Q5").kind, "unknown", "a skip without a condition is refused, not guessed");
++  assert.deepEqual(parseIntent("make Q4 required"), { kind: "required", target: "Q4", required: true });
++  assert.deepEqual(parseIntent("Q4 is optional"), { kind: "required", target: "Q4", required: false });
++  assert.deepEqual(parseIntent("set Q1 as not required"), { kind: "required", target: "Q1", required: false });
++  assert.deepEqual(parseIntent("rename AGE to RESP_AGE"), { kind: "rename", target: "AGE", newName: "RESP_AGE" });
++  assert.deepEqual(parseIntent("change Q1's variable name to AGE2"), { kind: "rename", target: "Q1", newName: "AGE2" });
++});
++
++test("grammar: adding a question, with type, text, options, position", () => {
++  assert.deepEqual(parseIntent("Add a numeric question “How old are you?” after Q1"), { kind: "add_question", type: "numeric", text: "How old are you?", options: undefined, after: "Q1", required: undefined });
++  assert.deepEqual(parseIntent("add a single choice question \"Do you own a car?\" with options Yes, No"), { kind: "add_question", type: "single choice", text: "Do you own a car?", options: ["Yes", "No"], after: undefined, required: undefined });
++  assert.deepEqual(parseIntent("add a question after Q3: Which brands do you buy?"), { kind: "add_question", type: undefined, text: "Which brands do you buy?", options: undefined, after: "Q3", required: undefined });
++  assert.deepEqual(parseIntent("Add a required multi-select question 'Which brands?' with options Coke, Pepsi and Fanta"), { kind: "add_question", type: "required multi-select", text: "'Which brands?'", options: ["Coke", "Pepsi", "Fanta"], after: undefined, required: undefined });
++  assert.deepEqual(parseIntent("add a numeric question “Age?” after Q1, required"), { kind: "add_question", type: "numeric", text: "Age?", options: undefined, after: "Q1", required: true });
++  assert.deepEqual(parseIntent("insert an email question"), { kind: "add_question", type: "email", text: "", options: undefined, after: undefined, required: undefined });
++});
++
++test("grammar: find and explain", () => {
++  assert.deepEqual(parseIntent("What depends on Q3?"), { kind: "find", target: "Q3", relation: "usedBy" });
++  assert.deepEqual(parseIntent("which questions use Q3"), { kind: "find", target: "Q3", relation: "usedBy" });
++  assert.deepEqual(parseIntent("find everything that references AGE"), { kind: "find", target: "AGE", relation: "usedBy" });
++  assert.deepEqual(parseIntent("what does Q4 depend on?"), { kind: "find", target: "Q4", relation: "dependsOn" });
++  assert.deepEqual(parseIntent("what does Q3 affect"), { kind: "find", target: "Q3", relation: "affects" });
++  assert.deepEqual(parseIntent("what can affect Q4?"), { kind: "find", target: "Q4", relation: "reach" });
++  assert.deepEqual(parseIntent("explain Q4"), { kind: "explain", target: "Q4" });
++  assert.deepEqual(parseIntent("why is Q4 shown?"), { kind: "explain", target: "Q4" });
++  assert.equal(parseIntent("make me a sandwich").kind, "unknown");
++  assert.equal(parseIntent("").kind, "unknown");
++  for (const e of EXAMPLES) assert.notEqual(parseIntent(e.text).kind, "unknown", `example “${e.text}” must parse`);
++});
++
++/* ---------------------------------------------------------------- planner */
++
++test("normaliseExpression bridges everyday operators to the parser's", () => {
++  assert.equal(normaliseExpression("Q1 is at least 18 and Q3 was selected"), "Q1 >= 18 and Q3 selected");
++  assert.equal(normaliseExpression("Q1 is greater than 2 or Q2 isn't Business."), "Q1 > 2 or Q2 is not Business");
++  assert.equal(normaliseExpression("the answer to Q3 equals Yes"), "Q3 = Yes");
++  assert.equal(normaliseExpression("Q2 = A"), "Q2 = A", "already-canonical text is untouched");
++  assert.equal(normaliseExpression("Q4 = United States and Q3 >= 18"), 'Q4 = "United States" and Q3 >= 18', "a multi-word operand is quoted");
++  assert.equal(normaliseExpression("Q2 is not Small business or Q1 > 2"), 'Q2 is not "Small business" or Q1 > 2');
++  assert.equal(normaliseExpression('Q4 = "United States"'), 'Q4 = "United States"', "already quoted stays as it is");
++});
++
++test("resolveTarget finds questions by code, variable, text; pages and blocks by title and number", () => {
++  const def = survey();
++  assert.equal(resolveTarget(def, "Q3")?.id, "q_car");
++  assert.equal(resolveTarget(def, "income")?.id, "q_income");
++  assert.equal(resolveTarget(def, "the income question")?.id, "q_income");
++  assert.equal(resolveTarget(def, "how old")?.id, "q_age");
++  assert.deepEqual(resolveTarget(def, "page 3"), { kind: "page", id: "p3", label: "Wrap up" });
++  assert.deepEqual(resolveTarget(def, "page Screener"), { kind: "page", id: "p1", label: "Screener" });
++  assert.deepEqual(resolveTarget(def, "block Main"), { kind: "block", id: "b_main", label: "Main" });
++  assert.equal(resolveTarget(def, "Q99"), null);
++  assert.equal(variantForWords("multiple choice"), "multi_select.checkbox");
++  assert.equal(variantForWords("numeric"), "numeric.open");
++  assert.equal(variantForWords(undefined), "single_select.radio");
++});
++
++test("a display proposal carries the parsed condition three ways and validates before Apply is offered", () => {
++  const def = survey();
++  const p = planProposal(def, parseIntent("show Q5 only when Q3 is Yes and Q1 is at least 18"), "grammar", deps(def));
++  assert.deepEqual(p.errors, []);
++  assert.equal(p.summary, "Show Q5 only when (Q3 is “Yes” AND Q1 is at least “18”).");
++  assert.equal(p.expression?.canonical, "Q3 = Yes AND Q1 >= 18");
++  assert.equal(p.changes.length, 1);
++  assert.equal(p.descriptions[0], "Show Q5 only when (Q3 is “Yes” AND Q1 is at least “18”).");
++  assert.equal(p.targetKey, "question:q_end");
++  assert.equal(p.readOnly, false);
++  // nothing was written
++  assert.equal(def.questions.find((q) => q.id === "q_end")!.displayLogic, undefined);
++  // and applying is the engine's job
++  const r = applyLogicProposal(def, p.changes);
++  assert.equal(r.applied, 1);
++  assert.ok(def.questions.find((q) => q.id === "q_end")!.displayLogic);
++});
++
++test("hide → NOT; a page target → display rule; a bad expression → errors, no changes", () => {
++  const def = survey();
++  const hide = planProposal(def, parseIntent("hide Q5 when Q2 = B"), "grammar", deps(def));
++  assert.equal(hide.changes[0].kind, "set_display_logic");
++  assert.equal(hide.expression?.canonical, "Q2 = B");
++  assert.equal(hide.descriptions[0], "Show Q5 only when not Q2 is “Business”.");
++  const page = planProposal(def, parseIntent("hide page 3 if Q2 is Business"), "grammar", deps(def));
++  assert.equal(page.changes[0].kind, "add_display_rule");
++  assert.match(page.descriptions[0], /^Hide page Wrap up when /);
++  const bad = planProposal(def, parseIntent("show Q5 when Q77 = 1"), "grammar", deps(def));
++  assert.ok(bad.errors.length >= 1);
++  assert.equal(bad.changes.length, 0);
++  const future = planProposal(def, parseIntent("show Q1 when Q5 answered"), "grammar", deps(def));
++  assert.match(future.errors[0], /asked after/);
++  assert.equal(future.changes.length, 1, "the change is built but blocked");
++  const replace = planProposal(def, parseIntent("show Q4 when Q2 = A"), "grammar", deps(def));
++  assert.match(replace.warnings[0], /already has display logic/);
++  const unknown = planProposal(def, parseIntent("show Q9 when Q1 > 1"), "grammar", deps(def));
++  assert.match(unknown.errors[0], /could not find “Q9”/);
++});
++
++test("a skip proposal lands on the triggering question and understands end / screen out", () => {
++  const def = survey();
++  const p = planProposal(def, parseIntent("skip to Q5 when Q3 = No"), "grammar", deps(def));
++  assert.deepEqual(p.errors, []);
++  assert.equal(p.changes[0].kind, "add_skip_rule");
++  assert.equal((p.changes[0] as { questionId: string }).questionId, "q_car", "the rule sits on the last question the condition reads");
++  assert.equal(p.summary, "After Q3, skip to Q5 when Q3 is “No”.");
++  const two = planProposal(def, parseIntent("skip to Q5 when Q1 > 18 and Q3 = No"), "grammar", deps(def));
++  assert.equal((two.changes[0] as { questionId: string }).questionId, "q_car", "the LAST question read, in flow order — by then every answer is known");
++  const out = planProposal(def, parseIntent("screen out when Q1 < 18"), "grammar", deps(def));
++  assert.deepEqual(out.errors, []);
++  assert.match(out.descriptions[0], /skip out of the survey as screened when Q1 is less than “18”/);
++  const end = planProposal(def, parseIntent("after Q2, go to the end if Q2 = B"), "grammar", deps(def));
++  assert.deepEqual(end.errors, []);
++  assert.match(end.descriptions[0], /^After Q2, skip to the end \(complete\)/);
++  const back = planProposal(def, parseIntent("after Q3, skip to Q1 when Q3 = No"), "grammar", deps(def));
++  assert.match(back.errors[0], /jump forward/);
++});
++
++test("required, rename and add-question proposals", () => {
++  const def = survey();
++  const req = planProposal(def, parseIntent("make Q4 required"), "grammar", deps(def));
++  assert.deepEqual(req.descriptions, ["Make Q4 required."]);
++  const again = planProposal(def, parseIntent("Q1 is optional"), "grammar", deps(def));
++  assert.match(again.warnings[0], /already optional/);
++  const ren = planProposal(def, parseIntent("rename AGE to RESP_AGE"), "grammar", deps(def));
++  assert.deepEqual(ren.errors, []);
++  assert.equal(ren.summary, "Rename AGE to RESP_AGE.");
++  const badRen = planProposal(def, parseIntent("rename Q1 to TYPE"), "grammar", deps(def));
++  assert.ok(badRen.errors.length >= 1, "renaming onto a taken name is refused by the engine's rename");
++
++  const add = planProposal(def, parseIntent("add a single choice question “Do you rent?” after Q3 with options Yes, No"), "grammar", deps(def));
++  assert.deepEqual(add.errors, []);
++  const ch = add.changes[0];
++  assert.equal(ch.kind, "add_question");
++  if (ch.kind !== "add_question") return;
++  assert.equal(ch.question.text, "Do you rent?");
++  assert.deepEqual(ch.question.options.map((o) => o.label), ["Yes", "No"]);
++  assert.deepEqual(ch.at, { pageId: "p2", index: 1 });
++  assert.match(add.summary, /^Add Q6 after Q3: “Do you rent\?”/);
++  const bare = planProposal(def, parseIntent("add a single select question"), "grammar", deps(def));
++  assert.ok(bare.warnings.some((w) => /no text/.test(w)) && bare.warnings.some((w) => /No options/.test(w)));
++});
++
++test("find and explain answer from the dependency index and never propose changes", () => {
++  const def = survey();
++  const f = planProposal(def, parseIntent("what depends on Q3?"), "grammar", deps(def));
++  assert.equal(f.readOnly, true);
++  assert.deepEqual(f.changes, []);
++  assert.deepEqual(f.answer?.map((a) => a.key), ["question:q_income"]);
++  assert.equal(f.summary, "1 object depend on Q3.".replace("depend", "depend"));
++  const d = planProposal(def, parseIntent("what does Q4 depend on"), "grammar", deps(def));
++  assert.deepEqual(d.answer?.map((a) => a.text), ["Q3"]);
++  const none = planProposal(def, parseIntent("what depends on Q5"), "grammar", deps(def));
++  assert.equal(none.summary, "Nothing depends on Q5.");
++  const e = planProposal(def, parseIntent("explain Q4"), "grammar", deps(def));
++  assert.equal(e.readOnly, true);
++  assert.ok(e.answer!.some((l) => /Shown when Q3 is “Yes”/.test(l.text)));
++  assert.ok(e.answer!.some((l) => /It reads: Q3/.test(l.text)));
++  const u = planProposal(def, parseIntent("make me a sandwich"), "grammar", deps(def));
++  assert.equal(u.errors.length, 1);
++});
++
++/* ---------------------------------------------------------------- context */
++
++test("surveyContext lists questions in flow order with options and logic, bounded", () => {
++  const def = survey();
++  const c = surveyContext(def, { selectedId: "q_car" });
++  assert.match(c, /^Survey: Intelligent \(5 questions\)/);
++  assert.match(c, /## Page 1: Screener \[p1\]/);
++  assert.match(c, /Q3 \(CAR\) · single select · "Do you own a car\?" · options: 1=Yes, 2=No · ← selected/);
++  assert.match(c, /Q4 \(INCOME\) · numeric · "Household income" · shown when Q3 is “Yes”/);
++  assert.ok(c.indexOf("Q1 (AGE)") < c.indexOf("Q3 (CAR)") && c.indexOf("Q3 (CAR)") < c.indexOf("Q5 (E)"));
++  const big = SurveyDefinition.parse({
++    meta: { id: "b", code: "B", title: "Big" },
++    questions: Array.from({ length: 30 }, (_, i) => ({ id: `q${i + 1}`, code: `Q${i + 1}`, variableName: `V${i + 1}`, type: "numeric", text: `Question ${i + 1}` })),
++    flow: [{ type: "page", id: "p", questionIds: Array.from({ length: 30 }, (_, i) => `q${i + 1}`) }],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++  const tight = surveyContext(big, { limit: 3, selectedId: "q20" });
++  assert.match(tight, /Q3 \(V3\)/, "the first `limit` in full");
++  assert.doesNotMatch(tight, /Q10 \(V10\)/, "beyond it, code only");
++  assert.match(tight, /Q20 \(V20\) · numeric · "Question 20" · ← selected/, "the selected question is always in full");
++  assert.match(tight, /Q15 \(V15\)/, "and its neighbours");
++  assert.match(tight, /Other questions \(by code\): Q4, Q5, .*Q14, Q26, .*Q30/);
++});
++
++/* --------------------------------------------------------------- the model */
++
++test("coerceIntent admits only the shapes the planner knows", async () => {
++  const { coerceIntent, logicUserPrompt, LOGIC_SYSTEM_PROMPT } = await import("./ai.ts");
++  assert.deepEqual(coerceIntent({ kind: "display", target: "Q5", action: "hide", expression: "Q3 = No" }), { kind: "display", target: "Q5", action: "hide", expression: "Q3 = No" });
++  assert.deepEqual(coerceIntent({ kind: "display", target: "Q5", action: "nonsense", expression: "Q3 = No" })?.kind === "display" && (coerceIntent({ kind: "display", target: "Q5", action: "nonsense", expression: "Q3 = No" }) as { action: string }).action, "show", "an unknown action falls back to show, never to a write");
++  assert.equal(coerceIntent({ kind: "display", target: "Q5" }), null, "no expression, no intent");
++  assert.equal(coerceIntent({}), null, "the fake provider's empty object is not an intent");
++  assert.equal(coerceIntent({ kind: "delete_everything" }), null);
++  assert.equal(coerceIntent({ kind: "rename", target: "Q1", newName: "1bad" }), null, "an unusable name is refused before the engine sees it");
++  assert.deepEqual(coerceIntent({ kind: "find", target: "Q3", relation: "affects" }), { kind: "find", target: "Q3", relation: "affects" });
++  assert.equal(coerceIntent({ kind: "find", target: "Q3", relation: "everything" }), null);
++  assert.deepEqual(coerceIntent({ kind: "add_question", type: "numeric", text: " Age? ", options: ["", "A", 3], required: "yes" }), { kind: "add_question", type: "numeric", text: "Age?", options: ["A"], after: undefined, required: undefined });
++  assert.deepEqual(coerceIntent({ kind: "unknown" }), { kind: "unknown", reason: "I did not understand that." });
++  assert.match(logicUserPrompt("CTX", " show Q5 ", "Q3"), /^CTX\n\nSelected: Q3\nSentence: show Q5$/);
++  assert.match(LOGIC_SYSTEM_PROMPT, /Never invent codes/);
++  // every shape the prompt promises, the coercer accepts
++  for (const k of ["display", "skip", "required", "add_question", "rename", "find", "explain", "unknown"]) assert.match(LOGIC_SYSTEM_PROMPT, new RegExp(`"kind":"${k}"`));
++});
+diff --git a/apps/studio/lib/intelligent/proposal.ts b/apps/studio/lib/intelligent/proposal.ts
+new file mode 100644
+index 0000000..f941cb8
+--- /dev/null
++++ b/apps/studio/lib/intelligent/proposal.ts
+@@ -0,0 +1,405 @@
++import type { Condition, Question, SkipRule, SurveyDefinition } from "@rescript/schema";
++import { cond } from "@rescript/schema";
++import {
++  parseLogicExpression, formatCondition, conditionSummary, questionLogicSummary,
++  getQuestionByCodeOrVar, listPages, listBlocks, questionOrder, conditionRefs,
++  validateProposal, describeChange, objectKey, neighbours,
++  type ProposalChange, type ExpressionError, type DependencyIndex, type ObjectKey,
++} from "@rescript/engine";
++
++/**
++ * THE INTELLIGENT MODE'S CONTRACT: sentence → INTENT → PROPOSAL → (Apply).
++ *
++ * An INTENT is the structured reading of what the programmer asked for —
++ * "show Q5 when <expression>", "add a numeric question", "what depends on
++ * Q3". It is deliberately provider-independent: the deterministic grammar
++ * (`grammar.ts`) produces one from a sentence with no network at all, and
++ * the language model, when it is configured, is asked for exactly the same
++ * shape. So there is ONE planner, below, that turns an intent into a
++ * proposal, and the model never gets to write logic in any form the parser
++ * does not check.
++ *
++ * The condition inside an intent is EXPRESSION TEXT — the same language the
++ * expression editor speaks (`Q3 = Yes AND Q4 > 2`) — and it goes through
++ * `parseLogicExpression` against the real survey, so a rule that names a
++ * question which does not exist, or compares an option that is not there,
++ * is an error on the review card, not a rule in the survey.
++ *
++ * A PROPOSAL is what the review card shows: the summary, every change in
++ * words (`describeChange`, the same words the Logic panel will use once it
++ * is applied), the parsed condition three ways (text, summary, tree), and
++ * the errors that block Apply. Nothing in this module writes to a survey.
++ */
++
++export type Intent =
++  | { kind: "display"; target: string; action: "show" | "hide"; expression: string }
++  | { kind: "skip"; from?: string; to: string; expression: string }
++  | { kind: "required"; target: string; required: boolean }
++  | { kind: "add_question"; type?: string; text: string; options?: string[]; after?: string; required?: boolean }
++  | { kind: "rename"; target: string; newName: string }
++  | { kind: "find"; target: string; relation: "usedBy" | "dependsOn" | "affects" | "reach" }
++  | { kind: "explain"; target: string }
++  | { kind: "unknown"; reason: string };
++
++export interface ProposalExpression {
++  /** as typed (after the light normalisation) */
++  text: string;
++  /** canonical spelling, from the tree — what the expression editor would show */
++  canonical: string;
++  /** the Logic panel's sentence */
++  summary: string;
++  condition?: Condition;
++  errors: ExpressionError[];
++  warnings: ExpressionError[];
++}
++
++export interface AnswerLine { text: string; key?: ObjectKey }
++
++export interface Proposal {
++  intent: Intent;
++  source: "grammar" | "ai";
++  /** one line: what will happen */
++  summary: string;
++  changes: ProposalChange[];
++  /** one line per change, in the Logic panel's words */
++  descriptions: string[];
++  expression?: ProposalExpression;
++  /** the object the proposal is about, for the inspector and for selection after Apply */
++  targetKey?: ObjectKey;
++  /** anything here blocks Apply */
++  errors: string[];
++  warnings: string[];
++  /** a read-only intent's answer — find / explain */
++  answer?: AnswerLine[];
++  readOnly: boolean;
++}
++
++/** what the planner needs from the Studio that the engine does not own */
++export interface PlannerDeps {
++  uid(prefix: string): string;
++  /** build a question of a variant, named for this survey — the Studio's own factory */
++  makeQuestion(def: SurveyDefinition, variantId: string): Question;
++  /** the dependency index, for find / explain */
++  index?: DependencyIndex;
++}
++
++/* ------------------------------------------------------------ expressions */
++
++/**
++ * The expression parser speaks `Q3 = Yes AND Q4 > 2`; people write "Q3 is
++ * yes and Q4 is greater than 2". These rewrites bridge the everyday
++ * spellings to the ones the parser already knows. They are textual and
++ * conservative: nothing here decides what a rule MEANS, only how an operator
++ * is spelled, and the parser still has the last word.
++ */
++const REWRITES: [RegExp, string][] = [
++  [/\bis\s+(?:greater|more|higher|bigger)\s+than\s+or\s+equal\s+to\b/gi, ">="],
++  [/\bis\s+(?:less|lower|smaller|fewer)\s+than\s+or\s+equal\s+to\b/gi, "<="],
++  [/\b(?:is\s+)?(?:greater|more|higher|bigger)\s+than\b/gi, ">"],
++  [/\b(?:is\s+)?(?:less|lower|smaller|fewer)\s+than\b/gi, "<"],
++  [/\b(?:is\s+)?at\s+least\b/gi, ">="],
++  [/\b(?:is\s+)?at\s+most\b/gi, "<="],
++  [/\b(?:is\s+)?(?:equal\s+to|equals)\b/gi, "="],
++  [/\b(?:does\s+not|doesn't|didn't|did\s+not)\s+(?:equal|contain|include)\b/gi, "is not"],
++  [/\b(?:is\s+not|isn't|was\s+not|wasn't)\s+(?:selected|chosen|picked|ticked)\b/gi, "not selected"],
++  [/\b(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, "selected"],
++  [/\b(?:includes?|selected)\s+(?:the\s+)?(?:option|answer|choice)\b/gi, "contains"],
++  [/\b(?:is|was|has\s+been)\s+answered\b/gi, "answered"],
++  [/\b(?:is|was)\s+(?:blank|empty|unanswered|skipped|not\s+answered)\b/gi, "unanswered"],
++  [/\b(?:isn't|is\s+not|was\s+not|wasn't)\b/gi, "is not"],
++  [/\b(?:was|are|were|has|have)\b/gi, "is"],
++  [/\bthe\s+(?:answer|response|value)\s+(?:to|of|for)\s+/gi, ""],
++  [/\b(?:respondent|they|the\s+user|the\s+person)\s+(?:answered|said|chose|selected|picked)\s+/gi, ""],
++  [/\bin\s+([A-Za-z_][\w.]*)\s+(?:is|=)\s+/gi, "$1 = "],
++  [/\bmore\s+than\s+or\s+=\b/gi, ">="],
++];
++
++/**
++ * A multi-word operand gets quotes: `Q4 = United States` is what people
++ * write, `Q4 = "United States"` is what the parser reads. Only bare words
++ * (no quotes, no digits-only tokens) up to the next AND/OR/parenthesis.
++ */
++const OPERAND_AFTER = /((?:^|\s)(?:=|!=|<>|>=|<=|>|<|is not|is|not contains|contains|not selected|selected|matches|starts with|ends with))\s+((?!and\b|or\b|not\b|then\b)[A-Za-z][\w'’\-\/]*(?:\s+(?!and\b|or\b|not\b|then\b)[A-Za-z0-9][\w'’\-\/]*)+)(?=\s+(?:and|or|then)\b|\s*\)|$)/gi;
++
++export function normaliseExpression(text: string): string {
++  let out = text.trim().replace(/[.?!]+$/, "");
++  for (const [re, to] of REWRITES) out = out.replace(re, to);
++  out = out.replace(OPERAND_AFTER, (_, op: string, words: string) => `${op} "${words}"`);
++  return out.replace(/\s+/g, " ").trim();
++}
++
++export function planExpression(def: SurveyDefinition, text: string): ProposalExpression {
++  const norm = normaliseExpression(text);
++  const r = parseLogicExpression(def, norm);
++  return {
++    text: norm,
++    canonical: r.condition ? formatCondition(def, r.condition) : "",
++    summary: r.condition ? conditionSummary(def, r.condition) : "",
++    condition: r.condition,
++    errors: r.errors,
++    warnings: r.warnings,
++  };
++}
++
++/* -------------------------------------------------------------- targets */
++
++export type Resolved =
++  | { kind: "question"; id: string; label: string; question: Question }
++  | { kind: "page" | "block"; id: string; label: string };
++
++const clean = (s: string) => s.replace(/<[^>]+>/g, "").trim().toLowerCase();
++
++/**
++ * A name in a sentence → the object it means. Codes and variable names
++ * first (the parser's own resolver), then a page or block by id or title,
++ * then a question by the start of its text — "the age question".
++ */
++export function resolveTarget(def: SurveyDefinition, raw: string): Resolved | null {
++  let token = raw.trim().replace(/^(?:the|question|q\.)\s+/i, "").replace(/\s+question$/i, "").replace(/[“”"']/g, "").trim();
++  if (!token) return null;
++  const q = getQuestionByCodeOrVar(def, token) ?? getQuestionByCodeOrVar(def, token.toUpperCase());
++  if (q) return { kind: "question", id: q.id, label: q.code || q.variableName, question: q };
++  const pageWord = /^(?:page|screen)\s+(.+)$/i.exec(token);
++  const blockWord = /^(?:block|section|group)\s+(.+)$/i.exec(token);
++  const pages = listPages(def.flow as unknown[]);
++  const blocks = listBlocks(def.flow as unknown[]);
++  const byName = <T extends { id: string; title?: string }>(items: T[], name: string): T | undefined =>
++    items.find((x) => x.id === name) ?? items.find((x) => clean(x.title ?? "") === clean(name)) ?? items.find((x) => clean(x.title ?? "").startsWith(clean(name)) && clean(name).length >= 3);
++  if (pageWord) {
++    const p = byName(pages.map((p) => ({ id: p.node.id, title: p.node.title })), pageWord[1]);
++    if (p) return { kind: "page", id: p.id, label: p.title || p.id };
++    const n = Number(pageWord[1]);
++    if (Number.isInteger(n) && pages[n - 1]) return { kind: "page", id: pages[n - 1].node.id, label: pages[n - 1].node.title || `Page ${n}` };
++  }
++  if (blockWord) {
++    const b = byName(blocks.map((b) => ({ id: b.id, title: b.title })), blockWord[1]);
++    if (b) return { kind: "block", id: b.id, label: b.title || b.id };
++    const n = Number(blockWord[1]);
++    if (Number.isInteger(n) && blocks[n - 1]) return { kind: "block", id: blocks[n - 1].id, label: blocks[n - 1].title || `Block ${n}` };
++  }
++  const b = byName(blocks.map((b) => ({ id: b.id, title: b.title })), token);
++  if (b) return { kind: "block", id: b.id, label: b.title || b.id };
++  const p = byName(pages.map((p) => ({ id: p.node.id, title: p.node.title })), token);
++  if (p) return { kind: "page", id: p.id, label: p.title || p.id };
++  const t = clean(token);
++  if (t.length >= 4) {
++    const byText = def.questions.find((x) => clean(x.text).startsWith(t)) ?? def.questions.find((x) => clean(x.text).includes(t));
++    if (byText) return { kind: "question", id: byText.id, label: byText.code || byText.variableName, question: byText };
++  }
++  return null;
++}
++
++/* ------------------------------------------------------- question types */
++
++/** everyday words for a kind of question → a variant the picker offers */
++const TYPE_WORDS: [RegExp, string][] = [
++  [/\b(?:multi(?:ple)?[\s-]?(?:select|choice|answer)|check ?box(?:es)?|select all|pick all)\b/i, "multi_select.checkbox"],
++  [/\bdrop ?down\b/i, "single_select.dropdown"],
++  [/\bnps\b|net promoter/i, "single_select.nps"],
++  [/\blikert\b/i, "matrix.likert"],
++  [/\b(?:matrix|grid)\b/i, "matrix.single"],
++  [/\brank(?:ing)?\b/i, "ranking.drag"],
++  [/\bslider\b/i, "slider.single"],
++  [/\bstar(?:s| rating)?\b/i, "slider.stars"],
++  [/\brating\b|\bscale\b/i, "matrix.rating"],
++  [/\be-?mail\b/i, "text.email"],
++  [/\bphone\b/i, "text.phone"],
++  [/\b(?:number|numeric|numerical|integer|count|how many|age)\b/i, "numeric.open"],
++  [/\bcurrency|price|amount|spend\b/i, "numeric.currency"],
++  [/\bpercent(?:age)?\b/i, "numeric.percentage"],
++  [/\b(?:long|essay|paragraph|multi[\s-]?line)\b/i, "text.multi_line"],
++  [/\b(?:open[\s-]?end(?:ed)?|free[\s-]?text|text|comment|verbatim|open)\b/i, "text.single_line"],
++  [/\b(?:yes\s*\/?\s*no|yes or no|boolean)\b/i, "single_select.radio"],
++  [/\b(?:single[\s-]?(?:select|choice|answer)|radio|choice|choose one|pick one|select one)\b/i, "single_select.radio"],
++];
++
++export function variantForWords(words: string | undefined): string {
++  if (!words) return "single_select.radio";
++  for (const [re, id] of TYPE_WORDS) if (re.test(words)) return id;
++  return "single_select.radio";
++}
++
++/* --------------------------------------------------------------- planner */
++
++const withKey = (r: Resolved): ObjectKey => objectKey(r.kind === "question" ? "question" : "flowNode", r.id);
++
++/**
++ * Turn an intent into a proposal against THIS survey. Pure: reads the
++ * definition, builds changes, validates them, writes nothing.
++ */
++export function planProposal(def: SurveyDefinition, intent: Intent, source: Proposal["source"], deps: PlannerDeps): Proposal {
++  const base = (p: Partial<Proposal>): Proposal => ({
++    intent, source, summary: "", changes: [], descriptions: [], errors: [], warnings: [], readOnly: false, ...p,
++  });
++  const finish = (p: Proposal): Proposal => {
++    const errs = p.errors.length ? p.errors : validateProposal(def, p.changes);
++    return { ...p, errors: errs, descriptions: p.changes.map((c) => describeChange(def, c)) };
++  };
++  const missing = (what: string) => base({ summary: "", errors: [`I could not find ${what} in this survey.`] });
++
++  switch (intent.kind) {
++    case "display": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      const ex = planExpression(def, intent.expression);
++      const errors = ex.errors.map((e) => e.message);
++      const warnings = ex.warnings.map((w) => w.message);
++      if (!ex.condition) return base({ summary: `${intent.action === "show" ? "Show" : "Hide"} ${t.label} when …`, expression: ex, targetKey: withKey(t), errors, warnings });
++      // "hide when X" on a question is "show when NOT X" — one field, one meaning
++      const shown: Condition = intent.action === "show" ? ex.condition : cond.not(ex.condition);
++      const changes: ProposalChange[] = t.kind === "question"
++        ? [{ kind: "set_display_logic", questionId: t.id, condition: shown }]
++        : [{ kind: "add_display_rule", rule: { id: deps.uid("dr"), target: { kind: t.kind, ref: t.id }, action: intent.action, when: ex.condition } }];
++      if (t.kind === "question" && t.question.displayLogic) warnings.push(`${t.label} already has display logic (${conditionSummary(def, t.question.displayLogic)}); this replaces it.`);
++      return finish(base({
++        summary: `${intent.action === "show" ? "Show" : "Hide"} ${t.label} ${intent.action === "show" ? "only " : ""}when ${ex.summary}.`,
++        changes, expression: ex, targetKey: withKey(t), warnings,
++      }));
++    }
++    case "skip": {
++      const ex = planExpression(def, intent.expression);
++      const errors = ex.errors.map((e) => e.message);
++      const warnings = ex.warnings.map((w) => w.message);
++      const toWord = intent.to.trim().toLowerCase();
++      let target: SkipRule["target"] | null = null;
++      let toLabel = intent.to;
++      let toKey: ObjectKey | undefined;
++      const status = /screen/.test(toWord) ? "screened" : /quota/.test(toWord) ? "quota_full" : /terminat/.test(toWord) ? "terminated" : /complete|end/.test(toWord) ? "complete" : undefined;
++      if (/^(?:the\s+)?(?:end|finish|completion)(?:\s+of\s+the\s+survey)?$/.test(toWord) || (status === "complete" && /end/.test(toWord))) { target = { kind: "end", status: "complete" }; toLabel = "the end"; }
++      else if (/terminat|screen|disqualif|quota|out\b|exit/.test(toWord)) { target = { kind: "terminate", status: status ?? "terminated" }; toLabel = `out of the survey (${(status ?? "terminated").replace("_", " ")})`; }
++      else if (/^https?:\/\//.test(intent.to.trim())) { target = { kind: "url", ref: intent.to.trim() }; }
++      else {
++        const t = resolveTarget(def, intent.to);
++        if (!t) return missing(`“${intent.to}”`);
++        target = t.kind === "question" ? { kind: "question", ref: t.id } : { kind: t.kind, ref: t.id };
++        toLabel = t.label; toKey = withKey(t);
++      }
++      // the rule lives on the question that triggers it: the one named, else
++      // the LAST question the condition reads (its answer is known by then)
++      let from: Resolved | null = intent.from ? resolveTarget(def, intent.from) : null;
++      if (intent.from && !from) return missing(`“${intent.from}”`);
++      if (!from && ex.condition) {
++        const order = questionOrder(def);
++        const refs = [...conditionRefs(def, ex.condition)].sort((a, b) => order.indexOf(a) - order.indexOf(b));
++        const last = refs[refs.length - 1];
++        const q = last ? def.questions.find((x) => x.id === last) : undefined;
++        if (q) from = { kind: "question", id: q.id, label: q.code || q.variableName, question: q };
++      }
++      if (!ex.condition) return base({ summary: `Skip to ${toLabel} when …`, expression: ex, targetKey: toKey, errors, warnings });
++      if (!from || from.kind !== "question") return base({ summary: `Skip to ${toLabel}`, expression: ex, errors: [...errors, "I could not tell which question the skip should follow — say “after Q3, skip to …”."], warnings });
++      const rule: SkipRule = { id: deps.uid("sk"), when: ex.condition, target: target! };
++      return finish(base({
++        summary: `After ${from.label}, skip to ${toLabel} when ${ex.summary}.`,
++        changes: [{ kind: "add_skip_rule", questionId: from.id, rule }],
++        expression: ex, targetKey: objectKey("question", from.id), warnings,
++      }));
++    }
++    case "required": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; only a question can be required.`] });
++      const warnings = t.question.required === intent.required ? [`${t.label} is already ${intent.required ? "required" : "optional"}.`] : [];
++      return finish(base({
++        summary: `Make ${t.label} ${intent.required ? "required" : "optional"}.`,
++        changes: [{ kind: "set_required", questionId: t.id, required: intent.required }],
++        targetKey: withKey(t), warnings,
++      }));
++    }
++    case "add_question": {
++      const variant = variantForWords(intent.type);
++      const q = deps.makeQuestion(def, variant);
++      q.text = intent.text.trim();
++      if (intent.required) q.required = true;
++      if (intent.options?.length && Array.isArray(q.options)) {
++        q.options = intent.options.map((label, i) => ({ code: i + 1, label: label.trim(), flags: [] })) as Question["options"];
++      }
++      let at: { pageId?: string; index?: number } | undefined;
++      let afterLabel = "";
++      if (intent.after) {
++        const t = resolveTarget(def, intent.after);
++        if (!t) return missing(`“${intent.after}”`);
++        if (t.kind === "question") {
++          for (const p of listPages(def.flow as unknown[])) {
++            const k = p.node.questionIds.indexOf(t.id);
++            if (k >= 0) { at = { pageId: p.node.id, index: k + 1 }; break; }
++          }
++        } else if (t.kind === "page") at = { pageId: t.id };
++        afterLabel = ` after ${t.label}`;
++      }
++      const warnings: string[] = [];
++      if (!intent.text.trim()) warnings.push("The question has no text yet — add it after applying.");
++      if (/select/.test(variant) && !(q.options?.length)) warnings.push("No options given — add them after applying.");
++      return finish(base({
++        summary: `Add ${q.code}${afterLabel}: “${q.text || "(untitled)"}”.`,
++        changes: [{ kind: "add_question", question: q, at }],
++        targetKey: objectKey("question", q.id), warnings,
++      }));
++    }
++    case "rename": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; only a question's variable can be renamed.`] });
++      const newName = intent.newName.trim().replace(/[“”"']/g, "");
++      return finish(base({
++        summary: `Rename ${t.question.variableName} to ${newName}.`,
++        changes: [{ kind: "rename_variable", oldName: t.question.variableName, newName }],
++        targetKey: withKey(t),
++      }));
++    }
++    case "find": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      const key = withKey(t);
++      const ix = deps.index;
++      if (!ix) return base({ summary: "", errors: ["The dependency index is not available."], readOnly: true });
++      /*
++       * usedBy   — what reads T directly (a rule on Q5 that mentions Q3)
++       * dependsOn — what T reads directly
++       * affects  — everything downstream of T, transitively
++       * reach    — everything upstream of T, transitively
++       */
++      const keys = (intent.relation === "usedBy" ? neighbours(ix, key, "usedBy").map((n) => n.key)
++        : intent.relation === "dependsOn" ? neighbours(ix, key, "dependsOn").map((n) => n.key)
++        : intent.relation === "affects" ? ix.affects(key)
++        : ix.reach(key)).filter((k) => k !== key);
++      const phrase = { usedBy: "depend on", dependsOn: "are used by", affects: "can be affected by", reach: "can affect" }[intent.relation];
++      const none = { usedBy: `Nothing depends on ${t.label}.`, dependsOn: `${t.label} depends on nothing.`, affects: `Nothing is affected by ${t.label}.`, reach: `Nothing can affect ${t.label}.` }[intent.relation];
++      return base({
++        summary: keys.length ? `${keys.length} object${keys.length === 1 ? "" : "s"} ${phrase} ${t.label}.` : none,
++        answer: keys.map((k) => ({ text: labelFor(def, ix, k), key: k })),
++        targetKey: key, readOnly: true,
++      });
++    }
++    case "explain": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ summary: `${t.label} is a ${t.kind}.`, readOnly: true, targetKey: withKey(t), answer: [] });
++      const q = t.question;
++      const lines: AnswerLine[] = [];
++      lines.push({ text: `${q.code} (${q.variableName}) is a ${q.type.replace(/_/g, " ")} question${q.required ? ", required" : ", optional"}.` });
++      const logic = questionLogicSummary(def, q);
++      if (!logic.length && !q.skipLogic?.length) lines.push({ text: "It is always shown; nothing skips from it." });
++      for (const l of logic) lines.push({ text: l });
++      for (const r of q.skipLogic ?? []) lines.push({ text: describeChange(def, { kind: "add_skip_rule", questionId: q.id, rule: r }).replace(/^After [^,]+, skip/, "Skips") });
++      const ix = deps.index;
++      if (ix) {
++        const key = objectKey("question", q.id);
++        const users = neighbours(ix, key, "usedBy").map((n) => n.key).filter((k) => k !== key);
++        const reads = neighbours(ix, key, "dependsOn").map((n) => n.key).filter((k) => k !== key);
++        if (reads.length) lines.push({ text: `It reads: ${reads.map((k) => labelFor(def, ix, k)).join(", ")}.` });
++        if (users.length) lines.push({ text: `It is used by: ${users.map((k) => labelFor(def, ix, k)).join(", ")}.` });
++      }
++      return base({ summary: `About ${t.label}`, answer: lines, targetKey: withKey(t), readOnly: true });
++    }
++    case "unknown":
++      return base({ errors: [intent.reason], readOnly: true });
++  }
++}
++
++function labelFor(def: SurveyDefinition, ix: DependencyIndex, key: ObjectKey): string {
++  const n = ix.nodes.get(key);
++  if (n) return n.code || n.label;
++  const [kind, id] = key.split(":", 2);
++  if (kind === "question") { const q = def.questions.find((x) => x.id === id); if (q) return q.code || q.variableName; }
++  return key;
++}
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index 49cc1ef..4977053 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -25,11 +25,12 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
+ test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
+   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
+   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
+-  // Intelligent is declared but has no renderer yet: never open on an empty screen
+-  const intelligent = MODES.find((m) => m.id === "intelligent")!;
+-  assert.equal(intelligent.available, false, "this test assumes Intelligent is not yet built; update it when it is");
+-  assert.equal(resolveInitialMode("?mode=intelligent", null), DEFAULT_MODE);
+-  assert.equal(resolveInitialMode("?tab=logic", "intelligent"), DEFAULT_MODE);
++  // every declared mode now has a renderer (Phase 4 delivered Intelligent),
++  // so each one may be opened from the URL or from memory; the fallback
++  // below is exercised by values that name no mode at all
++  for (const m of MODES) assert.equal(m.available, true, `${m.id} has a renderer`);
++  assert.equal(resolveInitialMode("?mode=intelligent", null), "intelligent");
++  assert.equal(resolveInitialMode("?tab=logic", "intelligent"), "intelligent");
+   assert.equal(resolveInitialMode("?mode=flow", null), "flow");
+   // Grid and Architect ARE available: the URL and memory both work for them
+   assert.equal(resolveInitialMode("?mode=grid", null), "grid");
+@@ -241,9 +242,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
+ test("mode commands offer only available modes other than the current one", () => {
+   const ctx = fakeCtx();
+   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
+-  assert.deepEqual(ids, ["mode.grid", "mode.architect", "mode.flow"], "in Studio, the three other built modes are offered");
++  assert.deepEqual(ids, ["mode.grid", "mode.architect", "mode.flow", "mode.intelligent"], "in Studio, the four other built modes are offered");
+   const inGrid = fakeCtx({ mode: "grid" });
+-  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect", "mode.flow"]);
++  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect", "mode.flow", "mode.intelligent"]);
+ });
+ 
+ test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index 6150019..0fdd0b6 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -34,7 +34,7 @@ export const MODES: readonly ModeInfo[] = [
+   { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
+   { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: true, index: 3 },
+   { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: true, index: 4 },
+-  { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
++  { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: true, index: 5 },
+ ];
+ 
+ export const DEFAULT_MODE: ProgrammingMode = "studio";
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index f2bfe46..abcb686 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -79,3 +79,4 @@ export * from "./derivedNames.js";
+ export * from "./questionShape.js";
+ export * from "./interview.js";
+ export * from "./versionedDictionary.js";
++export * from "./logicProposal.js";
+diff --git a/packages/engine/src/logicProposal.test.ts b/packages/engine/src/logicProposal.test.ts
+new file mode 100644
+index 0000000..450e903
+--- /dev/null
++++ b/packages/engine/src/logicProposal.test.ts
+@@ -0,0 +1,130 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond, type Question } from "@rescript/schema";
++import { applyLogicProposal, validateProposal, describeChange, proposalTargets, type ProposalChange } from "./logicProposal.js";
++import { evaluateCondition } from "./evaluate.js";
++import { createResponseState } from "./state.js";
++
++const evalWith = (def: SurveyDefinition, c: NonNullable<Question["displayLogic"]>, answers: Record<string, unknown>) => {
++  const state = createResponseState(def, { seed: 1 });
++  Object.assign(state.answers, answers);
++  return evaluateCondition(c, { def, state, loop: null });
++};
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Proposals" },
++    questions: [
++      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "Age" },
++      { id: "q_type", code: "Q2", variableName: "TYPE", type: "single_select", text: "Type", options: [{ code: "A", label: "Consumer" }, { code: "B", label: "Business" }] },
++      { id: "q_c", code: "Q3", variableName: "C", type: "text", text: "Consumer only" },
++      { id: "q_end", code: "Q5", variableName: "E", type: "text", text: "Everyone" },
++    ],
++    flow: [
++      { type: "page", id: "p1", title: "Intro", questionIds: ["q_age", "q_type"] },
++      { type: "page", id: "p2", questionIds: ["q_c"] },
++      { type: "page", id: "p5", questionIds: ["q_end"] },
++      { type: "end", id: "e_ok", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++const show: ProposalChange = { kind: "set_display_logic", questionId: "q_c", condition: cond.rule("q_type", "eq", "A") };
++
++test("display logic lands on the question and evaluates through the one evaluator", () => {
++  const def = survey();
++  const r = applyLogicProposal(def, [show]);
++  assert.deepEqual(r.errors, []);
++  assert.equal(r.applied, 1);
++  assert.equal(r.def, def, "mutates in place — the store's clone is what comes back");
++  const q = def.questions.find((x) => x.id === "q_c")!;
++  assert.ok(q.displayLogic);
++  assert.equal(evalWith(def, q.displayLogic!, { q_type: "A" }), true);
++  assert.equal(evalWith(def, q.displayLogic!, { q_type: "B" }), false);
++  // and null clears it
++  applyLogicProposal(def, [{ kind: "set_display_logic", questionId: "q_c", condition: null }]);
++  assert.equal(q.displayLogic, undefined);
++});
++
++test("apply is all-or-nothing: one bad change and nothing is touched", () => {
++  const def = survey();
++  const r = applyLogicProposal(def, [
++    { kind: "set_required", questionId: "q_c", required: true },
++    { kind: "set_required", questionId: "q_missing", required: true },
++  ]);
++  assert.equal(r.applied, 0);
++  assert.equal(r.errors.length, 1);
++  assert.match(r.errors[0], /q_missing/);
++  assert.equal(def.questions.find((x) => x.id === "q_c")!.required, false, "the valid change was NOT applied");
++});
++
++test("validation refuses logic that reads the future or itself", () => {
++  const def = survey();
++  const later = validateProposal(def, [{ kind: "set_display_logic", questionId: "q_c", condition: cond.rule("q_end", "answered") }]);
++  assert.equal(later.length, 1);
++  assert.match(later[0], /asked after/);
++  const self = validateProposal(def, [{ kind: "set_display_logic", questionId: "q_c", condition: cond.rule("q_c", "answered") }]);
++  assert.equal(self.length, 1, "one error, not the same fault said twice");
++  assert.match(self[0], /its own answer/);
++  assert.deepEqual(validateProposal(def, [show]), []);
++});
++
++test("a skip rule must jump forward, to something that exists", () => {
++  const def = survey();
++  const rule = (target: ProposalChange & { kind: "add_skip_rule" } extends { rule: { target: infer T } } ? T : never) => ({
++    kind: "add_skip_rule" as const, questionId: "q_type",
++    rule: { id: "sk1", when: cond.rule("q_type", "eq", "B"), target },
++  });
++  assert.match(validateProposal(def, [rule({ kind: "question", ref: "q_age" })])[0], /jump forward/);
++  assert.match(validateProposal(def, [rule({ kind: "question", ref: "q_type" })])[0], /jump forward/, "a skip to itself is not forward");
++  assert.match(validateProposal(def, [rule({ kind: "question", ref: "q_nope" })])[0], /does not exist/);
++  assert.match(validateProposal(def, [rule({ kind: "page", ref: "p_nope" })])[0], /does not exist/);
++  assert.deepEqual(validateProposal(def, [rule({ kind: "question", ref: "q_end" })]), []);
++  assert.deepEqual(validateProposal(def, [rule({ kind: "terminate", status: "screened" })]), []);
++  const r = applyLogicProposal(def, [rule({ kind: "question", ref: "q_end" })]);
++  assert.equal(r.applied, 1);
++  assert.equal(def.questions.find((x) => x.id === "q_type")!.skipLogic.length, 1);
++  const r2 = applyLogicProposal(def, [{ ...rule({ kind: "terminate", status: "screened" }), rule: { id: "sk2", when: cond.rule("q_age", "lt", 18), target: { kind: "terminate", status: "screened" } } }]);
++  assert.equal(r2.applied, 1);
++  assert.equal(def.questions.find((x) => x.id === "q_type")!.skipLogic.length, 2, "a second rule is appended, not a replacement");
++  // the same rule id twice is refused
++  assert.match(validateProposal(def, [rule({ kind: "question", ref: "q_end" })])[0], /already exists/);
++});
++
++test("a display rule on a page or an option is checked against the flow and the options", () => {
++  const def = survey();
++  const when = cond.rule("q_type", "eq", "A");
++  assert.deepEqual(validateProposal(def, [{ kind: "add_display_rule", rule: { id: "dr1", target: { kind: "page", ref: "p2" }, action: "hide", when } }]), []);
++  assert.match(validateProposal(def, [{ kind: "add_display_rule", rule: { id: "dr1", target: { kind: "page", ref: "p9" }, action: "show", when } }])[0], /No page p9/);
++  assert.match(validateProposal(def, [{ kind: "add_display_rule", rule: { id: "dr1", target: { kind: "option", ref: "q_type", subRef: "Z" }, action: "show", when } }])[0], /no option Z/);
++  const r = applyLogicProposal(def, [{ kind: "add_display_rule", rule: { id: "dr1", target: { kind: "option", ref: "q_type", subRef: "B" }, action: "hide", when } }]);
++  assert.equal(r.applied, 1);
++  assert.equal(def.displayRules.length, 1);
++});
++
++test("adding a question places it and refuses a taken name; rename goes through the engine's rename", () => {
++  const def = survey();
++  const q = { id: "q_new", code: "Q4", variableName: "NEW", type: "single_select", text: "New?", options: [{ code: "1", label: "Yes" }], rows: [], columns: [], validation: [], required: false, settings: {}, skipLogic: [], listLogic: [] } as unknown as Question;
++  assert.match(validateProposal(def, [{ kind: "add_question", question: { ...q, code: "Q1" } }])[0], /Q1 is already in use/);
++  assert.match(validateProposal(def, [{ kind: "add_question", question: { ...q, variableName: "AGE" } }])[0], /AGE is already in use/);
++  const r = applyLogicProposal(def, [{ kind: "add_question", question: q, at: { pageId: "p2", index: 0 } }]);
++  assert.deepEqual(r.errors, []);
++  assert.deepEqual((def.flow[1] as { questionIds: string[] }).questionIds, ["q_new", "q_c"]);
++  assert.equal(def.questions.length, 5);
++
++  const bad = validateProposal(def, [{ kind: "rename_variable", oldName: "AGE", newName: "1BAD" }]);
++  assert.ok(bad.length >= 1 && /not a usable variable name/.test(bad[0]));
++  const ok = applyLogicProposal(def, [{ kind: "rename_variable", oldName: "AGE", newName: "RESP_AGE" }]);
++  assert.deepEqual(ok.errors, []);
++  assert.equal(ok.def.questions.find((x) => x.id === "q_age")!.variableName, "RESP_AGE");
++});
++
++test("describeChange says what will happen in the Logic panel's words; targets are what to select after", () => {
++  const def = survey();
++  assert.equal(describeChange(def, show), "Show Q3 only when Q2 is “Consumer”.");
++  assert.equal(describeChange(def, { kind: "set_required", questionId: "q_end", required: false }), "Make Q5 optional.");
++  assert.match(describeChange(def, { kind: "add_skip_rule", questionId: "q_type", rule: { id: "s", when: cond.rule("q_age", "lt", 18), target: { kind: "terminate", status: "screened" } } }), /^After Q2, skip out of the survey as screened when /);
++  assert.match(describeChange(def, { kind: "add_display_rule", rule: { id: "d", target: { kind: "page", ref: "p1" }, action: "hide", when: show.condition! } }), /^Hide page Intro when /);
++  assert.equal(describeChange(def, { kind: "rename_variable", oldName: "AGE", newName: "A2" }), "Rename AGE to A2 everywhere it is used.");
++  assert.deepEqual(proposalTargets([show, { kind: "set_required", questionId: "q_c", required: true }, { kind: "rename_variable", oldName: "A", newName: "B" }]), ["q_c"]);
++});
+diff --git a/packages/engine/src/logicProposal.ts b/packages/engine/src/logicProposal.ts
+new file mode 100644
+index 0000000..d76ead5
+--- /dev/null
++++ b/packages/engine/src/logicProposal.ts
+@@ -0,0 +1,235 @@
++import type { Condition, DisplayRule, Question, SkipRule, SurveyDefinition } from "@rescript/schema";
++import { listPages, listBlocks } from "./blocks.js";
++import { conditionRefs, questionOrder } from "./dependencies.js";
++import { addQuestion } from "./questionOps.js";
++import { renameVariable } from "./variableUsage.js";
++import { conditionSummary } from "./logicSummary.js";
++import { findNode } from "./flowTree.js";
++
++/**
++ * A LOGIC PROPOSAL — what the Intelligent mode asks permission to do.
++ *
++ * The brief's rule for the natural-language mode is absolute: it "must NEVER
++ * silently modify logic. Always show a review step." So a sentence typed by
++ * the programmer is never turned into a mutation directly. It becomes a list
++ * of CHANGES of the kinds below — a closed, typed vocabulary — which the
++ * review card renders in words, and which `applyLogicProposal` performs only
++ * when the programmer presses Apply.
++ *
++ * The vocabulary is deliberately small and every entry maps onto an edit the
++ * Studio already performs by hand: display logic on a question, a skip rule,
++ * a display rule on a page or block, the required flag, a new question, a
++ * variable rename. Nothing here is a new way to express logic; a change
++ * carries the canonical `Condition` tree the visual builder and the
++ * expression editor already produce, so the evaluator, the linter, the
++ * dependency index and the summaries all read the result without knowing
++ * where it came from.
++ *
++ * Whether the sentence came from the deterministic grammar or from a
++ * language model makes no difference on this side: both produce changes, and
++ * a change is checked (`validateProposal`) against the survey it will be
++ * applied to before Apply is even offered. A model that names a question
++ * which does not exist produces an error, not a broken survey.
++ */
++
++export type ProposalChange =
++  /** replace a question's display logic; `null` removes it */
++  | { kind: "set_display_logic"; questionId: string; condition: Condition | null }
++  /** a new skip rule on the question that triggers it */
++  | { kind: "add_skip_rule"; questionId: string; rule: SkipRule }
++  /** a survey-level display rule — for pages, blocks, options and rows */
++  | { kind: "add_display_rule"; rule: DisplayRule }
++  | { kind: "set_required"; questionId: string; required: boolean }
++  /** an already-built question (the Studio's factory builds it; the engine places it) */
++  | { kind: "add_question"; question: Question; at?: { pageId?: string; index?: number } }
++  | { kind: "rename_variable"; oldName: string; newName: string };
++
++export interface ProposalOutcome {
++  /** the definition after the changes — the same object when every change mutates in place */
++  def: SurveyDefinition;
++  applied: number;
++  /** why nothing was applied — Apply is all-or-nothing */
++  errors: string[];
++}
++
++const q = (def: SurveyDefinition, id: string): Question | undefined => def.questions.find((x) => x.id === id);
++const name = (def: SurveyDefinition, id: string): string => {
++  const x = q(def, id);
++  return x ? (x.code || x.variableName || x.id) : id;
++};
++
++/** the id of a page, block or section named by a rule target, or null */
++function flowTargetExists(def: SurveyDefinition, ref: string): boolean {
++  return !!findNode(def.flow as never, ref);
++}
++
++/**
++ * Every reason a change cannot be applied to THIS survey, in words. Empty
++ * means Apply is safe. Run before offering the button, and again inside
++ * `applyLogicProposal`, because the survey may have changed in between.
++ */
++export function validateProposal(def: SurveyDefinition, changes: ProposalChange[]): string[] {
++  const errors: string[] = [];
++  const order = questionOrder(def);
++  const at = (id: string) => order.indexOf(id);
++  for (const c of changes) {
++    switch (c.kind) {
++      case "set_display_logic": {
++        if (!q(def, c.questionId)) { errors.push(`No question ${c.questionId} to put display logic on.`); break; }
++        if (c.condition) {
++          const refs = conditionRefs(def, c.condition);
++          if (refs.has(c.questionId)) errors.push(`${name(def, c.questionId)} cannot be shown based on its own answer.`);
++          for (const r of refs) if (at(r) > at(c.questionId)) errors.push(`${name(def, r)} is asked after ${name(def, c.questionId)}, so its answer is not known yet.`);
++        }
++        break;
++      }
++      case "add_skip_rule": {
++        if (!q(def, c.questionId)) { errors.push(`No question ${c.questionId} to hold the skip rule.`); break; }
++        const t = c.rule.target;
++        if (t.kind === "question" && (!t.ref || !q(def, t.ref))) errors.push(`The skip target question ${t.ref ?? "?"} does not exist.`);
++        else if (t.kind === "question" && t.ref && at(t.ref) <= at(c.questionId)) errors.push(`A skip must jump forward: ${name(def, t.ref)} is not after ${name(def, c.questionId)}.`);
++        else if ((t.kind === "page" || t.kind === "block" || t.kind === "section") && (!t.ref || !flowTargetExists(def, t.ref))) errors.push(`The skip target ${t.kind} ${t.ref ?? "?"} does not exist.`);
++        else if (t.kind === "url" && !t.ref) errors.push("A skip to a URL needs the URL.");
++        if (!c.rule.when) errors.push("A skip rule needs a condition.");
++        if (q(def, c.questionId)?.skipLogic?.some((r) => r.id === c.rule.id)) errors.push(`Skip rule ${c.rule.id} already exists.`);
++        break;
++      }
++      case "add_display_rule": {
++        const t = c.rule.target;
++        if (t.kind === "question") { if (!q(def, t.ref)) errors.push(`No question ${t.ref} for the display rule.`); }
++        else if (t.kind === "option" || t.kind === "row" || t.kind === "column") {
++          const owner = q(def, t.ref);
++          if (!owner) errors.push(`No question ${t.ref} for the display rule.`);
++          else if (!t.subRef) errors.push(`The display rule needs the ${t.kind} it applies to.`);
++          else if (t.kind === "option" && !owner.options?.some((o) => String(o.code) === t.subRef)) errors.push(`${owner.code} has no option ${t.subRef}.`);
++          else if (t.kind === "row" && !owner.rows?.some((r) => String(r.code) === t.subRef)) errors.push(`${owner.code} has no row ${t.subRef}.`);
++        } else if (!flowTargetExists(def, t.ref)) errors.push(`No ${t.kind} ${t.ref} for the display rule.`);
++        if (def.displayRules?.some((r) => r.id === c.rule.id)) errors.push(`Display rule ${c.rule.id} already exists.`);
++        break;
++      }
++      case "set_required":
++        if (!q(def, c.questionId)) errors.push(`No question ${c.questionId} to make ${c.required ? "required" : "optional"}.`);
++        break;
++      case "add_question": {
++        if (def.questions.some((x) => x.id === c.question.id)) errors.push(`A question with id ${c.question.id} already exists.`);
++        const taken = new Set<string>();
++        for (const x of def.questions) { if (x.code) taken.add(x.code); if (x.variableName) taken.add(x.variableName); }
++        if (taken.has(c.question.code)) errors.push(`The code ${c.question.code} is already in use.`);
++        else if (taken.has(c.question.variableName)) errors.push(`The variable name ${c.question.variableName} is already in use.`);
++        if (c.at?.pageId && !listPages(def.flow as unknown[]).some((p) => p.node.id === c.at!.pageId)) errors.push(`No page ${c.at.pageId} to add the question to.`);
++        break;
++      }
++      case "rename_variable": {
++        const r = renameVariable(def, c.oldName, c.newName);
++        if (!r.ok) errors.push(...(r.impact.blockers.length ? r.impact.blockers : [`Cannot rename ${c.oldName} to ${c.newName}.`]));
++        break;
++      }
++    }
++  }
++  return errors;
++}
++
++/**
++ * One change, in a sentence the review card shows — what WILL happen, before
++ * it happens. Uses the same `conditionSummary` the Logic panel uses, so the
++ * proposal reads the way the applied rule will read afterwards.
++ */
++export function describeChange(def: SurveyDefinition, c: ProposalChange): string {
++  switch (c.kind) {
++    case "set_display_logic":
++      return c.condition
++        ? `Show ${name(def, c.questionId)} only when ${conditionSummary(def, c.condition)}.`
++        : `Remove the display logic from ${name(def, c.questionId)} (always shown).`;
++    case "add_skip_rule": {
++      const t = c.rule.target;
++      const where = t.kind === "question" ? `to ${name(def, t.ref ?? "")}`
++        : t.kind === "end" ? `to the end${t.status ? ` (${t.status.replace("_", " ")})` : ""}`
++        : t.kind === "terminate" ? `out of the survey${t.status ? ` as ${t.status.replace("_", " ")}` : ""}`
++        : t.kind === "url" ? `to ${t.ref}`
++        : `to ${t.kind} ${flowLabel(def, t.ref ?? "")}`;
++      return `After ${name(def, c.questionId)}, skip ${where} when ${conditionSummary(def, c.rule.when)}.`;
++    }
++    case "add_display_rule": {
++      const t = c.rule.target;
++      const what = t.kind === "question" ? name(def, t.ref)
++        : (t.kind === "option" || t.kind === "row" || t.kind === "column") ? `${t.kind} ${t.subRef} of ${name(def, t.ref)}`
++        : `${t.kind} ${flowLabel(def, t.ref)}`;
++      return `${c.rule.action === "hide" ? "Hide" : "Show"} ${what} when ${conditionSummary(def, c.rule.when)}.`;
++    }
++    case "set_required":
++      return `Make ${name(def, c.questionId)} ${c.required ? "required" : "optional"}.`;
++    case "add_question": {
++      const page = c.at?.pageId ? listPages(def.flow as unknown[]).find((p) => p.node.id === c.at!.pageId) : null;
++      const text = (c.question.text ?? "").replace(/<[^>]+>/g, "").trim();
++      return `Add ${c.question.code} (${c.question.type.replace(/_/g, " ")})${text ? ` — “${text}”` : ""}${page ? ` on ${page.node.title ?? page.node.id}` : " on the last page"}${c.question.options?.length ? `, ${c.question.options.length} options` : ""}.`;
++    }
++    case "rename_variable":
++      return `Rename ${c.oldName} to ${c.newName} everywhere it is used.`;
++  }
++}
++
++function flowLabel(def: SurveyDefinition, id: string): string {
++  const b = listBlocks(def.flow as unknown[]).find((x) => x.node.id === id);
++  if (b) return b.title || id;
++  const p = listPages(def.flow as unknown[]).find((x) => x.node.id === id);
++  return p?.node.title || id;
++}
++
++/**
++ * Perform a proposal. ALL-OR-NOTHING: if any change fails validation against
++ * the survey as it is now, nothing is touched and the errors come back. In
++ * the Studio this runs inside `store.update`, so the result is one undo
++ * step labelled with the proposal's summary.
++ *
++ * Mutates `def` in place for every change kind except the rename, whose
++ * engine operation returns a new definition; the returned `def` is what the
++ * caller should keep, either way.
++ */
++export function applyLogicProposal(def: SurveyDefinition, changes: ProposalChange[]): ProposalOutcome {
++  const errors = validateProposal(def, changes);
++  if (errors.length) return { def, applied: 0, errors };
++  let cur = def;
++  for (const c of changes) {
++    switch (c.kind) {
++      case "set_display_logic": {
++        const x = q(cur, c.questionId)!;
++        if (c.condition) x.displayLogic = c.condition; else delete (x as { displayLogic?: Condition }).displayLogic;
++        break;
++      }
++      case "add_skip_rule": {
++        const x = q(cur, c.questionId)!;
++        x.skipLogic = [...(x.skipLogic ?? []), c.rule];
++        break;
++      }
++      case "add_display_rule":
++        cur.displayRules = [...(cur.displayRules ?? []), c.rule];
++        break;
++      case "set_required":
++        q(cur, c.questionId)!.required = c.required;
++        break;
++      case "add_question":
++        addQuestion(cur, c.question, c.at ?? {});
++        break;
++      case "rename_variable": {
++        const r = renameVariable(cur, c.oldName, c.newName);
++        if (!r.ok) return { def, applied: 0, errors: r.impact.blockers.length ? r.impact.blockers : [`Cannot rename ${c.oldName}.`] };
++        // keep the caller's object identity when we can: the store hands out
++        // a clone and takes back the same reference
++        if (r.def !== cur) { Object.assign(cur, r.def); }
++        break;
++      }
++    }
++  }
++  return { def: cur, applied: changes.length, errors: [] };
++}
++
++/** the questions a proposal touches — for selecting them after Apply */
++export function proposalTargets(changes: ProposalChange[]): string[] {
++  const out: string[] = [];
++  for (const c of changes) {
++    if (c.kind === "set_display_logic" || c.kind === "add_skip_rule" || c.kind === "set_required") out.push(c.questionId);
++    else if (c.kind === "add_question") out.push(c.question.id);
++    else if (c.kind === "add_display_rule" && c.rule.target.kind === "question") out.push(c.rule.target.ref);
++  }
++  return [...new Set(out)];
++}
+diff --git a/scripts/intelligent-mode-test.mjs b/scripts/intelligent-mode-test.mjs
+new file mode 100644
+index 0000000..94666b3
+--- /dev/null
++++ b/scripts/intelligent-mode-test.mjs
+@@ -0,0 +1,321 @@
++/**
++ * INTELLIGENT MODE — describe, review, apply (Phase 4).
++ *
++ *   node scripts/intelligent-mode-test.mjs
++ *
++ * Runs against the Studio dev server. With no AI provider configured the
++ * mode runs on its deterministic grammar (badge "grammar only"); with
++ * AI_API_URL=fake: the route answers and the badge reads "grammar + model"
++ * — the fake returns no intent, so every proposal below still comes from
++ * the grammar. Either way the review step is what is tested: nothing is
++ * written until Apply.
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => {
++  if (m.type() !== "error") return;
++  const t = m.text();
++  if (/401|501|ERR_TUNNEL|Failed to load resource/.test(t)) return;
++  pageErrors.push(t.slice(0, 400));
++});
++
++const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
++const loadDef = async (def) => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => {
++    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v);
++    el.dispatchEvent(new Event("input", { bubbles: true }));
++  }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await goTab("Questions");
++};
++const readDef = async () => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await goTab("Questions");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  return JSON.parse(json);
++};
++const q = (def, code) => def.questions.find((x) => x.code === code);
++
++/** type a sentence, wait for its card */
++const say = async (text) => {
++  const before = await page.$$eval('[data-testid="iq-turn"]', (els) => els.length);
++  await page.fill('[data-testid="iq-input"]', text);
++  await page.keyboard.press("Enter");
++  await page.waitForFunction((n) => document.querySelectorAll('[data-testid="iq-turn"]').length > n, before);
++  await page.waitForSelector('[data-testid="iq-thinking"]', { state: "detached" });
++  const turns = await page.$$('[data-testid="iq-turn"]');
++  return turns[turns.length - 1];
++};
++const textOf = async (el, sel) => { const c = await el.$(sel); return c ? (await c.textContent()).trim() : null; };
++const allText = async (el, sel) => { const cs = await el.$$(sel); return Promise.all(cs.map(async (c) => (await c.textContent()).trim())); };
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".block-badge");
++await loadDef(buildMasterDemoSurvey("sandbox"));
++
++/* ------------------------------------------------------------- switch */
++{
++  await page.click('[data-testid="mode-intelligent"]');
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  ok("Intelligent renders in place — no reload");
++  assert.match(page.url(), /mode=intelligent/);
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), true);
++  ok("the outer property panel steps aside — the mode has its own inspector");
++  await page.waitForSelector('[data-testid="iq-welcome"]');
++  assert.equal(await page.textContent('[data-testid="iq-welcome"] h2'), "How do you want to program your research?");
++  const examples = await page.$$('[data-testid="iq-example"]');
++  assert.ok(examples.length >= 8);
++  ok(`the welcome asks the brief's question and offers ${examples.length} example sentences`);
++  await examples[0].click();
++  assert.match(await page.inputValue('[data-testid="iq-input"]'), /^Show Q5 only when/);
++  ok("an example fills the prompt but does not send it");
++  await page.fill('[data-testid="iq-input"]', "");
++}
++
++/* ------------------------------------------------------ display logic */
++{
++  const before = await readDef();
++  assert.equal(q(before, "Q6").displayLogic, undefined, "Q6 has no display logic to begin with");
++  const turn = await say("Show Q6 only when Q4 = United States and Q3 >= 18");
++  assert.equal(await turn.getAttribute("data-state"), "open");
++  assert.equal(await turn.getAttribute("data-kind"), "display");
++  assert.equal(await turn.getAttribute("data-source"), "grammar");
++  assert.equal(await textOf(turn, ".iq-kicker"), "PROPOSED CHANGE");
++  ok("a sentence becomes a PROPOSED CHANGE card");
++  const summary = await textOf(turn, '[data-testid="iq-summary"]');
++  assert.equal(summary, "Show Q6 only when (Q4 is “United States” AND Q3 is at least “18”).");
++  ok(`the summary reads the way the Logic panel will: ${summary}`);
++  const expr = await textOf(turn, '[data-testid="iq-expression"] code');
++  assert.equal(expr, 'Q4 = "United States" AND Q3 >= 18');
++  ok("the condition is shown canonically — the multi-word label quoted, the rule validated by the expression parser");
++  assert.equal((await turn.$$('[data-testid="iq-error"]')).length, 0);
++  assert.equal(await page.$eval('[data-testid="iq-apply"]', (b) => b.disabled), false);
++  ok("no errors, Apply is enabled");
++
++  const mid = await readDef();
++  assert.equal(q(mid, "Q6").displayLogic, undefined);
++  ok("NOTHING was written yet — the review step is real");
++
++  // the object is selected and the inspector shows it
++  assert.equal(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), "question");
++  assert.equal(await page.textContent('[data-testid="inspector"] .ai-title'), "Q6");
++  ok("the inspector shows the proposal's target — how it is wired NOW");
++
++  await page.click('[data-testid="iq-review-btn"]');
++  await page.waitForSelector('[data-testid="iq-review"]');
++  const ops = await page.$$eval('[data-testid="iq-review"] .iq-op', (els) => els.map((e) => e.textContent));
++  assert.deepEqual(ops, ["ALL of"]);
++  const rules = await page.$$eval('[data-testid="iq-review"] .iq-rule', (els) => els.map((e) => e.textContent));
++  assert.deepEqual(rules, ['Q4 = "United States"', "Q3 >= 18"]);
++  ok("Review Logic shows the structured rule: ALL of [Q4 = \"United States\", Q3 >= 18]");
++
++  await page.click('[data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  const after = await readDef();
++  const dl = q(after, "Q6").displayLogic;
++  assert.ok(dl && dl.type === "group" && dl.op === "and" && dl.children.length === 2, JSON.stringify(dl));
++  assert.equal(dl.children[0].source.ref, "q_country");
++  assert.equal(dl.children[1].operator, "gte");
++  ok("Apply writes the canonical condition tree onto Q6 — the same shape the visual builder writes");
++  assert.equal((await page.$$('[data-testid="iq-apply"]')).length, 0);
++  ok("an applied card has no more buttons");
++
++  // one undo step, labelled
++  await page.keyboard.press(`${mod}+z`);
++  await page.waitForTimeout(300);
++  const undone = await readDef();
++  assert.equal(q(undone, "Q6").displayLogic, undefined);
++  ok("⌘Z removes the whole proposal in one step");
++  await page.keyboard.press(`${mod}+Shift+z`);
++  await page.waitForTimeout(300);
++  assert.ok(q(await readDef(), "Q6").displayLogic);
++  ok("and redo puts it back");
++}
++
++/* ------------------------------------------------------ cancel + hide */
++{
++  const turn = await say("hide Q9 if Q8 = No");
++  assert.equal(await textOf(turn, '[data-testid="iq-summary"]'), "Hide Q9 when Q8 is “No”.");
++  const warn = await allText(turn, '[data-testid="iq-warning"]');
++  assert.ok(warn.some((w) => /already has display logic/.test(w)), warn.join(" | "));
++  ok("replacing existing display logic is said out loud before Apply");
++  await page.click('[data-testid="iq-cancel"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "cancelled");
++  const d = await readDef();
++  assert.equal(d.questions.find((x) => x.code === "Q9").displayLogic.children?.[0]?.source?.ref ?? d.questions.find((x) => x.code === "Q9").displayLogic.source.ref, "q_contact_ok");
++  ok("Cancel leaves the survey exactly as it was");
++}
++
++/* --------------------------------------------------------- refusals */
++{
++  let turn = await say("show Q3 when Q99 = 1");
++  const errs = await allText(turn, '[data-testid="iq-error"]');
++  assert.ok(errs.length >= 1, "an unknown question is an error");
++  assert.equal(await page.$eval('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]', (b) => b.disabled), true);
++  ok(`a condition naming a question that does not exist blocks Apply: ${errs[0]}`);
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
++
++  turn = await say("show Q3 when Q10 = 1");
++  const errs2 = await allText(turn, '[data-testid="iq-error"]');
++  assert.ok(errs2.some((e) => /asked after/.test(e)), errs2.join(" | "));
++  assert.equal(await page.$eval('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]', (b) => b.disabled), true);
++  ok("logic that reads a LATER question is refused by the engine's validation — the model could not sneak it in either");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
++
++  turn = await say("make me a sandwich");
++  assert.equal(await turn.getAttribute("data-kind"), "unknown");
++  assert.equal((await turn.$$('[data-testid="iq-apply"]')).length, 0);
++  const e3 = await allText(turn, '[data-testid="iq-error"]');
++  assert.ok(e3.length >= 1);
++  ok("a sentence nobody understood gets an explanation and no Apply button");
++}
++
++/* ------------------------------------------------- skip / required */
++{
++  const before = await readDef();
++  const skipsBefore = q(before, "Q3").skipLogic.length;
++  const turn = await say("After Q3, screen out when Q3 < 18");
++  assert.equal(await textOf(turn, '[data-testid="iq-summary"]'), "After Q3, skip to out of the survey (screened) when Q3 is less than “18”.");
++  const desc = await allText(turn, '[data-testid="iq-changes"] li');
++  assert.deepEqual(desc, ["After Q3, skip out of the survey as screened when Q3 is less than “18”."]);
++  ok("a termination is a skip rule to terminate/screened, on the question that triggers it");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  const after = await readDef();
++  assert.equal(q(after, "Q3").skipLogic.length, skipsBefore + 1);
++  const rule = q(after, "Q3").skipLogic.at(-1);
++  assert.deepEqual(rule.target, { kind: "terminate", status: "screened" });
++  ok("the rule is on Q3 with a terminate target");
++
++  const t2 = await say("make Q9 required");
++  assert.deepEqual(await allText(t2, '[data-testid="iq-changes"] li'), ["Make Q9 required."]);
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  assert.equal(q(await readDef(), "Q9").required, true);
++  ok("required flips through the same review → Apply path");
++}
++
++/* ------------------------------------------------------ add question */
++{
++  const before = await readDef();
++  const n = before.questions.length;
++  const turn = await say("Add a single choice question “Do you own a car?” after Q3 with options Yes, No");
++  const summary = await textOf(turn, '[data-testid="iq-summary"]');
++  assert.match(summary, /^Add Q\d+ after Q3: “Do you own a car\?”\.$/);
++  const desc = await allText(turn, '[data-testid="iq-changes"] li');
++  assert.match(desc[0], /single select.*“Do you own a car\?”.*2 options/);
++  ok(`a new question is proposed with its type, text, options and place: ${summary}`);
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  const after = await readDef();
++  assert.equal(after.questions.length, n + 1);
++  const added = after.questions.find((x) => x.text === "Do you own a car?");
++  assert.ok(added);
++  assert.deepEqual(added.options.map((o) => o.label), ["Yes", "No"]);
++  assert.equal(added.variant, "single_select.radio");
++  const page1 = (function find(nodes) { for (const nd of nodes) { if (nd.type === "page" && nd.questionIds.includes("q_age")) return nd; const r = nd.children ? find(nd.children) : null; if (r) return r; } return null; })(after.flow);
++  assert.equal(page1.questionIds[page1.questionIds.indexOf("q_age") + 1], added.id);
++  ok("Apply adds it right after Q3 on Q3's page, built by the Studio's own question factory");
++  // the added question is selected — and Grid agrees, because selection is shared
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  const selected = await page.$$eval('[data-testid="grid-row"].selected, .sg-row.selected, [aria-selected="true"]', (els) => els.map((e) => e.dataset.question ?? e.dataset.id ?? e.textContent.slice(0, 40)));
++  assert.ok(selected.length >= 1, "the new question is the selection in Grid");
++  ok("the selection made by Apply is the Studio's shared selection — Grid opens on it");
++  await page.click('[data-testid="mode-intelligent"]');
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++}
++
++/* ------------------------------------------------ find + explain (read-only) */
++{
++  const turn = await say("What depends on Q13?");
++  assert.equal(await turn.getAttribute("data-kind"), "find");
++  assert.equal((await turn.$$('[data-testid="iq-apply"]')).length, 0);
++  const chips = await turn.$$('[data-testid="iq-chip"]');
++  assert.ok(chips.length >= 2, `Q13 (use type) drives branches and rules: ${chips.length}`);
++  ok(`a question answers from the dependency index with ${chips.length} selectable objects — no Apply button`);
++  const key = await chips[0].getAttribute("data-key");
++  await chips[0].click();
++  await page.waitForFunction((k) => document.querySelector('[data-testid="inspector"] .ai-title')?.textContent === k.split(":")[1] || document.querySelector('[data-testid="inspector"]')?.dataset.kind === k.split(":")[0], key);
++  ok(`clicking a chip selects that object (${key}) — the inspector follows`);
++
++  const t2 = await say("explain Q5");
++  assert.equal(await t2.getAttribute("data-kind"), "explain");
++  const lines = await allText(t2, ".iq-answer-list li");
++  assert.ok(lines.some((l) => /^Q5 \(REGION\) is a dropdown question, required\.$/.test(l)), lines.join(" | "));
++  assert.ok(lines.some((l) => /^Shown when Q4/.test(l)), lines.join(" | "));
++  assert.ok(lines.some((l) => /^It reads: Q4/.test(l)), lines.join(" | "));
++  ok("explain says what a question is, when it is shown and what it reads");
++}
++
++/* ------------------------------------------------------- the model route */
++{
++  const r = await page.evaluate(async () => {
++    const res = await fetch("/api/ai/logic", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "show Q6 when Q3 > 1", context: "Q3 (AGE) numeric" }) });
++    return { status: res.status, body: await res.json().catch(() => null) };
++  });
++  const badge = await page.getAttribute('[data-testid="iq-provider"]', "data-ai");
++  if (r.status === 501) {
++    assert.equal(badge, "off");
++    ok("no provider configured: the route says 501, the badge says grammar only");
++  } else {
++    assert.equal(r.status, 200);
++    assert.ok(r.body.ok === true && (r.body.intent === null || typeof r.body.intent === "object"), JSON.stringify(r.body));
++    assert.equal(badge, "on");
++    ok(`the fake provider answers (${JSON.stringify(r.body.intent)}) and the badge says grammar + model`);
++  }
++  assert.ok(!JSON.stringify(r.body).includes("AI_API"), "nothing about the provider leaks");
++}
++
++/* ------------------------------------------------------- read-only */
++{
++  const roButton = await page.$('[data-testid="readonly-toggle"], button:has-text("Read-only")');
++  if (roButton) {
++    await roButton.click();
++    await page.waitForTimeout(200);
++    await say("make Q6 optional");
++    assert.equal(await page.$eval('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]', (b) => b.disabled), true);
++    ok("read-only: the proposal is shown, Apply is disabled");
++    await roButton.click();
++  } else {
++    console.log("  skip read-only check: no toggle in this sandbox");
++  }
++}
++
++/* ---------------------------------------------------------- ⌘K path */
++{
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]');
++  await page.fill('[data-testid="command-palette"] input', "intelligent");
++  await page.waitForSelector(".palette-item.active");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  ok("⌘K → “Intelligent” switches modes like any other command");
++  const turns = await page.$$eval('[data-testid="iq-turn"]', (els) => els.length);
++  assert.ok(turns >= 8, `the session's history survives a mode round trip: ${turns} turns`);
++  ok("the conversation is kept while the survey is edited elsewhere and you come back");
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no page errors");
++await browser.close();
++console.log(`\n  ${passed} checks passed`);
+diff --git a/scripts/multimodal-foundation-test.mjs b/scripts/multimodal-foundation-test.mjs
+index ed7582e..f2fac32 100644
+--- a/scripts/multimodal-foundation-test.mjs
++++ b/scripts/multimodal-foundation-test.mjs
+@@ -62,13 +62,12 @@ await page.waitForSelector(".block-badge");
+   assert.ok(modes[0].active && modes[0].available === "1" && !modes[0].disabled, JSON.stringify(modes[0]));
+   ok("Studio is the active, available mode");
+   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
+-  const unbuilt = modes.filter((m) => m.available === "0");
+-  assert.deepEqual(built, ["studio", "grid", "architect", "flow"], "the modes with a renderer so far");
+-  for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
+-  ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
++  assert.deepEqual(built, ["studio", "grid", "architect", "flow", "intelligent"], "every mode has a renderer");
++  for (const m of modes) assert.ok(!m.disabled, JSON.stringify(m));
++  ok("all five modes are enabled");
+   const title = await page.getAttribute('[data-testid="mode-intelligent"]', "title");
+   assert.match(title, /Describe what you want/);
+-  ok("a disabled mode still tells you what it will be");
++  ok("a mode's tagline is its tooltip");
+ }
+ 
+ /* ----------------------------------------------------------- palette */
+@@ -261,14 +260,17 @@ await page.waitForSelector(".block-badge");
+ 
+ /* ----------------------------------------------------------- ?mode= */
+ {
+-  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
++  await page.goto(`${STUDIO}/sandbox?mode=nonsense`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="mode-selector"]');
+   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
+   assert.equal(active, "studio");
+-  ok("?mode=intelligent falls back to Studio while Intelligent has no renderer — never an empty screen");
++  ok("?mode=<unknown> falls back to Studio — never an empty screen");
+   const url = page.url();
+-  assert.ok(url.includes("mode=intelligent") || !url.includes("mode="), "the url is left alone until a real switch happens");
++  assert.ok(url.includes("mode=nonsense") || !url.includes("mode="), "the url is left alone until a real switch happens");
+   ok("the URL is not rewritten by the fallback");
++  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  ok("?mode=intelligent opens straight into Intelligent");
+   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="grid-view"]');
+   ok("?mode=grid opens straight into Grid");
+-- 
+2.43.0
+
+

@@ -56,9 +56,13 @@ const approvedCount = (plan: { items: unknown[] }) => plan.items.length;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
+  /* the researcher chose "send this once" while the project runs Internal: that one request may reach the model (audit A-2); nothing else may */
+  const consent: { consent?: "once" } = body.aiOnce === true ? { consent: "once" } : {};
+  /* a refusal body is a wallet failure unless the project's AI switch refused it */
+  const failureOf = (b: Record<string, unknown>) => (b.code === "ai_disabled" ? describeFailure("internal_mode") : describeFailure("wallet", String(b.error ?? "")));
   let user: AuthedUser | null = null;
   if (isFailure(authed)) {
     if (!(surveyId === "sandbox" && aiProviderName() === "fake")) return authed.response;
@@ -107,7 +111,7 @@ export async function POST(req: NextRequest) {
     const embeddings = new Map(chunks.filter((c) => c.embedding).map((c) => [c.id, c.embedding!]));
     let queryEmbedding: number[] | undefined;
     if (embeddings.size && aiEmbeddingsModelName()) {
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: message, maxTokens: 1, operation: "copilot_query_embedding" }, () => embedTexts([message]));
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: message, maxTokens: 1, operation: "copilot_query_embedding" }, () => embedTexts([message]));
       if (!m.ok) return refusalResponse(m);
       charge += m.event?.customerCharge ?? 0;
       queryEmbedding = m.value?.[0];
@@ -155,12 +159,12 @@ export async function POST(req: NextRequest) {
     const planPrompt = prompt + planStagePrompt();
     try {
       const pb = outputBudget("plan");
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
         () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, pb.maxTokens, { timeoutMs: pb.timeoutMs, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations }));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
-        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
+        return NextResponse.json({ ...body, failure: failureOf(body) }, { status: r.status });
       }
       charge += m.event?.customerCharge ?? 0;
       const plan = coerceChangePlan(fake ?? m.value);
@@ -186,13 +190,13 @@ export async function POST(req: NextRequest) {
       const item = approved[i];
       const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
       try {
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
           () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, ib.maxTokens, { timeoutMs: ib.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations }));
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
-          if (!built.length) return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
-          planFailures.push({ id: item.id, failure: describeFailure("wallet", String(body.error ?? "")) });
+          if (!built.length) return NextResponse.json({ ...body, failure: failureOf(body) }, { status: r.status });
+          planFailures.push({ id: item.id, failure: failureOf(body) });
           break;
         }
         charge += m.event?.customerCharge ?? 0;
@@ -225,12 +229,12 @@ export async function POST(req: NextRequest) {
        * budgets); and what still cannot be read comes back as a CODE the
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
         () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: budget.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations }));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
-        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
+        return NextResponse.json({ ...body, failure: failureOf(body) }, { status: r.status });
       }
       charge += m.event?.customerCharge ?? 0;
       raw = fake ?? m.value;
@@ -267,7 +271,7 @@ export async function POST(req: NextRequest) {
     const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
     try {
       const rb = outputBudget("repair");
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
         () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, { timeoutMs: rb.timeoutMs, continuations: rb.continuations }));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
@@ -302,7 +306,7 @@ export async function POST(req: NextRequest) {
       const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
       try {
         const cb = outputBudget("coverage");
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
           () => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, cb.maxTokens, { timeoutMs: cb.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations }));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;

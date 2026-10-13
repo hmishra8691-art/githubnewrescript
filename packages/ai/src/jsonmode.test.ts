@@ -60,7 +60,7 @@ test("other refusals are reported, not retried", async () => {
     }));
   await withEnv({ AI_API_URL: "https://down.example/v1", AI_API_KEY: "k" }, () =>
     withFetch(() => new Response("upstream error while applying response_format", { status: 500 }), async (sent) => {
-      await assert.rejects(completeJson("s", "u", 10), /\(500\)/);
+      await assert.rejects(completeJson("s", "u", 10, { retries: 0 }), /\(500\)/);
       assert.equal(sent.length, 1, "an outage is not a json-mode refusal");
     }));
   await withEnv({ AI_API_URL: "https://openai.example/v1", AI_API_KEY: "k" }, () =>

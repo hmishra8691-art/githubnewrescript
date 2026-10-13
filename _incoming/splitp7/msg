@@ -1,0 +1,44 @@
+Output is no longer rationed: every copilot call asks for the provider's
+output ceiling (AI_MAX_OUTPUT_TOKENS, default 32 000, floor 8 000) with
+eight continuations, the meter reserves only the expected size per task
+kind, and a provider's "max_tokens too large" is read, remembered per
+endpoint+model and the call retried once at it (packages/ai).
+
+Public documentation for the AI tools and search engines a researcher asks
+"how do I program this in ReScript Studio": fourteen pages under
+apps/studio/content/docs (three generated from the code by
+scripts/gen-public-docs.mjs), served at /docs, /docs/<slug>, /docs/<slug>.md,
+llms.txt, llms-full.txt, robots.txt and sitemap.xml without a session, by a
+dependency-free escaping markdown renderer; a catalogue of 110 sentences
+verified by test against the engine.
+
+The semantic tier (audit §F ①b): a synonym lexicon of 19 intents with cue
+phrases, fuzzy object resolution (codes, variables, wording, typos,
+populations, conditions in words), each candidate rewritten as a canonical
+sentence the recognisers verify; a clear reading is proposed as "Read … as
+…", a close call is a clarification with the readings as choices.
+
+Research-level checks as blockers (§F ⑤): research.strict on the design,
+the editor switch and "enforce the research design"; a batch that opens a
+gap (unmeasured construct, unlinked hypothesis, dead plan reference, dead
+derived, dead KPI) is refused with the gap and the fix named; the review
+marks the blockers first.
+
+Consolidation of Phases 1–6: question-scoped on_validate/on_submit and
+page-scoped on_change scripts never ran (runScripts matched one id) — it
+now takes the set of ids an event belongs to, in the runner and the QA
+simulator; "review the survey and identify problems with the logic" is the
+engine's own review, narrowed to the area named, with the Review tab filled;
+"demographic groups" and "a report showing the key findings" read by the
+engine; the turn cache key names the project and the person; the review's
+duplicate construct line replaced by the blocker's; customCss scoping and
+the trusted script surfaces documented.
+
+Tests: engine 1768, ai 36, studio 291, templates 98; auth audit 0 problems;
+pnpm -r test green; mutation checks engine 17/17, ai 4/4, studio 8/8 and the
+Studio wiring through the browser; browser corpus at baseline (124 pass,
+the 10 known failures); scripts/phase7-engine-docs-test.mjs 4/4.
+docs/PHASE7-CONSOLIDATION-2026-10-10.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

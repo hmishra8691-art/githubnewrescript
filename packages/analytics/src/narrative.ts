@@ -1,6 +1,7 @@
 import type { AnalysisRun } from "./findings.js";
 import { waveNumbers } from "./waves.js";
 import type { NarrativeSections } from "./deck.js";
+import { checkSentence, claimsFromRun, claimsBrief, sentenceLabel, printedTokens, type Claim, type ClaimLabel } from "./claims.js";
 
 /**
  * THE NARRATIVE GATE (Research Engine audit, Phase 5).
@@ -12,12 +13,18 @@ import type { NarrativeSections } from "./deck.js";
  * count), every hypothesis it names must exist, and a verdict it states
  * must be the verdict the run gave. A sentence that fails is dropped with
  * the reason; a section left empty falls back to the engine's own text.
- * Numbers up to ten pass as counting words ("two of the three tests");
- * years do not need to be in the run.
+ * Phase 2 (A-1): the gate is CLAIM-BOUND. A sentence cites the claims it
+ * rests on (see `claims.ts`) and is held to them — numbers, direction,
+ * significance, strength, causal wording, quotations. No integer and no year
+ * is exempt: a figure is in a cited claim or it is wrong. A sentence that
+ * fails and cites a claim is replaced by the engine's own wording for that
+ * claim and marked as such; one that cites nothing checkable is dropped.
  */
 export interface NarrativeCandidate { headline?: unknown; summary?: unknown; implications?: unknown; recommendations?: unknown }
+/** one sentence the model wrote, the claims it says it rests on, how it is labelled, and who wrote the words that stand */
+export interface GatedSentence { section: keyof NarrativeSections; text: string; claims: string[]; label: ClaimLabel; source: "model" | "template" }
 export interface NarrativeRejection { section: keyof NarrativeSections; text: string; reason: string }
-export interface GatedNarrative { accepted: NarrativeSections; rejected: NarrativeRejection[]; /** how many sentences were offered and how many kept */ offered: number; kept: number }
+export interface GatedNarrative { accepted: NarrativeSections; rejected: NarrativeRejection[]; /** how many sentences were offered and how many kept */ offered: number; kept: number; /** every sentence that stands, with the claims it cites and its label — what the audit record stores */ sentences: GatedSentence[]; /** sentences replaced by the engine's wording for the claim they cited */ replaced: number }
 
 type RunForGate = Pick<AnalysisRun, "n" | "findings" | "verdicts" | "warnings"> & { corrections?: AnalysisRun["corrections"]; discoveries?: AnalysisRun["discoveries"]; advice?: AnalysisRun["advice"]; kpis?: AnalysisRun["kpis"]; since?: AnalysisRun["since"] };
 
@@ -55,18 +62,32 @@ export function runNumbers(run: RunForGate): Set<string> {
   return out;
 }
 
-const SMALL = 10;
-const strs = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 400)) : typeof v === "string" && v.trim() ? [v.trim().slice(0, 400)] : []).slice(0, max);
+/** a sentence the model offered: a bare string (no claim cited) or {claims, text} */
+export interface OfferedSentence { text: string; claims: string[] }
+export const offeredSentences = (v: unknown, max: number): OfferedSentence[] => {
+  const one = (x: unknown): OfferedSentence | null => {
+    if (typeof x === "string") return x.trim() ? { text: x.trim().slice(0, 400), claims: [] } : null;
+    if (x && typeof x === "object") {
+      const o = x as Record<string, unknown>;
+      const text = typeof o.text === "string" ? o.text.trim().slice(0, 400) : "";
+      const ids = Array.isArray(o.claims) ? o.claims : typeof o.claim === "string" ? [o.claim] : [];
+      return text ? { text, claims: ids.filter((i): i is string => typeof i === "string").map((i) => i.trim().toUpperCase()).slice(0, 4) } : null;
+    }
+    return null;
+  };
+  return (Array.isArray(v) ? v.map(one) : [one(v)]).filter((x): x is OfferedSentence => !!x).slice(0, max);
+};
 
-/** why a sentence fails the gate, or null when it passes */
+/**
+ * Why a sentence fails against the run's numbers, or null. Kept for callers
+ * that hold a set of numbers rather than claims: the integer and year
+ * exemptions are gone (a figure is in the set or it is wrong), identifiers
+ * such as H1 are names, and the hypothesis verdicts are checked as before.
+ * The full check — direction, significance, strength, causal wording,
+ * quotations — needs claims: `checkSentence`.
+ */
 export function sentenceProblem(text: string, numbers: Set<string>, verdicts: RunForGate["verdicts"]): string | null {
-  for (const m of text.match(NUM) ?? []) {
-    const n = norm(m);
-    const v = Number(n);
-    if (Number.isInteger(v) && Math.abs(v) <= SMALL && !m.endsWith("%")) continue;
-    if (/^(?:19|20)\d\d$/.test(n)) continue;
-    if (!numbers.has(n)) return `the number ${m} is not in the run`;
-  }
+  for (const n of printedTokens(text)) if (!numbers.has(n.norm)) return `the number ${n.raw} is not in the run`;
   for (const m of text.match(/\bH(\d+)\b/g) ?? []) {
     const v = verdicts.find((x) => x.label === m);
     if (!v) return `${m} is not a hypothesis of this run`;
@@ -78,28 +99,35 @@ export function sentenceProblem(text: string, numbers: Set<string>, verdicts: Ru
   return null;
 }
 
-/** The candidate narrative, sentence by sentence, against the run. */
-export function gateNarrative(run: RunForGate, candidate: NarrativeCandidate): GatedNarrative {
-  const numbers = runNumbers(run);
+/** The candidate narrative, sentence by sentence, against the claims of the run. */
+export function gateNarrative(run: RunForGate, candidate: NarrativeCandidate, opts: { claims?: Claim[] } = {}): GatedNarrative {
+  const claims = opts.claims ?? claimsFromRun(run);
   const rejected: NarrativeRejection[] = [];
-  let offered = 0, kept = 0;
-  const section = (key: keyof NarrativeSections, items: string[]): string[] => {
+  const sentences: GatedSentence[] = [];
+  let count = 0, kept = 0, replaced = 0;
+  const section = (key: keyof NarrativeSections, items: OfferedSentence[]): string[] => {
     const ok: string[] = [];
-    for (const t of items) {
-      offered++;
-      const problem = sentenceProblem(t, numbers, run.verdicts);
-      if (problem) rejected.push({ section: key, text: t, reason: problem });
-      else { ok.push(t); kept++; }
+    for (const it of items) {
+      count++;
+      const r = checkSentence(it.text, claims, it.claims, run.verdicts);
+      if (!r.problem) { ok.push(it.text); kept++; sentences.push({ section: key, text: it.text, claims: r.claims.map((c) => c.id), label: sentenceLabel(r.claims, key), source: "model" }); continue; }
+      rejected.push({ section: key, text: it.text, reason: r.problem });
+      /* the sentence failed but named a real claim: the engine's own wording for it stands, marked as the engine's — never for a recommendation, which has no claim to fall back on */
+      const cited = key === "recommendations" ? undefined : it.claims.map((id) => claims.find((c) => c.id === id)).find((c): c is Claim => !!c && c.kind !== "run");
+      if (cited && cited.text && !ok.includes(cited.text)) { ok.push(cited.text); replaced++; sentences.push({ section: key, text: cited.text, claims: [cited.id], label: sentenceLabel([cited], key), source: "template" }); }
     }
     return ok;
   };
-  const headline = section("headline", strs(candidate.headline, 1));
-  const summary = section("summary", strs(candidate.summary, 6));
-  const implications = section("implications", strs(candidate.implications, 7));
-  const recommendations = section("recommendations", strs(candidate.recommendations, 7));
+  const headline = section("headline", offeredSentences(candidate.headline, 1));
+  const summary = section("summary", offeredSentences(candidate.summary, 6));
+  const implications = section("implications", offeredSentences(candidate.implications, 7));
+  const recommendations = section("recommendations", offeredSentences(candidate.recommendations, 7));
   const accepted: NarrativeSections = { ...(headline[0] ? { headline: headline[0] } : {}), ...(summary.length ? { summary } : {}), ...(implications.length ? { implications } : {}), ...(recommendations.length ? { recommendations } : {}) };
-  return { accepted, rejected, offered, kept };
+  return { accepted, rejected, offered: count, kept, sentences, replaced };
 }
 
+/** the claims block of a run's prompt: ids the model cites, each with the engine's own sentence */
+export const runClaimsBrief = (run: RunForGate): string => claimsBrief(claimsFromRun(run));
+
 /** the prompt's instructions for the model, and the shape it must answer in */
-export const NARRATIVE_INSTRUCTIONS = `Write the story of this analysis run for the audience named, from the RUN BRIEF below and nothing else. Answer as JSON: {"headline": "<one sentence, the single most important finding>", "summary": ["<3-5 bullets: what we set out to learn, what we found>"], "implications": ["<3-5 bullets: what each verdict means for the objective>"], "recommendations": ["<3-5 bullets: what to do next, as the evidence calls for>"]}. Rules: every number you write must appear in the brief exactly as printed there (a base, a p-value, an effect size, a mean, a share); name hypotheses by their label (H1, H2) and state only the verdict the brief gives; do not invent causes, segments or figures; plain sentences, no markdown.`;
+export const NARRATIVE_INSTRUCTIONS = `Write the story of this analysis run for the audience named, from the CLAIMS below and nothing else. Each claim has an id such as C3. Answer as JSON where every sentence is an object naming the claim ids it rests on: {"headline": {"claims": ["C1"], "text": "<one sentence, the single most important finding>"}, "summary": [{"claims": ["C2"], "text": "<3-5 bullets: what we set out to learn, what we found>"}], "implications": [{"claims": ["C3"], "text": "<3-5 bullets: what each verdict means for the objective>"}], "recommendations": [{"claims": [], "text": "<3-5 bullets: what to do next, as the evidence calls for>"}]}. Rules: a sentence may use only the numbers of the claims it cites, exactly as printed there, and each number stays with the group it belongs to; say which group is higher only as the claim says; name hypotheses by their label (H1, H2) and state only the verdict given; never use a causal word (causes, because, due to, leads to, drives) - results show association; call a result significant only if its claim is not marked "(not significant)"; never put words in a respondent's mouth or use quotation marks for anything the claims do not contain; do not invent causes, segments or figures; recommendations are your suggestions, not findings, and carry no numbers; plain sentences, no markdown.`;

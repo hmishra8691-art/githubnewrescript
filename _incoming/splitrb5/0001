@@ -1,0 +1,2269 @@
+From add8815d174dd974d56ca077eb38cffb871ee7f9 Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Mon, 12 Oct 2026 21:00:07 +0000
+Subject: [PATCH 1/4] Data Analytics audit, phase 2-3: export, snapshot, state
+ and chart fixes
+
+Root causes found and fixed (see the audit report in docs/):
+
+- Export 500 "reading 'flatMap'": insights / executive_summary blocks with no
+  analysisIds were read unguarded by the pptx builder, the compute step, the
+  findings report and the viewer. One helper (blockRefs) now answers "which
+  analyses does this block read" everywhere; saved reports are normalised on
+  PUT. The export route checks there is data before building, builds inside a
+  guard, validates the file, and returns a sentence + reference, never the raw
+  exception; gaps are reported beside the download.
+- Shared snapshot at 0 / n = 0: the builder rewrote a saved analysis's dataset
+  with the workspace selector on mount (twice under strict mode); planned
+  analyses kept a stale environment; "responses" was the base of whichever
+  analysis came back first; publish froze blank reports silently. Publish now
+  refuses a blank or partial snapshot unless forced, responses is the largest
+  base, and the viewer says "no respondents" instead of drawing zeros.
+- Warning wall: per-column base warnings collapse to one sentence, long lists
+  fold behind the first three, zero bases show blank not 0.0%, weighted n
+  follows the valid base, runner exceptions become a structured error.
+- Save / stale: canonical (key-sorted) comparison, one save at a time,
+  latest-run-wins, export / save-chart / add-to-report refuse stale results,
+  failed save aborts publish, stale errors are cleared, results reload after
+  save and a late save can no longer pre-empt a version view.
+- Saved charts load a few at a time and show a failure with Try again.
+- Question-aware chart selection (questionChart.ts): multi-select, scale,
+  numeric, ranking, text, crosstab size and thin bases drive the chart, state
+  the denominator and explain why; a saved type the data cannot draw falls
+  back and says so.
+
+Tests: analytics 292, studio lib 296, new browser suite
+scripts/analytics-audit-test.mjs (16 checks, 7 UI mutations caught); the
+unit-level mutations are all caught.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ .../[id]/analytics/[[...path]]/route.ts       |  62 ++-
+ .../components/analytics/AnalysisBuilder.tsx  |  81 +++-
+ .../analytics/AnalyticsWorkspace.tsx          |  51 ++-
+ .../components/analytics/ReportView.tsx       |  29 +-
+ .../components/analytics/ReportsPanel.tsx     |  69 ++-
+ .../components/analytics/ResultView.tsx       |  15 +-
+ apps/studio/components/analytics/Warnings.tsx |  20 +
+ apps/studio/components/analytics/api.ts       |  19 +-
+ .../components/analytics/charts/Chart.tsx     |   2 +-
+ apps/studio/lib/analytics.ts                  |  47 +-
+ apps/studio/lib/stableJson.test.ts            |  11 +
+ apps/studio/lib/stableJson.ts                 |  15 +
+ packages/access/src/audit.ts                  |   2 +
+ .../src/analyses/analysisRobustness.test.ts   |  67 +++
+ packages/analytics/src/analyses/common.ts     |   2 +-
+ packages/analytics/src/analyses/crosstab.ts   |  26 +-
+ packages/analytics/src/analyses/index.ts      |  37 +-
+ packages/analytics/src/blockRefs.test.ts      |  64 +++
+ packages/analytics/src/blockRefs.ts           |  95 ++++
+ packages/analytics/src/export/export.test.ts  |  22 +
+ packages/analytics/src/export/pptx.ts         |   7 +-
+ packages/analytics/src/findings.ts            |   3 +-
+ packages/analytics/src/findingsReport.test.ts |   3 +-
+ packages/analytics/src/findingsReport.ts      |  11 -
+ packages/analytics/src/index.ts               |   2 +
+ packages/analytics/src/questionChart.test.ts  | 109 +++++
+ packages/analytics/src/questionChart.ts       | 188 ++++++++
+ packages/analytics/src/types.ts               |   2 +
+ scripts/analytics-audit-test.mjs              | 420 ++++++++++++++++++
+ 29 files changed, 1358 insertions(+), 123 deletions(-)
+ create mode 100644 apps/studio/components/analytics/Warnings.tsx
+ create mode 100644 apps/studio/lib/stableJson.test.ts
+ create mode 100644 apps/studio/lib/stableJson.ts
+ create mode 100644 packages/analytics/src/analyses/analysisRobustness.test.ts
+ create mode 100644 packages/analytics/src/blockRefs.test.ts
+ create mode 100644 packages/analytics/src/blockRefs.ts
+ create mode 100644 packages/analytics/src/questionChart.test.ts
+ create mode 100644 packages/analytics/src/questionChart.ts
+ create mode 100644 scripts/analytics-audit-test.mjs
+
+diff --git a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+index 49d511e..36e53eb 100644
+--- a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+@@ -5,7 +5,7 @@ import type { AuditEvent, Capability } from "@rescript/access";
+ import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
+ import {
+   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
+-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses } from "@rescript/analytics";
++  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition } from "@rescript/analytics";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { supabaseService } from "@/lib/authServer";
+ import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
+@@ -248,14 +248,7 @@ async function computeReport(
+   report: ReportDefinition | { widgets?: { analysisId?: string }[]; blocks?: unknown[] },
+   extraFilterIds: string[] = [],
+ ) {
+-  const ids = new Set<string>();
+-  for (const b of (report as ReportDefinition).blocks ?? []) {
+-    if ("analysisId" in b && b.analysisId) ids.add(b.analysisId);
+-    if ("analysisIds" in b) for (const id of b.analysisIds) ids.add(id);
+-    // §37 — a panel_grid has no analysisId of its own; every one of its panels does.
+-    if (b.type === "panel_grid") for (const pnl of b.panels) if (pnl.analysisId) ids.add(pnl.analysisId);
+-  }
+-  for (const w of (report as { widgets?: { analysisId?: string }[] }).widgets ?? []) if (w.analysisId) ids.add(w.analysisId);
++  const ids = new Set<string>(reportAnalysisIds(report as ReportDefinition));
+   if (!ids.size) return {};
+   const reportFilter = (report as ReportDefinition).filterId;
+   const applied = [...new Set([...(reportFilter ? [reportFilter] : []), ...extraFilterIds])].filter(isUuid);
+@@ -270,12 +263,13 @@ async function computeReport(
+       ...(applied.length ? { filterIds: [...new Set([...(own.filterIds ?? []), ...applied])] } : {}),
+     };
+     /*
+-     * One analysis that cannot be computed (a variable since removed from the
+-     * survey, a filter that no longer matches) must not take the whole report
+-     * down: its blocks are left out and the failure is logged.
++     * One analysis that cannot be computed must not take the whole report with
++     * it: every other block still has its numbers. The failed one carries a
++     * structured error the viewer turns into "could not be computed", and the
++     * raw cause goes to the server log, not to the screen.
+      */
+     try { results[a.id] = await compute(db, surveyId, loaded as never, def); }
+-    catch (e) { console.warn("[rescript:analytics] report analysis skipped", JSON.stringify({ surveyId, analysisId: a.id, name: a.name, error: (e as Error)?.message })); }
++    catch (e) { console.error(`[analytics] report analysis ${a.id} failed:`, e); results[a.id] = { ...failedResult(a.name as string, own.kind), recommendations: [] } as never; }
+   }
+   return results;
+ }
+@@ -332,7 +326,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     try {
+       const result = await compute(db, surveyId, loaded, { ...def, name: def.name || def.kind });
+       return json({ result });
+-    } catch (e) { return bad(`Analysis failed: ${(e as Error).message}`, 500); }
++    } catch (e) { const ref = Math.random().toString(36).slice(2, 8); console.error(`[analytics] run failed (${ref}):`, e); return bad(`The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref ${ref})`, 500); }
+   }
+ 
+   if (head === "export") {
+@@ -413,16 +407,38 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     for (const [blockId, uri] of Object.entries(sent).slice(0, 40)) {
+       if (typeof blockId === "string" && blockId.length <= 64 && isEmbeddableImage(uri)) images[blockId] = uri;
+     }
+-    const buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta, images }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
++    /*
++     * What is about to be exported is checked BEFORE it is built. A deck of
++     * empty charts is not an export, it is a file that looks like one: when no
++     * analysis in the report has a respondent, or every one failed, say so
++     * instead of returning a "successful" download. Blocks whose analysis is
++     * missing or failed are named in `x-rescript-export-notes`, so the success
++     * message can say what the file does not contain.
++     */
++    const check = checkSnapshot(report, results);
++    const withData = reportAnalysisIds(report).filter((id) => results[id] && !results[id].error && (results[id].base?.n ?? 0) > 0);
++    if (reportAnalysisIds(report).length && !withData.length && body.allowEmpty !== true) return NextResponse.json({ error: `Nothing to export. ${check.problems.join(" ") || "No analysis in this report has any respondents in its selected data."}`, problems: check.problems }, { status: 409 });
++    let buf: Buffer;
++    try {
++      buf = format === "pptx" ? await buildPptx({ report: { ...report, author: report.author ?? ctx.user.fullName }, results, theme, settings: settings as never, meta, images }) : await buildXlsx({ report, results, theme, settings: settings as never, meta: { Survey: ctx.survey.title, "Generated by": ctx.user.fullName || ctx.user.email } });
++      if (!buf || buf.length < 1500 || buf.subarray(0, 2).toString("latin1") !== "PK") throw new Error("the built file is empty or not a valid Office document");
++    } catch (e) {
++      /* the cause goes to the server log with a reference; the person gets a sentence they can act on and the reference to quote */
++      const ref = Math.random().toString(36).slice(2, 8);
++      console.error(`[analytics] export (${format}) failed (${ref}):`, e);
++      log(ctx, "analytics.export_failed", reportId ?? analysisId, { name, format, ref });
++      return bad(`The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference ${ref} to support.`, 500);
++    }
+     await db.from("analytics_exports").insert({ survey_id: surveyId, report_id: reportId, analysis_id: analysisId, format, settings, report_version: reportVersion, bytes: buf.length, created_by: ctx.user.userId });
+     void recordUsage(getMeter(), projectContext(ctx, exportEnv), { eventType: "REPORT_GENERATION", quantity: 1, metadata: { format, bytes: buf.length, reportId, analysisId, environment: exportEnv } });
+     log(ctx, "analytics.export_generated", reportId ?? analysisId, { name, format, version: reportVersion });
+     const filename = `${(name || "analytics").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "analytics"}.${format}`;
+-    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": format === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });
++    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { ...(check.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(check.problems)) } : {}), "content-type": format === "pptx" ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "content-disposition": `attachment; filename="${filename}"`, "cache-control": "no-store" } });
+     } catch (e) {
+-      const message = (e as Error)?.message ?? String(e);
+-      console.error("[rescript:analytics] export failed", JSON.stringify({ surveyId, reportId: body.reportId ?? null, analysisId: body.analysisId ?? null, format: body.format ?? "pptx", error: message, stack: (e as Error)?.stack?.split("\n").slice(0, 6).join(" | ") }));
+-      return bad(`The export could not be built: ${message}`, 500);
++      /* anything that escapes the build above (computing, loading, the database) is answered in a sentence with a reference — the cause goes to the log, never to the screen */
++      const ref = Math.random().toString(36).slice(2, 8);
++      console.error("[rescript:analytics] export failed", JSON.stringify({ ref, surveyId, reportId: body.reportId ?? null, analysisId: body.analysisId ?? null, format: body.format ?? "pptx", error: (e as Error)?.message ?? String(e), stack: (e as Error)?.stack?.split("\n").slice(0, 6).join(" | ") }));
++      return bad(`The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference ${ref} to support.`, 500);
+     }
+   }
+ 
+@@ -437,10 +453,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     const theme = await loadTheme(db, r.theme_id, themeScope(ctx));
+     const { data: last } = await db.from("analytics_report_versions").select("version").eq("report_id", itemId).order("version", { ascending: false }).limit(1);
+     const version = (last?.[0]?.version ?? 0) + 1;
+-    const first = Object.values(snapshot)[0];
++    /* never freeze a blank or partial report by accident — the researcher can still publish it on purpose */
++    const check = checkSnapshot(definition, snapshot);
++    if (!check.ok && body.force !== true) return NextResponse.json({ error: `Not published. ${check.problems.join(" ")}`, problems: check.problems, canForce: true }, { status: 409 });
+     const analysisDefs = await db.from("analytics_analyses").select("definition").in("id", Object.keys(snapshot));
+     const environments = [...new Set((analysisDefs.data ?? []).map((a) => (a.definition as AnalysisDefinition).dataset?.environment).filter(Boolean))];
+-    const dataset = { surveyVersion: loaded.version, revision: loaded.revision, responses: first?.base.total ?? 0, environments, computedAt: new Date().toISOString() };
++    const dataset = { surveyVersion: loaded.version, revision: loaded.revision, responses: check.responses, environments, computedAt: new Date().toISOString() };
+     /*
+      * §36 — every filter a viewer is allowed to apply is computed NOW and
+      * frozen beside the base results.
+@@ -816,7 +834,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string;
+     if (body.isDefault !== undefined) patch.is_default = !!body.isDefault;
+   } else if (head === "reports") {
+     if (typeof body.name === "string") patch.name = body.name;
+-    if (body.definition) patch.definition = body.definition;
++    if (body.definition) patch.definition = normalizeReportDefinition(body.definition);
+     if (body.themeId !== undefined) patch.theme_id = body.themeId;
+     if (body.mode === "live" || body.mode === "snapshot") patch.mode = body.mode;
+   }
+diff --git a/apps/studio/components/analytics/AnalysisBuilder.tsx b/apps/studio/components/analytics/AnalysisBuilder.tsx
+index ac5f2c2..0765dd3 100644
+--- a/apps/studio/components/analytics/AnalysisBuilder.tsx
++++ b/apps/studio/components/analytics/AnalysisBuilder.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { stableStringify } from "@/lib/stableJson";
+ import React from "react";
+ import type { Condition } from "@rescript/schema";
+ import type { AnalysisDefinition, AnalysisKind, ChartSpec, DatasetSpec, ReportTheme, SegmentDef, VariableMeta, VariableRole } from "@rescript/analytics";
+@@ -179,9 +180,9 @@ const STAGES: { key: Stage; label: string }[] = [{ key: "builder", label: "Build
+ const SECTIONS = ["Analysis type", "Variables", "Filters", "Segments & weighting", "Options"];
+ 
+ /** what "unsaved" compares: the definition as it would be saved */
+-const snapshotOf = (def: AnalysisDefinition, name: string, filter: Condition) => JSON.stringify({ ...def, name, filter: isEmptyCondition(filter) ? null : filter });
++const snapshotOf = (def: AnalysisDefinition, name: string, filter: Condition) => stableStringify({ ...def, name, filter: isEmptyCondition(filter) ? null : filter });
+ /** what "out of date" compares: the same, minus the name and how the table is formatted — neither changes a number */
+-const runSnapshotOf = (def: AnalysisDefinition, filter: Condition) => { const { formatting: _f, ...options } = (def.options ?? {}) as Record<string, unknown>; void _f; return JSON.stringify({ ...def, name: "", options, filter: isEmptyCondition(filter) ? null : filter }); };
++const runSnapshotOf = (def: AnalysisDefinition, filter: Condition) => { const { formatting: _f, ...options } = (def.options ?? {}) as Record<string, unknown>; void _f; return stableStringify({ ...def, name: "", options, filter: isEmptyCondition(filter) ? null : filter }); };
+ 
+ export function AnalysisBuilder(p: BuilderProps) {
+   const initialDef: AnalysisDefinition = p.initial?.definition ?? (p.initial?.analysis?.definition as AnalysisDefinition) ?? { name: "", kind: p.initial?.kind ?? "descriptive", dataset: p.dataset, variables: [], options: p.initial?.kind === "crosstab" ? { layout: "banner" } : {} };
+@@ -203,7 +204,21 @@ export function AnalysisBuilder(p: BuilderProps) {
+   const theme = React.useMemo(() => (themeId ? (p.themes.find((t) => t.id === themeId)?.theme as ReportTheme | undefined) ?? null : null), [themeId, p.themes]);
+   const canEdit = p.canEdit !== false;
+ 
+-  React.useEffect(() => { setDef((d) => ({ ...d, dataset: p.dataset })); }, [p.dataset]);
++  /*
++   * The workspace's environment/quality selector SEEDS a new analysis and, when
++   * the researcher changes it, re-points the one on screen. It must NOT run on
++   * mount: opening a saved analysis used to overwrite its stored dataset with
++   * the selector's default (LIVE / all), so the same analysis read n = 33 in the
++   * builder and 0 in the report that was built from what had been saved.
++   */
++  const lastSelector = React.useRef(stableStringify(p.dataset));
++  React.useEffect(() => {
++    /* compares VALUES, not "is this the first run": React strict mode runs an effect twice on mount */
++    const now = stableStringify(p.dataset);
++    if (now === lastSelector.current) return;
++    lastSelector.current = now;
++    setDef((d) => ({ ...d, dataset: p.dataset }));
++  }, [p.dataset]);
+   // a saved analysis opens on its results: recompute from its stored definition
+   const autoRan = React.useRef(false);
+   React.useEffect(() => { if (p.initial?.analysis && !autoRan.current) { autoRan.current = true; void run(); } }, []); // eslint-disable-line react-hooks/exhaustive-deps
+@@ -222,40 +237,60 @@ export function AnalysisBuilder(p: BuilderProps) {
+   const setFormatting = (f: TableFormatting) => setOpt({ formatting: f });
+   const current = (): AnalysisDefinition => ({ ...def, name: name || def.name || kindInfo.label, filter: isEmptyCondition(filter) ? null : filter });
+ 
++  /* only the LATEST run may land: an earlier, slower response must not overwrite a newer result or clear `running` under it */
++  const runSeq = React.useRef(0);
+   const run = async () => {
++    const mine = ++runSeq.current;
+     setRunning(true); setError(null); setMsg(null);
+     try {
+       const d = current();
++      const snapAtStart = runSnapshotOf(def, filter);
+       const { result } = await p.api.run(d);
+-      setResult(result); ranSnap.current = runSnapshotOf(def, filter);
++      if (mine !== runSeq.current) return;
++      setResult(result); ranSnap.current = snapAtStart;
+       setSpec((s) => ({ ...s, type: result.recommendations[0]?.type ?? result.recommendedCharts[0] ?? "bar_vertical" }));
+       setStage("results");
+-    } catch (e) { setError((e as Error).message); } finally { setRunning(false); }
++    } catch (e) { if (mine === runSeq.current) setError((e as Error).message); } finally { if (mine === runSeq.current) setRunning(false); }
+   };
+ 
+-  const save = async () => {
+-    const d = current();
+-    try {
++  /*
++   * ONE save at a time. A second click (or "Save chart" racing "Add to report")
++   * used to POST a second create for an analysis that had no id yet — two
++   * copies. Callers that arrive while a save is in flight share its promise.
++   */
++  const [saving, setSaving] = React.useState(false);
++  const inflight = React.useRef<Promise<Row> | null>(null);
++  const persist = (): Promise<Row> => {
++    if (inflight.current) return inflight.current;
++    const d = current(); const snapNow = snapshotOf(def, name, filter);
++    setSaving(true);
++    const op = (async () => {
+       const r = saved ? await p.api.update("analyses", saved.id, { name: d.name, definition: d }) : await p.api.create("analyses", { name: d.name, definition: d });
+-      setSaved(r.item); setSavedSnap(snapshotOf(def, name, filter)); setMsg(saved ? `Saved as version ${r.item.version}.` : "Analysis saved."); p.onSaved?.(r.item);
+-    } catch (e) { setError((e as Error).message); }
++      setSaved(r.item); setSavedSnap(snapNow); p.onSaved?.(r.item);
++      return r.item as Row;
++    })().finally(() => { inflight.current = null; setSaving(false); });
++    inflight.current = op;
++    return op;
++  };
++  const save = async () => {
++    try { const item = await persist(); setMsg(saved ? `Saved as version ${item.version}.` : "Analysis saved."); } catch (e) { setError((e as Error).message); }
+   };
+   const ensureSaved = async (): Promise<Row> => {
+-    if (saved && !dirty) return saved;
+-    const d = current();
+-    const r = saved ? await p.api.update("analyses", saved.id, { name: d.name, definition: d }) : await p.api.create("analyses", { name: d.name, definition: d });
+-    setSaved(r.item); setSavedSnap(snapshotOf(def, name, filter)); p.onSaved?.(r.item);
+-    return r.item;
++    if (saved && !dirty && !inflight.current) return saved;
++    return persist();
+   };
++  /* what leaves this screen (an export, a saved chart, a report block) must describe the numbers on it */
++  const notCurrent = stale || running;
++  const refuseStale = (): boolean => { if (!notCurrent) return false; setError(running ? "The analysis is still running — wait for it to finish." : "Results are out of date — run the analysis again before exporting or saving a chart from it."); return true; };
+   const saveChart = async () => {
+-    if (!result) return;
++    if (!result || refuseStale()) return;
+     try {
+       const a = await ensureSaved();
+       const r = await p.api.create("charts", { analysisId: a.id, name: spec.options.title ?? `${a.name} — ${spec.type}`, spec, themeId: spec.themeId ?? null });
+       setMsg("Chart saved and linked to this analysis."); p.onChartSaved?.(r.item);
+     } catch (e) { setError((e as Error).message); }
+   };
+-  const exportAs = (format: "pptx" | "xlsx") => p.api.export({ format, ...(saved && !dirty ? { analysisId: saved.id } : { definition: current() }), chart: spec, themeId: spec.themeId ?? null }).catch((e) => setError(e.message));
++  const exportAs = (format: "pptx" | "xlsx") => refuseStale() ? Promise.resolve() : p.api.export({ format, ...(saved && !dirty ? { analysisId: saved.id } : { definition: current() }), chart: spec, themeId: spec.themeId ?? null }).then(() => undefined).catch((e) => setError(e.message));
+ 
+   const segmentsChosen = def.segments ?? [];
+   const toggleSegment = (s: Row) => { const cur = segmentsChosen; update({ segments: cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, { id: s.id, name: s.name, condition: s.condition as Condition, color: s.color ?? undefined }] }); };
+@@ -270,9 +305,9 @@ export function AnalysisBuilder(p: BuilderProps) {
+ 
+   const actions = (
+     <>
+-      {canEdit && <button className="btn small" onClick={save} data-testid="ax-save" title={dirty ? "Save the definition (a real change creates a new version)" : "Nothing to save"}>{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" aria-label="unsaved" />}</button>}
++      {canEdit && <button className="btn small" onClick={save} disabled={saving} data-testid="ax-save" title={dirty ? "Save the definition (a real change creates a new version)" : "Nothing to save"}>{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" aria-label="unsaved" />}</button>}
+       <button className="btn small" onClick={saveChart} data-testid="ax-save-chart" disabled={!canEdit}>Save chart</button>
+-      {p.onAddToReport && canEdit && <button className="btn small" onClick={async () => { try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to report</button>}
++      {p.onAddToReport && canEdit && <button className="btn small" onClick={async () => { if (refuseStale()) return; try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to report</button>}
+       <button className="btn small" onClick={() => exportAs("pptx")} data-testid="ax-export-pptx" disabled={p.canExport === false}>PPT</button>
+       <button className="btn small" onClick={() => exportAs("xlsx")} data-testid="ax-export-xlsx" disabled={p.canExport === false}>Excel</button>
+     </>
+@@ -372,11 +407,11 @@ export function AnalysisBuilder(p: BuilderProps) {
+       )}
+ 
+       {stage === "results" && result && (
+-        <ResultView result={result} recommendations={result.recommendations} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="results" formatting={formatting} onFormatting={setFormatting} actions={actions} />
++        <ResultView result={result} recommendations={result.recommendations} advice={result.advice} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="results" formatting={formatting} onFormatting={setFormatting} actions={actions} />
+       )}
+       {stage === "chart" && result && (
+         <div ref={chartHost}>
+-          <ResultView result={result} recommendations={result.recommendations} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="chart" actions={actions} />
++          <ResultView result={result} recommendations={result.recommendations} advice={result.advice} spec={spec} onSpec={setSpec} theme={theme} themes={p.themes.map((t) => ({ id: t.id, name: t.name }))} selected={selected} onSelectCategory={setSelected} view="chart" actions={actions} />
+         </div>
+       )}
+       {stage === "export" && result && (
+@@ -394,9 +429,9 @@ export function AnalysisBuilder(p: BuilderProps) {
+           <div className="card">
+             <div className="card-title">Keep &amp; share</div>
+             <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 6 }}>
+-              {canEdit && <button className="btn" onClick={save} data-testid="ax-save-export">{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" />}</button>}
++              {canEdit && <button className="btn" onClick={save} disabled={saving} data-testid="ax-save-export">{saved ? "Save changes" : "Save analysis"}{dirty && <span className="ax-dirty" />}</button>}
+               <button className="btn" onClick={saveChart} disabled={!canEdit}>Save chart to library</button>
+-              {p.onAddToReport && canEdit && <button className="btn" onClick={async () => { try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to a report</button>}
++              {p.onAddToReport && canEdit && <button className="btn" onClick={async () => { if (refuseStale()) return; try { const a = await ensureSaved(); p.onAddToReport!(a, spec); } catch (e) { setError((e as Error).message); } }}>Add to a report</button>}
+               <span className="muted" style={{ fontSize: 13 }}>Reports are published and shared from the Reports and Sharing tabs.</span>
+             </div>
+           </div>
+diff --git a/apps/studio/components/analytics/AnalyticsWorkspace.tsx b/apps/studio/components/analytics/AnalyticsWorkspace.tsx
+index 66a4a10..0cc6674 100644
+--- a/apps/studio/components/analytics/AnalyticsWorkspace.tsx
++++ b/apps/studio/components/analytics/AnalyticsWorkspace.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { Warnings } from "./Warnings";
+ import React from "react";
+ import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
+ import { ANALYSIS_KINDS } from "@rescript/analytics";
+@@ -290,14 +291,40 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
+   const [results, setResults] = React.useState<Record<string, RunResult>>({});
+   const [editing, setEditing] = React.useState<Row | null>(null);
+   const [spec, setSpec] = React.useState<ChartSpec | null>(null);
+-  const load = React.useCallback(async (analysisId: string) => { if (results[analysisId]) return; const a = analyses.find((x) => x.id === analysisId); if (!a) return; try { const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name }); setResults((r) => ({ ...r, [analysisId]: result })); } catch { /* shown as missing */ } }, [api, analyses, results]);
+-  React.useEffect(() => { for (const c of charts.slice(0, 12)) void load(c.analysis_id); }, [charts, load]);
++  /*
++   * Every saved chart's analysis is computed, a few at a time, and each one ends in
++   * either a result or a visible failure with a retry. Before, a failed run left
++   * the card on "Computing…" for ever, only the first 12 charts were ever
++   * requested, and `load` depended on `results` — so each arriving result re-fired
++   * the effect and re-requested every chart that had not arrived yet.
++   */
++  const [status, setStatus] = React.useState<Record<string, "loading" | "error">>({});
++  const inFlight = React.useRef(new Set<string>());
++  const done = React.useRef(new Set<string>());
++  const analysesRef = React.useRef(analyses); analysesRef.current = analyses;
++  const load = React.useCallback(async (analysisId: string, force = false) => {
++    if (!force && (done.current.has(analysisId) || inFlight.current.has(analysisId))) return;
++    const a = analysesRef.current.find((x) => x.id === analysisId); if (!a) return;
++    inFlight.current.add(analysisId); setStatus((s) => ({ ...s, [analysisId]: "loading" }));
++    try {
++      const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name });
++      done.current.add(analysisId); setResults((r) => ({ ...r, [analysisId]: result }));
++      setStatus((s) => { const { [analysisId]: _x, ...rest } = s; void _x; return rest; });
++    } catch { setStatus((s) => ({ ...s, [analysisId]: "error" })); } finally { inFlight.current.delete(analysisId); }
++  }, [api]);
++  React.useEffect(() => {
++    const ids = [...new Set(charts.map((c) => String(c.analysis_id)))];
++    let cancelled = false; let next = 0;
++    const worker = async () => { while (!cancelled && next < ids.length) { const id = ids[next++]; await load(id); } };
++    void Promise.all([worker(), worker(), worker()]);
++    return () => { cancelled = true; };
++  }, [charts, load]);
+   return (
+     <div className="ax-panel" data-testid="ax-charts">
+       <div className="row" style={{ marginBottom: 10 }}><h2 style={{ margin: 0 }}>Saved charts</h2><span className="muted" style={{ fontSize: 13 }}>Each chart is linked to its analysis definition — the data is recomputed, the styling is yours.</span></div>
+       {editing && spec && results[editing.analysis_id] && (
+         <div className="card">
+-          <ResultView result={results[editing.analysis_id]} recommendations={results[editing.analysis_id].recommendations} spec={spec} onSpec={setSpec} theme={themes.find((t) => t.id === spec.themeId)?.theme ?? null} themes={themes}
++          <ResultView result={results[editing.analysis_id]} recommendations={results[editing.analysis_id].recommendations} advice={results[editing.analysis_id].advice} spec={spec} onSpec={setSpec} theme={themes.find((t) => t.id === spec.themeId)?.theme ?? null} themes={themes}
+             actions={<><button className="btn primary small" onClick={async () => { await api.update("charts", editing.id, { spec, themeId: spec.themeId ?? null, name: spec.options.title ?? editing.name }); setEditing(null); await refresh(); }}>Save styling (v{editing.style_version + 1})</button><button className="btn small" onClick={() => setEditing(null)}>Cancel</button></>} />
+         </div>
+       )}
+@@ -306,7 +333,7 @@ function ChartsLibrary({ api, charts, analyses, themes, refresh, onOpen }: { api
+           <div key={c.id} className="card ax-chart-card" data-testid="ax-chart-card">
+             <div className="card-title">{c.name}<span className="grow" /><span className="muted" style={{ fontSize: 12.5 }}>style v{c.style_version}</span></div>
+             <div className="muted" style={{ fontSize: 13 }}>{a?.name ?? "analysis removed"} · {(c.spec as ChartSpec).type}</div>
+-            {r ? <Chart result={r} spec={c.spec as ChartSpec} theme={themes.find((t) => t.id === c.theme_id)?.theme ?? null} compact /> : <div className="muted" style={{ padding: 20 }}>{a ? "Computing…" : "The linked analysis no longer exists."}</div>}
++            {r ? <Chart result={r} spec={c.spec as ChartSpec} theme={themes.find((t) => t.id === c.theme_id)?.theme ?? null} compact /> : !a ? <div className="muted" style={{ padding: 20 }}>The linked analysis no longer exists.</div> : status[c.analysis_id] === "error" ? <div className="ax-warn" style={{ padding: 12 }} data-testid="ax-chart-failed">This chart could not be computed. <button className="btn small" onClick={() => void load(c.analysis_id, true)}>Try again</button></div> : <div className="muted" style={{ padding: 20 }}>Computing…</div>}
+             <div className="card-actions" style={{ marginTop: 6 }}><button className="btn small" onClick={() => { setEditing(c); setSpec(c.spec as ChartSpec); }} disabled={!r}>Customize</button>{a && <button className="btn small" onClick={() => onOpen(a)}>Open analysis</button>}<button className="btn small" onClick={() => api.export({ format: "pptx", analysisId: c.analysis_id, chart: c.spec, themeId: c.theme_id })}>PPT</button><button className="btn small danger" onClick={async () => { if (confirm("Delete this saved chart?")) { await api.remove("charts", c.id); await refresh(); } }}>Delete</button></div>
+           </div>); })}
+         {!charts.length && <div className="muted">No saved charts yet. Run an analysis and click “Save chart”.</div>}
+@@ -323,7 +350,18 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
+   const [filterText, setFilterText] = React.useState("");
+   const [busy, setBusy] = React.useState(false);
+   const tableAnalyses = analyses.filter((a) => ["crosstab", "descriptive", "topbox", "segmentation", "test", "nps", "csat", "ranking", "allocation", "turf", "brand", "conjoint", "maxdiff", "quality", "weighting"].includes(a.kind));
+-  React.useEffect(() => { if (!sel) return; const a = analyses.find((x) => x.id === sel); if (!a) return; setBusy(true); api.run({ ...(a.definition as AnalysisDefinition), name: a.name }).then(({ result }) => { setRes(result); setTableId(result.tables[0]?.id ?? ""); }).finally(() => setBusy(false)); }, [sel, analyses, api]);
++  const [tableError, setTableError] = React.useState<string | null>(null);
++  const selDef = React.useMemo(() => JSON.stringify(analyses.find((x) => x.id === sel)?.definition ?? null) + (analyses.find((x) => x.id === sel)?.name ?? ""), [analyses, sel]);
++  /* keyed on the selected analysis' own definition, not on the `analyses` array (a new array on every refresh re-ran every table); a late answer for a previous selection is dropped; a failure is shown, and the previous table is not left under the new title */
++  React.useEffect(() => {
++    if (!sel) return; const a = analyses.find((x) => x.id === sel); if (!a) return;
++    let cancelled = false; setBusy(true); setTableError(null); setRes(null);
++    api.run({ ...(a.definition as AnalysisDefinition), name: a.name })
++      .then(({ result }) => { if (cancelled) return; setRes(result); setTableId(result.tables[0]?.id ?? ""); })
++      .catch((e: Error) => { if (!cancelled) setTableError(e.message); })
++      .finally(() => { if (!cancelled) setBusy(false); });
++    return () => { cancelled = true; };
++  }, [sel, selDef, api]); // eslint-disable-line react-hooks/exhaustive-deps
+   const table = res?.tables.find((t) => t.id === tableId) ?? res?.tables[0];
+   const view = React.useMemo(() => {
+     if (!table) return table;
+@@ -345,12 +383,13 @@ function TablesLibrary({ api, analyses, onOpen, onNew }: { api: AxApi; analyses:
+         {sel && <button className="btn small" onClick={() => api.export({ format: "xlsx", analysisId: sel })}>Excel</button>}
+       </div>
+       {busy && <div className="muted">Computing…</div>}
++      {tableError && !busy && <div className="ax-warn" data-testid="ax-table-failed">{tableError}</div>}
+       {view && (
+         <div className="card">
+           <div className="row" style={{ marginBottom: 6 }}><div className="card-title">{view.title}</div><span className="grow" /><span className="muted" style={{ fontSize: 13 }}>click a column header to sort</span></div>
+           <div className="ax-table-wrap"><table className="ax-table" data-testid="ax-builder-table"><thead><tr>{view.columns.map((c) => <th key={c.key} className={c.type && c.type !== "text" ? "num sortable" : "sortable"} onClick={() => setSort(sort?.key === c.key ? { key: c.key, dir: sort.dir === 1 ? -1 : 1 } : { key: c.key, dir: -1 })}>{c.label}{sort?.key === c.key ? (sort.dir === 1 ? " ↑" : " ↓") : ""}</th>)}</tr></thead>
+             <tbody>{view.rows.map((r, i) => <tr key={i}>{view.columns.map((c) => { const v = r[c.key]; const sig = r[`${c.key}__sig`]; const ct = (r.__format as string | undefined) ?? c.type; return <td key={c.key} className={typeof v === "number" ? "num" : ""}>{v == null ? "" : typeof v === "number" ? (ct === "pct" ? `${v.toFixed(c.decimals ?? 1)}%` : ct === "count" ? Math.round(v).toLocaleString() : v.toLocaleString("en-US", { maximumFractionDigits: c.decimals ?? 2 })) : String(v)}{sig ? <sup className="ax-sig">{String(sig)}</sup> : null}</td>; })}</tr>)}</tbody></table></div>
+-          <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}{res?.warnings.map((w, i) => <div key={`w${i}`}>⚠ {w}</div>)}</div>
++          <div className="ax-table-notes">{view.base ? `Base: n = ${view.base.n}${view.base.weightedN != null && view.base.weightedN !== view.base.n ? ` · weighted n = ${view.base.weightedN}` : ""}` : ""}{view.notes?.map((n, i) => <div key={i}>{n}</div>)}<Warnings items={res?.warnings ?? []} testId="ax-table-warnings" /></div>
+         </div>
+       )}
+       {!sel && <div className="muted">Pick a saved analysis to build a frequency, crosstab, banner, means or significance table from it. Tables can be added to reports and exported to PowerPoint and Excel.</div>}
+diff --git a/apps/studio/components/analytics/ReportView.tsx b/apps/studio/components/analytics/ReportView.tsx
+index 96a7ebc..94cbf82 100644
+--- a/apps/studio/components/analytics/ReportView.tsx
++++ b/apps/studio/components/analytics/ReportView.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import type { AnalysisResult, ChartSpec, DashboardBand, DashboardHero, DashboardWidget, ReportBlock, ReportTheme } from "@rescript/analytics";
+ import {
+-  DEFAULT_THEME, executiveSummary, methodologyLines, reportPages, seriesForChart,
++  DEFAULT_THEME, executiveSummary, reportAnalysisIds, summaryAnalysisIds, checkChartChoice, methodologyLines, reportPages, seriesForChart,
+   DASHBOARD_COLUMNS, DASHBOARD_GAP_PX, DASHBOARD_ROW_PX, clampBox, heroRows, layoutRows, normalizeBands,
+   normalizeLayout, overlayTextColor, scrimFor, sortByPosition, themeSurfaces,
+   type LayoutBox,
+@@ -95,8 +95,7 @@ export function ReportView(p: ReportViewProps) {
+   const filtered = viewerFilter ? p.filterResults?.[viewerFilter] : undefined;
+   const results = filtered ?? p.results;
+   const usedIds = new Set<string>();
+-  for (const b of p.blocks ?? []) { if ("analysisId" in b && b.analysisId) usedIds.add(b.analysisId); if ("analysisIds" in b) b.analysisIds.forEach((id) => usedIds.add(id)); }
+-  for (const w of p.widgets ?? []) if (w.analysisId) usedIds.add(w.analysisId);
++  for (const id of reportAnalysisIds({ blocks: p.blocks, widgets: p.widgets })) usedIds.add(id);
+   const segmentsAvailable = [...usedIds].map((id) => results[id]).filter(Boolean).flatMap((r) => r.segments ?? []).map((s) => s.name);
+   const [globalSeg, setGlobalSeg] = React.useState<string>("");
+ 
+@@ -186,6 +185,8 @@ export function ReportView(p: ReportViewProps) {
+     ? <div className="ax-missing" data-testid="ax-unfilled">{hint ? `${hint} — open this widget and pick the analysis.` : "Waiting for an analysis. Open this block and pick one."}</div>
+     : <div className="ax-missing">Analysis {id.slice(0, 8)}… is not available{p.mode === "snapshot" ? " in this published version" : " (deleted or not yet computed)"}.</div>;
+ 
++  /** the block's heading is the title; drawing the analysis name again inside the chart repeats it (and, after a template or an analysis swap, can contradict it) */
++  const untitled = (c: ChartSpec): ChartSpec => ({ ...c, options: { ...c.options, title: "" } });
+   const renderChart = (id: string, spec: ChartSpec, height?: number) => {
+     /*
+      * An unfilled placeholder from a template has no analysis yet, which is a
+@@ -194,9 +195,18 @@ export function ReportView(p: ReportViewProps) {
+      */
+     if (!id) return <div className="ax-missing" data-testid="ax-unfilled">Waiting for an analysis. Open this block and pick one.</div>;
+     const r = results[id]; if (!r) return <Missing id={id} />;
++    /* an analysis that failed, or that saw nobody, says so — a chart of zeros reads as a finding */
++    if (r.error) return <div className="ax-missing" data-testid="ax-failed">{r.error.message}</div>;
++    if (r.base.n === 0) return <div className="ax-missing" data-testid="ax-nodata">No respondents in this analysis's data — nothing to chart{r.base.total ? ` (${r.base.total} in the dataset, none answered this)` : ""}. Check the analysis's environment, status and date range.</div>;
+     const si = segFor(id);
+-    const sp = si != null ? { ...spec, options: { ...spec.options, segmentIndex: si } } : spec;
+-    return <Chart result={r} spec={sp} theme={theme} height={height} onSelect={p.crossFilter ? setSelected : undefined} selected={p.crossFilter ? selected : undefined} />;
++    /* a saved choice that the data can no longer draw falls back to the best chart that can, and says so — never "No data to chart" */
++    const choice = checkChartChoice(r, spec.type);
++    const useSpec = choice.valid ? spec : { ...spec, type: choice.fallback ?? "table" };
++    const sp = si != null ? { ...useSpec, options: { ...useSpec.options, segmentIndex: si } } : useSpec;
++    return <>
++      <Chart result={r} spec={sp} theme={theme} height={height} onSelect={p.crossFilter ? setSelected : undefined} selected={p.crossFilter ? selected : undefined} />
++      {!choice.valid && <div className="muted" data-testid="ax-chart-fallback" style={{ fontSize: 12 }}>{choice.reason}</div>}
++    </>;
+   };
+ 
+   /*
+@@ -210,10 +220,10 @@ export function ReportView(p: ReportViewProps) {
+           case "cover": return <section key={b.id} className="ax-block ax-cover" style={{ background: theme.cover?.background ?? theme.colors.primary, color: theme.cover?.textColor ?? "#fff", textAlign: theme.cover?.layout === "center" ? "center" : "left" }}><Actions id={b.id} />{theme.logoUrl && p.branding?.showLogo !== false && <img src={theme.logoUrl} alt="" className="ax-logo" />}<h1 style={{ fontFamily: theme.headingFontFamily ?? font }}>{b.title || p.title}</h1>{(b.subtitle ?? p.subtitle) && <p>{b.subtitle ?? p.subtitle}</p>}<div className="ax-cover-meta">{b.date ?? (p.publishedAt ? new Date(p.publishedAt).toLocaleDateString() : new Date().toLocaleDateString())}{b.author ? ` · ${b.author}` : ""}</div></section>;
+           case "section": return <section key={b.id} className="ax-block ax-section" style={{ borderColor: theme.colors.primary }}><Actions id={b.id} /><h2 style={{ color: theme.colors.primary, fontFamily: theme.headingFontFamily ?? font }}>{b.title}</h2>{b.subtitle && <p className="muted">{b.subtitle}</p>}</section>;
+           case "text": return <section key={b.id} className="ax-block ax-text"><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}<div dangerouslySetInnerHTML={{ __html: mdToHtml(b.markdown) }} /></section>;
+-          case "chart": return <section key={b.id} className="ax-block" data-block-id={b.id}><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{renderChart(b.analysisId, b.chart)}{results[b.analysisId]?.segments?.length ? <div className="row" style={{ marginTop: 4 }}><select className="select small" value={segIdx[b.analysisId] ?? ""} onChange={(e) => setSegIdx({ ...segIdx, [b.analysisId]: e.target.value === "" ? null : Number(e.target.value) })}><option value="">Segment: follow report</option>{results[b.analysisId].segments!.map((s, i) => <option key={i} value={i}>{s.name} (n = {s.n})</option>)}</select></div> : null}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>;
++          case "chart": return <section key={b.id} className="ax-block" data-block-id={b.id}><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{renderChart(b.analysisId, b.title ? untitled(b.chart) : b.chart)}{results[b.analysisId]?.segments?.length ? <div className="row" style={{ marginTop: 4 }}><select className="select small" value={segIdx[b.analysisId] ?? ""} onChange={(e) => setSegIdx({ ...segIdx, [b.analysisId]: e.target.value === "" ? null : Number(e.target.value) })}><option value="">Segment: follow report</option>{results[b.analysisId].segments!.map((s, i) => <option key={i} value={i}>{s.name} (n = {s.n})</option>)}</select></div> : null}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>;
+           case "table": { const r = results[b.analysisId]; const t = r ? (b.tableId ? r.tables.find((x) => x.id === b.tableId) ?? r.tables[0] : r.tables[0]) : undefined; return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? t?.title ?? "Table"}</h3>{r ? <ResultTableView table={t} /> : <Missing id={b.analysisId} />}{b.caption && <p className="ax-caption">{b.caption}</p>}</section>; }
+           case "kpi": { const r = results[b.analysisId]; return <section key={b.id} className="ax-block"><Actions id={b.id} />{b.title && <h3>{b.title}</h3>}{r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: true } }} theme={theme} height={160} /> : <Missing id={b.analysisId} />}</section>; }
+-          case "insights": return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? "Key insights"}</h3><ul className="ax-insights">{(b.analysisIds ?? []).flatMap((id) => (results[id]?.insights ?? []).map((s, i) => <li key={`${id}-${i}`}>{s}</li>))}</ul></section>;
++          case "insights": return <section key={b.id} className="ax-block"><Actions id={b.id} /><h3>{b.title ?? "Key insights"}</h3><ul className="ax-insights">{summaryAnalysisIds(b, { blocks: p.blocks ?? [] }).flatMap((id) => (results[id]?.insights ?? []).map((s, i) => <li key={`${id}-${i}`}>{s}</li>))}</ul></section>;
+           /*
+            * §37 — a panel grid: a headline sentence, then several analyses
+            * side by side. Each panel is drawn exactly the way a lone chart
+@@ -246,7 +256,7 @@ export function ReportView(p: ReportViewProps) {
+               </section>
+             );
+           }
+-          case "executive_summary": { const items = executiveSummary((b.analysisIds ?? []).map((id) => ({ name: results[id]?.name ?? id, result: results[id] })).filter((x) => x.result)); return <section key={b.id} className="ax-block ax-exec"><Actions id={b.id} /><h3>{b.title ?? "Executive summary"}</h3>{b.text && <p>{b.text}</p>}{items.map((it) => <div key={it.analysis} className="ax-exec-item"><strong>{it.analysis}</strong> — {it.headline} <span className="muted">({it.base})</span></div>)}{!items.length && <p className="muted">Add analyses to this summary.</p>}</section>; }
++          case "executive_summary": { const items = executiveSummary(summaryAnalysisIds(b, { blocks: p.blocks ?? [] }).map((id) => ({ name: results[id]?.name ?? id, result: results[id] })).filter((x) => x.result)); return <section key={b.id} className="ax-block ax-exec"><Actions id={b.id} /><h3>{b.title ?? "Executive summary"}</h3>{b.text && <p>{b.text}</p>}{items.map((it) => <div key={it.analysis} className="ax-exec-item"><strong>{it.analysis}</strong> — {it.headline} <span className="muted">({it.base})</span></div>)}{!items.length && <p className="muted">Add analyses to this summary.</p>}</section>; }
+           /*
+            * §36 — a page break is a boundary, not a thing on the page. It
+            * draws a marker in the builder, where the author needs to see the
+@@ -409,9 +419,10 @@ export function ReportView(p: ReportViewProps) {
+                   onPointerDown={(e) => beginDrag(e, w, "resize")} onPointerMove={onDragMove} onPointerUp={endDrag} onPointerCancel={endDrag} />
+               )}
+               {w.title && <div className="ax-widget-title">{w.title}</div>}
++              {w.title && w.analysisId && results[w.analysisId]?.name && results[w.analysisId].name !== w.title && <div className="ax-widget-source muted" data-testid="ax-widget-source" style={{ fontSize: 11.5 }}>{results[w.analysisId].name}</div>}
+               {w.type === "text" && <div dangerouslySetInnerHTML={{ __html: mdToHtml(w.text ?? "") }} />}
+               {w.type === "kpi" && (r ? <Chart result={r} spec={{ type: r.chart.kpis && r.chart.kpis.length === 1 ? "gauge" : "kpi_card", options: { showBase: false } }} theme={theme} height={Math.max(120, live.h * DASHBOARD_ROW_PX - 30)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+-              {w.type === "chart" && (w.analysisId && r ? renderChart(w.analysisId, w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }, Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
++              {w.type === "chart" && (w.analysisId && r ? renderChart(w.analysisId, w.title ? untitled(w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }) : (w.chart ?? { type: r.recommendedCharts[0] ?? "bar_vertical", options: {} }), Math.max(160, live.h * DASHBOARD_ROW_PX - 30)) : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+               {w.type === "table" && (w.analysisId && r ? <ResultTableView table={r.tables[0]} dense maxRows={Math.max(4, live.h * 2)} /> : <Missing id={w.analysisId ?? ""} hint={w.placeholder} />)}
+               {w.type === "filter" && <div className="muted" style={{ fontSize: 13 }}>Segment switch: use the selector in the bar above.</div>}
+               {/*
+diff --git a/apps/studio/components/analytics/ReportsPanel.tsx b/apps/studio/components/analytics/ReportsPanel.tsx
+index 6463b37..87f382f 100644
+--- a/apps/studio/components/analytics/ReportsPanel.tsx
++++ b/apps/studio/components/analytics/ReportsPanel.tsx
+@@ -3,7 +3,7 @@ import { StoryReports } from "./StoryStudio";
+ import React from "react";
+ import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
+ import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
+-import { AxApi, type Row, timeAgo } from "./api";
++import { AxApi, ApiError, type Row, type RunResult, timeAgo } from "./api";
+ import { ReportView } from "./ReportView";
+ import { mapImagesOnScreen } from "./ResultView";
+ import { ICON_OPTIONS } from "./charts/Icons";
+@@ -26,6 +26,7 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
+   const [version, setVersion] = React.useState<string>("");
+   const [busy, setBusy] = React.useState(false);
+   const [error, setError] = React.useState<string | null>(null);
++  const [note, setNote] = React.useState<string | null>(null);
+   const inc = settings.include;
+   const setInc = (k: keyof ExportSettings["include"], v: boolean) => setSettings({ ...settings, include: { ...inc, [k]: v } });
+   const go = async () => {
+@@ -40,8 +41,9 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
+        * falls back to the bars, as before.
+        */
+       const images = settings.format === "pptx" ? await mapImagesOnScreen() : {};
+-      await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined, ...(Object.keys(images).length ? { images } : {}) });
+-      onClose();
++      const { notes } = await api.export({ format: settings.format, reportId, analysisId, definition, chart, themeId: themeId || null, settings, version: version ? Number(version) : undefined, ...(Object.keys(images).length ? { images } : {}) });
++      /* downloaded — but if the file leaves something out, say so rather than closing on a bare success */
++      if (notes.length) setNote(`Downloaded, with gaps: ${notes.join(" ")}`); else onClose();
+     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+   };
+   return (
+@@ -73,7 +75,7 @@ export function ExportDialog({ api, reportId, analysisId, definition, chart, the
+           <div className="ax-toggles"><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.freezePanes !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, freezePanes: e.target.checked } })} /> Freeze panes</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.autoFilter !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, autoFilter: e.target.checked } })} /> Auto-filter</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.includeNotes !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, includeNotes: e.target.checked } })} /> Notes</label><label className="ax-toggle"><input type="checkbox" checked={settings.xlsx?.includeMetadata !== false} onChange={(e) => setSettings({ ...settings, xlsx: { ...settings.xlsx, includeMetadata: e.target.checked } })} /> Metadata sheet</label></div>
+         </div>
+       )}
+-      <div className="row" style={{ marginTop: 14 }}>{error && <span className="ax-error">{error}</span>}<span className="grow" /><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy} onClick={go} data-testid="ax-export-go">{busy ? "Generating…" : "Generate export"}</button></div>
++      <div className="row" style={{ marginTop: 14 }}>{error && <span className="ax-error" data-testid="ax-export-error">{error}</span>}{note && <span className="ax-warn" data-testid="ax-export-note">{note}</span>}<span className="grow" /><button className="btn" onClick={onClose}>{note ? "Close" : "Cancel"}</button><button className="btn primary" disabled={busy} onClick={go} data-testid="ax-export-go">{busy ? "Generating…" : "Generate export"}</button></div>
+     </div></div>
+   );
+ }
+@@ -288,14 +290,24 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+   const [templates, setTemplates] = React.useState<ReportTemplate[]>([]);
+   const [templatesOpen, setTemplatesOpen] = React.useState(false);
+   const [savedFilters, setSavedFilters] = React.useState<Row[]>([]);
++  /** the numbers on screen come from the SAVED report; an unsaved change to what they are computed from (the report filter) makes them old */
++  const [resultsOutdated, setResultsOutdated] = React.useState(false);
++  const defRef = React.useRef(def); defRef.current = def;
++  const viewVersionRef = React.useRef<number | null>(null); viewVersionRef.current = viewVersion;
+   const isDash = open?.kind === "dashboard";
+   const theme = (open?.theme_id ? (themes.find((t) => t.id === open.theme_id)?.theme as ReportTheme | undefined) : undefined) ?? null;
+ 
++  /* only the newest load may land (version dropdown / save / filter can each start one) */
++  const loadSeq = React.useRef(0);
+   const load = React.useCallback(async (r: Row, version?: number | null) => {
++    const mine = ++loadSeq.current;
+     setLoading(true); setError(null);
+     try {
+       const res = await api.results(r.id, version ?? undefined);
+-      setResults(res.results);
++      if (mine !== loadSeq.current) return;
++      /* merge, don't replace: results the panel computed for blocks that are not saved yet must survive a reload */
++      setResults((prev) => (version ? res.results : { ...prev, ...res.results }));
++      setResultsOutdated(false);
+       /*
+        * The definition and the label it is shown under are set together, in
+        * one commit, so the body is never a version other than the one it
+@@ -303,7 +315,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+        */
+       if (version) { setDef(res.definition as ReportDefinition); setShownVersion(version); }
+       else setShownVersion(null);
+-    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
++    } catch (e) { if (mine === loadSeq.current) setError((e as Error).message); } finally { if (mine === loadSeq.current) setLoading(false); }
+   }, [api]);
+ 
+   /** Results for analyses referenced by unsaved blocks: computed server-side per analysis. */
+@@ -347,7 +359,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+     if (!open) return;
+     const name = prompt(`Name this ${isDash ? "dashboard" : "report"} shape, so the team can reuse it:`, `${open.name} shape`);
+     if (!name?.trim()) return;
+-    if (dirty) await save();
++    if (dirty && !(await save())) return;
+     try {
+       await api.saveReportTemplate({ name: name.trim(), fromReportId: open.id });
+       setMsg(`Saved “${name.trim()}” as a report template for this workspace. Analysis references were stripped — a template is a shape, not a study.`);
+@@ -363,18 +375,50 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+     }
+   }, [pendingAdd, open, def, isDash, clearPending, ensure]);
+ 
+-  const save = async () => { if (!open || !def) return; try { const r = await api.update("reports", open.id, { definition: def, name: (def as ReportDefinition).title || open.name }); setOpen(r.item); setDirty(false); setMsg("Saved."); onChange(); } catch (e) { setError((e as Error).message); } };
+-  const publish = async () => { if (!open) return; if (dirty) await save(); try { const r = await api.publish(open.id, prompt("Version note (optional)") ?? undefined); setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`); const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange(); } catch (e) { setError((e as Error).message); } };
++  const save = async (): Promise<boolean> => {
++    if (!open || !def) return false;
++    setError(null);
++    const sent = def;
++    try {
++      const r = await api.update("reports", open.id, { definition: sent, name: (sent as ReportDefinition).title || open.name });
++      setOpen(r.item);
++      /* edits made while the save was in flight are still unsaved */
++      setDirty(defRef.current !== sent);
++      setMsg("Saved."); onChange();
++      /* the saved report is what computes: refresh the numbers so they match what was just saved */
++      /* by the time the save returns the researcher may be looking at a published version: that load must not be pre-empted */
++      if (!viewVersionRef.current) void load(r.item);
++      return true;
++    } catch (e) { setError((e as Error).message); return false; }
++  };
++  const publish = async () => {
++    if (!open) return;
++    setError(null); setMsg(null);
++    /* a failed save must stop the publish: it would freeze the OLD saved definition and still say "Published" */
++    if (dirty && !(await save())) return;
++    const note = prompt("Version note (optional)") ?? undefined;
++    try {
++      let r;
++      try { r = await api.publish(open.id, note); }
++      catch (e) {
++        const body = (e as ApiError).body as { problems?: string[]; canForce?: boolean } | undefined;
++        if ((e as ApiError).status === 409 && body?.canForce && confirm(`${body.problems?.join("\n") ?? "This report looks blank."}\n\nPublish it anyway?`)) r = await api.publish(open.id, note, true);
++        else throw e;
++      }
++      setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`);
++      const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange();
++    } catch (e) { setError((e as Error).message); }
++  };
+   const create = async () => { if (!newName.trim() || !creating) return; try { const r = await api.create("reports", { name: newName.trim(), kind: creating, mode: "live" }); setCreating(null); setNewName(""); onChange(); await openReport(r.item); } catch (e) { setError((e as Error).message); } };
+ 
+   /** every analysisId a block or widget touches — one per panel for a panel_grid — so `ensure` can fetch results for all of them. */
+   const idsOf = (b: ReportBlock | DashboardWidget): (string | undefined)[] =>
+-    "panels" in b ? b.panels.map((pnl) => pnl.analysisId) : "analysisId" in b ? [b.analysisId] : "analysisIds" in b ? b.analysisIds : [];
++    "panels" in b ? b.panels.map((pnl) => pnl.analysisId) : "analysisId" in b ? [b.analysisId] : "analysisIds" in b ? (b.analysisIds ?? []) : [];
+ 
+   const addBlock = (type: ReportBlock["type"]) => {
+     if (!def || isDash) return;
+     const first = analyses[0]?.id ?? "", firstName = analyses[0]?.name;
+-    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical"), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : type === "panel_grid" ? { id: uid(), type, title: "Panel grid", headline: "", panels: [{ id: uid(), analysisId: first, title: firstName }, { id: uid(), analysisId: first, title: firstName }] } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
++    const b: ReportBlock = type === "cover" ? { id: uid(), type, title: (def as ReportDefinition).title } : type === "section" ? { id: uid(), type, title: "New section" } : type === "text" ? { id: uid(), type, markdown: "Write here…" } : type === "page_break" ? { id: uid(), type } : type === "methodology" ? { id: uid(), type, title: "Methodology", includeStandardNotes: true, items: [] } : type === "chart" ? { id: uid(), type, title: firstName, analysisId: first, chart: { type: ((first ? (results[first] as RunResult | undefined)?.recommendations?.[0]?.type : undefined) ?? (analyses[0]?.kind === "nps" ? "gauge" : "bar_vertical")), options: {} } } : type === "table" ? { id: uid(), type, title: firstName, analysisId: first } : type === "kpi" ? { id: uid(), type, title: firstName, analysisId: first } : type === "insights" ? { id: uid(), type, analysisIds: analyses.slice(0, 3).map((a) => a.id) } : type === "panel_grid" ? { id: uid(), type, title: "Panel grid", headline: "", panels: [{ id: uid(), analysisId: first, title: firstName }, { id: uid(), analysisId: first, title: firstName }] } : { id: uid(), type: "executive_summary", analysisIds: analyses.slice(0, 5).map((a) => a.id) };
+     setDef({ ...(def as ReportDefinition), blocks: [...(def as ReportDefinition).blocks, b] }); setDirty(true); setEditing(b.id);
+     void ensure(idsOf(b));
+   };
+@@ -491,6 +535,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+         {isDash && <button className="btn small" onClick={() => window.print()} data-testid="ax-dash-print"
+           title="Opens your browser's print dialog — choose “Save as PDF” there. The canvas keeps its arrangement on the page.">Print / PDF</button>}
+       </div>
++      {resultsOutdated && <div className="ax-warn" data-testid="ax-report-outdated" style={{ margin: "6px 0" }}>Results are out of date — the filter changed. Save to recompute them with it.</div>}
+       {(msg || error) && <div className={error ? "ax-error" : "ax-ok"} style={{ margin: "6px 0" }}>{error ?? msg}</div>}
+       <div className="ax-rb-body">
+         <aside className="ax-rb-side">
+@@ -544,7 +589,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+               */}
+             <div className="flabel" style={{ marginTop: 12 }}>This whole report is filtered to</div>
+             <select className="select small" value={rd.filterId ?? ""} data-testid="ax-report-filter"
+-              onChange={(e) => { setDef({ ...rd, filterId: e.target.value || null }); setDirty(true); void load(open!); }}>
++              onChange={(e) => { setDef({ ...rd, filterId: e.target.value || null }); setDirty(true); setResultsOutdated(true); }}>
+               <option value="">The whole sample</option>
+               {savedFilters.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+             </select>
+diff --git a/apps/studio/components/analytics/ResultView.tsx b/apps/studio/components/analytics/ResultView.tsx
+index b7c4b2d..986c712 100644
+--- a/apps/studio/components/analytics/ResultView.tsx
++++ b/apps/studio/components/analytics/ResultView.tsx
+@@ -1,6 +1,7 @@
+ "use client";
++import { Warnings } from "./Warnings";
+ import React from "react";
+-import type { AnalysisResult, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
++import type { AnalysisResult, ChartAdvice, ChartRecommendation, ChartSpec, ChartType, ReportTheme } from "@rescript/analytics";
+ import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable } from "@rescript/analytics";
+ import { Chart } from "./charts/Chart";
+ import { ProTable, tableToTsv, type TableFormatting } from "./ProTable";
+@@ -212,6 +213,8 @@ export function ChartFrame({ result, spec, theme, onSelect, selected, name, larg
+ export interface ResultViewProps {
+   result: AnalysisResult;
+   recommendations: ChartRecommendation[];
++  /** why the chart was chosen, and what its figures are a share of — shown with the chart */
++  advice?: ChartAdvice;
+   spec: ChartSpec;
+   onSpec: (s: ChartSpec) => void;
+   theme: ReportTheme | null;
+@@ -249,7 +252,7 @@ export function ResultView(p: ResultViewProps) {
+         <span className="grow" />
+         {p.actions}
+       </div>
+-      {r.warnings.length > 0 && <div className="ax-warnings" data-testid="ax-warnings">{r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}</div>}
++      <Warnings items={r.warnings} />
+       {view === "results" && (
+         <div className="ax-tabs">
+           {(["chart", "tables", "tests", "insights"] as const).map((t) => <button key={t} className={`ax-tab ${tab === t ? "on" : ""}`} onClick={() => setTab(t)}>{t === "chart" ? "Chart" : t === "tables" ? `Tables (${r.tables.length})` : t === "tests" ? `Tests (${r.tests.length})` : `Insights (${r.insights.length})`}</button>)}
+@@ -279,6 +282,14 @@ export function ResultView(p: ResultViewProps) {
+         <div className="ax-chart-area">
+           <div className="ax-chart-main">
+             <ChartFrame result={r} spec={spec} theme={p.theme} onSelect={p.onSelectCategory} selected={p.selected} name={spec.options.title ?? r.name} large={view === "chart"} />
++            {p.advice && (
++              <div className="ax-advice" data-testid="ax-chart-advice">
++                <div><strong>{p.spec.type === p.advice.type ? "Why this chart" : `Suggested: ${p.advice.type.replace(/_/g, " ")}`}</strong> — {p.advice.reason}.</div>
++                <div className="muted" data-testid="ax-denominator">{p.advice.denominator}</div>
++                {p.advice.notes.map((n, i) => <div key={i} className="muted">{n}</div>)}
++                {p.spec.type !== p.advice.type && p.advice.avoided.find((x) => x.type === p.spec.type) && <div className="ax-warn" data-testid="ax-advice-override">{p.spec.type.replace(/_/g, " ")} is not recommended here: {p.advice.avoided.find((x) => x.type === p.spec.type)!.why}.</div>}
++              </div>
++            )}
+             <ChartGallery result={r} current={p.spec.type} onPick={(t) => p.onSpec({ ...p.spec, type: t })} recommendations={p.recommendations} />
+           </div>
+           {customize && <ChartCustomizer spec={p.spec} onChange={p.onSpec} themes={p.themes} result={r} />}
+diff --git a/apps/studio/components/analytics/Warnings.tsx b/apps/studio/components/analytics/Warnings.tsx
+new file mode 100644
+index 0000000..982d3fe
+--- /dev/null
++++ b/apps/studio/components/analytics/Warnings.tsx
+@@ -0,0 +1,20 @@
++"use client";
++import React from "react";
++
++/**
++ * The caveats on a result. A long list used to be stacked above the numbers
++ * until it read as the result itself. The first few stay visible — they are the
++ * ones that change how the numbers are read — and the rest sit behind one
++ * line. The numbers are never replaced by a warning.
++ */
++export function Warnings({ items, testId = "ax-warnings", show = 3 }: { items: string[]; testId?: string; show?: number }) {
++  const unique = [...new Set(items)];
++  if (!unique.length) return null;
++  const head = unique.slice(0, show), rest = unique.slice(show);
++  return (
++    <div className="ax-warnings" data-testid={testId}>
++      {head.map((w, i) => <div key={i}>⚠ {w}</div>)}
++      {rest.length > 0 && <details data-testid={`${testId}-more`}><summary>{rest.length} more note{rest.length === 1 ? "" : "s"}</summary>{rest.map((w, i) => <div key={i}>⚠ {w}</div>)}</details>}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/analytics/api.ts b/apps/studio/components/analytics/api.ts
+index 6aa0a28..f36830c 100644
+--- a/apps/studio/components/analytics/api.ts
++++ b/apps/studio/components/analytics/api.ts
+@@ -1,15 +1,20 @@
+ "use client";
+-import type { AnalysisDefinition, AnalysisResult, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
++import type { AnalysisDefinition, AnalysisResult, ChartAdvice, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
+ import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
+ 
+ /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
++/** an API failure that keeps its status and body — a 409 "not published" carries the reasons and whether it may be forced */
++export class ApiError extends Error {
++  constructor(message: string, public status: number, public body: unknown) { super(message); }
++}
++
+ export class AxApi {
+   constructor(public surveyId: string) {}
+   private base() { return `/api/surveys/${this.surveyId}/analytics`; }
+   private async req<T>(path: string, init?: RequestInit): Promise<T> {
+     const r = await fetch(`${this.base()}/${path}`, { ...init, headers: { "content-type": "application/json", ...(init?.headers ?? {}) }, cache: "no-store" });
+     const body = await r.json().catch(() => ({}));
+-    if (!r.ok) throw new Error((body as { error?: string }).error ?? `Request failed (${r.status})`);
++    if (!r.ok) throw new ApiError((body as { error?: string }).error ?? `Request failed (${r.status})`, r.status, body);
+     return body as T;
+   }
+   variables() { return this.req<{ variables: VariableMeta[]; counts: Record<string, number>; surveyVersion: string | null; revision: number | null }>("variables"); }
+@@ -23,7 +28,7 @@ export class AxApi {
+   remove(coll: string, id: string) { return this.req<{ ok: true }>(`${coll}/${id}`, { method: "DELETE" }); }
+   versions(coll: "analyses" | "reports", id: string) { return this.req<{ versions: Row[] }>(`${coll}/${id}/versions`); }
+   results(reportId: string, version?: number) { return this.req<{ mode: "live" | "snapshot"; version?: number; definition: unknown; theme: unknown; results: Record<string, AnalysisResult>; computedAt?: string; publishedAt?: string }>(`reports/${reportId}/results${version ? `?version=${version}` : ""}`); }
+-  publish(reportId: string, note?: string) { return this.req<{ version: number; publishedAt: string; viewerFilters?: number }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note }) }); }
++  publish(reportId: string, note?: string, force = false) { return this.req<{ version: number; publishedAt: string; viewerFilters?: number }>(`reports/${reportId}/publish`, { method: "POST", body: JSON.stringify({ note, ...(force ? { force: true } : {}) }) }); }
+   /* §36 — report templates: the shape of a deliverable, reusable across studies */
+   reportTemplates() { return this.req<{ templates: ReportTemplate[]; available: boolean; note?: string }>("report-templates"); }
+   saveReportTemplate(body: { name: string; description?: string; fromReportId?: string; template?: unknown }) {
+@@ -38,7 +43,8 @@ export class AxApi {
+   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
+   editPlan(body: { actions: unknown[]; baseRevision: number | null }) { return this.req<{ ok: true; plan: unknown; revision: number | null; results: { op: string; ok: boolean; description: string; error?: string }[]; warnings: string[]; savedAt: string }>("plan", { method: "PUT", body: JSON.stringify(body) }); }
+   applyPlan(body: { environment: string; dataset: string; replaceReport?: boolean }) { return this.req<ApplyResponse>("plan/apply", { method: "POST", body: JSON.stringify(body) }); }
+-  async export(body: Record<string, unknown>): Promise<void> {
++  /** returns the notes the server attached — what the file does NOT contain — so the caller can say so beside "downloaded" */
++  async export(body: Record<string, unknown>): Promise<{ notes: string[] }> {
+     const r = await fetch(`${this.base()}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+     if (!r.ok) {
+       /* the server's own words when it sent JSON; otherwise the start of what the platform answered (a timeout, a crash) */
+@@ -50,6 +56,9 @@ export class AxApi {
+     const blob = await r.blob();
+     const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `export.${body.format ?? "pptx"}`;
+     downloadBlob(blob, name);
++    let notes: string[] = [];
++    try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
++    return { notes };
+   }
+ }
+ 
+@@ -57,7 +66,7 @@ export type Row = Record<string, any>; // eslint-disable-line @typescript-eslint
+ /** what `GET plan` and `POST plan/apply` answer — the server's own types, imported as types only (the module itself is server-only) */
+ export type PlanPayload = Awaited<ReturnType<typeof planPayload>>;
+ export type ApplyResponse = ApplyPlanOutcome;
+-export type RunResult = AnalysisResult & { recommendations: ChartRecommendation[] };
++export type RunResult = AnalysisResult & { recommendations: ChartRecommendation[]; advice?: ChartAdvice };
+ 
+ export function downloadBlob(blob: Blob, name: string) {
+   const url = URL.createObjectURL(blob);
+diff --git a/apps/studio/components/analytics/charts/Chart.tsx b/apps/studio/components/analytics/charts/Chart.tsx
+index f4a7c5c..eeeda52 100644
+--- a/apps/studio/components/analytics/charts/Chart.tsx
++++ b/apps/studio/components/analytics/charts/Chart.tsx
+@@ -93,7 +93,7 @@ export function Chart(props: ChartProps) {
+   return (
+     <div className="ax-chart" ref={boxRef} style={{ position: "relative", fontFamily: ctx.font, background: o.background ?? theme.colors.background, borderRadius: 8 }} data-testid="ax-chart" data-chart-type={t}
+       onMouseMove={(e) => { const b = boxRef.current?.getBoundingClientRect(); if (b) setPos({ x: e.clientX - b.left, y: e.clientY - b.top }); }} onMouseLeave={() => setPos(null)}>
+-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxWidth: "100%" }} role="img" aria-label={title ?? props.result.name}>
++      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxWidth: "100%" }} role="img" aria-label={title || props.result.name}>
+         {title && <text x={0} y={16} fontSize={ctx.fs + 3} fontWeight={700} fill={ctx.textColor} fontFamily={ctx.font}>{title}</text>}
+         {o.subtitle && <text x={0} y={title ? 34 : 16} fontSize={ctx.fs - 1} fill={ctx.subtle} fontFamily={ctx.font}>{o.subtitle}</text>}
+         {body}
+diff --git a/apps/studio/lib/analytics.ts b/apps/studio/lib/analytics.ts
+index a0a4e2b..81b3d49 100644
+--- a/apps/studio/lib/analytics.ts
++++ b/apps/studio/lib/analytics.ts
+@@ -1,10 +1,11 @@
++import { stableStringify } from "@/lib/stableJson";
+ import "server-only";
+ import type { SupabaseClient } from "@supabase/supabase-js";
+ import type { Condition, SurveyDefinition } from "@rescript/schema";
+ import {
+-  buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
++  buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME,
+   unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf,
+-  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
++  type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
+ } from "@rescript/analytics";
+ import type { VersionedDefinition } from "@rescript/engine";
+ import { getCachedVersionDefinition } from "@rescript/quality/server";
+@@ -306,11 +307,18 @@ async function resolveAnalyticsVersions(
+   return { variables: union.variables, defFor: (row) => resolve(row.version_id) };
+ }
+ 
+-export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<AnalysisResult & { recommendations: ReturnType<typeof recommendCharts> }> {
++export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<AnalysisResult & { recommendations: ReturnType<typeof recommendCharts>; advice?: ChartAdvice }> {
+   const def = await resolveSaved(db, surveyId, definition);
+   const ds = await buildFor(db, surveyId, ctx, def);
+   const result = runAnalysis({ ...def, surveyVersion: def.surveyVersion ?? ctx.version ?? undefined }, ds);
+-  return { ...result, recommendations: recommendCharts(result) };
++  /* the chart to open on is chosen from WHAT WAS ASKED (multi-select, scale, numeric…), not only from the shape of the numbers */
++  try {
++    const advice = adviseChart(def, result, [...ds.byName.values()]);
++    return { ...result, recommendations: advice.alternatives, advice };
++  } catch (e) {
++    console.error("[analytics] chart advice failed, using shape-based recommendations:", e);
++    return { ...result, recommendations: recommendCharts(result) };
++  }
+ }
+ 
+ /** Variable picker payload: dictionary-derived metadata, grouped by question, plus dataset counts. */
+@@ -457,24 +465,42 @@ export async function dueMilestone(db: SupabaseClient, surveyId: string, def: Su
+  * must point at saved analyses to be drawn.
+  */
+ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string, ctx: LoadedContext, items: PlannedAnalysis[], userId: string | null): Promise<{ created: Record<string, unknown>[]; skipped: number; byPlanned: Map<string, string>; error?: string }> {
+-  const { data: existing } = await db.from("analytics_analyses").select("id, definition").eq("survey_id", surveyId).is("deleted_at", null);
++  const { data: existing } = await db.from("analytics_analyses").select("id, definition, version").eq("survey_id", surveyId).is("deleted_at", null);
+   const byPlanned = new Map<string, string>();
+-  for (const r of existing ?? []) { const p = String((r.definition as AnalysisDefinition)?.options?.planned ?? ""); if (p && !byPlanned.has(p)) byPlanned.set(p, String(r.id)); }
+-  const created: Record<string, unknown>[] = []; let skipped = 0;
++  const existingRow = new Map<string, { id: string; definition: AnalysisDefinition; version: number }>();
++  for (const r of existing ?? []) { const p = String((r.definition as AnalysisDefinition)?.options?.planned ?? ""); if (p && !byPlanned.has(p)) { byPlanned.set(p, String(r.id)); existingRow.set(p, { id: String(r.id), definition: r.definition as AnalysisDefinition, version: Number(r.version ?? 1) }); } }
++  const created: Record<string, unknown>[] = []; let skipped = 0; let firstError: string | undefined;
+   for (const it of items) {
+     const planned = String(it.definition.options?.planned ?? "");
+-    if (planned && byPlanned.has(planned)) { skipped++; continue; }
++    if (planned && byPlanned.has(planned)) {
++      /*
++       * Never created twice — but never left reading a different dataset than the
++       * run did either. A planned analysis saved earlier under another environment
++       * (the plan defaulted to LIVE) and re-used by the report read 0 responses in
++       * the report while the run showed the real count. One no person has edited
++       * (still version 1) is re-pointed at the dataset the plan now runs on; an
++       * edited one is the researcher's own and is left alone.
++       */
++      const cur = existingRow.get(planned);
++      if (cur && cur.version === 1 && stableStringify(cur.definition.dataset ?? null) !== stableStringify(it.definition.dataset ?? null)) {
++        const next = { ...cur.definition, dataset: it.definition.dataset };
++        await db.from("analytics_analyses").update({ definition: next }).eq("id", cur.id);
++        await db.from("analytics_analysis_versions").update({ definition: next }).eq("analysis_id", cur.id).eq("version", 1);
++      }
++      skipped++; continue;
++    }
+     const name = it.definition.name.slice(0, 160);
+     /* stamped with the hash of the planned definition it was written from, so a later apply can tell "the plan changed" from "the researcher refined it" (planWorkspace) */
+     const definition: AnalysisDefinition = { ...it.definition, name, surveyVersion: ctx.version ?? undefined, options: { ...(it.definition.options ?? {}), ...(planned ? { plannedHash: plannedHash(it.definition) } : {}) } };
+     const row = { survey_id: surveyId, name, kind: it.definition.kind, definition, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId };
+     const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
+-    if (error) return { created, skipped, byPlanned, error: error.message };
++    /* one failed insert must not blank every later block of the report: keep going, report the first failure */
++    if (error) { firstError ??= error.message; continue; }
+     await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: row.definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+     if (planned) byPlanned.set(planned, String(data.id));
+     created.push(data);
+   }
+-  return { created, skipped, byPlanned };
++  return { created, skipped, byPlanned, ...(firstError ? { error: firstError } : {}) };
+ }
+ 
+ /* ------------------------------------------------------------ the findings report (research-intelligence Phase 6) */
+@@ -499,6 +525,7 @@ export async function draftFindingsReport(db: SupabaseClient, surveyId: string,
+   const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
+   const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
+   const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
++  if (ensured.error && items.length && !ensured.byPlanned.size) return { report: null, definition: null as never, error: `The planned analyses could not be saved, so the report would have no charts: ${ensured.error}` };
+   const facts = await reportFacts(db, surveyId, ctx.def as SurveyDefinition);
+   const definition = reportFromRun(ctx.def as SurveyDefinition, run as never, {
+     analysisIdFor: (planned) => (planned ? ensured.byPlanned.get(planned) : undefined),
+diff --git a/apps/studio/lib/stableJson.test.ts b/apps/studio/lib/stableJson.test.ts
+new file mode 100644
+index 0000000..eb8a954
+--- /dev/null
++++ b/apps/studio/lib/stableJson.test.ts
+@@ -0,0 +1,11 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { stableStringify } from "./stableJson.ts";
++
++test("key order does not change the string; values and array order do", () => {
++  assert.equal(stableStringify({ dataset: { environment: "LIVE", dataset: "all" }, a: 1 }), stableStringify({ a: 1, dataset: { dataset: "all", environment: "LIVE" } }));
++  assert.notEqual(stableStringify({ a: [1, 2] }), stableStringify({ a: [2, 1] }));
++  assert.notEqual(stableStringify({ a: 1 }), stableStringify({ a: 2 }));
++  assert.equal(stableStringify(null), "null");
++  assert.equal(stableStringify({ a: undefined, b: 1 }), stableStringify({ b: 1 }));
++});
+diff --git a/apps/studio/lib/stableJson.ts b/apps/studio/lib/stableJson.ts
+new file mode 100644
+index 0000000..7ad96ed
+--- /dev/null
++++ b/apps/studio/lib/stableJson.ts
+@@ -0,0 +1,15 @@
++/**
++ * JSON.stringify with object keys sorted, so two structurally equal values give
++ * the same string. "Unsaved changes" and "Results are out of date" compare
++ * strings; Postgres `jsonb` hands keys back in its own order (shorter first),
++ * so a plain stringify called a freshly opened, untouched analysis "changed".
++ */
++export function stableStringify(value: unknown): string {
++  return JSON.stringify(value, (_k, v) => {
++    if (v && typeof v === "object" && !Array.isArray(v)) {
++      const o = v as Record<string, unknown>;
++      return Object.fromEntries(Object.keys(o).sort().map((k) => [k, o[k]]));
++    }
++    return v;
++  });
++}
+diff --git a/packages/access/src/audit.ts b/packages/access/src/audit.ts
+index bdfb892..d44138d 100644
+--- a/packages/access/src/audit.ts
++++ b/packages/access/src/audit.ts
+@@ -155,6 +155,7 @@ export const AUDIT_EVENTS = [
+   "billing.project_budget_changed",
+   "billing.transfer_reversed",
+   "analytics.export_generated",
++  "analytics.export_failed",
+   "analytics.report_downloaded",
+ 
+   /* collaboration */
+@@ -269,6 +270,7 @@ export function describeEvent(r: AuditRow): string {
+     case "analytics.report_shared": return `${who} shared report “${str(d.name)}” (${str(d.access) || "link"}${d.permission ? `, ${str(d.permission)}` : ""})`;
+     case "analytics.share_revoked": return `${who} revoked a share link for “${str(d.name)}”`;
+     case "analytics.share_accessed": return `A shared report “${str(d.name)}” was opened${d.viewer ? ` by ${str(d.viewer)}` : ""}`;
++    case "analytics.export_failed": return `${who} tried to export “${str(d.name)}” as ${str(d.format || "").toUpperCase()} and the file could not be built (ref ${str(d.ref)})`;
+     case "analytics.export_generated": return `${who} generated a ${str(d.format || "").toUpperCase()} export of “${str(d.name)}”`;
+     case "analytics.report_downloaded": return `A ${str(d.format || "").toUpperCase()} of “${str(d.name)}” was downloaded${d.viewer ? ` by ${str(d.viewer)}` : " from a share link"}`;
+     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;
+diff --git a/packages/analytics/src/analyses/analysisRobustness.test.ts b/packages/analytics/src/analyses/analysisRobustness.test.ts
+new file mode 100644
+index 0000000..a3239ce
+--- /dev/null
++++ b/packages/analytics/src/analyses/analysisRobustness.test.ts
+@@ -0,0 +1,67 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset } from "../dataset.js";
++import { runAnalysis, mentionsVariable } from "./index.js";
++import { lowColumnsWarning } from "./crosstab.js";
++import type { AnalysisDefinition } from "../types.js";
++import { def, synthRows } from "./fixture.js";
++
++/**
++ * Regressions for the Data Analytics audit (Oct 2026): a wall of per-column
++ * "has a base of N" warnings stacked above the table, raw exception text on
++ * screen, and a zero base drawn as 0.0%.
++ */
++const rows = synthRows();
++const dsSpec = { environment: "LIVE" as const, dataset: "all" as const };
++const ds = buildDataset(def, rows, { spec: dsSpec });
++const XT = (extra: Partial<AnalysisDefinition>, options: Record<string, unknown> = {}): AnalysisDefinition => ({ name: "xt", kind: "crosstab", dataset: dsSpec, variables: [], rows: ["SAT"], columns: ["GENDER"], options, ...extra } as AnalysisDefinition);
++
++test("lowColumnsWarning: one sentence, names the thinnest few, counts the rest", () => {
++  const many = Array.from({ length: 9 }, (_, i) => ({ label: `C${i}`, group: "G", n: 10 + i }));
++  const w = lowColumnsWarning(many);
++  assert.match(w, /^9 columns have a base under 30: C0 \(n = 10\), C1 \(n = 11\), C2 \(n = 12\), C3 \(n = 13\) and 5 more/);
++  assert.equal(lowColumnsWarning([{ label: "X", group: "G", n: 4 }]), "1 column has a base under 30: X (n = 4) — read it with caution.");
++});
++
++test("a crosstab with many thin columns raises ONE base warning, not one per column", () => {
++  const thin = rows.slice(0, 80); // 80 respondents spread over the banner: every column is thin
++  const small = buildDataset(def, thin, { spec: dsSpec });
++  const r = runAnalysis(XT({ columns: ["REGION", "GENDER"] }, { layout: "banner" }), small);
++  const baseWarnings = r.warnings.filter((w) => /base (of|under)/.test(w) && !/respondents \(fewer/.test(w));
++  assert.equal(baseWarnings.length, 1, `got ${baseWarnings.length}: ${baseWarnings.join(" | ")}`);
++  assert.ok(r.tables[0].rows.some((x) => x.__kind === "category"), "values are still in the table");
++});
++
++test("a column nobody is in shows no value, not 0.0%", () => {
++  // everyone is male, so the "Female" column has a base of 0
++  const allMale = synthRows().map((r) => ({ ...r, answers: { ...r.answers, q_gender: 1 } }));
++  const one = buildDataset(def, allMale, { spec: dsSpec });
++  const r = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }, { measure: "pct_col" }), one);
++  const t = r.tables[0];
++  assert.ok(t.columns.some((c) => c.key === "2"), "the empty column is still a column");
++  const cats = t.rows.filter((x) => x.__kind === "category");
++  assert.ok(cats.length > 0);
++  for (const row of cats) assert.equal(row["2"], null, `empty column drew ${String(row["2"])}`);
++  assert.ok(cats.some((row) => typeof row["1"] === "number" && (row["1"] as number) > 0), "the populated column keeps its values");
++});
++
++test("a failing runner returns a sentence and a code — never the raw exception", () => {
++  const bad = { name: "boom", kind: "descriptive", dataset: dsSpec, variables: ["SAT"], get options(): never { throw new TypeError("Cannot read properties of undefined (reading 'flatMap')"); } } as unknown as AnalysisDefinition;
++  const r = runAnalysis(bad, ds);
++  assert.equal(r.error?.code, "not_computable");
++  assert.ok(r.warnings.length === 1 && !/flatMap|undefined|TypeError/.test(r.warnings.join(" ")), r.warnings.join(" "));
++  assert.deepEqual(r.tables, []);
++});
++
++test("dataset warnings attach by whole variable name: Q1 does not pick up Q10's note", () => {
++  assert.equal(mentionsVariable("Segment “S” (Q10): A n = 4", "Q1"), false);
++  assert.equal(mentionsVariable("Segment “S” (Q1): A n = 4", "Q1"), true);
++  assert.equal(mentionsVariable("Q1", "Q1"), true);
++});
++
++test("unweighted: weighted n equals the valid base the table used — not everyone in the dataset", () => {
++  const skipped = synthRows().map((r, i) => (i < 60 ? { ...r, answers: { ...r.answers, q_sat: undefined } } : r));
++  const r = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }), buildDataset(def, skipped, { spec: dsSpec }));
++  assert.ok(r.base.n < r.base.total, `n ${r.base.n} should be below total ${r.base.total}`);
++  assert.equal(r.base.weightedN, r.base.n);
++});
+diff --git a/packages/analytics/src/analyses/common.ts b/packages/analytics/src/analyses/common.ts
+index b51c3fd..da2fb89 100644
+--- a/packages/analytics/src/analyses/common.ts
++++ b/packages/analytics/src/analyses/common.ts
+@@ -32,7 +32,7 @@ export function hashDefinition(def: AnalysisDefinition): string {
+  * the variables it needs), when the runner knows it.
+  */
+ export function baseOf(ds: Dataset, total: number, filtered: number, label = "All respondents", validN?: number) {
+-  return { total, filtered, n: validN ?? ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length, label };
++  return { total, filtered, n: validN ?? ds.cases.length, weightedN: ds.weighted ? (round(weightedN(ds), 1) ?? ds.cases.length) : (validN ?? ds.cases.length), label };
+ }
+ 
+ export function lowBaseWarning(n: number, what = "This analysis"): string | null {
+diff --git a/packages/analytics/src/analyses/crosstab.ts b/packages/analytics/src/analyses/crosstab.ts
+index 4a07d4c..9314efd 100644
+--- a/packages/analytics/src/analyses/crosstab.ts
++++ b/packages/analytics/src/analyses/crosstab.ts
+@@ -123,6 +123,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+   const totalRow = opt(def, "totalRow", false) as boolean;
+   const decimals = Math.min(4, Math.max(0, Number(opt(def, "decimals", 1)) || 0));
+   const warnings: string[] = [];
++  /** columns under the minimum base, across every table — reported ONCE, not once per column */
++  const lowCols = new Map<string, { label: string; group: string; n: number }>();
+   const tables: ResultTable[] = [];
+   const tests: TestResult[] = [];
+   const insights: string[] = [];
+@@ -269,9 +271,9 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+         let v: number | null;
+         if (suppressed.has(c.key)) v = null;
+         else if (measure === "count") v = round(cell.w, ds.weighted ? 1 : 0);
+-        else if (measure === "pct_row") v = b.rowBase.get(rk)?.w ? (cell.w / b.rowBase.get(rk)!.w) * 100 : 0;
+-        else if (measure === "pct_total") v = tot ? (cell.w / tot) * 100 : 0;
+-        else v = base.w ? (cell.w / base.w) * 100 : 0;
++        else if (measure === "pct_row") v = b.rowBase.get(rk)?.w ? (cell.w / b.rowBase.get(rk)!.w) * 100 : null;
++        else if (measure === "pct_total") v = tot ? (cell.w / tot) * 100 : null;
++        else v = base.w ? (cell.w / base.w) * 100 : null;
+         row[c.key] = measure === "count" ? v : val(v);
+         row[`${c.key}__n`] = cell.count;
+         if (sig[c.key]) row[`${c.key}__sig`] = sig[c.key];
+@@ -334,7 +336,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+ 
+   /** the chart follows the first row × first column pair of the first layer */
+   const chartFrom = (b: Block, cols: ColumnDef[], cv: string) => {
+-    if (chart.categories) return;
++    if (chart.categories?.length) return;
+     const cc = cols.filter((c) => c.variable === cv);
+     if (b.meanMode) { chart = { categories: cc.map((c) => c.label), series: [{ name: `Mean ${labelOf(ds, b.rv)}`, values: cc.map((c) => { const s = b.nums.get(c.key); return s && s.w ? round(s.sum / s.w) : null; }) }] }; return; }
+     const rCats = categoriesOf(ds, b.rv);
+@@ -435,7 +437,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+       ...(suppressed.size ? [`* Columns with fewer than ${minBase} respondents are suppressed.`] : []),
+       ...(Object.entries(colBases).some(([k, b]) => k !== "__total" && b > 0 && b < 30) ? ["Some columns have a base below 30 — read with caution."] : []),
+     ];
+-    for (const c of cols) { const b = colBases[c.key]; if (c.variable && b > 0 && b < 30 && !suppressed.has(c.key)) warnings.push(`Column “${c.label}” of ${c.group || labelOf(ds, c.variable)} has a base of ${b}.`); }
++    for (const c of cols) { const b = colBases[c.key]; if (c.variable && b > 0 && b < 30 && !suppressed.has(c.key)) lowCols.set(`${c.group || labelOf(ds, c.variable)}\u0000${c.label}`, { label: c.label, group: c.group || labelOf(ds, c.variable), n: b }); }
+     const id = `xt_${rvs.join("+")}_${cvs.join("+")}${layerVar ? "_" + layer.label : ""}`;
+     tables.push({ id, title, columns, rows: out, base: { n: top.colBase.get("__total")?.count ?? 0, weightedN: round(top.colBase.get("__total")?.w, 1) ?? 0 }, columnBases: colBases, notes });
+     for (const cv of cvs) { testsFor(top, cols, cv); chartFrom(top, cols, cv); }
+@@ -450,6 +452,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+       else for (const rv of rowVars) for (const cv of colVars) buildTable(layer, [rv], [cv]);
+     }
+   }
++  if (lowCols.size) warnings.push(lowColumnsWarning([...lowCols.values()]));
+   return makeResult(def, ds, {
+     tables, chart, tests, insights, warnings: [...new Set(warnings)],
+     recommendedCharts: ["bar_grouped", "bar_stacked_100", "heatmap_crosstab", "bar_horizontal", "table"],
+@@ -457,3 +460,16 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
+     validN: layerVar ? undefined : tables[0]?.base?.n,
+   });
+ }
++
++/**
++ * One sentence for every thin column. Twenty small columns used to be twenty
++ * warnings stacked above the table — a wall that read as the result itself.
++ * The detail (each column's base) is already printed under its column header;
++ * this names the worst few and counts the rest.
++ */
++export function lowColumnsWarning(cols: { label: string; group: string; n: number }[], min = 30, show = 4): string {
++  const sorted = [...cols].sort((a, b) => a.n - b.n);
++  const named = sorted.slice(0, show).map((c) => `${c.label} (n = ${c.n})`).join(", ");
++  const more = sorted.length > show ? ` and ${sorted.length - show} more` : "";
++  return `${sorted.length} column${sorted.length === 1 ? " has" : "s have"} a base under ${min}: ${named}${more} — read ${sorted.length === 1 ? "it" : "those"} with caution.`;
++}
+diff --git a/packages/analytics/src/analyses/index.ts b/packages/analytics/src/analyses/index.ts
+index 53bc531..ed760b6 100644
+--- a/packages/analytics/src/analyses/index.ts
++++ b/packages/analytics/src/analyses/index.ts
+@@ -20,25 +20,40 @@ export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
+ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
+   const runner = RUNNERS[def.kind];
+   const ds = def.filter ? filterDataset(dataset, def.filter) : dataset;
+-  if (!runner) {
+-    return {
+-      kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
+-      tables: [], chart: {}, tests: [], insights: [], warnings: [`Unknown analysis kind “${def.kind}”.`], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: [],
+-    };
+-  }
++  const stub = (warning: string, error: NonNullable<AnalysisResult["error"]>): AnalysisResult => ({
++    kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
++    tables: [], chart: {}, tests: [], insights: [], warnings: [warning], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: def.variables ?? [], error,
++  });
++  if (!runner) return stub(`Unknown analysis kind “${def.kind}”.`, { code: "unknown_kind", message: `“${def.kind}” is not an analysis type this version can run.` });
+   try {
+     const result = runner(def, ds, dataset.cases.length);
+     /* a plan variable this analysis reads that could not be computed as planned: the dataset's own note, on the result that depends on it */
+-    const relevant = (dataset.warnings ?? []).filter((w) => def.variables.some((v) => v && w.includes(v)) && !result.warnings.includes(w));
++    const relevant = (dataset.warnings ?? []).filter((w) => def.variables.some((v) => v && mentionsVariable(w, v)) && !result.warnings.includes(w));
+     return relevant.length ? { ...result, warnings: [...result.warnings, ...relevant] } : result;
+   } catch (e) {
+-    return {
+-      kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
+-      tables: [], chart: {}, tests: [], insights: [], warnings: [`The analysis could not be computed: ${(e as Error).message}`], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: def.variables,
+-    };
++    /*
++     * The raw message ("Cannot read properties of undefined…", a weights-length
++     * RangeError, a database string) is for the server log. What reaches the
++     * screen, the findings and the stored run is a sentence the researcher can
++     * act on, plus a stable code — and `error` set, so a caller can tell "this
++     * could not be computed" from "this was computed and is empty".
++     */
++    console.error(`[analytics] ${def.kind} “${def.name}” failed:`, e);
++    return stub("This analysis could not be computed with the selected data. Check that the variables it uses exist in this survey and have answers, then run it again.", { code: "not_computable", message: "The analysis could not be computed with the selected data." });
+   }
+ }
+ 
++/** The result a report shows for an analysis that could not be computed: a sentence and a code, no tables, no chart — and every other block still renders. */
++export function failedResult(name: string, kind: AnalysisDefinition["kind"], message = "This analysis could not be computed. Open it in the Analysis tab to see what is missing.", code: NonNullable<AnalysisResult["error"]>["code"] = "not_computable"): AnalysisResult {
++  return { kind, name, base: { total: 0, filtered: 0, n: 0, weightedN: 0, label: "All respondents" }, tables: [], chart: {}, tests: [], insights: [], warnings: [message], recommendedCharts: ["table"], computedAt: new Date().toISOString(), definitionHash: "", variablesUsed: [], error: { code, message } };
++}
++
++/** a variable named as a whole word — "Q1" is not "Q10" */
++export function mentionsVariable(text: string, variable: string): boolean {
++  const esc = variable.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++  return new RegExp(`(^|[^A-Za-z0-9_])${esc}($|[^A-Za-z0-9_])`).test(text);
++}
++
+ export * from "./basics.js";
+ export * from "./statistics.js";
+ export * from "./business.js";
+diff --git a/packages/analytics/src/blockRefs.test.ts b/packages/analytics/src/blockRefs.test.ts
+new file mode 100644
+index 0000000..239911f
+--- /dev/null
++++ b/packages/analytics/src/blockRefs.test.ts
+@@ -0,0 +1,64 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { reportAnalysisIds, summaryAnalysisIds, normalizeBlocks, explicitAnalysisIds } from "./blockRefs.js";
++import type { ReportBlock } from "./types.js";
++
++const B = (x: unknown) => x as ReportBlock;
++
++test("reportAnalysisIds reads every kind of block, tolerating absent analysisIds", () => {
++  const blocks = [
++    B({ id: "1", type: "chart", analysisId: "a" }),
++    B({ id: "2", type: "insights" }),
++    B({ id: "3", type: "executive_summary", analysisIds: ["b", "a"] }),
++    B({ id: "4", type: "panel_grid", panels: [{ id: "p", analysisId: "c" }, { id: "q", analysisId: "" }] }),
++    B({ id: "5", type: "kpi", analysisId: "" }),
++  ];
++  assert.deepEqual(reportAnalysisIds({ blocks }).sort(), ["a", "b", "c"]);
++  assert.deepEqual(reportAnalysisIds({ widgets: [{ analysisId: "w" }, {}] }), ["w"]);
++  assert.deepEqual(reportAnalysisIds({}), []);
++});
++
++test("summaryAnalysisIds: explicit choice wins; none chosen means every analysis the report shows", () => {
++  const blocks = [B({ id: "1", type: "chart", analysisId: "a" }), B({ id: "2", type: "table", analysisId: "b" }), B({ id: "3", type: "insights" }), B({ id: "4", type: "insights", analysisIds: ["z"] })];
++  assert.deepEqual(summaryAnalysisIds(blocks[2], { blocks }), ["a", "b"]);
++  assert.deepEqual(summaryAnalysisIds(blocks[3], { blocks }), ["z"]);
++  assert.deepEqual(explicitAnalysisIds(blocks[2]), []);
++});
++
++test("normalizeBlocks makes the optional ids explicit and leaves other blocks alone", () => {
++  const blocks = [B({ id: "1", type: "insights" }), B({ id: "2", type: "text", markdown: "x" })];
++  const out = normalizeBlocks(blocks);
++  assert.deepEqual((out[0] as { analysisIds?: string[] }).analysisIds, []);
++  assert.equal(out[1], blocks[1]);
++});
++
++import { checkSnapshot } from "./blockRefs.js";
++
++test("checkSnapshot: responses is the largest base, not whichever analysis came first", () => {
++  const blocks = [B({ id: "1", type: "chart", analysisId: "a" }), B({ id: "2", type: "chart", analysisId: "b" })];
++  const c = checkSnapshot({ blocks }, { a: { base: { total: 0, n: 0 } }, b: { base: { total: 33, n: 33 } } });
++  assert.equal(c.responses, 33);
++  assert.equal(c.ok, true);
++});
++
++test("checkSnapshot flags a report that would freeze blank: all-zero bases, deleted and failed analyses", () => {
++  const blocks = [B({ id: "1", type: "chart", analysisId: "a" }), B({ id: "2", type: "chart", analysisId: "gone" }), B({ id: "3", type: "kpi", analysisId: "bad" })];
++  const c = checkSnapshot({ blocks }, { a: { base: { total: 0, n: 0 } }, bad: { name: "NPS", base: { total: 40, n: 40 }, error: { code: "not_computable" } } });
++  assert.deepEqual(c.missing, ["gone"]);
++  assert.deepEqual(c.failed, ["bad"]);
++  assert.equal(c.ok, false);
++  const empty = checkSnapshot({ blocks: [blocks[0]] }, { a: { base: { total: 0, n: 0 } } });
++  assert.equal(empty.empty, true);
++  assert.match(empty.problems[0], /every chart and number would read 0/);
++  assert.equal(checkSnapshot({ blocks: [B({ id: "t", type: "text", markdown: "x" })] }, {}).ok, true, "a text-only report has nothing to be blank");
++});
++
++import { normalizeReportDefinition } from "./blockRefs.js";
++
++test("normalizeReportDefinition heals stored blocks and leaves dashboards alone", () => {
++  const d = normalizeReportDefinition({ title: "t", blocks: [B({ id: "1", type: "executive_summary" })] }) as unknown as { blocks: { analysisIds: string[] }[] };
++  assert.deepEqual(d.blocks[0].analysisIds, []);
++  const dash = { title: "d", widgets: [{ id: "w" }] };
++  assert.equal(normalizeReportDefinition(dash), dash);
++  assert.equal(normalizeReportDefinition(null), null);
++});
+diff --git a/packages/analytics/src/blockRefs.ts b/packages/analytics/src/blockRefs.ts
+new file mode 100644
+index 0000000..9ab208b
+--- /dev/null
++++ b/packages/analytics/src/blockRefs.ts
+@@ -0,0 +1,95 @@
++import type { ReportBlock, ReportDefinition, TemplateBlock } from "./types.js";
++
++/**
++ * THE one place that answers "which analyses does this report block read?".
++ *
++ * Before this existed the export, the compute step, the findings report and
++ * the viewer each re-derived it with `"analysisIds" in block` followed by an
++ * unguarded `.analysisIds.map/flatMap`. A built-in page template ships an
++ * `insights` block ("Findings") with NO `analysisIds`; saved into a report it
++ * crashed the PowerPoint export with
++ * "Cannot read properties of undefined (reading 'flatMap')" while the viewer
++ * (which happened to use `?? []`) rendered fine — so the preview worked and
++ * the export failed.
++ *
++ * Rules:
++ *  - a block with its own `analysisId` reads that one;
++ *  - a `panel_grid` reads every panel's analysis;
++ *  - `insights` / `executive_summary` read their `analysisIds`; when none are
++ *    chosen (absent or empty) they summarise every analysis the rest of the
++ *    report shows, which is what an unconfigured "Findings" block means.
++ */
++type AnyBlock = ReportBlock | TemplateBlock;
++
++const own = (b: AnyBlock): string[] => {
++  const x = b as { analysisId?: unknown; analysisIds?: unknown; panels?: unknown };
++  const ids: string[] = [];
++  if (typeof x.analysisId === "string" && x.analysisId) ids.push(x.analysisId);
++  if (Array.isArray(x.analysisIds)) for (const id of x.analysisIds) if (typeof id === "string" && id) ids.push(id);
++  if (b.type === "panel_grid" && Array.isArray(x.panels)) for (const p of x.panels as { analysisId?: string }[]) if (p && typeof p.analysisId === "string" && p.analysisId) ids.push(p.analysisId);
++  return [...new Set(ids)];
++};
++
++/** Analyses a block names itself (no fallback). */
++export function explicitAnalysisIds(block: AnyBlock): string[] { return own(block); }
++
++/** Every analysis a report's data blocks read (what must be computed / snapshotted). */
++export function reportAnalysisIds<R extends { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] }>(report: R): string[] {
++  const ids = new Set<string>();
++  for (const b of report.blocks ?? []) for (const id of own(b)) ids.add(id);
++  for (const w of report.widgets ?? []) if (w?.analysisId) ids.add(w.analysisId);
++  return [...ids];
++}
++
++/** The analyses an `insights` / `executive_summary` block summarises, with the "all of them" default. */
++export function summaryAnalysisIds(block: AnyBlock, report: Pick<ReportDefinition, "blocks">): string[] {
++  const chosen = own(block);
++  if (chosen.length) return chosen;
++  const all = new Set<string>();
++  for (const b of report.blocks ?? []) if (b.type !== "insights" && b.type !== "executive_summary") for (const id of own(b)) all.add(id);
++  return [...all];
++}
++
++/** A block list with the optional ids made explicit — what save/apply-template write so stored reports are never ragged. */
++export function normalizeBlocks<T extends AnyBlock>(blocks: readonly T[]): T[] {
++  return blocks.map((b) => (b.type === "insights" || b.type === "executive_summary") && !Array.isArray((b as { analysisIds?: unknown }).analysisIds) ? ({ ...b, analysisIds: [] } as T) : b);
++}
++
++/**
++ * What a snapshot is about to freeze — checked BEFORE it is written, because a
++ * published version is a record: a link sent to a client that shows "0
++ * responses" cannot be fixed by recomputing, only by publishing again.
++ *
++ *  - `responses` is the LARGEST base any analysis in the report saw. (It used
++ *    to be the base of whichever analysis the database happened to return
++ *    first, so a report mixing datasets could announce 0.)
++ *  - `missing` analyses are referenced by a block but were not computed
++ *    (deleted since, or not in this survey).
++ *  - `failed` analyses carry a structured error.
++ *  - `empty` is true when analyses exist but not one of them saw a respondent.
++ */
++export interface SnapshotCheck { responses: number; missing: string[]; failed: string[]; empty: boolean; ok: boolean; problems: string[] }
++
++export function checkSnapshot(
++  definition: { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] },
++  snapshot: Record<string, { name?: string; base?: { total?: number; n?: number }; error?: unknown } | undefined>,
++): SnapshotCheck {
++  const referenced = reportAnalysisIds(definition);
++  const missing = referenced.filter((id) => !snapshot[id]);
++  const present = referenced.filter((id) => snapshot[id]);
++  const failed = present.filter((id) => !!snapshot[id]!.error);
++  const responses = present.reduce((m, id) => Math.max(m, snapshot[id]!.base?.total ?? 0), 0);
++  const empty = present.length > 0 && present.every((id) => (snapshot[id]!.base?.n ?? 0) === 0 && (snapshot[id]!.base?.total ?? 0) === 0);
++  const problems: string[] = [];
++  if (missing.length) problems.push(`${missing.length} analysis${missing.length === 1 ? " this report uses no longer exists" : "es this report uses no longer exist"} and would be blank.`);
++  if (failed.length) problems.push(`${failed.length} analysis${failed.length === 1 ? " could not be computed" : "es could not be computed"}: ${failed.slice(0, 3).map((id) => snapshot[id]!.name ?? id).join(", ")}.`);
++  if (empty) problems.push("Not one analysis in this report has a respondent in its selected data (environment, status or date range), so every chart and number would read 0.");
++  return { responses, missing, failed, empty, ok: problems.length === 0, problems };
++}
++
++/** A report or dashboard definition as it is stored: ragged optional ids made explicit. Dashboards (widgets) pass through untouched. */
++export function normalizeReportDefinition<D>(definition: D): D {
++  const d = definition as unknown as { blocks?: unknown };
++  if (!d || typeof d !== "object" || !Array.isArray(d.blocks)) return definition;
++  return { ...(definition as object), blocks: normalizeBlocks(d.blocks as AnyBlock[]) } as D;
++}
+diff --git a/packages/analytics/src/export/export.test.ts b/packages/analytics/src/export/export.test.ts
+index 2846a1d..436c1a5 100644
+--- a/packages/analytics/src/export/export.test.ts
++++ b/packages/analytics/src/export/export.test.ts
+@@ -175,3 +175,25 @@ test("xlsx: summary + one sheet per analysis + chart data + metadata; percents s
+   assert.ok(pctCell, "percent cells are numeric with a % format");
+   assert.ok(((pctCell as unknown as ExcelJS.Cell).value as number) <= 1);
+ });
++
++/* ------------------------------------------------------------- regression: block with no analysisIds
++ * The built-in "Findings" page ships an `insights` block with no analysisIds.
++ * It used to crash the PowerPoint export with
++ * "Cannot read properties of undefined (reading 'flatMap')" while the viewer
++ * rendered it, so the preview worked and the export returned a 500.
++ */
++test("pptx: an insights / executive-summary block with no analysisIds exports (all analyses are summarised)", async () => {
++  const ragged = {
++    title: "Ragged", mode: "live",
++    blocks: [
++      { id: "r0", type: "cover", title: "Ragged" },
++      { id: "r1", type: "chart", analysisId: "a1", chart: { type: "bar_grouped", options: {} } },
++      { id: "r2", type: "insights", title: "Findings" },
++      { id: "r3", type: "executive_summary", title: "Summary" },
++    ],
++  } as unknown as ReportDefinition;
++  const buf = await buildPptx({ report: ragged, results, meta: { survey: "Synthetic", environment: "LIVE" } });
++  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
++  const bufX = await buildXlsx({ report: ragged, results, meta: { Survey: "Synthetic" } });
++  assert.equal(bufX.subarray(0, 2).toString("latin1"), "PK");
++});
+diff --git a/packages/analytics/src/export/pptx.ts b/packages/analytics/src/export/pptx.ts
+index bebff5c..47a7beb 100644
+--- a/packages/analytics/src/export/pptx.ts
++++ b/packages/analytics/src/export/pptx.ts
+@@ -16,6 +16,7 @@ type ChartName = Extract<Parameters<Slide["addChart"]>[0], string>;
+ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
+ import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
+ import { executiveSummary } from "../summary.js";
++import { summaryAnalysisIds } from "../blockRefs.js";
+ import { chartTitleFor, seriesForChart } from "./shared.js";
+ import { methodologyBlock, methodologyLines } from "../reportPages.js";
+ 
+@@ -258,7 +259,7 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
+   if (theme.logoUrl && theme.logoUrl.startsWith("data:")) cover.addImage({ data: theme.logoUrl, x: 0.6, y: 0.5, w: 1.6, h: 0.7 });
+ 
+   // executive summary
+-  const usedResults = input.report.blocks.flatMap((b) => ("analysisId" in b && b.analysisId ? [{ name: ("title" in b && b.title) || input.results[b.analysisId]?.name || b.analysisId, result: input.results[b.analysisId] }] : "analysisIds" in b ? b.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })) : [])).filter((x) => x.result);
++  const usedResults = input.report.blocks.flatMap((b) => ("analysisId" in b && b.analysisId ? [{ name: ("title" in b && b.title) || input.results[b.analysisId]?.name || b.analysisId, result: input.results[b.analysisId] }] : "analysisIds" in b ? summaryAnalysisIds(b, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })) : [])).filter((x) => x.result);
+   if (settings.include.executiveSummary) {
+     const items = executiveSummary(usedResults.filter((x, i, a) => a.findIndex((y) => y.result === x.result) === i));
+     if (items.length) {
+@@ -282,8 +283,8 @@ export async function buildPptx(input: PptxInput): Promise<Buffer> {
+     if (block.type === "cover") return;
+     if (block.type === "section") { if (!px.sectionDividers) return; const s = p.addSlide(); slideNo++; s.background = { color: hex(theme.colors.secondary) }; s.addText(block.title, { x: 0.6, y: 2.0, w: W - 1.2, h: 1, fontSize: 28, bold: true, color: "FFFFFF", fontFace: font }); if (block.subtitle) s.addText(block.subtitle, { x: 0.6, y: 3.0, w: W - 1.2, h: 0.6, fontSize: 14, color: "FFFFFF", fontFace: font }); return; }
+     if (block.type === "text") { const s = p.addSlide(); decorate(s, block.title ?? ""); s.addText(block.markdown.replace(/[#*_`>]/g, ""), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, fontSize: 12, color: text, fontFace: font, valign: "top" }); return; }
+-    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(block.analysisIds.map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+-    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = block.analysisIds.flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
++    if (block.type === "executive_summary") { const s = p.addSlide(); decorate(s, block.title ?? "Executive summary"); const items = executiveSummary(summaryAnalysisIds(block, input.report).map((id) => ({ name: input.results[id]?.name ?? id, result: input.results[id] })).filter((x) => x.result)); s.addText((block.text ? [{ text: block.text, options: { fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 8 } }] : []).concat(items.map((it) => ({ text: `${it.analysis}: ${it.headline}`, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } as never }))), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
++    if (block.type === "insights") { const s = p.addSlide(); decorate(s, block.title ?? "Key insights"); const lines = summaryAnalysisIds(block, input.report).flatMap((id) => input.results[id]?.insights ?? []); s.addText(lines.map((l) => ({ text: l, options: { bullet: true, fontSize: 12, color: text, fontFace: font, breakLine: true, paraSpaceAfter: 6 } })), { x: 0.6, y: 1.1, w: W - 1.2, h: 4, valign: "top" }); return; }
+     /*
+      * §36 — a page break is already a slide boundary here, since every block
+      * gets its own slide; it is skipped rather than rendered. The METHODOLOGY
+diff --git a/packages/analytics/src/findings.ts b/packages/analytics/src/findings.ts
+index 8ed884d..abd593a 100644
+--- a/packages/analytics/src/findings.ts
++++ b/packages/analytics/src/findings.ts
+@@ -1,3 +1,4 @@
++import { adviseChart } from "./questionChart.js";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { hypothesisLabel } from "@rescript/schema";
+ import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec } from "./types.js";
+@@ -523,7 +524,7 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
+   const runOne = (p: PlannedAnalysis, adaptedFrom?: string): RunItem => {
+     const result = runAnalysis(p.definition, dataset);
+     const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
+-    const chart = recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
++    const chart = adviseChart(p.definition, result, [...dataset.byName.values()]).type ?? recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
+     /* which pairs differ, when a significant comparison had three or more groups (Phase 4) */
+     if (p.definition.kind === "test" && dataset.cases.length >= MIN_BASE) {
+       const [y, g] = p.definition.variables;
+diff --git a/packages/analytics/src/findingsReport.test.ts b/packages/analytics/src/findingsReport.test.ts
+index 2a2a52f..b309e77 100644
+--- a/packages/analytics/src/findingsReport.test.ts
++++ b/packages/analytics/src/findingsReport.test.ts
+@@ -2,7 +2,8 @@ import test from "node:test";
+ import assert from "node:assert/strict";
+ import { def as base, synthDataset } from "./analyses/fixture.js";
+ import { runPlan } from "./findings.js";
+-import { reportFromRun, reportNarrative, reportAnalysisIds } from "./findingsReport.js";
++import { reportFromRun, reportNarrative } from "./findingsReport.js";
++import { reportAnalysisIds } from "./blockRefs.js";
+ import { reportPages } from "./reportPages.js";
+ import { buildPptx } from "./export/pptx.js";
+ import type { AnalysisResult, ReportBlock } from "./types.js";
+diff --git a/packages/analytics/src/findingsReport.ts b/packages/analytics/src/findingsReport.ts
+index 9feb91e..610aa56 100644
+--- a/packages/analytics/src/findingsReport.ts
++++ b/packages/analytics/src/findingsReport.ts
+@@ -121,16 +121,5 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
+   return { title, subtitle: `Findings as of ${date(run.computedAt)}`, mode: "live", blocks };
+ }
+ 
+-/** every saved analysis the report draws — for the export's results map */
+-export function reportAnalysisIds(report: ReportDefinition): string[] {
+-  const ids = new Set<string>();
+-  for (const b of report.blocks) {
+-    if ((b.type === "chart" || b.type === "table" || b.type === "kpi") && b.analysisId) ids.add(b.analysisId);
+-    if ((b.type === "insights" || b.type === "executive_summary")) for (const id of b.analysisIds) ids.add(id);
+-    if (b.type === "panel_grid") for (const p of b.panels) if (p.analysisId) ids.add(p.analysisId);
+-  }
+-  return [...ids];
+-}
+-
+ /** a finding's own line for a slide or a caption */
+ export const findingLine = (f: Finding): string => `${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}`;
+diff --git a/packages/analytics/src/index.ts b/packages/analytics/src/index.ts
+index c7ac873..74c7357 100644
+--- a/packages/analytics/src/index.ts
++++ b/packages/analytics/src/index.ts
+@@ -25,3 +25,5 @@ export * from "./chartPurpose.js";
+ export * from "./deck.js";
+ export * from "./narrative.js";
+ export * from "./planWorkspace.js";
++export * from "./blockRefs.js";
++export * from "./questionChart.js";
+diff --git a/packages/analytics/src/questionChart.test.ts b/packages/analytics/src/questionChart.test.ts
+new file mode 100644
+index 0000000..d51fa16
+--- /dev/null
++++ b/packages/analytics/src/questionChart.test.ts
+@@ -0,0 +1,109 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset, variableMetadata } from "./dataset.js";
++import { runAnalysis } from "./analyses/index.js";
++import { adviseChart, checkChartChoice, scaleOf, looksOrdered, denominatorFor } from "./questionChart.js";
++import type { AnalysisDefinition } from "./types.js";
++import { def, synthRows } from "./analyses/fixture.js";
++
++const spec = { environment: "LIVE" as const, dataset: "all" as const };
++const rows = synthRows();
++const ds = buildDataset(def, rows, { spec });
++const vars = variableMetadata(def);
++const D = (kind: AnalysisDefinition["kind"], variables: string[], extra: Partial<AnalysisDefinition> = {}): AnalysisDefinition => ({ name: kind, kind, dataset: spec, variables, ...extra } as AnalysisDefinition);
++const advise = (d: AnalysisDefinition, data = ds) => { const r = runAnalysis(d, data); return { r, a: adviseChart(d, r, vars) }; };
++
++test("scaleOf reads the structure from the dictionary", () => {
++  const by = (n: string) => scaleOf(vars.find((v) => v.name === n));
++  assert.equal(by("GENDER"), "nominal");
++  assert.equal(by("REGION"), "nominal");
++  assert.equal(by("SAT"), "ordinal", "a 1–5 satisfaction scale is ordered");
++  assert.equal(by("AGE"), "numeric");
++  assert.equal(by("CONSIDER"), "multi");
++  assert.equal(by("TEXT"), "text");
++  assert.equal(looksOrdered([{ code: "1", label: "North" }, { code: "2", label: "South" }, { code: "3", label: "East" }]), false);
++  assert.equal(looksOrdered([{ code: "1", label: "Very unlikely" }, { code: "2", label: "Unlikely" }, { code: "3", label: "Likely" }, { code: "4", label: "Very likely" }]), true);
++});
++
++test("a multiple-choice question gets horizontal bars, never a pie, and an explicit denominator", () => {
++  const { a } = advise(D("descriptive", ["CONSIDER"]));
++  assert.equal(a.scale, "multi");
++  assert.equal(a.type, "bar_horizontal");
++  assert.ok(a.avoided.some((x) => x.type === "pie" || x.type === "donut" || x.type === "bar_stacked_100") || !a.alternatives.some((x) => x.type === "pie"));
++  assert.ok(!a.alternatives.some((x) => x.type === "pie" || x.type === "donut"), "no pie among the alternatives");
++  assert.match(a.denominator, /several answers were allowed.*more than 100%/);
++  assert.ok(a.notes.some((n) => /more than 100%/.test(n)));
++});
++
++test("a categorical question is never offered a mean chart or a line", () => {
++  const { a } = advise(D("descriptive", ["REGION"]));
++  assert.equal(a.scale, "nominal");
++  for (const bad of ["mean_ci", "ci_plot", "line", "area", "spline"] as const) assert.ok(!a.alternatives.some((x) => x.type === bad), `${bad} offered for a categorical question`);
++  assert.match(a.reason, /categorical question/);
++});
++
++test("a numeric answer is shown as a distribution", () => {
++  const { r, a } = advise(D("descriptive", ["AGE"]));
++  assert.equal(a.scale, "numeric");
++  assert.ok(["histogram", "box_plot", "bar_vertical", "bar_horizontal"].includes(a.type), `got ${a.type}`);
++  assert.ok(!a.alternatives.some((x) => x.type === "pie"));
++  assert.ok(r.base.n > 0);
++});
++
++test("a scale question keeps its order: bars in scale order, no pie", () => {
++  const { a } = advise(D("descriptive", ["SAT"]));
++  assert.equal(a.scale, "ordinal");
++  assert.ok(!a.alternatives.some((x) => x.type === "pie" || x.type === "donut"));
++  assert.ok(a.notes.some((n) => /scale order|keep their order/i.test(n)));
++});
++
++test("a thin base is flagged and never gets a pie", () => {
++  const thin = buildDataset(def, rows.slice(0, 20), { spec });
++  const { a } = advise(D("descriptive", ["GENDER"]), thin);
++  assert.ok(a.notes.some((n) => /Only \d+ respondents/.test(n)), a.notes.join("|"));
++  assert.ok(!a.alternatives.some((x) => x.type === "pie" || x.type === "donut"));
++});
++
++test("a crosstab states what the percentages are of", () => {
++  const { a, r } = advise(D("crosstab", [], { rows: ["SAT"], columns: ["GENDER"] }));
++  assert.match(a.denominator, new RegExp(`${r.base.n}`));
++  assert.ok(a.alternatives.length > 0);
++});
++
++test("denominatorFor says so when nobody answered", () => {
++  assert.match(denominatorFor({ kind: "descriptive", base: { total: 40, filtered: 40, n: 0, weightedN: 0, label: "All respondents" } }, "nominal"), /No respondents/);
++  assert.match(denominatorFor({ kind: "descriptive", base: { total: 400, filtered: 400, n: 212, weightedN: 212, label: "All respondents" } }, "nominal"), /the 212 of 400 respondents who answered/);
++});
++
++test("checkChartChoice: a saved choice survives unless the data cannot draw it", () => {
++  const r = runAnalysis(D("descriptive", ["GENDER"]), ds);
++  assert.equal(checkChartChoice(r, "bar_vertical").valid, true);
++  assert.equal(checkChartChoice(r, "table").valid, true);
++  const bad = checkChartChoice(r, "word_cloud");
++  assert.equal(bad.valid, false);
++  assert.ok(bad.fallback && bad.reason && /cannot draw this result/.test(bad.reason));
++});
++
++test("a single-choice list with numeric or scale-worded answers is a scale; a list of places is not", () => {
++  const cat = (labels: string[]) => ({ role: "categorical" as const, questionType: "single_select", categories: labels.map((l, i) => ({ code: String(i + 1), label: l })) });
++  assert.equal(scaleOf(cat(["1", "2", "3", "4", "5"])), "ordinal");
++  assert.equal(scaleOf(cat(["Very poor", "Poor", "Fair", "Good", "Very good"])), "ordinal");
++  assert.equal(scaleOf(cat(["North", "South", "East", "West"])), "nominal");
++});
++
++test("no line through unordered categories, even when a runner suggests one", () => {
++  const r = runAnalysis(D("descriptive", ["REGION"]), ds);
++  const withLine = { ...r, recommendedCharts: ["line" as const, "line_multi" as const, "bar_vertical" as const] };
++  const a = adviseChart(D("descriptive", ["REGION"]), withLine, vars);
++  assert.ok(!a.alternatives.some((x) => x.type === "line" || x.type === "line_multi"), a.alternatives.map((x) => x.type).join(","));
++  assert.ok(a.avoided.some((x) => x.type === "line" && /order/.test(x.why)));
++  // …but ordered periods do get a line
++  const waves = { ...r, kind: "trend" as const, chart: { ...r.chart, categories: ["2026-01", "2026-02", "2026-03"], series: [{ name: "x", values: [1, 2, 3] }] } };
++  assert.equal(adviseChart(D("trend", ["REGION"]), waves, vars).type, "line");
++});
++
++test("no line for a numeric answer's bins either (they are not periods)", () => {
++  const r = runAnalysis(D("descriptive", ["AGE"]), ds);
++  const a = adviseChart(D("descriptive", ["AGE"]), { ...r, recommendedCharts: ["line" as const, "area" as const, "histogram" as const] }, vars);
++  assert.ok(!a.alternatives.some((x) => x.type === "line" || x.type === "area"), a.alternatives.map((x) => x.type).join(","));
++});
+diff --git a/packages/analytics/src/questionChart.ts b/packages/analytics/src/questionChart.ts
+new file mode 100644
+index 0000000..cfd1ec3
+--- /dev/null
++++ b/packages/analytics/src/questionChart.ts
+@@ -0,0 +1,188 @@
++import type { AnalysisDefinition, AnalysisResult, ChartType } from "./types.js";
++import type { VariableMeta } from "./dataset.js";
++import { chooseChart, type Audience } from "./chartPurpose.js";
++import { chartsAvailable, recommendCharts, type ChartRecommendation } from "./recommend.js";
++
++/**
++ * QUESTION-AWARE CHART SELECTION (Data Analytics audit, Oct 2026).
++ *
++ * `chooseChart` already reads WHY a chart is shown (purpose) and for WHOM
++ * (audience). What it could not read is WHAT was asked: a multiple-choice
++ * question whose bars add to more than 100 %, a Likert battery, a numeric
++ * answer, a ranking. Without that, every categorical question got a bar and
++ * a pie, every result with a mean got a mean chart, and nothing said what
++ * the percentages were percentages OF.
++ *
++ * This layer adds the question's measurement structure on top of the same
++ * candidate list: it lifts the charts that suit the structure, VETOES the
++ * ones that would misrepresent it (a pie of overlapping answers, a mean of a
++ * categorical, a line across unordered categories), states the denominator,
++ * and says why — in a sentence a researcher can read. It never invents a
++ * chart the data cannot draw; the candidates are the shape-based ones.
++ */
++export type Scale = "nominal" | "ordinal" | "multi" | "numeric" | "ranking" | "text" | "time" | "mixed" | "unknown";
++
++const ORDINAL_TYPES = new Set(["rating", "rating_scale", "likert", "matrix_likert", "matrix_single", "star_rating", "semantic_differential"]);
++const RANKING_TYPES = new Set(["ranking", "image_ranking"]);
++
++const SCALE_WORDS = /\b(very|strongly|somewhat|slightly|neither|agree|disagree|satisf|dissatisf|likely|unlikely|poor|fair|good|excellent|never|rarely|sometimes|often|always|none|low|high|not at all|extremely)\b/i;
++/** a single-choice list whose answers are numbers, or are worded as a scale, is a scale — "North, South, East, West" is not */
++export function looksOrdered(categories: readonly { code: string; label: string }[] | undefined): boolean {
++  if (!categories || categories.length < 3 || categories.length > 11) return false;
++  return categories.every((c) => /^\d+$/.test(String(c.label).trim())) || categories.filter((c) => SCALE_WORDS.test(String(c.label))).length >= Math.ceil(categories.length / 2);
++}
++
++/** The measurement structure of one variable, from its dictionary entry. */
++export function scaleOf(meta: Pick<VariableMeta, "role" | "questionType" | "categories"> | undefined): Scale {
++  if (!meta) return "unknown";
++  const t = meta.questionType ?? "";
++  if (RANKING_TYPES.has(t)) return "ranking";
++  if (meta.role === "multi") return "multi";
++  if (meta.role === "text") return "text";
++  if (meta.role === "date") return "time";
++  if (meta.role === "numeric") return "numeric";
++  if (meta.role === "scale") return ORDINAL_TYPES.has(t) || (meta.categories?.length ?? 0) >= 3 ? "ordinal" : "numeric";
++  if (meta.role === "categorical") return ORDINAL_TYPES.has(t) || looksOrdered(meta.categories) ? "ordinal" : "nominal";
++  return "unknown";
++}
++
++export interface ChartAdvice {
++  /** the chart to open on */
++  type: ChartType;
++  /** why this one, in a sentence */
++  reason: string;
++  /** what the percentages / means are of: "% of the 212 respondents who answered; several answers allowed" */
++  denominator: string;
++  scale: Scale;
++  /** ranked, best first — the one above is the first */
++  alternatives: ChartRecommendation[];
++  /** charts that were available but are wrong for this question, and why — so an override can be explained */
++  avoided: { type: ChartType; why: string }[];
++  /** reading notes: small base, overlapping answers, unordered categories */
++  notes: string[];
++}
++
++const PIE_LIKE: ChartType[] = ["pie", "donut", "bar_stacked_100"];
++const MEAN_LIKE: ChartType[] = ["mean_ci", "ci_plot", "error_bar", "diff_means"];
++const LINE_LIKE: ChartType[] = ["line", "line_multi", "area", "spline", "wave_trend"];
++const SMALL = 30;
++
++const firstVars = (def: Pick<AnalysisDefinition, "variables" | "rows" | "columns">): string[] => [...(def.rows ?? []), ...(def.variables ?? []), ...(def.columns ?? [])].filter(Boolean);
++
++/** what the figures are a share / mean OF — never left for the reader to guess */
++export function denominatorFor(result: Pick<AnalysisResult, "base" | "kind">, scale: Scale): string {
++  const b = result.base;
++  const who = b.label && b.label !== "All respondents" ? b.label.toLowerCase() : "respondents";
++  const n = b.n ?? 0;
++  if (n === 0) return `No ${who} in the selected data.`;
++  const answered = b.total && n < b.total ? `the ${n} of ${b.total} ${who} who answered` : `all ${n} ${who}`;
++  if (scale === "multi") return `% of ${answered}; several answers were allowed, so the bars add to more than 100%.`;
++  if (scale === "numeric") return `Based on ${answered}.`;
++  if (scale === "ranking") return `Based on ${answered}; each ranked the items.`;
++  return `% of ${answered}.`;
++}
++
++export function adviseChart(
++  def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "rows" | "measure" | "options">,
++  result: AnalysisResult,
++  variables: readonly VariableMeta[],
++  opts: { audience?: Audience } = {},
++): ChartAdvice {
++  const byName = new Map(variables.map((v) => [v.name, v]));
++  const scales = firstVars(def).map((n) => scaleOf(byName.get(n)));
++  const scale: Scale = def.kind === "trend" ? "time" : scales.length === 0 ? "unknown" : scales.every((s) => s === scales[0]) ? scales[0] : scales.includes("multi") ? "multi" : "mixed";
++  const batteryOrdinal = scales.filter((s) => s === "ordinal").length >= 2;
++  const nCat = result.chart.categories?.length ?? 0, nSer = result.chart.series?.length ?? 0;
++  const n = result.base.n ?? 0;
++  const ordered = def.kind === "trend" || scale === "time" || (result.chart.categories?.every((c) => /^\d{4}(-\d{2}|-W\d{2})?$/.test(c) || /^(wave|w)\s*\d+$/i.test(c)) ?? false);
++
++  const candidates = chooseChart(def, result, { audience: opts.audience, limit: 40 });
++  const avoided: { type: ChartType; why: string }[] = [];
++  const veto = (type: ChartType, why: string) => avoided.push({ type, why });
++  const notes: string[] = [];
++  const adjust = new Map<ChartType, number>();
++  const bump = (t: ChartType, by: number) => adjust.set(t, (adjust.get(t) ?? 0) + by);
++  const vetoed = new Set<ChartType>();
++  const forbid = (types: ChartType[], why: string) => { for (const t of types) if (candidates.some((c) => c.type === t) && !vetoed.has(t)) { vetoed.add(t); veto(t, why); } };
++
++  if (scale === "multi") {
++    forbid(PIE_LIKE, "answers overlap, so the parts do not make a whole");
++    bump("bar_horizontal", 30); bump("lollipop", 8);
++    notes.push("Several answers were allowed: percentages add to more than 100%.");
++  }
++  if (scale === "nominal" || scale === "multi") {
++    forbid(MEAN_LIKE, "a mean of unordered categories means nothing");
++    forbid(LINE_LIKE.filter((t) => !ordered), "a line implies an order that categories do not have");
++    if (scale === "nominal") { bump(nCat > 6 ? "bar_horizontal" : "bar_vertical", 24); if (nCat > 5) forbid(["pie", "donut"], `${nCat} slices cannot be compared by eye`); }
++  }
++  if (scale === "ordinal") {
++    bump(batteryOrdinal ? "diverging_likert" : "bar_vertical", batteryOrdinal ? 34 : 22);
++    forbid(PIE_LIKE.filter((t) => t !== "bar_stacked_100"), "a scale has an order that slices throw away");
++    if (!batteryOrdinal) notes.push("Scale points keep their order — they are not sorted by size.");
++  }
++  if (scale === "numeric") {
++    bump("histogram", 28); bump("box_plot", 14);
++    forbid(PIE_LIKE, "a numeric answer is a distribution, not parts of a whole");
++  }
++  if (scale === "ranking") { bump("ranking_bar", 26); bump("bar_horizontal", 20); forbid(PIE_LIKE, "ranks are not shares"); }
++  if (scale === "text") { bump("word_cloud", 10); bump("theme_distribution", 14); }
++  if (!ordered && def.kind !== "trend") forbid(LINE_LIKE, "there is no time or order to draw a line through");
++  if (def.kind === "crosstab") {
++    const cells = nCat * nSer;
++    if (nSer <= 4 && cells <= 40) bump("bar_grouped", 10);
++    if (cells > 40 && cells <= 120) bump("heatmap_crosstab", 22), bump("heatmap", 14);
++    if (cells > 120) { bump("table", 60); notes.push(`${cells} cells — a table reads better than any chart.`); }
++    if (nSer > 6) forbid(["radar"], "too many series for a radar");
++  }
++  if (n > 0 && n < SMALL) {
++    forbid(["pie", "donut"], `only ${n} respondents — slices would suggest a precision the sample does not have`);
++    bump("table", 14);
++    notes.push(`Only ${n} respondents answered — read the figures as indicative.`);
++  }
++
++  const avail = new Set(chartsAvailable(result));
++  const scored = candidates
++    .filter((c) => !vetoed.has(c.type))
++    .map((c) => ({ ...c, score: c.score + (adjust.get(c.type) ?? 0) }));
++  /* a lifted chart the shape-based pass did not list is still a candidate when the data can draw it */
++  for (const [t, by] of adjust) if (by > 0 && avail.has(t) && !vetoed.has(t) && !scored.some((s) => s.type === t)) {
++    const base = recommendCharts(result, 80).find((r) => r.type === t);
++    if (base) scored.push({ ...base, score: base.score + by, purpose: candidates[0]?.purpose ?? "comparison", audience: opts.audience ?? "client", purposeWhy: candidates[0]?.purposeWhy ?? "" });
++  }
++  scored.sort((a, b) => b.score - a.score);
++  const best = scored[0];
++  const type: ChartType = best?.type ?? "table";
++  const why = (() => {
++    const bits: string[] = [];
++    if (scale === "multi") bits.push("a multiple-choice question: horizontal bars, each a share of respondents");
++    else if (scale === "nominal") bits.push(`a categorical question with ${nCat || "several"} answers`);
++    else if (scale === "ordinal") bits.push(batteryOrdinal ? "a battery of scale items: a diverging bar around the midpoint" : "a scale question: bars in scale order");
++    else if (scale === "numeric") bits.push("a numeric answer: its distribution");
++    else if (scale === "ranking") bits.push("a ranking: items in rank order");
++    else if (scale === "time") bits.push("ordered periods");
++    else if (def.kind === "crosstab") bits.push("a cross-tabulation");
++    else bits.push(`the shape of this ${def.kind} result`);
++    if (best?.reason) bits.push(best.reason.split(";")[0]);
++    return bits.join(" — ");
++  })();
++
++  return {
++    type, reason: why, denominator: denominatorFor(result, scale), scale,
++    alternatives: scored.slice(0, 6).map(({ purpose: _p, audience: _a, purposeWhy: _w, ...r }) => (void _p, void _a, void _w, r)),
++    avoided, notes,
++  };
++}
++
++/**
++ * Is a chart type that was chosen (and saved) still right for this result?
++ * A saved choice survives a refresh — unless the data can no longer draw it,
++ * in which case the report falls back to the best chart and says so, rather
++ * than rendering "No data to chart".
++ */
++export function checkChartChoice(result: AnalysisResult, type: ChartType): { valid: boolean; fallback?: ChartType; reason?: string } {
++  if (type === "table") return { valid: true };
++  const avail = chartsAvailable(result);
++  if (avail.includes(type)) return { valid: true };
++  const fb = recommendCharts(result, 1)[0]?.type ?? "table";
++  return { valid: false, fallback: fb, reason: `${type.replace(/_/g, " ")} cannot draw this result (it needs a different data shape), so it is shown as ${fb.replace(/_/g, " ")}.` };
++}
+diff --git a/packages/analytics/src/types.ts b/packages/analytics/src/types.ts
+index 183ec7c..11f694d 100644
+--- a/packages/analytics/src/types.ts
++++ b/packages/analytics/src/types.ts
+@@ -182,6 +182,8 @@ export interface AnalysisResult {
+   computedAt: string;
+   definitionHash: string;
+   variablesUsed: string[];
++  /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
++  error?: { code: "unknown_kind" | "not_computable" | "no_data"; message: string };
+ }
+ 
+ /* ------------------------------------------------------------ charts */
+diff --git a/scripts/analytics-audit-test.mjs b/scripts/analytics-audit-test.mjs
+new file mode 100644
+index 0000000..bbfbbb7
+--- /dev/null
++++ b/scripts/analytics-audit-test.mjs
+@@ -0,0 +1,420 @@
++/**
++ * DATA ANALYTICS AUDIT (Oct 2026) — regressions for the screenshot failures,
++ * driven through the real UI against the in-process fake backend (same
++ * contract as analytics-test.mjs: REAL analytics engine, in-memory store).
++ *
++ *  1. export of a report whose insights / executive-summary blocks have no
++ *     analysisIds ("Cannot read properties of undefined (reading 'flatMap')")
++ *  2. an export that cannot be built says so in a sentence, never raw text
++ *  3. publish refuses to freeze a blank report (n = 0 everywhere), with an
++ *     explicit "publish anyway"; the share page says "no respondents" rather
++ *     than drawing zeros
++ *  4. opening a saved analysis keeps its own dataset (no phantom "unsaved")
++ *  5. Saved charts: a failing analysis shows "could not be computed / Try again"
++ *     (not "Computing…" for ever), and the retry works
++ *  6. double-clicking Save creates ONE analysis
++ *  7. a stale result cannot be exported
++ *
++ * Needs `pnpm dev:studio` (3000).   node scripts/analytics-audit-test.mjs
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { navLabels } from "./lib/nav.mjs";
++import assert from "node:assert/strict";
++import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages } from "../packages/analytics/dist/index.js";
++import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
++import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
++import { variableMetadata } from "../packages/analytics/dist/dataset.js";
++
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const SURVEY = "11111111-1111-4111-8111-111111111111";
++
++/* ------------------------------------------------------------ fake backend */
++const rows = synthRows(400);
++const store = { analyses: [], charts: [], segments: [], themes: [], reports: [], shares: [], analysisVersions: [], reportVersions: [], reportTemplates: [], exports: 0, audit: [] };
++const uid = () => crypto.randomUUID();
++const now = () => new Date().toISOString();
++const compute = (definition) => {
++  const ds = buildDataset(def, rows, { spec: definition.dataset ?? { environment: "LIVE", dataset: "all" }, weighting: definition.weighting ?? null });
++  const result = runAnalysis(definition, ds);
++  const advice = adviseChart(definition, result, variableMetadata(def));
++  return { ...result, recommendations: advice.alternatives, advice };
++};
++const reportResults = (definition) => {
++  const ids = new Set();
++  for (const b of definition.blocks ?? []) {
++    if (b.analysisId) ids.add(b.analysisId);
++    for (const id of b.analysisIds ?? []) ids.add(id);
++    // §37 — a panel_grid has no analysisId of its own; every one of its panels does
++    if (b.type === "panel_grid") for (const pnl of b.panels ?? []) if (pnl.analysisId) ids.add(pnl.analysisId);
++  }
++  for (const w of definition.widgets ?? []) if (w.analysisId) ids.add(w.analysisId);
++  const out = {};
++  for (const id of ids) { const a = store.analyses.find((x) => x.id === id && !x.deleted_at); if (!a) continue; try { if (store.failIds?.has(id)) throw new Error('boom'); out[id] = compute({ ...a.definition, id, name: a.name }); } catch { out[id] = { ...failedResult(a.name, a.kind), recommendations: [] }; } }
++  return out;
++};
++const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
++
++async function fakeApi(route) {
++  const req = route.request();
++  const url = new URL(req.url());
++  const m = req.method();
++  const body = m === "POST" || m === "PUT" || m === "PATCH" ? JSON.parse(req.postData() || "{}") : {};
++  const path = url.pathname.replace(`/api/surveys/${SURVEY}/analytics`, "").replace(/^\//, "").split("/").filter(Boolean);
++  const [head, itemId, action] = path;
++  const coll = (k) => store[k];
++  /* §36 — report templates, and laying one over a report */
++  if (head === "report-templates") {
++    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates], available: true });
++    if (m === "POST") {
++      const src = store.reports.find((r) => r.id === body.fromReportId);
++      // §42 — a dashboard's shape is its widgets and scenery, not blocks
++      if (src?.kind === "dashboard") {
++        const t = { id: uid(), builtIn: false, ...dashboardAsTemplate(body.name, src.definition, body.description) };
++        store.reportTemplates.push(t);
++        return json(route, { template: t }, 201);
++      }
++      const blocks = (src?.definition?.blocks ?? []).map((b) => {
++        if (b.type === "panel_grid") return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) };
++        const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type };
++      });
++      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, kind: "report", blocks };
++      store.reportTemplates.push(t);
++      return json(route, { template: t }, 201);
++    }
++    if (m === "DELETE") { store.reportTemplates = store.reportTemplates.filter((t) => t.id !== itemId); return json(route, { ok: true }); }
++  }
++  if (head === "reports" && action === "apply-template" && m === "POST") {
++    const r = store.reports.find((x) => x.id === itemId);
++    const t = [...BUILT_IN_REPORT_TEMPLATES, ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
++    if (!r || !t) return json(route, { error: "Unknown template." }, 404);
++    // §42 — the two kinds share a gallery, so a mismatch is refused rather
++    // than left to produce a definition nothing can render
++    const wantKind = r.kind === "dashboard" ? "dashboard" : "report";
++    const gotKind = templateKind(t);
++    if (wantKind !== gotKind) return json(route, { error: `That is a ${gotKind} template, and this is a ${wantKind}. Pick a ${wantKind} template.` }, 409);
++    r.definition = wantKind === "dashboard" ? applyDashboardTemplate(t, r.definition) : applyTemplate(t, r.definition);
++    store.audit.push("analytics.report_modified");
++    return json(route, { definition: r.definition, appliedTemplate: t.name });
++  }
++  if (head === "variables") return json(route, { variables: variableMetadata(def).filter((v) => !v.hidden), counts: { LIVE: rows.length, TEST: 0 }, surveyVersion: "1.0", revision: 3 });
++  if (head === "home") return json(route, { analyses: store.analyses.filter((a) => !a.deleted_at), charts: store.charts, reports: store.reports.filter((r) => !r.deleted_at), shares: store.shares.filter((s) => !s.revoked_at) });
++  if (head === "run") { try { if (store.failRunNames?.has(body.definition?.name)) throw new Error("boom"); return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: "The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref abc123)" }, 500); } }
++  if (head === "export") {
++    store.exports++;
++    let report, results;
++    if (body.reportId) { const r = store.reports.find((x) => x.id === body.reportId); report = r.definition; results = body.version ? store.reportVersions.find((v) => v.report_id === r.id && v.version === body.version).snapshot : reportResults(r.definition); }
++    else { const a = body.analysisId ? store.analyses.find((x) => x.id === body.analysisId) : { id: "adhoc", name: body.definition.name, definition: body.definition }; const res = compute({ ...a.definition, name: a.name }); results = { [a.id]: res }; report = { title: a.name, mode: "live", blocks: [{ id: "c", type: "chart", analysisId: a.id, chart: body.chart ?? { type: res.recommendedCharts[0], options: {} } }, ...res.tables.map((t, i) => ({ id: `t${i}`, type: "table", analysisId: a.id, tableId: t.id }))] }; }
++    /*
++     * §43 — the same validation the real route does, so the test exercises the
++     * path a customer's deck actually takes. AX_DEBUG_IMG prints what arrived
++     * and which blocks the export is building from: the first version of this
++     * check passed while exporting an UNSAVED report that contained no map at
++     * all, and that is what showed it.
++     */
++    const images = {};
++    for (const [blockId, uri] of Object.entries(body.images ?? {}).slice(0, 40)) {
++      const okImg = isEmbeddableImage(uri);
++      if (process.env.AX_DEBUG_IMG) console.log("  [img]", blockId, typeof uri === "string" ? `${uri.slice(0, 32)}… len=${uri.length}` : typeof uri, "accepted:", okImg);
++      if (typeof blockId === "string" && blockId.length <= 64 && okImg) images[blockId] = uri;
++    }
++    if (process.env.AX_DEBUG_IMG) console.log("  [img] blocks being exported:", (report.blocks ?? []).map((b) => `${b.id}:${b.type}`).join(", "));
++    const chk = checkSnapshot(report, results);
++    const withData = reportAnalysisIds(report).filter((id) => results[id] && !results[id].error && (results[id].base?.n ?? 0) > 0);
++    if (reportAnalysisIds(report).length && !withData.length) return json(route, { error: `Nothing to export. ${chk.problems.join(" ")}` }, 409);
++    if (store.breakExport) return json(route, { error: "The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference abc123 to support." }, 500);
++    const buf = body.format === "xlsx" ? await buildXlsx({ report, results, theme: DEFAULT_THEME, settings: body.settings }) : await buildPptx({ report, results, theme: DEFAULT_THEME, settings: body.settings, images });
++    store.lastExport = { format: body.format ?? "pptx", bytes: buf.length, images: Object.keys(images).length, mapNote: buf.toString("latin1").includes("Shown as ranked bars"), hasMedia: /ppt\/media\/image/.test(buf.toString("latin1")) };
++    if (process.env.AX_SHOTS && Object.keys(images).length) (await import("node:fs")).writeFileSync(`${process.env.AX_SHOTS}/map-deck.pptx`, buf);
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { ...(chk.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(chk.problems)) } : {}), "access-control-expose-headers": "x-rescript-export-notes", "content-disposition": `attachment; filename="x.${body.format ?? "pptx"}"` }, body: buf });
++  }
++  if (head === "reports" && itemId && action === "publish") {
++    const r = store.reports.find((x) => x.id === itemId); const version = (r.published_version ?? 0) + 1;
++    const snapshot = reportResults(r.definition);
++    const chk = checkSnapshot(r.definition, snapshot);
++    if (!chk.ok && body.force !== true) return json(route, { error: `Not published. ${chk.problems.join(" ")}`, problems: chk.problems, canForce: true }, 409);
++    store.reportVersions.push({ id: uid(), report_id: r.id, version, definition: r.definition, theme: DEFAULT_THEME, snapshot, dataset: { responses: chk.responses }, published_at: now(), note: body.note ?? null });
++    r.published_version = version; store.audit.push("analytics.report_published");
++    return json(route, { version, publishedAt: now() });
++  }
++  if (head === "reports" && itemId && action === "results") {
++    const r = store.reports.find((x) => x.id === itemId); const v = url.searchParams.get("version");
++    if (v) { const rv = store.reportVersions.find((x) => x.report_id === r.id && x.version === Number(v)); return json(route, { mode: "snapshot", version: rv.version, definition: rv.definition, theme: rv.theme, results: rv.snapshot, publishedAt: rv.published_at }); }
++    return json(route, { mode: "live", definition: r.definition, theme: DEFAULT_THEME, results: reportResults(r.definition), computedAt: now() });
++  }
++  if (action === "versions") return json(route, { versions: (head === "analyses" ? store.analysisVersions.filter((v) => v.analysis_id === itemId) : store.reportVersions.filter((v) => v.report_id === itemId)).sort((a, b) => b.version - a.version) });
++  if (action === "access") return json(route, { events: [] });
++  /* the rail's verbs (route: POST analyses/reorder, POST analyses/<id>/duplicate; PUT accepts position) */
++  if (head === "analyses" && itemId === "reorder" && m === "POST") { let pos = 0; for (const id of body.ids) { const a = store.analyses.find((x) => x.id === id); if (a) a.position = pos++; } return json(route, { ok: true, ordered: pos }); }
++  if (head === "analyses" && action === "duplicate" && m === "POST") {
++    const src = store.analyses.find((x) => x.id === itemId); if (!src) return json(route, { error: "Unknown item." }, 404);
++    const name = body.name?.trim() || `${src.name} (copy)`;
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind: src.kind, definition: { ...src.definition, name }, version: 1, position: null };
++    store.analyses.push(row); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: `Duplicated from “${src.name}”`, created_at: now() }); store.audit.push("analytics.analysis_created");
++    return json(route, { item: row }, 201);
++  }
++  if (!store[head]) return json(route, { error: "Unknown analytics endpoint." }, 404);
++  if (m === "GET" && !itemId) {
++    const kind = url.searchParams.get("kind");
++    const items = coll(head).filter((x) => !x.deleted_at && (!kind || x.kind === kind));
++    // analyses: arranged first in their order, then newest first — the route's ORDER BY
++    if (head === "analyses") items.sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || (a.updated_at < b.updated_at ? 1 : -1));
++    return json(route, { items });
++  }
++  if (m === "GET") return json(route, { item: coll(head).find((x) => x.id === itemId) });
++  if (m === "POST") {
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now() };
++    if (head === "analyses") { Object.assign(row, { name: body.name, kind: body.definition.kind, definition: { ...body.definition, name: body.name }, version: 1 }); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: "Created", created_at: now() }); store.audit.push("analytics.analysis_created"); }
++    if (head === "charts") { Object.assign(row, { analysis_id: body.analysisId, name: body.name, spec: body.spec, theme_id: body.themeId ?? null, style_version: 1 }); store.audit.push("analytics.chart_created"); }
++    if (head === "segments") Object.assign(row, { kind: body.kind ?? "segment", name: body.name, description: body.description, color: body.color, condition: body.condition });
++    if (head === "themes") Object.assign(row, { name: body.name, theme: body.theme, survey_id: body.scope === "survey" ? SURVEY : null, customer_id: "c" });
++    if (head === "reports") Object.assign(row, { kind: body.kind ?? "report", name: body.name, mode: body.mode ?? "live", theme_id: null, published_version: null, definition: body.definition ?? (body.kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: "live", blocks: [{ id: "cover", type: "cover", title: body.name }] }) });
++    if (head === "shares") { const r = store.reports.find((x) => x.id === body.reportId); if (!r.published_version) return json(route, { error: "Publish the report before sharing it — a share link always points at a published version." }, 409); Object.assign(row, { report_id: body.reportId, token: uid().replace(/-/g, "") + "tok", access: body.access ?? "link", permission: body.permission ?? "viewer", report_version: body.pinVersion ? r.published_version : null, has_password: !!body.password, password: body.password ?? null, expires_at: body.expiresAt ?? null, revoked_at: null, allowed_emails: body.emails ?? [], view_count: 0, label: body.label ?? null }); store.audit.push("analytics.report_shared"); }
++    coll(head).push(row);
++    return json(route, { item: row }, 201);
++  }
++  if (m === "PUT") {
++    const row = coll(head).find((x) => x.id === itemId);
++    if (head === "analyses" && body.definition) { const strip = (d) => { const { formatting: _f, ...o } = d.options ?? {}; return JSON.stringify({ ...d, name: 0, options: o }); }; const changed = strip(row.definition) !== strip(body.definition); row.definition = body.definition; if (changed) { row.version++; store.analysisVersions.push({ analysis_id: row.id, version: row.version, definition: body.definition, created_at: now() }); } }
++    if (head === "analyses" && (body.position === null || typeof body.position === "number")) row.position = body.position;
++    if (head === "charts" && body.spec) { row.spec = body.spec; row.style_version++; }
++    for (const k of ["name", "definition", "mode", "condition", "theme", "description", "color"]) if (body[k] !== undefined && !(head === "analyses" && k === "definition")) row[k] = body[k];
++    if (body.themeId !== undefined) row.theme_id = body.themeId;
++    row.updated_at = now();
++    return json(route, { item: row });
++  }
++  if (m === "PATCH") { const row = coll(head).find((x) => x.id === itemId); if (body.revoke) { row.revoked_at = now(); store.audit.push("analytics.share_revoked"); } if (body.reshare) { row.revoked_at = null; row.token = uid().replace(/-/g, "") + "tok"; } for (const k of ["access", "permission"]) if (body[k]) row[k] = body[k]; if (body.expiresAt !== undefined) row.expires_at = body.expiresAt; return json(route, { item: row }); }
++  if (m === "DELETE") { const row = coll(head).find((x) => x.id === itemId); if (head === "shares") row.revoked_at = now(); else row.deleted_at = now(); return json(route, { ok: true }); }
++  return json(route, { error: "unhandled" }, 500);
++}
++
++/** The public door, mirroring rescript_resolve_share: revoked / expired / password / snapshot only. */
++async function fakeShare(route) {
++  const req = route.request(); const url = new URL(req.url());
++  const token = url.pathname.split("/").pop();
++  const s = store.shares.find((x) => x.token === token);
++  if (!s) return json(route, { error: "This link is not valid." }, 404);
++  const r = store.reports.find((x) => x.id === s.report_id);
++  if (s.revoked_at) return json(route, { error: "This shared report has been revoked by its owner.", status: "revoked" }, 410);
++  if (s.expires_at && new Date(s.expires_at) < new Date()) return json(route, { error: "This shared link has expired.", status: "expired" }, 410);
++  const pw = req.headers()["x-share-password"];
++  if (s.password && pw !== s.password) return json(route, { error: pw ? "That password is not correct." : "This report is password protected.", status: "password", reportName: r.name }, 401);
++  const v = store.reportVersions.filter((x) => x.report_id === r.id).find((x) => x.version === (s.report_version ?? r.published_version));
++  if (!v) return json(route, { error: "This report is not available.", status: "unpublished" }, 404);
++  if (req.method() === "POST") {
++    if (s.permission !== "download") return json(route, { error: "Downloads are not enabled for this shared report.", status: "no_download" }, 403);
++    const body = JSON.parse(req.postData() || "{}");
++    const buf = body.format === "xlsx" ? await buildXlsx({ report: v.definition, results: v.snapshot, theme: v.theme }) : await buildPptx({ report: v.definition, results: v.snapshot, theme: v.theme });
++    store.lastShareDownload = { format: body.format, bytes: buf.length };
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "content-disposition": `attachment; filename="r.${body.format}"` }, body: buf });
++  }
++  s.view_count++;
++  return json(route, { report: { name: r.name, title: v.definition.title, subtitle: v.definition.subtitle, blocks: v.definition.blocks, widgets: v.definition.widgets ?? null, hero: v.definition.hero ?? null, bands: v.definition.bands ?? null, viewerSegments: v.definition.viewerSegments ?? [], branding: v.definition.branding ?? {} }, theme: v.theme, results: v.snapshot, version: v.version, publishedAt: v.published_at, mode: "snapshot", dataset: v.dataset, permission: s.permission });
++}
++
++/* ------------------------------------------------------------ browser */
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
++await ctx.addCookies([{ name: "rescript_session", value: "fake", url: STUDIO }]);
++const page = await ctx.newPage();
++page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
++/*
++ * One dialog handler for the whole run. `promptAnswer` lets a test decide what
++ * a prompt() should return — Playwright allows only ONE handler, so a
++ * `page.once` alongside this one throws "already handled" rather than winning.
++ */
++let promptAnswer = "";
++let confirmAnswer = true; const dialogs = [];
++page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); if (d.type() === "confirm" && !confirmAnswer) return d.dismiss(); return d.accept(d.type() === "prompt" ? promptAnswer : undefined); });
++const user = { userId: "u1", userCode: "U-0001", name: "Ana Lyst", email: "ana@example.com", platformRole: "user", isPlatformAdmin: false, sessionId: "s1", unread: 0, policies: { heartbeatSeconds: 600 } };
++await page.route("**/api/auth/me", (r) => json(r, user));
++await page.route("**/api/auth/heartbeat**", (r) => json(r, { ok: true }));
++await page.route("**/api/surveys", (r) => json(r, { surveys: [{ id: SURVEY, code: "SYN", title: "Synthetic Study 2026", status: "live", myRole: "owner", roleSource: "owner", updated_at: now(), version: "1.0" }] }));
++await page.route(`**/api/surveys/${SURVEY}/analytics/**`, fakeApi);
++await page.route(`**/api/surveys/${SURVEY}/analytics`, fakeApi);
++await page.route("**/api/share/**", fakeShare);
++
++const text = (sel) => page.$eval(sel, (e) => e.textContent.replace(/\s+/g, " ").trim());
++/* AX_SHOTS=<dir> writes a screenshot at each named point — for visual review, not assertions */
++const shot = async (name) => { if (process.env.AX_SHOTS) await page.screenshot({ path: `${process.env.AX_SHOTS}/${name}.png`, fullPage: false }); };
++const count = (sel) => page.$$eval(sel, (es) => es.length);
++
++
++const mkAnalysis = (name, { env = "LIVE", kind = "descriptive", variables = ["SAT"], extra = {} } = {}) => {
++  const id = uid(); const definition = { name, kind, dataset: { environment: env, dataset: "all" }, variables, ...extra };
++  const row = { id, survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind, definition, version: 1, position: null };
++  store.analyses.push(row); store.analysisVersions.push({ analysis_id: id, version: 1, definition, summary: "", created_at: now() });
++  return row;
++};
++const mkReport = (name, definition) => {
++  const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
++  store.reports.push(row); return row;
++};
++const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
++const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
++const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
++
++/* ------------------------------------------------------------------ 1 */
++console.log("\n§1 EXPORT — blocks with no analysisIds");
++const sat = mkAnalysis("Satisfaction");
++const ragged = mkReport("Ragged findings", { title: "Ragged findings", mode: "live", blocks: [
++  { id: "b0", type: "cover", title: "Ragged findings" },
++  { id: "b1", type: "chart", title: "Satisfaction", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } },
++  { id: "b2", type: "insights", title: "Findings" },
++  { id: "b3", type: "executive_summary", title: "Summary" },
++] });
++await openReport("Ragged findings");
++assert.ok((await count('[data-testid="ax-report"] .ax-insights li')) >= 1, "an insights block with no chosen analyses summarises the report's analyses");
++assert.ok((await count('[data-testid="ax-report"] .ax-exec-item')) >= 1, "so does the executive summary");
++ok("the viewer shows the report's insights and executive summary for blocks with no chosen analyses");
++await exportNow();
++const [dl1] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-export-go"]')]);
++assert.match(dl1.suggestedFilename(), /\.pptx$/);
++assert.ok(store.lastExport.bytes > 15000, `deck is ${store.lastExport.bytes} bytes`);
++ok("PowerPoint export of that report succeeds (was: 500 Cannot read properties of undefined (reading 'flatMap'))");
++
++/* ------------------------------------------------------------------ 2 */
++console.log("\n§2 EXPORT — failures are a sentence, not an exception");
++store.breakExport = true;
++await openReport("Ragged findings"); await exportNow();
++await page.click('[data-testid="ax-export-go"]');
++await page.waitForSelector('[data-testid="ax-export-error"]');
++const err = await text('[data-testid="ax-export-error"]');
++assert.match(err, /could not be built.*Nothing was downloaded/);
++assert.doesNotMatch(err, /flatMap|undefined|TypeError|Cannot read/);
++ok("a failed build tells the researcher nothing was downloaded, with a reference — no raw exception text");
++store.breakExport = false;
++
++/* ------------------------------------------------------------------ 3 */
++console.log("\n§3 PUBLISH — never freeze a blank report");
++const empty = mkAnalysis("Satisfaction (test data)", { env: "TEST" });
++const blank = mkReport("Blank report", { title: "Blank report", mode: "live", blocks: [{ id: "c0", type: "cover", title: "Blank report" }, { id: "c1", type: "chart", title: "Satisfaction", analysisId: empty.id, chart: { type: "bar_vertical", options: {} } }] });
++await openReport("Blank report");
++assert.ok(await page.waitForSelector('[data-testid="ax-nodata"]'), "the authoring view says there are no respondents, not a chart of zeros");
++ok("a chart whose analysis saw nobody says so instead of drawing zeros");
++confirmAnswer = false; dialogs.length = 0;
++await page.click('[data-testid="ax-report-publish"]');
++await page.waitForFunction(() => true); await page.waitForTimeout(400);
++assert.equal(store.reportVersions.filter((v) => v.report_id === blank.id).length, 0, "declining the warning must not publish");
++assert.ok(dialogs.some((d) => /every chart and number would read 0/.test(d)), `the warning names the reason: ${dialogs.join(" | ")}`);
++ok("publish stops and explains: every chart and number would read 0");
++confirmAnswer = true;
++await page.click('[data-testid="ax-report-publish"]');
++await page.waitForSelector('.ax-ok:has-text("Published version 1")');
++assert.equal(store.reportVersions.filter((v) => v.report_id === blank.id).length, 1, "publishing anyway is possible when the author insists");
++ok("the author can still publish it on purpose");
++await page.click('[data-testid="ax-report-share"]');
++await page.waitForSelector('[data-testid="ax-share-dialog"]');
++await page.click('[data-testid="ax-share-create"]');
++await page.waitForSelector('[data-testid="ax-share-link"] input');
++const link2 = await page.$eval('[data-testid="ax-share-link"] input', (e) => e.value);
++const anon = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
++await anon.route("**/api/share/**", fakeShare);
++const pub = await anon.newPage();
++await pub.goto(link2, { waitUntil: "networkidle" });
++await pub.waitForSelector('[data-testid="ax-share-view"]');
++assert.ok((await pub.$$eval('[data-testid="ax-nodata"]', (es) => es.length)) >= 1, "the shared page says no respondents");
++assert.equal(await pub.$$eval('[data-testid="ax-chart"]', (es) => es.length), 0, "and draws no chart of zeros");
++ok("the shared snapshot shows 'no respondents' — not a chart of 0%");
++await anon.close();
++confirmAnswer = true;
++
++/* a report that mixes a populated and an empty analysis announces the populated base */
++const mixed = mkReport("Mixed report", { title: "Mixed report", mode: "live", blocks: [
++  { id: "m1", type: "chart", analysisId: empty.id, chart: { type: "bar_vertical", options: {} } },
++  { id: "m2", type: "chart", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } }] });
++await openReport("Mixed report");
++await page.click('[data-testid="ax-report-publish"]');
++await page.waitForSelector('.ax-ok:has-text("Published version 1")');
++assert.equal(store.reportVersions.find((v) => v.report_id === mixed.id).dataset.responses, 400, "responses = the largest base, whatever order the analyses came back in");
++ok("'N responses' is the largest base in the report, not whichever analysis came first");
++
++/* ------------------------------------------------------------------ 4 */
++console.log("\n§4 SAVED ANALYSIS — opening it changes nothing");
++const testEnv = mkAnalysis("Saved on test data", { env: "TEST" });
++await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
++await page.click('[data-testid="ax-tab-analysis"]');
++await page.waitForSelector('[data-testid="ax-rail"]');
++await page.click(`[data-testid="ax-rail-item"][data-id="${testEnv.id}"]`);
++await page.waitForSelector('[data-testid="ax-builder"]');
++await page.waitForSelector('[data-testid="ax-savestate"]');
++await page.waitForTimeout(600);
++assert.match(await text('[data-testid="ax-savestate"]'), /Saved · v1/, "an untouched saved analysis is not 'unsaved'");
++assert.equal(await count('[data-testid="ax-stale"]'), 0, "and its result is not out of date");
++ok("opening a saved analysis (stored on TEST data, workspace selector on production) leaves it Saved · v1, not stale");
++await page.click('[data-testid="ax-save"]');
++await page.waitForTimeout(300);
++assert.equal(store.analyses.find((a) => a.id === testEnv.id).definition.dataset.environment, "TEST", "saving must not rewrite the stored dataset to the selector's");
++ok("saving it does not rewrite its stored dataset to the workspace selector's");
++
++/* ------------------------------------------------------------------ 5 */
++console.log("\n§5 SAVED CHARTS — a failure is shown and retryable");
++const flaky = mkAnalysis("Flaky analysis");
++store.charts.push({ id: uid(), survey_id: SURVEY, analysis_id: flaky.id, name: "Flaky chart", spec: { type: "bar_vertical", options: {} }, theme_id: null, style_version: 1, created_at: now(), updated_at: now() });
++store.failRunNames = new Set(["Flaky analysis"]);
++await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
++await page.click('[data-testid="ax-tab-charts"]');
++await page.waitForSelector('[data-testid="ax-chart-failed"]');
++const failedText = await text('[data-testid="ax-chart-failed"]');
++assert.match(failedText, /could not be computed/);
++ok("a chart whose analysis fails says so — it does not sit on 'Computing…'");
++store.failRunNames = new Set();
++await page.click('[data-testid="ax-chart-failed"] button');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-chart-failed"]').length === 0);
++ok("Try again recomputes it");
++
++/* ------------------------------------------------------------------ 6 */
++console.log("\n§6 SAVE — one click, one analysis");
++await page.click('[data-testid="ax-tab-analysis"]');
++await page.click('[data-testid="ax-rail-new"]');
++await page.waitForSelector('[data-testid="ax-builder"]');
++await page.fill('[data-testid="ax-name"]', "Double-clicked");
++await page.click('[data-testid="ax-step-1"]');
++await page.click('.ax-var:has-text("SAT · Scale") input');
++await page.click('[data-testid="ax-run"]');
++await page.waitForSelector('[data-testid="ax-save"]');
++const before = store.analyses.length;
++await page.evaluate(() => { const b = document.querySelector('[data-testid="ax-save"]'); b.click(); b.click(); });
++await page.waitForTimeout(700);
++assert.equal(store.analyses.length - before, 1, `a double click created ${store.analyses.length - before} analyses`);
++ok("two quick clicks on Save create one analysis");
++
++/* ------------------------------------------------------------------ 7 */
++console.log("\n§7 STALE — a result that is out of date cannot be exported");
++await page.click('.ax-stage:has-text("Builder")');
++await page.click('[data-testid="ax-step-1"]');
++await page.click('.ax-var:has-text("GENDER · Categorical") input');   // a variable changes the numbers
++await page.click('[data-testid="ax-step-5"]');                         // back to the (old) results
++await page.waitForSelector('[data-testid="ax-stale"]');
++const exports0 = store.exports;
++await page.click('[data-testid="ax-export-pptx"]');
++await page.waitForSelector('[data-testid="ax-error"]');
++assert.equal(store.exports, exports0, "no export request while the results are out of date");
++assert.match(await text('[data-testid="ax-error"]'), /out of date/);
++ok("after a change that alters the numbers, Export refuses until the analysis is run again");
++
++/* ------------------------------------------------------------------ 8 */
++console.log("\n§8 CHARTS — chosen from what was asked, and the denominator is stated");
++const multi = mkAnalysis("Brands considered", { variables: ["CONSIDER"] });
++await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" });
++await page.click('[data-testid="ax-tab-analysis"]');
++await page.waitForSelector('[data-testid="ax-rail"]');
++await page.click(`[data-testid="ax-rail-item"][data-id="${multi.id}"]`);
++await page.waitForSelector('[data-testid="ax-chart-advice"]');
++const adviceText = await text('[data-testid="ax-chart-advice"]');
++assert.match(adviceText, /multiple-choice question/);
++assert.match(await text('[data-testid="ax-denominator"]'), /several answers were allowed.*more than 100%/);
++ok("a multiple-choice question says why it is drawn as horizontal bars, and that its bars add to more than 100%");
++assert.ok(!/\bpie\b/i.test(await page.$eval('.ax-gallery, [data-testid="ax-gallery"]', (e) => e.textContent).catch(() => "")), "no pie is recommended for overlapping answers");
++
++const gender = mkAnalysis("Gender split", { variables: ["GENDER"] });
++mkReport("Saved word cloud", { title: "Saved word cloud", mode: "live", blocks: [{ id: "w1", type: "chart", title: "Gender", analysisId: gender.id, chart: { type: "word_cloud", options: {} } }] });
++await openReport("Saved word cloud");
++await page.waitForSelector('[data-testid="ax-chart-fallback"]');
++assert.match(await text('[data-testid="ax-chart-fallback"]'), /cannot draw this result/);
++assert.ok((await count('[data-testid="ax-report"] [data-testid="ax-chart"]')) >= 1, "the block still shows a chart");
++ok("a saved chart type that cannot draw the result falls back and says why (was: 'No data to chart')");
++
++console.log(`\n${passed} checks passed`);
++await browser.close();
+-- 
+2.43.0
+
+

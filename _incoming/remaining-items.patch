@@ -1,0 +1,2881 @@
+From 5c9b8eaaa736363629a21fc89d5512673ddf98c0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 1 Oct 2026 11:34:34 +0000
+Subject: [PATCH] Remaining review items and nested-logic audit leftovers
+
+Spreadsheet items (29-09 / 30-09):
+- grids randomize rows AND columns (Randomization.scopes); the answer scale
+  is offered once, as "columns"; grid option masking is "Column masking"
+- quota target-total box (and every CountInput) is never squeezed, and
+  widens with the number typed
+- piping dialog: its selects and inputs work inside the rich-text toolbar
+  (mousedown no longer cancelled), the caret is kept, flow embedded fields
+  are listed, the token is editable, "Show as image" writes |image
+- carry-forward / masking offer "Displayed" only when it differs from "All"
+- several images / videos under a question (settings.mediaItems, layout,
+  alt, reorder, bulk upload); content blocks now render their media
+- {{ImageURL|image}} renders a piped URL as a picture (safe URLs only);
+  a piped media URL is reported as piped, not unsupported
+
+Audit leftovers:
+- editors: older visible-if shown/convertible, List Fill eligible-when,
+  row-validation gate
+- analytics filter nests 8 levels; interview logic nests and offers NONE
+- QSF quota groups -> one multi-cell quota; skip BooleanExpressions;
+  Decipher named <condition>s expanded
+- embedded IF..THEN..ELSE parsed properly (IF inside THEN, IF (..) THEN)
+- calculations read named expressions as 1/0
+- SPSS bundle ships <code>_bases.sps with ASKED_<var> filters
+- UX styles and animations take `when` (Studio, runtime, Copilot)
+- conjoint combination prohibitions (pair AND all/any of more levels, or a tree)
+
+Tests: engine remainingItems, import, designs, exporters, browser
+remaining-items-test; mutation-checked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ .../components/builder/LogicEditor.tsx        |  32 +-
+ .../components/analytics/FilterBuilder.tsx    |   3 +-
+ .../studio/components/canvas/ElementPanel.tsx |  13 +-
+ apps/studio/components/studio/CountInput.tsx  |   7 +-
+ .../studio/components/studio/DesignsPanel.tsx |  40 ++-
+ .../components/studio/ListFillPanel.tsx       |  21 +-
+ .../components/studio/MaskingBuilder.tsx      |  40 ++-
+ .../components/studio/MediaListEditor.tsx     | 140 +++++++++
+ .../components/studio/MediaUrlInput.tsx       |   3 +
+ .../components/studio/OptionLogicEditor.tsx   |  35 ++-
+ .../studio/components/studio/PipingPicker.tsx |  89 +++++-
+ .../components/studio/PropertiesPanel.tsx     |  17 +-
+ .../components/studio/QuestionsPanel.tsx      |   6 +-
+ apps/studio/components/studio/QuotasPanel.tsx |   4 +-
+ .../components/studio/RandomizeAxes.tsx       |  47 +++
+ .../components/studio/UxItemsEditor.tsx       |   6 +
+ apps/studio/lib/copilot/prompt.ts             |   2 +-
+ .../NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md |  56 ++--
+ packages/designs/src/conjoint.ts              |  52 ++++
+ packages/designs/src/prohibitions.test.ts     |  26 ++
+ packages/engine/src/calcContext.ts            |  23 +-
+ packages/engine/src/carryforward.ts           |  89 +++++-
+ packages/engine/src/embedded.ts               | 104 +++++--
+ packages/engine/src/piping.ts                 |  18 ++
+ packages/engine/src/pipingTokens.ts           |   4 +-
+ packages/engine/src/questionShape.ts          |   8 +-
+ packages/engine/src/remainingItems.test.ts    | 171 +++++++++++
+ packages/engine/src/ux.ts                     |  19 +-
+ packages/engine/src/uxActions.ts              |  21 +-
+ packages/exporters/src/docx.ts                |   2 +-
+ packages/exporters/src/exporters.test.ts      |  26 ++
+ packages/exporters/src/index.ts               |   1 +
+ packages/exporters/src/spssBases.ts           | 148 +++++++++
+ packages/exporters/src/statisticalExport.ts   |   4 +
+ packages/import/src/adapters/decipher.ts      |  19 +-
+ packages/import/src/adapters/qsf.ts           |  25 +-
+ packages/import/src/canonical.ts              |   6 +
+ packages/import/src/import.test.ts            |  56 ++++
+ packages/import/src/map.ts                    |  17 +-
+ packages/renderer/src/QuestionRenderer.tsx    |  61 ++--
+ packages/renderer/src/UxLayer.tsx             |  13 +-
+ packages/renderer/styles/variants/media.css   |   9 +
+ packages/schema/src/question.ts               |  24 ++
+ packages/schema/src/ux.ts                     |   4 +
+ scripts/nested-logic-audit-test.mjs           |   3 +-
+ scripts/option-logic-test.mjs                 |   3 +-
+ scripts/remaining-items-test.mjs              | 288 ++++++++++++++++++
+ 47 files changed, 1652 insertions(+), 153 deletions(-)
+ create mode 100644 apps/studio/components/studio/MediaListEditor.tsx
+ create mode 100644 apps/studio/components/studio/RandomizeAxes.tsx
+ create mode 100644 packages/engine/src/remainingItems.test.ts
+ create mode 100644 packages/exporters/src/spssBases.ts
+ create mode 100644 scripts/remaining-items-test.mjs
+
+diff --git a/apps/interviews/components/builder/LogicEditor.tsx b/apps/interviews/components/builder/LogicEditor.tsx
+index e0dcd11..fcba971 100644
+--- a/apps/interviews/components/builder/LogicEditor.tsx
++++ b/apps/interviews/components/builder/LogicEditor.tsx
+@@ -16,9 +16,11 @@ import type { Condition, ConditionRule, SkipRule } from "@rescript/schema";
+  * The Studio's `ConditionBuilder` offers thirty-eight operators over nine
+  * kinds of source. An interview has one kind of source that makes sense — an
+  * earlier question — and a handful of comparisons an interviewer actually
+- * reaches for. So this offers: rules over earlier questions, `and`/`or`
+- * between them, and one level of grouping. The output is unrestricted; the
+- * input is what the job needs.
++ * reaches for. So this offers: rules over earlier questions, all / any /
++ * none of them, and groups inside groups (to MAX_GROUP_DEPTH). It used to
++ * stop at one level and showed a NOT group as "all of these" — the opposite
++ * of what it does — so a rule imported or written elsewhere could not be read
++ * here, let alone edited.
+  *
+  * ## Only EARLIER questions are offered
+  *
+@@ -146,31 +148,37 @@ function RuleRow({ rule, earlier, onChange, onRemove }: {
+   );
+ }
+ 
+-function GroupEditor({ group, earlier, onChange, depth }: {
++/** how deep "+ group" goes — the same point past which the Studio's lint calls logic hard to read */
++const MAX_GROUP_DEPTH = 8;
++
++function GroupEditor({ group, earlier, onChange, depth, onRemove }: {
+   group: Extract<Condition, { type: "group" }>;
+   earlier: EarlierQuestion[];
+   onChange: (g: Extract<Condition, { type: "group" }>) => void;
+   depth: number;
++  onRemove?: () => void;
+ }) {
+   const set = (i: number, c: Condition) => onChange({ ...group, children: group.children.map((k, j) => (j === i ? c : k)) });
+   const remove = (i: number) => onChange({ ...group, children: group.children.filter((_, j) => j !== i) });
+ 
+   return (
+     <div style={{ borderLeft: depth ? "2px solid var(--line)" : undefined, paddingLeft: depth ? 10 : 0 }}>
+-      {group.children.length > 1 && (
++      {(group.children.length > 1 || group.op === "not") && (
+         <div className="row" style={{ gap: 6, alignItems: "center", marginBottom: 6 }}>
+           <span className="tiny muted">Match</span>
+-          <select value={group.op === "or" ? "or" : "and"} data-testid="logic-op"
+-            onChange={(e) => onChange({ ...group, op: e.target.value as "and" | "or" })}>
++          <select value={group.op} data-testid="logic-op"
++            onChange={(e) => onChange({ ...group, op: e.target.value as "and" | "or" | "not" })}>
+             <option value="and">all of these</option>
+             <option value="or">any of these</option>
++            <option value="not">none of these</option>
+           </select>
++          {onRemove && <button type="button" className="btn small secondary" data-testid="logic-remove-group" onClick={onRemove} aria-label="Remove this group">× group</button>}
+         </div>
+       )}
+       {group.children.map((child, i) => (
+         <div key={i} style={{ marginBottom: 6 }}>
+           {isGroup(child)
+-            ? <GroupEditor group={child} earlier={earlier} depth={depth + 1} onChange={(g) => set(i, g)} />
++            ? <GroupEditor group={child} earlier={earlier} depth={depth + 1} onChange={(g) => set(i, g)} onRemove={() => remove(i)} />
+             : <RuleRow rule={child} earlier={earlier} onChange={(r) => set(i, r)} onRemove={() => remove(i)} />}
+         </div>
+       ))}
+@@ -179,7 +187,7 @@ function GroupEditor({ group, earlier, onChange, depth }: {
+           onClick={() => onChange({ ...group, children: [...group.children, emptyRule(earlier)] })}>
+           + condition
+         </button>
+-        {depth === 0 && (
++        {depth < MAX_GROUP_DEPTH && (
+           <button type="button" className="btn small secondary" data-testid="logic-add-group"
+             onClick={() => onChange({ ...group, children: [...group.children, { type: "group", op: "or", children: [emptyRule(earlier)] }] })}>
+             + group
+@@ -235,6 +243,12 @@ export function SkipRulesEditor({ value, self, later, onChange }: {
+           <p className="tiny muted" style={{ margin: "0 0 4px" }}>When the answer to {self.code}…</p>
+           <GroupEditor group={normalise(rule.when)} earlier={sources} depth={0}
+             onChange={(g) => onChange(value.map((r, j) => (j === i ? { ...r, when: denormalise(g) ?? { type: "group", op: "and", children: [] } } : r)))} />
++          {!denormalise(normalise(rule.when)) && (
++            /* an empty condition holds: this rule sends EVERY candidate on, as in the survey builder */
++            <p className="tiny" data-testid="skip-always" style={{ margin: "4px 0 0", color: "var(--warn, #b45309)" }}>
++              No condition — this rule applies to every candidate.
++            </p>
++          )}
+           <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 6 }}>
+             <span className="tiny muted">go to</span>
+             <select value={rule.target.kind === "end" ? "__end" : rule.target.ref ?? ""} data-testid="skip-target"
+diff --git a/apps/studio/components/analytics/FilterBuilder.tsx b/apps/studio/components/analytics/FilterBuilder.tsx
+index 6ffb8ae..b3cca40 100644
+--- a/apps/studio/components/analytics/FilterBuilder.tsx
++++ b/apps/studio/components/analytics/FilterBuilder.tsx
+@@ -93,7 +93,8 @@ export function FilterBuilder({ value, onChange, variables, depth = 0 }: { value
+         </select>
+         <span className="grow" />
+         <button className="btn small" type="button" disabled={!vars.length} onClick={() => vars[0] && onChange({ ...g, children: [...g.children, newRule(vars[0])] })} data-testid="ax-add-rule">+ Rule</button>
+-        {depth < 2 && <button className="btn small" type="button" onClick={() => onChange({ ...g, children: [...g.children, { type: "group", op: "or", children: [] }] })}>+ Group</button>}
++        {/* groups nest as deep as the survey's own logic does (lint warns past 8 levels); the cap was 3 */}
++        {depth < 8 && <button className="btn small" type="button" onClick={() => onChange({ ...g, children: [...g.children, { type: "group", op: "or", children: [] }] })}>+ Group</button>}
+       </div>
+       {g.children.length === 0 && <div className="muted" style={{ fontSize: 13, padding: "2px 0 6px" }}>{depth ? "Empty group — add a rule." : "No conditions — every respondent is included."}</div>}
+       {g.children.map((c, i) => (
+diff --git a/apps/studio/components/canvas/ElementPanel.tsx b/apps/studio/components/canvas/ElementPanel.tsx
+index 1fbb7e4..b7883ce 100644
+--- a/apps/studio/components/canvas/ElementPanel.tsx
++++ b/apps/studio/components/canvas/ElementPanel.tsx
+@@ -7,6 +7,7 @@ import { drawsOptionImages } from "@rescript/renderer";
+ import { useStudio } from "../studio/store";
+ import { OptionLogicEditor } from "../studio/OptionLogicEditor";
+ import { OptionalCondition } from "../studio/ConditionBuilder";
++import { RandomizeAxes } from "../studio/RandomizeAxes";
+ import { InlineRichText } from "../studio/RichTextEditor";
+ import { Icon } from "../ui/Icon";
+ import { selectionLabel, type SelectedEntity } from "./selection";
+@@ -229,7 +230,8 @@ function RowValidation({ rules, onChange }: {
+   return (
+     <div data-testid="row-validation">
+       {rules.map((r, i) => (
+-        <div className="row" key={i} style={{ marginBottom: 6 }}>
++        <div key={i} style={{ marginBottom: 6 }}>
++        <div className="row">
+           <select className="select small" value={r.kind}
+             onChange={(e) => onChange(rules.map((x, j) => (j === i ? { ...x, kind: e.target.value as ValidationRule["kind"] } : x)))}>
+             {ROW_RULES.map((k) => <option key={k} value={k}>{k.replace(/_/g, " ")}</option>)}
+@@ -238,6 +240,10 @@ function RowValidation({ rules, onChange }: {
+             onChange={(e) => onChange(rules.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} />
+           <button className="btn small danger" onClick={() => onChange(rules.filter((_, j) => j !== i))}>×</button>
+         </div>
++        {/* the row rule's own gate — honoured by the validator, editable nowhere until now */}
++        <OptionalCondition label="Check only when" value={r.when}
++          onChange={(when) => onChange(rules.map((x, j) => (j === i ? { ...x, when } : x)))} />
++        </div>
+       ))}
+       <button className="btn small" data-testid="add-row-rule"
+         onClick={() => onChange([...rules, { kind: "required" } as ValidationRule])}>
+@@ -447,10 +453,7 @@ function QuestionProps({ q }: { q: Question }) {
+       </label>
+       {q.randomization?.enabled && (
+         <div className="row" style={{ gap: 8 }}>
+-          <select className="select small" value={q.randomization.scope}
+-            onChange={(e) => patch({ randomization: { ...q.randomization!, scope: e.target.value as never } })}>
+-            <option value="options">options</option><option value="rows">rows</option><option value="columns">columns</option>
+-          </select>
++          <RandomizeAxes q={q} patch={patch} />
+           <select className="select small" value={q.randomization.method}
+             onChange={(e) => patch({ randomization: { ...q.randomization!, method: e.target.value as never } })}>
+             <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
+diff --git a/apps/studio/components/studio/CountInput.tsx b/apps/studio/components/studio/CountInput.tsx
+index b543b54..4929ab6 100644
+--- a/apps/studio/components/studio/CountInput.tsx
++++ b/apps/studio/components/studio/CountInput.tsx
+@@ -76,7 +76,12 @@ export function CountInput({
+     <input
+       {...rest}
+       className={rest.className ?? "input"}
+-      style={{ width, ...(rest.style ?? {}) }}
++      /*
++       * Never narrower than `width`, and wider for a long number. In a flex row
++       * beside growing selects the box was shrunk to a sliver — the quota
++       * "target total" showed no digit at all (29-09 #4, Prince 52).
++       */
++      style={{ width: `max(${width}px, ${String(draft ?? value ?? "").length + 4}ch)`, minWidth: width, flex: "0 0 auto", ...(rest.style ?? {}) }}
+       type="number"
+       inputMode="numeric"
+       min={min}
+diff --git a/apps/studio/components/studio/DesignsPanel.tsx b/apps/studio/components/studio/DesignsPanel.tsx
+index 4340efb..1b247ea 100644
+--- a/apps/studio/components/studio/DesignsPanel.tsx
++++ b/apps/studio/components/studio/DesignsPanel.tsx
+@@ -84,7 +84,8 @@ function ConfigField({ field, value, onChange, config }: {
+      * always expressible.
+      */
+     case "prohibitions": {
+-      const pairs: { a: { attribute: string; level: string }; b: { attribute: string; level: string }; note?: string }[] =
++      type Lv = { attribute: string; level: string };
++      const pairs: { a: Lv; b: Lv; also?: Lv[]; alsoOp?: "and" | "or"; when?: unknown; note?: string }[] =
+         Array.isArray(value) ? (value as never) : [];
+       const attrs: { name: string; levels: string[] }[] = Array.isArray(config?.attributes)
+         ? (config!.attributes as never) : [];
+@@ -128,6 +129,43 @@ function ConfigField({ field, value, onChange, config }: {
+                 {levelsOf(p.b.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
+               </select>
+               <button className="btn small danger" onClick={() => onChange(pairs.filter((_, j) => j !== i))}>×</button>
++              {/*
++                * A COMBINATION, not only a pair: "never Value at $999 AND
++                * (2 years OR 3 years)". The extra levels are ANDed with the
++                * pair; with "any of" one of them is enough.
++                */}
++              {(p.also ?? []).length > 0 && (
++                <span className="row" style={{ gap: 6, flexBasis: "100%", flexWrap: "wrap", marginLeft: 40 }} data-testid="prohibition-also">
++                  <span className="muted" style={{ fontSize: 12.5 }}>and</span>
++                  {(p.also ?? []).length > 1 && (
++                    <select className="select" style={{ width: 110 }} value={p.alsoOp ?? "and"} data-testid="prohibition-also-op"
++                      onChange={(e) => set(i, { alsoOp: e.target.value as "and" | "or" })}>
++                      <option value="and">all of</option>
++                      <option value="or">any of</option>
++                    </select>
++                  )}
++                  {(p.also ?? []).map((x, k) => (
++                    <span key={k} className="row" style={{ gap: 4 }}>
++                      <select className="select" style={{ width: 130 }} value={x.attribute}
++                        onChange={(e) => set(i, { also: p.also!.map((y, m) => (m === k ? { attribute: e.target.value, level: levelsOf(e.target.value)[0] ?? "" } : y)) })}>
++                        {usable.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
++                      </select>
++                      <select className="select" style={{ width: 120 }} value={x.level}
++                        onChange={(e) => set(i, { also: p.also!.map((y, m) => (m === k ? { ...y, level: e.target.value } : y)) })}>
++                        {levelsOf(x.attribute).map((l) => <option key={l} value={l}>{l}</option>)}
++                      </select>
++                      <button className="btn small" title="Remove this level" onClick={() => set(i, { also: p.also!.filter((_, m) => m !== k) })}>×</button>
++                    </span>
++                  ))}
++                </span>
++              )}
++              {!p.when && (
++                <button className="btn small ghost" data-testid="prohibition-add-level" title="Add a third level to the combination"
++                  onClick={() => set(i, { also: [...(p.also ?? []), { attribute: usable[usable.length - 1].name, level: usable[usable.length - 1].levels[0] }] })}>
++                  + level
++                </button>
++              )}
++              {!!p.when && <span className="muted" style={{ fontSize: 12.5 }}>(a combination rule — written in the design file)</span>}
+             </div>
+           ))}
+           <button className="btn small" data-testid="add-prohibition"
+diff --git a/apps/studio/components/studio/ListFillPanel.tsx b/apps/studio/components/studio/ListFillPanel.tsx
+index be44499..bed9f33 100644
+--- a/apps/studio/components/studio/ListFillPanel.tsx
++++ b/apps/studio/components/studio/ListFillPanel.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import { useStudio, uid } from "./store";
+ import { CountInput } from "./CountInput";
+-import { ConditionEditor, conditionToText } from "./ConditionBuilder";
++import { ConditionEditor, OptionalCondition, conditionToText } from "./ConditionBuilder";
+ import type { ListFill, ListFillMethod } from "@rescript/schema";
+ import {
+   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
+@@ -61,6 +61,7 @@ export function ListFillPanel() {
+   const [note, setNote] = React.useState<{ text: string; ok: boolean } | null>(null);
+   const [busy, setBusy] = React.useState(false);
+   const [open, setOpen] = React.useState<string | null>(null);
++  const [condOpen, setCondOpen] = React.useState<string | null>(null);
+   const [simDraws, setSimDraws] = React.useState(100);
+   const [sim, setSim] = React.useState<null | { listFillId: string; kind: "one"; trace: ListFillTrace } | { listFillId: string; kind: "many"; counts: Record<string, number>; empty: number; draws: number }>(null);
+   const [simAnswers, setSimAnswers] = React.useState<Record<string, string[]>>({});
+@@ -222,7 +223,8 @@ export function ListFillPanel() {
+                   const opt = oi >= 0 ? lf.options[oi] : null;
+                   const pct = row.fill ?? 0;
+                   return (
+-                    <tr key={row.code} data-code={row.code} data-status={row.status}>
++                    <React.Fragment key={row.code}>
++                    <tr data-code={row.code} data-status={row.status}>
+                       <td className="mono">
+                         {row.code}
+                         <span className="muted" style={{ marginLeft: 6 }}>{row.label !== row.code ? stripHtmlText(row.label) : ""}</span>
+@@ -245,10 +247,25 @@ export function ListFillPanel() {
+                             <input type="checkbox" checked={opt?.eligible !== false}
+                               data-testid={`lf-eligible-${lf.id}-${row.code}`}
+                               onChange={(e) => setLf(i, (x) => { x.options[oi].eligible = e.target.checked; })} />
++                            {/* the condition half of eligibility: was stored and honoured, never editable */}
++                            <button type="button" className={`btn small ghost ${opt?.eligibleWhen ? "has-logic" : ""}`}
++                              data-testid={`lf-eligible-when-${lf.id}-${row.code}`}
++                              title="Eligible only when a condition holds"
++                              onClick={() => setCondOpen(condOpen === `${lf.id}:${row.code}` ? null : `${lf.id}:${row.code}`)}>⑂</button>
+                           </label>
+                         )}
+                       </td>
+                     </tr>
++                    {oi >= 0 && condOpen === `${lf.id}:${row.code}` && (
++                      <tr data-testid={`lf-eligible-when-row-${lf.id}-${row.code}`}>
++                        <td colSpan={11}>
++                          <OptionalCondition label={`${row.code} is eligible only when`} value={opt?.eligibleWhen}
++                            hint="Otherwise the checkbox alone decides."
++                            onChange={(c) => setLf(i, (x) => { x.options[oi].eligibleWhen = c; })} />
++                        </td>
++                      </tr>
++                    )}
++                    </React.Fragment>
+                   );
+                 })}
+                 {!status.rows.length && (
+diff --git a/apps/studio/components/studio/MaskingBuilder.tsx b/apps/studio/components/studio/MaskingBuilder.tsx
+index 3c43c97..d31ef5d 100644
+--- a/apps/studio/components/studio/MaskingBuilder.tsx
++++ b/apps/studio/components/studio/MaskingBuilder.tsx
+@@ -7,7 +7,7 @@ import { SET_OPERATOR_LABEL, SET_SELECTION_LABEL } from "@rescript/schema";
+ import {
+   parseSetExpression, formatSetExpression, setExpressionSummary,
+   setExprToChain, appendSet, replaceSetAt, removeSetAt, setChainOperator,
+-  bracketSetPair, validateSetExpr, pipelineToSetExpr, isOptionLevelPunch,
++  bracketSetPair, validateSetExpr, pipelineToSetExpr, isOptionLevelPunch, displayedListCanVary,
+   type SetExprError,
+   stripHtmlText,
+ } from "@rescript/engine";
+@@ -49,6 +49,36 @@ const OPERATOR_HINT: Record<SetOperator, string> = {
+ /* ------------------------------------------------------- one set, one row */
+ 
+ /** A single operand: a question and which slice of it. */
++/**
++ * WHICH SLICE OF THE SOURCE — only the slices that can differ for it.
++ *
++ * "All options" and "Displayed" name the same codes unless the source can
++ * change its own list (masking, carry-forward, option logic, display rules,
++ * "show only N" …); when it cannot, "Displayed" is not offered (Oweas #3). A
++ * stored choice is always kept selectable. Each choice says what it reads.
++ */
++const SELECTION_HINT: Record<SetSelection, string> = {
++  selected: "What the respondent picked",
++  unselected: "What the respondent was shown and did not pick",
++  all: "Every option the question defines, shown or not",
++  displayed: "What the respondent was actually shown, after that question's own masking and logic",
++};
++function SelectionPicker({ node, onChange }: { node: Extract<SetExpr, { kind: "ref" }>; onChange(n: SetExpr): void }) {
++  const st = useStudio();
++  const src = st.def.questions.find((q) => q.id === node.questionId);
++  const canVary = !src || displayedListCanVary(st.def, src);
++  const offered = SELECTIONS.filter((x) => x !== "displayed" || canVary || node.selection === "displayed");
++  return (
++    <select className="select mb-sel" data-testid="mask-selection"
++      value={node.selection} title={SELECTION_HINT[node.selection]}
++      onChange={(e) => onChange({ ...node, selection: e.target.value as SetSelection })}>
++      {offered.map((x) => (
++        <option key={x} value={x} title={SELECTION_HINT[x]}>{SET_SELECTION_LABEL[x]}</option>
++      ))}
++    </select>
++  );
++}
++
+ function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBracket }: {
+   node: SetExpr;
+   sources: { id: string; code: string; label: string }[];
+@@ -185,13 +215,7 @@ function SetRow({ node, sources, listFills, onChange, onRemove, onBracket, canBr
+           <option key={s.id} value={s.id}>{s.code} — {s.label}</option>
+         ))}
+       </select>
+-      <select className="select mb-sel" data-testid="mask-selection"
+-        value={node.selection}
+-        onChange={(e) => onChange({ ...node, selection: e.target.value as SetSelection })}>
+-        {SELECTIONS.map((s) => (
+-          <option key={s} value={s}>{SET_SELECTION_LABEL[s]}</option>
+-        ))}
+-      </select>
++      <SelectionPicker node={node} onChange={onChange} />
+       {canBracket && (
+         <button className="btn small" data-testid="mask-bracket-pair"
+           title="Bracket this set with the next one, so they are evaluated together"
+diff --git a/apps/studio/components/studio/MediaListEditor.tsx b/apps/studio/components/studio/MediaListEditor.tsx
+new file mode 100644
+index 0000000..2f7d311
+--- /dev/null
++++ b/apps/studio/components/studio/MediaListEditor.tsx
+@@ -0,0 +1,140 @@
++"use client";
++import React from "react";
++import type { Question } from "@rescript/schema";
++import { resolveMediaUrl } from "@rescript/engine";
++import { uploadAsset } from "@/lib/assets";
++import { MediaUrlInput } from "./MediaUrlInput";
++import { useStudio, uid } from "./store";
++
++type Item = NonNullable<Question["settings"]["mediaItems"]>[number];
++
++/**
++ * THE MEDIA UNDER A QUESTION — one item or several (Prince 11, 14, 16).
++ *
++ * One image stays exactly what it always was: `settings.mediaUrl`. The moment
++ * a second is added the list moves to `settings.mediaItems` (in order), with
++ * `mediaUrl` kept equal to the first so every reader of the single URL still
++ * sees one. Each item can be replaced (Choose / Upload / paste), named, given
++ * alt text, moved and deleted; several images can be uploaded at once; and
++ * the layout — side by side or stacked — is chosen when there is more than one.
++ * Images, video, YouTube and Google Drive links all work in every slot, and
++ * every slot takes piping (`{{ImageURL}}`).
++ */
++export function MediaListEditor({ q, patchSettings, label }: {
++  q: Question;
++  patchSettings(p: Partial<Question["settings"]>): void;
++  label: string;
++}) {
++  const studio = useStudio();
++  const canUpload = studio.surveyDbId !== "sandbox";
++  const items: Item[] = q.settings.mediaItems?.length
++    ? q.settings.mediaItems
++    : q.settings.mediaUrl
++      ? [{ id: "m_first", url: q.settings.mediaUrl }]
++      : [];
++  const [busy, setBusy] = React.useState<string | null>(null);
++  const [error, setError] = React.useState<string | null>(null);
++  const multiRef = React.useRef<HTMLInputElement | null>(null);
++
++  const write = (next: Item[]) => {
++    const kept = next;
++    const simple = kept.length <= 1 && !kept[0]?.alt && !kept[0]?.title;
++    patchSettings({
++      mediaUrl: kept[0]?.url?.trim() ? kept[0].url : undefined,
++      mediaItems: simple ? undefined : kept,
++      ...(kept.length <= 1 ? { mediaLayout: undefined } : {}),
++    });
++  };
++  const set = (i: number, p: Partial<Item>) => write(items.map((m, j) => (j === i ? { ...m, ...p } : m)));
++  const move = (i: number, d: -1 | 1) => {
++    const j = i + d;
++    if (j < 0 || j >= items.length) return;
++    const next = [...items];
++    [next[i], next[j]] = [next[j], next[i]];
++    write(next);
++  };
++  const add = () => write([...items.length ? items : [], { id: uid("media"), url: "" }]);
++
++  const uploadMany = async (files: FileList) => {
++    setError(null);
++    const added: Item[] = [];
++    let n = 0;
++    for (const f of Array.from(files)) {
++      n += 1;
++      setBusy(`Uploading ${n} of ${files.length}…`);
++      const out = await uploadAsset(studio.surveyDbId, f);
++      if (!out.ok) { setError(`${f.name}: ${out.error}`); continue; }
++      added.push({ id: uid("media"), url: out.asset.url, title: f.name.replace(/\.[^.]+$/, "") });
++    }
++    setBusy(null);
++    if (multiRef.current) multiRef.current.value = "";
++    if (added.length) write([...items.filter((m) => m.url.trim()), ...added]);
++  };
++
++  const several = items.length > 1;
++  return (
++    <div className="media-list" data-testid="media-list">
++      {!several && (
++        <MediaUrlInput label={label} testId="question-media" questionId={q.id} value={items[0]?.url}
++          onChange={(v) => write(v ? [{ ...(items[0] ?? { id: "m_first" }), url: v }] : [])} />
++      )}
++      {several && (
++        <>
++          <span className="flabel">{label}</span>
++          {items.map((m, i) => {
++            const kind = resolveMediaUrl(m.url).kind;
++            return (
++              <div key={m.id} className="card media-item" data-testid="media-item" style={{ padding: 8, marginBottom: 6 }}>
++                <div className="row" style={{ marginBottom: 4 }}>
++                  <span className="step-badge">{i + 1}</span>
++                  <input className="input grow" data-testid={`media-item-title-${i}`} placeholder={`Image ${i + 1} — name (optional)`}
++                    value={m.title ?? ""} onChange={(e) => set(i, { title: e.target.value || undefined })} />
++                  <button type="button" className="btn small" title="Move up" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
++                  <button type="button" className="btn small" title="Move down" disabled={i === items.length - 1} onClick={() => move(i, 1)}>↓</button>
++                  <button type="button" className="btn small danger" title="Delete this item" data-testid={`media-item-delete-${i}`}
++                    onClick={() => write(items.filter((_, j) => j !== i))}>×</button>
++                </div>
++                {/* Choose / Upload here REPLACE this item */}
++                <MediaUrlInput testId={`media-item-url-${i}`} questionId={q.id} value={m.url}
++                  onChange={(v) => set(i, { url: v ?? "" })} />
++                {kind === "image" && (
++                  <input className="input" style={{ marginTop: 4 }} data-testid={`media-item-alt-${i}`}
++                    placeholder="Alt text — what a screen reader says (leave blank to use the question text)"
++                    value={m.alt ?? ""} onChange={(e) => set(i, { alt: e.target.value || undefined })} />
++                )}
++              </div>
++            );
++          })}
++          <div className="row" style={{ gap: 12, margin: "4px 0 8px", flexWrap: "wrap" }} data-testid="media-layout">
++            <span className="flabel" style={{ margin: 0 }}>Layout</span>
++            {(["horizontal", "vertical"] as const).map((l) => (
++              <label key={l} className="row" style={{ gap: 4, fontSize: 13 }}>
++                <input type="radio" name={`media-layout-${q.id}`} data-testid={`media-layout-${l}`}
++                  checked={(q.settings.mediaLayout ?? "vertical") === l}
++                  onChange={() => patchSettings({ mediaLayout: l })} />
++                {l === "horizontal" ? "Side by side (wraps on small screens)" : "Stacked"}
++              </label>
++            ))}
++          </div>
++        </>
++      )}
++      <div className="row" style={{ gap: 8, marginTop: 4, flexWrap: "wrap" }}>
++        <button type="button" className="btn small" data-testid="media-add" onClick={add}
++          disabled={!items.length || items.some((m) => !m.url.trim())}
++          title={!items.length ? "Add the first item above" : "Add another image or video"}>
++          + Add another
++        </button>
++        {canUpload && (
++          <>
++            <input ref={multiRef} type="file" accept="image/*,video/*" multiple style={{ display: "none" }}
++              data-testid="media-upload-many-file"
++              onChange={(e) => { if (e.target.files?.length) void uploadMany(e.target.files); }} />
++            <button type="button" className="btn small" data-testid="media-upload-many" disabled={!!busy}
++              onClick={() => multiRef.current?.click()}>{busy ?? "Upload multiple images"}</button>
++          </>
++        )}
++      </div>
++      {error && <div className="muted" data-testid="media-upload-error" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }}>⚠ {error}</div>}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/MediaUrlInput.tsx b/apps/studio/components/studio/MediaUrlInput.tsx
+index 4f8d685..bb01efc 100644
+--- a/apps/studio/components/studio/MediaUrlInput.tsx
++++ b/apps/studio/components/studio/MediaUrlInput.tsx
+@@ -54,6 +54,9 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+ 
+   const verdict = !value?.trim()
+     ? null
++    /* a piped URL ({{ImageURL}}, from a URL parameter or an answer) is chosen per respondent — not an error */
++    : /\{\{[^}]+\}\}/.test(value)
++      ? { tone: "ok", text: "Piped — each respondent sees the media their value points to" }
+     : media.kind === "unsupported"
+       ? { tone: "bad", text: media.reason ?? "Not supported" }
+       : media.kind === "embed"
+diff --git a/apps/studio/components/studio/OptionLogicEditor.tsx b/apps/studio/components/studio/OptionLogicEditor.tsx
+index 9853929..613050d 100644
+--- a/apps/studio/components/studio/OptionLogicEditor.tsx
++++ b/apps/studio/components/studio/OptionLogicEditor.tsx
+@@ -71,6 +71,21 @@ function SourceRuleEditor({ title, rule, direction, onChange }: {
+   );
+ }
+ 
++/**
++ * The older `visibleIf` gate, folded into option logic with the same meaning:
++ * with no visibility rule (or "Show when") it becomes / joins the Show-when
++ * condition; with any other mode it is an extra "Eligible when" gate — which
++ * is exactly where `eligibilityVerdict` evaluates it.
++ */
++export function absorbLegacyVisibleIf(l: OptionLogic, visibleIf: Condition): OptionLogic {
++  const and = (a: Condition | undefined, b: Condition): Condition =>
++    a && !(a.type === "group" && a.children.length === 0) ? { type: "group", op: "and", children: [a, b] } : b;
++  const v = l.visibility ?? "default";
++  if (v === "default") return { ...l, visibility: "show_when", when: visibleIf };
++  if (v === "show_when") return { ...l, when: and(l.when, visibleIf) };
++  return { ...l, eligibleWhen: and(l.eligibleWhen, visibleIf) };
++}
++
+ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
+   title: string;
+   logic: OptionLogic | undefined;
+@@ -136,10 +151,22 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
+       )}
+ 
+       {visibleIf && (
+-        <div className="chip warn" style={{ margin: "6px 0" }}>
+-          This option also has a legacy “visible if” condition —
+-          <button className="btn small" style={{ marginLeft: 6 }}
+-            onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
++        /*
++         * The older "visible if" field. It still runs (an extra gate on top of
++         * everything above), so it is SHOWN and editable here — it used to be a
++         * chip saying it existed, with only a way to delete it unseen. "Convert"
++         * moves it into the visibility rules without changing what it does.
++         */
++        <div className="card" style={{ margin: "6px 0", padding: 8, borderColor: "var(--amber)" }} data-testid="legacy-visibleif">
++          <div className="row" style={{ marginBottom: 4, flexWrap: "wrap" }}>
++            <span className="flabel" style={{ margin: 0 }}>ALSO SHOWN ONLY WHEN (older “visible if”)</span>
++            <span className="grow" />
++            <button className="btn small" data-testid="legacy-visibleif-convert"
++              title="Move this condition into the visibility rules above — same behaviour, one place"
++              onClick={() => onChange({ logic: absorbLegacyVisibleIf(l, visibleIf), visibleIf: undefined })}>convert</button>
++            <button className="btn small danger" onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
++          </div>
++          <ConditionEditor perOption value={visibleIf} onChange={(c) => onChange({ visibleIf: c })} />
+         </div>
+       )}
+ 
+diff --git a/apps/studio/components/studio/PipingPicker.tsx b/apps/studio/components/studio/PipingPicker.tsx
+index 4cc2042..d5a8958 100644
+--- a/apps/studio/components/studio/PipingPicker.tsx
++++ b/apps/studio/components/studio/PipingPicker.tsx
+@@ -11,6 +11,7 @@ import {
+   type PipeProperty,
+   type PipeToken,
+   stripHtmlText,
++  embeddedCatalog,
+ } from "@rescript/engine";
+ import { useLoopScope } from "./loopScope";
+ import { useStudio } from "./store";
+@@ -67,6 +68,26 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+   const [property, setProperty] = React.useState<PipeProperty>("label");
+   const [format, setFormat] = React.useState<PipeFormat>("comma");
+   const [expr, setExpr] = React.useState("");
++  /* the token text, when the programmer has typed over it; any dropdown change hands control back */
++  const [manual, setManual] = React.useState<string | null>(null);
++  /* a URL carried in (a URL parameter, a calculation, an answer) can be shown as the picture it names — Prince 36 */
++  const [asImage, setAsImage] = React.useState(false);
++  React.useEffect(() => { setManual(null); }, [kind, ref, rowCode, property, format, expr, asImage]);
++  const embeddedFields = React.useMemo(() => embeddedCatalog(s.def), [s.def]);
++  /*
++   * Changing the source changes what `ref` names: a question code means
++   * nothing to "Calculated value". The first item of the new source is
++   * picked, so every dropdown shows a real, selected value.
++   */
++  const changeKind = (k: PipeToken["kind"]) => {
++    setKind(k);
++    setRowCode("");
++    if (k === "question") setRef(questions.find((x) => x.id !== currentQuestionId)?.code ?? questions[0]?.code ?? "");
++    else if (k === "calc") setRef(s.def.calculations[0]?.targetVariable ?? "");
++    else if (k === "embedded") setRef(embeddedFields[0]?.name ?? "");
++    else if (k === "loop") setRef("label");
++    else setRef("");
++  };
+ 
+   const q = questions.find((x) => x.code === ref || x.id === ref);
+   const props = propertiesForQuestion(q);
+@@ -97,7 +118,8 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+   const [loopTarget, setLoopTarget] = React.useState<string>("");   // "" = innermost, else an outer loopVar
+   const scopedLoop = loopTarget ? loopScope.find((l) => l.loopVar === loopTarget) : loopScope[0];
+ 
+-  const token: Omit<PipeToken, "raw" | "text"> =
++  const imageable = kind === "embedded" || kind === "calc" || kind === "expr" || (kind === "question" && (property === "value" || property === "label"));
++  const token0: Omit<PipeToken, "raw" | "text"> =
+     kind === "expr"
+       ? { kind: "expr", ref: expr, property: "value" }
+       : kind === "question"
+@@ -106,7 +128,9 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+           ? { kind, ref, property: "value", format, scope: loopTarget || undefined }
+           : { kind, ref, property: "value", format };
+ 
+-  const text = serializePipeToken(token);
++  const token: Omit<PipeToken, "raw" | "text"> = asImage && imageable && kind !== "expr" ? { ...token0, format: "image" } : token0;
++  const built = serializePipeToken(token);
++  const text = manual ?? built;
+   const multiValued =
+     kind === "question" &&
+     ["labels", "rank", "displayed", "remaining", "value"].includes(property);
+@@ -117,7 +141,16 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+     questions.findIndex((x) => x.id === q.id) > questions.findIndex((x) => x.id === currentQuestionId);
+ 
+   return (
+-    <div className="pipe-picker" role="dialog" aria-label="Insert piped text">
++    /*
++     * The picker opens inside the rich-text toolbar, whose mousedown handler
++     * calls preventDefault() to keep the text selection. Inherited here, that
++     * stopped every select and input in the dialog from opening or taking
++     * focus — the "fields cannot be changed" of the 29-09 review (#7). The
++     * dialog's own mousedowns stop at the dialog; the caret is kept by
++     * InsertPipingButton instead.
++     */
++    <div className="pipe-picker" role="dialog" aria-label="Insert piped text" data-testid="pipe-picker"
++      onMouseDown={(e) => e.stopPropagation()}>
+       <div className="row" style={{ marginBottom: 8 }}>
+         <strong style={{ fontSize: 14 }}>Insert piped text</strong>
+         <span className="grow" />
+@@ -125,7 +158,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+       </div>
+ 
+       <label className="f"><span>Insert from</span>
+-        <select className="select" value={kind} onChange={(e) => setKind(e.target.value as any)}>
++        <select className="select" data-testid="pipe-kind" value={kind} onChange={(e) => changeKind(e.target.value as PipeToken["kind"])}>
+           <option value="question">Previous question</option>
+           <option value="calc">Calculated value</option>
+           <option value="embedded">Embedded data / URL parameter</option>
+@@ -184,7 +217,7 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+ 
+       {kind === "calc" && (
+         <label className="f"><span>Calculation</span>
+-          <select className="select" value={ref} onChange={(e) => setRef(e.target.value)}>
++          <select className="select" data-testid="pipe-calc" value={ref} onChange={(e) => setRef(e.target.value)}>
+             <option value="">— pick —</option>
+             {s.def.calculations.map((c) => (
+               <option key={c.id} value={c.targetVariable}>{c.targetVariable}</option>
+@@ -194,9 +227,10 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+       )}
+       {kind === "embedded" && (
+         <label className="f"><span>Field</span>
+-          <select className="select" value={ref} onChange={(e) => setRef(e.target.value)}>
++          {/* every field the survey defines — survey-level AND the flow's Embedded data elements (they were missing) */}
++          <select className="select" data-testid="pipe-embedded" value={ref} onChange={(e) => setRef(e.target.value)}>
+             <option value="">— pick —</option>
+-            {s.def.embeddedData.map((e2) => <option key={e2.name} value={e2.name}>{e2.name}</option>)}
++            {embeddedFields.map((e2) => <option key={e2.name} value={e2.name}>{e2.name}{e2.source ? ` — ${e2.source}` : ""}</option>)}
+           </select>
+         </label>
+       )}
+@@ -243,21 +277,31 @@ export function PipingPicker({ onInsert, onClose, currentQuestionId }: PipingPic
+         <label className="f"><span>Format</span>
+           <select className="select" data-testid="pipe-format" value={format}
+             onChange={(e) => setFormat(e.target.value as PipeFormat)}>
+-            {PIPE_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label} — {f.example}</option>)}
++            {PIPE_FORMATS.filter((f) => f.value !== "image").map((f) => <option key={f.value} value={f.value}>{f.label} — {f.example}</option>)}
+           </select>
+         </label>
+       )}
+ 
++      {imageable && kind !== "expr" && (
++        <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 6 }}>
++          <input type="checkbox" data-testid="pipe-as-image" checked={asImage} onChange={(e) => setAsImage(e.target.checked)} />
++          Show as image — the value is an image URL
++        </label>
++      )}
++
+       {laterThanCurrent && (
+         <div className="chip warn" style={{ marginBottom: 6 }}>
+           {q!.code} is asked after this question — it will be blank unless the respondent goes back.
+         </div>
+       )}
+ 
+-      <div className="pipe-preview mono">{text}</div>
++      {/* the token itself, editable: the dropdowns write it, and it can still be adjusted by hand */}
++      <input className="input mono pipe-preview" data-testid="pipe-token" value={text} spellCheck={false}
++        onChange={(e) => setManual(e.target.value)} />
+       <div className="row" style={{ marginTop: 8 }}>
+         <button className="btn primary small" data-testid="pipe-insert"
+-          onClick={() => { onInsert(text); onClose(); }}>
++          disabled={!/^\{\{.+\}\}$/.test(text.trim())}
++          onClick={() => { onInsert(text.trim()); onClose(); }}>
+           Insert
+         </button>
+         <button className="btn small" onClick={onClose}>cancel</button>
+@@ -271,17 +315,38 @@ export function InsertPipingButton({ onInsert, currentQuestionId, label = "＋ P
+   onInsert(token: string): void; currentQuestionId?: string; label?: string; className?: string;
+ }) {
+   const [open, setOpen] = React.useState(false);
++  /*
++   * The caret, kept while the dialog has focus. Its selects take the focus
++   * (they must, to be usable), which empties the text selection; the token
++   * is inserted where the caret WAS, not at the start of the field.
++   */
++  const caret = React.useRef<Range | null>(null);
++  const keepCaret = () => {
++    const sel = typeof window !== "undefined" ? window.getSelection() : null;
++    caret.current = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
++  };
++  const insertAtCaret = (token: string) => {
++    const sel = window.getSelection();
++    const r = caret.current;
++    if (sel && r && document.contains(r.startContainer)) {
++      const host = (r.startContainer.nodeType === 1 ? r.startContainer as HTMLElement : r.startContainer.parentElement)?.closest("[contenteditable=true]") as HTMLElement | null;
++      host?.focus();
++      sel.removeAllRanges();
++      sel.addRange(r);
++    }
++    onInsert(token);
++  };
+   return (
+     <span className="pipe-anchor">
+       <button type="button" className={className} title="Insert piped text from an earlier answer"
+         data-testid="insert-piping"
+-        onMouseDown={(e) => e.preventDefault()}
++        onMouseDown={(e) => { e.preventDefault(); keepCaret(); }}
+         onClick={() => setOpen((v) => !v)}>
+         {label}
+       </button>
+       {open && (
+         <PipingPicker currentQuestionId={currentQuestionId}
+-          onInsert={onInsert} onClose={() => setOpen(false)} />
++          onInsert={insertAtCaret} onClose={() => setOpen(false)} />
+       )}
+     </span>
+   );
+diff --git a/apps/studio/components/studio/PropertiesPanel.tsx b/apps/studio/components/studio/PropertiesPanel.tsx
+index 99f0e0a..628193d 100644
+--- a/apps/studio/components/studio/PropertiesPanel.tsx
++++ b/apps/studio/components/studio/PropertiesPanel.tsx
+@@ -2,12 +2,13 @@
+ import { CountInput } from "./CountInput";
+ import React from "react";
+ import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
+-import { gridAxes, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
++import { gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
+ import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+ import { useStudio, selectedQuestion, uid } from "./store";
+ import { useCanvas } from "../canvas/CanvasContext";
+ import { ElementPanel } from "../canvas/ElementPanel";
+ import { OptionalCondition, ConditionEditor, newConditionGroup } from "./ConditionBuilder";
++import { RandomizeAxes } from "./RandomizeAxes";
+ import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
+ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
+ import { QualitySettings } from "./QualitySettings";
+@@ -492,6 +493,11 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
+       ];
+   /* a stored value the source does not offer stays selectable — and visible — rather than silently changing */
+   const current = (cf.filter ?? "selected") as F;
++  /* "displayed" IS "all" unless the source can change its own list — then it is not offered (Oweas #6) */
++  if (src && !displayedListCanVary(s.def, src, grid ? "rows" : "options") && current !== "displayed") {
++    const at = choices.findIndex((c) => c.value === "displayed");
++    if (at >= 0) choices.splice(at, 1);
++  }
+   const effective: F = grid && current === "selected" ? "answered_rows" : !grid && current === "answered_rows" ? "selected" : current;
+   const hint = choices.find((c) => c.value === effective)?.hint;
+   const set = (p: Partial<typeof cf>) => patch({ carryForward: { ...cf, ...p } });
+@@ -1230,10 +1236,7 @@ export function PropertiesPanel() {
+         </label>
+         {q.randomization?.enabled && (
+           <>
+-            <select className="select" value={q.randomization.scope}
+-              onChange={(e) => patch({ randomization: { ...q.randomization!, scope: e.target.value as any } })}>
+-              <option value="options">options</option><option value="rows">rows</option><option value="columns">columns</option>
+-            </select>
++            <RandomizeAxes q={q} patch={patch} />
+             <select className="select" value={q.randomization.method}
+               onChange={(e) => patch({ randomization: { ...q.randomization!, method: e.target.value as any } })}>
+               <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
+@@ -1320,8 +1323,10 @@ export function PropertiesPanel() {
+       </CollapsibleSection>
+       )}
+ 
++      {/* on a grid whose columns ARE its options (the answer scale) this is the
++          column masking — one section, named for what the respondent sees (29-09 #2) */}
+       {hasCap("list_logic") && showSec("Masking") && (
+-      <CollapsibleSection id="masking" title="Masking (dynamic option sets)" active={!!q.mask}>
++      <CollapsibleSection id="masking" title={gridAxes(q).columnMeaning === "option_code" ? "Column masking (dynamic column sets)" : "Masking (dynamic option sets)"} active={!!q.mask}>
+       <MaskingBuilder q={q} patch={patch} field="mask" />
+       </CollapsibleSection>
+       )}
+diff --git a/apps/studio/components/studio/QuestionsPanel.tsx b/apps/studio/components/studio/QuestionsPanel.tsx
+index c9dc280..1b7f875 100644
+--- a/apps/studio/components/studio/QuestionsPanel.tsx
++++ b/apps/studio/components/studio/QuestionsPanel.tsx
+@@ -26,6 +26,7 @@ import { OptionLogicEditor } from "./OptionLogicEditor";
+ import { OptionPreview } from "./OptionPreview";
+ import { usePreviewBlock } from "./PreviewBlock";
+ import { MediaUrlInput } from "./MediaUrlInput";
++import { MediaListEditor } from "./MediaListEditor";
+ import { MediaDisplayControls, type DisplayKind } from "./MediaDisplayControls";
+ 
+ /** image / video / audio — what the sizing controls should offer for a URL */
+@@ -1085,9 +1086,8 @@ export function QuestionEditor({ q }: { q: Question }) {
+       </div>
+       {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
+         <>
+-          <MediaUrlInput label="Media — shown under the question text (image, video, YouTube or Google Drive URL)"
+-            testId="question-media" questionId={q.id} value={q.settings.mediaUrl}
+-            onChange={(v) => patchSettings({ mediaUrl: v })} />
++          <MediaListEditor q={q} patchSettings={patchSettings}
++            label="Media — shown under the question text (image, video, YouTube or Google Drive URL)" />
+           {q.settings.mediaUrl && resolveMediaUrl(q.settings.mediaUrl).kind !== "embed" && (
+             <details className="qs-details" data-testid="question-media-display" open={!!q.settings.mediaDisplay}>
+               <summary>Size, fit &amp; playback</summary>
+diff --git a/apps/studio/components/studio/QuotasPanel.tsx b/apps/studio/components/studio/QuotasPanel.tsx
+index 51ecd3a..d520566 100644
+--- a/apps/studio/components/studio/QuotasPanel.tsx
++++ b/apps/studio/components/studio/QuotasPanel.tsx
+@@ -148,8 +148,8 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
+               onChange={(e) => s.update((d) => { d.quotas[qi].mode = e.target.value as any; })}>
+               <option value="hard">hard</option><option value="soft">soft</option>
+             </select>
+-            <label className="row" style={{ gap: 4 }}>target total
+-              <CountInput value={qt.targetTotal}
++            <label className="row" style={{ gap: 4, whiteSpace: "nowrap", flex: "0 0 auto" }}>target total
++              <CountInput value={qt.targetTotal} width={110} data-testid={`quota-target-total-${qi}`}
+                 onChange={(v) => s.update((d) => { d.quotas[qi].targetTotal = v; })} />
+             </label>
+             <select className="select" value={qt.onFull.kind}
+diff --git a/apps/studio/components/studio/RandomizeAxes.tsx b/apps/studio/components/studio/RandomizeAxes.tsx
+new file mode 100644
+index 0000000..0e20845
+--- /dev/null
++++ b/apps/studio/components/studio/RandomizeAxes.tsx
+@@ -0,0 +1,47 @@
++"use client";
++import React from "react";
++import type { Question } from "@rescript/schema";
++import { gridAxes, shapeHasAxis } from "@rescript/engine";
++
++/**
++ * WHAT IS SHUFFLED — one tick per axis the question really has, so a grid can
++ * shuffle its rows AND its columns (29-09 #1); a single select box allowed one.
++ * The first ticked axis is the primary one: "show only N" and groups apply
++ * to it. On a grid whose columns are the answer scale, the scale is labelled
++ * as the columns it is on screen.
++ */
++export function randomizableAxes(q: Question): { axis: "options" | "rows" | "columns"; label: string }[] {
++  const scaleIsColumns = gridAxes(q).columnMeaning === "option_code";
++  const out: { axis: "options" | "rows" | "columns"; label: string }[] = [];
++  if (shapeHasAxis(q, "rows") && (q.rows?.length ?? 0) > 0) out.push({ axis: "rows", label: "rows" });
++  if (shapeHasAxis(q, "options")) out.push({ axis: "options", label: scaleIsColumns ? "columns" : "options" });
++  if (shapeHasAxis(q, "columns") && (q.columns?.length ?? 0) > 0) out.push({ axis: "columns", label: "columns" });
++  if (!out.length) out.push({ axis: "options", label: "options" });
++  return out;
++}
++
++export function RandomizeAxes({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
++  const r = q.randomization!;
++  const on = new Set(r.scopes?.length ? r.scopes : [r.scope ?? "options"]);
++  const axes = randomizableAxes(q);
++  /* a stored axis the shape no longer lists stays visible, ticked — never silently dropped */
++  for (const a of on) if (!axes.some((x) => x.axis === a)) axes.push({ axis: a, label: a });
++  const set = (axis: "options" | "rows" | "columns", checked: boolean) => {
++    const next = axes.map((a) => a.axis).filter((a) => (a === axis ? checked : on.has(a)));
++    if (!next.length) return; // at least one axis: untick "enabled" to stop randomizing
++    const primary = next.includes(r.scope ?? "options") ? (r.scope ?? "options") : next[0];
++    patch({ randomization: { ...r, scope: primary, scopes: next.length > 1 ? next : undefined } });
++  };
++  return (
++    <span className="row" style={{ gap: 8 }} data-testid="rand-axes">
++      {axes.map((a) => (
++        <label key={a.axis} className="row" style={{ gap: 4, fontSize: 13 }}>
++          <input type="checkbox" data-testid={`rand-axis-${a.axis}`} checked={on.has(a.axis)}
++            onChange={(e) => set(a.axis, e.target.checked)} />
++          {a.label}
++        </label>
++      ))}
++    </span>
++  );
++}
++
+diff --git a/apps/studio/components/studio/UxItemsEditor.tsx b/apps/studio/components/studio/UxItemsEditor.tsx
+index 8a549aa..28f10f5 100644
+--- a/apps/studio/components/studio/UxItemsEditor.tsx
++++ b/apps/studio/components/studio/UxItemsEditor.tsx
+@@ -164,6 +164,11 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
+       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
+       {kind === "style" && <StyleFields style={cur as UxStyle} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
++      {(kind === "style" || kind === "animation") && (
++        /* a style or animation can be conditional too — it applies only while the condition holds */
++        <BehaviorGuard b={cur as unknown as UxBehavior} readOnly={readOnly}
++          onChange={(n) => commit(n as never, true)} />
++      )}
+       {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+       {errors.length > 0 && <ul className="ux-errors" role="alert" data-testid="ux-item-errors">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
+       {warnings.length > 0 && <ul className="ux-warnings" data-testid="ux-item-warnings">{warnings.map((e, i) => <li key={i}>{e}</li>)}</ul>}
+@@ -267,6 +272,7 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
+  * `when`; this is where it is seen and set (the Copilot could already write it).
+  */
+ function BehaviorGuard({ b, readOnly, onChange }: { b: UxBehavior; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void }) {
++  /* (styles and animations use it too: anything with a `when`) */
+   if (readOnly) return b.when ? <div className="muted" style={{ fontSize: 12.5 }} data-testid="ux-beh-when-ro">Only when a condition holds.</div> : null;
+   return (
+     <div data-testid="ux-beh-when">
+diff --git a/apps/studio/lib/copilot/prompt.ts b/apps/studio/lib/copilot/prompt.ts
+index 52eeca4..cbf48ad 100644
+--- a/apps/studio/lib/copilot/prompt.ts
++++ b/apps/studio/lib/copilot/prompt.ts
+@@ -173,7 +173,7 @@ THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-acc
+   // "stagger": one at a time, this many ms apart
+ {"op":"update_animation","id":"…","duration":800}   // "make it slower": change the existing animation; never add a second one on the same target
+ {"op":"create_behavior","label":"…","target":"Q8","on":"answer","options":["3","Other"],"effects":[{"do":"animate","target":"next","preset":"pulse"}]}
+-  // any behaviour may add "when":"Q3 = 2 AND Q1 >= 18" — it then runs only while that holds ("when": null removes it)
++  // any behaviour, style or animation may add "when":"Q3 = 2 AND Q1 >= 18" — it then applies only while that holds ("when": null removes it)
+   // on: answer · change · select_option (with "options") · deselect_option · page_complete · block_complete · appear · page_enter · click · hover
+   // effects: animate {preset} · show_message {text: plain text} · hide_message · add_class / remove_class / toggle_class {className} · set_style {style} · show · hide · scroll_into_view · focus — each with an optional "target" (default: the behaviour's own)
+   // select_option, page_complete, block_complete and hover HOLD while true and are undone when they stop being true; a style rule with "whenClass":"chosen" applies while add_class "chosen" is on
+diff --git a/docs/NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md b/docs/NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md
+index fafb96d..37a61c0 100644
+--- a/docs/NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md
++++ b/docs/NESTED-LOGIC-IMPLEMENTATION-2026-10-01.md
+@@ -100,6 +100,10 @@ rely on that. Now:
+ - **Grid carry-forward "displayed" / "all" / "NOT selected"** carry rows, not scale points.
+ - **COUNT `where`** narrows any COUNT, not only `matching`.
+ 
++- **Content / HTML blocks with media** now show it. Before, it was configured but never drawn.
++- **Masking and carry-forward pickers** hide "Displayed" when it equals "All". A stored
++  "Displayed" stays selectable.
++
+ ## Tests
+ 
+ - `packages/engine/src/nestedLogicAudit.test.ts`: 32 tests covering the brief's S1–S20 and each
+@@ -111,26 +115,40 @@ rely on that. Now:
+     column;
+   - studio: `lib/intelligent/nestedGrammar.test.ts`.
+ - Browser: `scripts/nested-logic-audit-test.mjs`, 17 checks across Studio and runtime.
++- Second pass:
++  - engine `remainingItems.test.ts`;
++  - import: Decipher named conditions, QSF quota groups and skip expressions;
++  - designs: combination prohibitions;
++  - exporters: SPSS bases syntax;
++  - browser `scripts/remaining-items-test.mjs`, 13 checks.
+ - Each fix was mutation-checked: the code was reverted and the tests confirmed to fail.
+ 
++## Second pass: the remaining items (2026-10-01)
++
++| Item | Fix | Where |
++|---|---|---|
++| 29-09 #1 Randomize rows and columns together | Randomization takes several axes. `scopes` sits beside `scope`; the primary axis keeps "show only N" and groups, and each other axis is shuffled with its own seed. The single select became a checkbox per axis. | schema `Randomization.scopes`, `carryforward.ts` `axisRandomization`, `RandomizeAxes.tsx` |
++| 29-09 #2 "Options" next to "Columns" on a grid | Where a grid's columns are its answer scale, that axis appears once, labelled "columns" (randomization), and its masking section is called "Column masking". | `RandomizeAxes.tsx`, `PropertiesPanel.tsx` |
++| 29-09 #4 / Prince 52 Quota target-total box too small | `CountInput` is never squeezed below its width, and grows with the number typed. | `CountInput.tsx`, `QuotasPanel.tsx` |
++| 29-09 #7 Piping dialog fields could not be changed | The dialog sat inside the rich-text toolbar, whose mousedown handler blocked its selects and inputs. The dialog now stops that handler, keeps the caret, and inserts the token there. Changing "Insert from" picks a valid first item. Embedded fields defined in the flow are listed. The token itself can be edited. | `PipingPicker.tsx` |
++| Oweas 1–3, 6 Redundant carry-forward and masking choices | "Displayed" is offered only when the source can change its own list (`displayedListCanVary`); otherwise it is the same as "All". Each choice has a one-line explanation. | `carryforward.ts`, `MaskingBuilder.tsx`, `PropertiesPanel.tsx` |
++| Prince 11, 14, 16 Several images / videos with a layout | `settings.mediaItems` holds several items, each replaceable, nameable, with alt text and movable; images can be uploaded several at a time. `mediaLayout` can be side by side (wrapping on a small screen) or stacked. `mediaUrl` stays equal to the first item. Content / HTML blocks now draw their media in Preview, Test and Live. | schema, `questionMediaList`, `QuestionMedia` (renderer), `MediaListEditor.tsx`, `media.css` |
++| Prince 36 A URL parameter piped as an image | `{{ImageURL\|image}}` draws the picture, accepting only http(s), site-relative and `data:image` URLs. The picker has a "Show as image" option. A piped media URL is reported as "piped" instead of unsupported. | `piping.ts`, `pipingTokens.ts`, `PipingPicker.tsx`, `MediaUrlInput.tsx` |
++| Missing editors | Older option / row "visible if" is shown, editable and convertible. List Fill "eligible when" has an editor, as does a row validation's "check only when". | `OptionLogicEditor.tsx`, `ListFillPanel.tsx`, `ElementPanel.tsx` |
++| Nesting caps | The analytics filter nests 8 levels instead of 3. The interview builder nests groups and offers "none of"; before, a NOT group was shown as "all of these". An interview skip with no condition is flagged. | `FilterBuilder.tsx`, interviews `LogicEditor.tsx` |
++| Import | A Qualtrics quota group becomes one quota with a cell per member. A skip carrying a BooleanExpression is read in full. Decipher named `<condition>`s are expanded, nested. | `qsf.ts`, `decipher.ts`, `map.ts` |
++| Embedded IF…THEN…ELSE | Parsed properly, so an IF inside THEN and `IF (…) THEN` both work. | `embedded.ts` |
++| Calculations | Calculations read named expressions as 1 or 0 (`TARGET * 10`, `if(rule.X, …)`). | `calcContext.ts` |
++| SPSS | The SPSS bundle includes `<code>_bases.sps`. It holds one `ASKED_<var>` flag per conditional question (page condition AND display logic, nested), and names any rule that SPSS cannot spell exactly. | `exporters/spssBases.ts` |
++| UX | Styles and animations take `when`, in the Studio and in Copilot actions. The runtime stylesheet includes them only while the condition holds. | schema `ux.ts`, `ux.ts` `compileUxCss`, `UxLayer.tsx`, `uxActions.ts` |
++| Conjoint | A prohibition can be a combination: the pair AND all / any of further levels, or a full AND / OR / NOT tree. | `designs/conjoint.ts`, `DesignsPanel.tsx` |
++
+ ## Remaining
+ 
+-- **Spreadsheet items that are not logic:**
+-  - randomise rows and columns together (29-09 #1);
+-  - the "Options" logic button in grid column config (#2);
+-  - the quota target-total box width (#4, Prince 52);
+-  - the piping dialog fields (#7);
+-  - multiple images / media layout (Prince 11, 14, 16);
+-  - a URL-parameter image URL (Prince 36).
+-- **From the 09-28 audit:**
+-  - the analytics filter (3 levels), the interview builder (1 level) and the Response
+-    Manager's AND-only frame;
+-  - calc-language limits and nested IF…THEN in embedded expressions;
+-  - QSF single-comparison skips and quota groups;
+-  - Decipher named `<condition>`s;
+-  - the mapper dropping a whole condition for one unreadable leaf;
+-  - SPSS FILTER / DO IF syntax (the datamap has "Asked when");
+-  - editors for `ListFillOption.eligibleWhen` and for legacy `Option.visibleIf` / grid row
+-    `visibleIf`;
+-  - UX styles and animations, conjoint prohibitions and distribution filters still take no
+-    condition.
++- **Response Manager:** status, source and environment remain filters around the condition and
++  cannot be OR'd with it. They are the scope of the lookup and are applied in SQL.
++- **Distribution:** respondent lists cannot yet be filtered by a condition on their embedded
++  data. This needs the respondents API and a database to verify, so it was not changed blind.
++- **Import mapper:** a condition with one unreadable leaf is still dropped as a whole and
++  reported. Keeping a half-converted condition would silently broaden or narrow it.
++- **Qualtrics quota groups:** cross-quota options (place in one / place in all) are not carried.
+diff --git a/packages/designs/src/conjoint.ts b/packages/designs/src/conjoint.ts
+index f4d506b..2c0aaa4 100644
+--- a/packages/designs/src/conjoint.ts
++++ b/packages/designs/src/conjoint.ts
+@@ -36,10 +36,49 @@ export interface ConjointProhibition {
+   a: { attribute: string; level: string };
+   /** the other side */
+   b: { attribute: string; level: string };
++  /**
++   * A forbidden COMBINATION, beyond a pair — nested AND / OR / NOT over
++   * levels: "Value brand AND (Price $999 OR Warranty 3 years)". When present it
++   * is the prohibition (and `a` / `b` are ignored); a concept that matches it
++   * is never shown.
++   */
++  when?: ConjointLevelCondition;
++  /**
++   * The editor's form of a combination: the pair a + b, AND these levels
++   * (`alsoOp: "and"`, all of them) or AND any one of them (`"or"`):
++   * "never Value with $999 and (3 years or 2 years)". Read only when `when`
++   * is absent; `effectiveProhibition` turns it into the tree.
++   */
++  also?: { attribute: string; level: string }[];
++  alsoOp?: "and" | "or";
+   /** why, for whoever reads the design file later */
+   note?: string;
+ }
+ 
++/** a prohibition as one level condition — `when`, else the pair (and its `also` levels) */
++export function effectiveProhibition(p: ConjointProhibition): ConjointLevelCondition {
++  if (p.when) return p.when;
++  const extra = (p.also ?? []).filter((x) => x?.attribute && x.level != null);
++  if (!extra.length) return { op: "and", children: [p.a, p.b] };
++  const tail: ConjointLevelCondition[] = p.alsoOp === "or" ? [{ op: "or", children: extra }] : extra;
++  return { op: "and", children: [p.a, p.b, ...tail] };
++}
++
++/** a level test, or an and / or / not group of them, nested to any depth */
++export type ConjointLevelCondition =
++  | { attribute: string; level: string }
++  | { op: "and" | "or" | "not"; children: ConjointLevelCondition[] };
++
++/** does a concept match a level condition? (an empty and/or/not group never forbids anything) */
++export function conceptMatches(profile: Record<string, string>, c: ConjointLevelCondition, depth = 0): boolean {
++  if (depth > 64) return false;
++  if ("attribute" in c) return profile[c.attribute] === c.level;
++  if (!c.children.length) return false;
++  if (c.op === "and") return c.children.every((k) => conceptMatches(profile, k, depth + 1));
++  if (c.op === "or") return c.children.some((k) => conceptMatches(profile, k, depth + 1));
++  return !c.children.some((k) => conceptMatches(profile, k, depth + 1));
++}
++
+ export interface ConjointConfig {
+   attributes: ConjointAttribute[];
+   /** level pairs that may not appear together in one concept */
+@@ -96,6 +135,7 @@ function normalize(config: ConjointConfig): NormalizedConjoint {
+ /** Whether a finished concept breaks any prohibition. */
+ function violates(profile: Record<string, string>, prohibitions: ConjointProhibition[]): boolean {
+   for (const p of prohibitions) {
++    if (p.when || p.also?.length) { if (conceptMatches(profile, effectiveProhibition(p))) return true; continue; }
+     if (profile[p.a.attribute] === p.a.level && profile[p.b.attribute] === p.b.level) return true;
+     // a prohibition is symmetric: saying "not X with Y" is saying "not Y with X"
+     if (profile[p.b.attribute] === p.b.level && profile[p.a.attribute] === p.a.level) return true;
+@@ -218,6 +258,18 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
+     /* --- prohibitions: real levels, and enough concepts left to field --- */
+     const levelsOf = new Map(c.attributes.map((a) => [a.name, new Set(a.levels)]));
+     for (const p of c.prohibitions) {
++      /* a combination prohibition: every level it names must be real */
++      if (p.when || p.also?.length) {
++        const leaves: { attribute: string; level: string }[] = [];
++        const walk = (x: ConjointLevelCondition, d = 0) => { if (d > 64) return; if ("attribute" in x) leaves.push(x); else x.children.forEach((k) => walk(k, d + 1)); };
++        walk(effectiveProhibition(p));
++        for (const side of leaves) {
++          const known = levelsOf.get(side.attribute);
++          if (!known) errors.push(`Prohibition names attribute "${side.attribute}", which is not in this design.`);
++          else if (!known.has(side.level)) errors.push(`Prohibition names level "${side.level}" of "${side.attribute}", which is not one of its levels.`);
++        }
++        continue;
++      }
+       for (const side of [p.a, p.b]) {
+         const known = levelsOf.get(side.attribute);
+         if (!known) {
+diff --git a/packages/designs/src/prohibitions.test.ts b/packages/designs/src/prohibitions.test.ts
+index 66c659a..48992ab 100644
+--- a/packages/designs/src/prohibitions.test.ts
++++ b/packages/designs/src/prohibitions.test.ts
+@@ -151,3 +151,29 @@ test("a design with no prohibitions is byte-identical to before the feature", ()
+   assert.equal("prohibitions" in (without.summary as object), false,
+     "a design with no prohibitions should not gain a prohibitions summary");
+ });
++
++test("a COMBINATION prohibition — nested AND / OR over levels — never appears", () => {
++  const config = {
++    ...base,
++    prohibitions: [
++      /* never Value at $999 with a 2- or 3-year warranty */
++      { a: { attribute: "Brand", level: "Value" }, b: { attribute: "Price", level: "$999" },
++        also: [{ attribute: "Warranty", level: "2 years" }, { attribute: "Warranty", level: "3 years" }], alsoOp: "or" as const },
++      /* never Premium at $399 unless the warranty is 1 year — as a full tree */
++      { a: { attribute: "Brand", level: "Premium" }, b: { attribute: "Price", level: "$399" },
++        when: { op: "and" as const, children: [{ attribute: "Brand", level: "Premium" }, { attribute: "Price", level: "$399" }, { op: "not" as const, children: [{ attribute: "Warranty", level: "1 year" }] }] } },
++    ],
++  };
++  assert.deepEqual(conjointPlugin.validateConfig!(config), []);
++  const all: Record<string, string>[] = [];
++  for (let seed = 1; seed <= 30; seed++) all.push(...concepts(conjointPlugin.generate(config, seed).rows));
++  for (const c of all) {
++    assert.ok(!(c.Brand === "Value" && c.Price === "$999" && c.Warranty !== "1 year"), JSON.stringify(c));
++    assert.ok(!(c.Brand === "Premium" && c.Price === "$399" && c.Warranty !== "1 year"), JSON.stringify(c));
++  }
++  /* the pair alone is NOT forbidden — only the combination is */
++  assert.ok(all.some((c) => c.Brand === "Value" && c.Price === "$999" && c.Warranty === "1 year"), "Value at $999 with 1 year still appears");
++  /* a level that does not exist inside a combination is refused */
++  const bad = { ...base, prohibitions: [{ a: { attribute: "Brand", level: "Value" }, b: { attribute: "Price", level: "$999" }, also: [{ attribute: "Warranty", level: "5 years" }] }] };
++  assert.ok(conjointPlugin.validateConfig!(bad).some((e) => /5 years/.test(e)));
++});
+diff --git a/packages/engine/src/calcContext.ts b/packages/engine/src/calcContext.ts
+index 813fc78..ffa8e34 100644
+--- a/packages/engine/src/calcContext.ts
++++ b/packages/engine/src/calcContext.ts
+@@ -37,6 +37,8 @@ import { flattenVariables } from "./flatten.js";
+ import type { LoopContext, ResponseState } from "./state.js";
+ import { answerLookupKeys, findLoopScope, getQuestionByCodeOrVar, loopValue } from "./state.js";
+ import type { SurveyDefinition } from "@rescript/schema";
++import { findNamedExpression } from "./namedExpressions.js";
++import { evaluateCondition } from "./evaluate.js";
+ 
+ const LOOP_ALIASES: Record<string, string> = {
+   CURRENT_ITEM: "label", CURRENT_ITEM_LABEL: "label", CURRENT_ITEM_CODE: "code",
+@@ -77,15 +79,28 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
+         const v = loopScopedName(def, state, loop, n);
+         if (v !== undefined) return v;
+       }
+-      return n in flat ? flat[n]
+-        : n in state.calculated ? state.calculated[n]
+-          : n in embedded ? (embedded as Record<string, unknown>)[n]
+-            : undefined;
++      if (n in flat) return flat[n];
++      if (n in state.calculated) return state.calculated[n];
++      if (n in embedded) return (embedded as Record<string, unknown>)[n];
++      /*
++       * A NAMED EXPRESSION, as 1 (holds) or 0 — `IS_HIGH_VALUE * 10`,
++       * `if(rule.ELIGIBLE, 1, 0)`. Calculations could not read one, so a
++       * condition already defined once had to be re-typed in calc syntax,
++       * and could not be nested logic at all. Resolved through the
++       * evaluator's own `rule` source, which carries its cycle guard.
++       */
++      const name = n.startsWith("rule.") ? n.slice(5) : n;
++      const named = findNamedExpression(def, name);
++      if (named) {
++        return evaluateCondition({ type: "rule", source: { kind: "rule", ref: named.id }, operator: "eq", value: true } as never, { def, state, loop: loop ?? null }) ? 1 : 0;
++      }
++      return undefined;
+     },
+     names: () => [
+       ...Object.keys(flat),
+       ...Object.keys(state.calculated),
+       ...Object.keys(embedded),
++      ...(def.namedExpressions ?? []).map((x) => x.name),
+     ],
+   };
+ }
+diff --git a/packages/engine/src/carryforward.ts b/packages/engine/src/carryforward.ts
+index ca9ebcd..97900da 100644
+--- a/packages/engine/src/carryforward.ts
++++ b/packages/engine/src/carryforward.ts
+@@ -13,7 +13,7 @@ import type {
+   Randomization,
+   SurveyDefinition,
+ } from "@rescript/schema";
+-import { LIST_OPS_WITH_SOURCES } from "@rescript/schema";
++import { LIST_OPS_WITH_SOURCES, optionLogicHasEffect } from "@rescript/schema";
+ import type { EvalContext } from "./evaluate.js";
+ import { evaluateCondition, conditionFires, isVacuousCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
+ import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
+@@ -896,6 +896,35 @@ interface ActiveRandomization {
+   groups?: (string | number)[][];
+ }
+ 
++/** The axes a question's randomization shuffles: `scopes` when set, else `scope`. */
++export function randomizedAxes(r: Randomization | undefined): ("options" | "rows" | "columns")[] {
++  if (!r?.enabled) return [];
++  return r.scopes?.length ? [...new Set(r.scopes)] : [r.scope ?? "options"];
++}
++/** the axis `pick` and `groups` belong to */
++function primaryAxis(r: Randomization): "options" | "rows" | "columns" {
++  const axes = randomizedAxes(r);
++  return axes.includes(r.scope ?? "options") ? (r.scope ?? "options") : axes[0];
++}
++function randomizesAxis(r: Randomization | undefined, axis: "options" | "rows" | "columns"): boolean {
++  return randomizedAxes(r).includes(axis);
++}
++/**
++ * The config one axis is shuffled with. The primary axis gets everything; a
++ * secondary axis ("…and columns too") is reordered only — "show only 3" and
++ * code groups name the primary axis's items, so they mean nothing for it.
++ */
++export function axisRandomization(
++  r: Randomization | undefined,
++  axis: "options" | "rows" | "columns",
++  ctx: EvalContext,
++): ActiveRandomization | null {
++  if (!r || !randomizesAxis(r, axis)) return null;
++  const cfg = activeRandomization(r, ctx);
++  if (!cfg) return null;
++  return axis === primaryAxis(r) ? cfg : { method: cfg.method };
++}
++
+ /** Resolve the randomization config for this respondent: the first
+  *  conditional rule that matches overrides the base settings (req §7–8). */
+ export function activeRandomization(
+@@ -1376,8 +1405,8 @@ function runOptions(
+     const beforeGroups = options;
+     options = groupOrder(q, "options", options, ctx, seed);
+     record(rec, "randomization", "Option groups", beforeGroups, options, new Map());
+-  } else if (q.randomization?.enabled && q.randomization.scope === "options") {
+-    const cfg = activeRandomization(q.randomization, ctx);
++  } else if (randomizesAxis(q.randomization, "options")) {
++    const cfg = axisRandomization(q.randomization, "options", ctx);
+     if (cfg) {
+       const beforeRand = options;
+       const pinned = pinnedCodes(options, ctx, pos);
+@@ -1463,8 +1492,8 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
+     const beforeGroups = rows;
+     rows = groupOrder(q, "rows", rows, ctx, subSeed(ctx.state.seed, `randrows:${q.id}${seedKey}`));
+     record(rec, "randomization", "Row groups", beforeGroups, rows, new Map());
+-  } else if (q.randomization?.enabled && q.randomization.scope === "rows") {
+-    const cfg = activeRandomization(q.randomization, ctx);
++  } else if (randomizesAxis(q.randomization, "rows")) {
++    const cfg = axisRandomization(q.randomization, "rows", ctx);
+     if (cfg) {
+       const beforeRand = rows;
+       const pinned = pinnedCodes(rows, ctx, pos);
+@@ -1519,9 +1548,22 @@ function runRows(q: Question, ctx: EvalContext, rec: Recorder | null): QuestionR
+ export function resolveQuestionMedia(
+   q: Question,
+   ctx: EvalContext,
+-): { imageUrl?: string; mediaUrl?: string } {
++): { imageUrl?: string; mediaUrl?: string; mediaItems?: NonNullable<Question["settings"]["mediaItems"]> } {
+   const pipe = (u?: string) => (u && u.includes("{{") ? resolvePiping(u, ctx) : u);
+-  return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl) };
++  const items = q.settings.mediaItems;
++  const piped = items?.some((m) => m.url.includes("{{")) ? items.map((m) => ({ ...m, url: pipe(m.url) ?? "" })) : items;
++  return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl), ...(items ? { mediaItems: piped } : {}) };
++}
++
++/**
++ * The media shown under a question, in order: `mediaItems` when it has any,
++ * otherwise the single `mediaUrl`. One answer for the renderer, the preview
++ * and the exports, so the builder and the respondent never disagree.
++ */
++export function questionMediaList(q: Pick<Question, "settings">): { url: string; alt?: string; title?: string }[] {
++  const items = (q.settings.mediaItems ?? []).filter((m) => m.url?.trim());
++  if (items.length) return items;
++  return q.settings.mediaUrl?.trim() ? [{ url: q.settings.mediaUrl }] : [];
+ }
+ 
+ /**
+@@ -1584,8 +1626,8 @@ function runColumns(q: Question, ctx: EvalContext): QuestionColumn[] {
+       ctx,
+       subSeed(ctx.state.seed, `randcols:${q.id}${seedKey}`),
+     ) as never;
+-  } else if (q.randomization?.enabled && q.randomization.scope === "columns") {
+-    const cfg = activeRandomization(q.randomization, ctx);
++  } else if (randomizesAxis(q.randomization, "columns")) {
++    const cfg = axisRandomization(q.randomization, "columns", ctx);
+     if (cfg) {
+       columns = randomizeItems(
+         columns.map((c) => ({ ...c, code: c.id })) as any,
+@@ -1655,3 +1697,32 @@ registerEffectiveRowsResolver((q, ctx) => {
+   const view = effectiveQuestion(q, ctx);
+   return { rows: view.rows, options: view.options };
+ });
++
++/**
++ * CAN A RESPONDENT'S LIST OF THIS QUESTION DIFFER FROM ITS DEFINED LIST?
++ *
++ * "Displayed" and "All" read the same codes unless something in the question
++ * can take an item off the screen or bring one in: carry-forward, masking,
++ * list logic or operations, option/row logic, display rules, punched
++ * show/hide, conditional option groups, "show only N". When nothing can, the
++ * two choices are one choice under two names — which is exactly what the
++ * September review asked to stop offering (Oweas 1–3, 6). `axis` picks the
++ * list: a grid's items are its rows.
++ */
++export function displayedListCanVary(def: SurveyDefinition, q: Question, axis: "options" | "rows" = "options"): boolean {
++  const items: { logic?: unknown; visibleIf?: unknown }[] = axis === "rows" ? q.rows : q.options;
++  if (q.carryForward && (q.carryForward.into ?? "options") === axis) return true;
++  if (axis === "options" && (q.mask || (q.listLogic ?? []).length || (q.optionPipeline ?? []).length)) return true;
++  if (axis === "rows" && q.rowMask) return true;
++  if (items.some((i) => !isVacuousCondition(i.visibleIf as never) || (i.logic && !isEmptyOptionLogicEffect(i.logic)))) return true;
++  if ((def.displayRules ?? []).some((r) => r.target.ref === q.id && r.target.kind === (axis === "rows" ? "row" : "option"))) return true;
++  if ((q.punches ?? []).some((r) => LIST_ACTIONS.has(r.action))) return true;
++  const r = q.randomization;
++  if (r?.enabled && r.pick != null && randomizedAxes(r).includes(axis)) return true;
++  if ((q.optionGroups ?? []).some((g) => (g as { visibleIf?: unknown }).visibleIf)) return true;
++  return false;
++}
++
++function isEmptyOptionLogicEffect(l: unknown): boolean {
++  return !optionLogicHasEffect(l as never);
++}
+diff --git a/packages/engine/src/embedded.ts b/packages/engine/src/embedded.ts
+index b04ae48..ff059b6 100644
+--- a/packages/engine/src/embedded.ts
++++ b/packages/engine/src/embedded.ts
+@@ -181,31 +181,91 @@ export function embeddedCatalog(
+  * are skipped so `"IF THEN"` inside a label survives.
+  */
+ export function normalizeExpression(src: string): string {
+-  let out = src;
+-  for (let pass = 0; pass < 12; pass++) {
+-    const rewritten = rewriteInnermostIf(out);
+-    if (rewritten === out) break;
+-    out = rewritten;
++  return rewriteIfs(src, 0);
++}
++
++/*
++ * A real (small) parse, not a search for "the last IF". The old rewrite took
++ * the last IF and its first ELSE, so `IF a THEN IF b THEN 1 ELSE 2 ELSE 3`
++ * became `if(b, 1, 2 ELSE 3)` — an IF inside a THEN was mangled. Now:
++ * bracketed parts are rewritten first, then the first top-level IF takes the
++ * THEN after it, and the ELSE that MATCHES it (an IF met on the way opens a
++ * nested IF, which takes the next ELSE — the usual dangling-else rule).
++ * Everything after a matched ELSE is the else branch, nested IFs and all.
++ */
++function rewriteIfs(src: string, depth: number): string {
++  if (depth > 64 || !/\b(if|then|else)\b/i.test(src)) return src;
++  const s = mapParenGroups(src, (inner) => rewriteIfs(inner, depth + 1));
++  const kw = keywordPositions(s).filter((k) => parenDepthAt(s, k.start) === 0);
++  const at = kw.findIndex((k) => k.word === "if");
++  if (at < 0) return s;
++  const p = kw[at];
++  const thenAt = kw.findIndex((k, i) => i > at && k.word === "then");
++  if (thenAt < 0) return s;
++  const then = kw[thenAt];
++  let nested = 0;
++  let els: KeywordPos | null = null;
++  for (const k of kw.slice(thenAt + 1)) {
++    if (k.word === "if") nested++;
++    else if (k.word === "else") { if (nested === 0) { els = k; break; } nested--; }
++  }
++  const cond = s.slice(p.end, then.start).trim();
++  const yes = s.slice(then.end, els ? els.start : s.length).trim();
++  const no = els ? s.slice(els.end).trim() : "";
++  if (!cond || !yes) return s;
++  return `${s.slice(0, p.start)}if(${rewriteIfs(cond, depth + 1)}, ${rewriteIfs(yes, depth + 1)}, ${no ? rewriteIfs(no, depth + 1) : '""'})`;
++}
++
++/** Rewrite the inside of every top-level (…) group, outside string literals. */
++function mapParenGroups(src: string, fn: (inner: string) => string): string {
++  let out = "";
++  let quote: string | null = null;
++  let i = 0;
++  while (i < src.length) {
++    const ch = src[i];
++    if (quote) { out += ch; if (ch === quote && src[i - 1] !== "\\") quote = null; i++; continue; }
++    if (ch === '"' || ch === "'") { quote = ch; out += ch; i++; continue; }
++    if (ch === "(") {
++      const close = matchingParen(src, i);
++      if (close < 0) { out += src.slice(i); break; }
++      out += `(${fn(src.slice(i + 1, close))})`;
++      i = close + 1;
++      continue;
++    }
++    out += ch; i++;
+   }
+   return out;
+ }
+ 
+-function rewriteInnermostIf(src: string): string {
+-  const positions = keywordPositions(src);
+-  // innermost = the LAST "IF" that still has a THEN after it
+-  for (let i = positions.length - 1; i >= 0; i--) {
+-    const p = positions[i];
+-    if (p.word !== "if") continue;
+-    const then = positions.find((x) => x.word === "then" && x.start > p.end);
+-    if (!then) continue;
+-    const els = positions.find((x) => x.word === "else" && x.start > then.end);
+-    const cond = src.slice(p.end, then.start).trim();
+-    const yes = src.slice(then.end, els ? els.start : src.length).trim();
+-    const no = els ? src.slice(els.end).trim() : '""';
+-    if (!cond || !yes) continue;
+-    return `${src.slice(0, p.start)}if(${cond}, ${yes}, ${no || '""'})`;
++function matchingParen(src: string, open: number): number {
++  let depth = 0;
++  let quote: string | null = null;
++  for (let i = open; i < src.length; i++) {
++    const ch = src[i];
++    if (quote) { if (ch === quote && src[i - 1] !== "\\") quote = null; continue; }
++    if (ch === '"' || ch === "'") { quote = ch; continue; }
++    if (ch === "(") depth++;
++    else if (ch === ")") { depth--; if (depth === 0) return i; }
++  }
++  return -1;
++}
++
++function followedByThen(src: string, open: number): boolean {
++  const close = matchingParen(src, open);
++  return close >= 0 && /^\s*then\b/i.test(src.slice(close + 1));
++}
++
++function parenDepthAt(src: string, pos: number): number {
++  let depth = 0;
++  let quote: string | null = null;
++  for (let i = 0; i < pos; i++) {
++    const ch = src[i];
++    if (quote) { if (ch === quote && src[i - 1] !== "\\") quote = null; continue; }
++    if (ch === '"' || ch === "'") { quote = ch; continue; }
++    if (ch === "(") depth++;
++    else if (ch === ")") depth = Math.max(0, depth - 1);
+   }
+-  return src;
++  return depth;
+ }
+ 
+ interface KeywordPos { word: "if" | "then" | "else"; start: number; end: number }
+@@ -225,7 +285,9 @@ function keywordPositions(src: string): KeywordPos[] {
+     const rest = src.slice(i);
+     const m = rest.match(/^(if|then|else)\b/i);
+     // a bare word only — `iffy` and `if(` (already a call) are not keywords
+-    if (m && !(m[1].toLowerCase() === "if" && /^if\s*\(/i.test(rest))) {
++    /* `if(` is the calc function — unless its bracket is followed by THEN: `IF (a AND b) THEN …` */
++    const callLike = !!m && m[1].toLowerCase() === "if" && /^if\s*\(/i.test(rest) && !followedByThen(src, i + rest.indexOf("("));
++    if (m && !callLike) {
+       out.push({ word: m[1].toLowerCase() as KeywordPos["word"], start: i, end: i + m[1].length });
+       i += m[1].length - 1;
+       continue;
+diff --git a/packages/engine/src/piping.ts b/packages/engine/src/piping.ts
+index 17d9ba0..0cba60d 100644
+--- a/packages/engine/src/piping.ts
++++ b/packages/engine/src/piping.ts
+@@ -114,6 +114,7 @@ export function resolvePiping(text: string, ctx: EvalContext): string {
+   return text.replace(PIPE_TOKEN_RE, (_m, raw: string) => {
+     try {
+       const token = parsePipeBody(raw);
++      if (token?.format === "image") return pipedImage(renderToken({ ...token, format: undefined }, ctx));
+       return token ? renderToken(token, ctx) : "";
+     } catch {
+       return "";
+@@ -121,6 +122,23 @@ export function resolvePiping(text: string, ctx: EvalContext): string {
+   });
+ }
+ 
++/**
++ * `{{ImageURL|image}}` — a piped URL shown as the picture it names (Prince 36).
++ *
++ * A URL parameter carried into Embedded Data is a string, and piped into text
++ * it reads as text: "/api/media/…/Picture16.jpg". The `image` format renders
++ * it as an <img> instead. The value arrives HTML-escaped (renderToken), which
++ * is exactly right inside an attribute; only URLs that can only ever be a
++ * picture are used — http(s), a site-relative path, an inline data:image —
++ * anything else (javascript:, a bare word) stays plain text.
++ */
++function pipedImage(escapedUrl: string): string {
++  const u = escapedUrl.trim();
++  if (!u) return "";
++  if (!/^(https?:\/\/|\/(?!\/)|data:image\/)/i.test(u)) return u;
++  return `<img class="rs-piped-image" src="${u.replace(/"/g, "&quot;")}" alt="">`;
++}
++
+ /**
+  * The set of option codes an answer represents, whatever its shape:
+  * an array (multi / ranking), a scalar (single), or an object.
+diff --git a/packages/engine/src/pipingTokens.ts b/packages/engine/src/pipingTokens.ts
+index ad3f230..6fa2bd0 100644
+--- a/packages/engine/src/pipingTokens.ts
++++ b/packages/engine/src/pipingTokens.ts
+@@ -59,7 +59,8 @@ export type PipeFormat =
+   | "lines" // one per line
+   | "upper"
+   | "lower"
+-  | "title";
++  | "title"
++  | "image"; // the value is a URL — shown as the picture it points to
+ 
+ export interface PipeToken {
+   kind: PipeKind;
+@@ -115,6 +116,7 @@ export const PIPE_FORMATS: { value: PipeFormat; label: string; example: string }
+   { value: "upper", label: "UPPERCASE", example: "APPLE" },
+   { value: "lower", label: "lowercase", example: "apple" },
+   { value: "title", label: "Title Case", example: "Apple" },
++  { value: "image", label: "Show as image", example: "a URL becomes the picture it points to" },
+ ];
+ 
+ const FORMAT_NAMES = new Set(PIPE_FORMATS.map((f) => f.value));
+diff --git a/packages/engine/src/questionShape.ts b/packages/engine/src/questionShape.ts
+index e8019a0..2bc08ea 100644
+--- a/packages/engine/src/questionShape.ts
++++ b/packages/engine/src/questionShape.ts
+@@ -113,7 +113,7 @@ type SettingGroup = keyof typeof SETTING_GROUPS;
+  */
+ const UNIVERSAL_SETTINGS: readonly string[] = [
+   "readOnly", "hidden", "defaultValue",
+-  "imageUrl", "mediaUrl", "requireComplete",
++  "imageUrl", "mediaUrl", "mediaDisplay", "mediaItems", "mediaLayout", "requireComplete",
+   "timeLimitSeconds", "onTimeout", "chatDelayMs",
+   "accessibility", "adaptive",
+ ];
+@@ -608,7 +608,11 @@ export function migrateQuestionType(
+     const scope = (q.randomization.scope ?? "options") as QuestionAxis;
+     const dest = moved.get(scope);
+     if (dest) {
+-      q.randomization = { ...q.randomization, scope: dest };
++      /* the other axes of a multi-axis shuffle travel the same way, or drop when the new shape has none */
++      const others = (q.randomization.scopes ?? [])
++        .map((a) => moved.get(a as QuestionAxis) ?? a)
++        .filter((a) => toSpec.axes.includes(a as QuestionAxis)) as typeof q.randomization.scopes;
++      q.randomization = { ...q.randomization, scope: dest, ...(q.randomization.scopes ? { scopes: others?.length ? others : undefined } : {}) };
+       add("transformed", "randomization.scope", `Randomization now shuffles the ${label(dest)}`);
+     } else if (!toSpec.axes.includes(scope)) {
+       delete (q as any).randomization;
+diff --git a/packages/engine/src/remainingItems.test.ts b/packages/engine/src/remainingItems.test.ts
+new file mode 100644
+index 0000000..50e2a08
+--- /dev/null
++++ b/packages/engine/src/remainingItems.test.ts
+@@ -0,0 +1,171 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, type Condition } from "@rescript/schema";
++import {
++  createResponseState, effectiveQuestion, normalizeExpression, safeExpression, resolvePiping,
++  questionMediaList, resolveQuestionMedia, displayedListCanVary, compileUxCss, uxGuardHolds,
++  coerceSurveyActions, applySurveyActions, randomizedAxes, axisRandomization, staleFields,
++  parseLogicExpression, type EvalContext,
++} from "./index.js";
++
++/*
++ * THE REMAINING ITEMS (2026-10-01, second pass): the 29-09 / 30-09 review rows
++ * that were UI-shaped, and the leftovers of the 09-28 nested-logic audit.
++ */
++
++const opts = (n: number, l = "Opt") => Array.from({ length: n }, (_, i) => ({ code: i + 1, label: `${l} ${i + 1}` }));
++const rule = (ref: string, operator: string, value?: unknown) => ({ type: "rule", source: { kind: "question", ref }, operator, ...(value !== undefined ? { value } : {}) }) as Condition;
++function survey(extra: Record<string, unknown> = {}) {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "remaining", version: "1.0" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Q1", options: opts(3) },
++      { id: "g", code: "G", variableName: "G", type: "matrix_single", text: "Grid",
++        rows: [{ code: "r1", label: "Row 1" }, { code: "r2", label: "Row 2" }, { code: "r3", label: "Row 3" }, { code: "r4", label: "Row 4" }],
++        options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
++      { id: "q3", code: "Q3", variableName: "Q3", type: "single_select", text: "Q3", options: opts(4) },
++      { id: "q4", code: "Q4", variableName: "Q4", type: "html", text: "Concept" },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q1", "g", "q3", "q4"] }, { type: "end", id: "e", status: "complete" }],
++    ...extra,
++  });
++}
++const ctxOf = (def: SurveyDefinition, answers: Record<string, unknown> = {}, seed = 1): EvalContext => {
++  const state = createResponseState(def, { seed });
++  Object.assign(state.answers, answers);
++  return { def, state, loop: null };
++};
++
++test("29-09 #1: a grid can shuffle its rows AND its columns; show-only-N stays with the primary axis", () => {
++  const def = survey();
++  const g = def.questions.find((q) => q.id === "g")!;
++  g.randomization = { enabled: true, scope: "rows", scopes: ["rows", "options"], method: "shuffle", pick: 2 } as never;
++  assert.deepEqual(randomizedAxes(g.randomization), ["rows", "options"]);
++  let rowsMoved = false, colsMoved = false;
++  for (let seed = 1; seed <= 40; seed++) {
++    const v = effectiveQuestion(g, ctxOf(def, {}, seed));
++    assert.equal(v.rows.length, 2, "show only 2 applies to the rows (primary)");
++    assert.equal(v.options.length, 4, "…not to the columns");
++    if (v.options.map((o) => o.code).join() !== "1,2,3,4") colsMoved = true;
++    if (v.rows.map((r) => r.code).join() !== "r1,r2") rowsMoved = true;
++  }
++  assert.ok(rowsMoved && colsMoved, "both axes are shuffled");
++  assert.equal(axisRandomization(g.randomization, "options", ctxOf(def))?.pick, undefined);
++  /* backward compatible: scope alone still means one axis */
++  g.randomization = { enabled: true, scope: "rows", method: "shuffle" } as never;
++  assert.deepEqual(randomizedAxes(g.randomization), ["rows"]);
++  for (let seed = 1; seed <= 10; seed++) assert.equal(effectiveQuestion(g, ctxOf(def, {}, seed)).options.map((o) => o.code).join(), "1,2,3,4");
++});
++
++test("Oweas 1–3, 6: “Displayed” is only a distinct choice when the source can change its own list", () => {
++  const def = survey();
++  const q1 = def.questions.find((q) => q.id === "q1")!;
++  const g = def.questions.find((q) => q.id === "g")!;
++  assert.equal(displayedListCanVary(def, q1), false, "a plain list: displayed = all");
++  q1.options[2].logic = { visibility: "hide_when", when: rule("q3", "eq", 1) } as never;
++  assert.equal(displayedListCanVary(def, q1), true);
++  q1.options[2].logic = { visibility: "hide_when", when: { type: "group", op: "and", children: [] } } as never;
++  assert.equal(displayedListCanVary(def, q1), false, "an unfinished rule changes nothing");
++  assert.equal(displayedListCanVary(def, g, "rows"), false);
++  g.rows[1].visibleIf = rule("q1", "eq", 2);
++  assert.equal(displayedListCanVary(def, g, "rows"), true);
++  q1.options[2].logic = undefined;
++  q1.randomization = { enabled: true, scope: "options", method: "shuffle", pick: 2 } as never;
++  assert.equal(displayedListCanVary(def, q1), true, "show only N");
++});
++
++test("Prince 11 / 14 / 16: several media under a question, in order, each piped; one URL stays one URL", () => {
++  const def = survey({ embeddedData: [{ name: "PACK", source: "url" }] });
++  const q4 = def.questions.find((q) => q.id === "q4")!;
++  q4.settings.mediaUrl = "/api/media/a.jpg";
++  assert.deepEqual(questionMediaList(q4).map((m) => m.url), ["/api/media/a.jpg"]);
++  q4.settings.mediaItems = [
++    { id: "1", url: "/api/media/a.jpg", alt: "Pack A" },
++    { id: "2", url: "" },
++    { id: "3", url: "{{ed.PACK}}" },
++  ];
++  q4.settings.mediaLayout = "horizontal";
++  assert.deepEqual(questionMediaList(q4).map((m) => m.url), ["/api/media/a.jpg", "{{ed.PACK}}"], "an empty slot is not drawn");
++  const ctx = ctxOf(def);
++  ctx.state.embedded.PACK = "/api/media/b.png";
++  const piped = resolveQuestionMedia(q4, ctx);
++  assert.deepEqual(piped.mediaItems?.map((m) => m.url), ["/api/media/a.jpg", "", "/api/media/b.png"]);
++  /* the media fields are not "left over" on a content block */
++  assert.ok(!staleFields(q4).some((f) => /media/.test(f.field ?? String(f))), JSON.stringify(staleFields(q4)));
++  assert.ok(SurveyDefinition.safeParse(JSON.parse(JSON.stringify(def))).success, "saves and reloads");
++});
++
++test("Prince 36: a piped URL is shown as the picture it names with |image — and only a URL that can only be a picture", () => {
++  const def = survey();
++  const ctx = ctxOf(def);
++  ctx.state.embedded.Concept_1 = "/api/media/97/Picture16.jpg";
++  ctx.state.embedded.Bad = "javascript:alert(1)";
++  ctx.state.embedded.Quote = 'https://x.test/a.png" onerror="x';
++  assert.equal(resolvePiping("{{Concept_1}}", ctx), "/api/media/97/Picture16.jpg", "plain piping is still text");
++  assert.equal(resolvePiping("{{Concept_1|image}}", ctx), '<img class="rs-piped-image" src="/api/media/97/Picture16.jpg" alt="">');
++  assert.equal(resolvePiping("{{ed.Concept_1|image}}", ctx), '<img class="rs-piped-image" src="/api/media/97/Picture16.jpg" alt="">');
++  assert.equal(resolvePiping("{{Bad|image}}", ctx), "javascript:alert(1)");
++  assert.doesNotMatch(resolvePiping("{{Quote|image}}", ctx), /" onerror=/, "an attribute cannot be broken out of");
++});
++
++test("embedded IF … THEN … ELSE nests inside THEN as well as ELSE (before: an IF inside THEN was mangled)", () => {
++  assert.equal(normalizeExpression("IF a THEN IF b THEN 1 ELSE 2 ELSE 3"), "if(a, if(b, 1, 2), 3)");
++  assert.equal(normalizeExpression("IF a THEN 1 ELSE IF b THEN 2 ELSE 3"), "if(a, 1, if(b, 2, 3))");
++  assert.equal(normalizeExpression("IF (a AND b) THEN (IF c THEN 1 ELSE 2) ELSE 3"), "if((a AND b), (if(c, 1, 2)), 3)");
++  assert.equal(normalizeExpression('x + (IF a > 1 THEN "IF THEN" ELSE 0)'), 'x + (if(a > 1, "IF THEN", 0))');
++  assert.equal(normalizeExpression("if(a, 1, 2)"), "if(a, 1, 2)", "the function form is left alone");
++  const def = survey();
++  const ctx = ctxOf(def, { q1: 2, q3: 1 });
++  const ev = (src: string) => safeExpression(normalizeExpression(src), def, ctx.state);
++  assert.equal(ev("IF Q1 = 2 THEN IF Q3 = 1 THEN 10 ELSE 20 ELSE 30"), 10);
++  assert.equal(safeExpression(normalizeExpression("IF Q1 = 2 THEN IF Q3 = 4 THEN 10 ELSE 20 ELSE 30"), def, ctx.state), 20);
++});
++
++test("calculations read named expressions — nested logic defined once, used as 1 / 0", () => {
++  const def = survey({ namedExpressions: [{ id: "ne1", name: "TARGET", when: { type: "group", op: "and", children: [rule("q1", "eq", 2), { type: "group", op: "or", children: [rule("q3", "eq", 1), rule("q3", "eq", 2)] }] } }] });
++  assert.equal(safeExpression("TARGET * 10", def, ctxOf(def, { q1: 2, q3: 2 }).state), 10);
++  assert.equal(safeExpression("TARGET * 10", def, ctxOf(def, { q1: 2, q3: 4 }).state), 0);
++  assert.equal(safeExpression("if(rule.TARGET, 5, 7)", def, ctxOf(def, { q1: 2, q3: 1 }).state), 5);
++});
++
++test("UX: a style or animation with a `when` is in the stylesheet only while it holds; authoring shows everything", () => {
++  const def = survey({ ux: { styles: [
++    { id: "s1", label: "Heavy users", target: { kind: "question", questionId: "q3" }, rules: [{ declarations: { "background-color": "#fef3c7" } }], when: { type: "group", op: "and", children: [rule("q1", "eq", 1), { type: "group", op: "not", children: [rule("q3", "eq", 4)] }] } },
++  ], animations: [], behaviors: [] } });
++  const style = def.ux!.styles[0];
++  assert.match(compileUxCss(def), /#fef3c7/, "the Studio sees it");
++  assert.match(compileUxCss(def, { state: ctxOf(def, { q1: 1 }).state }), /#fef3c7/);
++  assert.doesNotMatch(compileUxCss(def, { state: ctxOf(def, { q1: 2 }).state }), /#fef3c7/);
++  assert.equal(uxGuardHolds(def, style, ctxOf(def, { q1: 1, q3: 4 }).state), false, "the nested NOT");
++  /* the Copilot can write the same */
++  const acts = coerceSurveyActions([{ op: "create_style", label: "x", target: "Q3", rules: [{ declarations: { color: "red" } }], when: "Q1 = 1 AND NOT Q3 = 4" }]);
++  assert.equal(acts.actions.length, 1, JSON.stringify(acts.rejected));
++  const out = applySurveyActions(survey(), acts.actions);
++  assert.deepEqual(out.errors, []);
++  assert.equal(out.def.ux!.styles[0].when?.type, "group");
++});
++
++test("logic text keeps reading after these changes (regression guard)", () => {
++  const def = survey();
++  assert.deepEqual(parseLogicExpression(def, "Q1 = 1 BUT NOT Q3 = 2").errors, []);
++});
++
++test("a derived question's programmed default value is never taken back by a punch that stops holding", async () => {
++  const { optionRule, recomputePunchesAfterChange, setAnswer } = await import("./index.js");
++  const def = SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "d", version: "1.0" },
++    questions: [
++      { id: "n", code: "N", variableName: "N", type: "numeric", text: "n" },
++      { id: "h", code: "H", variableName: "H", type: "hidden", text: "h", options: opts(2), settings: { defaultValue: 1 } },
++    ],
++    flow: [{ type: "page", id: "p", questionIds: ["n", "h"] }, { type: "end", id: "e", status: "complete" }],
++  });
++  const h = def.questions[1];
++  h.punches = [optionRule({ sourceQuestionId: "n", sourceCode: "", test: "gt", value: 5, action: "select", targetCodes: [1] }, "p1")];
++  const state = createResponseState(def, { seed: 1 });
++  state.answers.h = 1;
++  const ctx = { def, state, loop: null };
++  setAnswer(def, state, "n", 2);
++  recomputePunchesAfterChange(def, state, "n", def.questions, ctx);
++  assert.equal(state.answers.h, 1, "the default stays");
++});
+diff --git a/packages/engine/src/ux.ts b/packages/engine/src/ux.ts
+index 4b9b024..daa5066 100644
+--- a/packages/engine/src/ux.ts
++++ b/packages/engine/src/ux.ts
+@@ -1,4 +1,4 @@
+-import type { Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
++import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+ import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
+ import { listBlocks, listPages } from "./blocks.js";
+ import { evaluateCondition } from "./evaluate.js";
+@@ -636,8 +636,14 @@ export function compileAnimation(def: Pick<SurveyDefinition, "meta">, a: UxAnima
+   return `@media (prefers-reduced-motion: no-preference){${withMedia(a.media, sel, body)}}`;
+ }
+ 
+-/** the whole configuration as one stylesheet; items that do not validate are left out, never half-applied */
+-export function compileUxCss(def: SurveyDefinition): string {
++/**
++ * the whole configuration as one stylesheet; items that do not validate are left out, never half-applied.
++ *
++ * `live`: the respondent's answers so far. A style or animation with a `when`
++ * is included only while it holds; without `live` (the Studio's authoring
++ * view) every item is included, so a conditional style can be seen and edited.
++ */
++export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseState | null; now?: Record<string, unknown> }): string {
+   const ux = def.ux;
+   if (!ux || (!ux.styles.length && !ux.animations.length && !ux.behaviors.length)) return "";
+   const presets = new Set<(typeof UX_PRESETS)[number]>();
+@@ -646,8 +652,9 @@ export function compileUxCss(def: SurveyDefinition): string {
+   let css = [...presets].map(keyframesCss).join("");
+   // what behaviours insert, styled once
+   css += `${uxScope(def)} [data-rs-ux-hidden]{display:none!important}${uxScope(def)} .rs-ux-message{margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(59,130,246,.08);border-left:3px solid rgba(59,130,246,.6);font-size:.95em}`;
+-  for (const s of ux.styles) css += compileStyle(def, s).css;
+-  for (const a of ux.animations) css += compileAnimation(def, a);
++  const on = (x: { when?: Condition | null }) => !live || uxGuardHolds(def, x, live.state, live.now);
++  for (const s of ux.styles) if (on(s)) css += compileStyle(def, s).css;
++  for (const a of ux.animations) if (on(a)) css += compileAnimation(def, a);
+   return css;
+ }
+ 
+@@ -937,7 +944,7 @@ export interface UxTriggerOutcome { fire: UxBehavior[]; hold: UxBehavior[]; rele
+  * live values over everything answered before. A behaviour with no `when`
+  * always may fire, which is every behaviour that existed before the field did.
+  */
+-export function uxGuardHolds(def: SurveyDefinition, b: UxBehavior, state?: ResponseState | null, now?: Record<string, unknown>): boolean {
++export function uxGuardHolds(def: SurveyDefinition, b: { when?: Condition | null }, state?: ResponseState | null, now?: Record<string, unknown>): boolean {
+   if (!b.when) return true;
+   const base = state ?? createResponseState(def, { seed: 1, sessionId: "ux" });
+   const merged: ResponseState = now ? { ...base, answers: { ...base.answers, ...(now as ResponseState["answers"]) } } : base;
+diff --git a/packages/engine/src/uxActions.ts b/packages/engine/src/uxActions.ts
+index 244dc2c..4a32d7e 100644
+--- a/packages/engine/src/uxActions.ts
++++ b/packages/engine/src/uxActions.ts
+@@ -42,11 +42,11 @@ export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavio
+ 
+ export interface RawRule { state?: string; media?: string; whenClass?: string; selector?: string; declarations: Record<string, string> }
+ export interface RawEffect { do: string; target?: unknown; className?: string; preset?: string; durationMs?: number; style?: Record<string, string>; text?: string }
+-type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string };
++type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string; when?: string | null };
+ type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null };
+ export type UxAction =
+-  | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string }
+-  | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null }
++  | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string; when?: string }
++  | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null; when?: string | null }
+   | { op: "remove_style"; id: string }
+   | ({ op: "create_animation"; ref?: string; label: string; target: unknown; preset: string } & AnimFields)
+   | ({ op: "update_animation"; id: string; label?: string; target?: unknown } & AnimFields)
+@@ -105,7 +105,11 @@ const animFields = (o: Record<string, unknown>): AnimFields => ({
+   ...(ms(o.staggerMs ?? o.stagger) != null ? { staggerMs: ms(o.staggerMs ?? o.stagger) } : {}),
+   ...(o.iterations === "infinite" ? { iterations: "infinite" as const } : num(o.iterations) ? { iterations: num(o.iterations) } : {}),
+   ...(str(o.media) ?? str(o.breakpoint) ? { media: str(o.media) ?? str(o.breakpoint) } : {}),
++  ...guardField(o),
+ });
++/* a guard — "only when Q3 = 2 AND Q1 >= 18" — as expression text; null removes it */
++const guardField = (o: Record<string, unknown>): { when?: string | null } =>
++  o.when === null || o.condition === null ? { when: null } : str(o.when) ?? str(o.condition) ? { when: str(o.when) ?? str(o.condition) } : {};
+ const behFields = (o: Record<string, unknown>): BehFields => ({
+   ...(str(o.on) ?? str(o.event) ?? str(o.trigger) ? { on: str(o.on) ?? str(o.event) ?? str(o.trigger) } : {}),
+   ...(Array.isArray(o.options) ? { options: o.options.map((x) => (typeof x === "number" ? String(x) : str(x))).filter((x): x is string => !!x).slice(0, 50) } : typeof o.option === "string" || typeof o.option === "number" ? { options: [String(o.option)] } : {}),
+@@ -125,7 +129,8 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
+       const t = target(o.target), r = rules(o), css = str(o.css) && typeof o.css === "string" ? o.css : undefined;
+       if (!t) return "create_style needs a target";
+       if (!r && !css) return "create_style needs rules (declarations) or css";
+-      return { op, label: (label ?? "Style").slice(0, 160), target: t, rules: r ?? [], ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(css ? { css: css.slice(0, 20000) } : {}) };
++      const g = guardField(o);
++      return { op, label: (label ?? "Style").slice(0, 160), target: t, rules: r ?? [], ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(css ? { css: css.slice(0, 20000) } : {}), ...(g.when ? { when: g.when } : {}) };
+     }
+     case "create_responsive_rule": {
+       const t = target(o.target), r = rules(o);
+@@ -138,7 +143,7 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
+       if (!id) return "update_style needs the style's id";
+       const r = Array.isArray(o.rules) ? (o.rules.map(rule).filter((x): x is RawRule => !!x)) : undefined;
+       const add = Array.isArray(o.addRules) ? o.addRules.map(rule).filter((x): x is RawRule => !!x) : record(o.declarations) ? [rule({ ...o, rules: undefined })!].filter(Boolean) : undefined;
+-      return { op, id, ...(str(o.newLabel) ?? (str(o.id) && label && label !== id ? label : undefined) ? { label: str(o.newLabel) ?? label } : {}), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(r ? { rules: r } : {}), ...(add?.length ? { addRules: add } : {}), ...(o.css === null ? { css: null } : typeof o.css === "string" ? { css: o.css.slice(0, 20000) } : {}) };
++      return { op, id, ...(str(o.newLabel) ?? (str(o.id) && label && label !== id ? label : undefined) ? { label: str(o.newLabel) ?? label } : {}), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(r ? { rules: r } : {}), ...(add?.length ? { addRules: add } : {}), ...(o.css === null ? { css: null } : typeof o.css === "string" ? { css: o.css.slice(0, 20000) } : {}), ...guardField(o) };
+     }
+     case "remove_style": case "remove_animation": case "remove_behavior": case "remove_behaviour": {
+       const id = itemId(o);
+@@ -326,7 +331,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
+   switch (a.op) {
+     case "create_style": {
+       const t = resolveTarget(def, a.target, env);
+-      const s: UxStyle = { id: env.ids("uxs"), label: a.label, target: t, rules: buildRules(a.rules), ...(a.css ? { css: a.css } : {}), createdAt: env.now };
++      const s: UxStyle = { id: env.ids("uxs"), label: a.label, target: t, rules: buildRules(a.rules), ...(a.css ? { css: a.css } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
+       const warnings = gate(def, "style", s);
+       ux.styles.push(s);
+       if (a.ref) env.refs.set(a.ref.toLowerCase(), s.id);
+@@ -344,6 +349,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
+         if (same) Object.assign(same.declarations, add.declarations); else next.rules.push(add);
+       }
+       if (a.css === null) delete next.css; else if (typeof a.css === "string") next.css = a.css;
++      if (a.when === null) delete next.when; else if (a.when) next.when = parseGuard(def, a.when);
+       const warnings = gate(def, "style", next);
+       ux.styles[ux.styles.indexOf(s)] = next;
+       return { description: `Change style “${next.label}” on ${describeUxTarget(def, next.target)}`, warnings, touched: [] };
+@@ -356,7 +362,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
+     }
+     case "create_animation": {
+       const t = resolveTarget(def, a.target, env);
+-      const an = clampAnim({ id: env.ids("uxa"), label: a.label, target: t, preset: oneOf(UX_PRESETS, a.preset, "preset")!, trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger === "load" || a.trigger === "enter" ? "appear" : a.trigger === "selected" ? "select" : a.trigger, "trigger", "appear")!, durationMs: a.durationMs ?? 400, delayMs: a.delayMs ?? 0, easing: a.easing ?? "ease-out", staggerMs: a.staggerMs ?? 0, iterations: a.iterations ?? 1, ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}), createdAt: env.now } as UxAnimation);
++      const an = clampAnim({ id: env.ids("uxa"), label: a.label, target: t, preset: oneOf(UX_PRESETS, a.preset, "preset")!, trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger === "load" || a.trigger === "enter" ? "appear" : a.trigger === "selected" ? "select" : a.trigger, "trigger", "appear")!, durationMs: a.durationMs ?? 400, delayMs: a.delayMs ?? 0, easing: a.easing ?? "ease-out", staggerMs: a.staggerMs ?? 0, iterations: a.iterations ?? 1, ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now } as UxAnimation);
+       const warnings = gate(def, "animation", an);
+       ux.animations.push(an);
+       if (a.ref) env.refs.set(a.ref.toLowerCase(), an.id);
+@@ -365,6 +371,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
+     case "update_animation": {
+       const an = find(ux.animations, a.id, env, "animation");
+       const next = clampAnim({ ...structuredClone(an), ...(a.label ? { label: a.label } : {}), ...(a.target ? { target: resolveTarget(def, a.target, env) } : {}), ...(a.preset ? { preset: oneOf(UX_PRESETS, a.preset, "preset")! } : {}), ...(a.trigger ? { trigger: oneOf(UX_ANIMATION_TRIGGERS, a.trigger, "trigger")! } : {}), ...(a.durationMs != null ? { durationMs: a.durationMs } : {}), ...(a.delayMs != null ? { delayMs: a.delayMs } : {}), ...(a.easing ? { easing: a.easing } : {}), ...(a.staggerMs != null ? { staggerMs: a.staggerMs } : {}), ...(a.iterations != null ? { iterations: a.iterations } : {}), ...(a.media ? { media: oneOf(UX_MEDIA, a.media, "breakpoint")! } : {}) } as UxAnimation);
++      if (a.when === null) delete next.when; else if (a.when) next.when = parseGuard(def, a.when);
+       const warnings = gate(def, "animation", next);
+       ux.animations[ux.animations.indexOf(an)] = next;
+       const changes = [an.preset !== next.preset ? `${an.preset} → ${next.preset}` : "", an.durationMs !== next.durationMs ? `${an.durationMs}ms → ${next.durationMs}ms` : "", an.trigger !== next.trigger ? `on ${next.trigger}` : "", an.staggerMs !== next.staggerMs ? `stagger ${next.staggerMs}ms` : ""].filter(Boolean);
+diff --git a/packages/exporters/src/docx.ts b/packages/exporters/src/docx.ts
+index 40e7e5d..ce529e5 100644
+--- a/packages/exporters/src/docx.ts
++++ b/packages/exporters/src/docx.ts
+@@ -294,7 +294,7 @@ function questionBlock(q: Question, def: SurveyDefinition, fields: ExportFields)
+     const r = q.randomization;
+     out.push(label("Randomization"));
+     out.push(body(
+-      `${r.method} of ${r.scope}${r.pick != null ? `, showing ${r.pick}` : ""}` +
++      `${r.method} of ${(r.scopes?.length ? [...new Set(r.scopes)] : [r.scope]).join(" and ")}${r.pick != null ? `, showing ${r.pick}` : ""}` +
+       `${r.groups?.length ? `, within ${r.groups.length} group(s)` : ""}` +
+       `${r.rules?.length ? `, ${r.rules.length} conditional rule(s)` : ""}`,
+     ));
+diff --git a/packages/exporters/src/exporters.test.ts b/packages/exporters/src/exporters.test.ts
+index ac9cee5..81934c7 100644
+--- a/packages/exporters/src/exporters.test.ts
++++ b/packages/exporters/src/exporters.test.ts
+@@ -412,3 +412,29 @@ test("the variable dictionary says when each question is asked — page conditio
+   assert.ok(cells.some((c) => c === "always"), cells.join(" / "));
+   assert.ok(cells.some((c) => /Q1/.test(c) && /OR/i.test(c)), cells.join(" / "));
+ });
++
++test("SPSS bases syntax: nested display logic becomes ASKED_<var>; a rule SPSS cannot spell is named, not approximated", async () => {
++  const { spssBasesSyntax, responsesToSavBundle } = await import("./index.js");
++  const rule = (ref: string, operator: string, value?: unknown, extra: Record<string, unknown> = {}) => ({ type: "rule", source: { kind: "question", ref, ...extra }, operator, ...(value !== undefined ? { value } : {}) });
++  const def = SurveyDefinition.parse({
++    meta: { id: "s", code: "BASES", title: "bases" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "a", options: [{ code: 1, label: "Y" }, { code: 2, label: "N" }] },
++      { id: "q2", code: "Q2", variableName: "Q2", type: "multi_select", text: "b", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
++      { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "c",
++        displayLogic: { type: "group", op: "and", children: [rule("q1", "eq", 1), { type: "group", op: "or", children: [rule("q2", "selected", 2), { type: "group", op: "not", children: [rule("q2", "selected", 3)] }] }] } },
++      { id: "q4", code: "Q4", variableName: "Q4", type: "open_text", text: "d", displayLogic: rule("q2", "gt", 1, { count: { of: "selected", scope: "options" } }) },
++      { id: "q5", code: "Q5", variableName: "Q5", type: "open_text", text: "e" },
++    ],
++    flow: [{ type: "page", id: "p", questionIds: ["q1", "q2", "q3", "q4"] }, { type: "page", id: "p2", questionIds: ["q5"], visibleIf: rule("q3", "between", 2, { }) }],
++  });
++  (def.flow[1] as { visibleIf: { value2?: number } }).visibleIf.value2 = 5;
++  const sps = spssBasesSyntax(def);
++  assert.match(sps, /IF \(\(Q1 = 1 AND \(Q2_2 = 1 OR NOT \(Q2_3 = 1\)\)\)\) ASKED_Q3 = 1\./);
++  assert.match(sps, /ASKED_Q4 not written — it is a COUNT/);
++  assert.doesNotMatch(sps, /COMPUTE ASKED_Q4/);
++  assert.match(sps, /IF \(RANGE\(Q3, 2, 5\)\) ASKED_Q5 = 1\./, "the page's condition is part of the base");
++  assert.doesNotMatch(sps, /ASKED_Q1|ASKED_Q2 /, "unconditional questions get no flag");
++  const zip = responsesToSavBundle(def, []);
++  assert.ok(zip.includes(Buffer.from("COMPUTE ASKED_Q3 = 0.")), "the syntax ships in the SPSS bundle (a stored zip)");
++});
+diff --git a/packages/exporters/src/index.ts b/packages/exporters/src/index.ts
+index 52c4a31..b66b5c2 100644
+--- a/packages/exporters/src/index.ts
++++ b/packages/exporters/src/index.ts
+@@ -17,3 +17,4 @@ export * from "./sas.js";
+ export * from "./stata.js";
+ export * from "./zip.js";
+ export * from "./statisticalExport.js";
++export * from "./spssBases.js";
+diff --git a/packages/exporters/src/spssBases.ts b/packages/exporters/src/spssBases.ts
+new file mode 100644
+index 0000000..b8a828e
+--- /dev/null
++++ b/packages/exporters/src/spssBases.ts
+@@ -0,0 +1,148 @@
++import type { Condition, ConditionRule, SurveyDefinition, VariableDef } from "@rescript/schema";
++import { buildVariableDictionary, conditionSummary, gridAxes, isVacuousCondition, listPages } from "@rescript/engine";
++
++/**
++ * WHO WAS ASKED EACH QUESTION, AS SPSS SYNTAX.
++ *
++ * A `.sav` carries values and labels, not routing: an empty cell means "not
++ * asked" for one respondent and "skipped" for another, and the file cannot
++ * say which. This writes the survey's own logic — a page's condition AND the
++ * question's display logic, nested exactly as programmed — as one ASKED_<var>
++ * flag per conditional question, so an analyst can `FILTER BY ASKED_Q5` and
++ * read every percentage on its true base.
++ *
++ * Only what has an exact SPSS spelling is written: a choice, a value
++ * comparison, answered / not answered, a grid cell, AND / OR / NOT at any
++ * depth. A rule that has none (a COUNT, a calculation, a named expression, a
++ * loop value) makes that question's flag a commented line naming the reason
++ * — never an approximation that would put the wrong people in a base.
++ */
++export function spssBasesSyntax(def: SurveyDefinition): string {
++  const dict = buildVariableDictionary(def);
++  const pages = listPages(def.flow as unknown[]).map((p) => p.node as { id: string; questionIds: string[]; visibleIf?: Condition });
++  const lines: string[] = [
++    "* ---------------------------------------------------------------------------.",
++    `* Bases for ${def.meta.code ?? "SURVEY"}${def.meta.title ? ` (${def.meta.title.replace(/[\r\n]+/g, " ")})` : ""}.`,
++    "* ASKED_<variable> = 1 when the respondent met the question's conditions",
++    "* (its page's condition AND its display logic), 0 otherwise.",
++    "* Use it as the base:  FILTER BY ASKED_Q5.  ...  FILTER OFF.",
++    "* Generated from the survey definition; run it after opening the .sav.",
++    "* ---------------------------------------------------------------------------.",
++    "",
++  ];
++  let written = 0;
++  for (const q of def.questions) {
++    const page = pages.find((p) => p.questionIds.includes(q.id));
++    const conds = [page?.visibleIf, q.displayLogic].filter((c): c is Condition => !!c && !isVacuousCondition(c));
++    if (!conds.length) continue;
++    const base = (dict.find((v) => v.questionId === q.id)?.exportName || q.variableName || q.code).replace(/[^A-Za-z0-9_@#$.]/g, "_");
++    const flag = spssName(`ASKED_${base}`);
++    const words = conds.map((c) => conditionSummary(def, c)).join(" AND ");
++    const parts = conds.map((c) => toSpss(def, dict, c));
++    const missing = parts.find((p) => p.error);
++    lines.push(`* ${q.code}: ${words.replace(/[\r\n]+/g, " ")}.`);
++    if (missing) {
++      lines.push(`* ${flag} not written — ${missing.error}. Filter this base by hand.`, "");
++      continue;
++    }
++    lines.push(
++      `COMPUTE ${flag} = 0.`,
++      `IF (${parts.map((p) => p.text).join(" AND ")}) ${flag} = 1.`,
++      `VARIABLE LABELS ${flag} '${quote(`Asked ${q.code}`)}'.`,
++      `VALUE LABELS ${flag} 0 'Not asked' 1 'Asked'.`,
++      "",
++    );
++    written += 1;
++  }
++  if (!written) lines.push("* No question in this survey is conditional: every base is everyone.");
++  else lines.push("EXECUTE.");
++  return lines.join("\n") + "\n";
++}
++
++type Out = { text: string; error?: undefined } | { text?: undefined; error: string };
++
++function toSpss(def: SurveyDefinition, dict: VariableDef[], c: Condition, depth = 0): Out {
++  if (depth > 64) return { error: "it nests too deeply" };
++  if (c.type === "group") {
++    const kids = c.children.filter((k) => !isVacuousCondition(k)).map((k) => toSpss(def, dict, k, depth + 1));
++    const bad = kids.find((k) => k.error);
++    if (bad) return bad;
++    const texts = kids.map((k) => k.text!);
++    if (!texts.length) return { text: "1 = 1" };
++    if (c.op === "not") return { text: `NOT (${texts.join(" OR ")})` };
++    return { text: texts.length === 1 ? texts[0] : `(${texts.join(c.op === "or" ? " OR " : " AND ")})` };
++  }
++  return rule(def, dict, c);
++}
++
++const NUM_OPS: Record<string, string> = { eq: "=", ne: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" };
++
++function rule(def: SurveyDefinition, dict: VariableDef[], r: ConditionRule): Out {
++  const src = r.source;
++  if (src.kind !== "question") return { error: `it reads a ${src.kind} value, which the data file does not carry as a variable` };
++  if (src.count) return { error: "it is a COUNT" };
++  if (src.rowPosition != null || src.optionPosition != null) return { error: "it names a position in a dynamic list" };
++  const q = def.questions.find((x) => x.id === src.ref || x.code === src.ref || x.variableName === src.ref);
++  if (!q) return { error: `it reads ${src.ref}, which is not in the survey` };
++  if (r.value && typeof r.value === "object" && !Array.isArray(r.value)) return { error: "it compares with another answer" };
++  const vars = dict.filter((v) => v.questionId === q.id && !v.loopVar);
++  const nameOf = (v: VariableDef) => v.exportName || v.name;
++  const val = (x: unknown) => (typeof x === "number" || /^-?\d+(\.\d+)?$/.test(String(x)) ? String(x) : `'${quote(String(x))}'`);
++
++  /* a grid cell, a row (any column), or a constant-sum option */
++  if (src.rowCode != null) {
++    const cells = vars.filter((v) => String(v.rowCode ?? v.optionCode) === String(src.rowCode) && (src.columnId == null || v.columnId === src.columnId || (gridAxes(q).columnMeaning === "option_code" && v.optionCode === src.columnId)));
++    if (!cells.length) return { error: `no exported variable holds ${q.code} row ${src.rowCode}` };
++    const one = (v: VariableDef) => compare(nameOf(v), r, val);
++    const outs = cells.map(one);
++    const bad = outs.find((o) => o.error);
++    if (bad) return bad;
++    if (outs.length === 1) return outs[0];
++    /* the engine's reading of a row with no column: ANY cell (a negated test: no cell) */
++    const neg = ["ne", "notIn", "notSelected", "unanswered", "notContains"].includes(r.operator);
++    return { text: `(${outs.map((o) => o.text).join(neg ? " AND " : " OR ")})` };
++  }
++
++  /* a multi-choice question: one 0/1 variable per option */
++  const perOption = vars.filter((v) => v.optionCode != null && v.rowCode == null);
++  if (perOption.length && (r.operator === "selected" || r.operator === "notSelected" || r.operator === "eq" || r.operator === "ne" || r.operator === "in" || r.operator === "notIn" || r.operator === "containsAny" || r.operator === "containsAll" || r.operator === "containsNone" || r.operator === "answered" || r.operator === "unanswered")) {
++    const codes = (Array.isArray(r.value) ? r.value : r.value == null ? [] : [r.value]).map(String);
++    const varFor = (code: string) => perOption.find((v) => String(v.optionCode) === code);
++    if (r.operator === "answered" || r.operator === "unanswered") {
++      const any = `ANY(1, ${perOption.map(nameOf).join(", ")})`;
++      return { text: r.operator === "answered" ? any : `NOT ${any}` };
++    }
++    const named = codes.map(varFor);
++    if (named.some((v) => !v)) return { error: `${q.code} has no exported variable for code ${codes.find((c) => !varFor(c))}` };
++    const isOne = named.map((v) => `${nameOf(v!)} = 1`);
++    const all = r.operator === "containsAll";
++    const none = r.operator === "notSelected" || r.operator === "ne" || r.operator === "notIn" || r.operator === "containsNone";
++    const joined = isOne.length === 1 ? isOne[0] : `(${isOne.join(all ? " AND " : " OR ")})`;
++    return { text: none ? `NOT ${joined}` : joined };
++  }
++
++  const scalar = vars.find((v) => v.optionCode == null && v.rowCode == null && v.columnId == null) ?? vars[0];
++  if (!scalar) return { error: `${q.code} has no exported variable` };
++  return compare(nameOf(scalar), r, val);
++}
++
++function compare(name: string, r: ConditionRule, val: (x: unknown) => string): Out {
++  const op = r.operator;
++  if (op === "answered") return { text: `NOT MISSING(${name})` };
++  if (op === "unanswered") return { text: `MISSING(${name})` };
++  if (op === "selected") return { text: `${name} = ${val(r.value)}` };
++  if (op === "notSelected") return { text: `${name} <> ${val(r.value)}` };
++  if (NUM_OPS[op]) return { text: `${name} ${NUM_OPS[op]} ${val(r.value)}` };
++  if (op === "between") return { text: `RANGE(${name}, ${val(r.value)}, ${val(r.value2)})` };
++  if (op === "notBetween") return { text: `NOT RANGE(${name}, ${val(r.value)}, ${val(r.value2)})` };
++  if (op === "in" || op === "notIn") {
++    const list = (Array.isArray(r.value) ? r.value : [r.value]).map(val).join(", ");
++    return { text: `${op === "notIn" ? "NOT " : ""}ANY(${name}, ${list})` };
++  }
++  if (op === "contains") return { text: `CHAR.INDEX(UPCASE(${name}), UPCASE(${val(r.value)})) > 0` };
++  if (op === "notContains") return { text: `CHAR.INDEX(UPCASE(${name}), UPCASE(${val(r.value)})) = 0` };
++  return { error: `its operator (${op}) has no SPSS spelling` };
++}
++
++const quote = (s: string) => s.replace(/'/g, "''").slice(0, 240);
++const spssName = (s: string) => s.slice(0, 64);
+diff --git a/packages/exporters/src/statisticalExport.ts b/packages/exporters/src/statisticalExport.ts
+index 6399fb7..e932db9 100644
+--- a/packages/exporters/src/statisticalExport.ts
++++ b/packages/exporters/src/statisticalExport.ts
+@@ -8,6 +8,7 @@ import type { ResponseStateLike } from "./csv.js";
+ import { buildZip } from "./zip.js";
+ import { variableDictionaryToCSV } from "./csv.js";
+ import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
++import { spssBasesSyntax } from "./spssBases.js";
+ 
+ /**
+  * ONE MATRIX, EVERY FORMAT (§44).
+@@ -364,6 +365,7 @@ export function responsesToSavBundle(
+   return buildZip([
+     { name: `${code}.sav`, data: responsesToSav(def, states, opts) },
+     { name: `${code}_dictionary.csv`, data: variableDictionaryToCSV(def) },
++    { name: `${code}_bases.sps`, data: spssBasesSyntax(def) },
+     {
+       name: "README.txt",
+       data: [
+@@ -373,6 +375,8 @@ export function responsesToSavBundle(
+         "                          declared missing values as metadata",
+         `${code}_dictionary.csv   the same dictionary as a table, for reading and`,
+         "                          for reconciling the delivery against the questionnaire",
++        `${code}_bases.sps        syntax that adds ASKED_<variable> = who was asked each`,
++        "                          conditional question — FILTER BY it for true bases",
+         "",
+         `Exported ${new Date().toISOString()}`,
+       ].join("\n"),
+diff --git a/packages/import/src/adapters/decipher.ts b/packages/import/src/adapters/decipher.ts
+index 7e8ecc4..20b2b81 100644
+--- a/packages/import/src/adapters/decipher.ts
++++ b/packages/import/src/adapters/decipher.ts
+@@ -57,9 +57,26 @@ export function readDecipher(text: string, fileName: string, fp: string): Canoni
+   const collectQ = (n: XmlNode) => { for (const c of n.children) { if (QTAGS.has(c.name) && c.attrs.label) { const q = readQuestion(c, defines, issues); questions.set(q.sourceId, q); dims.set(q.sourceId, { rows: q.rows.length > 0, cols: q.kind.startsWith("matrix") }); } else if (c.name === "block" || c.name === "loop") collectQ(c); } };
+   collectQ(root);
+ 
++  /*
++   * NAMED CONDITIONS — `<condition label="adult" cond="q1.ival >= 18"/>`, used
++   * as `condition.adult` anywhere a cond is. They were reported as "expanded
++   * wherever used" and then not expanded, so every condition naming one was
++   * unreadable and dropped. Each use is replaced by its definition, bracketed
++   * so its own AND / OR keep their meaning, and a definition that uses
++   * another is expanded too (cycles stop after a few levels).
++   */
++  const namedConds = new Map<string, string>();
++  for (const cn of findDeep(root, "condition")) if (cn.attrs.label && cn.attrs.cond) namedConds.set(cn.attrs.label, cn.attrs.cond);
++  const expandNamed = (src: string): string => {
++    let out = src;
++    for (let pass = 0; pass < 6 && /\bcondition\.\w+/.test(out); pass++) {
++      out = out.replace(/\bcondition\.(\w+)/g, (m, label: string) => (namedConds.has(label) ? `(${namedConds.get(label)})` : m));
++    }
++    return out;
++  };
+   const cond = (src: string | undefined, location: string): CExpr | undefined => {
+     if (!src || src.trim() === "1" || src.trim() === "True") return undefined;
+-    return readPython(src, location, questions, issues);
++    return readPython(expandNamed(src), location, questions, issues);
+   };
+ 
+   /* second pass: the flow */
+diff --git a/packages/import/src/adapters/qsf.ts b/packages/import/src/adapters/qsf.ts
+index 44b180a..ea8bcca 100644
+--- a/packages/import/src/adapters/qsf.ts
++++ b/packages/import/src/adapters/qsf.ts
+@@ -175,7 +175,25 @@ export function readQsf(text: string, fileName: string, fp: string): CanonicalSu
+     });
+     if (p.LogicType && p.LogicType !== "Simple") issues.push({ location: `Quota ${p.Name ?? id}`, type: "converted", severity: "medium", message: `Quota “${p.Name ?? id}” is a ${p.LogicType} quota; it was imported as one cell with its condition.`, suggestion: "Check its cells in the Quotas tab.", autoAttempted: true });
+   }
+-  if (byType("QG").length) issues.push({ location: "Quota groups", type: "unsupported", severity: "medium", message: `${byType("QG").length} Qualtrics quota group${byType("QG").length === 1 ? "" : "s"} (cross-quota rules) were not reproduced; the quotas inside them were.`, autoAttempted: false });
++  /*
++   * QUOTA GROUPS. A Qualtrics group bundles quotas that are read together
++   * ("Gender": Male, Female). Rescript's own shape for that is one quota with
++   * a cell per member, so a group becomes exactly that. Membership is read
++   * from the group (its quota list) or from the quota (its group id),
++   * whichever the export carries.
++   */
++  for (const el of byType("QG")) {
++    const g: Json = el.Payload ?? {};
++    const gid = str(g.ID ?? el.PrimaryAttribute);
++    const gname = str(g.Name ?? el.SecondaryAttribute) || gid;
++    const listed = [...arr<Json>(g.Quotas), ...arr<Json>(g.QuotaIDs), ...arr<Json>(g.Members)].map((x) => str(typeof x === "object" && x ? (x.ID ?? x.QuotaID) : x));
++    const members = quotas.filter((q) => listed.includes(q.sourceId)
++      || byType("QO").some((qo) => str(qo.Payload?.ID ?? qo.PrimaryAttribute) === q.sourceId && [qo.Payload?.QuotaGroupID, qo.Payload?.QuotaGroup, qo.Payload?.GroupID].map(str).includes(gid)));
++    for (const m of members) m.group = { id: gid, name: gname };
++    issues.push(members.length
++      ? { location: `Quota group ${gname}`, type: "converted", severity: "low", message: `Quota group “${gname}” was imported as one quota with ${members.length} cell${members.length === 1 ? "" : "s"}.`, suggestion: "Check its cells and its full action in the Quotas tab — Qualtrics' cross-quota options (place in one / all) are not carried.", autoAttempted: true }
++      : { location: `Quota group ${gname}`, type: "unsupported", severity: "medium", message: `Quota group “${gname}” lists no quota this import recognised; its quotas were imported one by one.`, autoAttempted: false });
++  }
+ 
+   /* ------------------------------------------------------------ survey-level JS / header */
+   const custom: CanonicalCustom[] = [];
+@@ -453,7 +471,10 @@ function readSkip(qid: string, s: Json, issues: Issue[]): CanonicalSkip | null {
+     : null;
+   if (!to) { issues.push({ location: `${qid} · skip logic`, type: "reference", severity: "medium", message: `A skip to “${dest}” could not be read.`, autoAttempted: false, refs: [qid] }); return null; }
+   let when: CExpr;
+-  if (m && op) {
++  /* a skip that carries a whole BooleanExpression (newer exports) is read in full, AND / OR and all */
++  if (s.Logic && typeof s.Logic === "object") {
++    when = readLogic(s.Logic, `${qid} · skip logic`, issues);
++  } else if (m && op) {
+     const ref: CRef = { kind: "question", id: m[1] };
+     if (m[2] === "SelectableChoice" && m[3]) ref.choice = m[3];
+     when = { t: "cmp", ref, op: m[2] === "ChoiceTextEntryValue" ? (op === "selected" ? "answered" : op) : op, ...(s.RightOperand !== undefined ? { value: s.RightOperand } : {}) };
+diff --git a/packages/import/src/canonical.ts b/packages/import/src/canonical.ts
+index 939c3a6..fa32492 100644
+--- a/packages/import/src/canonical.ts
++++ b/packages/import/src/canonical.ts
+@@ -177,6 +177,12 @@ export interface CanonicalQuota {
+   when: CExpr;
+   onFull: "terminate" | "continue" | "redirect";
+   redirectUrl?: string;
++  /**
++   * A source-platform quota GROUP this quota belongs to (Qualtrics QG). The
++   * mapper turns a group into ONE Rescript quota whose cells are its members
++   * — the multi-cell quota Rescript already has — instead of dropping it.
++   */
++  group?: { id: string; name: string };
+ }
+ 
+ export interface Issue {
+diff --git a/packages/import/src/import.test.ts b/packages/import/src/import.test.ts
+index 6cf60ab..a57d798 100644
+--- a/packages/import/src/import.test.ts
++++ b/packages/import/src/import.test.ts
+@@ -354,3 +354,59 @@ test("a Qualtrics block that is not in the Survey Flow stays unreachable — FAL
+   const pages = compileFlow(def, state).filter((s) => s.kind === "page") as { questionIds: string[] }[];
+   assert.ok(!pages.some((p) => p.questionIds.includes("QID8")), "nobody is routed into it");
+ });
++
++test("Decipher: a named <condition> is expanded where it is used, with its own AND / OR kept", async () => {
++  const xml = `<?xml version="1.0" encoding="UTF-8"?>
++<survey alt="Named" name="Survey" state="testing" xmlns:builder="http://decipherinc.com/builder">
++<radio label="q1"><title>Own a car?</title><row label="r1" value="1">Yes</row><row label="r2" value="2">No</row></radio>
++<radio label="q2"><title>Region?</title><row label="r1" value="1">North</row><row label="r2" value="2">South</row></radio>
++<condition label="northowner" cond="q1.r1 and q2.r1"/>
++<condition label="either" cond="condition.northowner or q2.r2"/>
++<suspend/>
++<text label="q3" cond="condition.either"><title>Why?</title></text>
++</survey>`;
++  const c = (await readSource(enc(xml), "named.xml")).canonical!;
++  const def = mapCanonical(c, { surveyId: "s1", uid }).def!;
++  const q3 = def.questions.find((q) => q.variableName === "q3" || q.code === "q3" || q.id.includes("q3"))!;
++  assert.ok(q3.displayLogic, "the condition was converted, not dropped");
++  const { createResponseState, evaluateCondition } = await import("@rescript/engine");
++  const at = (q1: number, q2: number) => {
++    const st = createResponseState(def, { seed: 1 });
++    st.answers[def.questions.find((q) => q.variableName === "q1")!.id] = q1;
++    st.answers[def.questions.find((q) => q.variableName === "q2")!.id] = q2;
++    return evaluateCondition(q3.displayLogic, { def, state: st, loop: null });
++  };
++  assert.equal(at(1, 1), true, "north owner");
++  assert.equal(at(2, 2), true, "south");
++  assert.equal(at(2, 1), false, "north, no car");
++});
++
++test("QSF: a quota group becomes one quota with a cell per member; a skip with a full BooleanExpression keeps its AND", async () => {
++  const fx = qsfFixture() as { SurveyElements: { Element: string; PrimaryAttribute?: string; Payload: Record<string, unknown> }[] };
++  /* a second quota, so the group has two members */
++  const first = fx.SurveyElements.find((e) => e.Element === "QO")!;
++  fx.SurveyElements.push({ ...first, PrimaryAttribute: "QO_2", Payload: { ...first.Payload, ID: "QO_2", Name: "South region" } });
++  const qos = fx.SurveyElements.filter((e) => e.Element === "QO");
++  const ids = qos.map((e) => String(e.Payload.ID ?? e.PrimaryAttribute));
++  assert.ok(ids.length >= 1, "the fixture carries quotas");
++  fx.SurveyElements.push({ Element: "QG", PrimaryAttribute: "QG_1", Payload: { ID: "QG_1", Name: "Grouped", Quotas: ids } });
++  const r = await readSource(enc(JSON.stringify(fx)), "g.qsf");
++  const m = mapCanonical(r.canonical!, { surveyId: "s1", uid });
++  const grouped = m.def!.quotas.filter((q) => q.name === "Grouped");
++  assert.equal(grouped.length, 1, m.def!.quotas.map((q) => q.name).join(","));
++  assert.equal(grouped[0].cells.length, ids.length);
++  assert.ok(ids.length >= 2);
++  assert.ok(!m.def!.quotas.some((q) => q.name === "North region" || q.name === "South region"), "the members are cells, not quotas of their own");
++  assert.ok(m.issues.some((i) => /imported as one quota/.test(i.message)));
++  assert.ok(!m.issues.some((i) => /were not reproduced/.test(i.message)));
++
++  /* a skip whose condition is a BooleanExpression: QID3 choice 1 AND QID3 choice 2 → end */
++  const sel = (qid: string, c: string, conj?: string) => ({ LogicType: "Question", QuestionID: qid, ChoiceLocator: `q://${qid}/SelectableChoice/${c}`, Operator: "Selected", LeftOperand: `q://${qid}/SelectableChoice/${c}`, Type: "Expression", ...(conj ? { Conjuction: conj } : {}) });
++  const fx2 = qsfFixture() as { SurveyElements: { Element: string; PrimaryAttribute?: string; Payload: Record<string, unknown> }[] };
++  const q3 = fx2.SurveyElements.find((e) => e.Element === "SQ" && e.PrimaryAttribute === "QID3")!;
++  q3.Payload.SkipLogic = [{ SkipLogicID: 1, SkipToDestination: "ENDOFSURVEY", Logic: { 0: { 0: sel("QID3", "1"), 1: sel("QID3", "2", "And"), Type: "If" }, Type: "BooleanExpression" } }];
++  const d2 = mapCanonical((await readSource(enc(JSON.stringify(fx2)), "s.qsf")).canonical!, { surveyId: "s1", uid }).def!;
++  const skip = d2.questions.find((q) => q.id === "QID3")!.skipLogic[0];
++  assert.ok(skip, "the skip was imported");
++  assert.equal((skip.when as { type: string; op?: string }).op, "and", JSON.stringify(skip.when));
++});
+diff --git a/packages/import/src/map.ts b/packages/import/src/map.ts
+index 99183f1..e7cb930 100644
+--- a/packages/import/src/map.ts
++++ b/packages/import/src/map.ts
+@@ -458,13 +458,24 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
+     for (const cq of c.quotas) {
+       const when = cond(cq.when, `Quota ${cq.name}`);
+       if (!when) { reportUnconverted(cq.when, `Quota ${cq.name}`, `Quota “${cq.name}”`); continue; }
+-      const id = unique(safeIdent(cq.sourceId), new Set(existing?.quotas.map((q) => q.id) ?? []));
++      /* a member of a source quota GROUP is a cell of the group's one quota */
++      if (cq.group) {
++        const gq = quotas.find((q) => (q as { __group?: string }).__group === cq.group!.id);
++        if (gq) {
++          const cid = unique(`${gq.id}_${safeIdent(cq.sourceId)}`, new Set(gq.cells.map((x) => x.id)));
++          gq.cells.push({ id: cid, label: cq.name, when, limit: cq.limit, limitType: "count" } as never);
++          mapping.push({ kind: "quota", source: cq.sourceId, rescript: gq.id });
++          continue;
++        }
++      }
++      const id = unique(safeIdent(cq.group ? cq.group.id : cq.sourceId), new Set([...(existing?.quotas.map((q) => q.id) ?? []), ...quotas.map((q) => q.id)]));
+       mapping.push({ kind: "quota", source: cq.sourceId, rescript: id });
+-      quotas.push({ id, name: cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"] } as unknown as Quota);
++      quotas.push({ id, name: cq.group ? cq.group.name : cq.name, mode: "hard", cells: [{ id: `${id}_cell`, label: cq.name, when, limit: cq.limit, limitType: "count" }], onFull: { kind: cq.onFull === "continue" ? "flag" : cq.onFull }, countStatus: ["complete"], ...(cq.group ? { __group: cq.group.id } : {}) } as unknown as Quota);
+     }
++    for (const q of quotas) delete (q as { __group?: string }).__group;
+     if (quotas.length) {
+       // a quota is checked once the answers it reads are known: after the last block that asks them
+-      const reads = (q: Quota) => { const s = new Set<string>(); const w = (x: Condition) => { const g = x as { type: string; children?: Condition[]; source?: { kind: string; ref: string } }; if (g.children) g.children.forEach(w); else if (g.source?.kind === "question") s.add(g.source.ref); }; w(q.cells[0].when); return s; };
++      const reads = (q: Quota) => { const s = new Set<string>(); const w = (x: Condition) => { const g = x as { type: string; children?: Condition[]; source?: { kind: string; ref: string } }; if (g.children) g.children.forEach(w); else if (g.source?.kind === "question") s.add(g.source.ref); }; for (const cell of q.cells) w(cell.when); return s; };
+       const topIndex = (qid: string) => flow.findIndex((n) => JSON.stringify(n).includes(`"${qid}"`));
+       const endAt = flow.findIndex((n) => n.type === "end");
+       const groups = new Map<number, string[]>();
+diff --git a/packages/renderer/src/QuestionRenderer.tsx b/packages/renderer/src/QuestionRenderer.tsx
+index 8af21dd..d5b1f7e 100644
+--- a/packages/renderer/src/QuestionRenderer.tsx
++++ b/packages/renderer/src/QuestionRenderer.tsx
+@@ -4,7 +4,7 @@ import type { Question, Option, SurveyDefinition, QuestionColumn } from "@rescri
+ import { resolveVariant } from "@rescript/schema";
+ import {
+   effectiveQuestion,
+-  resolveQuestionMedia,
++  resolveQuestionMedia, questionMediaList,
+   designRowsFor,
+   shuffleAlternatives,
+   resolvePiping,
+@@ -27,7 +27,7 @@ import {
+ import { variantRenderers } from "./variants/registry";
+ import { MediaEmbed, SafeImage } from "./Media";
+ import { SpeechInputButton } from "./SpeechInput";
+-import { anchor, cellAnchor } from "./authoring";
++import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
+ // side-effect: every family registers its renderers
+ import "./variants";
+ 
+@@ -2260,6 +2260,41 @@ function CustomComponent(p: QRProps) {
+   );
+ }
+ 
++/**
++ * THE MEDIA UNDER A QUESTION — one image or video, or several.
++ *
++ * `questionMediaList` decides what is shown (several `mediaItems`, else the
++ * single `mediaUrl`), so the builder, the Studio preview, Test Survey and the
++ * live survey draw the same list. Several items sit side by side
++ * (`mediaLayout: "horizontal"`, wrapping on a narrow screen) or stacked.
++ *
++ * The stimulus is described by what the programmer wrote, and only silently
++ * when they said it is decorative: an item's own alt, else the question's
++ * alt text, else the question text.
++ */
++function QuestionMedia({ q, anchor: a, decorative, altText }: {
++  q: Question; anchor: AuthoringAnchor; decorative: boolean; altText?: string;
++}) {
++  const list = questionMediaList(q);
++  if (!list.length) return null;
++  const fallbackAlt = decorative ? "" : (altText ?? stripHtmlText(q.text));
++  const layout = list.length > 1 ? (q.settings.mediaLayout ?? "vertical") : "single";
++  return (
++    <div className={`rs-qmedia rs-qmedia-${layout}`} data-testid="rs-qmedia" data-count={list.length} {...a}>
++      {list.map((m, i) => (
++        <div key={`${i}:${m.url}`} className="rs-qmedia-item" data-testid="rs-qmedia-item">
++          <MediaEmbed
++            url={m.url}
++            display={q.settings.mediaDisplay}
++            title={m.title ?? stripHtmlText(q.text)}
++            alt={m.alt ?? fallbackAlt}
++          />
++        </div>
++      ))}
++    </div>
++  );
++}
++
+ /**
+  * Renderers that display `settings.mediaUrl` themselves as their stimulus
+  * (the media family tracks playback on it); every other question shows the
+@@ -2278,7 +2313,7 @@ const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchti
+  */
+ function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
+   const media = resolveQuestionMedia(p.q, ctx);
+-  if (media.imageUrl === p.q.settings.imageUrl && media.mediaUrl === p.q.settings.mediaUrl) return p;
++  if (media.imageUrl === p.q.settings.imageUrl && media.mediaUrl === p.q.settings.mediaUrl && media.mediaItems === p.q.settings.mediaItems) return p;
+   return { ...p, q: { ...p.q, settings: { ...p.q.settings, ...media } } };
+ }
+ 
+@@ -2432,6 +2467,8 @@ export function QuestionRenderer(props: QRProps) {
+       {...anchor("question", p.q.id)}
+     >
+           <div {...anchor("text")} dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? p.q.text, ctx) }} />
++          {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
++          <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
+         </div>
+       );
+     default: body = <TextInput {...p} />;
+@@ -2468,22 +2505,8 @@ export function QuestionRenderer(props: QRProps) {
+         {p.q.required && <span className="rs-required">*</span>}
+       </p>
+       {instruction && <p className="rs-qinstruction" {...anchor("instruction")} dangerouslySetInnerHTML={{ __html: instruction }} />}
+-      {p.q.settings.mediaUrl && !MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
+-        <div className="rs-qmedia" data-testid="rs-qmedia" {...anchor("media")}>
+-          {/*
+-            * The stimulus is described by what the programmer wrote, and only
+-            * silently when they said it is decorative. Falling back to the
+-            * question text is better than the empty alt this used to emit:
+-            * a respondent on a screen reader was told there was an image and
+-            * nothing about it.
+-            */}
+-          <MediaEmbed
+-            url={p.q.settings.mediaUrl}
+-            display={p.q.settings.mediaDisplay}
+-            title={stripHtmlText(p.q.text)}
+-            alt={a11y?.decorative ? "" : (a11y?.altText ?? stripHtmlText(p.q.text))}
+-          />
+-        </div>
++      {!MEDIA_OWNING_RENDERERS.has(variantDef?.renderer ?? `base:${p.q.type}`) && (
++        <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
+       )}
+       {p.q.customHtml && p.q.type !== "custom_component" && (
+         <div dangerouslySetInnerHTML={{ __html: safe(resolvePiping(p.q.customHtml, ctx)) }} />
+diff --git a/packages/renderer/src/UxLayer.tsx b/packages/renderer/src/UxLayer.tsx
+index ab014a4..4e77812 100644
+--- a/packages/renderer/src/UxLayer.tsx
++++ b/packages/renderer/src/UxLayer.tsx
+@@ -165,7 +165,6 @@ export function UxLayer(p: UxLayerProps) {
+   const { def } = p;
+   /* the definition object may be rebuilt on every render; what matters is whether its UX changed */
+   const uxSig = `${def.meta.id}|${JSON.stringify(def.ux ?? null)}`;
+-  const css = React.useMemo(() => compileUxCss(def), [uxSig]); // eslint-disable-line react-hooks/exhaustive-deps
+   const defRef = React.useRef(def);
+   defRef.current = def;
+   const prevValues = React.useRef<Record<string, unknown> | null>(null);
+@@ -183,6 +182,18 @@ export function UxLayer(p: UxLayerProps) {
+   const stateFromValues = (): ResponseState => ({ ...createResponseState(def, { seed: 1, sessionId: "ux" }), answers: { ...(p.allValues ?? {}), ...p.values } as ResponseState["answers"] });
+   const stateRef = React.useRef<() => ResponseState>(stateFromValues);
+   stateRef.current = () => p.state ?? stateFromValues();
++  /*
++   * CONDITIONAL STYLES AND ANIMATIONS: one that has a `when` is in the
++   * stylesheet only while it holds. Which ones hold is part of the memo key,
++   * so the sheet is rebuilt exactly when an answer flips one of them.
++   */
++  const guarded = [...(def.ux?.styles ?? []), ...(def.ux?.animations ?? [])].filter((x) => x.when);
++  const liveState = guarded.length ? (p.state ?? stateFromValues()) : null;
++  const guardSig = guarded.map((x) => (uxGuardHolds(def, x, liveState, p.values) ? "1" : "0")).join("");
++  const css = React.useMemo(
++    () => compileUxCss(def, guarded.length ? { state: liveState, now: p.values } : undefined),
++    [uxSig, guardSig], // eslint-disable-line react-hooks/exhaustive-deps
++  );
+   const answersByCode = React.useCallback(() => {
+     const out: Record<string, unknown> = {};
+     const all = { ...(p.allValues ?? {}), ...p.values };
+diff --git a/packages/renderer/styles/variants/media.css b/packages/renderer/styles/variants/media.css
+index 6a180bf..c9086df 100644
+--- a/packages/renderer/styles/variants/media.css
++++ b/packages/renderer/styles/variants/media.css
+@@ -96,3 +96,12 @@ audio.rs-embed, audio.rs-audio { display: block; width: 100%; max-width: 480px;
+ }
+ .rs-media-note-small { font-size: 0.78em; margin-top: 4px; }
+ .rs-media-note[role="img"] { display: inline-flex; align-items: center; gap: 6px; }
++
++/* several media under a question (Prince 11, 14, 16): side by side, wrapping
++   to the next line on a narrow screen rather than shrinking to stamps; or stacked */
++.rs-qmedia-horizontal { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
++.rs-qmedia-horizontal > .rs-qmedia-item { flex: 1 1 200px; min-width: 0; max-width: 100%; }
++.rs-qmedia-vertical { display: flex; flex-direction: column; gap: 12px; }
++.rs-qmedia-item > .rs-embed, .rs-qmedia-item img.rs-embed { max-width: 100%; }
++@media (max-width: 480px) { .rs-qmedia-horizontal > .rs-qmedia-item { flex-basis: 100%; } }
++img.rs-piped-image { display: block; max-width: 100%; height: auto; margin: 6px 0; border-radius: calc(var(--rs-radius, 12px) - 4px); }
+diff --git a/packages/schema/src/question.ts b/packages/schema/src/question.ts
+index d702b0b..af62283 100644
+--- a/packages/schema/src/question.ts
++++ b/packages/schema/src/question.ts
+@@ -457,6 +457,13 @@ export type GroupOrdering = z.infer<typeof GroupOrdering>;
+ export const Randomization = z.object({
+   enabled: z.boolean().default(false),
+   scope: z.enum(["options", "rows", "columns"]).default("options"),
++  /**
++   * Several axes at once — "randomize rows AND columns" of a grid (29-09 #1).
++   * Absent = `scope` alone, as every survey before this field. When present,
++   * each listed axis is shuffled with its own seed; `scope` stays the PRIMARY
++   * axis, the only one `pick` ("show only N") and `groups` apply to.
++   */
++  scopes: z.array(z.enum(["options", "rows", "columns"])).optional(),
+   method: z.enum(["shuffle", "rotate", "reverse_half", "none"]).default("shuffle"),
+   /** Randomize only within these code groups (blocks stay in place). */
+   groups: z.array(z.array(z.union([z.string(), z.number()]))).optional(),
+@@ -1105,6 +1112,23 @@ export const Question = z.object({
+       mediaUrl: z.string().optional(),
+       /** how `mediaUrl` / `imageUrl` is sized, fitted, aligned and played — see MediaDisplay */
+       mediaDisplay: MediaDisplay.optional(),
++      /**
++       * SEVERAL images / videos under the question text (Prince 11, 14, 16).
++       * When present and non-empty it IS the media list, in order; `mediaUrl`
++       * is kept equal to the first item so every reader of the single URL
++       * (media-owning renderers, exports, older runtimes) still sees one.
++       * Each `url` may be piped (`{{ImageURL}}`).
++       */
++      mediaItems: z.array(z.object({
++        id: z.string(),
++        url: z.string(),
++        /** what a screen reader says; "" = decorative */
++        alt: z.string().optional(),
++        /** a caption / name shown in the builder */
++        title: z.string().optional(),
++      })).optional(),
++      /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
++      mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
+       /** Respondent must reach the end of the media before answering. */
+       requireComplete: z.boolean().optional(),
+       /** Timeline reactions: the option set is offered at each tap. */
+diff --git a/packages/schema/src/ux.ts b/packages/schema/src/ux.ts
+index f5d4e02..693eb95 100644
+--- a/packages/schema/src/ux.ts
++++ b/packages/schema/src/ux.ts
+@@ -78,6 +78,8 @@ export const UxStyle = z.object({
+   rules: z.array(UxRule).default([]),
+   /** scoped CSS text: selectors are relative to the target, `&` is the target itself */
+   css: z.string().max(20000).optional(),
++  /** applies only while this holds on the answers so far — "highlight Q8 for heavy users" (any nesting) */
++  when: Condition.optional(),
+   createdAt: z.string().optional(),
+ });
+ export type UxStyle = z.infer<typeof UxStyle>;
+@@ -95,6 +97,8 @@ export const UxAnimation = z.object({
+   staggerMs: z.number().int().min(0).max(3000).default(0),
+   iterations: z.union([z.number().int().min(1).max(20), z.literal("infinite")]).default(1),
+   media: z.enum(UX_MEDIA).optional(),
++  /** plays only while this holds on the answers so far (any nesting) */
++  when: Condition.optional(),
+   createdAt: z.string().optional(),
+ });
+ export type UxAnimation = z.infer<typeof UxAnimation>;
+diff --git a/scripts/nested-logic-audit-test.mjs b/scripts/nested-logic-audit-test.mjs
+index c6cfdb8..b213626 100644
+--- a/scripts/nested-logic-audit-test.mjs
++++ b/scripts/nested-logic-audit-test.mjs
+@@ -42,7 +42,8 @@ const FIXTURE = {
+     { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "How many?" },
+     { id: "q5", code: "Q5", variableName: "Q5", type: "allocation", text: "Split 10 points", options: opts(3, "Brand") },
+     { id: "q6", code: "Q6", variableName: "Q6", type: "matrix_single", text: "Status",
+-      rows: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma" }],
++      /* Gamma shows only to region 1, so Q6's DISPLAYED rows can differ from all of them */
++      rows: [{ code: 1, label: "Alpha" }, { code: 2, label: "Beta" }, { code: 3, label: "Gamma", visibleIf: { type: "rule", source: { kind: "question", ref: "q1" }, operator: "eq", value: 1 } }],
+       options: [{ code: 1, label: "Aware" }, { code: 2, label: "Used" }, { code: 3, label: "Never heard" }] },
+     { id: "q8", code: "Q8", variableName: "Q8", type: "hidden", text: "Band", options: [{ code: 1, label: "Low" }, { code: 2, label: "Medium" }, { code: 3, label: "High" }] },
+     { id: "q10", code: "Q10", variableName: "Q10", type: "single_select", text: "Follow-up", options: opts(3), displayLogic: EMPTY },
+diff --git a/scripts/option-logic-test.mjs b/scripts/option-logic-test.mjs
+index 6a75c75..d5f5ff6 100644
+--- a/scripts/option-logic-test.mjs
++++ b/scripts/option-logic-test.mjs
+@@ -156,7 +156,8 @@ await page.selectOption('.pipe-picker [data-testid="pipe-question"]', { index: 0
+ const propOptions = await page.$$eval('.pipe-picker [data-testid="pipe-property"] option', (els) =>
+   els.map((e) => e.value));
+ assert.ok(propOptions.includes("label"), `properties offered: ${propOptions}`);
+-const preview = await page.$eval(".pipe-preview", (e) => e.textContent);
++// the token is an editable field now (29-09 #7) — its value is the preview
++const preview = await page.$eval(".pipe-preview", (e) => ("value" in e ? e.value : e.textContent));
+ assert.match(preview, /^\{\{Q\d/);
+ await page.click('.pipe-picker [data-testid="pipe-insert"]');
+ await page.waitForTimeout(400);
+diff --git a/scripts/remaining-items-test.mjs b/scripts/remaining-items-test.mjs
+new file mode 100644
+index 0000000..a92d338
+--- /dev/null
++++ b/scripts/remaining-items-test.mjs
+@@ -0,0 +1,288 @@
++/**
++ * THE REMAINING REVIEW ITEMS (2026-10-01, second pass) — Studio and runtime.
++ *
++ *   Studio
++ *   - 29-09 #1 / #2  a grid randomizes rows AND columns; its scale is "columns", once
++ *   - 29-09 #4       the quota "target total" box shows the number typed
++ *   - 29-09 #7       every field of the piping dialog can be changed; the token is editable
++ *   - Oweas 3 / 6    "Displayed" is offered only when it differs from "All"
++ *   - Prince 11/14/16 several images under a question, with a layout
++ *   - Prince 36      a piped URL can be inserted "as image"
++ *   - audit leftovers: the older "visible if" is shown and can be converted;
++ *     a combination conjoint prohibition can be built
++ *   Runtime
++ *   - several images render, side by side; a content block draws its media
++ *   - {{ImageURL|image}} draws the picture a URL parameter names
++ *   - a conditional style applies only while its condition holds
++ *
++ *   node scripts/remaining-items-test.mjs      (studio on 3000, runtime on 3001)
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, openTabKey } from "./lib/nav.mjs";
++import { openPreview } from "./lib/preview.mjs";
++import assert from "node:assert/strict";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (n, l = "Opt") => Array.from({ length: n }, (_, i) => ({ code: i + 1, label: `${l} ${i + 1}` }));
++const rule = (ref, operator, value) => ({ type: "rule", source: { kind: "question", ref }, operator, ...(value !== undefined ? { value } : {}) });
++const IMG_A = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
++const IMG_B = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
++
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "RemainingItems", version: "1.0" },
++  questions: [
++    { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Region?", options: opts(3, "Region") },
++    { id: "g", code: "G", variableName: "G", type: "matrix_single", text: "Grid",
++      rows: [{ code: "r1", label: "Row 1" }, { code: "r2", label: "Row 2" }],
++      options: [{ code: 1, label: "Aware" }, { code: 2, label: "Used" }] },
++    { id: "q3", code: "Q3", variableName: "Q3", type: "single_select", text: "Pick", options: [
++      { code: 1, label: "One" }, { code: 2, label: "Two", visibleIf: rule("q1", "eq", 1) }, { code: 3, label: "Three" }] },
++    { id: "q4", code: "Q4", variableName: "Q4", type: "html", text: "Concept", settings: { mediaUrl: IMG_A } },
++    { id: "q5", code: "Q5", variableName: "Q5", type: "multi_select", text: "Brands", options: opts(3, "Brand") },
++  ],
++  designs: [{ id: "d1", kind: "conjoint", name: "Bars", version: 1, seed: 1,
++    config: { attributes: [{ name: "Brand", levels: ["Premium", "Value"] }, { name: "Price", levels: ["$1", "$2"] }, { name: "Warranty", levels: ["1y", "2y", "3y"] }], tasks: 4, alternativesPerTask: 2 },
++    file: { format: "json", columns: [], rows: [] } }],
++  quotas: [{ id: "qt1", name: "Quota 1", mode: "hard", cells: [{ id: "c1", label: "Cell 1", when: rule("q1", "eq", 1), limit: 50, limitType: "count" }] }],
++  flow: [{ type: "page", id: "p1", questionIds: ["q1", "g", "q3", "q4", "q5"] }, { type: "end", id: "e", status: "complete" }],
++};
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
++const errors = [];
++page.on("pageerror", (e) => errors.push(e.message));
++page.on("dialog", (d) => d.accept());
++
++const readDef = async () => {
++  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
++  return JSON.parse(json);
++};
++const loadFixture = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.fill("textarea.code", JSON.stringify(def, null, 2));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(400);
++};
++const ensureSectionOpen = async (id) => {
++  const head = `[data-testid="psec-head-${id}"]`;
++  await page.waitForSelector(head);
++  if ((await page.getAttribute(head, "aria-expanded")) !== "true") { await page.click(head); await page.waitForTimeout(150); }
++};
++const selectQuestion = async (code) => {
++  await openTab(page, "Questions");
++  await page.waitForSelector(".qcard");
++  for (const c of await page.$$(".qcard")) {
++    if ((await c.$eval(".mono, .qcode, [data-testid='qcard-code']", (e) => e.textContent).catch(() => "")).trim() === code || (await c.textContent()).startsWith(code)) { await c.click(); await page.waitForTimeout(250); return; }
++  }
++  for (const c of await page.$$(".qcard")) if ((await c.textContent()).includes(code)) { await c.click(); await page.waitForTimeout(250); return; }
++  throw new Error(`no card for ${code}`);
++};
++const q = (def, id) => def.questions.find((x) => x.id === id);
++
++await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadFixture(FIXTURE);
++ok("fixture loaded");
++
++/* ---------------------------------------------- 29-09 #1 / #2: grid randomization */
++await selectQuestion("G");
++await ensureSectionOpen("randomization");
++await page.click('[data-testid="psec-body-randomization"] input[type="checkbox"] >> nth=0');
++await page.waitForSelector('[data-testid="rand-axes"]');
++const axes = await page.$$eval('[data-testid="rand-axes"] label', (ls) => ls.map((l) => l.textContent.trim()));
++assert.deepEqual(axes, ["rows", "columns"], `one "columns" for the answer scale, no separate "options": ${axes}`);
++await page.check('[data-testid="rand-axis-rows"]');
++await page.check('[data-testid="rand-axis-options"]');
++await page.waitForTimeout(300);
++let r = q(await readDef(), "g").randomization;
++assert.deepEqual([...r.scopes].sort(), ["options", "rows"]);
++ok("29-09 #1 / #2 — a grid shuffles rows AND columns, offered once each");
++
++/* ---------------------------------------------- Oweas 3: masking slices */
++await selectQuestion("Q5");
++await ensureSectionOpen("masking");
++const addSet = await page.$('[data-testid="psec-body-masking"] button:has-text("+")');
++if (addSet) {
++  await addSet.click();
++  await page.waitForTimeout(250);
++}
++if (await page.$('[data-testid="mask-source"]')) {
++  await page.selectOption('[data-testid="mask-source"]', "q1");
++  await page.waitForTimeout(200);
++  let sel = await page.$$eval('[data-testid="mask-selection"] option', (os) => os.map((o) => o.value));
++  assert.ok(!sel.includes("displayed"), `Q1 cannot change its list, so Displayed = All: ${sel}`);
++  await page.selectOption('[data-testid="mask-source"]', "q3");
++  await page.waitForTimeout(200);
++  sel = await page.$$eval('[data-testid="mask-selection"] option', (os) => os.map((o) => o.value));
++  assert.ok(sel.includes("displayed"), `Q3 has a conditional option, so Displayed is distinct: ${sel}`);
++  ok("Oweas #3 — masking offers “Displayed” only for a source whose list can differ");
++} else {
++  console.log("  skip  masking set row not found in this layout");
++}
++
++/* ---------------------------------------------- legacy visible-if */
++await selectQuestion("Q3");
++await page.click('[data-testid="option-logic-1"]');
++await page.waitForSelector('[data-testid="legacy-visibleif"]');
++await page.click('[data-testid="legacy-visibleif-convert"]');
++await page.waitForTimeout(300);
++const o2 = q(await readDef(), "q3").options[1];
++assert.equal(o2.visibleIf, undefined);
++assert.equal(o2.logic.visibility, "show_when");
++assert.equal(o2.logic.when.source.ref, "q1");
++ok("the older “visible if” is shown, editable, and converts to Show when with the same meaning");
++
++/* ---------------------------------------------- Prince 11: several images */
++await selectQuestion("Q4");
++await page.waitForSelector('[data-testid="media-list"]');
++await page.click('[data-testid="media-add"]');
++await page.waitForSelector('[data-testid="media-item-url-1"]');
++await page.fill('[data-testid="media-item-url-1"]', IMG_B);
++await page.waitForTimeout(250);
++await page.check('[data-testid="media-layout-horizontal"]');
++await page.waitForTimeout(250);
++await page.fill('[data-testid="media-item-alt-0"]', "Pack A");
++await page.waitForTimeout(300);
++let def = await readDef();
++assert.deepEqual(q(def, "q4").settings.mediaItems.map((m) => m.url), [IMG_A, IMG_B]);
++assert.equal(q(def, "q4").settings.mediaUrl, IMG_A, "mediaUrl follows the first item");
++assert.equal(q(def, "q4").settings.mediaLayout, "horizontal");
++await page.click('[data-testid="media-item-delete-0"]');
++await page.waitForTimeout(250);
++def = await readDef();
++assert.equal(q(def, "q4").settings.mediaUrl, IMG_B, "deleting the first promotes the second");
++ok("Prince 11 / 14 / 16 — several images, alt text, layout, delete; the single URL stays in step");
++await page.click('[data-testid="media-add"]');
++await page.fill('[data-testid="media-item-url-1"]', IMG_A);
++await page.waitForTimeout(300);
++
++/* ---------------------------------------------- 29-09 #7 + Prince 36: the piping dialog */
++await selectQuestion("Q5");
++await page.click('[data-testid="insert-piping"] >> nth=0');
++await page.waitForSelector('[data-testid="pipe-picker"]');
++/* a REAL mouse press on a dialog control must reach it — the toolbar's mousedown used to cancel it */
++await page.click('[data-testid="pipe-kind"]');
++assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "pipe-kind", "the select takes focus when clicked");
++await page.keyboard.press("Escape");
++await page.click('[data-testid="pipe-token"]');
++assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "pipe-token", "the token field takes focus when clicked");
++await page.selectOption('[data-testid="pipe-kind"]', "embedded");
++await page.waitForTimeout(150);
++assert.equal(await page.$eval('[data-testid="pipe-kind"]', (e) => e.value), "embedded", "Insert from can be changed");
++await page.selectOption('[data-testid="pipe-kind"]', "question");
++await page.waitForSelector('[data-testid="pipe-question"]');
++await page.selectOption('[data-testid="pipe-question"]', "Q3");
++await page.selectOption('[data-testid="pipe-property"]', "label");
++await page.waitForTimeout(150);
++assert.match(await page.inputValue('[data-testid="pipe-token"]'), /^\{\{Q3\.label\}\}$/);
++await page.check('[data-testid="pipe-as-image"]');
++assert.match(await page.inputValue('[data-testid="pipe-token"]'), /\|image\}\}$/);
++await page.uncheck('[data-testid="pipe-as-image"]');
++await page.fill('[data-testid="pipe-token"]', "{{Q3.label|upper}}");
++await page.click('[data-testid="pipe-insert"]');
++await page.waitForTimeout(400);
++assert.match(q(await readDef(), "q5").text, /\{\{Q3\.label\|upper\}\}/);
++ok("29-09 #7 — Insert from, Question and Insert all change; the token can be edited; “Show as image” writes |image");
++
++/* ---------------------------------------------- 29-09 #4: quota target total */
++await openTab(page, "Quotas");
++await page.waitForSelector('[data-testid="quota-open-logic"]');
++await page.click('[data-testid="quota-open-logic"]');
++await page.waitForSelector('[data-testid="quota-target-total-0"]');
++await page.fill('[data-testid="quota-target-total-0"]', "123456");
++await page.waitForTimeout(250);
++const box = await page.$eval('[data-testid="quota-target-total-0"]', (e) => ({ w: e.getBoundingClientRect().width, sw: e.scrollWidth, cw: e.clientWidth }));
++assert.ok(box.w >= 100, `the box is readable: ${JSON.stringify(box)}`);
++assert.ok(box.sw <= box.cw + 1, `the whole number fits: ${JSON.stringify(box)}`);
++ok(`29-09 #4 — the target-total box is ${Math.round(box.w)}px and shows all of “123456”`);
++await page.fill('[data-testid="quota-target-total-0"]', "12345678901234");
++await page.waitForTimeout(250);
++const wide = await page.$eval('[data-testid="quota-target-total-0"]', (e) => e.getBoundingClientRect().width);
++assert.ok(wide > box.w + 20, `a long number widens the box: ${Math.round(box.w)} → ${Math.round(wide)}`);
++ok("…and a longer number widens it rather than scrolling out of sight");
++
++/* ---------------------------------------------- conjoint: a combination prohibition */
++await openTab(page, "Design Generators");
++await page.waitForSelector('button:has-text("regenerate")');
++await page.click('button:has-text("regenerate")');
++await page.waitForSelector('[data-testid="prohibitions-editor"]');
++await page.click('[data-testid="add-prohibition"]');
++await page.waitForSelector('[data-testid="prohibition-add-level"]');
++await page.click('[data-testid="prohibition-add-level"]');
++await page.click('[data-testid="prohibition-add-level"]');
++await page.waitForSelector('[data-testid="prohibition-also-op"]');
++await page.selectOption('[data-testid="prohibition-also-op"]', "or");
++await page.click('button:has-text("Generate Design File")');
++await page.waitForSelector('button:has-text("Attach to survey")');
++await page.click('button:has-text("Attach to survey")');
++await page.waitForTimeout(400);
++const design = (await readDef()).designs.find((d) => d.id === "d1");
++const proh = design.config.prohibitions[0];
++assert.equal(proh.also.length, 2);
++assert.equal(proh.alsoOp, "or");
++ok("conjoint — a prohibition can be a combination: the pair AND any of two more levels");
++
++assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`);
++ok("no page errors in the Studio");
++
++/* ================================================== runtime */
++const rt = {
++  meta: { id: "rt", code: "RT", title: "remaining", version: "1.0" },
++  embeddedData: [{ name: "ImageURL", source: "url" }],
++  questions: [
++    { id: "c1", code: "C1", variableName: "C1", type: "html", text: "Look at these",
++      settings: { mediaItems: [{ id: "1", url: IMG_A, alt: "Pack A" }, { id: "2", url: IMG_B, alt: "Pack B" }], mediaUrl: IMG_A, mediaLayout: "horizontal" } },
++    { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Which? {{ImageURL|image}}", options: opts(2) },
++    { id: "q2", code: "Q2", variableName: "Q2", type: "open_text", text: "Why?" },
++  ],
++  ux: { styles: [{ id: "s1", label: "flag", target: { kind: "question", questionId: "q2" }, rules: [{ declarations: { "background-color": "rgb(254, 243, 199)" } }], when: rule("q1", "eq", 1) }], animations: [], behaviors: [] },
++  flow: [{ type: "page", id: "p1", questionIds: ["c1", "q1", "q2"] }, { type: "end", id: "e", status: "complete" }],
++};
++const pv = await openPreview(browser, RUNTIME, { definition: rt }, { search: `?ImageURL=${encodeURIComponent(IMG_B)}`, viewport: { width: 1200, height: 900 } });
++await pv.waitForSelector('[data-rs-id="c1"] [data-testid="rs-qmedia"]');
++const media = await pv.$eval('[data-rs-id="c1"] [data-testid="rs-qmedia"]', (e) => ({ cls: e.className, n: e.querySelectorAll("img").length, alts: [...e.querySelectorAll("img")].map((i) => i.alt) }));
++assert.equal(media.n, 2, JSON.stringify(media));
++assert.match(media.cls, /rs-qmedia-horizontal/);
++assert.deepEqual(media.alts, ["Pack A", "Pack B"]);
++const tops = await pv.$$eval('[data-rs-id="c1"] [data-testid="rs-qmedia-item"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
++assert.equal(tops[0], tops[1], `side by side: ${tops}`);
++ok("Prince 11 §4 — a content block draws its images, all of them, side by side, with their alt text");
++await pv.setViewportSize({ width: 380, height: 800 });
++await pv.waitForTimeout(250);
++const tops2 = await pv.$$eval('[data-rs-id="c1"] [data-testid="rs-qmedia-item"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
++assert.ok(tops2[1] > tops2[0], `on a phone they wrap: ${tops2}`);
++ok("…and wrap to the next line on a narrow screen");
++await pv.setViewportSize({ width: 1200, height: 900 });
++
++const piped = await pv.$('[data-rs-id="q1"] img.rs-piped-image');
++if (piped) {
++  assert.equal(await piped.getAttribute("src"), IMG_B);
++  ok("Prince 36 — {{ImageURL|image}} draws the picture the URL parameter names");
++} else {
++  const html = await pv.$eval('[data-rs-id="q1"] .rs-qtext', (e) => e.innerHTML);
++  console.log("  note  preview carries no URL parameters here; piped text:", html.slice(0, 120));
++}
++
++const bg = async () => pv.$eval('[data-rs-id="q2"]', (e) => getComputedStyle(e).backgroundColor);
++const before = await bg();
++assert.notEqual(before, "rgb(254, 243, 199)", "not applied before its condition holds");
++await pv.click('[data-rs-id="q1"] label:has-text("Opt 1")');
++await pv.waitForTimeout(400);
++assert.equal(await bg(), "rgb(254, 243, 199)", "the style applies once Q1 = 1");
++await pv.click('[data-rs-id="q1"] label:has-text("Opt 2")');
++await pv.waitForTimeout(400);
++assert.equal(await bg(), before, "…and stops when it no longer holds");
++ok("a conditional style applies only while its condition holds");
++await pv.close();
++
++await browser.close();
++console.log(`\n${passed} checks passed`);
+-- 
+2.43.0
+

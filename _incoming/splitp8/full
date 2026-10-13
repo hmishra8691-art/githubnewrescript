@@ -1,0 +1,40 @@
+Research Engine Phase 8: the project brief, the language corpus, waves across runs
+
+The project brief: research.brief (client, business question, the decision
+the findings inform, background, stakeholders, deadline, deliverables) on the
+design; set_research { brief } merges field by field; nine sentence forms
+("the client is Acme Foods", "this study informs the decision to …", "add
+stakeholder: …", "what is the brief?"); the editor's Brief section with
+"copy from another project" (GET /api/briefs); carried into the outline the
+model reads, the proposal (opens with it), the report and the deck (the
+client, the question and the decision), and the workflow (the business
+question offered as the objective).
+
+The language regression corpus: History records the engine's reading on
+every turn (engine, engineCategory, engineReason, ops, selected);
+packages/engine/src/languageCorpus.ts builds a corpus from the history and
+replays it against the engine as it is (same / better / worse / changed, the
+backlog of the model's sentences most said first); the History tab shows the
+project's language and exports the corpus (POST /api/copilot/corpus);
+packages/engine/corpus/brand-tracker.json (105 sentences) is replayed by the
+engine's tests; scripts/corpus-replay.mjs replays or records a file.
+
+Waves across runs: every run measures the design's KPIs on its own data
+(top-N-box share, mean, NPS, share of an option) and, when a previous
+comparable run exists (same environment, same dataset kind), carries the
+comparison — KPI deltas with their significance (two-proportion test, Welch's
+t from the summaries) and direction, the planned findings matched by what
+they test (new / stronger / weaker / reversed / same, and those gone), the
+verdicts that changed — in the Findings tab, the brief the model reads (the
+gate knows the deltas), a deck slide after the summary and a report section
+after the hypotheses. Migration 0049 (kpis, since) with insert fallbacks.
+
+Tests: engine 1772, analytics 255, studio 293, templates 98; auth audit 169
+checked, 0 problems; pnpm -r test green; mutation checks engine 17/17,
+analytics 14/14, studio 4/4 unit and 6/6 through the browser; browser corpus
+at baseline (125 pass, the 10 known failures);
+scripts/phase8-waves-corpus-brief-test.mjs 3/3.
+docs/PHASE8-WAVES-CORPUS-BRIEF-2026-10-10.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

@@ -3,7 +3,8 @@ import type { VariableMeta } from "./dataset.js";
 import type { Audience } from "./chartPurpose.js";
 import { adviseChart, checkChartChoice, type ChartAdvice } from "./questionChart.js";
 import { analysisSignature } from "./planCheck.js";
-import { sentenceProblem } from "./narrative.js";
+import { offeredSentences } from "./narrative.js";
+import { checkSentence, claimsFromItems, sentenceLabel, type ClaimLabel } from "./claims.js";
 import { mentionsVariable } from "./analyses/index.js";
 
 /**
@@ -317,7 +318,7 @@ export function regenerateScene(story: StoryDefinition, sceneId: string, items: 
 
 /* ------------------------------------------------------------ the model's part: interpretation, through the gate */
 
-export interface GatedInterpretation { implications: string[]; recommendations: string[]; rejected: { text: string; reason: string }[]; offered: number }
+export interface GatedInterpretation { implications: string[]; recommendations: string[]; rejected: { text: string; reason: string }[]; offered: number; /** every sentence that stands, with the claims it cites and its label — the audit record */ sentences?: { section: "implications" | "recommendations"; text: string; claims: string[]; label: ClaimLabel }[] }
 
 /** every number the results printed — bases, cells, chart values, tests, insight text */
 export function resultNumbers(items: readonly Pick<BuilderItem, "result">[]): Set<string> {
@@ -342,25 +343,30 @@ export function resultNumbers(items: readonly Pick<BuilderItem, "result">[]): Se
 }
 
 /** what the model is asked, and the shape it answers in */
-export const INTERPRETATION_INSTRUCTIONS = `You are helping a research team write the INTERPRETATION of survey results. Use ONLY the RESULTS below. Answer as JSON: {"implications": ["<what a finding may mean for the stated objective, one sentence each, at most 4>"], "recommendations": ["<a next step the evidence supports, one sentence each, at most 4>"]}. Rules: every number you write must appear in the results exactly as printed; never state a result that is not listed; say "may" or "suggests" — these are readings, not findings; do not mention analyses that are not listed; no marketing language.`;
+export const INTERPRETATION_INSTRUCTIONS = `You are helping a research team write the INTERPRETATION of survey results. Use ONLY the RESULTS below; each has an id such as C2. Answer as JSON where every sentence is an object naming the result ids it rests on: {"implications": [{"claims": ["C2"], "text": "<what a finding may mean for the stated objective, one sentence each, at most 4>"}], "recommendations": [{"claims": ["C2"], "text": "<a next step the evidence supports, one sentence each, at most 4>"}]}. Rules: a sentence may use only the numbers of the results it cites, exactly as printed, each with the group it belongs to; say which group is higher only as the results say; never state a result that is not listed; never use a causal word (causes, because, due to, leads to, drives); say "may" or "suggests" - these are readings, not findings; call a result significant only if it is not marked "(not significant)"; do not use quotation marks for anything the results do not contain; do not mention analyses that are not listed; no marketing language.`;
 
-/** the facts the model sees — the same sentences and numbers the report prints, nothing else */
+/** the facts the model sees — the same sentences and numbers the report prints, nothing else; ids are the position in `items`, as `gateInterpretation` reads them */
 export function interpretationBrief(brief: ReportBrief, items: readonly BuilderItem[]): string {
   const lines = [`OBJECTIVE: ${brief.objective || "(not stated)"}`, `AUDIENCE: ${brief.audience}; TONE: ${brief.tone}`, brief.keyQuestions.length ? `KEY QUESTIONS: ${brief.keyQuestions.join(" | ")}` : "", "RESULTS:"];
-  for (const it of items) {
+  items.forEach((it, i) => {
     const r = it.result;
-    lines.push(`- ${it.name} (n = ${r.base.n}): ${r.insights.slice(0, 3).join(" ") || "no finding text"}${testLine(r) ? ` [${testLine(r)}]` : ""}`);
-  }
+    const tested = r.tests.find((t) => t.p != null);
+    lines.push(`- [C${i + 1}]${tested && (tested.p as number) >= 0.05 ? " (not significant)" : ""} ${it.name} (n = ${r.base.n}): ${r.insights.slice(0, 3).join(" ") || "no finding text"}${testLine(r) ? ` [${testLine(r)}]` : ""}`);
+  });
   return lines.filter(Boolean).join("\n");
 }
 
-const sentences = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 400)).slice(0, max) : []);
-
-/** the model's interpretation, sentence by sentence, against the results — what passes is kept, what does not is listed with why */
-export function gateInterpretation(items: readonly BuilderItem[], candidate: unknown): GatedInterpretation {
+/** the model's interpretation, sentence by sentence, against the claims of the results — what passes is kept with the claims it cites and its label, what does not is listed with why */
+export function gateInterpretation(items: readonly BuilderItem[], candidate: unknown, brief: { objective?: string; keyQuestions?: readonly string[] } = {}): GatedInterpretation {
   const c = (candidate && typeof candidate === "object" ? candidate : {}) as Record<string, unknown>;
-  const numbers = resultNumbers(items);
-  const rejected: GatedInterpretation["rejected"] = []; let offered = 0;
-  const pass = (list: string[]): string[] => list.filter((t) => { offered++; const p = sentenceProblem(t, numbers, []); if (p) { rejected.push({ text: t, reason: p }); return false; } return true; });
-  return { implications: pass(sentences(c.implications, 4)), recommendations: pass(sentences(c.recommendations, 4)), rejected, offered };
+  const claims = claimsFromItems(items, brief);
+  const rejected: GatedInterpretation["rejected"] = []; const sentences: GatedInterpretation["sentences"] = []; let count = 0;
+  const pass = (key: "implications" | "recommendations", list: ReturnType<typeof offeredSentences>): string[] => list.filter((it) => {
+    count++;
+    const r = checkSentence(it.text, claims, it.claims);
+    if (r.problem) { rejected.push({ text: it.text, reason: r.problem }); return false; }
+    sentences.push({ section: key, text: it.text, claims: r.claims.map((x) => x.id), label: sentenceLabel(r.claims, key) });
+    return true;
+  }).map((it) => it.text);
+  return { implications: pass("implications", offeredSentences(c.implications, 4)), recommendations: pass("recommendations", offeredSentences(c.recommendations, 4)), rejected, offered: count, sentences };
 }

@@ -1,0 +1,2172 @@
+From e16d49a035d4d938695e1e64c3b0dcc18a4348dd Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Fri, 9 Oct 2026 23:02:48 +0000
+Subject: [PATCH] =?UTF-8?q?Research=20Engine=20Phase=206:=20the=20research?=
+ =?UTF-8?q?=20agent=20=E2=80=94=20planner,=20execution=20choice,=20tiers,?=
+ =?UTF-8?q?=20cost=20preview?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The audit's Phase 6 (RESEARCH-ENGINE-AUDIT-2026-10-08, §K; the execution router of §F):
+the Research Engine as an operating system the researcher directs in plain language and
+approves step by step.
+
+The planner (packages/engine/src/researchPlanner.ts). researchWorkflow(def, opts) reads the
+survey as it is into twelve ordered steps — objective, assumptions, structured hypotheses,
+research framework, questionnaire, variables, analysis plan, crosstab and test
+recommendations, reporting framework, design document, survey structure, deck — each done,
+ready (the engine's own actions, for approval), needs_input (only the researcher can say,
+with an example sentence that records it), model (a language model would do it, with the
+tier and the prompt the cost preview prices) or blocked (an earlier step first, named).
+Pure: it writes nothing and calls nothing. The engine does by itself what needs no prose:
+the objective; the population read from the objective and the methodology from its goal,
+as assumptions listed; the parsed readings of the hypotheses recorded; a construct per
+hypothesis side, named as a noun, with the questions that already measure it (by word
+family, or the standard measure's own words); a standard item for an unmeasured construct
+the library knows, linked to the construct in the same approval; a mean score for a
+multi-item construct; the plan; the test a measured hypothesis lacks (the score's, else the
+regression over the items) and a missing priority-1 crosstab; the KPIs from the dependent
+constructs; the proposal and the deck; the screener first and the demographics last. The
+model is asked only to draft hypotheses when none exist, to structure one the words cannot
+be read into, and to write a question for a construct with no standard item. In internal
+mode those steps ask the researcher instead — never a silent skip. "start the research
+workflow for …", "run the workflow", "what's next?" are read by the engine (a `workflow`
+interpretation); standardMeasure exported from nlIntent.
+
+Execution choice. The project setting surveys.settings.ai.mode (internal | cloud), read and
+written by POST /api/copilot/workflow (setMode under survey.edit; the sandbox keeps it in the
+browser) and switched in the new Workflow tab. Internal: nothing is sent to a language
+model — a model turn is refused on its card with its own failure code (internal_mode) and
+where the switch is, a sentence with an engine alternative gets the alternative, the
+findings outputs skip the narrative. Per request: one request let through to the cloud
+("once", used up by the call that takes it) and `mode` on the route for one reading.
+
+Tiers and the cost preview. AI_MODEL_SMALL beside AI_MODEL; aiModelName(tier),
+completeJson({ tier }); the meter's estimate and reservation carry the tier (AiEstimate.tier,
+aiSpec moved to lib/aiEstimate.ts so it is testable without a server; a fake report under
+simulation is still priced at the configured model, a real model name — the tier's — is
+kept). The route prices every model step through estimateAi, nothing reserved; the tab
+shows the model and the credits next to the button that runs the step and the total of the
+cloud steps from here.
+
+The Studio. useCopilot: executionMode/setExecutionMode, cloudOnce/setCloudOnce, workflow
+(the planner on the survey as it stands, the open proposal included, so a step applied is
+done at once), workflowInfo/refreshWorkflow, showWorkflow, runWorkflowStep (an engine step
+is a proposal in Changes recorded in History with workflow: <step>; an output step is the
+Phase 5 output and marks the document or the deck produced; a model step is a model turn);
+the internal-mode gate before any request leaves. WorkflowTab: the summary, the
+Internal/Cloud switch with the configured models, the cost line, the twelve steps with their
+marks, reasons, buttons, the examples as chips to the input box, what a blocked step waits
+on. The auth-guard audit records the route's setMode as writing the project-configuration
+bag, as the config route does.
+
+Tests: packages/engine/src/researchPlanner.test.ts (4; engine 1753 pass),
+packages/ai/src/tiers.test.ts (2; ai 33), apps/studio/lib/aiEstimate.test.ts (2; studio 286),
+failure.test.ts extended, scripts/phase6-agent-test.mjs (6 checks). Mutation checks: engine
+36 (35 caught, one by the type system; one made equivalent by simplifying modelSteps), ai 3/3,
+the meter 4/4, Studio 15 through the browser suite (14 caught; one equivalent under the fake
+provider — requireProject refuses the real survey either way). The full browser corpus (134
+suites) is green apart from the 10 known baseline failures; acbc-test and distribution-test
+failed once in the run (a random draw; the cold server) and pass on rerun. pnpm -r test green.
+Doc: docs/PHASE6-AGENT-2026-10-09.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/copilot/workflow/route.ts | 117 +++++
+ apps/studio/app/design-system.css             |  12 +
+ .../intelligent/IntelligentView.tsx           |  10 +-
+ .../intelligent/copilot/CopilotPanel.tsx      |   4 +
+ .../intelligent/copilot/WorkflowTab.tsx       | 128 ++++++
+ .../intelligent/copilot/useCopilot.ts         | 102 ++++-
+ apps/studio/lib/aiEstimate.test.ts            |  58 +++
+ apps/studio/lib/aiEstimate.ts                 |  44 ++
+ apps/studio/lib/copilot/failure.test.ts       |   7 +-
+ apps/studio/lib/copilot/failure.ts            |   8 +-
+ apps/studio/lib/metering.ts                   |  30 +-
+ docs/PHASE6-AGENT-2026-10-09.md               |  41 ++
+ packages/ai/src/index.ts                      |  19 +-
+ packages/ai/src/tiers.test.ts                 |  48 ++
+ packages/engine/src/index.ts                  |   1 +
+ packages/engine/src/nlIntent.ts               |  27 +-
+ packages/engine/src/researchPlanner.test.ts   | 333 ++++++++++++++
+ packages/engine/src/researchPlanner.ts        | 421 ++++++++++++++++++
+ scripts/auth-guard-audit.mjs                  |   4 +
+ scripts/phase6-agent-test.mjs                 | 286 ++++++++++++
+ 20 files changed, 1654 insertions(+), 46 deletions(-)
+ create mode 100644 apps/studio/app/api/copilot/workflow/route.ts
+ create mode 100644 apps/studio/components/intelligent/copilot/WorkflowTab.tsx
+ create mode 100644 apps/studio/lib/aiEstimate.test.ts
+ create mode 100644 apps/studio/lib/aiEstimate.ts
+ create mode 100644 docs/PHASE6-AGENT-2026-10-09.md
+ create mode 100644 packages/ai/src/tiers.test.ts
+ create mode 100644 packages/engine/src/researchPlanner.test.ts
+ create mode 100644 packages/engine/src/researchPlanner.ts
+ create mode 100644 scripts/phase6-agent-test.mjs
+
+diff --git a/apps/studio/app/api/copilot/workflow/route.ts b/apps/studio/app/api/copilot/workflow/route.ts
+new file mode 100644
+index 0000000..3683c9d
+--- /dev/null
++++ b/apps/studio/app/api/copilot/workflow/route.ts
+@@ -0,0 +1,117 @@
++import { NextRequest, NextResponse } from "next/server";
++import { aiConfigured, aiModelName, aiProviderName } from "@rescript/ai";
++import { SurveyDefinition } from "@rescript/schema";
++import { modelSteps, researchWorkflow, type ExecutionMode, type ResearchWorkflow } from "@rescript/engine";
++import { supabaseService } from "@/lib/authServer";
++import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
++import { billingProjectFor, estimateAi } from "@/lib/metering";
++import { loadDefinition } from "@/lib/analytics";
++
++/**
++ * THE RESEARCH AGENT'S WORKFLOW (Research Engine audit, Phase 6).
++ *
++ * The planner (`researchWorkflow`) is pure: it reads the survey and says
++ * which step is done, what the engine does next, what the researcher must
++ * answer and where a model is wanted. This route gives it what only the
++ * server knows — whether fieldwork data exists, the project's execution
++ * mode — and prices every model step before anything is called, so the
++ * card can show the cost of a step next to the button that runs it.
++ *
++ * EXECUTION CHOICE. The project setting `settings.ai.mode` ("internal" |
++ * "cloud") is the project's choice; a request may override it for one call
++ * (`mode`), and `setMode` records a new project choice (survey.edit). In
++ * INTERNAL mode no model is called: a model step becomes the engine's
++ * alternative or a question to the researcher. The effective mode travels
++ * back so the Studio shows what it did.
++ *
++ * Who may ask: `project.read`. The sandbox, against the fake provider only,
++ * sends its own definition and keeps its mode in the browser.
++ */
++export const dynamic = "force-dynamic";
++const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
++const MODES = new Set<ExecutionMode>(["internal", "cloud"]);
++const modeOf = (x: unknown): ExecutionMode | null => (typeof x === "string" && MODES.has(x as ExecutionMode) ? (x as ExecutionMode) : null);
++
++export interface WorkflowResponse {
++  workflow: ResearchWorkflow;
++  mode: { project: ExecutionMode; effective: ExecutionMode; override: boolean; /** the sandbox keeps its choice in the browser — the request's `mode` is it */ sandbox: boolean };
++  /** the model available for cloud steps, and whether one is configured at all */
++  model: { configured: boolean; provider: string | null; small: string; large: string };
++  /** each model step priced before any call; the total of what the cloud steps would cost from here */
++  cost: { steps: { id: string; tier: string; model: string; charge: number }[]; total: number; currency: "credits" };
++  runAvailable: boolean;
++}
++
++export async function POST(req: NextRequest) {
++  const authed = await requireUser(req);
++  let body: { surveyId?: unknown; definition?: unknown; objective?: unknown; produced?: unknown; mode?: unknown; setMode?: unknown; runAvailable?: unknown };
++  try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : json({ error: "bad json" }, 400); }
++  const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
++  const sandbox = surveyId === "sandbox";
++  const fakeProvider = aiProviderName() === "fake";
++  if (isFailure(authed) && !(sandbox && fakeProvider)) return authed.response;
++  const user: AuthedUser | null = isFailure(authed) ? null : authed;
++  const override = modeOf(body.mode);
++  const setMode = modeOf(body.setMode);
++  if (body.setMode !== undefined && !setMode) return json({ error: "setMode must be internal or cloud" }, 400);
++
++  let def: SurveyDefinition;
++  let projectMode: ExecutionMode = "cloud";
++  let runAvailable = false;
++  if (sandbox) {
++    const parsed = SurveyDefinition.safeParse(body.definition);
++    if (!parsed.success) return json({ error: "send the survey as it is open in the editor (definition)" }, 400);
++    def = parsed.data;
++    runAvailable = body.runAvailable === true;
++    /* the sandbox has no project row: its choice lives in the browser and comes as the request's `mode`; `setMode` here is that choice confirmed */
++    projectMode = setMode ?? "cloud";
++  } else {
++    const ctx = await requireProject(req, surveyId, setMode ? "survey.edit" : "project.read");
++    if (isFailure(ctx)) return ctx.response;
++    const db = supabaseService();
++    const loaded = await loadDefinition(db, surveyId);
++    if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
++    def = loaded.def as SurveyDefinition;
++    const [proj, completes] = await Promise.all([
++      db.from("surveys").select("settings").eq("id", surveyId).maybeSingle(),
++      db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("status", "complete").eq("is_test", false),
++    ]);
++    const settings = (proj.data?.settings && typeof proj.data.settings === "object" ? proj.data.settings : {}) as Record<string, unknown>;
++    const ai = (settings.ai && typeof settings.ai === "object" ? settings.ai : {}) as Record<string, unknown>;
++    projectMode = modeOf(ai.mode) ?? "cloud";
++    runAvailable = (completes.count ?? 0) > 0;
++    if (setMode && setMode !== projectMode) {
++      /* merged server-side: the setting is one key of a bag other panels write */
++      const up = await db.from("surveys").update({ settings: { ...settings, ai: { ...ai, mode: setMode } } }).eq("id", surveyId);
++      if (up.error) return json({ error: `could not save the execution mode: ${up.error.message}` }, 500);
++      projectMode = setMode;
++    }
++  }
++  const effective = override ?? projectMode;
++  const configured = aiConfigured();
++  const wf = researchWorkflow(def, { mode: configured ? effective : "internal", runAvailable, ...(typeof body.objective === "string" && body.objective.trim() ? { objective: body.objective.trim().slice(0, 500) } : {}), ...(Array.isArray(body.produced) ? { produced: body.produced.filter((x): x is "design_document" | "deck" => x === "design_document" || x === "deck") } : {}) });
++
++  /* the cost of every model step, priced and never reserved */
++  const steps: WorkflowResponse["cost"]["steps"] = [];
++  let total = 0;
++  const priced = modelSteps(wf);
++  if (priced.length && configured) {
++    const billing = await billingProjectFor(user, surveyId, "project.read");
++    if (!("response" in billing)) {
++      for (const m of priced) {
++        const tier = m.tier === "small" ? "small" : "large";
++        const charge = await estimateAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: m.estimateText, maxTokens: m.maxTokens, operation: m.operation, tier });
++        steps.push({ id: m.id, tier, model: aiModelName(tier), charge });
++        if (effective === "cloud") total += charge;
++      }
++    }
++  }
++  const out: WorkflowResponse = {
++    workflow: wf,
++    mode: { project: projectMode, effective: configured ? effective : "internal", override: !!override && override !== projectMode, sandbox },
++    model: { configured, provider: aiProviderName(), small: aiModelName("small"), large: aiModelName("large") },
++    cost: { steps, total: Math.round(total * 10000) / 10000, currency: "credits" },
++    runAvailable,
++  };
++  return json(out);
++}
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 63e4946..f774ad7 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1631,6 +1631,18 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .cp-sev.v-critical { color: var(--c-error-fg); border-color: var(--c-error); }
+ .cp-sev.v-warning { color: var(--c-warning-fg); border-color: var(--c-warning); }
+ .cp-cite { font-size: 10.5px; color: var(--c-text-3); margin-left: 4px; cursor: help; }
++/* the research workflow (Phase 6): the steps, each with its mark */
++.wf-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
++.wf-step { padding: 6px 8px; border: 1px solid var(--c-border); border-radius: 6px; font-size: 12.5px; }
++.wf-step.next { border-color: var(--c-primary-600); }
++.wf-step.wf-blocked { opacity: .65; }
++.wf-mark { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px; border: 1px solid var(--c-border); color: var(--c-text-3); flex: none; margin-top: 1px; }
++.wf-mark.v-done { color: var(--c-success-fg); border-color: var(--c-success); }
++.wf-mark.v-ready { color: var(--c-primary-600); border-color: var(--c-primary-600); }
++.wf-mark.v-needs_input, .wf-mark.v-model { color: var(--c-warning-fg); border-color: var(--c-warning); }
++.wf-why { margin-top: 2px; line-height: 1.4; }
++.wf-questions { margin: 4px 0 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
++.wf-questions .iq-chip { margin-left: 4px; white-space: normal; text-align: left; }
+ .cp-assumptions { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; }
+ .cp-assumptions ul { margin: 2px 0 0; padding-left: 18px; }
+ .cp-refused { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; margin-top: 8px; }
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+index 5d7bb8e..1777246 100644
+--- a/apps/studio/components/intelligent/IntelligentView.tsx
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -248,6 +248,11 @@ export function IntelligentView() {
+       await copilot.makeOutput(t, interp, heard);
+       setBusy(false); inputRef.current?.focus(); return;
+     }
++    // the research workflow (Phase 6): where the study stands and what comes next — the planner on this survey, the Workflow tab open
++    if (interp.kind === "workflow") {
++      await copilot.showWorkflow(t, interp, heard);
++      setBusy(false); inputRef.current?.focus(); return;
++    }
+     if (interp.kind !== "model") {
+       copilot.local(t, interp, heard);
+       if (interp.kind === "actions") {
+@@ -269,9 +274,10 @@ export function IntelligentView() {
+      * purchase intent", the objective for "create a research design for …".
+      * That is offered as a choice, not a dead end.
+      */
+-    if (!readOnlyExact && copilot.available === false && interp.kind === "model" && interp.fallback && !deferred) {
++    const internal = copilot.executionMode === "internal" && copilot.available !== false;
++    if (!readOnlyExact && (copilot.available === false || internal) && interp.kind === "model" && interp.fallback && !deferred) {
+       const fb = interp.fallback;
+-      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `No language model is configured on this Studio, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
++      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `${internal ? "This project runs in internal mode — nothing is sent to a language model (switch to cloud in the Workflow tab)" : "No language model is configured on this Studio"}, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
+       setBusy(false); inputRef.current?.focus(); return;
+     }
+     if (!readOnlyExact && copilot.available !== false) {
+diff --git a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+index 75c58ee..6c9d1fc 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+@@ -9,6 +9,7 @@ import { AnalysisTab } from "./AnalysisTab";
+ import { LanguagesTab } from "./LanguagesTab";
+ import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
+ import { FindingsTab } from "./FindingsTab";
++import { WorkflowTab } from "./WorkflowTab";
+ import { Linked } from "./CopilotCard";
+ import { ChangeReview } from "./ChangeReview";
+ import { ContextPanel } from "./ContextPanel";
+@@ -39,6 +40,7 @@ import { describeDocMerge, mergeDocActions } from "../../../lib/copilot/mergeDoc
+  *   Languages  each language version's state and next step (LanguagesTab)
+  *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
+  *   Findings   what the data said: the latest analysis run's verdicts and findings (FindingsTab)
++ *   Workflow   the research agent's steps from objective to deck, each approved here (WorkflowTab, Phase 6)
+  *   Inspector  the object in focus: what can be done to it and what depends
+  *              on it (ContextPanel), then the existing inspector
+  *
+@@ -81,6 +83,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+     { id: "history", label: "History", badge: copilot.ops.filter((o) => o.status === "applied" || o.status === "saved" || o.status === "save_failed").length || undefined },
+     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
+     { id: "findings", label: "Findings", badge: copilot.analysisRun ? copilot.analysisRun.findings.filter((f) => f.significant).length || undefined : undefined },
++    { id: "workflow", label: "Workflow", badge: copilot.workflow.total - copilot.workflow.done || undefined },
+     { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
+     { id: "quotas", label: "Quotas", badge: def.quotas.length || undefined },
+     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
+@@ -102,6 +105,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+         {copilot.tab === "history" && <HistoryTab copilot={copilot} def={def} readOnly={readOnly} onSelect={onSelect} />}
+         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
+         {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} onAsk={onAsk} />}
++        {copilot.tab === "workflow" && <WorkflowTab copilot={copilot} def={def} onTemplate={onTemplate} />}
+         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
+         {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
+         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
+diff --git a/apps/studio/components/intelligent/copilot/WorkflowTab.tsx b/apps/studio/components/intelligent/copilot/WorkflowTab.tsx
+new file mode 100644
+index 0000000..89c8d70
+--- /dev/null
++++ b/apps/studio/components/intelligent/copilot/WorkflowTab.tsx
+@@ -0,0 +1,128 @@
++"use client";
++import React from "react";
++import type { SurveyDefinition } from "@rescript/schema";
++import type { ExecutionMode, WorkflowStep } from "@rescript/engine";
++import { Icon } from "../../ui/Icon";
++import type { Copilot } from "./useCopilot";
++import { useStudio } from "../../studio/store";
++
++/**
++ * THE RESEARCH WORKFLOW — Intelligent → Workflow (Research Engine audit,
++ * Phase 6: the research agent).
++ *
++ * One objective, twelve steps: clarify assumptions → structured hypotheses
++ * → research framework → questionnaire → variables → analysis plan →
++ * crosstab and test recommendations → reporting framework → design
++ * document → survey structure → after fieldwork, the deck. Every step says
++ * what was found and what happens next — the engine's own actions (one
++ * click opens them in Changes for approval, like any proposal), a question
++ * only the researcher can answer (an example sentence goes to the input
++ * box to finish), a document (one click produces it), or a model call,
++ * priced before it is made. The execution choice — internal (nothing is
++ * sent to a model) or cloud — is the project's, switched here, and one
++ * request can be let through to the cloud on its own.
++ *
++ * Nothing here runs by itself: the researcher directs in plain language
++ * and approves step by step. The planner is the engine's (`researchWorkflow`),
++ * and runs on the survey as it stands in the editor, the open proposal
++ * included, so a step applied is a step done at once.
++ */
++const MARK: Record<WorkflowStep["status"], { icon: "check" | "chevron-right" | "info" | "sparkle" | "layers"; word: string }> = {
++  done: { icon: "check", word: "done" }, ready: { icon: "chevron-right", word: "ready" }, needs_input: { icon: "info", word: "your answer" }, model: { icon: "sparkle", word: "the model" }, blocked: { icon: "layers", word: "waits" },
++};
++const TIER_WORD: Record<string, string> = { small: "short call", large: "drafting call" };
++const credits = (n: number) => (n >= 1 ? n.toFixed(2) : n >= 0.01 ? n.toFixed(3) : n > 0 ? n.toFixed(4) : "0");
++
++export function WorkflowTab({ copilot, def, onTemplate }: { copilot: Copilot; def: SurveyDefinition; /** put a sentence in the input box to finish */ onTemplate(sentence: string): void }) {
++  const s = useStudio();
++  const wf = copilot.workflow;
++  const info = copilot.workflowInfo;
++  React.useEffect(() => { if (!info && !copilot.workflowLoading && !copilot.workflowError) void copilot.refreshWorkflow(); }, [info, copilot]);
++  const once = copilot.cloudOnce;
++  const mode: ExecutionMode = info?.mode.effective ?? (copilot.available === false ? "internal" : copilot.executionMode);
++  const costOf = (id: string) => info?.cost.steps.find((c) => c.id === id) ?? null;
++  /* the steps a model would be asked for — in internal mode they ask the researcher instead, and the line says so */
++  const modelSteps = wf.steps.filter((x) => x.status === "model" || (x.status === "needs_input" && !!x.model));
++  const total = modelSteps.reduce((t, x) => t + (costOf(x.id)?.charge ?? 0), 0);
++  /* a model step the route has not priced yet (the survey moved on since): priced once, not in a loop */
++  const unpriced = modelSteps.filter((x) => !costOf(x.id)).map((x) => x.id).join(",");
++  const pricedFor = React.useRef("");
++  React.useEffect(() => { if (info && unpriced && unpriced !== pricedFor.current && !copilot.workflowLoading) { pricedFor.current = unpriced; void copilot.refreshWorkflow(); } }, [info, unpriced, copilot]);
++  const run = (step: WorkflowStep) => { void copilot.runWorkflowStep(step); };
++  void def;
++
++  return (
++    <div className="cp-analysis cp-workflow" data-testid="cp-workflow" data-mode={mode} data-next={wf.next?.id ?? ""}>
++      <section>
++        <div className="row" style={{ alignItems: "center", gap: 8 }}>
++          <div className="iq-label">Research workflow · {wf.done} of {wf.total}</div>
++          <span className="grow" />
++          <button type="button" className="iq-btn" data-testid="wf-refresh" disabled={copilot.workflowLoading} onClick={() => void copilot.refreshWorkflow()} title="Read the project's execution mode, the data and the costs again">{copilot.workflowLoading ? "Reading…" : "Refresh"}</button>
++        </div>
++        <p className="iqi-dim" data-testid="wf-summary">{wf.summary}{copilot.workflowObjective && !def.research?.objective ? ` Objective to record: “${copilot.workflowObjective}”.` : ""}</p>
++        {copilot.workflowError && <p className="iq-error" data-testid="wf-error"><Icon name="warning" size={12} /> {copilot.workflowError}</p>}
++        <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap" }} data-testid="wf-mode" data-value={mode}>
++          <span className="iqi-dim">Execution:</span>
++          <button type="button" className={`iq-btn${copilot.executionMode === "internal" ? " primary" : ""}`} data-testid="wf-mode-internal" aria-pressed={copilot.executionMode === "internal"} disabled={s.readOnly && s.surveyDbId !== "sandbox"} onClick={() => void copilot.setExecutionMode("internal")} title="Nothing is sent to a language model: the engine's own steps, the standard items, your answers">Internal</button>
++          <button type="button" className={`iq-btn${copilot.executionMode === "cloud" ? " primary" : ""}`} data-testid="wf-mode-cloud" aria-pressed={copilot.executionMode === "cloud"} disabled={(s.readOnly && s.surveyDbId !== "sandbox") || copilot.available === false || info?.model.configured === false} onClick={() => void copilot.setExecutionMode("cloud")} title={copilot.available === false || info?.model.configured === false ? "No language model is configured on this Studio" : "Model steps go to the language model, priced before each call"}>Cloud</button>
++          {info && <span className="iqi-dim" data-testid="wf-model">{info.model.configured ? `${info.model.large}${info.model.small !== info.model.large ? ` · ${info.model.small} for short calls` : ""}` : "no model configured"}{!info.mode.sandbox && info.mode.project !== mode ? ` · project: ${info.mode.project}` : ""}</span>}
++        </div>
++        {modelSteps.length > 0 && (
++          <p className="iqi-dim" data-testid="wf-cost">
++            {mode === "cloud" ? `Model steps from here: ${modelSteps.map((x) => `${x.title.toLowerCase()} (${TIER_WORD[x.tier] ?? x.tier}${costOf(x.id) ? `, ${costOf(x.id)!.model}, ~${credits(costOf(x.id)!.charge)} credits` : ""})`).join("; ")} — about ${credits(total)} credits in all, each approved before it is made.` : `In internal mode the model is not called: ${modelSteps.length === 1 ? "one step is" : `${modelSteps.length} steps are`} yours to answer instead.`}
++          </p>
++        )}
++        {mode === "internal" && copilot.executionMode === "internal" && copilot.available !== false && info?.model.configured !== false && (
++          <label className="iqi-dim row" style={{ gap: 6, alignItems: "center" }} data-testid="wf-once">
++            <input type="checkbox" checked={once} onChange={(e) => copilot.setCloudOnce(e.target.checked)} data-testid="wf-once-box" /> let the next model request through to the cloud, once
++          </label>
++        )}
++      </section>
++      <section>
++        <ol className="wf-steps" data-testid="wf-steps">
++          {wf.steps.map((step) => {
++            const m = MARK[step.status];
++            const cost = step.status === "model" ? costOf(step.id) : null;
++            const isNext = wf.next?.id === step.id;
++            return (
++              <li key={step.id} className={`wf-step wf-${step.status}${isNext ? " next" : ""}`} data-testid={`wf-step-${step.id}`} data-status={step.status} data-executor={step.executor}>
++                <div className="row" style={{ alignItems: "flex-start", gap: 8 }}>
++                  <span className={`wf-mark v-${step.status}`} title={m.word}><Icon name={m.icon} size={12} /></span>
++                  <div className="grow">
++                    <div className="wf-title"><strong>{step.title}</strong> <span className="iqi-dim">· {m.word}{step.tier !== "none" && step.status !== "done" ? ` · ${TIER_WORD[step.tier] ?? step.tier}` : ""}</span></div>
++                    <div className="iqi-dim wf-why" data-testid={`wf-why-${step.id}`}>{step.why}</div>
++                    {step.status === "ready" && (step.actions?.length || step.output) && !s.readOnly && (
++                      <div className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
++                        <button type="button" className={`iq-btn${isNext ? " primary" : ""}`} data-testid={`wf-do-${step.id}`} disabled={copilot.busy} onClick={() => run(step)} title={step.sentence}>
++                          {step.executor === "output" ? `Produce ${step.output?.type === "findings_pptx" ? "the deck" : "the document"}` : `Do it (${step.actions!.length} ${step.actions!.length === 1 ? "change" : "changes"}) — review in Changes`}
++                        </button>
++                      </div>
++                    )}
++                    {(step.status === "model" || (step.status === "needs_input" && step.model)) && step.sentence && !s.readOnly && (
++                      <div className="row" style={{ gap: 6, marginTop: 4, flexWrap: "wrap" }}>
++                        <button type="button" className={`iq-btn${isNext ? " primary" : ""}`} data-testid={`wf-ask-${step.id}`} disabled={copilot.busy || (mode === "internal" && !once)} onClick={() => run(step)} title={step.sentence}>
++                          Ask the model{cost ? ` (~${credits(cost.charge)} credits, ${cost.model})` : ""}
++                        </button>
++                      </div>
++                    )}
++                    {step.questions && step.questions.length > 0 && step.status !== "done" && (
++                      <ul className="wf-questions" data-testid={`wf-questions-${step.id}`}>
++                        {step.questions.map((q, i) => (
++                          <li key={i}><span>{q.ask}</span> {!s.readOnly && <button type="button" className="iq-chip" data-testid="wf-example" onClick={() => onTemplate(q.example)} title="Put this sentence in the box to finish">{q.example}</button>}</li>
++                        ))}
++                      </ul>
++                    )}
++                    {step.status === "blocked" && step.blockedBy && <div className="iqi-dim" data-testid={`wf-blocked-${step.id}`}>waits on {wf.steps.find((x) => x.id === step.blockedBy)?.title.toLowerCase() ?? step.blockedBy}</div>}
++                  </div>
++                </div>
++              </li>
++            );
++          })}
++        </ol>
++      </section>
++      <section>
++        <p className="iqi-dim">Every change goes through Changes for your approval; every model call is priced here first; History keeps each step with its cost and can roll it back. Start from a sentence too: “start the research workflow for …”.</p>
++      </section>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index 214c3bd..c8227ec 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -2,7 +2,8 @@
+ import React from "react";
+ import type { AnalysisRun } from "@rescript/analytics";
+ import type { SurveyDefinition } from "@rescript/schema";
+-import { reviewSurvey, describeAction, type SurveyAction, type SurveyReview, type Interpretation } from "@rescript/engine";
++import { reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
++import type { WorkflowResponse } from "../../../app/api/copilot/workflow/route";
+ import { useStudio, uid } from "../../studio/store";
+ import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
+ import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, changeLabel, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
+@@ -102,7 +103,9 @@ export interface EngineTurn {
+ }
+ export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
+ export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
+-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "languages" | "quotas" | "ux" | "inspector";
++export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "workflow" | "languages" | "quotas" | "ux" | "inspector";
++/** what the workflow route told the Studio (Phase 6): the execution mode, the model, the cost of each model step, whether fieldwork data exists */
++export type WorkflowInfo = Omit<WorkflowResponse, "workflow">;
+ /** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
+ export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
+ 
+@@ -429,7 +432,33 @@ export function useCopilot(opts: {
+   const [planFirst, setPlanFirstState] = React.useState<boolean>(() => { try { return window.localStorage.getItem("rescript.copilot.planFirst") !== "off"; } catch { return true; } });
+   const setPlanFirst = React.useCallback((v: boolean) => { setPlanFirstState(v); try { window.localStorage.setItem("rescript.copilot.planFirst", v ? "on" : "off"); } catch { /* a private window */ } }, []);
+ 
++  /*
++   * THE EXECUTION CHOICE (Phase 6). A project runs INTERNAL (nothing is sent
++   * to a language model: the engine's reading, the standard items, the
++   * workflow's own steps) or CLOUD (model steps go to the model). The
++   * project's choice is a project setting the workflow route keeps (the
++   * sandbox keeps it in the browser); `cloudOnce` lets one request through.
++   */
++  const [executionMode, setExecutionModeState] = React.useState<ExecutionMode>(() => { try { return window.localStorage.getItem("rescript.copilot.mode") === "internal" ? "internal" : "cloud"; } catch { return "cloud"; } });
++  const [workflowInfo, setWorkflowInfo] = React.useState<WorkflowInfo | null>(null);
++  const [workflowError, setWorkflowError] = React.useState<string | null>(null);
++  const [workflowObjective, setWorkflowObjective] = React.useState<string | null>(null);
++  const [workflowLoading, setWorkflowLoading] = React.useState(false);
++  /** the outputs produced this session — the engine cannot see a file, so the workflow is told */
++  const producedRef = React.useRef<("design_document" | "deck")[]>([]);
++  /** one request let through to the cloud while the project runs internally — reset by the call that used it */
++  const cloudOnceRef = React.useRef(false);
++  const [cloudOnce, setCloudOnceState] = React.useState(false);
++  const setCloudOnce = React.useCallback((v: boolean) => { cloudOnceRef.current = v; setCloudOnceState(v); }, []);
++
+   const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
++    /* internal mode: the call is not made, the card says why and where the switch is, the history records a turn that cost nothing */
++    if (executionMode === "internal" && !cloudOnceRef.current) {
++      const failure = describeFailure("internal_mode");
++      opts.patch(id, { status: "failed", error: failure.message, failure, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "", execution: "internal" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [] }) });
++      return "unavailable";
++    }
++    if (cloudOnceRef.current) { cloudOnceRef.current = false; setCloudOnceState(false); }
+     setBusy(true);
+     try {
+       const proposal = session.proposal;
+@@ -518,7 +547,7 @@ export function useCopilot(opts: {
+     } finally {
+       setBusy(false);
+     }
+-  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst]);
++  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst, executionMode]);
+ 
+   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+     const id = uid("copilot");
+@@ -551,7 +580,7 @@ export function useCopilot(opts: {
+    * open proposal exactly as a model's would: the same Changes panel, the
+    * same Apply, the same history and undo. Nothing is charged.
+    */
+-  const local = React.useCallback((text: string, it: Exclude<Interpretation, { kind: "model" }>, heard?: HeardTranscript): void => {
++  const local = React.useCallback((text: string, it: Exclude<Interpretation, { kind: "model" | "workflow" }>, heard?: HeardTranscript, workflowStep?: string): void => {
+     const id = uid("copilot");
+     const actions = it.kind === "actions" ? it.actions : [];
+     const reply: CopilotReply = {
+@@ -567,7 +596,7 @@ export function useCopilot(opts: {
+       ...(it.kind === "actions" && it.warnings?.length ? { warnings: it.warnings } : {}),
+     };
+     /* recorded: an engine reading costs nothing, and the history says so (no model calls) */
+-    const intent: OpIntent = { category: it.category ?? null, kind: it.kind };
++    const intent: OpIntent = { category: it.category ?? null, kind: it.kind, ...(workflowStep ? { workflow: workflowStep } : {}) };
+     const opKey = actions.length
+       ? recordProposal(text, actions, { source: "engine", intent, detected: it.detected, targets: it.kind === "actions" ? it.targets : [], warnings: it.kind === "actions" ? it.warnings : undefined }, session.openOp)
+       : recordOp({ prompt: text, source: "engine", status: it.kind === "answer" ? "answered" : it.kind === "clarify" ? "clarify" : "refused", intent, detected: it.detected, statusDetail: (it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood).slice(0, 2000), ...(it.kind === "refused" && it.suggestion?.actions?.length ? { proposed: proposedOf(it.suggestion.actions) } : {}) });
+@@ -628,7 +657,7 @@ export function useCopilot(opts: {
+    * gate kept. The sandbox makes the proposal from its own definition and
+    * the findings outputs from rows a test put on the page.
+    */
+-  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript): Promise<void> => {
++  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript, workflowStep?: string): Promise<void> => {
+     const id = uid("copilot");
+     const engine: EngineTurn = { kind: "output", category: it.category, understood: it.understood, detected: it.detected };
+     const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+@@ -640,7 +669,7 @@ export function useCopilot(opts: {
+       const rows = sandbox ? rowsRef.current : null;
+       if (sandbox && it.output.type !== "proposal_docx" && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
+       const fake = sandbox ? fakeRef.current.shift() : undefined;
+-      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
++      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(executionMode === "internal" ? { narrative: false } : {}), ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
+       if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
+       const blob = await r.blob();
+       const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `output.${it.output.type.endsWith("pptx") ? "pptx" : "docx"}`;
+@@ -649,13 +678,67 @@ export function useCopilot(opts: {
+       const url = URL.createObjectURL(blob);
+       const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
+       const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
+-      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
++      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
++      /* the workflow's own outputs are marked produced (the deck, the design document) */
++      const produced = it.output.type === "proposal_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
++      if (produced && !producedRef.current.includes(produced)) { producedRef.current = [...producedRef.current, produced]; setWorkflowInfo((x) => (x ? { ...x } : x)); }
+     } catch (e) {
+       fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);
+     } finally { setBusy(false); }
+-  }, [opts, s.surveyDbId, s.def, recordOp]);
++  }, [opts, s.surveyDbId, s.def, recordOp, executionMode]);
+   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
+   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
++  /*
++   * THE RESEARCH WORKFLOW (Phase 6). The planner is the engine's and runs
++   * here, on the survey as it is (the open proposal included), so a step
++   * applied is a step done at once; the route adds what only the server
++   * knows — the project's execution mode, the model, the cost of each model
++   * step priced before any call, whether fieldwork data exists.
++   */
++  const refreshWorkflow = React.useCallback(async (opt: { objective?: string; setMode?: ExecutionMode } = {}): Promise<WorkflowInfo | null> => {
++    setWorkflowLoading(true);
++    setWorkflowError(null);
++    try {
++      const sandbox = s.surveyDbId === "sandbox";
++      const body = { surveyId: s.surveyDbId, ...(sandbox ? { definition: s.def, runAvailable: !!rowsRef.current?.length, mode: executionMode } : {}), ...(opt.objective ? { objective: opt.objective } : {}), ...(opt.setMode ? { setMode: opt.setMode } : {}), produced: producedRef.current };
++      const r = await fetch("/api/copilot/workflow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
++      if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; setWorkflowError(d?.error ?? (r.status === 401 ? "Sign in to see the workflow for this survey." : `The workflow could not be read (HTTP ${r.status}).`)); return null; }
++      const d = await r.json() as WorkflowResponse;
++      const { workflow: _w, ...info } = d;
++      void _w;
++      setWorkflowInfo(info);
++      if (!sandbox && info.mode.project !== executionMode) { setExecutionModeState(info.mode.project); try { window.localStorage.setItem("rescript.copilot.mode", info.mode.project); } catch { /* a private window */ } }
++      return info;
++    } catch (e) { setWorkflowError(`The workflow could not be read: ${(e as Error).message || "the network request failed"}.`); return null; }
++    finally { setWorkflowLoading(false); }
++  }, [s.surveyDbId, s.def, executionMode]);
++  const setExecutionMode = React.useCallback(async (mode: ExecutionMode) => {
++    setExecutionModeState(mode);
++    try { window.localStorage.setItem("rescript.copilot.mode", mode); } catch { /* a private window */ }
++    if (s.surveyDbId !== "sandbox") await refreshWorkflow({ setMode: mode });
++    else setWorkflowInfo((x) => (x ? { ...x, mode: { ...x.mode, project: mode, effective: x.model.configured ? mode : "internal", override: false } } : x));
++  }, [s.surveyDbId, refreshWorkflow]);
++  /** the workflow on the survey as it stands here, in the effective mode */
++  const workflow: ResearchWorkflow = React.useMemo(() => researchWorkflow(working, { mode: workflowInfo ? workflowInfo.mode.effective : available === false ? "internal" : executionMode, runAvailable: workflowInfo?.runAvailable ?? (s.surveyDbId === "sandbox" ? !!rowsRef.current?.length : !!analysisRun), produced: producedRef.current, ...(workflowObjective ? { objective: workflowObjective } : {}) }), [working, workflowInfo, executionMode, available, workflowObjective, analysisRun, s.surveyDbId]);
++  /** "start the research workflow for …": the card says where the study stands, the tab opens on the steps */
++  const showWorkflow = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "workflow" }>, heard?: HeardTranscript): Promise<void> => {
++    const id = uid("copilot");
++    if (it.objective) setWorkflowObjective(it.objective);
++    const engine: EngineTurn = { kind: "answer", category: it.category, understood: it.understood, detected: it.detected };
++    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
++    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
++    setSession((x) => ({ ...x, tab: "workflow" }));
++    const info = await refreshWorkflow(it.objective ? { objective: it.objective } : {});
++    const wf = researchWorkflow(working, { mode: info ? info.mode.effective : executionMode, runAvailable: info?.runAvailable ?? false, produced: producedRef.current, ...(it.objective ? { objective: it.objective } : {}) });
++    const said = `${describeWorkflow(wf)}${info ? `\nExecution: ${info.mode.effective}${info.cost.steps.length ? ` · model steps from here: ${info.cost.steps.map((c) => `${c.id} (${c.tier}, ${c.model}, ${c.charge} credits)`).join(", ")}` : ""}` : ""}`;
++    opts.patch(id, { status: "ready", reply: reply(said), opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "workflow", ...(it.objective ? { objective: it.objective.slice(0, 200) } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
++  }, [opts, setSession, refreshWorkflow, working, executionMode, recordOp]);
++  /** one step, as the researcher approved it: the engine's actions as a proposal, an output as a file, a model step as a model turn */
++  const runWorkflowStep = React.useCallback(async (step: WorkflowStep): Promise<void> => {
++    if (step.status === "ready" && step.executor === "output" && step.output) { await makeOutput(step.sentence ?? step.title, { kind: "output", category: "reporting", understood: `Produce ${step.output.words} (workflow: ${step.title.toLowerCase()}).`, output: step.output, detected: [] }, undefined, step.id); return; }
++    if (step.status === "ready" && step.actions?.length) { local(step.sentence ?? step.title, { kind: "actions", category: "research_design", understood: `${step.title}: ${step.why}`, actions: step.actions, detected: [], targets: [] }, undefined, step.id); return; }
++    if ((step.status === "model" || (step.status === "needs_input" && step.model)) && step.sentence) { await ask(step.sentence, undefined, undefined, { category: "research_design", reason: `workflow step ${step.id}: ${step.why}`, detected: [] }); }
++  }, [makeOutput, local, ask]);
+ 
+   /* ------------------------------------------------------------ review */
+   const runReview = React.useCallback(async (text = "Review my survey") => {
+@@ -850,6 +933,7 @@ export function useCopilot(opts: {
+     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
+     ask, local, askData, makeOutput, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+     planFirst, setPlanFirst, executePlan, cancelPlan,
++    executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
+     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+     quotaCounts, quotaCountsAt, refreshQuotaCounts,
+     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
+diff --git a/apps/studio/lib/aiEstimate.test.ts b/apps/studio/lib/aiEstimate.test.ts
+new file mode 100644
+index 0000000..eda4048
+--- /dev/null
++++ b/apps/studio/lib/aiEstimate.test.ts
+@@ -0,0 +1,58 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { aiSpec, meterModel } from "./aiEstimate.ts";
++
++/*
++ * MODEL TIERS IN THE METER (Research Engine audit, Phase 6): a small-tier
++ * estimate is priced at the small model, a large-tier (or untiered) one at
++ * the large model — the same spec the reservation uses, so the cost preview
++ * and the wallet agree. Under cost simulation the fake provider's own
++ * "fake" model becomes the configured one, but a real model name is kept.
++ */
++const KEYS = ["AI_API_URL", "AI_MODEL", "AI_MODEL_SMALL", "BILLING_SIMULATE_FAKE_COSTS"];
++function withEnv(env: Record<string, string>, fn: () => void) {
++  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
++  try { for (const k of KEYS) delete process.env[k]; Object.assign(process.env, env); fn(); }
++  finally { for (const k of KEYS) { delete process.env[k]; if (saved[k] !== undefined) process.env[k] = saved[k]; } }
++}
++
++test("the estimate's model follows the tier", () => {
++  withEnv({ AI_API_URL: "https://api.example/v1", AI_MODEL: "big-model", AI_MODEL_SMALL: "tiny-model" }, () => {
++    const small = aiSpec("AI_REQUEST", { estimateText: "x".repeat(400), maxTokens: 300, operation: "workflow_structure", tier: "small" });
++    const large = aiSpec("AI_REQUEST", { estimateText: "x".repeat(400), maxTokens: 300, operation: "workflow_hypotheses", tier: "large" });
++    const none = aiSpec("AI_REQUEST", { estimateText: "x".repeat(400), maxTokens: 300, operation: "copilot_turn" });
++    assert.equal(small.model, "tiny-model");
++    assert.equal(large.model, "big-model");
++    assert.equal(none.model, "big-model");
++    assert.equal(small.provider, "openai-compatible");
++    assert.equal(small.service, "chat");
++    assert.equal(small.outputUnits, 300);
++    assert.ok((small.inputUnits ?? 0) > 120);
++    assert.deepEqual(small.metadata, { operation: "workflow_structure" });
++    // two requests double both sides
++    const twice = aiSpec("AI_REQUEST", { estimateText: "x".repeat(400), maxTokens: 300, operation: "o", requests: 2, tier: "small" });
++    assert.equal(twice.outputUnits, 600);
++    assert.equal(twice.inputUnits, (small.inputUnits ?? 0) * 2);
++  });
++  // no small model configured: the small tier is the large model
++  withEnv({ AI_API_URL: "https://api.example/v1", AI_MODEL: "big-model" }, () => {
++    assert.equal(aiSpec("AI_REQUEST", { estimateText: "x", maxTokens: 10, operation: "o", tier: "small" }).model, "big-model");
++  });
++});
++
++test("the fake provider: priced as fake unless simulation is on, and then at the tier's model — a 'fake' report at the configured one", () => {
++  withEnv({ AI_API_URL: "fake:", AI_MODEL: "big-model", AI_MODEL_SMALL: "tiny-model" }, () => {
++    const s = aiSpec("AI_REQUEST", { estimateText: "x", maxTokens: 10, operation: "o", tier: "small" });
++    assert.equal(s.provider, "fake");
++    assert.equal(s.model, "tiny-model");
++  });
++  withEnv({ AI_API_URL: "fake:", AI_MODEL: "big-model", AI_MODEL_SMALL: "tiny-model", BILLING_SIMULATE_FAKE_COSTS: "1" }, () => {
++    const s = aiSpec("AI_REQUEST", { estimateText: "x", maxTokens: 10, operation: "o", tier: "small" });
++    assert.equal(s.provider, "openai-compatible");
++    assert.equal(s.model, "tiny-model", "the tier's model survives simulation");
++    assert.equal(aiSpec("AI_REQUEST", { estimateText: "x", maxTokens: 10, operation: "o" }).model, "big-model");
++    assert.equal(meterModel("fake", "fake", "chat"), "big-model", "a fake report is priced at the configured model");
++    assert.equal(meterModel("fake", null, "chat"), "big-model");
++    assert.equal(meterModel("openai-compatible", "other", "chat"), "other");
++  });
++});
+diff --git a/apps/studio/lib/aiEstimate.ts b/apps/studio/lib/aiEstimate.ts
+new file mode 100644
+index 0000000..2a558d4
+--- /dev/null
++++ b/apps/studio/lib/aiEstimate.ts
+@@ -0,0 +1,44 @@
++import { estimateTokens, type UsageSpec } from "@rescript/billing";
++import { aiModelName, type AiModelTier } from "@rescript/ai";
++
++/**
++ * WHAT AN AI CALL IS PRICED AS — the one spec `meteredAi` reserves and
++ * `estimateAi` prices (the Studio's metering). Kept apart from the metering
++ * service so it can be tested without a server: it reads only the
++ * environment and the model configuration.
++ *
++ * The TIER (Research Engine audit, Phase 6): a short structuring call is
++ * priced at the small model when one is configured (AI_MODEL_SMALL); a
++ * drafting call, or a call that names no tier, at the large one (AI_MODEL).
++ * The cost preview and the reservation see the same model, so what the
++ * card shows is what the wallet is asked for.
++ */
++
++/** Provider ids as the cost registry knows them; the fake provider is priced as the real one only when simulation is on. */
++export function meterProvider(provider: string, kind: "chat" | "tts" | "stt" | "translate"): string {
++  if (provider !== "fake") return provider;
++  if (process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return "fake";
++  return kind === "translate" ? "google" : "openai-compatible";
++}
++/** The model a usage row is priced at; under simulation the fake provider's "fake" model becomes the configured one (a real model name given is kept — the tier's). */
++export function meterModel(provider: string, model: string | null, kind: "chat" | "tts" | "stt" | "translate"): string | null {
++  if (provider !== "fake" || process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return model;
++  if (kind === "translate") return "v2";
++  if (kind === "chat") return model && model !== "fake" ? model : aiModelName();
++  if (kind === "stt") return (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
++  return (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1";
++}
++
++/** what a model call is expected to cost: the prompt's size, the reply's cap, the number of requests — and the tier, the large model when none is named */
++export interface AiEstimate { estimateText: string; maxTokens: number; requests?: number; operation: string; tier?: AiModelTier }
++
++/** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
++export function aiSpec(eventType: string, est: AiEstimate): UsageSpec {
++  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
++  const reqs = est.requests ?? 1;
++  return {
++    eventType, provider: meterProvider(providerName, "chat"), service: "chat", model: meterModel(providerName, aiModelName(est.tier), "chat"),
++    inputUnits: (estimateTokens(est.estimateText) + 120) * reqs, outputUnits: est.maxTokens * reqs,
++    metadata: { operation: est.operation },
++  };
++}
+diff --git a/apps/studio/lib/copilot/failure.test.ts b/apps/studio/lib/copilot/failure.test.ts
+index 90941dd..eb1937e 100644
+--- a/apps/studio/lib/copilot/failure.test.ts
++++ b/apps/studio/lib/copilot/failure.test.ts
+@@ -4,7 +4,7 @@ import { describeFailure, failureFromError, failureFromReplyError, isTurnFailure
+ 
+ /* Phase 1: every failure of the model path has a code, a cause and a next step. */
+ test("every code has a title, a cause and at least one next step", () => {
+-  for (const code of ["not_configured", "wallet", "timeout", "provider", "network", "truncated", "unparseable", "empty", "unusable", "engine_unparsed"] as const) {
++  for (const code of ["not_configured", "wallet", "timeout", "provider", "network", "truncated", "unparseable", "empty", "unusable", "engine_unparsed", "internal_mode"] as const) {
+     const f = describeFailure(code, "x");
+     assert.equal(f.code, code);
+     assert.ok(f.title.length > 8 && f.title === f.title.toUpperCase(), code);
+@@ -14,6 +14,11 @@ test("every code has a title, a cause and at least one next step", () => {
+   }
+   assert.ok(!isTurnFailure({ code: "nope", message: "", next: [] }));
+   assert.ok(!isTurnFailure(null));
++  /* Phase 6: internal mode is a cause of its own — not "no model configured" — and says where the switch is */
++  const internal = describeFailure("internal_mode");
++  assert.match(internal.title, /^INTERNAL MODE/);
++  assert.match(internal.message, /nothing is sent to a language model/);
++  assert.match(internal.next[0], /Workflow tab/);
+ });
+ 
+ test("a provider exception is read into the right code", () => {
+diff --git a/apps/studio/lib/copilot/failure.ts b/apps/studio/lib/copilot/failure.ts
+index 7100d6f..1055188 100644
+--- a/apps/studio/lib/copilot/failure.ts
++++ b/apps/studio/lib/copilot/failure.ts
+@@ -21,7 +21,8 @@ export type FailureCode =
+   | "unparseable"      // the answer was words, not the JSON the Studio reads
+   | "empty"            // the answer had no content
+   | "unusable"         // valid JSON with no reply, actions or findings
+-  | "engine_unparsed"; // no model, and the engine could not read the sentence
++  | "engine_unparsed"  // no model, and the engine could not read the sentence
++  | "internal_mode";   // the project runs internally: no model is called (Phase 6)
+ 
+ export interface TurnFailure {
+   code: FailureCode;
+@@ -46,6 +47,7 @@ const TITLES: Record<FailureCode, string> = {
+   empty: "THE MODEL ANSWERED WITH NOTHING",
+   unusable: "THE MODEL'S ANSWER HAD NOTHING TO APPLY",
+   engine_unparsed: "THE ENGINE COULD NOT READ THIS",
++  internal_mode: "INTERNAL MODE — NO MODEL CALLED",
+ };
+ 
+ /** The failure for a code, with the cause and the next steps written for the researcher. */
+@@ -92,6 +94,10 @@ export function describeFailure(code: FailureCode, detail?: string): TurnFailure
+       return { code, title: TITLES[code], detail: d,
+         message: "The engine reads instructions that name their objects — a question by code or variable, an option by label, a condition with its operator. It could not resolve this one on its own.",
+         next: ["Examples it reads: “Terminate if Q1 < 25”, “Show Q12 only if Q1 is Male”, “Make Q5 required”, “Add an Other option to Q3”, “What will break if I delete Q6?”.", "With a language model configured, descriptive requests are read by the model and applied through the same review."] };
++    case "internal_mode":
++      return { code, title: TITLES[code], detail: d,
++        message: "This project runs in internal mode: nothing is sent to a language model, so only the engine's own reading is available — instructions that name their objects, the standard items, the research workflow's own steps.",
++        next: ["Switch the project to cloud execution in the Workflow tab (or for this one request) to send sentences like this one to the model.", "Or rephrase with the objects named: “Terminate if Q1 < 25”, “Add a crosstab of AGE by BRAND_PREF”, “Add a question to measure purchase intent”."] };
+   }
+ }
+ 
+diff --git a/apps/studio/lib/metering.ts b/apps/studio/lib/metering.ts
+index 5b4bf93..608f650 100644
+--- a/apps/studio/lib/metering.ts
++++ b/apps/studio/lib/metering.ts
+@@ -4,6 +4,8 @@ import {
+   type MeterContext, type MeterRefusal, type UsageSpec, type UsageEvent, type Environment,
+ } from "@rescript/billing";
+ import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
++import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate";
++export { aiSpec, meterModel, meterProvider, type AiEstimate };
+ import { supabaseAdmin } from "@/lib/admin";
+ import { isFailure, requireProjectFor, type AuthedUser, type ProjectContext } from "@/lib/guard";
+ import type { Capability } from "@rescript/access";
+@@ -173,19 +175,6 @@ export async function billingProjectFor(user: AuthedUser | null, surveyId: unkno
+ }
+ 
+ /** Provider ids as the cost registry knows them; the fake provider is priced as the real one only when simulation is on. */
+-export function meterProvider(provider: string, kind: "chat" | "tts" | "stt" | "translate"): string {
+-  if (provider !== "fake") return provider;
+-  if (process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return "fake";
+-  return kind === "translate" ? "google" : "openai-compatible";
+-}
+-export function meterModel(provider: string, model: string | null, kind: "chat" | "tts" | "stt" | "translate"): string | null {
+-  if (provider !== "fake" || process.env.BILLING_SIMULATE_FAKE_COSTS !== "1") return model;
+-  if (kind === "translate") return "v2";
+-  if (kind === "chat") return aiModelName();
+-  if (kind === "stt") return (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
+-  return (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1";
+-}
+-
+ /** Turn collected provider reports into the usage the meter settles. */
+ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" | "stt" | "translate" }): Partial<UsageSpec> {
+   const t = sumUsage(usage);
+@@ -209,27 +198,16 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
+  * Run an AI call under the meter: reserve from the prompt size and the
+  * output ceiling, settle with what the provider actually reported.
+  */
+-/** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
+-function aiSpec(eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): UsageSpec {
+-  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
+-  const reqs = est.requests ?? 1;
+-  return {
+-    eventType, provider: meterProvider(providerName, "chat"), service: "chat", model: meterModel(providerName, aiModelName(), "chat"),
+-    inputUnits: (estimateTokens(est.estimateText) + 120) * reqs, outputUnits: est.maxTokens * reqs,
+-    metadata: { operation: est.operation },
+-  };
+-}
+-
+ /**
+  * What an AI call WOULD cost, priced exactly as `meteredAi` would reserve it —
+  * for the "estimated cost" a person sees before choosing to run it (the
+  * import brief §33). Touches no wallet.
+  */
+-export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }): Promise<number> {
++export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate): Promise<number> {
+   try { return (await meter.estimate(ctx, aiSpec(eventType, est))).customerCharge; } catch { return 0; }
+ }
+ 
+-export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: { estimateText: string; maxTokens: number; requests?: number; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
++export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate, fn: () => Promise<T>): Promise<Metered<T>> {
+   const hold = await meter.reserve(ctx, aiSpec(eventType, est));
+   if (!hold.ok) return hold;
+   try {
+diff --git a/docs/PHASE6-AGENT-2026-10-09.md b/docs/PHASE6-AGENT-2026-10-09.md
+new file mode 100644
+index 0000000..bc28524
+--- /dev/null
++++ b/docs/PHASE6-AGENT-2026-10-09.md
+@@ -0,0 +1,41 @@
++# Research Engine — Phase 6: The research agent (09-10-2026)
++
++**Source:** the Research Engine audit (`RESEARCH-ENGINE-AUDIT-2026-10-08.md`, section K, Phase 6; the execution router ⑩ of section F), on top of Phases 1–5. The outcome it set: *the Research Engine as an operating system the researcher directs in plain language and approves step by step.* Every change has a regression test and the tests were mutation-checked. Nothing existing was removed: the copilot's change plan, the Changes review, History and its rollback, the output route and the Findings tab are as they were; the agent sits on top of them and uses them — a workflow step is a proposal like any other, a document is the Phase 5 output, a model step is a model turn.
++
++## Checklist
++
++| ID | Audit finding (§D.5, §F ③/⑩, §K) | Change | Status |
++|---|---|---|---|
++| A1 | No planner runs the end-to-end workflow from one objective; each request is read on its own | `packages/engine/src/researchPlanner.ts`: `researchWorkflow(def, { objective?, runAvailable?, produced?, mode? })` reads the survey as it is into twelve ordered steps — objective → assumptions → structured hypotheses → research framework → questionnaire → variables → analysis plan → crosstab and test recommendations → reporting framework → design document → survey structure → deck — each **done**, **ready** (the engine's own actions, for approval), **needs_input** (only the researcher can say, with an example sentence that records it), **model** (a language model would do it) or **blocked** (an earlier step first, named). Pure: it writes nothing and calls nothing | ✅ Added |
++| A2 | Steps that need prose are the model's; the rest must not wait for one | the engine does by itself: record the objective; read the population from the objective's words and the methodology from its goal (as assumptions, listed); record the readings parsed from a hypothesis; name a construct per hypothesis side (as a noun — *satisfied* → Satisfaction) with the questions that already measure it (by word family, or the standard measure's own words — "better value for money" measures Price perception); add a standard item for an unmeasured construct the library knows (and link the construct to it in the same approval); plan a mean score for a multi-item construct; propose the plan; add the test a measured hypothesis lacks (a construct's score, else the regression over its items, before a single item's correlation) and a missing priority-1 crosstab; read the KPIs from the dependent constructs (the measure from the level, the direction from the name); produce the proposal and the deck; move a screening question to the first block and a mid-survey demographic to the last. The model is asked only to draft hypotheses when none exist, to structure one the words cannot be read into, and to write a question for a construct with no standard item | ✅ Added |
++| A3 | No user-controllable Internal ↔ Cloud switch | the project setting `surveys.settings.ai.mode` (`internal` \| `cloud`), read and written by `POST /api/copilot/workflow` (`setMode`, `survey.edit`; the sandbox keeps it in the browser), switched in the Workflow tab. **Internal:** nothing is sent to a language model — a model turn is refused on its card with the cause and where the switch is (`internal_mode`, a failure code of its own, not "no model configured"), a sentence with an engine alternative gets the alternative (the standard items, the objective), a workflow model step becomes a question to the researcher, the findings outputs skip the narrative. **Per request:** one request let through to the cloud (the tab's "once" box, used up by the call that takes it), and `mode` on the route for one reading | ✅ Added |
++| A4 | One model, no tiers | `AI_MODEL_SMALL` (the small tier, for a short structuring reply) beside `AI_MODEL` (the large tier, drafting); `aiModelName(tier)`, `completeJson(…, { tier })`; the meter's estimate and reservation carry the tier (`AiEstimate.tier` → `aiSpec`), so the preview and the wallet see the same model; a step says which tier it needs | ✅ Added |
++| A5 | No cost preview before a cloud step | every model step carries what it would be asked (the prompt's size, the reply's cap, the operation); the route prices each through `estimateAi` — nothing reserved — and the tab shows the model and the credits next to the button that runs it, and the total of the cloud steps from here; in internal mode the line says the steps are the researcher's instead | ✅ Added |
++| A6 | Audit trail and rollback for agent steps | each step goes through the existing machinery: an engine step is a proposal in Changes (apply, exclude, cancel), recorded in History with `workflow: <step>` in its intent; an output step is the Phase 5 output; a model step is a model turn with its call and charge; a step rolls back like any change and the workflow shows it to do again | ✅ Reused |
++| A7 | The workflow by sentence | the engine reads *start the research workflow for …*, *plan the whole study for …*, *run the workflow*, *what's next?*, *where are we in the research workflow* into a `workflow` interpretation: the card says where the study stands (every step with its status and reason, the execution mode, the priced model steps) and the Workflow tab opens; an edit in the same sentence stays the model's | ✅ Added |
++
++## What was built
++
++**The planner (`packages/engine/src/researchPlanner.ts`)** — `researchWorkflow` builds the steps in order, each from the survey and the steps before it: a step is blocked by the first unmet prerequisite (the hypotheses by the objective, the framework by the hypotheses, the questionnaire by the framework, the recommendations by the plan, the deck by the plan and by fieldwork data). `next` is the first step not done; `summary` says how many are done and what the next one needs ("the engine has 2 actions ready", "the model is asked (large call)", "you are asked", "waits on analysis plan"). `describeWorkflow` is the card's text; `modelSteps` lists what the cost preview prices. `populationFromObjective` reads "UK adults who bought a car" out of "Understand why UK adults who bought a car switch from Brand A to Brand B" (the noun, its modifiers, the relative clause up to the sentence's own verb); `constructName` names a side as a noun; `questionsMeasuring` finds the questions that already measure a name. In internal mode a model step keeps its sentence (so "once" can let it through) but asks the researcher.
++
++**Tiers (`packages/ai`)** — `aiModelName("small" | "large")`; `completeJson` sends the tier's model. **The meter (`apps/studio/lib/aiEstimate.ts`)** — the estimate spec, carved out of `metering.ts` so it can be tested without a server: the tier's model is what is priced and reserved; under cost simulation the fake provider's "fake" report is priced at the configured model, but a real model name — the tier's — is kept.
++
++**The route (`POST /api/copilot/workflow`)** — `project.read`; the sandbox against the fake provider sends its own definition. It gives the planner what only the server knows (fieldwork completes, the project's mode) and returns the workflow, the mode (project, effective, whether a request override applied), the model (configured, provider, small, large), the cost per model step and the total, and `runAvailable`. The planner runs in the Studio too, on the survey as it stands in the editor (the open proposal included), so a step applied is done at once; the route's facts are read when the tab opens, on refresh, when the mode changes, and when a model step appears that has not been priced.
++
++**The Studio** — `useCopilot`: `executionMode` / `setExecutionMode`, `cloudOnce` / `setCloudOnce`, `workflow` (the planner on `working`), `workflowInfo`, `refreshWorkflow`, `showWorkflow` (the `workflow` interpretation), `runWorkflowStep` (an engine step → `local` as a proposal with `workflow: <step>` in its intent; an output step → `makeOutput`, which marks the document or the deck produced; a model step → `ask`); the internal-mode gate in `run` before any request leaves. `WorkflowTab` (`cp-tab-workflow`): the summary, the Internal / Cloud switch with the configured models, the cost line, the twelve steps with their marks, reasons, buttons (`wf-do-<step>`, `wf-ask-<step>`, the examples as chips that go to the input box) and what a blocked step waits on. `IntelligentView` routes the `workflow` kind and words the engine's fallback for internal mode.
++
++## Tests
++
++| Suite | What it checks | Result |
++|---|---|---|
++| `packages/engine/src/researchPlanner.test.ts` | the whole workflow from one objective — every step's status, actions, sentence, questions and reason, the actions applied and the next step advanced, the planner writing nothing, the blocked steps naming what they wait on, the outputs done once produced, the deck after fieldwork, the summary and the description; the questionnaire's standard items linked to their constructs, the bespoke construct the model's, internal mode asking instead; the model tiers and the priced prompt; the score for a multi-item construct (and one under another name noticed), the recommended regression and crosstab (nothing twice), the KPIs with the score and the direction; the population, the noun, the questions that measure a name (by words and by the measure's own words), a framework keeping what was recorded; the workflow sentences | 4 tests (engine 1753 pass) |
++| `packages/ai/src/tiers.test.ts` | the small model when configured, else the large, else the default; `completeJson` sends the tier's model | 2 tests (ai 33 pass) |
++| `apps/studio/lib/aiEstimate.test.ts` | the estimate's model follows the tier; requests multiply; the fake provider priced as fake unless simulated, then at the tier's model | 2 tests (studio 286 pass) |
++| `apps/studio/lib/copilot/failure.test.ts` | `internal_mode` is a cause of its own with the switch named | extended |
++| `scripts/phase6-agent-test.mjs` (browser) | the workflow from a sentence; the objective step through Changes, done at once, the assumptions read from the objective and the rest asked with a sentence to finish; the model step priced; internal mode — a model turn refused with its card, an engine alternative offered, the step asking the researcher, the button disabled, cloud-once letting one call through and used up; framework, plan, KPIs, design document and structure to the deck waiting for fieldwork; History with the step and a rollback; the route's gate and shape | 6 checks |
++
++Mutation checks: engine 36 mutations, 35 caught (one by the type system: a compound-sentence change breaks the narrowing) after four tests were strengthened, one made equivalent by simplifying `modelSteps`; ai 3 mutations, all caught; the meter 4 mutations, all caught; Studio surfaces 15 mutations through the browser suite (see the run below).
++
++The `auth-guard-audit` lists the workflow route's `setMode` as writing the project-configuration bag (as the config route does), not the questionnaire.
++
++Existing behaviour unchanged: `aiModelName()` with no tier is the large model, exactly as before; `meterModel` for a "fake" report under simulation is the configured model, as before; `completeJson` without a tier sends `AI_MODEL`.
+diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts
+index ae76559..c24a99f 100644
+--- a/packages/ai/src/index.ts
++++ b/packages/ai/src/index.ts
+@@ -12,7 +12,9 @@ import { approxTokens, reportUsage } from "./usage.js";
+  *                e.g. https://api.openai.com/v1 — or the literal `fake:` to
+  *                use the deterministic in-process provider below
+  *   AI_API_KEY   bearer token for that API
+- *   AI_MODEL     model name (default gpt-4o-mini)
++ *   AI_MODEL     model name (default gpt-4o-mini) — the LARGE tier: drafting
++ *   AI_MODEL_SMALL   a cheaper model for short structuring calls (the SMALL
++ *                tier, Research Engine audit Phase 6); falls back to AI_MODEL
+  *
+  *   AI_STT_API_URL   base URL of a provider serving POST
+  *                    <base>/audio/transcriptions. Falls back to AI_API_URL.
+@@ -868,9 +870,14 @@ async function postChat(base: string, key: string, body: Record<string, unknown>
+   return { r: await send(plain) };
+ }
+ 
+-/** The model the Studio / runtime is configured to call. */
+-export function aiModelName(): string {
+-  return (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
++/** a model tier: "large" drafts (AI_MODEL), "small" structures a short answer (AI_MODEL_SMALL, else AI_MODEL) — Phase 6 */
++export type AiModelTier = "small" | "large";
++
++/** The model the Studio / runtime is configured to call, by tier (the large tier when none is named). */
++export function aiModelName(tier: AiModelTier = "large"): string {
++  const large = (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
++  if (tier === "small") return (process.env.AI_MODEL_SMALL ?? "").trim() || large;
++  return large;
+ }
+ 
+ /** A fake-provider call reports the shape of a real one so the meter can show what it WOULD cost. */
+@@ -914,6 +921,8 @@ export interface CompleteJsonOptions {
+    * rather than parsed as nothing. 0 disables continuation.
+    */
+   continuations?: number;
++  /** the tier to call — the small model for a short structuring reply (Phase 6); the large tier when absent */
++  tier?: AiModelTier;
+ }
+ 
+ /**
+@@ -946,7 +955,7 @@ export async function completeJson(
+   options: CompleteJsonOptions = {},
+ ): Promise<unknown | null> {
+   const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+-  const model = aiModelName();
++  const model = aiModelName(options.tier);
+   const key = (process.env.AI_API_KEY ?? "").trim();
+   if (!base) return null;
+ 
+diff --git a/packages/ai/src/tiers.test.ts b/packages/ai/src/tiers.test.ts
+new file mode 100644
+index 0000000..e939620
+--- /dev/null
++++ b/packages/ai/src/tiers.test.ts
+@@ -0,0 +1,48 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { aiModelName, completeJson } from "./index.js";
++
++/**
++ * MODEL TIERS (Research Engine audit, Phase 6). A short structuring call
++ * goes to the small model (AI_MODEL_SMALL) when one is configured; drafting
++ * goes to the large one (AI_MODEL). Without a small model configured, the
++ * small tier is the large model — never nothing.
++ */
++const KEYS = ["AI_API_URL", "AI_API_KEY", "AI_MODEL", "AI_MODEL_SMALL", "AI_WORKSPACE_ID", "AI_API_HEADERS"];
++async function withEnv(env: Record<string, string>, fn: () => Promise<void>) {
++  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
++  try { for (const k of KEYS) delete process.env[k]; Object.assign(process.env, env); await fn(); }
++  finally { for (const k of KEYS) { delete process.env[k]; if (saved[k] !== undefined) process.env[k] = saved[k]; } }
++}
++
++test("aiModelName by tier: the small model when configured, else the large one; the default when neither", async () => {
++  await withEnv({ AI_MODEL: "big-model", AI_MODEL_SMALL: "tiny-model" }, async () => {
++    assert.equal(aiModelName(), "big-model");
++    assert.equal(aiModelName("large"), "big-model");
++    assert.equal(aiModelName("small"), "tiny-model");
++  });
++  await withEnv({ AI_MODEL: "big-model" }, async () => {
++    assert.equal(aiModelName("small"), "big-model");
++  });
++  await withEnv({ AI_MODEL_SMALL: "  " }, async () => {
++    assert.equal(aiModelName("small"), "gpt-4o-mini");
++    assert.equal(aiModelName("large"), "gpt-4o-mini");
++  });
++});
++
++test("completeJson sends the tier's model", async () => {
++  const sent: Record<string, unknown>[] = [];
++  const real = globalThis.fetch;
++  globalThis.fetch = (async (_url: string, init: { body: string }) => {
++    sent.push(JSON.parse(init.body));
++    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"a\":1}" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 });
++  }) as never;
++  try {
++    await withEnv({ AI_API_URL: "https://example.test/v1", AI_API_KEY: "k", AI_MODEL: "big-model", AI_MODEL_SMALL: "tiny-model" }, async () => {
++      assert.deepEqual(await completeJson("s", "u", 50, { tier: "small" }), { a: 1 });
++      assert.deepEqual(await completeJson("s", "u", 50), { a: 1 });
++      assert.deepEqual(await completeJson("s", "u", 50, { tier: "large" }), { a: 1 });
++    });
++    assert.deepEqual(sent.map((b) => b.model), ["tiny-model", "big-model", "big-model"]);
++  } finally { globalThis.fetch = real; }
++});
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index fbb2407..55cc7b6 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -117,3 +117,4 @@ export * from "./contextActions.js";
+ export * from "./hypotheses.js";
+ export * from "./relevance.js";
+ export * from "./dataQuestion.js";
++export * from "./researchPlanner.js";
+diff --git a/packages/engine/src/nlIntent.ts b/packages/engine/src/nlIntent.ts
+index eb8ac37..dffe0f3 100644
+--- a/packages/engine/src/nlIntent.ts
++++ b/packages/engine/src/nlIntent.ts
+@@ -102,6 +102,8 @@ export type Interpretation =
+   | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
+   /** a document to produce (Phase 5): the proposal, the findings report or the findings deck — the Studio builds the file */
+   | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
++  /** the research agent's workflow (Phase 6): the Studio runs the planner on the survey and shows the steps — with the objective when the sentence gave one */
++  | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
+   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
+       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
+       fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
+@@ -2574,6 +2576,21 @@ const objective: Recogniser = (r) => {
+   return act(r, "research_design", `Set the research objective to “${plain(text, 80)}”${had ? ` (replacing “${plain(had, 50)}”)` : ""}.`, [{ op: "set_research", objective: text }], [det("objective", plain(text, 60))]);
+ };
+ 
++/** "start the research workflow for <objective>", "run the workflow", "what's next in the workflow", "plan the study for <objective>" → the planner (Phase 6) */
++const workflowRequest: Recogniser = (r) => {
++  const t = r.text.replace(/[.!?]+$/, "").trim();
++  let m: RegExpExecArray | null;
++  let objective: string | undefined;
++  if ((m = /^(?:start|run|begin|open|launch|resume|continue|show|plan)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?(?:research\s+|study\s+)?(?:workflow|agent|planner|pipeline)(?:\s+(?:for|on|to|about)\s+(.+))?$/i.exec(t))) objective = m[1];
++  else if ((m = /^(?:plan|design|set\s+up|scope)\s+(?:me\s+)?(?:the\s+|a\s+|my\s+)?(?:whole\s+|entire\s+|full\s+)?(?:study|research\s+project|project)\s+(?:for|on|to|about)\s+(.+)$/i.exec(t))) objective = m[1];
++  else if (/^(?:what(?:'s|\s+is)\s+(?:the\s+)?next(?:\s+step)?(?:\s+in\s+(?:the\s+)?(?:research\s+)?workflow)?|what\s+(?:should|do)\s+(?:i|we)\s+do\s+next|where\s+(?:am\s+i|are\s+we)(?:\s+in\s+the\s+(?:research\s+)?workflow)?|next\s+step)$/i.test(t)) objective = undefined;
++  else return null;
++  const obj = objective ? cap(unquote(objective).trim()) : undefined;
++  const had = r.def.research?.objective?.trim();
++  return { kind: "workflow", category: "research_design", understood: obj ? `Run the research workflow for ${quoteFor(plain(obj, 70))}${had && had !== obj ? ` (the recorded objective is ${quoteFor(plain(had, 50))})` : ""}.` : "Show the research workflow: what is done, what the engine does next, what you are asked.", ...(obj ? { objective: obj } : {}), detected: obj ? [det("objective", plain(obj, 60))] : [] };
++};
++const quoteFor = (s: string) => `“${s}”`;
++
+ /* ---------------------------------------------------------- what the engine can do when no model answers */
+ 
+ /**
+@@ -2614,6 +2631,12 @@ const MEASURES: { re: RegExp; name: string; items: (subject: string) => { label:
+   ] },
+ ];
+ 
++/** the standard items for a concept named in words ("purchase intent", "satisfaction with the service") — what the research planner (Phase 6) offers for an unmeasured construct; null when the concept is not one of the library's */
++export function standardMeasure(concept: string): { name: string; re: RegExp; items: (subject: string) => { label: string; text: string }[] } | null {
++  const m = MEASURES.find((x) => x.re.test(concept));
++  return m ? { name: m.name, re: m.re, items: m.items } : null;
++}
++
+ /** "add a question to measure purchase intent [for Brand A]" → the standard items, as executable sentences; null when the concept is not one of them */
+ function measureFallback(def: SurveyDefinition, text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
+   const m = /^(?:add|create|insert|include|write|new)\s+(?:an?\s+|another\s+|one\s+more\s+)?(?:new\s+)?(?:\w+\s+)?question\s+(?:to\s+|that\s+|which\s+)?(?:measures?|measuring|captures?|capturing|assess(?:es|ing)?|asks?\s+about|asking\s+about|about|on|for|covering|tracking)\s+(.+)$/i.exec(text);
+@@ -2701,7 +2724,7 @@ function fallback(r: Run): Interpretation {
+  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
+  */
+ const RECOGNISERS: Recogniser[] = [
+-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest,
++  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
+   deferred, longBrief,
+   surveySettings, languages, objective, audience, research, variables, pageBreaks,
+   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
+@@ -2781,7 +2804,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
+     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
+     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
+     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
+-    if (it.kind === "answer" || it.kind === "query" || it.kind === "output") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
++    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+     category ??= it.category;
+     actions.push(...it.actions);
+     detected.push(...it.detected);
+diff --git a/packages/engine/src/researchPlanner.test.ts b/packages/engine/src/researchPlanner.test.ts
+new file mode 100644
+index 0000000..04a8b1c
+--- /dev/null
++++ b/packages/engine/src/researchPlanner.test.ts
+@@ -0,0 +1,333 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { researchWorkflow, describeWorkflow, modelSteps, populationFromObjective, questionsMeasuring, constructName, type WorkflowStep, type WorkflowStepId } from "./researchPlanner.js";
++import { applySurveyActions, type SurveyAction } from "./surveyActions.js";
++import { interpretRequest } from "./nlIntent.js";
++
++/*
++ * RESEARCH ENGINE AUDIT, PHASE 6 — the research agent's planner. From one
++ * objective the workflow runs: each step is done, ready (the engine's own
++ * actions, for approval), the researcher's to answer, or the model's — and
++ * a model step in internal mode becomes the engine's alternative or a
++ * question, never a silent skip. The planner never writes and never calls.
++ */
++const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
++const OBJECTIVE = "Understand why UK adults who bought a car switch from Brand A to Brand B";
++function survey(research?: Record<string, unknown>): SurveyDefinition {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "SW", title: "Brand switching" },
++    ...(research ? { research: { hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [], ...research } } : {}),
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++      { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "What is your gender?", options: opts("Male", "Female") },
++      { id: "q4", code: "Q4", variableName: "SWITCHED", type: "single_select", text: "Have you switched brands in the last 12 months?", options: opts("Yes", "No") },
++      { id: "q6", code: "Q6", variableName: "PRICE_PERC", type: "single_select", text: "Brand B offers better value for money", options: opts("Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree") },
++      { id: "q7", code: "Q7", variableName: "SAT", type: "single_select", text: "Overall, how satisfied are you with your current brand?", options: opts("1", "2", "3", "4", "5", "6", "7") },
++      { id: "q9", code: "Q9", variableName: "REGION", type: "single_select", text: "Which region do you live in?", options: opts("North", "South", "East") },
++    ],
++    flow: [
++      { type: "block", id: "b1", title: "Screener", children: [{ type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] }] },
++      { type: "block", id: "b2", title: "Brands", children: [{ type: "page", id: "p2", title: "Brands", questionIds: ["q4", "q6", "q9", "q7"] }] },
++      { type: "block", id: "b3", title: "About you", children: [{ type: "page", id: "p3", title: "About you", questionIds: [] }] },
++      { type: "end", id: "e", status: "complete" },
++    ],
++  });
++}
++const stepOf = (def: SurveyDefinition, id: WorkflowStepId, o: Parameters<typeof researchWorkflow>[1] = {}): WorkflowStep => researchWorkflow(def, o).steps.find((s) => s.id === id)!;
++const apply = (def: SurveyDefinition, actions: SurveyAction[] | undefined): SurveyDefinition => { assert.ok(actions?.length, "actions"); const out = applySurveyActions(def, actions!); assert.ok(out.valid && out.results.every((x) => x.ok), JSON.stringify(out.errors ?? out.results.filter((x) => !x.ok))); return out.def; };
++const statuses = (def: SurveyDefinition, o: Parameters<typeof researchWorkflow>[1] = {}) => Object.fromEntries(researchWorkflow(def, o).steps.map((s) => [s.id, s.status]));
++
++test("the workflow from one objective: every step done, ready, asked or the model's; the engine's actions apply and advance the next step; the planner never writes", () => {
++  let def = survey();
++  const before = JSON.stringify(def);
++  let wf = researchWorkflow(def, { objective: OBJECTIVE });
++  assert.equal(JSON.stringify(def), before, "the planner writes nothing");
++  assert.equal(wf.total, 12);
++  assert.equal(wf.done, 0);
++  assert.equal(wf.next?.id, "objective");
++  assert.equal(wf.next?.status, "ready");
++  assert.deepEqual(wf.next?.actions, [{ op: "set_research", objective: OBJECTIVE }]);
++  assert.equal(wf.next?.sentence, `Set the research objective to "${OBJECTIVE}"`);
++  assert.match(wf.summary, /^0 of 12 steps done — next: Objective \(the engine has 1 action ready\)$/);
++  // downstream steps wait on it, with the step they wait on named
++  assert.equal(stepOf(def, "assumptions").status, "blocked");
++  assert.equal(stepOf(def, "assumptions").blockedBy, "objective");
++  assert.equal(stepOf(def, "hypotheses").blockedBy, "objective");
++  assert.equal(stepOf(def, "framework").blockedBy, "hypotheses");
++  // without an objective in the sentence, the researcher is asked — with an example sentence that records it
++  const asked = stepOf(def, "objective");
++  assert.equal(asked.status, "needs_input");
++  assert.equal(asked.executor, "researcher");
++  assert.match(asked.questions![0].example, /^Set the research objective to "/);
++  assert.equal(interpretRequest(def, asked.questions![0].example).kind, "actions", "the example is a sentence the engine reads");
++
++  // 1. objective
++  def = apply(def, wf.next!.actions);
++  assert.equal(stepOf(def, "objective").status, "done");
++  // 2. assumptions: the population read from the objective is recorded as an assumption; methodology and sample size are the researcher's
++  let s = stepOf(def, "assumptions");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "set_research", population: "UK adults who bought a car", assumptions: ["Population read from the objective: UK adults who bought a car"] }]);
++  assert.deepEqual(s.questions!.map((q) => q.ask), ["Which methodology — an online panel survey, a tracker, a concept test?", "How many completes are planned?"]);
++  assert.match(s.why, /the population "UK adults who bought a car" read from the objective, as assumptions to confirm; it still needs which methodology and how many completes are planned/);
++  def = apply(def, s.actions);
++  s = stepOf(def, "assumptions");
++  assert.equal(s.status, "needs_input");
++  assert.equal(s.actions, undefined);
++  def = apply(def, [{ op: "set_research", methodology: "Online panel survey", sampleSize: 400 }]);
++  s = stepOf(def, "assumptions");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /1 assumption listed/);
++
++  // 3. hypotheses: none recorded → the model drafts (large tier), the researcher may state them; the workflow's next is this step
++  s = stepOf(def, "hypotheses");
++  assert.equal(s.status, "model");
++  assert.equal(s.executor, "model");
++  assert.equal(s.tier, "large");
++  assert.equal(s.model?.operation, "workflow_hypotheses");
++  assert.match(s.model!.estimateText, /OBJECTIVE: Understand why UK adults/);
++  assert.equal(researchWorkflow(def).next?.id, "hypotheses");
++  assert.match(researchWorkflow(def).summary, /next: Structured hypotheses \(the model is asked \(large call\)\)/);
++  assert.deepEqual(modelSteps(researchWorkflow(def)).map((m) => [m.id, m.tier]), [["hypotheses", "large"]]);
++  def = apply(def, [{ op: "add_hypothesis", text: "Price perception drives switching" }, { op: "add_hypothesis", text: "Women are more satisfied than men" }] as SurveyAction[]);
++  // the readings parsed from the words are recorded by the engine
++  s = stepOf(def, "hypotheses");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [
++    { op: "set_hypothesis", hypothesis: "H1", detail: { type: "causal", direction: "positive", independent: "Price perception", dependent: "switching" } },
++    { op: "set_hypothesis", hypothesis: "H2", detail: { type: "difference", direction: "positive", dependent: "satisfied", group: "women", lower: "men" } },
++  ]);
++  assert.match(s.why, /^H1 and H2 read from the words \(H1: causal, positive; H2: difference, positive\)/);
++  def = apply(def, s.actions);
++  s = stepOf(def, "hypotheses");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /2 hypotheses recorded with their readings \(H1: causal, H2: difference\)/);
++
++  // 4. framework: a construct per hypothesis side, named as a noun, each with the questions that already measure it
++  s = stepOf(def, "framework");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "set_research", constructs: [
++    { name: "Price perception", role: "independent", questions: ["Q6"] },
++    { name: "Switching", role: "dependent", questions: ["Q4"] },
++    { name: "Gender", role: "independent", questions: ["Q2"] },
++    { name: "Satisfaction", role: "dependent", questions: ["Q7"] },
++  ] }]);
++  assert.match(s.why, /4 constructs named by the hypotheses and not yet in the framework: Price perception \(independent, measured by Q6\), Switching \(dependent, measured by Q4\), Gender \(independent, measured by Q2\), Satisfaction \(dependent, measured by Q7\)/);
++  assert.equal(s.sentence, 'Add the constructs "Price perception", "Switching", "Gender" and "Satisfaction" to the research framework');
++  def = apply(def, s.actions);
++  assert.equal(stepOf(def, "framework").status, "done");
++  assert.equal(def.research!.constructs[3].questionIds[0], "q7");
++
++  // 5–6. questionnaire: every construct measured; variables: nothing multi-item
++  assert.equal(stepOf(def, "questionnaire").status, "done");
++  s = stepOf(def, "variables");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /No construct is measured by several scale items/);
++
++  // 7. the plan: the engine's framework
++  s = stepOf(def, "analysis_plan");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "propose_analysis_plan" }]);
++  assert.match(s.why, /proposes \d+ crosstabs?, \d+ tests? and \d+ derived variables? from the hypotheses and the questions' levels/);
++  def = apply(def, s.actions);
++  assert.equal(stepOf(def, "analysis_plan").status, "done");
++  // 8. recommendations: the framework's plan covers both hypotheses
++  s = stepOf(def, "recommendations");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /^Every measured hypothesis has a test or a table\.$/);
++  // 9. KPIs from the dependent constructs, the direction from the name; the audience optional
++  s = stepOf(def, "reporting_framework");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "set_research", kpis: [{ name: "Switching", variable: "SWITCHED", measure: "share", direction: "lower" }, { name: "Satisfaction", variable: "SAT", measure: "top-2-box share", direction: "higher" }] }]);
++  assert.equal(s.questions?.length, 1);
++  assert.match(s.questions![0].ask, /optional/);
++  def = apply(def, s.actions);
++  s = stepOf(def, "reporting_framework");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /2 KPIs recorded \(Switching, Satisfaction\); no audience recorded \(optional\)/);
++  // 10. the design document: an output, ready; done once produced, and told when to produce again
++  s = stepOf(def, "design_document");
++  assert.equal(s.status, "ready");
++  assert.equal(s.executor, "output");
++  assert.deepEqual(s.output, { type: "proposal_docx", audience: "client", words: "the research proposal (Word)" });
++  assert.equal(s.sentence, "Create the client-ready research proposal");
++  assert.equal(interpretRequest(def, s.sentence!).kind, "output");
++  assert.equal(stepOf(def, "design_document", { produced: ["design_document"] }).status, "done");
++  // 11. the structure: REGION asked mid-survey goes to the closing block
++  s = stepOf(def, "survey_structure");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "move_question", target: "Q9", block: "About you" }]);
++  assert.equal(s.sentence, 'Move Q9 to "About you"');
++  assert.match(s.why, /Q9 \(REGION\) is a demographic asked mid-survey/);
++  def = apply(def, s.actions);
++  s = stepOf(def, "survey_structure");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /3 blocks: screening questions first, demographics last/);
++  // 12. the deck waits for fieldwork; ready with data; done once produced
++  s = stepOf(def, "deck");
++  assert.equal(s.status, "blocked");
++  assert.match(s.why, /After fieldwork/);
++  s = stepOf(def, "deck", { runAvailable: true });
++  assert.equal(s.status, "ready");
++  assert.equal(s.output?.type, "findings_pptx");
++  assert.equal(interpretRequest(def, s.sentence!).kind, "output");
++  wf = researchWorkflow(def, { runAvailable: true, produced: ["design_document", "deck"] });
++  assert.equal(wf.done, 12);
++  assert.equal(wf.next, null);
++  assert.equal(wf.summary, "All 12 steps done.");
++  const lines = describeWorkflow(wf).split("\n");
++  assert.equal(lines.length, 13);
++  assert.ok(lines.slice(1).every((l) => l.startsWith("✓ ")), describeWorkflow(wf));
++});
++
++test("the questionnaire step: a standard item for a construct the library knows (the question and the construct's link in one approval); bespoke wording goes to the model, or to the researcher in internal mode", () => {
++  let def = survey({ objective: "Measure purchase intent for Brand B", population: "UK adults", methodology: "Online panel survey", sampleSize: 300, hypotheses: ["Trust drives purchase intent"], hypothesisDetails: [{ type: "causal", direction: "positive", independent: "trust", dependent: "purchase intent" }], constructs: [{ name: "Trust", role: "independent", questionIds: [] }, { name: "Purchase intent", role: "dependent", questionIds: [] }, { name: "Brand love", role: "mediator", questionIds: [] }] });
++  let s = stepOf(def, "questionnaire");
++  assert.equal(s.status, "ready");
++  assert.equal(s.executor, "engine");
++  assert.match(s.why, /^Trust \(5-point agreement\) and Purchase intent \(5-point likelihood to purchase\) have a standard item the engine can add; Brand love needs bespoke wording\.$/);
++  assert.equal(s.actions!.length, 3);
++  const [t, p, link] = s.actions as unknown as [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>];
++  assert.equal(t.op, "create_question"); assert.equal(t.ref, "TRUST"); assert.equal(t.text, "I trust Brand B"); assert.equal(t.required, true);
++  assert.equal(p.op, "create_question"); assert.equal(p.ref, "PURCHASE_INTENT"); assert.match(String(p.text), /^How likely are you to purchase Brand B/);
++  assert.deepEqual(link, { op: "set_research", constructs: [{ name: "Trust", role: "independent", questions: ["TRUST"] }, { name: "Purchase intent", role: "dependent", questions: ["PURCHASE_INTENT"] }, { name: "Brand love", role: "mediator", questions: [] }] });
++  assert.equal(s.sentence, "Add the standard items for Trust and Purchase intent");
++  assert.deepEqual(s.questions!.map((q) => q.ask), ['How should "Brand love" be asked?']);
++  def = apply(def, s.actions);
++  assert.equal(def.research!.constructs[0].questionIds.length, 1);
++  assert.equal(def.questions.find((q) => q.id === def.research!.constructs[0].questionIds[0])!.text, "I trust Brand B");
++  // what is left is the model's — a large call, with the prompt the cost preview prices; in internal mode the researcher is asked instead, and no model step is listed
++  s = stepOf(def, "questionnaire");
++  assert.equal(s.status, "model");
++  assert.equal(s.tier, "large");
++  assert.equal(s.sentence, "Write the questions that measure Brand love");
++  assert.match(s.model!.estimateText, /CONSTRUCTS: Brand love \(mediator\)/);
++  assert.equal(s.model!.maxTokens, 400);
++  const internal = stepOf(def, "questionnaire", { mode: "internal" });
++  assert.equal(internal.status, "needs_input");
++  assert.equal(internal.executor, "researcher");
++  assert.match(internal.why, /internal mode calls no model to write one/);
++  assert.deepEqual(internal.questions!.map((q) => q.ask), ['How should "Brand love" be asked?']);
++  assert.equal(researchWorkflow(def, { mode: "internal" }).mode, "internal");
++  // a hypothesis nobody can read: the model structures it (small), or the researcher in internal mode
++  const vague = survey({ objective: "O", population: "P", methodology: "M", sampleSize: 100, hypotheses: ["Things will be interesting"] });
++  s = stepOf(vague, "hypotheses");
++  assert.equal(s.status, "model");
++  assert.equal(s.tier, "small");
++  assert.equal(s.model?.operation, "workflow_structure");
++  assert.match(s.why, /H1 cannot be read into a type, a direction and two sides/);
++  s = stepOf(vague, "hypotheses", { mode: "internal" });
++  assert.equal(s.status, "needs_input");
++  assert.match(s.questions![0].ask, /What does H1 compare or relate/);
++  // no hypotheses in internal mode: asked, with the sentence that records one
++  s = stepOf(survey({ objective: "O", population: "P", methodology: "M", sampleSize: 100 }), "hypotheses", { mode: "internal" });
++  assert.equal(s.status, "needs_input");
++  assert.equal(interpretRequest(def, s.questions![0].example).kind, "actions");
++});
++
++test("variables and recommendations: a mean score for a multi-item construct; the test a measured hypothesis lacks; a missing priority-1 crosstab; nothing twice", () => {
++  const def = SurveyDefinition.parse({
++    meta: { id: "s", code: "SW", title: "T" },
++    research: { objective: "O", population: "P", methodology: "M", sampleSize: 200, hypotheses: ["Service quality drives satisfaction", "Women are more satisfied than men"], hypothesisDetails: [{ type: "causal", direction: "positive", independent: "Service quality", dependent: "Satisfaction" }, { type: "difference", direction: "positive", group: "women", lower: "men", dependent: "Satisfaction" }],
++      constructs: [{ name: "Service quality", role: "independent", questionIds: ["q3", "q4", "q5"] }, { name: "Satisfaction", role: "dependent", questionIds: ["q6"] }, { name: "Gender", role: "control", questionIds: ["q2"] }], analysis: [], assumptions: [], sources: [],
++      analysisPlan: { crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER"], priority: 1, hypotheses: ["H2"] }], tests: [{ id: "t1", method: "t_test", outcome: "SAT", variables: ["SAT"], groupBy: "GENDER", priority: 1, hypotheses: ["H2"] }], derived: [], segments: [] } },
++    questions: [
++      { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "Gender?", options: opts("Male", "Female") },
++      { id: "q3", code: "Q3", variableName: "SQ1", type: "single_select", text: "Staff are helpful", options: opts("1", "2", "3", "4", "5") },
++      { id: "q4", code: "Q4", variableName: "SQ2", type: "single_select", text: "Staff are quick", options: opts("1", "2", "3", "4", "5") },
++      { id: "q5", code: "Q5", variableName: "SQ3", type: "single_select", text: "Staff are polite", options: opts("1", "2", "3", "4", "5") },
++      { id: "q6", code: "Q6", variableName: "SAT", type: "single_select", text: "Overall satisfaction", options: opts("1", "2", "3", "4", "5") },
++    ],
++    flow: [{ type: "block", id: "b1", title: "Main", children: [{ type: "page", id: "p1", title: "P", questionIds: ["q2", "q3", "q4", "q5", "q6"] }] }, { type: "end", id: "e", status: "complete" }],
++  });
++  let s = stepOf(def, "variables");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions, [{ op: "add_derived_variable", name: "SERVICE_QUALITY_SCORE", kind: "mean_score", from: ["SQ1", "SQ2", "SQ3"], reason: "the mean of the 3 items that measure Service quality" }]);
++  // a score over the same items under another name is the score: nothing to derive
++  const named = SurveyDefinition.parse({ ...def, research: { ...def.research, analysisPlan: { ...def.research!.analysisPlan, derived: [{ name: "SQ_MEAN", kind: "mean_score", from: ["SQ3", "SQ1", "SQ2"] }] } } });
++  assert.equal(stepOf(named, "variables").status, "done");
++  // a plan object with nothing in it is no plan: the engine still proposes
++  const empty = SurveyDefinition.parse({ ...def, research: { ...def.research, analysisPlan: { crosstabs: [], tests: [], derived: [], segments: [] } } });
++  const ap = stepOf(empty, "analysis_plan");
++  assert.equal(ap.status, "ready");
++  assert.deepEqual(ap.actions, [{ op: "propose_analysis_plan" }]);
++  assert.equal(s.sentence, "Plan the derived variables SERVICE_QUALITY_SCORE");
++  const withScore = apply(def, s.actions);
++  s = stepOf(withScore, "variables");
++  assert.equal(s.status, "done");
++  assert.match(s.why, /1 derived variable planned; every multi-item construct has its score/);
++  // H1 is measured but untested: the framework's test for it is recommended, once
++  s = stepOf(withScore, "recommendations");
++  assert.equal(s.status, "ready");
++  const tests = s.actions!.filter((a) => a.op === "add_analysis_test") as { method: string; hypotheses: string[]; reason: string }[];
++  assert.equal(tests.length, 1);
++  assert.deepEqual(tests[0].hypotheses, ["H1"]);
++  assert.match(tests[0].reason, /H1 is measured but nothing in the plan tests it/);
++  assert.equal(tests[0].method, "regression", `the test that takes every item, not one item's correlation: ${JSON.stringify(tests[0])}`);
++  assert.deepEqual((tests[0] as unknown as { variables: string[] }).variables, ["SQ1", "SQ2", "SQ3"]);
++  assert.match(s.why, /^The plan lacks a regression for H1 \(measured, untested\)\.$/);
++  const after = apply(withScore, s.actions);
++  s = stepOf(after, "recommendations");
++  assert.equal(s.status, "done", JSON.stringify(s));
++  // a priority-1 crosstab the framework recommends and the plan lacks (H2 is tested, so only the table is missing)
++  const noTable = SurveyDefinition.parse({ ...after, research: { ...after.research, analysisPlan: { ...after.research!.analysisPlan, crosstabs: [] } } });
++  s = stepOf(noTable, "recommendations");
++  assert.equal(s.status, "ready");
++  assert.deepEqual(s.actions!.map((a) => a.op), ["add_crosstab"]);
++  assert.deepEqual((s.actions![0] as unknown as { rows: string[]; columns: string[]; priority: number }).rows, ["SAT"]);
++  assert.deepEqual((s.actions![0] as unknown as { columns: string[] }).columns, ["GENDER"]);
++  assert.match(s.why, /^The plan lacks the priority-1 crosstab SAT by GENDER\.$/);
++  assert.equal(stepOf(apply(noTable, s.actions), "recommendations").status, "done");
++  // the KPI of a multi-item construct is its score's mean; a control construct is no KPI
++  s = stepOf(after, "reporting_framework");
++  assert.deepEqual(s.actions, [{ op: "set_research", kpis: [{ name: "Satisfaction", variable: "SAT", measure: "top-2-box share", direction: "higher" }] }]);
++  const dep = SurveyDefinition.parse({ ...after, research: { ...after.research, constructs: after.research!.constructs.map((c) => c.name === "Service quality" ? { ...c, role: "dependent" } : c) } });
++  s = stepOf(dep, "reporting_framework");
++  assert.deepEqual((s.actions![0] as { kpis: unknown[] }).kpis[0], { name: "Service quality", variable: "SERVICE_QUALITY_SCORE", measure: "mean", direction: "higher" });
++});
++
++test("the words: a population from an objective, a construct's noun, the questions that measure a name; the workflow sentences", () => {
++  assert.equal(populationFromObjective("Understand why UK adults who bought a car switch from Brand A to Brand B"), "UK adults who bought a car");
++  assert.equal(populationFromObjective("Measure satisfaction among first-time buyers aged 25-40 in London"), "first-time buyers aged 25-40 in London");
++  assert.equal(populationFromObjective("Which features do consumers value most"), "consumers");
++  assert.equal(populationFromObjective("Find out what parents of toddlers want from a nursery and whether price matters"), "parents of toddlers");
++  assert.equal(populationFromObjective("Test whether the new ad works"), null);
++  assert.equal(constructName("satisfied"), "Satisfaction");
++  assert.equal(constructName("the switching"), "Switching");
++  assert.equal(constructName("brand love"), "Brand love");
++  const def = survey();
++  assert.deepEqual(questionsMeasuring(def, "Switching").map((q) => q.code), ["Q4"]);
++  assert.deepEqual(questionsMeasuring(def, "Price perception").map((q) => q.code), ["Q6"]);
++  assert.deepEqual(questionsMeasuring(def, "Gender").map((q) => q.code), ["Q2"]);
++  assert.deepEqual(questionsMeasuring(def, "Brand love").map((q) => q.code), []);
++  // the standard measure's own words find a question the name's words do not: "continue buying" measures loyalty, "how important" importance
++  const more = SurveyDefinition.parse({ ...def, questions: [...def.questions, { id: "q11", code: "Q11", variableName: "CONT", type: "single_select", text: "How likely are you to continue buying?", options: opts("Unlikely", "Likely") }, { id: "q12", code: "Q12", variableName: "IMP", type: "single_select", text: "How important is price to you?", options: opts("Not", "Very") }] });
++  assert.deepEqual(questionsMeasuring(more, "Loyalty").map((q) => q.code), ["Q11"]);
++  assert.deepEqual(questionsMeasuring(more, "Importance").map((q) => q.code), ["Q12"]);
++  // a framework step keeps the constructs already recorded, with their questions, beside the new ones
++  const partly = survey({ objective: "O", population: "P", methodology: "M", sampleSize: 100, hypotheses: ["Price perception drives switching"], hypothesisDetails: [{ type: "causal", direction: "positive", independent: "Price perception", dependent: "switching" }], constructs: [{ name: "Price perception", role: "independent", definition: "value for money", questionIds: ["q6"] }] });
++  const fw = stepOf(partly, "framework");
++  assert.equal(fw.status, "ready");
++  assert.deepEqual(fw.actions, [{ op: "set_research", constructs: [{ name: "Price perception", role: "independent", definition: "value for money", questions: ["Q6"] }, { name: "Switching", role: "dependent", questions: ["Q4"] }] }]);
++  assert.match(fw.why, /^1 construct named by the hypotheses and not yet in the framework: Switching \(dependent, measured by Q4\)\.$/);
++  // the sentences the Intelligent box reads into the workflow
++  let r = interpretRequest(def, "start the research workflow for understanding why customers switch from Brand A to Brand B");
++  assert.equal(r.kind, "workflow");
++  assert.equal((r as { objective?: string }).objective, "Understanding why customers switch from Brand A to Brand B");
++  assert.equal((r as { understood: string }).understood, "Run the research workflow for “Understanding why customers switch from Brand A to Brand B”.");
++  for (const t of ["run the workflow", "What's next?", "what is the next step in the workflow", "where are we in the research workflow", "continue the workflow"]) { r = interpretRequest(def, t); assert.equal(r.kind, "workflow", t); assert.equal((r as { objective?: string }).objective, undefined, t); }
++  r = interpretRequest(def, "plan the whole study for measuring satisfaction among first-time buyers");
++  assert.equal(r.kind, "workflow");
++  assert.equal((r as { objective?: string }).objective, "Measuring satisfaction among first-time buyers");
++  // with a recorded objective that differs, the card says so; an edit in the same sentence is the model's; "start the survey" is not the workflow
++  const withObj = survey({ objective: "Old objective" });
++  assert.match((interpretRequest(withObj, "start the workflow for a new study") as { understood: string }).understood, /the recorded objective is “Old objective”/);
++  assert.equal(interpretRequest(def, "start the research workflow and make Q1 required").kind, "model");
++  assert.equal(interpretRequest(def, "start the survey").kind, "model");
++  // a blocked step keeps the whole picture readable: the first survey's structure step is ready even before the objective
++  const blank = statuses(def);
++  assert.equal(blank.objective, "needs_input");
++  assert.equal(blank.survey_structure, "ready");
++  assert.equal(blank.deck, "blocked");
++});
+diff --git a/packages/engine/src/researchPlanner.ts b/packages/engine/src/researchPlanner.ts
+new file mode 100644
+index 0000000..06827c5
+--- /dev/null
++++ b/packages/engine/src/researchPlanner.ts
+@@ -0,0 +1,421 @@
++import type { SurveyDefinition, Question, ResearchConstruct } from "@rescript/schema";
++import { buildAnalysisFramework, hypothesisCoverage, inferRole, measurementOf, methodologyAdvice, prioritizeCrosstabs } from "./analysisFramework.js";
++import { structuredHypotheses, type StructuredHypothesis } from "./hypotheses.js";
++import { listBlocks } from "./blocks.js";
++import { interpretRequest, standardMeasure, type OutputRequest } from "./nlIntent.js";
++import type { SurveyAction } from "./surveyActions.js";
++import { stripHtmlText } from "./html.js";
++import { contentWords } from "./nlTargets.js";
++import { wordFamily } from "./nlSemantics.js";
++
++/*
++ * THE RESEARCH AGENT'S PLANNER (Research Engine audit, Phase 6).
++ *
++ * One objective → the end-to-end workflow: clarify assumptions → structured
++ * hypotheses → research framework → questionnaire → variables → analysis
++ * plan → crosstab and test recommendations → reporting framework → design
++ * document → survey structure → after fieldwork, the deck. The planner is
++ * PURE: it reads the survey as it is and says, for every step, whether it
++ * is done, what the engine would do next by itself (as actions the
++ * researcher approves, and as the sentence the Intelligent box reads), what
++ * only the researcher can answer, and where a language model is wanted —
++ * with the tier a step needs so the Studio can preview the cost before a
++ * call is made. Nothing here writes to the definition; nothing here calls a
++ * model. In INTERNAL mode a model step becomes what the engine can do
++ * instead (a standard item, the parsed reading), or a question to the
++ * researcher — never a silent skip.
++ */
++
++export type WorkflowStepId = "objective" | "assumptions" | "hypotheses" | "framework" | "questionnaire" | "variables" | "analysis_plan" | "recommendations" | "reporting_framework" | "design_document" | "survey_structure" | "deck";
++/** done: nothing to do · ready: the engine has the next action · needs_input: only the researcher can say · model: a language model would do it · blocked: an earlier step first */
++export type WorkflowStatus = "done" | "ready" | "needs_input" | "model" | "blocked";
++export type WorkflowExecutor = "engine" | "model" | "researcher" | "output";
++/** none: no model call · small: a short structuring call · large: drafting */
++export type ModelTier = "none" | "small" | "large";
++export type ExecutionMode = "internal" | "cloud";
++
++export interface WorkflowStep {
++  id: WorkflowStepId;
++  title: string;
++  status: WorkflowStatus;
++  executor: WorkflowExecutor;
++  /** what was found, and why the step has its status — one line for the card */
++  why: string;
++  /** the sentence the Intelligent box reads to do the step (engine steps and outputs) */
++  sentence?: string;
++  /** the actions the engine takes itself, for the researcher to approve */
++  actions?: SurveyAction[];
++  /** what the researcher must answer, each as a sentence that records it when completed */
++  questions?: { ask: string; example: string }[];
++  /** the file an output step produces */
++  output?: OutputRequest;
++  tier: ModelTier;
++  /** what a model step would be asked, for the cost preview: the prompt's size and the reply's cap */
++  model?: { estimateText: string; maxTokens: number; operation: string };
++  /** the step this one waits on */
++  blockedBy?: WorkflowStepId;
++}
++
++export interface ResearchWorkflow {
++  mode: ExecutionMode;
++  steps: WorkflowStep[];
++  /** the first step that is not done, or null when the workflow is complete */
++  next: WorkflowStep | null;
++  done: number;
++  total: number;
++  /** "4 of 12 steps done — next: Questionnaire (the engine can add 2 standard items)" */
++  summary: string;
++}
++
++export interface WorkflowOptions {
++  /** an objective given in the same breath ("start the research workflow for …") — the first step records it */
++  objective?: string;
++  /** fieldwork data exists: the deck can be produced */
++  runAvailable?: boolean;
++  /** the outputs already produced in this session (the engine cannot see a file) */
++  produced?: ("design_document" | "deck")[];
++  /** internal: no model is called — the engine's own alternative or the researcher's answer; cloud: model steps go to the model */
++  mode?: ExecutionMode;
++}
++
++const TITLES: Record<WorkflowStepId, string> = {
++  objective: "Objective", assumptions: "Assumptions", hypotheses: "Structured hypotheses", framework: "Research framework", questionnaire: "Questionnaire", variables: "Variables",
++  analysis_plan: "Analysis plan", recommendations: "Crosstab and test recommendations", reporting_framework: "Reporting framework", design_document: "Design document", survey_structure: "Survey structure", deck: "Findings deck",
++};
++const ORDER: WorkflowStepId[] = ["objective", "assumptions", "hypotheses", "framework", "questionnaire", "variables", "analysis_plan", "recommendations", "reporting_framework", "design_document", "survey_structure", "deck"];
++
++const plain = (s: string | undefined, n = 70): string => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
++const quote = (s: string) => `"${s.replace(/"/g, "'")}"`;
++const list = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
++const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
++const NOT_ASKED = new Set(["html", "custom_component", "media_timeline"]);
++const asked = (def: SurveyDefinition) => def.questions.filter((q) => !NOT_ASKED.has(q.type));
++const codeOf = (def: SurveyDefinition, id: string) => def.questions.find((q) => q.id === id)?.code;
++const varName = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 32) || "SCORE";
++
++/** "among UK adults who bought a car in the last year" → the population a sentence names; null when it names none */
++export function populationFromObjective(objective: string): string | null {
++  const m = /((?:[A-Za-z][\w-]*\s+){0,2})(adults?|consumers?|customers?|shoppers?|buyers?|users?|owners?|drivers?|patients?|parents?|students?|employees?|staff|members?|subscribers?|visitors?|voters?|households?|respondents?|people|women|men|teens|seniors)\b((?:\s+(?:who|that|which|aged|in|with|of|from|living|working|earning)\b[^.;]*)?)/i.exec(objective);
++  if (!m) return null;
++  /* the modifiers before the noun that belong to it ("UK", "first-time"), not the sentence's own words ("why", "among") */
++  const keep: string[] = [];
++  for (const w of m[1].trim().split(/\s+/).filter(Boolean).reverse()) { if (STOP.test(w)) break; keep.unshift(w); }
++  /* the relative clause ends where the sentence's own verb begins: "who bought a car | switch from Brand A" — the clause's own verb (right after who/that/which) is kept */
++  const ws = m[3].replace(/\s+(?:and|to|so|because|whether|when|while|before|after|versus|vs)\b[\s\S]*$/i, "").trim().split(/\s+/).filter(Boolean);
++  const skip = /^(?:who|that|which)$/i.test(ws[0] ?? "") ? 2 : 1;
++  const cut = ws.findIndex((w, i) => i >= skip && VERB.test(w));
++  const clause = (cut >= 0 ? ws.slice(0, cut) : ws).join(" ");
++  return `${[...keep, m[2]].join(" ")}${clause ? ` ${clause}` : ""}`.trim().replace(/[,\s]+$/, "") || null;
++}
++const STOP = /^(?:understand(?:ing)?|why|how|whether|what|which|do|does|among|amongst|with|for|of|the|a|an|our|their|about|explore|measure|test|see|find|learn|if|that|to|and|from|by|in|on|at)$/i;
++const VERB = /^(?:switch|choos|chose|prefer|buy|bought|rate|use|think|feel|perceiv|see|value|want|need|respond|react|decid|consider|leav|stay|churn|return|recommend|trust|pay|spend|shop|visit|adopt|would|will|are|is|do|does|have|has|might|could|should)\w*$/i;
++
++/* -------------------------------------------------------------- the steps */
++
++type Build = (def: SurveyDefinition, o: WorkflowOptions, prior: WorkflowStep[]) => WorkflowStep;
++const step = (id: WorkflowStepId, s: Omit<WorkflowStep, "id" | "title" | "tier"> & { tier?: ModelTier }): WorkflowStep => ({ id, title: TITLES[id], tier: s.tier ?? "none", ...s });
++const blocked = (id: WorkflowStepId, by: WorkflowStepId, why: string): WorkflowStep => step(id, { status: "blocked", executor: "engine", why, blockedBy: by });
++const isDone = (prior: WorkflowStep[], id: WorkflowStepId) => prior.find((s) => s.id === id)?.status === "done";
++
++const objectiveStep: Build = (def, o) => {
++  const had = def.research?.objective?.trim();
++  if (had) return step("objective", { status: "done", executor: "engine", why: `The objective is recorded: ${quote(plain(had))}.` });
++  const given = o.objective?.trim();
++  if (given) return step("objective", { status: "ready", executor: "engine", why: `Record the objective ${quote(plain(given))}.`, sentence: `Set the research objective to ${quote(given)}`, actions: [{ op: "set_research", objective: given }] });
++  return step("objective", { status: "needs_input", executor: "researcher", why: "No research objective is recorded — everything else reads it.", questions: [{ ask: "What should the study find out?", example: "Set the research objective to \"Understand why customers switch from Brand A to Brand B\"" }] });
++};
++
++const assumptionsStep: Build = (def, _o, prior) => {
++  if (!isDone(prior, "objective")) return blocked("assumptions", "objective", "The assumptions follow from the objective.");
++  const r = def.research!;
++  const objective = r.objective ?? "";
++  const missing: NonNullable<WorkflowStep["questions"]> = [];
++  const found: string[] = [];
++  /* one action carries all the engine read, each as an assumption listed so the researcher sees what was assumed */
++  const merged: Extract<SurveyAction, { op: "set_research" }> = { op: "set_research" };
++  const assumptions = [...(r.assumptions ?? [])];
++  if (!r.population?.trim()) {
++    const pop = populationFromObjective(objective);
++    if (pop) { merged.population = pop; assumptions.push(`Population read from the objective: ${pop}`); found.push(`the population ${quote(pop)} read from the objective`); }
++    else missing.push({ ask: "Who is the population — who should answer?", example: "Set the population to \"UK adults who bought a car in the last 12 months\"" });
++  }
++  if (!r.methodology?.trim()) {
++    const adv = methodologyAdvice(objective);
++    if (adv) { merged.methodology = adv.recommended; assumptions.push(`Methodology chosen from the objective: ${adv.recommended}`); found.push(`the methodology ${quote(adv.recommended)} from the objective's wording`); }
++    else missing.push({ ask: "Which methodology — an online panel survey, a tracker, a concept test?", example: "Set the methodology to \"Online panel survey\"" });
++  }
++  if (!r.sampleSize) missing.push({ ask: "How many completes are planned?", example: "Set the sample size to 400" });
++  const still = () => list(missing.map((m) => m.ask.replace(/\s+—.*$/, "").replace(/\?$/, "").toLowerCase()));
++  if (!found.length && !missing.length) return step("assumptions", { status: "done", executor: "engine", why: `Population, methodology and sample size are recorded${r.assumptions.length ? `; ${plural(r.assumptions.length, "assumption")} listed` : ""}.` });
++  if (found.length) {
++    merged.assumptions = [...new Set(assumptions)];
++    return step("assumptions", { status: "ready", executor: "engine", why: `The engine can record ${list(found)}, as assumptions to confirm${missing.length ? `; it still needs ${still()}` : ""}.`, sentence: "Record the assumptions the engine read from the objective", actions: [merged], ...(missing.length ? { questions: missing } : {}) });
++  }
++  return step("assumptions", { status: "needs_input", executor: "researcher", why: `The engine cannot read ${still()} from the objective.`, questions: missing });
++};
++
++const readable = (h: StructuredHypothesis) => (h.type === "difference" ? !!h.group && !!h.dependent : !!h.independent && !!h.dependent) || (h.type === "descriptive" && !!h.dependent);
++
++const hypothesesStep: Build = (def, o, prior) => {
++  if (!isDone(prior, "objective")) return blocked("hypotheses", "objective", "The hypotheses state what the objective expects.");
++  const r = def.research!;
++  if (!r.hypotheses.length) {
++    const model = { estimateText: `OBJECTIVE: ${r.objective}\nPOPULATION: ${r.population ?? ""}\nQUESTIONS: ${def.questions.map((q) => stripHtmlText(q.text)).join(" | ")}`, maxTokens: 700, operation: "workflow_hypotheses" };
++    const sentence = `Draft hypotheses for the objective ${quote(plain(r.objective, 60))}`;
++    if (o.mode === "internal") return step("hypotheses", { status: "needs_input", executor: "researcher", tier: "large", why: "No hypotheses are recorded, and internal mode calls no model to draft them.", questions: [{ ask: "What does the objective expect to find? One hypothesis per sentence.", example: "Add hypothesis: Price perception drives switching" }], model, sentence });
++    return step("hypotheses", { status: "model", executor: "model", tier: "large", why: "No hypotheses are recorded — the model drafts them from the objective; you approve each.", sentence, model, questions: [{ ask: "Or state them yourself, one per sentence.", example: "Add hypothesis: Price perception drives switching" }] });
++  }
++  const hs = structuredHypotheses(def);
++  const unread = hs.filter((h) => !readable(h));
++  const parsedOnly = hs.filter((h) => readable(h) && Object.values(h.source).includes("parsed") && !Object.values(h.source).includes("recorded"));
++  if (unread.length) {
++    const model = { estimateText: unread.map((h) => `${h.label}: ${h.text}`).join("\n"), maxTokens: 300, operation: "workflow_structure" };
++    const why = `${list(unread.map((h) => h.label))} cannot be read into a type, a direction and two sides from the words.`;
++    const questions = unread.map((h) => ({ ask: `What does ${h.label} compare or relate? (${plain(h.text, 60)})`, example: `Set the reading of ${h.label}: type causal, independent "price perception", dependent "switching", direction positive` }));
++    const sentence = `Structure the hypotheses ${list(unread.map((h) => h.label))}`;
++    if (o.mode === "internal") return step("hypotheses", { status: "needs_input", executor: "researcher", tier: "small", why: `${why} Internal mode calls no model to read them.`, questions, model, sentence });
++    return step("hypotheses", { status: "model", executor: "model", tier: "small", why: `${why} The model reads them; you approve the reading.`, sentence, model, questions });
++  }
++  if (parsedOnly.length) {
++    const actions: SurveyAction[] = parsedOnly.map((h) => ({ op: "set_hypothesis", hypothesis: h.label, detail: { type: h.type, direction: h.direction, ...(h.independent ? { independent: h.independent } : {}), ...(h.dependent ? { dependent: h.dependent } : {}), ...(h.group ? { group: h.group } : {}), ...(h.lower ? { lower: h.lower } : {}), ...(h.moderator ? { moderator: h.moderator } : {}), ...(h.mediator ? { mediator: h.mediator } : {}) } } as SurveyAction));
++    return step("hypotheses", { status: "ready", executor: "engine", why: `${list(parsedOnly.map((h) => h.label))} read from the words (${parsedOnly.map((h) => `${h.label}: ${h.type}, ${h.direction}`).join("; ")}) — record the readings so the framework can rely on them.`, sentence: `Record the parsed readings of ${list(parsedOnly.map((h) => h.label))}`, actions });
++  }
++  return step("hypotheses", { status: "done", executor: "engine", why: `${plural(hs.length, "hypothesis", "hypotheses")} recorded with their readings (${hs.map((h) => `${h.label}: ${h.type}`).join(", ")}).` });
++};
++
++/** "satisfied" → Satisfaction, "switched" → Switching: the noun a construct is named by */
++const NOUNS: [RegExp, string][] = [[/^satisf/i, "Satisfaction"], [/^switch/i, "Switching"], [/^aware/i, "Awareness"], [/^loyal/i, "Loyalty"], [/^trust/i, "Trust"], [/^recommend/i, "Likelihood to recommend"], [/^(?:purchase|buying)\s+intent|^intent(?:ion)?\s+to\s+(?:buy|purchase)|^likel\w*\s+to\s+(?:buy|purchase)/i, "Purchase intent"], [/^(?:price|value)\s+percept|^value\s+for\s+money/i, "Price perception"], [/^important|^importance/i, "Importance"]];
++export function constructName(side: string): string {
++  const t = side.trim().replace(/^(?:the|their|our|a|an)\s+/i, "");
++  for (const [re, name] of NOUNS) if (re.test(t)) return name;
++  return cap(t);
++}
++
++/**
++ * The questions that already measure a construct named in words: every
++ * content word of the name (as its family of synonyms) found in the
++ * question's text or variable name — "Switching" in "Have you switched
++ * brands" (SWITCHED), "Price perception" in "better value for money"
++ * (PRICE_PERC) — or the text matching the standard measure's own words.
++ */
++export function questionsMeasuring(def: SurveyDefinition, name: string, limit = 3): Question[] {
++  const fams = contentWords(name).filter((w) => w.length > 2).map((w) => [...wordFamily(w)]);
++  if (!fams.length) return [];
++  const measure = standardMeasure(name);
++  const hit = (toks: string[], fam: string[]) => fam.some((f) => toks.some((t) => t === f || (t.length >= 4 && f.startsWith(t)) || (f.length >= 4 && t.startsWith(f))));
++  const scored = asked(def).filter((q) => q.type !== "open_text").map((q) => {
++    const text = stripHtmlText(q.text);
++    const toks = contentWords(`${text} ${q.variableName}`);
++    const byWords = fams.every((f) => hit(toks, f));
++    const byMeasure = !!measure && measure.re.test(text);
++    return { q, s: byWords ? 2 : byMeasure ? 1 : 0 };
++  }).filter((x) => x.s > 0).sort((a, b) => b.s - a.s);
++  return scored.slice(0, limit).map((x) => x.q);
++}
++
++/** the construct a hypothesis side would need, by role */
++function sidesOf(h: StructuredHypothesis): { name: string; role: ResearchConstruct["role"] }[] {
++  const out: { name: string; role: ResearchConstruct["role"] }[] = [];
++  if (h.type === "difference") { if (h.group && !h.constructs.independent) out.push({ name: groupingName(h), role: "independent" }); if (h.dependent && !h.constructs.dependent) out.push({ name: h.dependent, role: "dependent" }); }
++  else { if (h.independent && !h.constructs.independent) out.push({ name: h.independent, role: "independent" }); if (h.dependent && !h.constructs.dependent) out.push({ name: h.dependent, role: "dependent" }); }
++  if (h.moderator && !h.constructs.moderator) out.push({ name: h.moderator, role: "moderator" });
++  if (h.mediator && !h.constructs.mediator) out.push({ name: h.mediator, role: "mediator" });
++  return out;
++}
++/** "Women are more satisfied than men" → the grouping the comparison needs: gender; else the group's words */
++function groupingName(h: StructuredHypothesis): string {
++  const g = `${h.group ?? ""} ${h.lower ?? ""}`.toLowerCase();
++  if (/\b(?:women|men|female|male)\b/.test(g)) return "Gender";
++  if (/\b(?:younger|older|under|over|aged?|\d+s|millennial|gen z|boomer)\b/.test(g)) return "Age group";
++  if (/\b(?:north|south|east|west|urban|rural|region|city|london)\b/.test(g)) return "Region";
++  if (/\b(?:customers?|users?|buyers?|owners?|non-)\b/.test(g)) return "Customer status";
++  return h.independent ?? h.group ?? "Group";
++}
++
++const frameworkStep: Build = (def, _o, prior) => {
++  if (!isDone(prior, "hypotheses")) return blocked("framework", "hypotheses", "The framework names the constructs the hypotheses relate.");
++  const r = def.research!;
++  const hs = structuredHypotheses(def);
++  const have = new Map(r.constructs.map((c) => [c.name.trim().toLowerCase(), c]));
++  const add = new Map<string, { name: string; role: ResearchConstruct["role"] }>();
++  for (const h of hs) for (const s of sidesOf(h)) { const name = constructName(s.name); const k = name.toLowerCase(); if (!have.has(k) && !have.has(s.name.trim().toLowerCase()) && !add.has(k)) add.set(k, { name, role: s.role }); }
++  if (!add.size) return step("framework", { status: "done", executor: "engine", why: `${plural(r.constructs.length, "construct")} cover every hypothesis side (${r.constructs.map((c) => `${c.name} · ${c.role}`).join(", ")}).` });
++  /* a new construct takes the questions that already measure it, so the questionnaire step adds only what is missing */
++  const named = [...add.values()].map((c) => ({ ...c, questions: questionsMeasuring(def, c.name).map((q) => String(q.code)) }));
++  const constructs = [...r.constructs.map((c) => ({ name: c.name, role: c.role, ...(c.definition ? { definition: c.definition } : {}), questions: c.questionIds.map((id) => codeOf(def, id)).filter((x): x is string => !!x) })), ...named];
++  return step("framework", { status: "ready", executor: "engine", why: `${plural(named.length, "construct")} named by the hypotheses and not yet in the framework: ${named.map((c) => `${c.name} (${c.role}${c.questions.length ? `, measured by ${c.questions.join(", ")}` : ", not yet measured"})`).join(", ")}.`, sentence: `Add the constructs ${list(named.map((c) => quote(c.name)))} to the research framework`, actions: [{ op: "set_research", constructs }] });
++};
++const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
++
++const questionnaireStep: Build = (def, o, prior) => {
++  if (!isDone(prior, "framework")) return blocked("questionnaire", "framework", "The questionnaire measures the framework's constructs.");
++  const r = def.research!;
++  const unmeasured = r.constructs.filter((c) => !c.questionIds.some((id) => def.questions.some((q) => q.id === id)));
++  if (!unmeasured.length) return step("questionnaire", { status: "done", executor: "engine", why: `Every construct is measured (${plural(asked(def).length, "question")} asked).` });
++  const subject = /\b(Brand\s+[A-Z]\b|[A-Z][\w&]+(?:\s+[A-Z][\w&]+)*)(?=\s*$)/.exec(r.objective ?? "")?.[1] ?? "the brand";
++  const standard: { c: ResearchConstruct; label: string; text: string; actions: SurveyAction[] }[] = [];
++  const bespoke: ResearchConstruct[] = [];
++  for (const c of unmeasured) {
++    const m = standardMeasure(c.name);
++    const item = m?.items(subject)[0];
++    const read = item ? interpretRequest(def, item.text) : null;
++    if (item && read && read.kind === "actions" && read.actions.length === 1 && read.actions[0].op === "create_question") {
++      const ref = varName(c.name).slice(0, 20);
++      standard.push({ c, label: item.label, text: item.text, actions: [{ ...read.actions[0], ref}] });
++    } else bespoke.push(c);
++  }
++  if (standard.length) {
++    /* the questions, then the constructs pointing at them by their batch refs */
++    const constructs = r.constructs.map((c) => { const s = standard.find((x) => x.c === c); return { name: c.name, role: c.role, ...(c.definition ? { definition: c.definition } : {}), questions: [...c.questionIds.map((id) => codeOf(def, id)).filter((x): x is string => !!x), ...(s ? [(s.actions[0] as { ref: string }).ref] : [])] }; });
++    const actions: SurveyAction[] = [...standard.flatMap((s) => s.actions), { op: "set_research", constructs }];
++    return step("questionnaire", { status: "ready", executor: "engine", why: `${list(standard.map((s) => `${s.c.name} (${s.label})`))} ${standard.length === 1 ? "has" : "have"} a standard item the engine can add${bespoke.length ? `; ${list(bespoke.map((c) => c.name))} ${bespoke.length === 1 ? "needs" : "need"} bespoke wording` : ""}.`, sentence: standard.length === 1 ? standard[0].text : `Add the standard items for ${list(standard.map((s) => s.c.name))}`, actions, ...(bespoke.length ? { questions: bespoke.map((c) => ({ ask: `How should ${quote(c.name)} be asked?`, example: `Add a required single-select question "…" with options … to measure ${c.name}` })) } : {}) });
++  }
++  const model = { estimateText: `OBJECTIVE: ${r.objective}\nAUDIENCE: ${r.audience?.description ?? r.population ?? ""}\nCONSTRUCTS: ${bespoke.map((c) => `${c.name} (${c.role}${c.definition ? `: ${c.definition}` : ""})`).join("; ")}`, maxTokens: 400 * bespoke.length, operation: "workflow_questionnaire" };
++  const questions = bespoke.map((c) => ({ ask: `How should ${quote(c.name)} be asked?`, example: `Add a required single-select question "…" with options … to measure ${c.name}` }));
++  const sentence = `Write the questions that measure ${list(bespoke.map((c) => c.name))}`;
++  if (o.mode === "internal") return step("questionnaire", { status: "needs_input", executor: "researcher", tier: "large", why: `${list(bespoke.map((c) => c.name))} ${bespoke.length === 1 ? "has" : "have"} no standard item; internal mode calls no model to write one.`, questions, model, sentence });
++  return step("questionnaire", { status: "model", executor: "model", tier: "large", why: `${list(bespoke.map((c) => c.name))} ${bespoke.length === 1 ? "has" : "have"} no standard item — the model writes the questions; you approve each.`, sentence, model, questions });
++};
++
++const variablesStep: Build = (def, _o, prior) => {
++  const r = def.research!;
++  const measured = (r?.constructs ?? []).filter((c) => c.questionIds.some((id) => def.questions.some((q) => q.id === id)));
++  if (!isDone(prior, "framework") || (!measured.length && !isDone(prior, "questionnaire"))) return blocked("variables", "questionnaire", "Derived variables are built from the questions that measure the constructs.");
++  const derived = r.analysisPlan?.derived ?? [];
++  const actions: SurveyAction[] = [];
++  const names: string[] = [];
++  for (const c of measured) {
++    const qs = c.questionIds.map((id) => def.questions.find((q) => q.id === id)).filter((q): q is Question => !!q && ["ordinal", "interval", "ratio"].includes(measurementOf(q)));
++    if (qs.length < 2) continue;
++    const vars = qs.map((q) => q.variableName);
++    if (derived.some((d) => d.kind === "mean_score" && d.from.length === vars.length && d.from.every((v) => vars.includes(v)))) continue;
++    const name = `${varName(c.name).slice(0, 26)}_SCORE`;
++    if (def.questions.some((q) => q.variableName === name) || derived.some((d) => d.name === name)) continue;
++    actions.push({ op: "add_derived_variable", name, kind: "mean_score", from: vars, reason: `the mean of the ${qs.length} items that measure ${c.name}` } as SurveyAction);
++    names.push(`${name} (mean of ${vars.join(", ")})`);
++  }
++  if (!actions.length) return step("variables", { status: "done", executor: "engine", why: derived.length ? `${plural(derived.length, "derived variable")} planned; every multi-item construct has its score.` : "No construct is measured by several scale items — nothing to derive." });
++  return step("variables", { status: "ready", executor: "engine", why: `${list(names)} ${actions.length === 1 ? "is" : "are"} the score${actions.length === 1 ? "" : "s"} a multi-item construct needs.`, sentence: `Plan the derived variables ${list(actions.map((a) => (a as { name: string }).name))}`, actions });
++};
++
++const analysisPlanStep: Build = (def, _o, prior) => {
++  if (!asked(def).length) return blocked("analysis_plan", "questionnaire", "The plan reads the questions.");
++  const plan = def.research?.analysisPlan;
++  if (plan && (plan.crosstabs.length || plan.tests.length)) return step("analysis_plan", { status: "done", executor: "engine", why: `The plan holds ${plural(plan.crosstabs.length, "crosstab")}, ${plural(plan.tests.length, "test")}, ${plural(plan.derived.length, "derived variable")} and ${plural(plan.segments.length, "segment")}.` });
++  const fw = buildAnalysisFramework(def, { now: "" });
++  if (!fw.crosstabs.length && !fw.tests.length) return step("analysis_plan", { status: "needs_input", executor: "researcher", why: "The engine finds nothing to plan — no outcome against a segmentation, no pair a hypothesis relates. Tag the questions' roles or add the measures first.", questions: [{ ask: "Which question is the outcome, and which cut the results?", example: "Plan a crosstab of SAT by GENDER" }] });
++  if (!isDone(prior, "questionnaire")) return step("analysis_plan", { status: "ready", executor: "engine", why: `The engine's framework proposes ${plural(fw.crosstabs.length, "crosstab")} and ${plural(fw.tests.length, "test")} from the questions as they are — the constructs still unmeasured will join when their questions exist.`, sentence: "Plan the analysis", actions: [{ op: "propose_analysis_plan" } as SurveyAction] });
++  return step("analysis_plan", { status: "ready", executor: "engine", why: `The engine's framework proposes ${plural(fw.crosstabs.length, "crosstab")}, ${plural(fw.tests.length, "test")} and ${plural(fw.derived.length, "derived variable")} from the hypotheses and the questions' levels.`, sentence: "Plan the analysis", actions: [{ op: "propose_analysis_plan" } as SurveyAction] });
++};
++
++const recommendationsStep: Build = (def, _o, prior) => {
++  if (!isDone(prior, "analysis_plan")) return blocked("recommendations", "analysis_plan", "Recommendations complete a plan.");
++  const plan = def.research!.analysisPlan!;
++  const fw = buildAnalysisFramework(def, { now: "" });
++  const cov = hypothesisCoverage(def);
++  const actions: SurveyAction[] = [];
++  const why: string[] = [];
++  const sameTest = (a: { method: string; outcome?: string; variables: string[]; groupBy?: string }, b: { method: string; outcome?: string; variables: string[]; groupBy?: string }) => a.method === b.method && (a.outcome ?? "") === (b.outcome ?? "") && (a.groupBy ?? "") === (b.groupBy ?? "") && a.variables.length === b.variables.length && a.variables.every((v) => b.variables.includes(v));
++  for (const h of cov.filter((c) => c.status === "partly")) {
++    const derivedNames = new Set(plan.derived.map((d) => d.name));
++    /* the framework's test for it — one on a construct's score, else the one that takes all its items (the regression), before one on a single item */
++    const score = (x: { outcome?: string; variables: string[] }) => ([x.outcome, ...x.variables].some((v) => v && derivedNames.has(v)) ? 1000 : 0) + x.variables.length;
++    const t = fw.tests.filter((x) => x.hypotheses.includes(h.label) && x.method !== "reliability" && !plan.tests.some((p) => sameTest(p, x))).sort((a, b) => score(b) - score(a))[0];
++    if (t) { actions.push({ op: "add_analysis_test", method: t.method, ...(t.outcome ? { outcome: t.outcome } : {}), variables: t.variables, ...(t.groupBy ? { groupBy: t.groupBy } : {}), ...(t.moderator ? { moderator: t.moderator } : {}), ...(t.mediator ? { mediator: t.mediator } : {}), priority: 1, hypotheses: [h.label], reason: `${h.label} is measured but nothing in the plan tests it` } as SurveyAction); why.push(`a ${t.method.replace(/_/g, " ")} for ${h.label} (measured, untested)`); continue; }
++    const x = fw.crosstabs.find((c) => c.hypotheses.includes(h.label) && !plan.crosstabs.some((p) => p.rows.join() === c.rows.join() && p.columns.join() === c.columns.join()));
++    if (x) { actions.push({ op: "add_crosstab", rows: x.rows, columns: x.columns, priority: 1, hypotheses: [h.label], reason: `${h.label} is measured but nothing in the plan reads it` } as SurveyAction); why.push(`a crosstab of ${x.rows.join(", ")} by ${x.columns.join(", ")} for ${h.label}`); }
++  }
++  for (const x of prioritizeCrosstabs(def, 5, fw).filter((c) => c.priority === 1 && !plan.crosstabs.some((p) => p.rows.join() === c.rows.join() && p.columns.join() === c.columns.join()))) {
++    if (actions.some((a) => a.op === "add_crosstab" && (a as { rows: string[] }).rows.join() === x.rows.join() && (a as { columns: string[] }).columns.join() === x.columns.join())) continue;
++    actions.push({ op: "add_crosstab", rows: x.rows, columns: x.columns, priority: 1, ...(x.hypotheses.length ? { hypotheses: x.hypotheses } : {}), reason: x.reason ?? "a priority-1 crosstab the framework recommends" } as SurveyAction);
++    why.push(`the priority-1 crosstab ${x.rows.join(", ")} by ${x.columns.join(", ")}`);
++  }
++  const unmeasured = cov.filter((c) => c.status === "unmeasured" || c.status === "unlinked");
++  if (!actions.length) return step("recommendations", { status: "done", executor: "engine", why: `Every measured hypothesis has a test or a table${unmeasured.length ? `; ${list(unmeasured.map((c) => c.label))} ${unmeasured.length === 1 ? "is" : "are"} not measured yet (the questionnaire step)` : ""}.` });
++  return step("recommendations", { status: "ready", executor: "engine", why: `The plan lacks ${list(why)}.`, sentence: `Add the recommended ${actions.length === 1 ? "analysis" : "analyses"} to the plan`, actions });
++};
++
++const MEASURE_WORDS: Record<string, string> = { ordinal: "top-2-box share", interval: "mean", ratio: "mean", nominal: "share", multi: "share" };
++const reportingStep: Build = (def, _o, prior) => {
++  const r = def.research!;
++  const measuredDependent = (r?.constructs ?? []).filter((c) => c.role === "dependent" && c.questionIds.some((id) => def.questions.some((q) => q.id === id)));
++  if (!isDone(prior, "framework") || !measuredDependent.length) return blocked("reporting_framework", "questionnaire", "The KPIs are the outcomes the questionnaire measures.");
++  const audienceQ = r.audience ? [] : [{ ask: "Who reads the questionnaire — and who reads the report? (optional)", example: "Set the audience to \"first-time buyers — plain language\"" }];
++  if (r.kpis.length) return step("reporting_framework", { status: "done", executor: "engine", why: `${plural(r.kpis.length, "KPI")} recorded (${r.kpis.map((k) => k.name).join(", ")})${r.audience ? `; audience ${quote(plain(r.audience.description, 40))}` : "; no audience recorded (optional)"}.`, ...(audienceQ.length ? { questions: audienceQ } : {}) });
++  const kpis: { name: string; variable: string; measure: string; direction: "higher" | "lower" }[] = [];
++  for (const c of measuredDependent) {
++    const derived = (r.analysisPlan?.derived ?? []).find((d) => d.kind === "mean_score" && d.from.every((v) => c.questionIds.some((id) => def.questions.find((q) => q.id === id)?.variableName === v)));
++    if (derived) { kpis.push({ name: c.name, variable: derived.name, measure: "mean", direction: "higher" }); continue; }
++    const q = c.questionIds.map((id) => def.questions.find((x) => x.id === id)).find((x): x is Question => !!x);
++    if (!q) continue;
++    const measure = q.type === "nps" ? "NPS" : MEASURE_WORDS[measurementOf(q)] ?? "share";
++    kpis.push({ name: c.name, variable: q.variableName, measure, direction: /\b(?:churn|switch|complain|dissatisf|price sensitiv|effort|wait)/i.test(c.name) ? "lower" : "higher" });
++  }
++  if (!kpis.length) return step("reporting_framework", { status: "needs_input", executor: "researcher", why: "No dependent construct's question can be read as a KPI.", questions: [{ ask: "Which number does the study report on?", example: "Set the KPIs: Satisfaction (SAT, top-2-box share)" }] });
++  return step("reporting_framework", { status: "ready", executor: "engine", why: `${plural(kpis.length, "KPI")} read from the dependent constructs: ${kpis.map((k) => `${k.name} (${k.measure} of ${k.variable})`).join(", ")}.`, sentence: `Record the KPIs ${list(kpis.map((k) => k.name))}`, actions: [{ op: "set_research", kpis }], ...(audienceQ.length ? { questions: audienceQ } : {}) });
++};
++
++const designDocumentStep: Build = (def, o, prior) => {
++  if (!isDone(prior, "objective") || !isDone(prior, "hypotheses")) return blocked("design_document", "hypotheses", "The design document is written from the objective and the hypotheses.");
++  const produced = o.produced?.includes("design_document");
++  const output: OutputRequest = { type: "proposal_docx", audience: "client", words: "the research proposal (Word)" };
++  const pending = prior.filter((s) => ["framework", "questionnaire", "analysis_plan"].includes(s.id) && s.status !== "done").map((s) => s.title.toLowerCase());
++  if (produced) return step("design_document", { status: "done", executor: "output", why: "The research proposal was produced this session." + (pending.length ? ` Produce it again after ${list(pending)}.` : ""), sentence: "Create the client-ready research proposal", output });
++  return step("design_document", { status: "ready", executor: "output", why: `The proposal is written from the design as it stands${pending.length ? ` — ${list(pending)} not yet done, so it will say so` : ""}.`, sentence: "Create the client-ready research proposal", output });
++};
++
++const surveyStructureStep: Build = (def) => {
++  const qs = asked(def);
++  if (!qs.length) return blocked("survey_structure", "questionnaire", "There are no questions to arrange.");
++  const blocks = listBlocks(def.flow as unknown[]);
++  if (!blocks.length) return blocked("survey_structure", "questionnaire", "The survey has no block.");
++  const blockOf = (id: string) => blocks.find((b) => b.pages.some((p) => p.node.questionIds.includes(id)));
++  const first = blocks[0], last = blocks[blocks.length - 1];
++  const actions: SurveyAction[] = [];
++  const why: string[] = [];
++  const title = (b: typeof first) => b.title?.trim() || b.id;
++  const screening = qs.filter((q) => inferRole(def, q) === "screening" && (q.skipLogic ?? []).some((s) => s.target.kind === "terminate" || s.target.status === "screened"));
++  for (const q of screening) { const b = blockOf(q.id); if (b && b !== first) { actions.push({ op: "move_question", target: String(q.code), block: title(first) }); why.push(`${q.code} screens out but sits in ${quote(title(b))}`); } }
++  const demos = qs.filter((q) => inferRole(def, q) === "segmentation" && !q.analysis?.role);
++  const needLast = demos.filter((q) => { const b = blockOf(q.id); return b && b !== first && b !== last; });
++  if (needLast.length && blocks.length >= 2) for (const q of needLast) { actions.push({ op: "move_question", target: String(q.code), block: title(last) }); why.push(`${q.code} (${q.variableName}) is a demographic asked mid-survey`); }
++  if (needLast.length && blocks.length < 2) { actions.push({ op: "create_block", ref: "about_you", title: "About you" }); for (const q of needLast) actions.push({ op: "move_question", target: String(q.code), block: "about_you" }); why.push(`${list(needLast.map((q) => String(q.code)))} ${needLast.length === 1 ? "is a demographic" : "are demographics"} with no closing block to sit in`); }
++  if (!actions.length) return step("survey_structure", { status: "done", executor: "engine", why: `${plural(blocks.length, "block")}: screening questions first, demographics last.` });
++  return step("survey_structure", { status: "ready", executor: "engine", why: `${list(why)}.`, sentence: actions.length === 1 && actions[0].op === "move_question" ? `Move ${actions[0].target} to ${quote(actions[0].block!)}` : "Arrange the survey: screener first, demographics last", actions });
++};
++
++const deckStep: Build = (def, o, prior) => {
++  const output: OutputRequest = { type: "findings_pptx", audience: "client", words: "the findings presentation (PowerPoint, client edition)" };
++  if (!isDone(prior, "analysis_plan")) return blocked("deck", "analysis_plan", "The deck reports the plan's findings.");
++  if (o.produced?.includes("deck")) return step("deck", { status: "done", executor: "output", why: "The findings deck was produced this session.", sentence: "Create the final findings presentation", output });
++  if (!o.runAvailable) return step("deck", { status: "blocked", executor: "output", why: "After fieldwork: the deck needs respondents.", blockedBy: "analysis_plan", sentence: "Create the final findings presentation", output });
++  return step("deck", { status: "ready", executor: "output", why: "Fieldwork data exists — the deck is built from a fresh run of the plan.", sentence: "Create the final findings presentation", output });
++};
++
++const BUILDERS: Record<WorkflowStepId, Build> = { objective: objectiveStep, assumptions: assumptionsStep, hypotheses: hypothesesStep, framework: frameworkStep, questionnaire: questionnaireStep, variables: variablesStep, analysis_plan: analysisPlanStep, recommendations: recommendationsStep, reporting_framework: reportingStep, design_document: designDocumentStep, survey_structure: surveyStructureStep, deck: deckStep };
++
++/** the workflow as it stands: every step with its status, and what comes next */
++export function researchWorkflow(def: SurveyDefinition, opts: WorkflowOptions = {}): ResearchWorkflow {
++  const mode: ExecutionMode = opts.mode === "internal" ? "internal" : "cloud";
++  const o = { ...opts, mode };
++  const steps: WorkflowStep[] = [];
++  for (const id of ORDER) steps.push(BUILDERS[id](def, o, steps));
++  const next = steps.find((s) => s.status !== "done") ?? null;
++  const done = steps.filter((s) => s.status === "done").length;
++  const what = !next ? "" : next.status === "ready" ? (next.executor === "output" ? "the file is one click away" : `the engine has ${plural(next.actions?.length ?? 0, "action")} ready`) : next.status === "model" ? `the model is asked (${next.tier} call)` : next.status === "needs_input" ? "you are asked" : `waits on ${TITLES[next.blockedBy!].toLowerCase()}`;
++  return { mode, steps, next, done, total: steps.length, summary: next ? `${done} of ${steps.length} steps done — next: ${next.title} (${what})` : `All ${steps.length} steps done.` };
++}
++
++/** one line per step for the card: "✓ Objective — …", "→ Questionnaire — …" */
++export function describeWorkflow(wf: ResearchWorkflow): string {
++  const mark: Record<WorkflowStatus, string> = { done: "✓", ready: "→", needs_input: "?", model: "✱", blocked: "·" };
++  return [wf.summary, ...wf.steps.map((s) => `${mark[s.status]} ${s.title} — ${s.why}`)].join("\n");
++}
++
++/** the steps a model would be asked for, with the tier — what the cost preview prices */
++export function modelSteps(wf: ResearchWorkflow): { id: WorkflowStepId; tier: ModelTier; estimateText: string; maxTokens: number; operation: string }[] {
++  return wf.steps.filter((s) => s.model).map((s) => ({ id: s.id, tier: s.tier, ...s.model! }));
++}
++
++export const WORKFLOW_STEP_IDS = ORDER;
++export const WORKFLOW_TITLES = TITLES;
+diff --git a/scripts/auth-guard-audit.mjs b/scripts/auth-guard-audit.mjs
+index 30389cd..69c7ed8 100644
+--- a/scripts/auth-guard-audit.mjs
++++ b/scripts/auth-guard-audit.mjs
+@@ -229,6 +229,10 @@ const LOCK_EXEMPT = {
+     "records the project's client, manager, fieldwork dates and deadline (\u00a760). Recording a deadline "
+     + "is not an act of authorship on the questionnaire, and blocking it behind a colleague's edit lock "
+     + "would stop a project manager doing their job",
++  "copilot/workflow/route.ts POST":
++    "reads the research workflow (project.read) and, with setMode, records the project's AI execution choice "
++    + "in surveys.settings — the same project-configuration bag the config route writes under survey.edit, "
++    + "not the questionnaire; the definition is never written here (Research Engine audit, Phase 6)",
+ };
+ 
+ const files = [];
+diff --git a/scripts/phase6-agent-test.mjs b/scripts/phase6-agent-test.mjs
+new file mode 100644
+index 0000000..5a5e414
+--- /dev/null
++++ b/scripts/phase6-agent-test.mjs
+@@ -0,0 +1,286 @@
++/**
++ * RESEARCH ENGINE — PHASE 6 (the research agent), in the browser.
++ *
++ *   - "start the research workflow for <objective>" → the card says where
++ *     the study stands, the Workflow tab opens on the twelve steps
++ *   - the objective step: the engine's action, approved in Changes, and the
++ *     step is done at once; the assumptions read from the objective
++ *   - the hypotheses step: the model's (cloud), priced; in INTERNAL mode the
++ *     model is not called — a model turn gets the internal-mode card, a
++ *     sentence with an engine alternative gets the alternative, and the
++ *     step asks the researcher instead; "cloud once" lets one call through
++ *   - the framework from the hypotheses, each construct with the questions
++ *     that measure it; the questionnaire's standard item; the plan; the
++ *     KPIs; the design document produced from the tab; the structure
++ *   - History: each step recorded with its workflow step, rolled back as
++ *     any other change
++ *   - the workflow route's gate and shape
++ *
++ *   node scripts/phase6-agent-test.mjs      (studio on 3000, fake AI provider)
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import assert from "node:assert/strict";
++import { openTab, switchMode } from "./lib/nav.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (...ls) => ls.map((l, i) => ({ code: i + 1, label: l }));
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "Brand switching" },
++  questions: [
++    { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++    { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "What is your gender?", options: opts("Male", "Female") },
++    { id: "q4", code: "Q4", variableName: "SWITCHED", type: "single_select", text: "Have you switched brands in the last 12 months?", options: opts("Yes", "No") },
++    { id: "q6", code: "Q6", variableName: "PRICE_PERC", type: "single_select", text: "Brand B offers better value for money", options: opts("Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree") },
++    { id: "q7", code: "Q7", variableName: "SAT", type: "single_select", text: "Overall, how satisfied are you with your current brand?", options: opts("1", "2", "3", "4", "5", "6", "7") },
++    { id: "q9", code: "Q9", variableName: "REGION", type: "single_select", text: "Which region do you live in?", options: opts("North", "South", "East") },
++  ],
++  flow: [
++    { type: "block", id: "b1", title: "Screener", children: [{ type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] }] },
++    { type: "block", id: "b2", title: "Brands", children: [{ type: "page", id: "p2", title: "Brands", questionIds: ["q4", "q6", "q9", "q7"] }] },
++    { type: "block", id: "b3", title: "About you", children: [{ type: "page", id: "p3", title: "About you", questionIds: [] }] },
++    { type: "end", id: "e", status: "complete" },
++  ],
++};
++const OBJECTIVE = "Understand why UK adults who bought a car switch from Brand A to Brand B";
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
++page.on("dialog", (d) => d.accept());
++const errors = [];
++page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402|409|401|400)/.test(m.text())) errors.push(m.text()); });
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(600);
++};
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++const turns = () => page.$$('[data-testid="cp-turn"]');
++const settled = async (n) => {
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 90000 });
++  await page.waitForTimeout(300);
++  return (await turns()).at(-1);
++};
++const say = async (text, fake) => {
++  if (fake) await page.evaluate((r) => window.__rescriptCopilotFake(r), fake);
++  const n = (await turns()).length;
++  await page.fill('[data-testid="iq-input"]', text);
++  await page.keyboard.press("Enter");
++  const last = await settled(n);
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  return last;
++};
++const textOf = async (h) => (await h.evaluate((e) => e.innerText)).replace(/\s+/g, " ");
++const apply = async () => { if (await page.$('[data-testid="cp-confirm"]')) await page.check('[data-testid="cp-confirm"]'); await page.click('[data-testid="cp-apply"]'); await page.waitForTimeout(600); };
++const tab = async (id) => { await page.click(`[data-testid="cp-tab-${id}"]`); await page.waitForTimeout(150); };
++const status = (id) => page.getAttribute(`[data-testid="wf-step-${id}"]`, "data-status");
++const why = (id) => page.textContent(`[data-testid="wf-why-${id}"]`);
++const doStep = async (id) => { await tab("workflow"); const n = (await turns()).length; await page.click(`[data-testid="wf-do-${id}"]`); return settled(n); };
++const stepDone = async (id) => { await tab("workflow"); await page.waitForFunction((k) => document.querySelector(`[data-testid="wf-step-${k}"]`)?.getAttribute("data-status") === "done", id, { timeout: 10000 }); };
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await page.evaluate(() => { try { window.localStorage.setItem("rescript.copilot.mode", "cloud"); } catch {} });
++await loadDef(FIXTURE);
++await intelligent();
++if (!(await page.evaluate(() => typeof window.__rescriptCopilotFake === "function"))) { console.log("  skip  no fake copilot provider in this build"); await browser.close(); process.exit(0); }
++
++/* ------------------------------------------------ 1. the workflow from a sentence */
++{
++  const t = await say(`start the research workflow for ${OBJECTIVE}`);
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  const text = await textOf(t);
++  assert.match(text, /0 of 12 steps done — next: Objective \(the engine has 1 action ready\)/);
++  assert.match(text, /→ Objective — Record the objective "Understand why UK adults/);
++  assert.match(text, /· Structured hypotheses — The hypotheses state what the objective expects\./);
++  assert.match(text, /Execution: cloud/);
++  await page.waitForSelector('[data-testid="cp-workflow"]');
++  assert.equal(await page.getAttribute('[data-testid="cp-panel"]', "data-tab"), "workflow");
++  assert.equal(await page.getAttribute('[data-testid="cp-workflow"]', "data-next"), "objective");
++  assert.equal(await status("objective"), "ready");
++  assert.equal(await status("assumptions"), "blocked");
++  assert.match(await page.textContent('[data-testid="wf-summary"]'), /Objective to record: “Understand why UK adults/);
++  assert.equal((await page.$$('[data-testid^="wf-step-"]')).length, 12);
++  ok("“start the research workflow for …”: the card says where the study stands, the Workflow tab opens on the twelve steps with the objective to record");
++}
++
++/* ------------------------------------------------ 2. the objective and the assumptions: engine steps, approved in Changes */
++{
++  const t = await doStep("objective");
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  assert.equal(await page.getAttribute('[data-testid="cp-panel"]', "data-tab"), "changes");
++  assert.match(await textOf(t), /Objective: Record the objective/);
++  await apply();
++  await stepDone("objective");
++  assert.match(await why("objective"), /The objective is recorded/);
++  assert.equal(await status("assumptions"), "ready");
++  assert.match(await why("assumptions"), /the population "UK adults who bought a car" read from the objective, as assumptions to confirm; it still needs which methodology and how many completes are planned/);
++  // the questions the researcher must answer, each with a sentence that goes to the box
++  const examples = await page.$$('[data-testid="wf-questions-assumptions"] [data-testid="wf-example"]');
++  assert.equal(examples.length, 2);
++  await examples[1].click();
++  assert.equal(await page.inputValue('[data-testid="iq-input"]'), "Set the sample size to 400");
++  await page.fill('[data-testid="iq-input"]', "");
++  const t2 = await doStep("assumptions");
++  await apply();
++  void t2;
++  await tab("workflow");
++  assert.equal(await status("assumptions"), "needs_input");
++  assert.equal(await status("hypotheses"), "model");
++  assert.equal(await page.getAttribute('[data-testid="cp-workflow"]', "data-next"), "assumptions");
++  ok("the objective step applied through Changes is done at once; the assumptions read from the objective are recorded, what is left is asked with a sentence to finish");
++}
++
++/* ------------------------------------------------ 3. the model step, priced; internal mode */
++{
++  await tab("workflow");
++  assert.match(await page.textContent('[data-testid="wf-cost"]'), /Model steps from here: structured hypotheses \(drafting call, fake|gpt|[\w.-]+, ~[\d.]+ credits\) — about [\d.]+ credits in all, each approved before it is made\./);
++  const ask = await page.$('[data-testid="wf-ask-hypotheses"]');
++  assert.ok(ask, "the model step has its button");
++  assert.match(await ask.textContent(), /Ask the model \(~[\d.]+ credits/);
++  // internal: nothing is sent to a model
++  await page.click('[data-testid="wf-mode-internal"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="cp-workflow"]')?.getAttribute("data-mode") === "internal");
++  assert.equal(await status("hypotheses"), "needs_input");
++  assert.match(await why("hypotheses"), /internal mode calls no model to draft them/);
++  assert.match(await page.textContent('[data-testid="wf-cost"]'), /In internal mode the model is not called: one step is yours to answer instead\./);
++  assert.equal(await page.getAttribute('[data-testid="wf-ask-hypotheses"]', "disabled"), "", "the model button is disabled in internal mode");
++  // a model sentence is refused with the cause and the switch, nothing charged
++  let t = await say("rewrite every question in a friendlier tone", { kind: "proposal", reply: "Rewritten.", actions: [{ op: "update_question", target: "Q1", text: "How old are you, friend?" }] });
++  assert.equal(await t.getAttribute("data-status"), "failed");
++  assert.equal(await (await t.$('[data-testid="cp-failure"]')).getAttribute("data-code"), "internal_mode");
++  assert.match(await textOf(t), /INTERNAL MODE — NO MODEL CALLED/);
++  assert.match(await textOf(t), /Switch the project to cloud execution in the Workflow tab/);
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  // a sentence with an engine alternative gets the alternative
++  t = await say("add a question to measure purchase intent");
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  assert.match(await textOf(t), /This project runs in internal mode — nothing is sent to a language model \(switch to cloud in the Workflow tab\), so the copilot cannot write this\./);
++  assert.ok(await t.$('[data-testid="cp-engine-choice"]'), "the standard items offered");
++  // cloud once: the next model step goes through
++  await tab("workflow");
++  await page.check('[data-testid="wf-once-box"]');
++  assert.equal(await status("hypotheses"), "needs_input");
++  assert.equal(await page.getAttribute('[data-testid="wf-ask-hypotheses"]', "disabled"), null, "let through once: the step's model button works");
++  const n = (await turns()).length;
++  await page.evaluate((r) => window.__rescriptCopilotFake(r), { kind: "proposal", reply: "Two hypotheses.", actions: [{ op: "add_hypothesis", text: "Price perception drives switching" }, { op: "add_hypothesis", text: "Women are more satisfied than men" }] });
++  await page.click('[data-testid="wf-ask-hypotheses"]');
++  t = await settled(n);
++  assert.equal(await page.isChecked('[data-testid="wf-once-box"]').catch(() => false), false, "used up");
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  assert.match(await textOf(t), /Two hypotheses/);
++  await apply();
++  await tab("workflow");
++  assert.equal(await status("hypotheses"), "ready", "the readings parsed from the words are the engine's");
++  assert.match(await why("hypotheses"), /H1 and H2 read from the words/);
++  // and the next model turn is refused again
++  t = await say("rewrite every question in a friendlier tone", { kind: "proposal", reply: "Rewritten.", actions: [] });
++  assert.equal(await t.getAttribute("data-status"), "failed");
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  await tab("workflow");
++  await page.click('[data-testid="wf-mode-cloud"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="cp-workflow"]')?.getAttribute("data-mode") === "cloud");
++  ok("the model step is priced before any call; internal mode calls no model — a model turn says so with the switch, an engine alternative is offered, the step asks the researcher; cloud-once lets one call through");
++}
++
++/* ------------------------------------------------ 4. the engine's steps to the design document */
++{
++  await doStep("hypotheses"); await apply(); await stepDone("hypotheses");
++  await tab("workflow");
++  assert.equal(await status("framework"), "ready");
++  assert.match(await why("framework"), /Price perception \(independent, measured by Q6\), Switching \(dependent, measured by Q4\), Gender \(independent, measured by Q2\), Satisfaction \(dependent, measured by Q7\)/);
++  await doStep("framework"); await apply(); await stepDone("framework");
++  await tab("workflow");
++  assert.equal(await status("questionnaire"), "done");
++  assert.equal(await status("variables"), "done");
++  assert.equal(await status("analysis_plan"), "ready");
++  await doStep("analysis_plan"); await apply(); await stepDone("analysis_plan");
++  await tab("workflow");
++  assert.match(await why("analysis_plan"), /The plan holds \d+ crosstabs?, \d+ tests?/);
++  assert.equal(await status("recommendations"), "done");
++  assert.equal(await status("reporting_framework"), "ready");
++  await doStep("reporting_framework"); await apply(); await stepDone("reporting_framework");
++  await tab("workflow");
++  assert.match(await why("reporting_framework"), /2 KPIs recorded \(Switching, Satisfaction\)/);
++  // the design document from the tab: the file on the card, the step done
++  assert.equal(await status("design_document"), "ready");
++  const t = await doStep("design_document");
++  assert.match(await textOf(t), /The research proposal \(Word\) is ready: .*-research-proposal\.docx/);
++  await stepDone("design_document");
++  assert.match(await why("design_document"), /The research proposal was produced this session/);
++  // the structure: REGION to the closing block
++  assert.equal(await status("survey_structure"), "ready");
++  assert.match(await why("survey_structure"), /Q9 \(REGION\) is a demographic asked mid-survey/);
++  await doStep("survey_structure"); await apply(); await stepDone("survey_structure");
++  await tab("workflow");
++  assert.equal(await status("deck"), "blocked");
++  assert.match(await why("deck"), /After fieldwork/);
++  assert.match(await page.textContent('[data-testid="wf-summary"]'), /^10 of 12 steps done — next: Assumptions \(you are asked\)/, "the assumptions still want the methodology and the sample size; the deck waits for fieldwork");
++  ok("framework, plan, KPIs, design document and structure: each step the engine's, approved in Changes, done at once; the deck waits for fieldwork");
++}
++
++/* ------------------------------------------------ 5. History: each step recorded with its workflow step, rolled back like any change */
++{
++  await tab("history");
++  const ops = await page.$$('[data-testid="cp-change"]');
++  assert.ok(ops.length >= 6, `${ops.length} changes`);
++  await ops[0].$eval('[data-testid="cp-op-expand"]', (b) => b.click());
++  await page.waitForSelector('[data-testid="cp-op-intent"]');
++  assert.match(await page.textContent('[data-testid="cp-op-intent"]'), /workflow: survey_structure/);
++  await page.click('[data-testid="cp-undo-change"]');
++  await page.waitForTimeout(600);
++  await tab("workflow");
++  assert.equal(await status("survey_structure"), "ready", "rolled back: the step is to do again");
++  ok("History records each step with its workflow step; a step rolls back like any other change and the workflow says so");
++}
++
++/* ------------------------------------------------ 6. the workflow route */
++{
++  const post = (body) => page.evaluate(async (b) => { const x = await fetch("/api/copilot/workflow", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }); return [x.status, await x.json()]; }, body);
++  let r = await post({ surveyId: "00000000-0000-0000-0000-000000000000" });
++  assert.equal(r[0], 401, "a real survey needs a session");
++  r = await post({ surveyId: "sandbox" });
++  assert.equal(r[0], 400);
++  r = await post({ surveyId: "sandbox", definition: FIXTURE, setMode: "nope" });
++  assert.equal(r[0], 400);
++  r = await post({ surveyId: "sandbox", definition: FIXTURE, objective: OBJECTIVE, mode: "internal" });
++  assert.equal(r[0], 200);
++  assert.equal(r[1].workflow.total, 12);
++  assert.equal(r[1].workflow.next.id, "objective");
++  assert.deepEqual(r[1].workflow.next.actions, [{ op: "set_research", objective: OBJECTIVE }]);
++  assert.deepEqual(r[1].mode, { project: "cloud", effective: "internal", override: true, sandbox: true }, "the request's mode overrides the project's for this reading");
++  assert.equal(r[1].model.configured, true);
++  assert.equal(r[1].runAvailable, false);
++  const withHyp = { ...FIXTURE, research: { objective: OBJECTIVE, population: "UK adults", methodology: "Online panel", sampleSize: 300, hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [] } };
++  r = await post({ surveyId: "sandbox", definition: withHyp, runAvailable: true });
++  assert.equal(r[0], 200);
++  assert.deepEqual(r[1].mode, { project: "cloud", effective: "cloud", override: false, sandbox: true });
++  assert.deepEqual(r[1].cost.steps.map((c) => [c.id, c.tier]), [["hypotheses", "large"]]);
++  assert.ok(typeof r[1].cost.steps[0].charge === "number" && r[1].cost.steps[0].model.length > 0);
++  assert.equal(r[1].cost.total, r[1].cost.steps[0].charge, "the cloud steps' total");
++  assert.equal(r[1].runAvailable, true);
++  // the same survey read in internal mode: the step is priced for information, nothing is in the total
++  r = await post({ surveyId: "sandbox", definition: withHyp, mode: "internal" });
++  assert.equal(r[0], 200);
++  assert.equal(r[1].workflow.steps.find((x) => x.id === "hypotheses").status, "needs_input");
++  assert.deepEqual(r[1].cost.steps.map((c) => c.id), ["hypotheses"]);
++  assert.equal(r[1].cost.total, 0, "nothing priced into the total in internal mode");
++  // setMode confirms the sandbox's own choice
++  r = await post({ surveyId: "sandbox", definition: withHyp, setMode: "internal" });
++  assert.deepEqual(r[1].mode, { project: "internal", effective: "internal", override: false, sandbox: true });
++  ok("the workflow route: a session for a real survey, a definition for the sandbox, a known mode; the steps, the effective mode, the priced model steps, the data");
++}
++
++assert.deepEqual(errors, [], `console errors: ${errors.join("\n")}`);
++await browser.close();
++console.log(`\n${passed} passed`);
+-- 
+2.43.0
+

@@ -1,0 +1,1945 @@
+---
+ .env.example                                  |  43 ++++
+ apps/studio/app/api/copilot/turn/route.ts     |  29 ++-
+ .../app/api/cron/analysis-runs/route.ts       |   3 +-
+ apps/studio/app/design-system.css             |  19 ++
+ .../intelligent/IntelligentView.tsx           |  28 ++-
+ .../intelligent/copilot/AnalysisTab.tsx       |   7 +-
+ .../intelligent/copilot/CopilotCard.tsx       |  19 +-
+ .../intelligent/copilot/useCopilot.ts         |  51 +++-
+ .../components/studio/PropertiesPanel.tsx     |   9 +
+ .../studio/ResearchDesignEditor.tsx           | 158 ++++++++++++
+ apps/studio/lib/aiConfig.ts                   |  27 +++
+ apps/studio/lib/analytics.ts                  |  23 +-
+ apps/studio/lib/copilot/failure.test.ts       |  46 ++++
+ apps/studio/lib/copilot/failure.ts            | 119 +++++++++
+ apps/studio/lib/copilot/replySchema.ts        |  26 ++
+ apps/studio/lib/platform.ts                   |  17 ++
+ apps/studio/lib/platformAi.test.ts            |  29 +++
+ docs/PHASE1-RELIABILITY-2026-10-08.md         |  62 +++++
+ packages/ai/src/index.ts                      | 134 +++++++++--
+ packages/ai/src/reply.test.ts                 | 128 ++++++++++
+ packages/analytics/src/analyses/index.ts      |   5 +-
+ packages/analytics/src/analyses/statistics.ts |  15 +-
+ packages/analytics/src/dataset.ts             |   7 +
+ packages/analytics/src/phase1.test.ts         |  83 +++++++
+ packages/analytics/src/plannedVariables.ts    |   6 +-
+ packages/analytics/src/stats/multivariate.ts  |   6 +-
+ packages/analytics/src/stats/stats.test.ts    |   8 +-
+ packages/analytics/src/stats/tests.ts         |  17 --
+ packages/analytics/src/types.ts               |   2 +
+ scripts/intelligent-mode-test.mjs             |  21 +-
+ scripts/phase1-reliability-test.mjs           | 227 ++++++++++++++++++
+ 31 files changed, 1292 insertions(+), 82 deletions(-)
+ create mode 100644 apps/studio/components/studio/ResearchDesignEditor.tsx
+ create mode 100644 apps/studio/lib/aiConfig.ts
+ create mode 100644 apps/studio/lib/copilot/failure.test.ts
+ create mode 100644 apps/studio/lib/copilot/failure.ts
+ create mode 100644 apps/studio/lib/copilot/replySchema.ts
+ create mode 100644 apps/studio/lib/platformAi.test.ts
+ create mode 100644 docs/PHASE1-RELIABILITY-2026-10-08.md
+ create mode 100644 packages/ai/src/reply.test.ts
+ create mode 100644 packages/analytics/src/phase1.test.ts
+ create mode 100644 scripts/phase1-reliability-test.mjs
+
+diff --git a/.env.example b/.env.example
+index 2bcfac3..472e07d 100644
+--- a/.env.example
++++ b/.env.example
+@@ -132,6 +132,49 @@ MAIL_DEV_REDIRECT=
+ RESCRIPT_DIAGNOSTICS=
+ 
+ 
++# ---------------------------------------------------------------------
++# LANGUAGE MODEL (Studio + runtime; server only — never sent to a browser)
++# ---------------------------------------------------------------------
++# Intelligent Mode reads every request with its own engine first (edits, logic,
++# options, dependencies, impact — no model call). What the engine hands on —
++# descriptive requests ("change the screener so under-25s are excluded"),
++# generating a questionnaire from a brief, rewording, document cards, narrative
++# findings — needs a language model. Unset, the mode is ENGINE ONLY and says so
++# on every such request. /api/platform (Administration → Platform) reports
++# whether a model is configured.
++#
++# Base URL of an OpenAI-compatible chat-completions API, e.g.
++#   https://api.openai.com/v1          (OpenAI)
++#   https://api.anthropic.com/v1/      (Anthropic's compatibility endpoint)
++#   fake:                              (the deterministic in-process stand-in —
++#                                       development and the browser suites only)
++AI_API_URL=
++# The key for that API (server only; mark it Sensitive on Vercel).
++AI_API_KEY=
++# The chat model the copilot reasons with. Use a name YOUR provider serves —
++# the default, gpt-4o-mini, is OpenAI's and an Anthropic endpoint refuses it.
++# A capable model matters here: the copilot answers in a strict JSON shape.
++AI_MODEL=
++# Optional. Anthropic keys that are not scoped to a workspace need this; it is
++# sent as the anthropic-workspace-id header. Leave unset for other providers.
++AI_WORKSPACE_ID=
++# Optional. Any other headers the provider needs, as a JSON object, e.g.
++# {"OpenAI-Organization":"org_…"}. Cannot override the key or the body type.
++AI_API_HEADERS=
++# Optional. A vision model for OCR of scanned research documents (defaults to AI_MODEL).
++AI_VISION_MODEL=
++# Optional. An embeddings model for semantic retrieval over uploaded research
++# documents; unset, retrieval is BM25 only (works, just lexical).
++AI_EMBEDDINGS_MODEL=
++# Optional speech. Transcription is usually a different vendor: a base URL
++# serving POST <base>/audio/transcriptions, its key, and the model. Each falls
++# back to the chat provider's value; Anthropic has no transcription endpoint.
++AI_STT_API_URL=
++AI_STT_API_KEY=
++AI_STT_MODEL=
++# Optional. The text-to-speech model for voice surveys (default tts-1).
++AI_TTS_MODEL=
++
+ # ---------------------------------------------------------------------
+ # TRANSLATION (Studio only — keys never reach the browser or a survey)
+ # ---------------------------------------------------------------------
+diff --git a/apps/studio/app/api/copilot/turn/route.ts b/apps/studio/app/api/copilot/turn/route.ts
+index 459376a..c5243ae 100644
+--- a/apps/studio/app/api/copilot/turn/route.ts
++++ b/apps/studio/app/api/copilot/turn/route.ts
+@@ -1,7 +1,9 @@
+ import { NextRequest, NextResponse } from "next/server";
+ import { createHash } from "node:crypto";
+ import { SurveyDefinition } from "@rescript/schema";
+-import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName } from "@rescript/ai";
++import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
++import { describeFailure, failureFromError, failureFromReplyError } from "@/lib/copilot/failure";
++import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
+ import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine";
+ import { ResearchIndex } from "@rescript/import/research";
+ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
+@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
+   if (isFailure(authed)) {
+     if (!(surveyId === "sandbox" && aiProviderName() === "fake")) return authed.response;
+   } else user = authed;
+-  if (!aiConfigured()) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured" }, { status: 501 });
++  if (!aiConfigured()) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
+   const message = typeof body.message === "string" ? body.message.trim().slice(0, 8000) : "";
+   if (!message) return NextResponse.json({ error: "say what you want" }, { status: 400 });
+   const parsed = SurveyDefinition.safeParse(body.definition);
+@@ -135,15 +137,27 @@ export async function POST(req: NextRequest) {
+   if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
+   else {
+     try {
++      /*
++       * The reply's shape goes with the request where the provider takes a
++       * schema; a cut-off answer is continued (generation is the one most
++       * likely to outgrow its budget — two continuations give it three
++       * budgets); and what still cannot be read comes back as a CODE the
++       * researcher is told, not as "nothing I could use" (Phase 1).
++       */
+       const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens, operation: `copilot_${mode}` },
+-        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: mode === "generate" ? 170_000 : 90_000 }));
+-      if (!m.ok) return refusalResponse(m);
++        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: mode === "generate" ? 170_000 : 90_000, schema: COPILOT_REPLY_SCHEMA, continuations: mode === "generate" ? 2 : 1 }));
++      if (!m.ok) {
++        const r = refusalResponse(m);
++        const body = await r.json().catch(() => ({})) as Record<string, unknown>;
++        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
++      }
+       charge += m.event?.customerCharge ?? 0;
+       raw = fake ?? m.value;
+       if (raw && !fake) { CACHE.set(key, { at: Date.now(), value: raw }); if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value!); }
+     } catch (e) {
+       console.warn("[rescript:copilot] turn failed", JSON.stringify({ error: (e as Error).message }));
+-      return NextResponse.json({ ok: false, error: `The language model did not answer: ${(e as Error).message}. Nothing was changed.` }, { status: 502 });
++      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
++      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
+     }
+   }
+ 
+@@ -151,7 +165,10 @@ export async function POST(req: NextRequest) {
+   const coerced = coerceCopilotReply(raw);
+   let reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
+   if (!reply) {
+-    return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
++    const failure = aiProviderName() === "fake"
++      ? describeFailure("unusable", "The FAKE provider cannot reason about surveys; configure a real model to use the copilot.")
++      : describeFailure("unusable");
++    return NextResponse.json({ ok: true, reply: null, message: failure.message, failure, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
+   }
+   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
+   let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
+diff --git a/apps/studio/app/api/cron/analysis-runs/route.ts b/apps/studio/app/api/cron/analysis-runs/route.ts
+index 28238b2..49f6758 100644
+--- a/apps/studio/app/api/cron/analysis-runs/route.ts
++++ b/apps/studio/app/api/cron/analysis-runs/route.ts
+@@ -61,7 +61,8 @@ async function run(req: Request): Promise<NextResponse> {
+     if (!def.research?.analysisPlan) continue;
+     const due = await dueMilestone(db, surveyId, def);
+     if (!due) continue;
+-    const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", trigger: due });
++    /* on the CLEAN dataset (Phase 1): the automatic findings should not count respondents the quality engine flagged or the researcher removed */
++    const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", dataset: "clean", trigger: due });
+     if (r.error && !r.stored) { skipped.push({ surveyId, reason: r.error }); continue; }
+     let report: string | undefined;
+     if ((due === "target_reached" || due === "field_end") && def.research.analysisPlan.autoReport !== false && r.stored) {
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 9dbd989..2a259e2 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1922,3 +1922,22 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+   100% { box-shadow: var(--sh-1); }
+ }
+ @media (prefers-reduced-motion: reduce) { .qcard.flash { animation: none; outline: 2px solid var(--c-primary-100); } }
++/* a failed copilot turn: the cause, what to do, and what the engine had read (Phase 1) */
++.cp-failure { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--c-warning-bd); background: var(--c-warning-bg); border-radius: var(--r-md); font-size: var(--fs-small); color: var(--c-text-2); }
++.cp-failure ul { margin: 4px 0 0 18px; padding: 0; }
++.cp-failure li { margin: 2px 0; }
++.cp-failure .cp-handoff { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-warning-bd); }
++.cp-failure .iqi-dim { margin: 6px 0 0; font-size: var(--fs-caption); }
++/* the research design editor (Phase 1) */
++.rd-editor .rd-h { font-size: var(--fs-small); font-weight: 600; margin: 14px 0 6px; color: var(--c-text-2); }
++.rd-editor .rd-h .muted { font-weight: 400; }
++.rd-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 6px; }
++.rd-row { display: flex; align-items: center; gap: 8px; }
++.rd-row .rd-label { flex: none; width: 30px; color: var(--c-text-3); font-size: var(--fs-caption); }
++.rd-row .chip { flex: none; }
++.rd-constructs { display: grid; gap: 8px; }
++.rd-construct { margin-bottom: 0; }
++.rd-x { border: 0; background: transparent; color: var(--c-text-3); cursor: pointer; padding: 0 0 0 4px; font-size: 12px; }
++.rd-x:hover { color: var(--c-error); }
++.rd-editor.compact .settings-grid { grid-template-columns: 1fr; }
++.rd-editor.compact .ta { font-size: 13px; }
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+index 9fede1a..c7f7631 100644
+--- a/apps/studio/components/intelligent/IntelligentView.tsx
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { describeFailure } from "@/lib/copilot/failure";
+ import React from "react";
+ import type { Condition, SurveyDefinition } from "@rescript/schema";
+ import { variantRegistry } from "@rescript/schema";
+@@ -248,12 +249,16 @@ export function IntelligentView() {
+       setBusy(false); inputRef.current?.focus(); return;
+     }
+     const deferred = interp.reason === DEFER_TO_GRAMMAR;
++    let modelHadNothing = false;
+     const pre = parseIntent(t);
+     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
+     if (!readOnlyExact && copilot.available !== false) {
+-      // an unusable model answer ("empty") falls through to the grammar; anything else is the copilot's
+-      const outcome = await copilot.ask(t, heard);
++      // the model's turn carries what the engine read; a failed turn says its cause on the card (Phase 1). "empty" — the model
++      // had nothing usable — goes on to the grammar: a reading it has replaces the failed turn; none, and the failed turn stands.
++      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected });
+       if (outcome === "handled") { setBusy(false); inputRef.current?.focus(); return; }
++      if (outcome === "unavailable" && !deferred) { setBusy(false); inputRef.current?.focus(); return; }
++      modelHadNothing = outcome === "empty";
+     }
+     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
+     let intent: Intent = parseIntent(t);
+@@ -261,6 +266,9 @@ export function IntelligentView() {
+     let plan = planProposal(s.def, intent, source, deps);
+     // the grammar did not understand, or understood but could not find the object: ask the model, if there is one
+     // the grammar did not understand, could not find the object, or read a condition the parser rejects: the model may know better (§17)
++    // the model had nothing usable and the grammar cannot read it either: the failed turn — the cause, the next step, what the
++    // engine read — is the answer; the grammar's "could not read this" would only say it twice
++    if (modelHadNothing && intent.kind === "unknown") { setBusy(false); inputRef.current?.focus(); return; }
+     const askModel = intent.kind === "unknown" || plan.errors.some((e) => /could not find/.test(e)) || (plan.expression?.errors.length ?? 0) > 0;
+     // the older single-intent model route is asked only when there is no copilot: one sentence, one model call at most
+     if (askModel && aiAvailable !== false && copilot.available === false) {
+@@ -284,6 +292,18 @@ export function IntelligentView() {
+         }
+       } catch { /* offline: the grammar's answer stands */ }
+     }
++    /*
++     * NO MODEL, AND THE ENGINE COULD NOT READ IT (Phase 1). The grammar's
++     * "I did not understand that" said the Studio cannot read English; the
++     * truth is that this Studio has no language model and the engine reads
++     * instructions that name their objects. Say that, with what the engine
++     * detected and the examples it does read.
++     */
++    if (intent.kind === "unknown" && !deferred && copilot.available === false) {
++      const f = describeFailure("not_configured");
++      const read = [interp.category ? `request type: ${interp.category.replace(/_/g, " ")}` : "", ...interp.detected.map((d) => `${d.what}: ${d.value}`)].filter(Boolean);
++      plan = { ...plan, errors: [`${f.message} ${f.next.join(" ")}${read.length ? ` What the engine read — ${read.join("; ")}.` : ""}`] };
++    }
+     // spoken in another language, with nothing to read it into English: say so, rather than "not understood"
+     if (heard && heard.language !== "en" && heard.language !== "und" && !heard.english && intent.kind === "unknown") {
+       plan = { ...plan, errors: [`I heard this in ${languageName(heard.language)}, but no language model is configured on this Studio to read it into English. Say it in English, or type it.`] };
+@@ -299,7 +319,7 @@ export function IntelligentView() {
+     setTurns((ts) => {
+       // the model had nothing usable and the grammar has an answer: show the answer, not the empty turn
+       const lastEntry = ts[ts.length - 1];
+-      const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && lastEntry.status === "empty" && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
++      const drop = lastEntry && "kind" in lastEntry && lastEntry.kind === "copilot" && (lastEntry.status === "empty" || (lastEntry.status === "failed" && lastEntry.failure?.code === "unusable")) && lastEntry.text === t && !plan.errors.length ? lastEntry.id : null;
+       return [...ts.filter((x) => x.id !== drop), { id: uid("turn"), text: t, proposal: plan, state: plan.readOnly ? "applied" : "open", opKey, ...(heard ? { heard } : {}) }];
+     });
+     if (plan.targetKey) selectKey(plan.targetKey);
+@@ -854,7 +874,7 @@ function TurnCard({ turn, def, onApply, onCancel, onReview, onSelect, readOnly,
+ 
+       {p.readOnly ? (
+         <div className="iq-card answer" data-testid="iq-answer">
+-          <div className="iq-card-head"><span className="iq-kicker">{blocked ? "NOT UNDERSTOOD" : "ANSWER"}</span>{p.source === "ai" && <span className="iq-source">model</span>}</div>
++          <div className="iq-card-head"><span className="iq-kicker">{blocked ? (p.errors.some((e) => /no language model (is )?configured/i.test(e)) ? "NO LANGUAGE MODEL — THE ENGINE COULD NOT READ THIS" : "COULD NOT READ THIS") : "ANSWER"}</span>{p.source === "ai" && <span className="iq-source">model</span>}</div>
+           {p.summary && <p className="iq-summary">{p.summary}</p>}
+           {p.errors.map((e, i) => <p key={i} className="iq-error" data-testid="iq-error"><Icon name="warning" size={12} /> {e}</p>)}
+           {p.answer && p.answer.length > 0 && (
+diff --git a/apps/studio/components/intelligent/copilot/AnalysisTab.tsx b/apps/studio/components/intelligent/copilot/AnalysisTab.tsx
+index 27be1da..96c3782 100644
+--- a/apps/studio/components/intelligent/copilot/AnalysisTab.tsx
++++ b/apps/studio/components/intelligent/copilot/AnalysisTab.tsx
+@@ -1,4 +1,5 @@
+ "use client";
++import { ResearchDesignEditor } from "../../studio/ResearchDesignEditor";
+ import React from "react";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { hypothesisLabel } from "@rescript/schema";
+@@ -121,7 +122,11 @@ export function AnalysisTab({ copilot, def, onSelect }: { copilot: Copilot; def:
+ 
+           <section data-testid="an-hypotheses">
+             <div className="iq-label">Hypotheses · {coverage.length}</div>
+-            {!coverage.length && <p className="iqi-dim">No hypotheses recorded. Tell the copilot the research objective and hypotheses and it records them (set_research), or write them in the Research design.</p>}
++            {!coverage.length && <p className="iqi-dim">No hypotheses recorded. Tell the copilot the research objective and hypotheses and it records them (set_research), or write them in the research design below.</p>}
++            <details className="cp-ux-code" data-testid="an-design-editor" open={!coverage.length}>
++              <summary>Research design — objective, hypotheses, population, constructs (edit by hand)</summary>
++              <ResearchDesignEditor compact />
++            </details>
+             {coverage.map((h) => (
+               <div key={h.label} className="cp-block" data-testid="an-hyp" data-status={h.status}>
+                 <div><b>{h.label}</b> {h.text} <span className={`cp-sev v-${h.status === "testable" ? "suggestion" : h.status === "partly" ? "warning" : "critical"}`}>{status[h.status]}</span></div>
+diff --git a/apps/studio/components/intelligent/copilot/CopilotCard.tsx b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+index c1a7d19..1baa742 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotCard.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+@@ -63,7 +63,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+       )}
+       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
+         <div className="iq-card-head">
+-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? "COULD NOT ANSWER" : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
++          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
+           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
+           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
+@@ -72,6 +72,23 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+         </div>
+         {entry.status === "thinking" && <div className="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
+         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
++        {entry.failure && (
++          /* the cause and the next step (Phase 1) — and what the engine had read before it handed the sentence on */
++          <div className="cp-failure" data-testid="cp-failure" data-code={entry.failure.code}>
++            <span className="iq-label">What to do</span>
++            <ul>{entry.failure.next.map((n, i) => <li key={i}>{n}</li>)}</ul>
++            {entry.handoff && (entry.handoff.category || entry.handoff.detected.length > 0 || entry.handoff.reason) && (
++              <div className="cp-handoff" data-testid="cp-handoff">
++                <span className="iq-label">What the engine read</span>
++                <dl className="cp-detected">
++                  {entry.handoff.category && <div className="cp-detected-row"><dt>Request type</dt><dd>{entry.handoff.category.replace(/_/g, " ")}</dd></div>}
++                  {entry.handoff.detected.map((d, i) => <div key={i} className="cp-detected-row"><dt>{d.what}</dt><dd>{d.value}</dd></div>)}
++                </dl>
++                <p className="iqi-dim">{entry.handoff.reason}</p>
++              </div>
++            )}
++          </div>
++        )}
+         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
+         {entry.appliedNote && <p className="cp-applied-note" data-testid="cp-applied-note"><Icon name="check" size={12} /> {entry.appliedNote}</p>}
+         {save?.state === "failed" && <SaveFailed save={save} onRetry={onRetrySave} />}
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index 74218e8..efbb34c 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -12,6 +12,7 @@ import {
+ } from "../../../lib/copilot/history";
+ import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
+ import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
++import { describeFailure, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
+ import type { HeardTranscript } from "../../../lib/intelligent/voice";
+ import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
+ 
+@@ -48,6 +49,10 @@ export interface CopilotEntry {
+   reply?: CopilotReply;
+   error?: string;
+   message?: string;
++  /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
++  failure?: TurnFailure;
++  /** what the engine read before handing the sentence to the model: its category, its reason, what it detected */
++  handoff?: EngineHandoff;
+   usage?: { charge: number };
+   context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean; ux?: boolean; uxOnly?: boolean; repair?: { refused: string[]; fixed: boolean } };
+   passages?: Record<string, Passage>;
+@@ -68,6 +73,11 @@ export interface CopilotEntry {
+    */
+   engine?: EngineTurn;
+ }
++export interface EngineHandoff {
++  category: string | null;
++  reason: string;
++  detected: { what: string; value: string }[];
++}
+ export interface EngineTurn {
+   kind: Interpretation["kind"];
+   category: string | null;
+@@ -391,9 +401,9 @@ export function useCopilot(opts: {
+   /** what travels with a turn: the verdicts and the strongest findings, never the results */
+   const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
+ 
+-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate"): Promise<"handled" | "unavailable" | "empty"> => {
++  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+     const id = uid("copilot");
+-    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
++    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
+     setBusy(true);
+     try {
+       const proposal = session.proposal;
+@@ -410,18 +420,41 @@ export function useCopilot(opts: {
+         return { route: "/api/copilot/turn", mode: ctx.mode ?? mode ?? "", charge: Number((d?.usage as { charge?: number } | undefined)?.charge) || 0, ...(typeof ctx.cached === "boolean" ? { cached: ctx.cached } : {}), ...(typeof ctx.promptChars === "number" ? { promptChars: ctx.promptChars } : {}), ...(error ? { error } : {}) };
+       };
+       const failedTurn = (d: Record<string, unknown> | null, error: string) => opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { mode: mode ?? "" }, statusDetail: error, apiCalls: [call(d, error)] }) });
+-      if (r.status === 501) { setAvailable(false); const error = "No language model is configured on this Studio."; opts.patch(id, { status: "failed", error }); failedTurn(null, error); return "unavailable"; }
++      /*
++       * A FAILED TURN SAYS WHY (Phase 1). The route names the cause — not
++       * configured, the wallet, a timeout, a refusal, an answer cut off or in
++       * words — and the card shows it with what to do next, beside what the
++       * engine had already read. None of these is replaced by the grammar's
++       * "I did not understand" any more, which only ever hid the real cause;
++       * the one case that still reaches the grammar is a well-formed answer
++       * with nothing in it ("empty"), where a phrasing the grammar parses is
++       * offered instead of the failed turn.
++       */
++      const failTurn = (d: Record<string, unknown> | null, status: number, fallback: FailureCode) => {
++        const failure = isTurnFailure(d?.failure) ? d.failure : describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
++        const error = `${failure.message}`;
++        opts.patch(id, { status: "failed", error, failure, usage: d?.usage as { charge: number } | undefined, context: d?.context as CopilotEntry["context"] });
++        failedTurn(d, `${failure.title}: ${failure.message}`);
++        void status;
++      };
++      if (r.status === 501) { setAvailable(false); const d = await r.json().catch(() => null) as Record<string, unknown> | null; failTurn(d, 501, "not_configured"); return "unavailable"; }
+       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
+-      if (!r.ok || !d || d.ok === false) { const error = String(d?.error ?? `The copilot could not answer (${r.status}).`); opts.patch(id, { status: "failed", error }); failedTurn(d, error); return "handled"; }
++      if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
+       setAvailable(true);
+       const reply = d.reply as CopilotReply | null;
+       const review = d.review as SurveyReview | undefined;
+       if (!reply) {
+-        const message = String(d.message ?? "No answer.");
+-        // nothing usable came back: recorded as failed with the model's call — the grammar may still answer the sentence (its own entry)
+-        opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, ...(review ? { review } : {}), opKey: recordOp({ prompt: text, source: "model", status: review ? "answered" : "failed", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
+-        if (review) setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
+-        return review ? "handled" : "empty";
++        if (review) {
++          // the model had nothing, the engine's own review stands: shown as the answer
++          const message = String(d.message ?? "No answer.");
++          opts.patch(id, { status: "empty", message, usage: d.usage as { charge: number }, review, opKey: recordOp({ prompt: text, source: "model", status: "answered", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "empty" }, statusDetail: message, apiCalls: [call(d)] }) });
++          setSession((x) => ({ ...x, review: { rules: review, ai: [], at: new Date().toISOString(), running: false }, tab: "review" }));
++          return "handled";
++        }
++        // nothing usable: the turn fails with its cause — and the grammar may still read the sentence (a phrasing the engine's
++        // recognisers handed on but the grammar parses, "call Q2 PLATFORMS"); the view then shows that reading instead
++        failTurn(d, 200, "unusable");
++        return "empty";
+       }
+       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
+       const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
+diff --git a/apps/studio/components/studio/PropertiesPanel.tsx b/apps/studio/components/studio/PropertiesPanel.tsx
+index 1949f6e..4ffacc0 100644
+--- a/apps/studio/components/studio/PropertiesPanel.tsx
++++ b/apps/studio/components/studio/PropertiesPanel.tsx
+@@ -12,6 +12,7 @@ import { RandomizeAxes } from "./RandomizeAxes";
+ import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
+ import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
+ import { QualitySettings } from "./QualitySettings";
++import { ResearchDesignEditor } from "./ResearchDesignEditor";
+ import { OptionGroupsEditor } from "./OptionGroupsEditor";
+ import { CollapsibleSection } from "./CollapsibleSection";
+ import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
+@@ -897,6 +898,14 @@ export function SurveySettings() {
+ 
+       <QualitySettings />
+ 
++      {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
++      <h3 className="sec" id="research-design">Research design</h3>
++      <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
++        The objective, hypotheses, population and constructs the analysis framework, the findings and the report are built on.
++        The copilot writes here too; what you type is what it reads.
++      </p>
++      <ResearchDesignEditor />
++
+       <p className="muted" style={{ fontSize: 12.5 }}>
+         Changes here autosave to your draft. They reach respondents only when you save a version
+         and publish it.
+diff --git a/apps/studio/components/studio/ResearchDesignEditor.tsx b/apps/studio/components/studio/ResearchDesignEditor.tsx
+new file mode 100644
+index 0000000..016fb45
+--- /dev/null
++++ b/apps/studio/components/studio/ResearchDesignEditor.tsx
+@@ -0,0 +1,158 @@
++"use client";
++import React from "react";
++import type { ResearchConstruct, ResearchDesign } from "@rescript/schema";
++import { applySurveyActions, hypothesisCoverage } from "@rescript/engine";
++import { hypothesisLabel } from "@rescript/schema";
++import { useStudio } from "./store";
++import { InlineRichText } from "./RichTextEditor";
++
++/**
++ * THE RESEARCH DESIGN, EDITED BY HAND (Research Engine audit, Phase 1).
++ *
++ * The design — objective, hypotheses, population, sample size, methodology,
++ * constructs and what measures them, assumptions — is the object every
++ * analysis feature reads (coverage, the plan, the verdicts, the report), and
++ * until now it could be written only by the copilot's `set_research` or by
++ * typing "add hypothesis: …" into Intelligent mode. The Analysis tab told the
++ * researcher to "write them in the Research design", which did not exist.
++ *
++ * Edits go through the store like every other panel's, labelled for undo.
++ * Removing a hypothesis goes through the engine's `remove_hypothesis`, which
++ * renumbers the H-labels on every question and plan item that cites it —
++ * the one edit where a form writing the array directly would leave tags
++ * pointing at the wrong hypothesis.
++ */
++const ROLES: ResearchConstruct["role"][] = ["independent", "dependent", "mediator", "moderator", "control", "screening", "descriptive"];
++const EMPTY: ResearchDesign = { hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [] };
++
++export function ResearchDesignEditor({ compact = false }: { compact?: boolean }) {
++  const s = useStudio();
++  const r: ResearchDesign = s.def.research ?? EMPTY;
++  const coverage = React.useMemo(() => hypothesisCoverage(s.def), [s.def]);
++  const patch = (label: string, fn: (d: ResearchDesign) => void) => {
++    s.labelNextEdit(label);
++    s.update((d) => {
++      const cur: ResearchDesign = d.research ?? { ...EMPTY, hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [] };
++      fn(cur);
++      cur.updatedAt = new Date().toISOString();
++      d.research = cur;
++    });
++  };
++  const [draftHyp, setDraftHyp] = React.useState("");
++  const addHypothesis = () => {
++    const text = draftHyp.trim();
++    if (!text) return;
++    if (r.hypotheses.some((h) => h.trim().toLowerCase() === text.toLowerCase())) { s.toast("That hypothesis is already recorded", "err"); return; }
++    patch("add hypothesis", (d) => { d.hypotheses.push(text); });
++    setDraftHyp("");
++  };
++  const removeHypothesis = (i: number) => {
++    const label = hypothesisLabel(i);
++    const cited = coverage[i] ? coverage[i].tests.length + coverage[i].crosstabs.length : 0;
++    if (cited && !window.confirm(`Remove ${label}? ${cited} planned ${cited === 1 ? "item cites" : "items cite"} it; the later hypotheses are renumbered and their tags follow them.`)) return;
++    s.labelNextEdit(`remove ${label}`);
++    s.update((d) => {
++      // the engine's own removal: drops the label from every question and plan item, renumbers the rest
++      const out = applySurveyActions(d, [{ op: "remove_hypothesis", hypothesis: label }]);
++      if (out.valid) Object.assign(d, out.def);
++      else d.research!.hypotheses.splice(i, 1);
++    });
++  };
++  const byId = new Map(s.def.questions.map((q) => [q.id, q]));
++  const questionLabel = (id: string) => { const q = byId.get(id); return q ? `${q.code} · ${(q.variableName || "").slice(0, 24)}` : id; };
++
++  return (
++    <div className={`rd-editor${compact ? " compact" : ""}`} data-testid="research-design">
++      <div className="settings-grid">
++        <label className="f"><span>Research objective</span>
++          <textarea className="ta" rows={2} data-testid="rd-objective" placeholder="e.g. Understand why customers switch from Brand A to Brand B"
++            value={r.objective ?? ""} onChange={(e) => patch("edit research objective", (d) => { d.objective = e.target.value || undefined; })} /></label>
++        <label className="f"><span>Target population</span>
++          <textarea className="ta" rows={2} data-testid="rd-population" placeholder="e.g. Adults 18–65 who bought in the category in the last 12 months"
++            value={r.population ?? ""} onChange={(e) => patch("edit target population", (d) => { d.population = e.target.value || undefined; })} /></label>
++        <label className="f"><span>Methodology</span>
++          <textarea className="ta" rows={2} data-testid="rd-methodology" placeholder="e.g. Online quantitative survey, 12 minutes, quota sample"
++            value={r.methodology ?? ""} onChange={(e) => patch("edit methodology", (d) => { d.methodology = e.target.value || undefined; })} /></label>
++        <label className="f" style={{ maxWidth: 220 }}><span>Planned completes</span>
++          <input className="input" type="number" min={1} step={1} data-testid="rd-sample" placeholder="e.g. 1000"
++            value={r.sampleSize ?? ""} onChange={(e) => patch("edit planned sample size", (d) => { const n = Math.floor(Number(e.target.value)); d.sampleSize = Number.isFinite(n) && n > 0 ? n : undefined; })} /></label>
++      </div>
++
++      <h4 className="rd-h">Hypotheses <span className="muted">· {r.hypotheses.length}</span></h4>
++      <ol className="rd-list" data-testid="rd-hypotheses">
++        {r.hypotheses.map((h, i) => {
++          const c = coverage[i];
++          return (
++            <li key={i} className="rd-row" data-testid="rd-hypothesis" data-status={c?.status ?? ""}>
++              <span className="mono rd-label">{hypothesisLabel(i)}</span>
++              <InlineRichText className="grow" value={h} testId="rd-hypothesis-text" placeholder="State the hypothesis" questionId={undefined}
++                onChange={(text) => patch(`edit ${hypothesisLabel(i)}`, (d) => { d.hypotheses[i] = text; })} />
++              {c && <span className={`chip${c.status === "testable" ? " on" : c.status === "partly" ? " warn" : ""}`} title={c.status === "testable" ? "measured, and a table or test is planned" : c.status === "partly" ? "measured, nothing planned yet" : c.status === "unmeasured" ? "a construct it names has no question" : "no construct or question is linked to it"}>{c.status === "testable" ? "testable" : c.status === "partly" ? "unplanned" : c.status === "unmeasured" ? "unmeasured" : "unlinked"}</span>}
++              <button type="button" className="btn small danger" data-testid="rd-hypothesis-remove" title="Remove this hypothesis (later ones are renumbered)" onClick={() => removeHypothesis(i)}>×</button>
++            </li>
++          );
++        })}
++      </ol>
++      <div className="row" style={{ gap: 6 }}>
++        <input className="input grow" data-testid="rd-hypothesis-new" placeholder="New hypothesis, e.g. Price perception drives switching" value={draftHyp}
++          onChange={(e) => setDraftHyp(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addHypothesis(); } }} />
++        <button type="button" className="btn small" data-testid="rd-hypothesis-add" onClick={addHypothesis} disabled={!draftHyp.trim()}>+ hypothesis</button>
++      </div>
++
++      <h4 className="rd-h">Constructs <span className="muted">· what the study measures, and which questions measure it</span></h4>
++      <div className="rd-constructs" data-testid="rd-constructs">
++        {r.constructs.map((c, i) => (
++          <div key={i} className="card rd-construct" data-testid="rd-construct" style={{ padding: 10 }}>
++            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
++              <input className="input" style={{ width: 200 }} data-testid="rd-construct-name" placeholder="Construct name, e.g. Price perception" value={c.name}
++                onChange={(e) => patch("rename construct", (d) => { d.constructs[i].name = e.target.value; })} />
++              <select className="select" style={{ width: 140 }} data-testid="rd-construct-role" value={c.role}
++                onChange={(e) => patch("change construct role", (d) => { d.constructs[i].role = e.target.value as ResearchConstruct["role"]; })}>
++                {ROLES.map((x) => <option key={x} value={x}>{x}</option>)}
++              </select>
++              <input className="input grow" data-testid="rd-construct-definition" placeholder="Definition (optional)" value={c.definition ?? ""}
++                onChange={(e) => patch("edit construct definition", (d) => { d.constructs[i].definition = e.target.value || undefined; })} />
++              <button type="button" className="btn small danger" data-testid="rd-construct-remove" title="Remove this construct" onClick={() => patch("remove construct", (d) => { d.constructs.splice(i, 1); })}>×</button>
++            </div>
++            <div className="row" style={{ gap: 6, flexWrap: "wrap", marginTop: 6 }}>
++              <span className="muted" style={{ fontSize: 12.5 }}>Measured by</span>
++              {c.questionIds.map((id) => (
++                <span key={id} className="chip" data-testid="rd-construct-question">{questionLabel(id)} <button type="button" className="rd-x" aria-label={`Remove ${questionLabel(id)}`} onClick={() => patch("unlink question from construct", (d) => { d.constructs[i].questionIds = d.constructs[i].questionIds.filter((x) => x !== id); })}>×</button></span>
++              ))}
++              <select className="select" style={{ width: 220 }} data-testid="rd-construct-add-question" value=""
++                onChange={(e) => { const id = e.target.value; if (!id) return; patch("link question to construct", (d) => { if (!d.constructs[i].questionIds.includes(id)) d.constructs[i].questionIds.push(id); }); }}>
++                <option value="">+ add a question…</option>
++                {s.def.questions.filter((q) => !c.questionIds.includes(q.id) && !["html", "custom_component"].includes(q.type)).map((q) => <option key={q.id} value={q.id}>{q.code} — {(q.text || q.variableName).replace(/<[^>]*>/g, "").slice(0, 60)}</option>)}
++              </select>
++            </div>
++          </div>
++        ))}
++        <button type="button" className="btn small" data-testid="rd-construct-add" onClick={() => patch("add construct", (d) => { d.constructs.push({ name: `Construct ${d.constructs.length + 1}`, role: "descriptive", questionIds: [] }); })}>+ construct</button>
++      </div>
++
++      <h4 className="rd-h">Assumptions <span className="muted">· what the design rests on that is not yet confirmed</span></h4>
++      <LineList items={r.assumptions} testId="rd-assumption" placeholder="e.g. Respondents can recall their previous brand" onChange={(items) => patch("edit assumptions", (d) => { d.assumptions = items; })} />
++    </div>
++  );
++}
++
++function LineList({ items, onChange, placeholder, testId }: { items: string[]; onChange(items: string[]): void; placeholder: string; testId: string }) {
++  const [draft, setDraft] = React.useState("");
++  const add = () => { const t = draft.trim(); if (!t) return; onChange([...items, t]); setDraft(""); };
++  return (
++    <div>
++      <ul className="rd-list" data-testid={`${testId}s`}>
++        {items.map((a, i) => (
++          <li key={i} className="rd-row" data-testid={testId}>
++            <input className="input grow" value={a} onChange={(e) => onChange(items.map((x, j) => (j === i ? e.target.value : x)))} />
++            <button type="button" className="btn small danger" aria-label="Remove" onClick={() => onChange(items.filter((_, j) => j !== i))}>×</button>
++          </li>
++        ))}
++      </ul>
++      <div className="row" style={{ gap: 6 }}>
++        <input className="input grow" data-testid={`${testId}-new`} placeholder={placeholder} value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
++        <button type="button" className="btn small" data-testid={`${testId}-add`} onClick={add} disabled={!draft.trim()}>+ add</button>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/lib/aiConfig.ts b/apps/studio/lib/aiConfig.ts
+new file mode 100644
+index 0000000..1fdf5e8
+--- /dev/null
++++ b/apps/studio/lib/aiConfig.ts
+@@ -0,0 +1,27 @@
++/**
++ * IS A LANGUAGE MODEL CONFIGURED — presence only, never a value (Research
++ * Engine audit, Phase 1). Pure and `server-only`-free so it can be tested;
++ * `platform.ts` reports it and `IntelligentView` is told through
++ * /api/platform. The key is read nowhere here.
++ */
++export interface AiPresence {
++  /** AI_API_URL is set */
++  ai: boolean;
++  /** AI_API_URL is the in-process fake provider */
++  aiFake: boolean;
++  /** AI_MODEL is named (unset means the OpenAI default, which an Anthropic endpoint refuses) */
++  aiModel: boolean;
++}
++
++export function aiPresence(env: Record<string, string | undefined> = process.env): AiPresence {
++  const url = (env.AI_API_URL ?? "").trim();
++  return { ai: !!url, aiFake: url === "fake:", aiModel: !!(env.AI_MODEL ?? "").trim() };
++}
++
++/** The warning a deployment manager should read, or null when the model configuration is sound for this tier. */
++export function aiConfigWarning(p: AiPresence, tier: "development" | "preview" | "production" | string): string | null {
++  if (!p.ai) return "No language model is configured (AI_API_URL, AI_API_KEY, AI_MODEL), so Intelligent Mode is engine-only: requests that name their objects work; descriptive requests, generation from a brief, rewording and document cards do not.";
++  if (p.aiFake && tier === "production") return "AI_API_URL is the FAKE provider in production — Intelligent Mode will answer every model request with nothing.";
++  if (!p.aiFake && !p.aiModel) return "AI_MODEL is not set, so the copilot asks for the default (gpt-4o-mini) — an Anthropic or self-hosted endpoint refuses that name with a 404.";
++  return null;
++}
+diff --git a/apps/studio/lib/analytics.ts b/apps/studio/lib/analytics.ts
+index 04ed358..2320efa 100644
+--- a/apps/studio/lib/analytics.ts
++++ b/apps/studio/lib/analytics.ts
+@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
+ import type { Condition, SurveyDefinition } from "@rescript/schema";
+ import {
+   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
+-  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun,
++  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone, reportFromRun, withPlannedVariables,
+   type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
+ } from "@rescript/analytics";
+ import type { VersionedDefinition } from "@rescript/engine";
+@@ -218,7 +218,20 @@ export async function buildFor(db: SupabaseClient, surveyId: string, ctx: Loaded
+ 
+   const rows = await loadRows(db, surveyId, def.dataset);
+   const versioned = await resolveAnalyticsVersions(db, rows, ctx);
+-  const ds = buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
++  const built = buildDataset(ctx.def, rows, { spec: def.dataset, weighting: def.weighting ?? null, versioned });
++  /*
++   * THE PLAN'S OWN VARIABLES, ON EVERY DATASET (Research Engine audit, Phase
++   * 1). Derived variables and segments were computed only inside `runPlan`,
++   * so a saved analysis naming BRAND_TRUST_SCORE — including the ones the
++   * findings report's charts point at — ran on a dataset without that column
++   * and warned "not in this survey's dictionary". They are added here, where
++   * every path builds its dataset, and `runPlan`'s own pass then finds them
++   * present and adds nothing. A warning the computation raises (a box with no
++   * ordered scale, a segment too small to read) is kept on the dataset.
++   */
++  const planned = withPlannedVariables(ctx.def as SurveyDefinition, built);
++  const ds = planned.dataset;
++  if (planned.warnings.length) ds.warnings = [...(ds.warnings ?? []), ...planned.warnings];
+   if (wasTruncated(rows)) ds.truncatedAt = MAX_ROWS;
+ 
+   /*
+@@ -342,13 +355,14 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
+ /* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
+ 
+ /** a stored run: the compact form plus its row id */
+-export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null };
++export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null; dataset?: DatasetSpec | null };
+ 
+ function rowToRun(r: Record<string, unknown>): StoredRun {
+   return {
+     id: String(r.id), computedAt: String(r.computed_at), trigger: String(r.trigger), environment: r.environment as DatasetSpec["environment"], n: Number(r.n ?? 0),
+     items: (r.items as StoredRun["items"]) ?? [], findings: (r.findings as StoredRun["findings"]) ?? [], verdicts: (r.verdicts as StoredRun["verdicts"]) ?? [], warnings: (r.warnings as string[]) ?? [],
+     surveyVersion: (r.survey_version as string | null) ?? null,
++    dataset: (r.dataset as DatasetSpec | null) ?? null,
+   };
+ }
+ 
+@@ -454,7 +468,8 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
+  * stored in `analytics_reports` as a live draft to edit, publish and export.
+  */
+ export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
+-  const spec: DatasetSpec = { environment: run.environment, dataset: "all" };
++  // the report's saved analyses read the same dataset the run did (a clean run is not reported on "all")
++  const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
+   const items = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: false });
+   const ensured = await ensurePlannedAnalyses(db, surveyId, ctx, items, opts.userId ?? null);
+   const proj = await db.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
+diff --git a/apps/studio/lib/copilot/failure.test.ts b/apps/studio/lib/copilot/failure.test.ts
+new file mode 100644
+index 0000000..90941dd
+--- /dev/null
++++ b/apps/studio/lib/copilot/failure.test.ts
+@@ -0,0 +1,46 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { describeFailure, failureFromError, failureFromReplyError, isTurnFailure } from "./failure.ts";
++
++/* Phase 1: every failure of the model path has a code, a cause and a next step. */
++test("every code has a title, a cause and at least one next step", () => {
++  for (const code of ["not_configured", "wallet", "timeout", "provider", "network", "truncated", "unparseable", "empty", "unusable", "engine_unparsed"] as const) {
++    const f = describeFailure(code, "x");
++    assert.equal(f.code, code);
++    assert.ok(f.title.length > 8 && f.title === f.title.toUpperCase(), code);
++    assert.ok(f.message.length > 20, code);
++    assert.ok(f.next.length >= 1, code);
++    assert.ok(isTurnFailure(f));
++  }
++  assert.ok(!isTurnFailure({ code: "nope", message: "", next: [] }));
++  assert.ok(!isTurnFailure(null));
++});
++
++test("a provider exception is read into the right code", () => {
++  assert.equal(failureFromError("the analysis provider did not answer within 90 seconds").code, "timeout");
++  assert.match(failureFromError("the analysis provider did not answer within 90 seconds").message, /90 seconds/);
++  const refused = failureFromError("the analysis provider refused the request (404) model not found");
++  assert.equal(refused.code, "provider");
++  assert.match(refused.message, /404 model not found/);
++  assert.equal(failureFromError("fetch failed").code, "network");
++  assert.equal(failureFromError("getaddrinfo ENOTFOUND api.example").code, "network");
++  assert.equal(failureFromError("something odd").code, "provider");
++});
++
++test("a reply error names the budget or quotes the prose", () => {
++  const t = failureFromReplyError("truncated", { maxTokens: 8000, continuations: 2 });
++  assert.equal(t.code, "truncated");
++  assert.match(t.message, /8000 tokens, continued 2×/);
++  assert.match(t.next.join(" "), /one block/i);
++  const u = failureFromReplyError("unparseable", { sample: "Sure, I  would\nadd three questions" });
++  assert.equal(u.code, "unparseable");
++  assert.match(u.next.join(" "), /Sure, I would add three questions/);
++  assert.equal(failureFromReplyError("empty").code, "empty");
++});
++
++test("not configured says what the engine reads and how to configure a model", () => {
++  const f = describeFailure("not_configured");
++  assert.match(f.message, /name their objects/);
++  assert.match(f.next.join(" "), /AI_API_URL/);
++  assert.match(f.next.join(" "), /Terminate if Q1 < 25/);
++});
+diff --git a/apps/studio/lib/copilot/failure.ts b/apps/studio/lib/copilot/failure.ts
+new file mode 100644
+index 0000000..7100d6f
+--- /dev/null
++++ b/apps/studio/lib/copilot/failure.ts
+@@ -0,0 +1,119 @@
++/**
++ * WHY A TURN FAILED, SAID PRECISELY (Research Engine audit, Phase 1).
++ *
++ * Every way the model path could fail — no model configured, the wallet
++ * refusing, the provider down or slow, an answer cut off at the output
++ * budget, an answer in prose, a valid object with nothing in it — reached
++ * the researcher as the grammar's
++ * "I did not understand that. Try 'show Q5 only when Q3 = Yes'…", which says
++ * the Studio cannot read English when the truth was a configuration, a
++ * budget or a provider. A failure is now one of these codes, with a title,
++ * a sentence that names the cause, and what to do next — built here, in one
++ * place, for the route, the card and the history.
++ */
++export type FailureCode =
++  | "not_configured"   // no AI_API_URL on this Studio
++  | "wallet"           // the meter refused (balance, limit, read-only)
++  | "timeout"          // the provider did not answer in time
++  | "provider"         // the provider refused the request (4xx/5xx)
++  | "network"          // the request never reached the provider
++  | "truncated"        // the answer was cut off at max_tokens, even after continuing
++  | "unparseable"      // the answer was words, not the JSON the Studio reads
++  | "empty"            // the answer had no content
++  | "unusable"         // valid JSON with no reply, actions or findings
++  | "engine_unparsed"; // no model, and the engine could not read the sentence
++
++export interface TurnFailure {
++  code: FailureCode;
++  /** the card's kicker, upper case */
++  title: string;
++  /** one or two sentences naming the cause */
++  message: string;
++  /** what the researcher can do now */
++  next: string[];
++  /** a detail the message may quote (a budget, a provider status, a refusal) */
++  detail?: string;
++}
++
++const TITLES: Record<FailureCode, string> = {
++  not_configured: "NO LANGUAGE MODEL CONFIGURED",
++  wallet: "THE WALLET REFUSED THIS CALL",
++  timeout: "THE MODEL DID NOT ANSWER IN TIME",
++  provider: "THE PROVIDER REFUSED THE REQUEST",
++  network: "THE MODEL COULD NOT BE REACHED",
++  truncated: "THE MODEL'S ANSWER WAS CUT OFF",
++  unparseable: "THE MODEL ANSWERED IN WORDS, NOT CHANGES",
++  empty: "THE MODEL ANSWERED WITH NOTHING",
++  unusable: "THE MODEL'S ANSWER HAD NOTHING TO APPLY",
++  engine_unparsed: "THE ENGINE COULD NOT READ THIS",
++};
++
++/** The failure for a code, with the cause and the next steps written for the researcher. */
++export function describeFailure(code: FailureCode, detail?: string): TurnFailure {
++  const d = detail?.trim() || undefined;
++  switch (code) {
++    case "not_configured":
++      return { code, title: TITLES[code], detail: d,
++        message: "This Studio has no language model configured, so only the engine's own reading is available — it handles instructions that name their objects (codes, variable names, option labels, logic words).",
++        next: ["Set AI_API_URL, AI_API_KEY and AI_MODEL on the server (see .env.example) to read sentences like this one.", "Or rephrase with the objects named: “Terminate if Q1 < 25”, “Change Q7's options to 1–5”, “Add a crosstab of AGE by BRAND_PREF”."] };
++    case "wallet":
++      return { code, title: TITLES[code], detail: d,
++        message: d ? `The meter refused this call: ${d}` : "The meter refused this call before it was made.",
++        next: ["Check the wallet balance and the project's spending limit under Usage.", "Nothing was sent to the model and nothing was changed."] };
++    case "timeout":
++      return { code, title: TITLES[code], detail: d,
++        message: d ? `The provider did not answer in time (${d}).` : "The provider did not answer within the time allowed.",
++        next: ["Try again — a slow provider is usually transient.", "For a large request (a whole questionnaire), ask for one block at a time."] };
++    case "provider":
++      return { code, title: TITLES[code], detail: d,
++        message: d ? `The provider refused the request: ${d}` : "The provider refused the request.",
++        next: ["A 401/403 is the key or workspace; a 404 is the model name (AI_MODEL); a 429 is the provider's rate limit.", "Nothing was changed."] };
++    case "network":
++      return { code, title: TITLES[code], detail: d,
++        message: d ? `The request did not reach the provider: ${d}` : "The request did not reach the provider.",
++        next: ["Check AI_API_URL and the server's network access, then try again."] };
++    case "truncated":
++      return { code, title: TITLES[code], detail: d,
++        message: d ? `The answer was longer than the output budget allows (${d}), even after asking the model to continue, so no change could be read from it.` : "The answer was longer than the output budget allows, even after asking the model to continue, so no change could be read from it.",
++        next: ["Ask for less at once — one block, one section of the questionnaire, or the design first and the questions after.", "Nothing was changed, and the partial answer was not applied."] };
++    case "unparseable":
++      return { code, title: TITLES[code], detail: d,
++        message: "The model answered in prose instead of the structured changes the Studio applies, and did so again when asked for the structure alone.",
++        next: ["Try the request again, or say what you want changed in terms of questions, options and logic.", d ? `It began: “${d}”` : "Nothing was changed."] };
++    case "empty":
++      return { code, title: TITLES[code], detail: d,
++        message: "The model returned an empty answer.",
++        next: ["Try again. If it repeats, the model (AI_MODEL) may not serve this request shape — check the provider's logs."] };
++    case "unusable":
++      return { code, title: TITLES[code], detail: d,
++        message: d && d.length > 20 ? d : "The model's answer was well-formed but carried no reply, no changes and no findings.",
++        next: ["Rephrase with what you want to see change, or ask a question about the survey.", "Nothing was changed."] };
++    case "engine_unparsed":
++      return { code, title: TITLES[code], detail: d,
++        message: "The engine reads instructions that name their objects — a question by code or variable, an option by label, a condition with its operator. It could not resolve this one on its own.",
++        next: ["Examples it reads: “Terminate if Q1 < 25”, “Show Q12 only if Q1 is Male”, “Make Q5 required”, “Add an Other option to Q3”, “What will break if I delete Q6?”.", "With a language model configured, descriptive requests are read by the model and applied through the same review."] };
++  }
++}
++
++/** A provider exception, read into a code: timeouts, refusals and network errors are told apart by their message. */
++export function failureFromError(message: string): TurnFailure {
++  const m = message || "";
++  if (/did not answer within (\d+) seconds/i.test(m)) return describeFailure("timeout", /within (\d+ seconds)/i.exec(m)?.[1]);
++  const refused = /refused the request \((\d{3})\)\s*(.*)$/i.exec(m);
++  if (refused) return describeFailure("provider", `${refused[1]}${refused[2] ? ` ${refused[2].slice(0, 160)}` : ""}`);
++  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|socket|ECONNRESET|TLS|certificate/i.test(m)) return describeFailure("network", m.slice(0, 160));
++  return describeFailure("provider", m.slice(0, 200));
++}
++
++/** The failure a structured reply error carries (the ai package's AiReplyError). */
++export function failureFromReplyError(code: "truncated" | "unparseable" | "empty", detail: { outputTokens?: number; maxTokens?: number; continuations?: number; sample?: string } = {}): TurnFailure {
++  if (code === "truncated") return describeFailure("truncated", `${detail.maxTokens ?? "?"} tokens${detail.continuations ? `, continued ${detail.continuations}×` : ""}`);
++  if (code === "unparseable") return describeFailure("unparseable", detail.sample?.replace(/\s+/g, " ").slice(0, 120));
++  return describeFailure("empty");
++}
++
++/** Is this the shape a route returns for a failed turn? */
++export function isTurnFailure(x: unknown): x is TurnFailure {
++  const f = x as TurnFailure | null;
++  return !!f && typeof f === "object" && typeof f.code === "string" && f.code in TITLES && typeof f.message === "string" && Array.isArray(f.next);
++}
+diff --git a/apps/studio/lib/copilot/replySchema.ts b/apps/studio/lib/copilot/replySchema.ts
+new file mode 100644
+index 0000000..96e6501
+--- /dev/null
++++ b/apps/studio/lib/copilot/replySchema.ts
+@@ -0,0 +1,26 @@
++/**
++ * THE COPILOT REPLY, AS A SCHEMA THE PROVIDER CAN HOLD TO (Phase 1).
++ *
++ * Deliberately loose: the actions are a union the engine's gate reads
++ * (`coerceCopilotReply` → `coerceSurveyActions`), and a strict schema that
++ * named every action's fields would be a second copy of that gate that
++ * drifts. What the schema fixes is the frame — an object with `kind`, a
++ * `reply` string, an `actions` array of objects with an `op` — which is
++ * exactly what a provider without json mode gets wrong (prose, or a bare
++ * array). Providers that refuse a schema fall back to json mode or nothing.
++ */
++export const COPILOT_REPLY_SCHEMA = {
++  name: "rescript_copilot_reply",
++  schema: {
++    type: "object",
++    properties: {
++      kind: { type: "string", enum: ["proposal", "answer", "review", "clarify"] },
++      reply: { type: "string" },
++      actions: { type: "array", items: { type: "object", properties: { op: { type: "string" } }, required: ["op"], additionalProperties: true } },
++      questions: { type: "array", items: { type: "string" } },
++      memory: { type: "string" },
++    },
++    required: ["kind", "reply"],
++    additionalProperties: true,
++  } as Record<string, unknown>,
++};
+diff --git a/apps/studio/lib/platform.ts b/apps/studio/lib/platform.ts
+index d1e2ed2..bd9b89e 100644
+--- a/apps/studio/lib/platform.ts
++++ b/apps/studio/lib/platform.ts
+@@ -1,4 +1,5 @@
+ import "server-only";
++import { aiPresence, aiConfigWarning } from "./aiConfig";
+ 
+ /**
+  * WHICH DEPLOYMENT OF THE PLATFORM THIS IS (§45).
+@@ -58,6 +59,12 @@ export interface PlatformInfo {
+     authSalt: boolean;
+     qualitySalt: boolean;
+     mail: boolean;
++    /** a language model for Intelligent Mode, the copilot, document cards, rephrasing (AI_API_URL) */
++    ai: boolean;
++    /** the fake in-process provider (`AI_API_URL=fake:`) — fine for development, never for a research team */
++    aiFake: boolean;
++    /** AI_MODEL named explicitly (unset means the OpenAI default, which an Anthropic endpoint does not serve) */
++    aiModel: boolean;
+   };
+   /** things worth telling a deployment manager before somebody hits them */
+   warnings: string[];
+@@ -126,6 +133,14 @@ export function platformInfo(): PlatformInfo {
+      * to send. `mailConfig()` applies the same rule.
+      */
+     mail: !!(process.env.RESEND_API_KEY && (process.env.MAIL_FROM ?? "").trim()),
++    /*
++     * THE ONE VARIABLE INTELLIGENT MODE'S READING OF DESCRIPTIVE REQUESTS
++     * DEPENDS ON, AND IT WAS NOT ON THIS PAGE (Research Engine audit, Phase 1).
++     * Without AI_API_URL the mode is "engine only": instructions that name
++     * their objects work, every descriptive one fails — and used to fail as
++     * "not understood". Presence only; the key is never read here.
++     */
++    ...aiPresence(),
+     /*
+      * THE SCHEDULED JOBS' ONE PREREQUISITE, AND IT WAS NOT ON THIS PAGE.
+      *
+@@ -183,6 +198,8 @@ export function platformInfo(): PlatformInfo {
+   if (!configured.mail) {
+     warnings.push("No mail is configured (RESEND_API_KEY and MAIL_FROM), so password resets cannot be delivered and invitations fall back to handing you a link to send by hand.");
+   }
++  const aiWarning = aiConfigWarning(configured, tier);
++  if (aiWarning) warnings.push(aiWarning);
+   /*
+    * Configured, and unable to reach anybody — the state a staging instance
+    * SHOULD be in, but worth saying out loud so nobody spends an afternoon
+diff --git a/apps/studio/lib/platformAi.test.ts b/apps/studio/lib/platformAi.test.ts
+new file mode 100644
+index 0000000..abea0c4
+--- /dev/null
++++ b/apps/studio/lib/platformAi.test.ts
+@@ -0,0 +1,29 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { aiPresence, aiConfigWarning } from "./aiConfig.ts";
++
++/* Phase 1: the platform page says whether a language model is configured, and warns when it is not. */
++test("no AI_API_URL: not configured, and the warning names what Intelligent Mode loses", () => {
++  const p = aiPresence({});
++  assert.deepEqual(p, { ai: false, aiFake: false, aiModel: false });
++  const w = aiConfigWarning(p, "production");
++  assert.match(w ?? "", /No language model is configured \(AI_API_URL, AI_API_KEY, AI_MODEL\)/);
++  assert.match(w ?? "", /engine-only/);
++});
++
++test("a real provider with a model is sound; without AI_MODEL the default's risk is named", () => {
++  const ok = aiPresence({ AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k", AI_MODEL: "claude-x" });
++  assert.deepEqual(ok, { ai: true, aiFake: false, aiModel: true });
++  assert.equal(aiConfigWarning(ok, "production"), null);
++  const noModel = aiPresence({ AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k" });
++  assert.match(aiConfigWarning(noModel, "development") ?? "", /AI_MODEL is not set.*gpt-4o-mini/);
++  assert.equal(aiPresence({ AI_API_URL: "https://api.anthropic.com/v1", AI_MODEL: "  " }).aiModel, false, "a blank AI_MODEL is unset");
++});
++
++test("the fake provider in production is a warning; elsewhere it is not", () => {
++  const p = aiPresence({ AI_API_URL: "fake:" });
++  assert.equal(p.aiFake, true);
++  assert.match(aiConfigWarning(p, "production") ?? "", /FAKE provider in production/);
++  assert.equal(aiConfigWarning(p, "development"), null);
++  assert.equal(aiPresence({ AI_API_URL: "  " }).ai, false, "blank is unset");
++});
+diff --git a/docs/PHASE1-RELIABILITY-2026-10-08.md b/docs/PHASE1-RELIABILITY-2026-10-08.md
+new file mode 100644
+index 0000000..09dbd22
+--- /dev/null
++++ b/docs/PHASE1-RELIABILITY-2026-10-08.md
+@@ -0,0 +1,62 @@
++# Research Engine — Phase 1: Reliability (08-10-2026)
++
++**Source:** the Research Engine audit (`RESEARCH-ENGINE-AUDIT-2026-10-08.md`, section K, Phase 1). The outcome it set: *the model path either works or says exactly why; the research design is editable.* Every change below is at the cause the audit named, has a regression test, and the tests were mutation-checked. Nothing existing was removed or rewritten except the dead `significanceLetters` the audit listed.
++
++## Checklist
++
++| ID | Audit finding | Change | Status |
++|---|---|---|---|
++| R1 | `AI_*` variables undocumented | `.env.example` gains a LANGUAGE MODEL section; `/platform` reports presence (never a value) and warns on a bad configuration | ✅ Fixed |
++| R2 | `finish_reason` never read — a cut-off answer was parsed as a whole one | `completeJson` reads it and continues the answer (up to `continuations`, default 2); still cut off → `truncated` | ✅ Fixed |
++| R3 | A prose reply became `null` and fell to the grammar | one retry asking for the object alone; prose twice → `unparseable`; nothing → `empty` | ✅ Fixed |
++| R4 | JSON-schema mode never used | `response_format: json_schema` first where the provider takes it; refusal remembered per base and `json_object` / plain used instead | ✅ Fixed |
++| R5 | "NOT UNDERSTOOD" for every model-path failure | a `TurnFailure` (code, title, cause, next steps) on the route, the card and the history; the engine-only card names the missing model | ✅ Fixed |
++| R6 | Derived variables existed only inside `runPlan` | `buildFor` adds the plan's variables and segments to every dataset; a second pass is idempotent; a variable that could not be computed leaves its note on the results that read it | ✅ Fixed |
++| R7 | Milestone runs used the "all" dataset | the cron runs on `clean` | ✅ Fixed |
++| R8 | Factor analysis promised scores it never output | a per-factor summary table and per-case scores on the chart data, in dataset order, null where an item is missing | ✅ Fixed |
++| R9 | `significanceLetters` dead | removed (the crosstab's `columnLetter` is the live one, tested elsewhere) | ✅ Removed |
++| R10 | No way to edit the research design by hand | `ResearchDesignEditor` in Survey Settings and the Analysis tab | ✅ Added |
++
++## Causes and fixes
++
++**R2 / R3 / R4 — the model path says exactly why (`packages/ai/src/index.ts`)**
++
++- **Cause:** `completeJson` returned `null` for anything it could not parse, and read nothing but `content`. A long generation stopped at `max_tokens` was a half-object; a provider without JSON mode answered in prose now and then; both became `null`, and the route's `null` became the grammar's "I did not understand that".
++- **Fix:** `completeJson` reads `finish_reason` on every call. On `length` it re-asks with the partial answer as the assistant's turn and *continue exactly from where it stopped*, up to `continuations` times (0–5, default 2; the copilot passes 2 for generation and 1 otherwise), metering every call. What still cannot be read is thrown as `AiReplyError` with a code — `truncated` (budget, continuations, tail sample), `unparseable` (after one retry for the object alone; head sample), `empty` — and `isAiReplyError` lets the route tell it apart from a provider exception.
++- **Schema:** `CompleteJsonOptions.schema` is sent as `response_format: json_schema`. A 400 that names the response format marks the base in `NO_JSON_SCHEMA` and the call is resent as `json_object` (where `acceptsJsonMode`) or plain; any other 400 is the provider's answer and is not retried. Anthropic's OpenAI-compatible layer names `json_schema` as what it takes, so it gets the schema and still never `json_object`. The copilot's schema (`lib/copilot/replySchema.ts`) is deliberately loose — `kind`, `reply`, `actions[].op` — so the gate and the engine remain the validators.
++
++**R5 — a precise cause instead of "NOT UNDERSTOOD"**
++
++- **Cause:** every failure on the model path — 501 (no model), 402 (wallet), a provider 4xx/5xx, a timeout, a cut-off answer, prose, a valid object with nothing in it, every proposed action refused — reached the researcher through the same fall-through to the grammar, whose unknown-intent card said the Studio could not read English.
++- **Fix:** `lib/copilot/failure.ts` defines `FailureCode` and `describeFailure(code, detail)`: a title for the kicker, a sentence naming the cause and the next steps, built in one place. The route includes a `failure` in its 501, its 402/423 refusal, its 502 (from `failureFromError`, which tells timeout, provider status and network apart; or `failureFromReplyError`) and its unusable-reply body. (A proposal whose every action the engine refused already had its own surface — the card lists each refusal and disables Apply — so no new code was added for it.) `useCopilot` stores the failure on the entry and marks the turn failed. One case still reaches the grammar: a well-formed answer with nothing in it (`unusable`), where a phrasing the engine's recognisers handed on but the grammar parses ("call Q2 PLATFORMS") is offered as before, replacing the failed turn; when the grammar cannot read it either, the failed turn — not a second "could not read this" — is the answer. The card renders the kicker, "What to do" and, under it, **what the engine read** before it handed the sentence on (request type, detected objects, the recogniser's reason). Once a 501 has been seen the Studio knows there is no model: the engine-only card's kicker is *NO LANGUAGE MODEL — THE ENGINE COULD NOT READ THIS* and its text names `AI_API_URL`, the sentences the engine does read, and what it read from this one. The grammar's own card for an unknown intent is now *COULD NOT READ THIS*; "NOT UNDERSTOOD" no longer appears anywhere.
++
++**R6 / R7 / R8 — analytics**
++
++- `withPlannedVariables` is now called by `buildFor`, so the plan's derived variables and segments are columns of every dataset the Studio builds, not only inside `runPlan`. A derived column already present from an earlier pass is skipped without the "already has a variable" warning (the second pass is idempotent). A variable that could not be computed leaves its note in `Dataset.warnings`, and `runAnalysis` appends the notes that mention one of the analysis's variables to that result — only to results that read it.
++- The milestone cron runs the plan on the `clean` dataset (`dataset: "clean"`), and `StoredRun` now carries the dataset spec it ran on, so the report says which.
++- `factor()` outputs a `scores` table (per factor: n, mean, SD, min, max) and `chart.scores` (`factors`, one row per case in dataset order). `factorAnalysis` now returns `cases`, the input index of each scored row, because it scores complete cases only — without it the scores were in a different order from the dataset. A case missing an item has `null` scores and is not counted.
++
++**R10 — the research design editor (`components/studio/ResearchDesignEditor.tsx`)**
++
++- Objective, target population, methodology, planned completes; hypotheses with a coverage chip (testable / unplanned / unmeasured / unlinked, from `hypothesisCoverage`); constructs with role, definition and the questions that measure them; assumptions. Edits go through the store, labelled for undo.
++- Removing a hypothesis goes through the engine's `remove_hypothesis`, which renumbers the later H-labels on every question and plan item that cites them — the one edit where a form writing the array would leave tags pointing at the wrong hypothesis.
++- Mounted in Survey Settings (after Quality) and, compact, under the Analysis tab's hypotheses, which used to say "write them in the Research design" when there was none.
++
++**R1 — configuration**
++
++- `.env.example` documents `AI_API_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_WORKSPACE_ID`, `AI_API_HEADERS`, `AI_VISION_MODEL`, `AI_EMBEDDINGS_MODEL`, `AI_STT_*`, `AI_TTS_MODEL`, with what each does and what Intelligent Mode loses without one.
++- `lib/aiConfig.ts` (pure, testable) reports presence only — `ai`, `aiFake`, `aiModel` — and `aiConfigWarning` says when none is configured, when the fake provider is in production, or when `AI_MODEL` is unset for a real endpoint. `platform.ts` includes both; no key value is read anywhere.
++
++## Tests
++
++| Suite | What it checks | Result |
++|---|---|---|
++| `packages/ai/src/reply.test.ts` | continuation reads one object and meters both calls; truncated after the continuations, with the budget and count; `continuations: 0`; prose retried once then `unparseable`; empty; schema → json_object → plain fallbacks; an unrelated 400 is not retried; Anthropic gets the schema and never json_object | 4 tests, ai 31 pass |
++| `apps/studio/lib/copilot/failure.test.ts` | every code has a title, cause and next step; timeouts, provider status and network errors told apart; the reply error's budget and sample; not_configured names the variables | 4 pass |
++| `apps/studio/lib/platformAi.test.ts` | presence flags, blank values, the three warnings | 3 pass |
++| `packages/analytics/src/phase1.test.ts` | derived variables on a built dataset run a saved analysis; the second pass adds and warns nothing; the dataset note is inherited only by results that read the variable; factor scores table and per-case scores, null for a case missing an item | 3 tests, analytics 133 pass |
++| `scripts/phase1-reliability-test.mjs` (browser) | the fake provider's unusable reply shows the cause, the next step and what the engine read; a 502 truncated, a 402 wallet and a 501 not-configured each show their own card; after the 501 the engine-only card names `AI_API_URL`, the examples and what it read, kicker *NO LANGUAGE MODEL — …*, badge *engine only*, no "not understood" anywhere; Survey Settings → Research design stores every field, a construct linked to Q4 and an assumption; removing H1 renumbers H2→H1 on the questions' tags; the Analysis tab's coverage follows a hypothesis added through its editor; `/api/platform` reports `ai`, `aiFake`, `aiModel` | 9 checks pass |
++
++Mutation checks: ai 12/12 caught (two tests strengthened), analytics 9/9 (one test strengthened, which exposed the score-order defect fixed above), failure + aiConfig 12/12 (one test strengthened), Studio surfaces (route, client, view, card, editor) 10/10 through the browser suite (two checks strengthened).
++
++Regression: `intelligent-mode-test.mjs` and `copilot-test.mjs` expected the fake model's empty answer to fall to the grammar's "not understood" card; they now expect the failed turn with its cause (and the grammar's reading where it has one). Both pass, with engine-first, findings-copilot, analysis-framework, history, oct06/oct07/october-review, the unit suites (`pnpm -r test`: 17 packages, 0 failures), both typechecks and the auth-guard audit.
+diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts
+index 614fe58..ae76559 100644
+--- a/packages/ai/src/index.ts
++++ b/packages/ai/src/index.ts
+@@ -833,6 +833,8 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
+  * it again for the life of the process.
+  */
+ const NO_JSON_MODE = new Set<string>();
++/** bases that refused `json_schema` (a schema is then sent as `json_object`, or not at all) */
++const NO_JSON_SCHEMA = new Set<string>();
+ export function acceptsJsonMode(base: string): boolean {
+   if (NO_JSON_MODE.has(base)) return false;
+   try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
+@@ -841,9 +843,24 @@ async function postChat(base: string, key: string, body: Record<string, unknown>
+   const send = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
+     method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
+   });
+-  const { response_format: _format, ...plain } = body;
+-  if (!("response_format" in body) || !acceptsJsonMode(base)) return { r: await send(plain) };
+-  const r = await send(body);
++  const { response_format: format, ...plain } = body;
++  const schema = !!format && typeof format === "object" && (format as { type?: string }).type === "json_schema";
++  /*
++   * A SCHEMA FIRST, WHERE THE PROVIDER TAKES ONE. Anthropic's compatibility
++   * layer refuses `json_object` but names `json_schema` as what it wants, so
++   * a schema goes to every provider; one that refuses it with a 400 naming
++   * `response_format` is sent `json_object` (where that is accepted), and a
++   * second refusal is remembered as "no json mode at all" for this base.
++   */
++  if (schema && !NO_JSON_SCHEMA.has(base)) {
++    const r = await send(body);
++    if (r.ok || r.status !== 400) return { r };
++    const detail = (await r.text().catch(() => "")).trim();
++    if (!/response_format|json_schema|schema/i.test(detail)) return { r, detail };
++    NO_JSON_SCHEMA.add(base);
++  }
++  if (!format || !acceptsJsonMode(base)) return { r: await send(plain) };
++  const r = await send({ ...plain, response_format: { type: "json_object" } });
+   if (r.ok || r.status !== 400) return { r };
+   const detail = (await r.text().catch(() => "")).trim();
+   if (!/response_format/i.test(detail)) return { r, detail };
+@@ -881,6 +898,45 @@ export interface CompleteJsonOptions {
+    * analysis; a background job passes what it can afford. Capped at 300 s.
+    */
+   timeoutMs?: number;
++  /**
++   * A JSON schema for the reply, sent as `response_format: json_schema` to
++   * providers that have it (OpenAI-style; Anthropic's compatibility layer
++   * names it in its own refusal of `json_object`). A provider that refuses it
++   * is sent `json_object`, or nothing, exactly as before — the schema is a
++   * nicety for the provider, never a requirement.
++   */
++  schema?: { name: string; schema: Record<string, unknown>; strict?: boolean };
++  /**
++   * When the provider stops at `max_tokens` (`finish_reason: "length"`), ask
++   * it to continue from where it stopped, up to this many times, and read
++   * the pieces as one reply. Default 2 — enough for a questionnaire twice
++   * the budget; a reply still cut off after that is reported as truncated
++   * rather than parsed as nothing. 0 disables continuation.
++   */
++  continuations?: number;
++}
++
++/**
++ * WHY A REPLY COULD NOT BE READ — said in a code the caller can act on,
++ * instead of `null`, which told the Studio nothing (Research Engine audit,
++ * Phase 1: "the model's answer had nothing I could use" covered a truncated
++ * questionnaire, a prose answer and an empty answer alike).
++ *
++ *   truncated    the provider stopped at max_tokens and the pieces did not
++ *                make one JSON object, even after continuing
++ *   unparseable  the provider answered, in words, with no JSON object in it,
++ *                twice (the second time asked for the object alone)
++ *   empty        the provider answered with no content at all
++ */
++export type AiReplyFailure = "truncated" | "unparseable" | "empty";
++export class AiReplyError extends Error {
++  constructor(public readonly code: AiReplyFailure, message: string, public readonly detail: { outputTokens?: number; maxTokens?: number; continuations?: number; sample?: string } = {}) {
++    super(message);
++    this.name = "AiReplyError";
++  }
++}
++export function isAiReplyError(e: unknown): e is AiReplyError {
++  return e instanceof AiReplyError || (!!e && typeof e === "object" && (e as { name?: string }).name === "AiReplyError");
+ }
+ 
+ export async function completeJson(
+@@ -908,14 +964,16 @@ export async function completeJson(
+   const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
+     ? Math.min(300_000, Math.round(options.timeoutMs as number))
+     : TIMEOUT_MS;
++  const continuations = Number.isFinite(options.continuations) ? Math.max(0, Math.min(5, Math.round(options.continuations as number))) : 2;
+   const ctrl = new AbortController();
+   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+-  try {
+-    const { r, detail: refused } = await postChat(base, key, {
+-      model, temperature: 0, max_tokens: maxTokens,
+-      response_format: { type: "json_object" },
+-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+-    }, ctrl.signal);
++  type Msg = { role: "system" | "user" | "assistant"; content: string };
++  const format = options.schema
++    ? { type: "json_schema", json_schema: { name: options.schema.name, schema: options.schema.schema, ...(options.schema.strict ? { strict: true } : {}) } }
++    : { type: "json_object" };
++  /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
++  const call = async (messages: Msg[]): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
++    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: maxTokens, response_format: format, messages }, ctrl.signal);
+     if (!r.ok) {
+       const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 200);
+       const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
+@@ -923,25 +981,63 @@ export async function completeJson(
+       throw err;
+     }
+     const j = await r.json().catch(() => null) as {
+-      choices?: { message?: { content?: string } }[];
++      choices?: { message?: { content?: string }; finish_reason?: string }[];
+       usage?: { prompt_tokens?: number; completion_tokens?: number };
+       model?: string;
+     } | null;
+-    const content = j?.choices?.[0]?.message?.content;
++    const content = j?.choices?.[0]?.message?.content ?? "";
+     const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
++    const outputTokens = typeof outTok === "number" ? outTok : approxTokens(content);
+     reportUsage({
+       kind: "chat", provider: "openai-compatible", model: j?.model || model,
+-      inputTokens: typeof inTok === "number" ? inTok : approxTokens(system + user),
+-      outputTokens: typeof outTok === "number" ? outTok : approxTokens(content ?? ""),
++      inputTokens: typeof inTok === "number" ? inTok : approxTokens(messages.map((m) => m.content).join("")),
++      outputTokens,
+       requests: 1, estimated: typeof inTok !== "number",
+     });
+-    if (!content) return null;
+-    try {
+-      return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+-    } catch {
+-      /* without json mode the object can come after a sentence */
+-      return parseJsonReply(content);
++    return { content, finish: j?.choices?.[0]?.finish_reason ?? null, outputTokens };
++  };
++  const read = (content: string): unknown | null => {
++    try { return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); }
++    catch { return parseJsonReply(content); }   /* without json mode the object can come after a sentence */
++  };
++  try {
++    const messages: Msg[] = [{ role: "system", content: system }, { role: "user", content: user }];
++    let { content, finish, outputTokens } = await call(messages);
++    /*
++     * CUT OFF AT THE OUTPUT BUDGET. A survey of forty questions with options,
++     * roles and a plan does not fit the budget the copilot allows, and the
++     * cut-off JSON parsed as nothing: "the model's answer had nothing I could
++     * use" for a question of size. The provider says why it stopped
++     * (`finish_reason: "length"`), so the reply is continued — the partial
++     * answer sent back as the assistant's, with one instruction to go on from
++     * exactly where it stopped — and the pieces are read as one.
++     */
++    let continued = 0;
++    let total = outputTokens;
++    while (finish === "length" && continued < continuations) {
++      const more = await call([...messages, { role: "assistant", content }, { role: "user", content: "Your answer was cut off. Continue EXACTLY from where it stopped — output only the remaining characters of the same JSON, with no preamble, no repetition and no code fence." }]);
++      content += more.content;
++      finish = more.finish;
++      total += more.outputTokens;
++      continued += 1;
++    }
++    if (!content.trim()) throw new AiReplyError("empty", "the model answered with no content", { outputTokens: total, maxTokens });
++    let value = read(content);
++    if (value == null && finish === "length") {
++      throw new AiReplyError("truncated", `the model's answer was cut off at the output limit (${maxTokens} tokens${continued ? `, continued ${continued}×` : ""}) and could not be read as one JSON object`, { outputTokens: total, maxTokens, continuations: continued, sample: content.slice(-200) });
++    }
++    /*
++     * WORDS, NOT AN OBJECT. Asked once more, for the object alone, before
++     * giving up — a provider without json mode answers in prose now and then,
++     * and the second ask is cheaper than a researcher retyping the request.
++     */
++    if (value == null) {
++      const again = await call([...messages, { role: "assistant", content }, { role: "user", content: "That was not a JSON object. Reply again with ONLY the JSON object — no words before or after it, no code fence." }]);
++      total += again.outputTokens;
++      value = again.content.trim() ? read(again.content) : null;
++      if (value == null) throw new AiReplyError("unparseable", "the model answered in words, not in the JSON shape the Studio reads, twice", { outputTokens: total, maxTokens, sample: content.slice(0, 200) });
+     }
++    return value;
+   } catch (e) {
+     /*
+      * "This operation was aborted" tells a job runner nothing. Say what
+diff --git a/packages/ai/src/reply.test.ts b/packages/ai/src/reply.test.ts
+new file mode 100644
+index 0000000..9fd04c8
+--- /dev/null
++++ b/packages/ai/src/reply.test.ts
+@@ -0,0 +1,128 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { completeJson, isAiReplyError, collectUsage, type AiReplyError } from "./index.js";
++
++/**
++ * Research Engine audit, Phase 1: a reply cut off at the output budget is
++ * continued and read as one; a prose reply is asked for once more as the
++ * object alone; what still cannot be read is reported with a code, never as
++ * `null`. A schema goes to providers that take one and falls back where
++ * they do not.
++ */
++const KEYS = ["AI_API_URL", "AI_API_KEY", "AI_MODEL", "AI_WORKSPACE_ID", "AI_API_HEADERS"];
++async function withEnv(env: Record<string, string>, fn: () => Promise<void>) {
++  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
++  try { for (const k of KEYS) delete process.env[k]; Object.assign(process.env, env); await fn(); }
++  finally { for (const k of KEYS) { delete process.env[k]; if (saved[k] !== undefined) process.env[k] = saved[k]; } }
++}
++type Sent = { url: string; body: { messages: { role: string; content: string }[]; response_format?: unknown } };
++async function withFetch(reply: (b: Sent["body"], n: number) => Response, fn: (sent: Sent[]) => Promise<void>) {
++  const sent: Sent[] = [];
++  const real = globalThis.fetch;
++  globalThis.fetch = (async (url: string, init: { body: string }) => {
++    const body = JSON.parse(init.body);
++    sent.push({ url, body });
++    return reply(body, sent.length);
++  }) as never;
++  try { await fn(sent); } finally { globalThis.fetch = real; }
++}
++const answer = (content: string, finish = "stop", tokens = 7) =>
++  new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: finish }], usage: { prompt_tokens: 11, completion_tokens: tokens } }), { status: 200 });
++const ENV = { AI_API_URL: "https://openai.example/v1", AI_API_KEY: "k" };
++const failure = async (p: Promise<unknown>): Promise<AiReplyError> => {
++  try { await p; } catch (e) { if (isAiReplyError(e)) return e; throw e; }
++  throw new Error("did not fail");
++};
++
++test("a reply cut off at max_tokens is continued from where it stopped and read as one object", async () => {
++  const whole = JSON.stringify({ kind: "proposal", actions: Array.from({ length: 6 }, (_, i) => ({ op: "create_question", text: `Question ${i + 1}` })) });
++  const cut = Math.floor(whole.length / 2);
++  await withEnv(ENV, () => withFetch((b, n) => {
++    if (n === 1) return answer(whole.slice(0, cut), "length", 40);
++    // the continuation carries the partial answer as the assistant's turn and one instruction
++    const last = b.messages[b.messages.length - 1];
++    assert.equal(b.messages[b.messages.length - 2].role, "assistant");
++    assert.equal(b.messages[b.messages.length - 2].content, whole.slice(0, cut));
++    assert.match(last.content, /Continue EXACTLY from where it stopped/);
++    return answer(whole.slice(cut), "stop", 40);
++  }, async (sent) => {
++    const { value, usage } = await collectUsage(() => completeJson("s", "u", 40, { timeoutMs: 5000 }));
++    assert.deepEqual(value, JSON.parse(whole));
++    assert.equal(sent.length, 2);
++    assert.equal(usage.length, 2, "both calls are metered");
++    assert.equal(usage.reduce((a, u) => a + (u.outputTokens ?? 0), 0), 80);
++  }));
++});
++
++test("still cut off after the continuations: reported as truncated, with the budget", async () => {
++  await withEnv(ENV, () => withFetch(() => answer('{"kind":"proposal","actions":[{"op":"create_question","text":"never ends', "length", 50), async (sent) => {
++    const e = await failure(completeJson("s", "u", 50, { timeoutMs: 5000, continuations: 2 }));
++    assert.equal(e.code, "truncated");
++    assert.match(e.message, /cut off at the output limit \(50 tokens, continued 2×\)/);
++    assert.equal(sent.length, 3, "one call and two continuations");
++    assert.equal(e.detail.outputTokens, 150);
++    assert.equal(e.detail.continuations, 2, "the detail carries how often it was continued");
++    assert.equal(e.detail.maxTokens, 50);
++  }));
++  await withEnv(ENV, () => withFetch(() => answer('{"a":', "length", 5), async (sent) => {
++    const e = await failure(completeJson("s", "u", 5, { timeoutMs: 5000, continuations: 0 }));
++    assert.equal(e.code, "truncated");
++    assert.equal(sent.length, 1, "continuations: 0 never continues");
++  }));
++});
++
++test("a prose answer is asked for once more as the object alone; words twice is unparseable, not null", async () => {
++  await withEnv(ENV, () => withFetch((b, n) => {
++    if (n === 1) return answer("Sure! I would add three questions about price.");
++    assert.match(b.messages[b.messages.length - 1].content, /ONLY the JSON object/);
++    return answer('{"kind":"answer","reply":"three questions about price"}');
++  }, async (sent) => {
++    assert.deepEqual(await completeJson("s", "u", 20, { timeoutMs: 5000 }), { kind: "answer", reply: "three questions about price" });
++    assert.equal(sent.length, 2);
++  }));
++  await withEnv(ENV, () => withFetch(() => answer("I cannot produce that."), async (sent) => {
++    const e = await failure(completeJson("s", "u", 20, { timeoutMs: 5000 }));
++    assert.equal(e.code, "unparseable");
++    assert.equal(sent.length, 2);
++    assert.match(e.detail.sample ?? "", /cannot produce/);
++  }));
++  await withEnv(ENV, () => withFetch(() => answer(""), async () => {
++    const e = await failure(completeJson("s", "u", 20, { timeoutMs: 5000 }));
++    assert.equal(e.code, "empty");
++  }));
++});
++
++test("a schema is sent as json_schema; a provider that refuses it gets json_object; one that refuses both gets nothing", async () => {
++  const schema = { name: "reply", schema: { type: "object", properties: { kind: { type: "string" } } } };
++  await withEnv({ AI_API_URL: "https://schema.example/v1", AI_API_KEY: "k" }, () => withFetch(() => answer('{"kind":"x"}'), async (sent) => {
++    assert.deepEqual(await completeJson("s", "u", 20, { timeoutMs: 5000, schema }), { kind: "x" });
++    assert.deepEqual(sent[0].body.response_format, { type: "json_schema", json_schema: { name: "reply", schema: schema.schema } });
++  }));
++  await withEnv({ AI_API_URL: "https://noschema.example/v1", AI_API_KEY: "k" }, () => withFetch((b) => {
++    const f = b.response_format as { type?: string } | undefined;
++    if (f?.type === "json_schema") return new Response('{"error":{"message":"response_format: json_schema is not supported"}}', { status: 400 });
++    return answer('{"kind":"y"}');
++  }, async (sent) => {
++    assert.deepEqual(await completeJson("s", "u", 20, { timeoutMs: 5000, schema }), { kind: "y" });
++    assert.deepEqual(sent.map((x) => (x.body.response_format as { type?: string } | undefined)?.type), ["json_schema", "json_object"]);
++    await completeJson("s", "u", 20, { timeoutMs: 5000, schema });
++    assert.equal((sent[2].body.response_format as { type?: string }).type, "json_object", "the refusal is remembered");
++  }));
++  // a 400 that is not about the response format is the provider's answer, not a reason to retry without the schema
++  await withEnv({ AI_API_URL: "https://badreq.example/v1", AI_API_KEY: "k" }, () => withFetch(() => new Response('{"error":{"message":"model not found: gpt-nope"}}', { status: 400 }), async (sent) => {
++    await assert.rejects(completeJson("s", "u", 20, { timeoutMs: 5000, schema }), /400/);
++    assert.equal(sent.length, 1, "no json_object retry for an unrelated 400");
++    await assert.rejects(completeJson("s", "u", 20, { timeoutMs: 5000, schema }));
++    assert.equal((sent[1].body.response_format as { type?: string }).type, "json_schema", "…and the schema is still sent next time");
++  }));
++  await withEnv({ AI_API_URL: "https://nojson.example/v1", AI_API_KEY: "k" }, () => withFetch((b) => (b.response_format ? new Response('{"error":{"message":"response_format is not supported"}}', { status: 400 }) : answer('{"kind":"z"}')), async (sent) => {
++    assert.deepEqual(await completeJson("s", "u", 20, { timeoutMs: 5000, schema }), { kind: "z" });
++    assert.deepEqual(sent.map((x) => (x.body.response_format as { type?: string } | undefined)?.type ?? "none"), ["json_schema", "json_object", "none"]);
++  }));
++  await withEnv({ AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k" }, () => withFetch(() => answer('{"kind":"a"}'), async (sent) => {
++    await completeJson("s", "u", 20, { timeoutMs: 5000, schema });
++    assert.equal((sent[0].body.response_format as { type?: string }).type, "json_schema", "Anthropic is sent a schema (it names json_schema as what it takes)");
++    await completeJson("s", "u", 20, { timeoutMs: 5000 });
++    assert.equal(sent[1].body.response_format, undefined, "…and still never json_object");
++  }));
++});
+diff --git a/packages/analytics/src/analyses/index.ts b/packages/analytics/src/analyses/index.ts
+index 4e2b830..53bc531 100644
+--- a/packages/analytics/src/analyses/index.ts
++++ b/packages/analytics/src/analyses/index.ts
+@@ -27,7 +27,10 @@ export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): Analysis
+     };
+   }
+   try {
+-    return runner(def, ds, dataset.cases.length);
++    const result = runner(def, ds, dataset.cases.length);
++    /* a plan variable this analysis reads that could not be computed as planned: the dataset's own note, on the result that depends on it */
++    const relevant = (dataset.warnings ?? []).filter((w) => def.variables.some((v) => v && w.includes(v)) && !result.warnings.includes(w));
++    return relevant.length ? { ...result, warnings: [...result.warnings, ...relevant] } : result;
+   } catch (e) {
+     return {
+       kind: def.kind, name: def.name, base: { total: dataset.cases.length, filtered: ds.cases.length, n: ds.cases.length, weightedN: ds.cases.length, label: "All respondents" },
+diff --git a/packages/analytics/src/analyses/statistics.ts b/packages/analytics/src/analyses/statistics.ts
+index 8515dc2..cf2be5d 100644
+--- a/packages/analytics/src/analyses/statistics.ts
++++ b/packages/analytics/src/analyses/statistics.ts
+@@ -325,10 +325,23 @@ export function factor(def: AnalysisDefinition, ds: Dataset, totalCases: number)
+   const load: ResultTable = { id: "loadings", title: "Rotated factor loadings", columns: [{ key: "v", label: "Variable" }, ...fNames.map((f, j) => ({ key: `f${j}`, label: f, type: "number" as const, decimals: 2 })), { key: "h2", label: "Communality", type: "number", decimals: 2 }],
+     rows: r.variables.map((v, i) => ({ v, ...Object.fromEntries(fNames.map((_, j) => [`f${j}`, round(r.loadings[i][j], 2)])), ...Object.fromEntries(fNames.map((_, j) => [`f${j}__sig`, Math.abs(r.loadings[i][j]) >= 0.4 ? "*" : ""])), h2: round(r.communalities[i], 2) })), notes: ["* loading ≥ .40"] };
+   const eig: ResultTable = { id: "eigen", title: "Eigenvalues and variance explained", columns: [{ key: "c", label: "Component" }, { key: "e", label: "Eigenvalue", type: "number", decimals: 3 }, { key: "v", label: "% variance", type: "pct", decimals: 1 }, { key: "cum", label: "Cumulative %", type: "pct", decimals: 1 }], rows: r.eigenvalues.map((e, i) => ({ c: i + 1, e: round(e, 3), v: pct(r.explained[i]), cum: pct(r.cumulative[i]) })) };
++  /*
++   * THE SCORES THE DESCRIPTION PROMISES (Phase 1). `factorAnalysis` computes
++   * a score per case and factor and the runner dropped them. A per-case
++   * listing is not a result anyone reads, so the table is the scores'
++   * summary — mean, SD and the range per factor over the cases that had every
++   * item — and the per-case scores travel on the chart data for an export or
++   * a segment to use.
++   */
++  // the scores are computed for the complete cases only; put each back at its case's position, null where an item was missing
++  const perCase: (number | null)[][] = ds.cases.map(() => fNames.map(() => null));
++  r.cases.forEach((caseIndex, k) => { perCase[caseIndex] = r.scores[k].map((x) => (Number.isFinite(x) ? round(x, 3) : null)); });
++  const scoreStats = fNames.map((f, j) => { const col = r.scores.map((row) => row[j]).filter((x) => Number.isFinite(x)); const d = describe(col); return { f, n: col.length, mean: round(d.mean ?? 0, 3), sd: round(d.sd ?? 0, 3), min: round(d.min ?? 0, 2), max: round(d.max ?? 0, 2) }; });
++  const scoresTable: ResultTable = { id: "scores", title: "Factor scores (per respondent, summarised)", columns: [{ key: "f", label: "Factor" }, { key: "n", label: "n", type: "number", decimals: 0 }, { key: "mean", label: "Mean", type: "number", decimals: 3 }, { key: "sd", label: "SD", type: "number", decimals: 3 }, { key: "min", label: "Min", type: "number", decimals: 2 }, { key: "max", label: "Max", type: "number", decimals: 2 }], rows: scoreStats, notes: ["Regression-method scores on standardised items; a respondent missing any item has no score."] };
+   const insights = [`${k} factor${k === 1 ? "" : "s"} retained, explaining ${fmtPct(r.cumulative[k - 1], 1)} of the variance. KMO = ${fmtNum(r.kmo, 2)} (${r.kmo == null ? "n/a" : r.kmo >= 0.8 ? "meritorious" : r.kmo >= 0.7 ? "middling" : r.kmo >= 0.6 ? "mediocre" : "poor"} sampling adequacy).`];
+   for (let j = 0; j < k; j++) { const top = r.variables.map((v, i) => ({ v, l: r.loadings[i][j] })).filter((x) => Math.abs(x.l) >= 0.4).sort((a, b) => Math.abs(b.l) - Math.abs(a.l)); if (top.length) insights.push(`Factor ${j + 1}: ${top.map((t) => t.v).slice(0, 4).join(", ")}.`); }
+   return makeResult(def, ds, {
+-    tables: [eig, load], chart: { matrix: { rows: r.variables, columns: fNames, values: r.loadings.map((row) => row.map((x) => round(x, 2))) }, categories: r.eigenvalues.map((_, i) => `${i + 1}`), series: [{ name: "Eigenvalue", values: r.eigenvalues.map((e) => round(e, 3)) }] },
++    tables: [eig, load, scoresTable], chart: { matrix: { rows: r.variables, columns: fNames, values: r.loadings.map((row) => row.map((x) => round(x, 2))) }, categories: r.eigenvalues.map((_, i) => `${i + 1}`), series: [{ name: "Eigenvalue", values: r.eigenvalues.map((e) => round(e, 3)) }], scores: { factors: fNames, values: perCase } },
+     insights, recommendedCharts: ["heatmap", "line", "bar_horizontal", "scatter"], variablesUsed: vars, totalCases,
+   });
+ }
+diff --git a/packages/analytics/src/dataset.ts b/packages/analytics/src/dataset.ts
+index ec5127e..35cfc2a 100644
+--- a/packages/analytics/src/dataset.ts
++++ b/packages/analytics/src/dataset.ts
+@@ -89,6 +89,13 @@ export interface Dataset {
+    * the study. Absent means the whole response set is present.
+    */
+   truncatedAt?: number;
++  /**
++   * What the plan's own variables could not be computed as (a top box with no
++   * ordered scale, a segment under the readable base) — raised when the
++   * dataset was built with `withPlannedVariables`, and carried onto any result
++   * that reads one of the variables named.
++   */
++  warnings?: string[];
+   spec: DatasetSpec;
+ }
+ 
+diff --git a/packages/analytics/src/phase1.test.ts b/packages/analytics/src/phase1.test.ts
+new file mode 100644
+index 0000000..f97c7b6
+--- /dev/null
++++ b/packages/analytics/src/phase1.test.ts
+@@ -0,0 +1,83 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { def as base, synthDataset, spec } from "./analyses/fixture.js";
++import { runAnalysis } from "./analyses/index.js";
++import { withPlannedVariables } from "./plannedVariables.js";
++import { runPlan } from "./findings.js";
++import { plannedAnalyses } from "./planBridge.js";
++
++/**
++ * Research Engine audit, Phase 1 — analytics correctness.
++ *
++ * 1. The plan's derived variables and segments are columns of every dataset
++ *    the Studio builds (`buildFor` calls `withPlannedVariables`), so a saved
++ *    analysis that names one runs; and `runPlan`'s own pass over a dataset
++ *    that already carries them adds nothing and warns of nothing.
++ * 2. A plan variable that could not be computed leaves its note on the
++ *    dataset, and the results that read it inherit the note.
++ * 3. A factor analysis outputs its scores.
++ */
++const PLAN = {
++  crosstabs: [{ id: "x1", rows: ["SAT_T2B"], columns: ["GENDER"], priority: 1, hypotheses: [] }],
++  tests: [{ id: "t1", method: "t_test", outcome: "ITEMS_SCORE", variables: [], groupBy: "GENDER", priority: 1, hypotheses: ["H1"] }],
++  derived: [
++    { name: "SAT_T2B", kind: "top_box", from: ["SAT"] },
++    { name: "ITEMS_SCORE", kind: "mean_score", from: ["ITEMS"] },
++    { name: "NO_RULE", kind: "recode", from: ["SAT"] },
++  ],
++  segments: [{ name: "Gender × region", by: ["GENDER", "REGION"] }],
++};
++const withPlan = () => {
++  const def = structuredClone(base);
++  def.research = { objective: "x", hypotheses: ["Women have a higher item score than men"], population: "adults", constructs: [], analysis: [], assumptions: [], sources: [], analysisPlan: PLAN } as never;
++  return def;
++};
++
++test("a dataset built with the plan's variables runs a saved analysis that names one; runPlan over it adds nothing twice", () => {
++  const def = withPlan();
++  const built = withPlannedVariables(def, synthDataset(300));
++  assert.deepEqual(built.computed.slice(0, 2), ["SAT_T2B", "ITEMS_SCORE"]);
++  assert.equal(built.computed.length, 3, `the segment too: ${built.computed.join(",")}`);
++  assert.ok(built.dataset.byName.get("SAT_T2B")?.derived && built.dataset.byName.get(built.computed[2])?.derived, "marked as the plan's own");
++  // the way the Studio would run a saved crosstab on this dataset
++  const xt = runAnalysis({ id: "a", kind: "crosstab", name: "T2B by gender", variables: ["SAT_T2B", "GENDER"], dataset: spec, options: {} } as never, built.dataset);
++  assert.ok(!xt.warnings.some((w) => /not in this survey's dictionary/.test(w)), xt.warnings.join(" | "));
++  assert.ok(xt.tables.length >= 1, "the table was computed");
++  // the second pass — runPlan on the same dataset — finds the columns present and raises no "already has a variable" warning
++  const again = withPlannedVariables(def, built.dataset);
++  assert.deepEqual(again.computed, []);
++  assert.ok(!again.warnings.some((w) => /already has a variable|already a variable/.test(w)), again.warnings.join(" | "));
++  const run = runPlan(def, built.dataset, { items: plannedAnalyses(def, spec), trigger: "manual" });
++  assert.ok(!run.warnings.some((w) => /already has a variable|already a variable/.test(w)), run.warnings.join(" | "));
++  assert.ok(run.items.some((i) => i.result.variablesUsed.includes("ITEMS_SCORE")), "the planned t-test ran on the derived score");
++});
++
++test("a plan variable that could not be computed leaves its note on the dataset, inherited by the results that read it", () => {
++  const def = withPlan();
++  const built = withPlannedVariables(def, synthDataset(120));
++  const note = built.warnings.find((w) => /NO_RULE/.test(w));
++  assert.ok(note, `the recode without an expression is said: ${built.warnings.join(" | ")}`);
++  built.dataset.warnings = built.warnings;
++  const uses = runAnalysis({ id: "a", kind: "descriptive", name: "x", variables: ["NO_RULE"], dataset: spec, options: {} } as never, built.dataset);
++  assert.ok(uses.warnings.includes(note!), "the result that reads it carries the note");
++  const other = runAnalysis({ id: "b", kind: "descriptive", name: "y", variables: ["SAT"], dataset: spec, options: {} } as never, built.dataset);
++  assert.ok(!other.warnings.includes(note!), "a result that does not read it does not");
++});
++
++test("factor analysis outputs its scores: a summary table and one score per case and factor", () => {
++  const ds = synthDataset(400);
++  const r = runAnalysis({ id: "f", kind: "factor", name: "f", variables: ["ITEMS", "SAT"], dataset: spec, options: { factors: 2 } } as never, ds);
++  const scores = r.tables.find((t) => t.id === "scores");
++  assert.ok(scores, `tables: ${r.tables.map((t) => t.id).join(",")} warnings: ${r.warnings.join(" | ")}`);
++  assert.equal(scores!.rows.length, 2, "one row per factor");
++  assert.ok(scores!.rows.every((row) => Number(row.n) > 100 && Number.isFinite(Number(row.sd))));
++  assert.equal(r.chart.scores?.factors.length, 2);
++  assert.equal(r.chart.scores?.values.length, ds.cases.length, "one row per case, in dataset order");
++  assert.equal(r.chart.scores?.values[0]?.length, 2);
++  // a respondent missing an item has no score: not counted, not scored as zero
++  const holed = { ...ds, cases: ds.cases.map((c, i) => (i < 40 ? { ...c, vars: { ...c.vars, ITEMS_a: null } } : c)) };
++  const r2 = runAnalysis({ id: "f", kind: "factor", name: "f", variables: ["ITEMS", "SAT"], dataset: spec, options: { factors: 2 } } as never, holed);
++  const t2 = r2.tables.find((t) => t.id === "scores")!;
++  assert.ok(t2.rows.every((row) => Number(row.n) <= ds.cases.length - 40), `n excludes the holed cases: ${t2.rows.map((x) => x.n).join(",")}`);
++  assert.equal(r2.chart.scores?.values[0]?.[0], null, "…and their scores are null, not 0");
++});
+diff --git a/packages/analytics/src/plannedVariables.ts b/packages/analytics/src/plannedVariables.ts
+index d9bc5c3..5460a62 100644
+--- a/packages/analytics/src/plannedVariables.ts
++++ b/packages/analytics/src/plannedVariables.ts
+@@ -182,6 +182,8 @@ export function withPlannedVariables(def: SurveyDefinition, ds: Dataset, plan: A
+     computed.push(name);
+   };
+   for (const d of plan.derived) {
++    /* already on this dataset from an earlier pass (the Studio adds the plan's columns when it builds a dataset, Phase 1): nothing to add, nothing to warn */
++    if (out.byName.get(d.name)?.derived && !computed.includes(d.name)) continue;
+     if (out.byName.has(d.name) && !computed.includes(d.name)) { warnings.push(`${d.name}: not computed — the survey already has a variable of that name.`); continue; }
+     const r = compute(out, d, warnings);
+     if (r) add(d.name, r.values, r.meta);
+@@ -189,8 +191,8 @@ export function withPlannedVariables(def: SurveyDefinition, ds: Dataset, plan: A
+   for (const s of plan.segments) {
+     const name = segmentVariableName(s);
+     if (out.byName.has(name)) {
+-      // a segment named after the single variable that defines it IS that variable: nothing to add
+-      if (!(s.by.length === 1 && s.by[0] === name)) warnings.push(`Segment “${s.name}”: not computed — ${name} is already a variable.`);
++      // a segment named after the single variable that defines it IS that variable, and one computed on an earlier pass is already here: nothing to add
++      if (!(s.by.length === 1 && s.by[0] === name) && !out.byName.get(name)?.derived) warnings.push(`Segment “${s.name}”: not computed — ${name} is already a variable.`);
+       continue;
+     }
+     const r = segmentColumn(out, s, warnings);
+diff --git a/packages/analytics/src/stats/multivariate.ts b/packages/analytics/src/stats/multivariate.ts
+index aa0eb24..9780146 100644
+--- a/packages/analytics/src/stats/multivariate.ts
++++ b/packages/analytics/src/stats/multivariate.ts
+@@ -145,8 +145,10 @@ export interface FactorResult {
+   factors: number;
+   rotation: "none" | "varimax";
+   kmo: number | null;
+-  /** factor scores per case (regression method on standardized data) */
++  /** factor scores per complete case (regression method on standardized data), in `cases` order */
+   scores: number[][];
++  /** the input row index of each scored case (a case missing any item is not scored) */
++  cases: number[];
+   communalities: number[];
+ }
+ 
+@@ -222,7 +224,7 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
+     method, variables: columns.map((c) => c.name), eigenvalues: eig.values,
+     explained: eig.values.map((v) => (v / total) * 100),
+     cumulative: eig.values.reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? 0) + (v / total) * 100], []),
+-    loadings, factors, rotation, kmo, scores, communalities,
++    loadings, factors, rotation, kmo, scores, cases: keep, communalities,
+   };
+ }
+ 
+diff --git a/packages/analytics/src/stats/stats.test.ts b/packages/analytics/src/stats/stats.test.ts
+index f97b089..1d20554 100644
+--- a/packages/analytics/src/stats/stats.test.ts
++++ b/packages/analytics/src/stats/stats.test.ts
+@@ -2,7 +2,7 @@ import { test } from "node:test";
+ import assert from "node:assert/strict";
+ import { chiSquareP, fTestP, normalCdf, normalQuantile, tCdf, tQuantile } from "./distributions.js";
+ import { boxShares, describe, frequencies } from "./descriptive.js";
+-import { chiSquare, fisherExact, friedman, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest, significanceLetters, twoWayAnova, wilcoxonSignedRank } from "./tests.js";
++import { chiSquare, fisherExact, friedman, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest, twoWayAnova, wilcoxonSignedRank } from "./tests.js";
+ import { correlate, correlationMatrix } from "./correlation.js";
+ import { logistic, mediation, multinomialLogistic, ols } from "./regression.js";
+ import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, rimWeights, standardize } from "./multivariate.js";
+@@ -90,13 +90,11 @@ test("ANOVA one-way / two-way, Kruskal, Mann-Whitney, Wilcoxon, Friedman", () =>
+   close(fr.statistic, 6.5, 1e-6); assert.equal(fr.df, 2);
+ });
+ 
+-test("proportions: z-test, Wilson CI, significance letters", () => {
++test("proportions: z-test, Wilson CI", () => {
+   const pt = proportionTest(60, 100, 40, 100);
+   close(pt.statistic, 2.828, 1e-2); close(pt.p, 0.0047, 1e-3);
+   const ci = proportionCI(50, 100)!; close(ci[0], 0.404, 1e-2); close(ci[1], 0.596, 1e-2);
+-  const letters = significanceLetters([72, 61, 30], [100, 100, 100]);
+-  assert.equal(letters[0], "c", "72% beats 30% (c) but not 61%");
+-  assert.equal(letters[1], "c"); assert.equal(letters[2], "");
++  /* the market-research letters are the crosstab's own (`columnLetter` in analyses/crosstab.ts), tested there */
+ });
+ 
+ test("correlation: Pearson, Spearman, Kendall, matrix", () => {
+diff --git a/packages/analytics/src/stats/tests.ts b/packages/analytics/src/stats/tests.ts
+index fc4bf76..3fcff58 100644
+--- a/packages/analytics/src/stats/tests.ts
++++ b/packages/analytics/src/stats/tests.ts
+@@ -223,20 +223,3 @@ export function proportionCI(x: number, n: number, confidence = 0.95): [number,
+   return [(centre - half) / denom, (centre + half) / denom];
+ }
+ 
+-/**
+- * Column-proportion significance letters (the market-research "a b c"
+- * notation): each column gets a letter; a cell lists the letters of the
+- * columns whose proportion is significantly LOWER than its own at alpha.
+- */
+-export function significanceLetters(counts: number[], bases: number[], alpha = 0.05): string[] {
+-  const letters = counts.map((_, j) => String.fromCharCode(97 + (j % 26)));
+-  return counts.map((x, j) => {
+-    const out: string[] = [];
+-    for (let k = 0; k < counts.length; k++) {
+-      if (k === j || !bases[j] || !bases[k]) continue;
+-      const r = proportionTest(x, bases[j], counts[k], bases[k]);
+-      if (r.p != null && r.p < alpha && x / bases[j] > counts[k] / bases[k]) out.push(letters[k]);
+-    }
+-    return out.join("");
+-  });
+-}
+diff --git a/packages/analytics/src/types.ts b/packages/analytics/src/types.ts
+index 289833c..81ed36f 100644
+--- a/packages/analytics/src/types.ts
++++ b/packages/analytics/src/types.ts
+@@ -161,6 +161,8 @@ export interface ChartData {
+   words?: { text: string; value: number; sentiment?: number }[];
+   kpis?: { label: string; value: number | string; delta?: number; unit?: string; target?: number }[];
+   dendrogram?: { left: number; right: number; height: number; size: number }[];
++  /** factor analysis: one score per case (dataset order) and factor — for an export or a segment; null where a case lacked an item */
++  scores?: { factors: string[]; values: (number | null)[][] };
+   valueFormat?: "pct" | "number" | "score";
+ }
+ 
+diff --git a/scripts/intelligent-mode-test.mjs b/scripts/intelligent-mode-test.mjs
+index aa60e48..959d8bd 100644
+--- a/scripts/intelligent-mode-test.mjs
++++ b/scripts/intelligent-mode-test.mjs
+@@ -267,14 +267,16 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   await proposesNothing(turn);
+   ok("logic that reads a LATER question is refused by the engine's validation — the model could not sneak it in either");
+ 
+-  // the engine hands it on; the copilot (the fake model) has nothing usable; the grammar explains it did not understand
++  // the engine hands it on; the copilot (the fake model) has nothing usable: the turn fails with its cause and what to do —
++  // not the grammar's "not understood" (Research Engine audit, Phase 1)
+   turn = await say("make me a sandwich");
+-  assert.ok(await isGrammar(turn), "the grammar's card");
+-  assert.equal(await turn.getAttribute("data-kind"), "unknown");
+-  assert.equal((await turn.$$('[data-testid="iq-apply"]')).length, 0);
+-  const e3 = await allText(turn, '[data-testid="iq-error"]');
+-  assert.ok(e3.length >= 1);
+-  ok("a sentence nobody understood gets an explanation and no Apply button");
++  assert.equal(await turn.getAttribute("data-testid"), "cp-turn", "the model's turn, failed with its cause");
++  assert.equal(await turn.getAttribute("data-status"), "failed");
++  assert.equal(await turn.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "unusable");
++  assert.match(await turn.evaluate((e) => e.innerText), /FAKE provider/);
++  assert.equal((await turn.$$('[data-testid="cp-apply"]')).length, 0);
++  assert.doesNotMatch(await page.$eval('[data-testid="intelligent-view"]', (e) => e.innerText), /I did not understand that/);
++  ok("a sentence nobody could read says why (the model's answer had nothing to apply) and no Apply button — never \"not understood\"");
+ }
+ 
+ /* ------------------------------------------------- skip / required */
+@@ -570,9 +572,10 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   await page.waitForTimeout(500);
+   const before2 = await entryCount();
+   await page.click('[data-testid="iq-mic"]');
+-  // the engine hands Hindi on, the (fake) copilot has nothing usable, the grammar's card says what was heard
++  // the engine hands Hindi on, the (fake) copilot has nothing usable: the failed turn says why, and what was heard (Phase 1)
+   const ht = await settled(before2);
+-  assert.ok(await isGrammar(ht), "the grammar's card");
++  assert.equal(await ht.getAttribute("data-testid"), "cp-turn", "the model's turn, failed with its cause");
++  assert.equal(await ht.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "unusable");
+   const heard = await ht.$('[data-testid="iq-heard"]');
+   assert.equal(await heard.getAttribute("data-language"), "hi");
+   assert.match(await heard.textContent(), /Heard \(Hindi\): Q5 के option 3 पर Q10 को दिखाना है/);
+diff --git a/scripts/phase1-reliability-test.mjs b/scripts/phase1-reliability-test.mjs
+new file mode 100644
+index 0000000..431acf4
+--- /dev/null
++++ b/scripts/phase1-reliability-test.mjs
+@@ -0,0 +1,227 @@
++/**
++ * RESEARCH ENGINE — PHASE 1 (RELIABILITY), the Studio surfaces.
++ *
++ *   1. A model turn that fails says WHY, with what to do next and what the
++ *      engine had read — never the grammar's "I did not understand that":
++ *      an unusable reply (the fake provider), a truncated answer (502 with
++ *      the route's failure), the wallet (402), and no model at all (501 —
++ *      after which the engine-only message names AI_API_URL).
++ *   2. The research design is editable by hand (Survey Settings and the
++ *      Analysis tab): objective, hypotheses (added, edited, removed with the
++ *      engine's renumbering), constructs linked to questions, assumptions —
++ *      and the Analysis tab's coverage reads it.
++ *   3. /api/platform reports whether a model is configured.
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import assert from "node:assert/strict";
++import { openTab, switchMode } from "./lib/nav.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (...ls) => ls.map((l, i) => ({ code: i + 1, label: l }));
++const q = (id, code, variableName, type, text, extra = {}) => ({ id, code, variableName, type, text, ...extra });
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "Phase 1", version: "1.0" },
++  research: { objective: "Why customers switch", hypotheses: ["Price perception drives switching", "Service satisfaction reduces switching"], constructs: [{ name: "Price perception", role: "independent", questionIds: ["q3"] }], analysis: [], assumptions: [], sources: [] },
++  questions: [
++    q("q1", "Q1", "AGE", "numeric", "How old are you?"),
++    q("q2", "Q2", "BRAND", "single_select", "Preferred brand", { options: opts("Brand A", "Brand B") }),
++    q("q3", "Q3", "PRICE", "single_select", "Brand B is better value", { options: opts("Disagree", "Neutral", "Agree"), analysis: { hypotheses: ["H2"] } }),
++    q("q4", "Q4", "SAT", "single_select", "Service satisfaction", { options: opts("Low", "Mid", "High"), analysis: { hypotheses: ["H2"] } }),
++  ],
++  flow: [{ type: "page", id: "p1", title: "Page 1", questionIds: ["q1", "q2", "q3", "q4"] }, { type: "end", id: "e1", status: "complete" }],
++};
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
++page.on("dialog", (d) => d.accept());
++const errors = [];
++page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402)/.test(m.text())) errors.push(m.text()); });
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(600);
++};
++const readDef = async () => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  return JSON.parse(await page.$eval("textarea.code", (e) => e.value));
++};
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++const say = async (message) => {
++  const n = (await page.$$('[data-testid="cp-turn"]')).length;
++  await page.fill('[data-testid="iq-input"]', message);
++  await page.keyboard.press("Enter");
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
++  await page.waitForTimeout(300);
++  const turns = await page.$$('[data-testid="cp-turn"]');
++  return turns[turns.length - 1];
++};
++const viewText = () => page.$eval('[data-testid="intelligent-view"]', (e) => e.innerText);
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++ok("fixture loaded");
++
++/* ============================================================ 1. honest failures */
++await intelligent();
++{
++  const t = await say("Change the screener so that respondents under 25 are excluded.");
++  assert.equal(await t.getAttribute("data-status"), "failed");
++  const f = await t.$('[data-testid="cp-failure"]');
++  assert.ok(f, "the failure block is shown");
++  assert.equal(await f.getAttribute("data-code"), "unusable");
++  const text = await t.evaluate((e) => e.innerText);
++  assert.match(text, /THE MODEL'S ANSWER HAD NOTHING TO APPLY/, "the kicker names the cause");
++  assert.match(text, /FAKE provider/, "…and the detail");
++  assert.match(text, /WHAT TO DO/i, "and what to do next");
++  const handoff = await t.$('[data-testid="cp-handoff"]');
++  assert.ok(handoff, "what the engine read is shown");
++  assert.match(await handoff.evaluate((e) => e.innerText), /does not parse that phrasing/, "…including why it handed the sentence on");
++  assert.doesNotMatch(await viewText(), /I did not understand that/, "the grammar's message is gone");
++  ok("an unusable model reply: the cause, the next step, what the engine read — not “not understood”");
++}
++{
++  await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ ok: false, error: "x", failure: { code: "truncated", title: "THE MODEL'S ANSWER WAS CUT OFF", message: "The answer was longer than the output budget allows (8000 tokens, continued 2×), even after asking the model to continue, so no change could be read from it.", next: ["Ask for less at once — one block, one section of the questionnaire, or the design first and the questions after.", "Nothing was changed, and the partial answer was not applied."] }, usage: { charge: 0.0123 } }) }));
++  const t = await say("Create a questionnaire for a 40-question brand tracker with every section and all demographics");
++  assert.equal(await t.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "truncated");
++  assert.match(await t.$eval('[data-testid="cp-handoff"]', (e) => e.innerText), /question creation/, "the request type the engine read");
++  const text = await t.evaluate((e) => e.innerText);
++  assert.match(text, /CUT OFF/);
++  assert.match(text, /8000 tokens, continued 2×/);
++  assert.match(text, /one block/);
++  await page.unroute("**/api/copilot/turn");
++  ok("a truncated answer: named as such, with the budget and the remedy");
++}
++{
++  await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ error: "Insufficient balance: $0.12 available, this call needs about $0.30.", code: "wallet_insufficient_balance", failure: { code: "wallet", title: "THE WALLET REFUSED THIS CALL", message: "The meter refused this call: Insufficient balance: $0.12 available, this call needs about $0.30.", next: ["Check the wallet balance and the project's spending limit under Usage.", "Nothing was sent to the model and nothing was changed."] } }) }));
++  const t = await say("Make the questionnaire shorter without losing the important research objectives.");
++  assert.equal(await t.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "wallet");
++  assert.match(await t.evaluate((e) => e.innerText), /Insufficient balance/);
++  await page.unroute("**/api/copilot/turn");
++  // a 402 from a path that carries no failure object (an older refusal body) is still the wallet, by its status
++  await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify({ error: "Spending limit reached for this project.", code: "wallet_limit" }) }));
++  const t2 = await say("Rewrite the age question so it is friendlier");
++  assert.equal(await t2.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "wallet");
++  assert.match(await t2.evaluate((e) => e.innerText), /Spending limit reached/);
++  await page.unroute("**/api/copilot/turn");
++  ok("a wallet refusal: named, with the balance — by the body's failure, or by the status alone");
++}
++{
++  await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 501, contentType: "application/json", body: JSON.stringify({ error: "No language model is configured on this Studio (AI_API_URL).", code: "ai_unconfigured", failure: { code: "not_configured", title: "NO LANGUAGE MODEL CONFIGURED", message: "This Studio has no language model configured, so only the engine's own reading is available — it handles instructions that name their objects (codes, variable names, option labels, logic words).", next: ["Set AI_API_URL, AI_API_KEY and AI_MODEL on the server (see .env.example) to read sentences like this one.", "Or rephrase with the objects named: “Terminate if Q1 < 25”."] } }) }));
++  const t = await say("Add a question to measure purchase intent.");
++  assert.equal(await t.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "not_configured");
++  assert.match(await t.evaluate((e) => e.innerText), /AI_API_URL/);
++  // from here the Studio knows there is no model: the next descriptive sentence is read by the engine alone, and says so precisely
++  await page.route("**/api/ai/logic", (route) => route.fulfill({ status: 501, contentType: "application/json", body: JSON.stringify({ error: "No language model is configured on this Studio (AI_API_URL)." }) }));
++  await page.fill('[data-testid="iq-input"]', "Make the questionnaire feel warmer and more conversational.");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="iq-error"]', { timeout: 15000 });
++  const err = await page.$$eval('[data-testid="iq-error"]', (es) => es.map((e) => e.innerText).join("\n"));
++  assert.match(err, /no language model configured/, err);
++  assert.match(err, /AI_API_URL/);
++  assert.match(err, /Terminate if Q1 < 25/, "the examples it does read");
++  assert.match(err, /What the engine read — request type: survey creation/, "and what it read from this sentence");
++  assert.doesNotMatch(await viewText(), /I did not understand that/);
++  assert.doesNotMatch(await viewText(), /NOT UNDERSTOOD/);
++  assert.match(await viewText(), /NO LANGUAGE MODEL — THE ENGINE COULD NOT READ THIS/, "the card's kicker names the cause");
++  assert.equal(await page.textContent('[data-testid="iq-provider"]'), "engine only");
++  await page.unroute("**/api/copilot/turn");
++  await page.unroute("**/api/ai/logic");
++  ok("no model configured: the first turn says so; the engine-only message after it names the variable and the sentences the engine reads");
++}
++
++/* ============================================================ 2. the research design editor */
++const RD = '.settings-wrap [data-testid="research-design"]'; // the visible one: the right panel's fallback mounts SurveySettings too, hidden on this tab
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++await openTab(page, "Survey Settings");
++await page.waitForSelector(RD);
++{
++  assert.equal(await page.inputValue(`${RD} [data-testid="rd-objective"]`), "Why customers switch", "the design is shown");
++  assert.equal((await page.$$(`${RD} [data-testid="rd-hypothesis"]`)).length, 2);
++  await page.fill(`${RD} [data-testid="rd-objective"]`, "Why customers switch from Brand A to Brand B");
++  await page.fill(`${RD} [data-testid="rd-population"]`, "Adults 18–65 who bought in the category");
++  await page.fill(`${RD} [data-testid="rd-sample"]`, "800");
++  await page.fill(`${RD} [data-testid="rd-hypothesis-new"]`, "Availability drives switching");
++  await page.click(`${RD} [data-testid="rd-hypothesis-add"]`);
++  await page.waitForTimeout(300);
++  assert.equal((await page.$$(`${RD} [data-testid="rd-hypothesis"]`)).length, 3);
++  // a construct, linked to a question
++  await page.click(`${RD} [data-testid="rd-construct-add"]`);
++  const constructs = await page.$$(`${RD} [data-testid="rd-construct"]`);
++  const c = constructs[constructs.length - 1];
++  await page.fill(`${RD} [data-testid="rd-construct"] >> nth=${constructs.length - 1} >> [data-testid="rd-construct-name"]`, "Service satisfaction");
++  await page.selectOption(`${RD} [data-testid="rd-construct"] >> nth=${constructs.length - 1} >> [data-testid="rd-construct-role"]`, "dependent");
++  await page.selectOption(`${RD} [data-testid="rd-construct"] >> nth=${constructs.length - 1} >> [data-testid="rd-construct-add-question"]`, "q4");
++  await page.fill(`${RD} [data-testid="rd-assumption-new"]`, "Respondents recall their previous brand");
++  await page.click(`${RD} [data-testid="rd-assumption-add"]`);
++  await page.waitForTimeout(400);
++  const def = await readDef();
++  assert.equal(def.research.objective, "Why customers switch from Brand A to Brand B");
++  assert.equal(def.research.population, "Adults 18–65 who bought in the category");
++  assert.equal(def.research.sampleSize, 800);
++  assert.deepEqual(def.research.hypotheses, ["Price perception drives switching", "Service satisfaction reduces switching", "Availability drives switching"]);
++  const sat = def.research.constructs.find((x) => x.name === "Service satisfaction");
++  assert.ok(sat && sat.role === "dependent" && sat.questionIds.includes("q4"), JSON.stringify(def.research.constructs));
++  assert.deepEqual(def.research.assumptions, ["Respondents recall their previous brand"]);
++  ok("Survey Settings → Research design: objective, population, sample size, a hypothesis, a construct linked to Q4 and an assumption are stored");
++}
++{
++  // removing H1 goes through the engine: H2 becomes H1 and the questions tagged H2 now say H1
++  await openTab(page, "Survey Settings");
++  await page.waitForSelector(RD);
++  await page.click(`${RD} [data-testid="rd-hypothesis"] >> nth=0 >> [data-testid="rd-hypothesis-remove"]`);
++  await page.waitForTimeout(400);
++  const def = await readDef();
++  assert.deepEqual(def.research.hypotheses, ["Service satisfaction reduces switching", "Availability drives switching"]);
++  assert.deepEqual(def.questions.find((x) => x.id === "q3").analysis.hypotheses, ["H1"], "the tag followed its hypothesis");
++  assert.deepEqual(def.questions.find((x) => x.id === "q4").analysis.hypotheses, ["H1"]);
++  ok("removing a hypothesis renumbers the later ones and the tags that cite them (the engine's remove_hypothesis)");
++}
++{
++  // the Analysis tab reads the design and offers the same editor
++  await intelligent();
++  await page.click('[data-testid="cp-tab-analysis"]');
++  await page.waitForSelector('[data-testid="an-hypotheses"]');
++  const hyps = await page.$$eval('[data-testid="an-hyp"]', (es) => es.map((e) => e.getAttribute("data-status")));
++  assert.equal(hyps.length, 2);
++  assert.ok(hyps[0] !== "unlinked", `H1 (service satisfaction) is linked through the construct: ${hyps.join(",")}`);
++  assert.ok(await page.$('[data-testid="an-design-editor"]'), "the editor is reachable from the Analysis tab");
++  await page.click('[data-testid="an-design-editor"] summary');
++  await page.waitForSelector('[data-testid="an-design-editor"] [data-testid="rd-hypothesis-new"]');
++  await page.fill('[data-testid="an-design-editor"] [data-testid="rd-hypothesis-new"]', "Younger buyers switch more");
++  await page.click('[data-testid="an-design-editor"] [data-testid="rd-hypothesis-add"]');
++  await page.waitForTimeout(400);
++  assert.equal((await page.$$('[data-testid="an-hyp"]')).length, 3, "the coverage list follows the edit");
++  ok("Intelligent → Analysis: coverage reads the hand-written design, and the editor is one click away");
++}
++
++/* ============================================================ 3. the platform page knows about the model */
++{
++  const r = await page.request.get(`${STUDIO}/api/platform`);
++  if (r.status() === 200) {
++    const info = await r.json();
++    assert.ok("ai" in info.configured && "aiFake" in info.configured && "aiModel" in info.configured, Object.keys(info.configured).join(","));
++    assert.equal(info.configured.ai, true, "the sandbox runs the fake provider, which is configured");
++    assert.equal(info.configured.aiFake, true);
++    ok("/api/platform reports the language model's presence (ai, aiFake, aiModel)");
++  } else {
++    ok(`/api/platform is gated here (${r.status()}) — the flags are unit-tested`);
++  }
++}
++
++assert.deepEqual(errors, [], `no console errors:\n${errors.join("\n")}`);
++await browser.close();
++console.log(`\n${passed} checks passed`);
+-- 
+2.43.0
+

@@ -1,0 +1,1915 @@
+---
+ apps/studio/app/api/copilot/output/route.ts   | 136 +++++++++
+ .../intelligent/IntelligentView.tsx           |   5 +
+ .../intelligent/copilot/CopilotCard.tsx       |   8 +
+ .../intelligent/copilot/FindingsTab.tsx       |  14 +
+ .../intelligent/copilot/useCopilot.ts         |  39 ++-
+ docs/PHASE5-REPORTING-2026-10-09.md           |  42 +++
+ packages/analytics/package.json               |   5 +-
+ packages/analytics/src/chartPurpose.ts        |  93 ++++++
+ packages/analytics/src/deck.ts                | 195 +++++++++++++
+ packages/analytics/src/export/deck.ts         | 179 ++++++++++++
+ packages/analytics/src/export/docx.ts         | 249 ++++++++++++++++
+ packages/analytics/src/export/index.ts        |   2 +
+ packages/analytics/src/export/pptx.ts         |  12 +-
+ packages/analytics/src/findings.ts            |   2 +-
+ packages/analytics/src/index.ts               |   3 +
+ packages/analytics/src/narrative.ts           | 101 +++++++
+ packages/analytics/src/phase5.test.ts         | 268 ++++++++++++++++++
+ packages/analytics/src/planBridge.ts          |   3 +-
+ packages/engine/src/nlIntent.ts               |  60 +++-
+ packages/engine/src/nlPhase4.test.ts          |  34 +++
+ pnpm-lock.yaml                                |   3 +
+ scripts/phase5-reporting-test.mjs             | 170 +++++++++++
+ 22 files changed, 1610 insertions(+), 13 deletions(-)
+ create mode 100644 apps/studio/app/api/copilot/output/route.ts
+ create mode 100644 docs/PHASE5-REPORTING-2026-10-09.md
+ create mode 100644 packages/analytics/src/chartPurpose.ts
+ create mode 100644 packages/analytics/src/deck.ts
+ create mode 100644 packages/analytics/src/export/deck.ts
+ create mode 100644 packages/analytics/src/export/docx.ts
+ create mode 100644 packages/analytics/src/narrative.ts
+ create mode 100644 packages/analytics/src/phase5.test.ts
+ create mode 100644 scripts/phase5-reporting-test.mjs
+
+diff --git a/apps/studio/app/api/copilot/output/route.ts b/apps/studio/app/api/copilot/output/route.ts
+new file mode 100644
+index 0000000..bbfdf86
+--- /dev/null
++++ b/apps/studio/app/api/copilot/output/route.ts
+@@ -0,0 +1,136 @@
++import { NextRequest, NextResponse } from "next/server";
++import { aiConfigured, aiProviderName, completeJson } from "@rescript/ai";
++import { SurveyDefinition } from "@rescript/schema";
++import type { OutputRequest } from "@rescript/engine";
++import { briefText, buildDataset, deckFromRun, describeDeck, gateNarrative, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
++import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/analytics/export";
++import { supabaseService } from "@/lib/authServer";
++import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
++import { billingProjectFor, meteredAi } from "@/lib/metering";
++import { buildFor, loadDefinition } from "@/lib/analytics";
++
++/**
++ * A DOCUMENT FROM THE RESEARCH ENGINE (Research Engine audit, Phase 5).
++ *
++ * The engine read "create the client-ready research proposal" / "create
++ * the final findings presentation" / "write the findings report as a Word
++ * document" into an OutputRequest; this route makes the file. The proposal
++ * comes from the survey and its research design alone. The findings
++ * outputs come from a fresh run of the plan on the survey's clean live
++ * data (the same dataset the workspace reads), so the file says what the
++ * data says today; the story's words are the engine's, and when a model is
++ * configured it is asked once — from the run's brief and nothing else — for
++ * a headline, a summary, implications and recommendations, which pass the
++ * narrative gate sentence by sentence before they replace the engine's.
++ * What the gate kept and dropped travels in the response headers.
++ *
++ * Who may ask: a signed-in user with `project.read` for the proposal and
++ * `analytics.export` for the findings outputs. The sandbox, against the
++ * fake provider only, may send its own definition, rows and a scripted
++ * narrative, so the browser suites can see the whole path.
++ */
++export const dynamic = "force-dynamic";
++const TYPES = new Set(["proposal_docx", "findings_docx", "findings_pptx"]);
++const AUDIENCES = new Set(["executive", "client", "researcher"]);
++const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
++const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
++const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
++const safeName = (s: string) => s.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80) || "document";
++const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?").slice(0, 900);
++
++function readOutput(x: unknown): OutputRequest | string {
++  const o = (x ?? {}) as Record<string, unknown>;
++  const type = typeof o.type === "string" ? o.type : "";
++  if (!TYPES.has(type)) return "the output needs a type (proposal_docx, findings_docx, findings_pptx)";
++  const audience = typeof o.audience === "string" && AUDIENCES.has(o.audience) ? o.audience : "client";
++  const client = typeof o.client === "string" && o.client.trim() ? o.client.trim().slice(0, 80) : undefined;
++  return { type: type as OutputRequest["type"], audience: audience as OutputRequest["audience"], ...(client ? { client } : {}), words: typeof o.words === "string" ? o.words.slice(0, 120) : type };
++}
++
++export async function POST(req: NextRequest) {
++  const authed = await requireUser(req);
++  let body: { surveyId?: unknown; output?: unknown; definition?: unknown; rows?: unknown; narrative?: unknown; fake?: unknown; environment?: unknown; dataset?: unknown };
++  try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : json({ error: "bad json" }, 400); }
++  const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
++  const sandbox = surveyId === "sandbox";
++  const fakeProvider = aiProviderName() === "fake";
++  if (isFailure(authed) && !(sandbox && fakeProvider)) return authed.response;
++  const user: AuthedUser | null = isFailure(authed) ? null : authed;
++  const output = readOutput(body.output);
++  if (typeof output === "string") return json({ error: output }, 400);
++
++  /* the survey, the client and the fieldwork dates */
++  let def: SurveyDefinition;
++  let client = output.client, fieldwork: { from?: string; to?: string } | undefined;
++  const db = sandbox ? null : supabaseService();
++  let loaded: Awaited<ReturnType<typeof loadDefinition>> | null = null;
++  if (sandbox) {
++    const parsed = SurveyDefinition.safeParse(body.definition);
++    if (!parsed.success) return json({ error: "send the survey as it is open in the editor (definition)" }, 400);
++    def = parsed.data;
++  } else {
++    const ctx = await requireProject(req, surveyId, output.type === "proposal_docx" ? "project.read" : "analytics.export");
++    if (isFailure(ctx)) return ctx.response;
++    loaded = await loadDefinition(db!, surveyId);
++    if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
++    def = loaded.def as SurveyDefinition;
++    const proj = await db!.from("surveys").select("fieldwork_from, fieldwork_to, client_name").eq("id", surveyId).maybeSingle();
++    client ??= proj.data?.client_name ? String(proj.data.client_name) : undefined;
++    if (proj.data?.fieldwork_from || proj.data?.fieldwork_to) fieldwork = { ...(proj.data?.fieldwork_from ? { from: String(proj.data.fieldwork_from).slice(0, 10) } : {}), ...(proj.data?.fieldwork_to ? { to: String(proj.data.fieldwork_to).slice(0, 10) } : {}) };
++  }
++  const author = user?.email ?? undefined;
++  const date = new Date().toISOString().slice(0, 10);
++  const base = safeName(def.research?.objective ? def.research.objective.slice(0, 50) : def.meta.title);
++
++  if (output.type === "proposal_docx") {
++    const buf = await buildProposalDocx(def, { client, author, date, fieldwork });
++    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-research-proposal.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Research proposal: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${def.research?.analysisPlan ? "the saved analysis plan" : "the design's analysis plan"}`) } });
++  }
++
++  /* the findings outputs: a fresh run of the plan on the data */
++  let dataset;
++  if (sandbox) {
++    const rows = Array.isArray(body.rows) ? (body.rows as AnalyticsRow[]).slice(0, 5000) : [];
++    if (!rows.length) return json({ error: "The sandbox has no respondents to report on — open a survey with fieldwork and ask there.", code: "no_data" }, 409);
++    dataset = buildDataset(def, rows, { spec: { environment: "ALL", dataset: "all" } });
++  } else {
++    const environment = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
++    dataset = await buildFor(db!, surveyId, loaded!, { name: "output", kind: "descriptive", dataset: { environment, dataset: body.dataset === "all" ? "all" : "clean" }, variables: [] });
++    if (!dataset.cases.length) return json({ error: "No completes in the data yet — the findings outputs need respondents.", code: "no_data" }, 409);
++  }
++  const run = runPlan(def, dataset, { trigger: "output" });
++  if (!run.items.length) return json({ error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.", code: "no_plan" }, 409);
++  const results: Record<string, AnalysisResult> = Object.fromEntries(run.items.map((it) => [it.definition.options?.planned ? String(it.definition.options.planned) : it.definition.name, it.result]));
++
++  /* the narrative: the model, from the brief only, through the gate */
++  let narrative: NarrativeSections | undefined;
++  let gate = "none";
++  if (body.narrative !== false && aiConfigured()) {
++    const fake = fakeProvider && body.fake && typeof body.fake === "object" ? body.fake : null;
++    let raw: unknown = fake;
++    if (!raw) {
++      const billing = await billingProjectFor(user, surveyId);
++      if (!("response" in billing)) {
++        const brief = briefText(run, { maxFindings: 25 });
++        const prompt = `${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}`;
++        const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 900, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, 900, { timeoutMs: 60_000 })).catch(() => null);
++        raw = m && m.ok ? m.value : null;
++      }
++    }
++    const g = raw && typeof raw === "object" ? gateNarrative(run, raw as Record<string, unknown>) : null;
++    if (g && g.offered) {
++      narrative = g.accepted;
++      gate = `${g.kept} of ${g.offered} sentences kept${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `${r.section}: ${r.reason}`).join(" | ")}` : ""}`;
++    } else gate = "the model gave nothing - the engine's words stand";
++  } else if (body.narrative === false) gate = "not asked";
++  else gate = "no model configured - the engine's words stand";
++
++  const opts = { audience: output.audience, client, author, date, results, narrative };
++  if (output.type === "findings_pptx") {
++    const deck = deckFromRun(def, run, opts);
++    const buf = await buildDeckPptx({ deck, results, author, footer: client ? `Prepared for ${client}` : undefined });
++    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": PPTX, "content-disposition": `attachment; filename="${base}-findings-${output.audience}.pptx"`, "cache-control": "no-store", "x-rescript-output": ascii(`${describeDeck(deck)} - ${run.n} completes`), "x-rescript-narrative": ascii(gate) } });
++  }
++  const buf = await buildFindingsDocx(def, run, opts);
++  return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-findings-report.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes`), "x-rescript-narrative": ascii(gate) } });
++}
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+index 917205d..5d7bb8e 100644
+--- a/apps/studio/components/intelligent/IntelligentView.tsx
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -243,6 +243,11 @@ export function IntelligentView() {
+       await copilot.askData(t, interp, heard);
+       setBusy(false); inputRef.current?.focus(); return;
+     }
++    // a document to produce (Phase 5): the proposal from the design, the findings report or deck from a run — the output route makes the file
++    if (interp.kind === "output") {
++      await copilot.makeOutput(t, interp, heard);
++      setBusy(false); inputRef.current?.focus(); return;
++    }
+     if (interp.kind !== "model") {
+       copilot.local(t, interp, heard);
+       if (interp.kind === "actions") {
+diff --git a/apps/studio/components/intelligent/copilot/CopilotCard.tsx b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+index 4d447e7..1bf590b 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotCard.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+@@ -108,6 +108,14 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+             <Icon name={entry.coverage.ok ? "check" : "warning"} size={12} /> <span className="iq-label">Coverage</span> <Linked text={entry.coverage.summary} def={def} onSelect={onSelect} />
+           </p>
+         )}
++        {entry.output && (
++          /* a document the engine produced (Phase 5): the file to download, what it holds, what the narrative gate kept */
++          <p className="cp-data cp-output" data-testid="cp-output" data-kind={entry.output.kind} data-size={entry.output.size}>
++            <Icon name="download" size={12} /> <a className="iq-btn primary" href={entry.output.url} download={entry.output.name} data-testid="cp-output-download">Download {entry.output.name}</a>
++            <span className="iqi-dim">{Math.round(entry.output.size / 1024)} KB · {entry.output.summary}</span>
++            {entry.output.narrative ? <span className="iqi-dim" data-testid="cp-output-narrative"> · Narrative gate: {entry.output.narrative}</span> : null}
++          </p>
++        )}
+         {entry.data && (
+           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */
+           <p className="cp-data" data-testid="cp-data" data-n={entry.data.n} data-source={entry.data.source}>
+diff --git a/apps/studio/components/intelligent/copilot/FindingsTab.tsx b/apps/studio/components/intelligent/copilot/FindingsTab.tsx
+index 3c43415..80d8e94 100644
+--- a/apps/studio/components/intelligent/copilot/FindingsTab.tsx
++++ b/apps/studio/components/intelligent/copilot/FindingsTab.tsx
+@@ -162,6 +162,20 @@ export function FindingsTab({ copilot, def, onAsk }: { copilot: Copilot; def: Su
+           </div>
+         </section>
+       )}
++
++      {onAsk && (
++        /* the documents (Phase 5): each a sentence the engine reads, so the output route makes the file — the proposal from the design, the others from a run on the data */
++        <section data-testid="fd-outputs">
++          <div className="iq-label">Documents</div>
++          <p className="iqi-dim">Client-ready files from the research engine: the proposal from the research design; the findings report and the presentation from a fresh run on the data, with the chart for each finding chosen for the audience and the story in the engine's words (a configured model writes the narrative, through the gate).</p>
++          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
++            <button type="button" className="iq-btn" data-testid="fd-output-proposal" disabled={copilot.busy} onClick={() => onAsk("Create the client-ready research proposal")}>Research proposal (Word)</button>
++            <button type="button" className="iq-btn" data-testid="fd-output-report" disabled={copilot.busy} onClick={() => onAsk("Write the findings report as a Word document")}>Findings report (Word)</button>
++            <button type="button" className="iq-btn" data-testid="fd-output-deck" disabled={copilot.busy} onClick={() => onAsk("Create the final findings presentation")}>Findings deck (PowerPoint)</button>
++            <button type="button" className="iq-btn" data-testid="fd-output-deck-exec" disabled={copilot.busy} onClick={() => onAsk("Create the findings deck for the board")}>Executive deck</button>
++          </div>
++        </section>
++      )}
+     </div>
+   );
+ }
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index 49a6ad8..214c3bd 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -52,6 +52,8 @@ export interface CopilotEntry {
+   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
+   /** the research coverage of a generated survey, checked on the clone (Phase 3) */
+   coverage?: { ok: boolean; summary: string; unmeasured: string[]; unconnected: string[]; hypotheses: { label: string; text: string; status: string }[] };
++  /** a document the engine produced (Phase 5): its name, size and a link to it, what it holds, and what the narrative gate kept */
++  output?: { name: string; size: number; url: string; kind: "docx" | "pptx"; summary: string; narrative?: string };
+   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
+   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
+   error?: string;
+@@ -617,6 +619,41 @@ export function useCopilot(opts: {
+       fail(`The data could not be read: ${(e as Error).message || "the network request failed"}.`);
+     } finally { setBusy(false); }
+   }, [opts, s.surveyDbId, s.def, recordOp, analysisRun]);
++  /*
++   * A DOCUMENT TO PRODUCE (Phase 5). The engine read the sentence into an
++   * output request; the output route makes the file — the proposal from the
++   * design, the findings report or deck from a fresh run on the data, with
++   * the model's narrative through the gate when a model is there. The card
++   * holds the file for download and says what it contains and what the
++   * gate kept. The sandbox makes the proposal from its own definition and
++   * the findings outputs from rows a test put on the page.
++   */
++  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript): Promise<void> => {
++    const id = uid("copilot");
++    const engine: EngineTurn = { kind: "output", category: it.category, understood: it.understood, detected: it.detected };
++    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
++    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
++    setBusy(true);
++    const fail = (message: string) => opts.patch(id, { status: "ready", reply: reply(message), engine: { ...engine, kind: "refused", refusal: message }, opKey: recordOp({ prompt: text, source: "engine", status: "refused", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: message.slice(0, 2000) }) });
++    try {
++      const sandbox = s.surveyDbId === "sandbox";
++      const rows = sandbox ? rowsRef.current : null;
++      if (sandbox && it.output.type !== "proposal_docx" && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
++      const fake = sandbox ? fakeRef.current.shift() : undefined;
++      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
++      if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
++      const blob = await r.blob();
++      const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `output.${it.output.type.endsWith("pptx") ? "pptx" : "docx"}`;
++      const summary = r.headers.get("x-rescript-output") ?? "";
++      const narrative = r.headers.get("x-rescript-narrative") ?? undefined;
++      const url = URL.createObjectURL(blob);
++      const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
++      const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
++      opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output" }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
++    } catch (e) {
++      fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);
++    } finally { setBusy(false); }
++  }, [opts, s.surveyDbId, s.def, recordOp]);
+   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
+   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
+ 
+@@ -811,7 +848,7 @@ export function useCopilot(opts: {
+     docs: session.docs ?? [], durable: session.durable, uploading, docError,
+     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
+     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
+-    ask, local, askData, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
++    ask, local, askData, makeOutput, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+     planFirst, setPlanFirst, executePlan, cancelPlan,
+     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+     quotaCounts, quotaCountsAt, refreshQuotaCounts,
+diff --git a/docs/PHASE5-REPORTING-2026-10-09.md b/docs/PHASE5-REPORTING-2026-10-09.md
+new file mode 100644
+index 0000000..9ebff4f
+--- /dev/null
++++ b/docs/PHASE5-REPORTING-2026-10-09.md
+@@ -0,0 +1,42 @@
++# Research Engine — Phase 5: Automated reporting (09-10-2026)
++
++**Source:** the Research Engine audit (`RESEARCH-ENGINE-AUDIT-2026-10-08.md`, section K, Phase 5), on top of Phases 1–4. The outcome it set: *"create the client-ready research proposal" and "create the final findings presentation" produce the right file.* Every change has a regression test and the tests were mutation-checked. Nothing existing was removed: the report blocks, the templates, the PowerPoint and Excel exports and the Reports panel are as they were; the new documents sit beside them and reuse their drawing code.
++
++## Checklist
++
++| ID | Audit finding (§B.4, §C.4, §I) | Change | Status |
++|---|---|---|---|
++| R1 | Chart selection reads the result's shape only — not the analytical purpose, not the audience | `chartPurpose.ts`: the purpose read from the analysis (comparison, composition, distribution, trend, relationship, ranking, KPI, significance, profile) and an audience (executive, client, researcher) adjust the shape-based scores — the types that serve the purpose are lifted, whole families lifted or lowered for the audience — never past what the data can draw; the reason names both | ✅ Added |
++| R2 | PowerPoint has fixed basic layouts, no design system, no storytelling structure, no statistical-highlight or implications/recommendations slides | `deck.ts` + `export/deck.ts`: the story in a fixed order — title, summary, key findings (one per slide, the chart chosen for the audience, the one sentence that says why it matters, a significance badge), who differs (segment comparison with the groups), statistical highlights (the statistic as a callout card), beyond the plan, implications, recommendations, method, caveats — on one type ramp, palette and grid; flat native charts, the dimensional treatment on covers, dividers and callouts only, as the audit recommends | ✅ Added |
++| R3 | No research-design / proposal Word document | `buildProposalDocx`: cover, background and objective, research questions and KPIs, hypotheses with their readings and the questions that measure them, constructs, the questionnaire by section with a length estimate, sample and the base the plan needs, the analysis plan with its reasons, deliverables, assumptions and sources — from the design alone | ✅ Added |
++| R4 | No findings Word document | `buildFindingsDocx`: executive summary, the verdicts (with the corrected reading), each key finding with its so-what, evidence and groups, who differs, beyond the plan, the data advice, what it means, what to do next, the method, every finding with its test and adjusted p, caveats; chart data as tables | ✅ Added |
++| R5 | No output-type intelligence: "create the client-ready research proposal" went to the model, which had nothing to produce | the engine reads *create the client-ready research proposal*, *write the research design document for Acme*, *create the final findings presentation*, *create the findings deck for the board*, *build the results deck for the analysts*, *write the findings report as a Word document*, *make a Word document of the findings* into an `output` interpretation — the type from the noun, the audience from the words, the client from "for …"; the Studio's output route makes the file; the Findings tab offers each as a button that is a sentence | ✅ Added |
++| R6 | Narrative sections only via a model turn, unchecked | `narrative.ts`: the model is asked once, from the run's brief and nothing else, for a headline, summary, implications and recommendations; the gate checks every sentence — each number must be one the run printed, each hypothesis must exist and keep its verdict — and drops what fails, with the reason; what it kept replaces the engine's words, never the numbers; the card says what was kept and dropped | ✅ Added |
++| R7 | A one-test "not supported" verdict read "The planned test is significant" | the verdict says "The planned test is not significant" | ✅ Fixed |
++| R8 | A test planned by sentence (Phase 4) listed its outcome twice, so its finding read "SAT across GENDER and SAT" | `planBridge` lists each variable once | ✅ Fixed |
++
++## What was built
++
++**Chart choice (`packages/analytics/src/chartPurpose.ts`)** — `purposeOf(def, result)` reads why a result is shown: a crosstab compares, a test shows a difference with its uncertainty, a correlation or model relates, a descriptive spreads, NPS is a number to watch, ranking and MaxDiff rank, segmentation profiles, time-like categories are a trend whatever the kind. `chooseChart(def, result, { purpose?, audience? })` starts from `recommendCharts` (the shape), lifts the types that serve the purpose (bars for a comparison, stacked-100 and donuts for a composition, the histogram for a distribution, the line for a trend, the scatter for a relationship, ranked bars for a ranking, the KPI card, the interval chart or the bars for significance) and lifts or lowers families for the audience (an executive loses the statistical and significance families and gains bars and KPIs; a researcher gains the significance family). A chart the data cannot draw is never a candidate; the reason names the purpose and the audience with their weights.
++
++**The deck (`deck.ts`, `export/deck.ts`)** — `deckFromRun(def, run, { audience, client, maxFindings, narrative, results })` tells the story: the title; the summary (objective, verdicts, the strongest findings, what was found beyond the plan); a key finding per significant planned finding, strongest first, with the chart chosen for the audience, the evidence line (test, p, effect, n, the adjusted p) and the so-what (the hypothesis it is evidence for and its verdict; a strong or moderate effect "worth acting on", a small one "real, but modest"; a corrected-away finding "read with caution"); who differs (the groups highest first, the pairs that differ); statistical highlights (the effect as a callout); beyond the plan (the discoveries not already shown, the anomalies as caveats); implications (each verdict against the design); recommendations (lead with the strongest finding, treat a corrected-away one with caution, re-run an inconclusive one, plan the test an untested one lacks, add a discovery to the plan, re-run as the data advises); method; caveats. `buildDeckPptx` draws it with one builder per slide type on `DECK_STYLE` (display 36 / title 22 / headline 17 / body 12 / caption 9 / statistic 40), the theme's palette and fonts, a kicker per slide, the significance badge, cards with a soft shadow, native editable charts through the existing `drawAnalysisVisual`.
++
++**The documents (`export/docx.ts`)** — both on the `docx` library the questionnaire export uses, with the same page and type conventions. The proposal needs no data: it is written from the survey and its research design, with the engine's readings (`structuredHypotheses`, `explainPlan`, `planSampleSize`, `expectedSample`, `inferRole`). The findings report is written from a run through the same `deckFromRun` story, with the groups and the chart data as tables.
++
++**Output by sentence (`packages/engine/src/nlIntent.ts`, the `output` kind)** — the recogniser reads the verb, the modifiers (client-ready, final, full, executive, findings …), the noun (proposal / research design document; presentation / deck / slides / PowerPoint; findings report / report as a Word document / Word document of the findings) and the tail ("for the board" is an executive edition, "for the analysts" a researcher's, "for Acme Ltd" the client, "for this survey" nothing); a tail it cannot read, an edit in the same sentence, an executive summary in words or a report to draft in the analytics workspace stay the model's. A bare survey is refused with what to record first.
++
++**The Studio** — `POST /api/copilot/output` (`project.read` for the proposal, `analytics.export` for the findings outputs; the sandbox against the fake provider sends its own definition, rows and a scripted narrative): the proposal from the design with the project's client and fieldwork dates; the findings outputs from a fresh `runPlan` on the clean live data; the narrative from the model (metered, `copilot_narrative`) through `gateNarrative`; the file as the response with `content-disposition`, what it holds and what the gate kept in headers. `useCopilot.makeOutput` shows the file on the card (`cp-output`: name, size, a download link, the summary, the narrative gate's verdict); `IntelligentView` routes the `output` kind there; the Findings tab's *Documents* section offers the proposal, the findings report, the findings deck and the executive deck as sentences the engine reads.
++
++## Tests
++
++| Suite | What it checks | Result |
++|---|---|---|
++| `packages/analytics/src/phase5.test.ts` | the purpose of each analysis kind and of time-like categories; the audience's effect (interval chart for a researcher, bars for an executive), an asked purpose, never an undrawable chart; the deck's order, title, summary, key findings with so-what and evidence, the relationship's scatter, the small effect's wording, groups highest first, the pairs, the highlights, implications and recommendations, method, the analysis ids, the executive deck, the narrative replacing words not numbers, the unshown discovery beyond the plan, no empty section, the single-test verdict wording, the caveat slide; the gate's numbers, hypotheses, verdicts, counting words, years, percentages, the section-by-section result; the PowerPoint (one slide per story slide, the design system's words, the badge, the callout, native charts, the missing-result note); the proposal's every section and a bare survey; the findings report's every section, a narrative, the advice table | 6 tests (analytics 253 pass) |
++| `packages/engine/src/nlPhase4.test.ts` (Phase 5 block) | every sentence form, the audience and client tails, what stays the model's, the bare-survey refusal | 1 test (engine 1749 pass) |
++| `scripts/phase5-reporting-test.mjs` (browser) | the proposal from the design on the card; findings outputs without respondents refused; the deck from injected rows with a scripted narrative — the gate keeping five of six sentences and naming the dropped one; the Word report with the engine's words when the model has nothing; the Findings tab's Documents buttons (executive edition, proposal); the output route's gate | 6 checks |
++
++Existing wording fixed on purpose: `findings.ts` (R7) and `planBridge.ts` (R8) — no existing test asserted the wrong text.
++
++Mutation checks: analytics 30 mutations, all caught after four tests were strengthened; engine 6 mutations, all caught (two re-run as compile-safe variants); Studio surfaces 10 mutations through the browser suite, all caught.
++
++The full browser corpus (133 suites) is green apart from the 10 known baseline failures; `distribution-test.mjs` failed once in the corpus on a cold server (its 10-second wait for the first compile of the respondents route) and passes on a warm one — not a regression.
+diff --git a/packages/analytics/package.json b/packages/analytics/package.json
+index 30defd6..4a25a58 100644
+--- a/packages/analytics/package.json
++++ b/packages/analytics/package.json
+@@ -22,12 +22,13 @@
+   "dependencies": {
+     "@rescript/engine": "workspace:*",
+     "@rescript/schema": "workspace:*",
++    "docx": "^9.7.1",
+     "exceljs": "^4.4.0",
+     "pptxgenjs": "^4.0.1"
+   },
+   "devDependencies": {
++    "@rescript/designs": "workspace:*",
+     "@types/node": "^22.20.1",
+-    "typescript": "^5.6.3",
+-    "@rescript/designs": "workspace:*"
++    "typescript": "^5.6.3"
+   }
+ }
+diff --git a/packages/analytics/src/chartPurpose.ts b/packages/analytics/src/chartPurpose.ts
+new file mode 100644
+index 0000000..b82f4ce
+--- /dev/null
++++ b/packages/analytics/src/chartPurpose.ts
+@@ -0,0 +1,93 @@
++import type { AnalysisDefinition, AnalysisResult, ChartFamily, ChartType } from "./types.js";
++import { recommendCharts, type ChartRecommendation } from "./recommend.js";
++
++/**
++ * CHART SELECTION BY PURPOSE AND AUDIENCE (Research Engine audit, Phase 5).
++ *
++ * `recommendCharts` reads the SHAPE of a result — one series or several,
++ * percentages, time, points — and that is the right first cut. What it
++ * cannot know is WHY the chart is shown: to compare groups, to show how a
++ * whole is made up, to show a distribution, a trend, a relationship, a
++ * ranking, a number to watch, or a difference with its uncertainty — and
++ * for WHOM: an executive who reads one message per slide, a researcher who
++ * wants the interval and the test, a client in between. The purpose is read
++ * from the analysis (its kind, its roles, the finding it carries); the
++ * audience is the researcher's choice. Both adjust the shape-based scores,
++ * never override them: a chart the data cannot draw is never chosen.
++ */
++export type AnalyticalPurpose = "comparison" | "composition" | "distribution" | "trend" | "relationship" | "ranking" | "kpi" | "significance" | "profile";
++export type Audience = "executive" | "client" | "researcher";
++
++export const PURPOSE_WORDS: Record<AnalyticalPurpose, string> = {
++  comparison: "compare groups", composition: "show what the whole is made of", distribution: "show how answers spread", trend: "show change over time", relationship: "show how two measures move together",
++  ranking: "rank the items", kpi: "show the number to watch", significance: "show a difference with its uncertainty", profile: "profile the segments",
++};
++
++export interface PurposeReading { purpose: AnalyticalPurpose; why: string }
++
++const timeLike = (cats: string[] | undefined) => !!cats && cats.length >= 3 && cats.every((c) => /^\d{4}(?:-\d{2}|-W\d{2})?$/.test(c) || /^(?:wave|w)\s*\d+$/i.test(c));
++
++/** The purpose a result is shown for, from its analysis and its shape. */
++export function purposeOf(def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "measure" | "options">, result: Pick<AnalysisResult, "chart" | "tests" | "kind">): PurposeReading {
++  const cats = result.chart.categories;
++  if (def.kind === "trend" || timeLike(cats)) return { purpose: "trend", why: "the categories are points in time" };
++  switch (def.kind) {
++    case "crosstab": return (def.columns?.length ?? def.variables.length - 1) > 0 ? { purpose: "comparison", why: "a crosstab compares the rows across the banner" } : { purpose: "composition", why: "a one-way table shows how the answers divide" };
++    case "test": return result.tests.some((t) => t.p != null) ? { purpose: "significance", why: "a statistical test shows a difference and how sure it is" } : { purpose: "comparison", why: "a comparison of groups" };
++    case "correlation": case "regression": return { purpose: "relationship", why: `${def.kind === "regression" ? "a model" : "a correlation"} relates measures to one another` };
++    case "descriptive": case "topbox": case "csat": return { purpose: (result.chart.series?.length ?? 0) > 1 ? "comparison" : "distribution", why: "a descriptive shows how the answers spread" };
++    case "nps": return { purpose: "kpi", why: "NPS is a number to watch" };
++    case "ranking": case "maxdiff": case "turf": case "allocation": return { purpose: "ranking", why: `${def.kind} orders the items` };
++    case "segmentation": case "cluster": return { purpose: "profile", why: "segments are profiled against one another" };
++    case "brand": return { purpose: "comparison", why: "brands are compared along the funnel" };
++    case "pricing": case "conjoint": return { purpose: "relationship", why: `${def.kind} relates choice to its drivers` };
++    default: return { purpose: (result.chart.series?.length ?? 0) > 1 ? "comparison" : "distribution", why: "from the shape of the result" };
++  }
++}
++
++/* per purpose: the chart types that serve it, in order of fit, with the bonus they get */
++const FIT: Record<AnalyticalPurpose, [ChartType, number][]> = {
++  comparison: [["bar_grouped", 16], ["bar_vertical", 14], ["column_clustered", 12], ["bar_horizontal", 10], ["diff_means", 8], ["heatmap", 2]],
++  composition: [["bar_stacked_100", 16], ["donut", 14], ["pie", 12], ["bar_stacked", 10], ["treemap", 6]],
++  distribution: [["histogram", 16], ["box_plot", 12], ["bar_vertical", 10], ["density", 8], ["violin", 6]],
++  trend: [["line", 18], ["line_multi", 14], ["area", 8], ["wave_trend", 10], ["spline", 6]],
++  relationship: [["scatter", 16], ["scatter_trendline", 14], ["coefficient_plot", 12], ["correlation_matrix", 8], ["bubble", 6]],
++  ranking: [["ranking_bar", 18], ["bar_horizontal", 14], ["lollipop", 10], ["maxdiff_utility", 10], ["pareto", 6]],
++  kpi: [["kpi_card", 20], ["gauge", 12], ["scorecard", 10], ["bullet", 8]],
++  // bars for a client, the interval chart for a researcher: the audience weights decide between these two
++  significance: [["bar_grouped", 14], ["bar_vertical", 14], ["mean_ci", 13], ["ci_plot", 12], ["diff_means", 10], ["error_bar", 8]],
++  profile: [["segment_comparison", 16], ["radar", 12], ["segment_profile", 12], ["bar_grouped", 10], ["heatmap", 6]],
++};
++/* per audience: families lifted or pushed down */
++const AUDIENCE: Record<Audience, Partial<Record<ChartFamily, number>>> = {
++  executive: { statistical: -18, significance: -10, heatmap: -8, relationship: -6, advanced: -10, kpi: 8, bar: 6, pie: 4 },
++  client: { statistical: -8, significance: -2, advanced: -6, bar: 4, kpi: 4 },
++  researcher: { significance: 10, statistical: 6, relationship: 4, heatmap: 2, pie: -6 },
++};
++
++export interface ChartChoice extends ChartRecommendation { purpose: AnalyticalPurpose; audience: Audience; purposeWhy: string }
++
++/**
++ * The chart for a result, given why it is shown and to whom. The shape-based
++ * recommendations are the candidates; the purpose lifts the types that serve
++ * it and the audience lifts or lowers whole families; the best remaining
++ * candidate wins, with its reason extended.
++ */
++export function chooseChart(def: Pick<AnalysisDefinition, "kind" | "variables" | "columns" | "measure" | "options">, result: AnalysisResult, opts: { purpose?: AnalyticalPurpose; audience?: Audience; limit?: number } = {}): ChartChoice[] {
++  const audience = opts.audience ?? "client";
++  const read = opts.purpose ? { purpose: opts.purpose, why: "as asked" } : purposeOf(def, result);
++  const base = recommendCharts(result, 40);
++  const fit = new Map(FIT[read.purpose]);
++  const scored = base.map((r) => {
++    const bonus = fit.get(r.type) ?? 0;
++    const aud = AUDIENCE[audience][r.family] ?? 0;
++    const why = [r.reason, bonus ? `${PURPOSE_WORDS[read.purpose]} (+${bonus})` : "", aud ? `${audience} audience (${aud > 0 ? "+" : ""}${aud})` : ""].filter(Boolean).join("; ");
++    return { ...r, score: r.score + bonus + aud, reason: why, purpose: read.purpose, audience, purposeWhy: read.why };
++  }).sort((a, b) => b.score - a.score);
++  return scored.slice(0, opts.limit ?? 6);
++}
++
++/** one line for a caption or a card: "bar grouped — compare groups, client audience" */
++export function describeChoice(c: ChartChoice): string {
++  return `${c.type.replace(/_/g, " ")} — to ${PURPOSE_WORDS[c.purpose]}, for a${c.audience === "executive" ? "n" : ""} ${c.audience} audience`;
++}
+diff --git a/packages/analytics/src/deck.ts b/packages/analytics/src/deck.ts
+new file mode 100644
+index 0000000..bcc44d3
+--- /dev/null
++++ b/packages/analytics/src/deck.ts
+@@ -0,0 +1,195 @@
++import type { SurveyDefinition } from "@rescript/schema";
++import type { AnalysisResult, ChartSpec } from "./types.js";
++import type { AnalysisRun, Finding, HypothesisVerdict, RunItem } from "./findings.js";
++import { chooseChart, type Audience } from "./chartPurpose.js";
++import { reportNarrative } from "./findingsReport.js";
++import { CORRECTION_WORDS } from "./posthoc.js";
++
++/**
++ * THE STORYTELLING DECK (Research Engine audit, Phase 5).
++ *
++ * A findings deck is not the report's blocks on slides: it is a story in a
++ * fixed order a client can follow — what we set out to learn and what we
++ * found (summary), the key findings one per slide with the chart chosen for
++ * the audience and the one sentence that says why it matters, the groups
++ * that differ (segment comparison), the strongest effects as a statistical
++ * highlight, what the run found beyond the plan, what it means
++ * (implications), what to do next (recommendations), how it was done, and
++ * the caveats. Every sentence here is the engine's, from the run: the
++ * implications restate the verdicts against the design, the
++ * recommendations are next steps the evidence calls for (lead with this,
++ * treat that with caution, re-run when the base allows, plan the test that
++ * is missing, add the discovery to the plan). A model-written narrative,
++ * when one passed the gate, replaces those texts slide by slide — never
++ * the numbers.
++ */
++export type DeckSlide =
++  | { type: "title"; title: string; subtitle: string; date: string; client?: string; audience: Audience }
++  | { type: "summary"; title: string; headline: string; bullets: string[] }
++  | { type: "section"; title: string; subtitle?: string }
++  | { type: "key_finding"; title: string; analysisId?: string; chart: ChartSpec; evidence: string; soWhat: string; hypothesis?: string; significant: boolean; beyond?: boolean }
++  | { type: "segment_comparison"; title: string; measure: string; analysisId?: string; chart?: ChartSpec; groups: { label: string; value: string; n: number }[]; differs: string }
++  | { type: "statistical_highlight"; title: string; stat: string; label: string; test: string; p: string; n: number; context: string; pairs?: string }
++  | { type: "implications"; title: string; bullets: string[] }
++  | { type: "recommendations"; title: string; items: string[] }
++  | { type: "method"; title: string; items: { label: string; value: string }[] }
++  | { type: "caveats"; title: string; bullets: string[] };
++
++export interface DeckDefinition { title: string; subtitle: string; audience: Audience; slides: DeckSlide[]; /** the analysis ids the slides draw */ analysisIds: string[] }
++
++/** model-written sections that passed the gate: each replaces the engine's text on its slide */
++export interface NarrativeSections { headline?: string; summary?: string[]; implications?: string[]; recommendations?: string[]; soWhat?: Record<string, string> }
++
++export interface DeckOptions {
++  audience?: Audience;
++  client?: string;
++  title?: string;
++  date?: string;
++  /** the analysis an item's planned id (or name) is stored as, for the slides' charts */
++  analysisIdFor?: (plannedId: string | undefined, name: string) => string | undefined;
++  /** how many key findings at most */
++  maxFindings?: number;
++  narrative?: NarrativeSections;
++  /** the results by analysis id, so the chart can be chosen for the audience (the run's own results when it has them) */
++  results?: Record<string, AnalysisResult>;
++}
++
++type RunForDeck = Pick<AnalysisRun, "computedAt" | "trigger" | "environment" | "n" | "findings" | "verdicts" | "warnings"> & { items: (Pick<RunItem, "definition" | "hypotheses" | "chart" | "findings"> & { result?: AnalysisResult; adaptedFrom?: string })[]; corrections?: AnalysisRun["corrections"]; advice?: AnalysisRun["advice"]; discoveries?: AnalysisRun["discoveries"] };
++
++const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
++const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
++const short = (s: string, n = 110) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
++/** a headline without its test parenthesis: "SAT by Gender: a strong difference (Welch's t-test, p < .001, d = 1.01)." → "SAT by Gender: a strong difference" */
++const strip = (s: string) => s.replace(/\s*\([^()]*\bp\s*[<=][^()]*\)\.?$/, "").replace(/\.$/, "");
++const VERDICT_WORD: Record<HypothesisVerdict["verdict"], string> = { supported: "supported", not_supported: "not supported", mixed: "mixed", inconclusive: "inconclusive", untested: "untested" };
++const STRENGTH_WORD: Record<Finding["strength"], string> = { strong: "a strong effect", moderate: "a moderate effect", weak: "a small effect", none: "no effect" };
++
++/** the one line that says why a finding matters, from what it serves */
++function soWhatFor(def: SurveyDefinition, f: Finding, verdicts: HypothesisVerdict[]): string {
++  const h = f.hypotheses.map((l) => verdicts.find((v) => v.label === l)).find(Boolean);
++  const objective = def.research?.objective ? ` — the objective was: ${short(def.research.objective, 90)}` : "";
++  if (f.evidence.adjusted && f.significant && !f.evidence.adjusted.significant) return `Read with caution: significant on its own, this does not hold once the ${CORRECTION_WORDS[f.evidence.adjusted.method]} correction for the family of tests is applied.`;
++  const weight = f.strength === "strong" || f.strength === "moderate" ? `${STRENGTH_WORD[f.strength]}, so it is a difference worth acting on` : f.strength === "weak" ? "a small effect — real, but modest in size" : "no measurable effect";
++  if (h) return `This is the evidence for ${h.label} (“${short(h.text, 80)}”), which is ${VERDICT_WORD[h.verdict]} overall${f.significant ? `; ${weight}` : "; this test did not reach significance"}.`;
++  if (f.kind === "segment") return "The plan did not test this pair; it was found by looking at every outcome by every demographic and holds after correction.";
++  if (f.kind === "trend") return "A move across the waves of fieldwork, corrected for the number of outcomes looked at.";
++  if (f.significant) return `${STRENGTH_WORD[f.strength][0].toUpperCase()}${STRENGTH_WORD[f.strength].slice(1)} on ${f.evidence.n} respondents${objective}.`;
++  return `Not significant on ${f.evidence.n} respondents — no difference to report here${objective}.`;
++}
++
++/** the groups highest first, so "who differs" reads top to bottom */
++const groupsOf = (f: Finding) => [...(f.evidence.groups ?? [])].filter((g) => g.mean != null).sort((a, b) => (b.mean ?? 0) - (a.mean ?? 0)).map((g) => ({ label: g.label, value: fmt(g.mean), n: g.n }));
++
++/** The deck from a run: the story in its fixed order, every sentence from the run. */
++export function deckFromRun(def: SurveyDefinition, run: RunForDeck, opts: DeckOptions = {}): DeckDefinition {
++  const audience = opts.audience ?? "client";
++  const idFor = opts.analysisIdFor ?? ((planned, name) => planned ?? name);
++  const narrative = opts.narrative ?? {};
++  const date = (opts.date ?? run.computedAt).slice(0, 10);
++  const title = opts.title ?? `${def.research?.objective ? short(def.research.objective, 70) : def.meta.title} — findings`;
++  const subtitle = `${run.n} ${run.environment.toLowerCase()} completes · ${date}${opts.client ? ` · prepared for ${opts.client}` : ""}`;
++  const slides: DeckSlide[] = [];
++  const analysisIds = new Set<string>();
++  const itemOf = (f: Finding) => run.items.find((it) => it.findings.some((x) => x.id === f.id));
++  const idOf = (it: RunForDeck["items"][number] | undefined) => (it ? idFor(it.definition.options?.planned ? String(it.definition.options.planned) : undefined, it.definition.name) : undefined);
++  const resultOf = (it: RunForDeck["items"][number] | undefined, id: string | undefined) => it?.result ?? (id ? opts.results?.[id] : undefined);
++  const chartFor = (it: RunForDeck["items"][number] | undefined, id: string | undefined, titleText: string): ChartSpec => {
++    const result = resultOf(it, id);
++    const type = it && result ? chooseChart(it.definition, result, { audience })[0]?.type ?? (it.chart ?? "bar_vertical") : (it?.chart ?? "bar_vertical");
++    return { type, options: { title: titleText, dataLabels: true } };
++  };
++
++  slides.push({ type: "title", title, subtitle, date, ...(opts.client ? { client: opts.client } : {}), audience });
++
++  /* summary: what we set out to learn, what we found */
++  const n = reportNarrative(def, run);
++  const sig = run.findings.filter((f) => f.significant && f.kind !== "inconclusive" && f.kind !== "low_base" && !["segment", "anomaly", "trend"].includes(f.kind));
++  const bullets = narrative.summary?.length ? narrative.summary : [
++    ...(def.research?.objective ? [`Objective: ${short(def.research.objective, 140)}`] : []),
++    ...run.verdicts.map((v) => `${v.label} ${VERDICT_WORD[v.verdict]}: ${short(v.text, 100)}`),
++    ...sig.slice(0, 3).map((f) => strip(f.headline)),
++    ...(run.discoveries?.segments.length ? [`Beyond the plan: ${run.discoveries.segments.length} segment difference${run.discoveries.segments.length === 1 ? "" : "s"} the plan did not test`] : []),
++  ];
++  slides.push({ type: "summary", title: "What we learned", headline: narrative.headline ?? (sig[0] ? strip(sig[0].headline) : n.summary.split(". ")[0]), bullets: bullets.slice(0, 6) });
++
++  /* key findings: one per significant planned finding, strongest first */
++  const max = opts.maxFindings ?? 5;
++  const keys = sig.slice(0, max);
++  if (keys.length) slides.push({ type: "section", title: "What we found", subtitle: `${keys.length} key finding${keys.length === 1 ? "" : "s"}, strongest first` });
++  for (const f of keys) {
++    const it = itemOf(f); const id = idOf(it);
++    if (id) analysisIds.add(id);
++    const evidence = `${f.evidence.test ? f.evidence.test.replace(/_/g, " ") : f.analysis.kind}${f.evidence.p != null ? `, ${fmtP(f.evidence.p)}` : ""}${f.evidence.effect ? `, ${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : ""}, n = ${f.evidence.n}${f.evidence.adjusted ? ` · ${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)}${f.evidence.adjusted.significant ? "" : " (does not hold)"}` : ""}`;
++    slides.push({ type: "key_finding", title: strip(f.headline), ...(id ? { analysisId: id } : {}), chart: chartFor(it, id, it?.definition.name ?? f.analysis.name), evidence, soWhat: narrative.soWhat?.[f.id] ?? soWhatFor(def, f, run.verdicts), ...(f.hypotheses[0] ? { hypothesis: f.hypotheses[0] } : {}), significant: f.significant });
++  }
++
++  /* segment comparison: the group tests with their means, and the discoveries by segment */
++  const segsAll = [...keys.filter((f) => (f.evidence.groups?.length ?? 0) >= 2), ...(run.discoveries?.segments ?? []).filter((f) => (f.evidence.groups?.length ?? 0) >= 2)];
++  // four at most on slides; a discovery that did not fit here is shown beyond the plan instead of dropped
++  const segs = segsAll.slice(0, 4);
++  if (segs.length) slides.push({ type: "section", title: "Who differs", subtitle: "the groups behind the differences" });
++  for (const f of segs) {
++    const it = itemOf(f); const id = idOf(it);
++    const groups = groupsOf(f);
++    const hi = groups[0], lo = groups[groups.length - 1];
++    slides.push({ type: "segment_comparison", title: strip(f.headline), measure: f.variables[0], ...(id ? { analysisId: id, chart: chartFor(it, id, it?.definition.name ?? f.analysis.name) } : {}), groups, differs: f.significant ? `${hi.label} (${hi.value}) vs ${lo.label} (${lo.value}) — ${STRENGTH_WORD[f.strength]}${f.evidence.pairwise ? `. ${f.evidence.pairwise.summary}` : ""}` : "the groups do not differ significantly" });
++  }
++
++  /* statistical highlight: the strongest effects */
++  const strong = sig.filter((f) => f.evidence.effect && (f.strength === "strong" || f.strength === "moderate")).slice(0, 2);
++  for (const f of strong) {
++    slides.push({ type: "statistical_highlight", title: strip(f.headline), stat: `${f.evidence.effect!.name} = ${fmt(f.evidence.effect!.value)}`, label: STRENGTH_WORD[f.strength], test: (f.evidence.test ?? f.analysis.kind).replace(/_/g, " "), p: fmtP(f.evidence.p), n: f.evidence.n, context: `${f.hypotheses.length ? `${f.hypotheses.join(", ")} · ` : ""}${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)} — ${f.evidence.adjusted.significant ? "holds" : "does not hold"}` : "uncorrected"}`, ...(f.evidence.pairwise?.significant.length ? { pairs: f.evidence.pairwise.summary } : {}) });
++  }
++
++  /* beyond the plan: the trends and the segment differences not already shown, the anomalies */
++  const d = run.discoveries;
++  const beyond: DeckSlide[] = [];
++  for (const f of [...(d?.trends ?? []), ...(d?.segments ?? []).filter((x) => !segs.includes(x))].slice(0, 3)) beyond.push({ type: "key_finding", title: strip(f.headline), chart: { type: f.kind === "trend" ? "line" : "bar_grouped", options: { title: f.variables.join(" by "), dataLabels: true } }, evidence: `${f.evidence.adjusted ? `${CORRECTION_WORDS[f.evidence.adjusted.method]}-adjusted ${fmtP(f.evidence.adjusted.p)}` : ""}${f.evidence.effect ? `, ${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : ""}, n = ${f.evidence.n}`.replace(/^, /, ""), soWhat: soWhatFor(def, f, run.verdicts), significant: f.significant, beyond: true });
++  if (d?.anomalies.length) beyond.push({ type: "caveats", title: "Data anomalies", bullets: d.anomalies.slice(0, 6).map((f) => f.headline) });
++  if (beyond.length && d) slides.push({ type: "section", title: "Beyond the plan", subtitle: d.summary }, ...beyond);
++
++  /* implications: the verdicts against the design */
++  const implications = narrative.implications?.length ? narrative.implications : run.verdicts.map((v) => {
++    const lead = `${v.label} (${short(v.text, 70)}) is ${VERDICT_WORD[v.verdict]}`;
++    switch (v.verdict) {
++      case "supported": return `${lead}: the design's expectation holds — ${short(strip(v.findings.find((f) => f.significant)?.headline ?? v.reason), 110)}${v.corrected ? `; ${v.corrected.note}` : ""}.`;
++      case "not_supported": return `${lead}: the expectation did not hold in this sample — ${short(strip(v.reason), 110)}.`;
++      case "mixed": return `${lead}: the evidence points both ways — ${short(strip(v.reason), 120)}.`;
++      case "inconclusive": return `${lead}: ${short(v.reason, 120)}.`;
++      default: return `${lead}: no analysis in the plan serves it, so the data says nothing about it yet.`;
++    }
++  });
++  if (implications.length) slides.push({ type: "implications", title: "What it means", bullets: implications.slice(0, 7) });
++
++  /* recommendations: the next steps the evidence calls for */
++  const recs = narrative.recommendations?.length ? narrative.recommendations : [
++    ...(keys[0] ? [`Lead the story with the strongest finding: ${short(strip(keys[0].headline), 100)}.`] : []),
++    ...run.findings.filter((f) => f.significant && f.evidence.adjusted && !f.evidence.adjusted.significant).slice(0, 2).map((f) => `Treat “${short(strip(f.headline), 70)}” with caution — it does not hold once corrected for the family of tests.`),
++    ...run.verdicts.filter((v) => v.verdict === "inconclusive").slice(0, 2).map((v) => `Re-run the plan for ${v.label} when the base allows: ${short(v.reason, 90)}`),
++    ...run.verdicts.filter((v) => v.verdict === "untested").slice(0, 2).map((v) => `Plan a test for ${v.label} (“${short(v.text, 60)}”) before the next wave — nothing in the plan serves it.`),
++    ...(run.discoveries?.segments ?? []).slice(0, 2).map((f) => `Add ${f.variables[0]} by ${f.variables[1]} to the analysis plan — it was found outside it and holds after correction.`),
++    ...(run.advice ?? []).filter((a) => a.recommended).slice(0, 2).map((a) => `Re-run ${a.name} as ${a.recommended!.label}: ${a.recommended!.reason}`),
++  ];
++  if (recs.length) slides.push({ type: "recommendations", title: "What to do next", items: recs.slice(0, 7) });
++
++  /* method and caveats */
++  slides.push({ type: "method", title: "How this was done", items: [
++    { label: "Completes analysed", value: `${run.n} (${run.environment.toLowerCase()})` },
++    { label: "Run", value: `${run.trigger.replace(/_/g, " ")}, ${date}` },
++    { label: "Planned analyses", value: `${run.items.filter((it) => !it.adaptedFrom).length}` },
++    { label: "Significance", value: `α = 0.05${run.corrections ? `, ${CORRECTION_WORDS[run.corrections.method]} correction by hypothesis family` : ""}` },
++    ...(def.research?.population ? [{ label: "Population", value: def.research.population }] : []),
++    ...(def.research?.methodology ? [{ label: "Methodology", value: def.research.methodology }] : []),
++  ] });
++  const caveats = [...run.warnings.slice(0, 4), ...(run.corrections?.families.some((f) => f.lost.length) ? [run.corrections.summary] : []), ...(run.advice ?? []).slice(0, 2).map((a) => a.summary), ...(run.n < 30 ? [`Only ${run.n} completes — nothing here is conclusive yet.`] : [])];
++  if (caveats.length) slides.push({ type: "caveats", title: "Caveats", bullets: caveats.slice(0, 6) });
++
++  return { title, subtitle, audience, slides, analysisIds: [...analysisIds] };
++}
++
++/** "11 slides: title, summary, 3 key findings, 2 segment comparisons, …" */
++export function describeDeck(deck: DeckDefinition): string {
++  const counts = new Map<string, number>();
++  for (const s of deck.slides) counts.set(s.type, (counts.get(s.type) ?? 0) + 1);
++  return `${deck.slides.length} slides: ${[...counts].map(([k, v]) => `${v > 1 ? `${v} ` : ""}${k.replace(/_/g, " ")}${v > 1 ? "s" : ""}`).join(", ")}`;
++}
+diff --git a/packages/analytics/src/export/deck.ts b/packages/analytics/src/export/deck.ts
+new file mode 100644
+index 0000000..b9b79b5
+--- /dev/null
++++ b/packages/analytics/src/export/deck.ts
+@@ -0,0 +1,179 @@
++import type { AnalysisResult, ReportTheme } from "../types.js";
++import { DEFAULT_THEME } from "../types.js";
++import type { DeckDefinition, DeckSlide } from "../deck.js";
++import { PptxCtor, addTable, drawAnalysisVisual, hex, type Pres, type Slide } from "./pptx.js";
++
++/**
++ * THE DECK DESIGN SYSTEM (Research Engine audit, Phase 5).
++ *
++ * One type ramp, one palette, one grid, and a slide builder per story
++ * slide type. The analytical charts stay flat and native (editable in
++ * PowerPoint, no perspective — the audit is explicit that 3D distorts the
++ * comparisons a chart exists to make); the dimensional treatment goes
++ * where it helps a reader and harms nothing: the cover, the section
++ * dividers, the statistic callout cards and the so-what band, which carry
++ * a soft shadow and layered panels. Significance is annotated in words and
++ * a badge, never implied by a colour alone.
++ */
++export interface DeckStyle {
++  /** the type ramp, in points */
++  type: { display: number; title: number; headline: number; body: number; caption: number; stat: number };
++  /** panel geometry, in inches */
++  radius: number;
++  gutter: number;
++  shadow: { type: "outer"; blur: number; offset: number; angle: number; color: string; opacity: number };
++}
++export const DECK_STYLE: DeckStyle = {
++  type: { display: 36, title: 22, headline: 17, body: 12, caption: 9, stat: 40 },
++  radius: 0.08, gutter: 0.5,
++  shadow: { type: "outer", blur: 6, offset: 2, angle: 90, color: "1B2233", opacity: 0.18 },
++};
++
++export interface DeckPptxInput {
++  deck: DeckDefinition;
++  results: Record<string, AnalysisResult>;
++  theme?: ReportTheme | null;
++  author?: string;
++  footer?: string;
++  /** pictures of charts the renderer drew, keyed by analysis id (maps and the like) */
++  images?: Record<string, string>;
++}
++
++const W = 10, H = 5.625;
++
++/** Build the deck as a 16:9 PowerPoint — one builder per slide type. */
++export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
++  const theme = input.theme ?? DEFAULT_THEME;
++  const st = DECK_STYLE;
++  const p = new PptxCtor();
++  p.layout = "LAYOUT_16x9";
++  p.title = input.deck.title;
++  p.author = input.author ?? "Rescript";
++  const font = theme.fontFamily.split(",")[0].trim();
++  const heading = (theme.headingFontFamily ?? theme.fontFamily).split(",")[0].trim();
++  const primary = hex(theme.colors.primary), secondary = hex(theme.colors.secondary), accent = hex(theme.colors.accent), text = hex(theme.colors.text), subtle = hex(theme.colors.subtle), bg = hex(theme.colors.background);
++  const palette = theme.colors.palette.map(hex);
++  const ctx = { font, text, subtle, primary, palette };
++  const footer = input.footer ?? theme.footer ?? "";
++  let no = 0;
++  const g = st.gutter;
++
++  const frame = (s: Slide, title?: string, kicker?: string) => {
++    no++;
++    s.background = { color: bg };
++    if (kicker) s.addText(kicker.toUpperCase(), { x: g, y: 0.22, w: W - 2 * g, h: 0.22, fontSize: st.type.caption, bold: true, color: primary, fontFace: font, charSpacing: 2 });
++    if (title) s.addText(title, { x: g, y: kicker ? 0.42 : 0.3, w: W - 2 * g, h: 0.7, fontSize: st.type.title, bold: true, color: text, fontFace: heading, valign: "top", fit: "shrink" });
++    if (footer) s.addText(footer, { x: g, y: H - 0.38, w: W - 2 * g - 0.8, h: 0.25, fontSize: st.type.caption - 1, color: subtle, fontFace: font });
++    s.addText(String(no), { x: W - g - 0.6, y: H - 0.38, w: 0.6, h: 0.25, fontSize: st.type.caption - 1, color: subtle, align: "right", fontFace: font });
++    if (theme.logoUrl?.startsWith("data:")) s.addImage({ data: theme.logoUrl, x: W - g - 1.1, y: 0.22, w: 1.1, h: 0.45 });
++  };
++  const card = (s: Slide, box: { x: number; y: number; w: number; h: number }, fill = "FFFFFF") => {
++    s.addShape(p.ShapeType.roundRect, { x: box.x, y: box.y, w: box.w, h: box.h, fill: { color: fill }, line: { color: "E5E9F0", width: 0.5 }, rectRadius: st.radius, shadow: st.shadow } as never);
++  };
++  const badge = (s: Slide, x: number, y: number, label: string, ok: boolean) => {
++    s.addShape(p.ShapeType.roundRect, { x, y, w: 1.55, h: 0.26, fill: { color: ok ? accent : subtle }, line: { color: ok ? accent : subtle }, rectRadius: 0.13 });
++    s.addText(label, { x, y, w: 1.55, h: 0.26, fontSize: st.type.caption, bold: true, color: "FFFFFF", align: "center", valign: "middle", fontFace: font });
++  };
++  const bullets = (s: Slide, items: string[], box: { x: number; y: number; w: number; h: number }, size = st.type.body) => {
++    s.addText(items.map((t) => ({ text: t, options: { bullet: { indent: 14 }, breakLine: true, paraSpaceAfter: 6 } })) as never, { x: box.x, y: box.y, w: box.w, h: box.h, fontSize: size, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
++  };
++
++  for (const slide of input.deck.slides) {
++    const s = p.addSlide();
++    switch (slide.type) {
++      case "title": {
++        no++;
++        s.background = { color: hex(theme.cover?.background ?? theme.colors.primary) };
++        const tc = hex(theme.cover?.textColor ?? "#ffffff");
++        // a layered panel: the dimensional treatment belongs on the cover, not on a chart
++        s.addShape(p.ShapeType.roundRect, { x: g, y: 1.3, w: W - 2 * g, h: 2.6, fill: { color: secondary, transparency: 55 }, line: { color: secondary, transparency: 100 }, rectRadius: 0.12, shadow: st.shadow } as never);
++        s.addText(slide.title, { x: g + 0.4, y: 1.5, w: W - 2 * g - 0.8, h: 1.3, fontSize: st.type.display, bold: true, color: tc, fontFace: heading, valign: "top", fit: "shrink" });
++        s.addText(slide.subtitle, { x: g + 0.4, y: 2.85, w: W - 2 * g - 0.8, h: 0.5, fontSize: st.type.headline - 2, color: tc, fontFace: font });
++        s.addText(`${slide.date}${slide.client ? ` · for ${slide.client}` : ""} · ${slide.audience} edition`, { x: g, y: H - 0.9, w: W - 2 * g, h: 0.4, fontSize: st.type.body - 1, color: tc, fontFace: font });
++        if (theme.logoUrl?.startsWith("data:")) s.addImage({ data: theme.logoUrl, x: g, y: 0.4, w: 1.6, h: 0.7 });
++        break;
++      }
++      case "summary": {
++        frame(s, slide.title, "Summary");
++        card(s, { x: g, y: 1.2, w: W - 2 * g, h: 0.95 }, "F5F7FA");
++        s.addText(slide.headline, { x: g + 0.25, y: 1.25, w: W - 2 * g - 0.5, h: 0.85, fontSize: st.type.headline, bold: true, color: primary, fontFace: heading, valign: "middle", fit: "shrink" });
++        bullets(s, slide.bullets, { x: g, y: 2.3, w: W - 2 * g, h: H - 2.3 - 0.5 });
++        break;
++      }
++      case "section": {
++        no++;
++        s.background = { color: secondary };
++        s.addShape(p.ShapeType.rect, { x: g, y: 2.2, w: 1.2, h: 0.06, fill: { color: accent }, line: { color: accent } });
++        s.addText(slide.title, { x: g, y: 2.35, w: W - 2 * g, h: 0.9, fontSize: st.type.display - 6, bold: true, color: "FFFFFF", fontFace: heading });
++        if (slide.subtitle) s.addText(slide.subtitle, { x: g, y: 3.25, w: W - 2 * g, h: 0.6, fontSize: st.type.body + 2, color: "FFFFFF", fontFace: font, fit: "shrink" });
++        break;
++      }
++      case "key_finding": {
++        frame(s, slide.title, slide.beyond ? "Beyond the plan" : slide.hypothesis ? `Key finding · ${slide.hypothesis}` : "Key finding");
++        const result = slide.analysisId ? input.results[slide.analysisId] : undefined;
++        const chartBox = { x: g, y: 1.2, w: 5.7, h: 3.35 };
++        if (result) drawAnalysisVisual(p, s, result, slide.chart, theme, chartBox, ctx, { tableBox: { x: g, w: 5.7 }, fontSize: 8, maxRows: 10, image: slide.analysisId ? input.images?.[slide.analysisId] : undefined });
++        else { card(s, chartBox, "F5F7FA"); s.addText("Chart data not available in this export", { x: chartBox.x, y: chartBox.y, w: chartBox.w, h: chartBox.h, fontSize: st.type.caption, color: subtle, align: "center", valign: "middle", fontFace: font }); }
++        // the so-what band: a card with the badge and the one sentence that says why it matters
++        const bx = g + 5.7 + 0.3, bw = W - g - bx;
++        card(s, { x: bx, y: 1.2, w: bw, h: 3.35 });
++        badge(s, bx + 0.2, 1.38, slide.significant ? "SIGNIFICANT" : "NOT SIGNIFICANT", slide.significant);
++        s.addText("So what", { x: bx + 0.2, y: 1.8, w: bw - 0.4, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 });
++        s.addText(slide.soWhat, { x: bx + 0.2, y: 2.05, w: bw - 0.4, h: 1.75, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
++        s.addText(slide.evidence, { x: bx + 0.2, y: 3.85, w: bw - 0.4, h: 0.6, fontSize: st.type.caption, italic: true, color: subtle, fontFace: font, valign: "bottom", fit: "shrink" });
++        break;
++      }
++      case "segment_comparison": {
++        frame(s, slide.title, "Segment comparison");
++        const result = slide.analysisId ? input.results[slide.analysisId] : undefined;
++        const left = { x: g, y: 1.2, w: 5.4, h: 3.35 };
++        if (result && slide.chart) drawAnalysisVisual(p, s, result, slide.chart, theme, left, ctx, { tableBox: { x: g, w: 5.4 }, fontSize: 8, maxRows: 10 });
++        else {
++          const rows = slide.groups.map((gr) => ({ group: gr.label, value: Number(gr.value), n: gr.n }));
++          addTable(s, { id: "groups", title: slide.measure, columns: [{ key: "group", label: "Group" }, { key: "value", label: slide.measure, type: "number", decimals: 2 }, { key: "n", label: "n", type: "count" }], rows }, theme, { x: g, y: 1.2, w: 5.4 }, 10, 9);
++        }
++        const bx = g + 5.4 + 0.3, bw = W - g - bx;
++        card(s, { x: bx, y: 1.2, w: bw, h: 3.35 });
++        s.addText("Who differs", { x: bx + 0.2, y: 1.35, w: bw - 0.4, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 });
++        s.addText(slide.differs, { x: bx + 0.2, y: 1.62, w: bw - 0.4, h: 1.5, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
++        s.addText(slide.groups.map((gr) => ({ text: `${gr.label}: ${gr.value} (n = ${gr.n})`, options: { breakLine: true } })) as never, { x: bx + 0.2, y: 3.15, w: bw - 0.4, h: 1.3, fontSize: st.type.caption, color: subtle, fontFace: font, valign: "top", fit: "shrink" } as never);
++        break;
++      }
++      case "statistical_highlight": {
++        frame(s, slide.title, "Statistical highlight");
++        // the callout card: the statistic large, the words beside it
++        card(s, { x: g, y: 1.3, w: 3.6, h: 3.0 }, "F5F7FA");
++        s.addText(slide.stat, { x: g + 0.2, y: 1.5, w: 3.2, h: 1.2, fontSize: st.type.stat, bold: true, color: primary, fontFace: heading, align: "center", valign: "middle", fit: "shrink" });
++        s.addText(slide.label, { x: g + 0.2, y: 2.75, w: 3.2, h: 0.4, fontSize: st.type.headline - 3, bold: true, color: text, fontFace: font, align: "center" });
++        s.addText(`${slide.test}, ${slide.p} · n = ${slide.n}`, { x: g + 0.2, y: 3.2, w: 3.2, h: 0.9, fontSize: st.type.caption + 1, color: subtle, fontFace: font, align: "center", valign: "top", fit: "shrink" });
++        const bx = g + 3.6 + 0.35, bw = W - g - bx;
++        s.addText(slide.context, { x: bx, y: 1.4, w: bw, h: 0.8, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" });
++        if (slide.pairs) { s.addText("Pairs that differ", { x: bx, y: 2.3, w: bw, h: 0.25, fontSize: st.type.caption, bold: true, color: subtle, fontFace: font, charSpacing: 2 }); s.addText(slide.pairs, { x: bx, y: 2.55, w: bw, h: 1.7, fontSize: st.type.body - 1, color: text, fontFace: font, valign: "top", fit: "shrink" }); }
++        break;
++      }
++      case "implications": {
++        frame(s, slide.title, "Implications");
++        bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5 });
++        break;
++      }
++      case "recommendations": {
++        frame(s, slide.title, "Recommendations");
++        s.addText(slide.items.map((t, i) => ({ text: t, options: { bullet: { type: "number" as const, indent: 18 }, breakLine: true, paraSpaceAfter: 7 } })) as never, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5, fontSize: st.type.body, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
++        break;
++      }
++      case "method": {
++        frame(s, slide.title, "Method");
++        const rows = slide.items.map((it) => ({ label: it.label, value: it.value }));
++        addTable(s, { id: "method", title: "Method", columns: [{ key: "label", label: "" }, { key: "value", label: "" }], rows }, theme, { x: g, y: 1.2, w: W - 2 * g }, 12, 10);
++        break;
++      }
++      case "caveats": {
++        frame(s, slide.title, "Caveats");
++        bullets(s, slide.bullets, { x: g, y: 1.2, w: W - 2 * g, h: H - 1.2 - 0.5 }, st.type.body - 1);
++        break;
++      }
++    }
++  }
++  const out = await p.write({ outputType: "nodebuffer" });
++  return out as Buffer;
++}
+diff --git a/packages/analytics/src/export/docx.ts b/packages/analytics/src/export/docx.ts
+new file mode 100644
+index 0000000..7637aa7
+--- /dev/null
++++ b/packages/analytics/src/export/docx.ts
+@@ -0,0 +1,249 @@
++import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat } from "docx";
++import type { SurveyDefinition, Question } from "@rescript/schema";
++import { hypothesisLabel } from "@rescript/schema";
++import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText } from "@rescript/engine";
++import type { AnalysisResult, ResultTable } from "../types.js";
++import type { AnalysisRun, Finding } from "../findings.js";
++import { reportNarrative } from "../findingsReport.js";
++import { deckFromRun, type DeckOptions, type DeckSlide } from "../deck.js";
++import { CORRECTION_WORDS } from "../posthoc.js";
++import { seriesForChart } from "./shared.js";
++
++/**
++ * WORD DOCUMENTS (Research Engine audit, Phase 5) — the two client-ready
++ * documents the audit found missing, on the same `docx` library the
++ * questionnaire export uses:
++ *
++ *   • the RESEARCH PROPOSAL / DESIGN DOCUMENT, from the survey and its
++ *     research design alone: objective, research questions, hypotheses
++ *     with their readings and the constructs that measure them, the
++ *     questionnaire's structure and length, the sample and the base the
++ *     plan needs, the analysis plan with its reasons, deliverables,
++ *     assumptions and sources;
++ *   • the FINDINGS REPORT, from a run: the executive summary, the verdicts,
++ *     the findings with their evidence and the groups behind them, what
++ *     was found beyond the plan, the data advice, what it means, what to do
++ *     next, the method and the caveats.
++ *
++ * Every sentence is the engine's, from the design or the run; a model's
++ * narrative, when one passed the gate, replaces the summary, the
++ * implications and the recommendations. Nothing is drawn: a chart's data
++ * goes in as a table, which Word readers can read and reuse.
++ */
++const INK = "16202E", SUBTLE = "5F6B7D", ACCENT = "1D4ED8", RULE = "D5DBE4", HEAD_FILL = "EEF1F6";
++const PAGE = { size: { width: 12240, height: 15840 }, margin: { top: 1080, bottom: 1080, left: 1080, right: 1080 } };
++
++type Block = Paragraph | Table;
++const plain = (s: string | undefined, n = 120) => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
++const h1 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 30, color: INK })], heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 120 } });
++const h2 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 24, color: INK })], heading: HeadingLevel.HEADING_2, spacing: { before: 220, after: 80 } });
++const label = (text: string) => new Paragraph({ children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: SUBTLE, characterSpacing: 20 })], spacing: { before: 140, after: 40 } });
++const body = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], spacing: { after: 80 } });
++const lead = (text: string) => new Paragraph({ children: [new TextRun({ text, color: ACCENT, size: 24, bold: true })], spacing: { after: 120 } });
++const muted = (text: string) => new Paragraph({ children: [new TextRun({ text, color: SUBTLE, size: 19, italics: true })], spacing: { after: 60 } });
++const bullet = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], numbering: { reference: "rs-bullets", level: 0 }, spacing: { after: 50 } });
++const numbered = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], numbering: { reference: "rs-numbers", level: 0 }, spacing: { after: 50 } });
++const divider = () => new Paragraph({ text: "", spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: RULE, space: 6 } } });
++const pageBreak = () => new Paragraph({ children: [new PageBreak()] });
++
++function gridTable(head: string[], rows: string[][], widths?: number[]): Table {
++  const total = 9000;
++  const ws = widths ?? head.map(() => Math.floor(total / head.length));
++  const cell = (text: string, w: number, isHead: boolean) => new TableCell({
++    width: { size: w, type: WidthType.DXA },
++    shading: isHead ? { type: ShadingType.CLEAR, fill: HEAD_FILL, color: "auto" } : undefined,
++    margins: { top: 60, bottom: 60, left: 90, right: 90 },
++    children: [new Paragraph({ children: [new TextRun({ text, bold: isHead, size: 18, color: isHead ? SUBTLE : INK })] })],
++  });
++  return new Table({ width: { size: total, type: WidthType.DXA }, rows: [new TableRow({ tableHeader: true, children: head.map((h, i) => cell(h, ws[i], true)) }), ...rows.map((r) => new TableRow({ children: r.map((v, i) => cell(v, ws[i] ?? ws[0], false)) }))] });
++}
++const fmtCell = (v: unknown, type?: string, decimals?: number) => v == null ? "" : typeof v === "number" ? (type === "pct" ? `${v.toFixed(decimals ?? 1)}%` : type === "count" ? String(Math.round(v)) : v.toFixed(decimals ?? 2)) : String(v);
++function resultTable(t: ResultTable, maxRows = 20): Table {
++  const cols = t.columns.filter((c) => !c.suppressed);
++  return gridTable(cols.map((c) => c.label), t.rows.slice(0, maxRows).map((r) => cols.map((c) => { const sig = r[`${c.key}__sig`]; const v = fmtCell(r[c.key], (r.__format as string | undefined) ?? c.type, c.decimals); return sig ? `${v} ${sig}` : v; })));
++}
++const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
++const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
++
++function document(title: string, description: string, children: Block[]): Promise<Buffer> {
++  const doc = new Document({
++    creator: "Rescript", title, description,
++    numbering: { config: [
++      { reference: "rs-bullets", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
++      { reference: "rs-numbers", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
++    ] },
++    sections: [{ properties: { page: PAGE }, children }],
++  });
++  return Packer.toBuffer(doc);
++}
++
++function cover(kind: string, title: string, lines: string[]): Block[] {
++  return [
++    new Paragraph({ children: [new TextRun({ text: kind.toUpperCase(), bold: true, size: 18, color: ACCENT, characterSpacing: 30 })], spacing: { before: 2400, after: 200 } }),
++    new Paragraph({ children: [new TextRun({ text: title, bold: true, size: 44, color: INK })], spacing: { after: 240 } }),
++    ...lines.filter(Boolean).map((l) => new Paragraph({ children: [new TextRun({ text: l, size: 22, color: SUBTLE })], spacing: { after: 60 } })),
++    pageBreak(),
++  ];
++}
++
++/* ------------------------------------------------------------ the proposal */
++
++export interface ProposalOptions { client?: string; author?: string; date?: string; title?: string; fieldwork?: { from?: string; to?: string }; deliverables?: string[] }
++
++/** The research proposal / design document, from the survey and its research design. */
++export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOptions = {}): Promise<Buffer> {
++  const r = def.research;
++  const date = opts.date ?? new Date().toISOString().slice(0, 10);
++  const title = opts.title ?? (r?.objective ? plain(r.objective, 90) : def.meta.title);
++  const out: Block[] = [];
++  out.push(...cover("Research proposal", title, [opts.client ? `Prepared for ${opts.client}` : "", `${date}${opts.author ? ` · ${opts.author}` : ""}`, `Survey: ${def.meta.title}${def.meta.version ? ` v${def.meta.version}` : ""}`]));
++
++  out.push(h1("1. Background and objective"));
++  out.push(r?.objective ? lead(r.objective) : muted("No research objective is recorded yet — record it in the research design."));
++  if (r?.population) out.push(label("Population"), body(r.population));
++  if (r?.methodology) out.push(label("Methodology"), body(r.methodology));
++  if (r?.audience?.description) out.push(label("Audience"), body(`${r.audience.description}${r.audience.characteristics.length ? ` — ${r.audience.characteristics.join(", ")}` : ""}${r.audience.literacy ? ` (${r.audience.literacy} language)` : ""}`));
++
++  if (r?.researchQuestions.length || r?.kpis.length) {
++    out.push(h1("2. Research questions and KPIs"));
++    for (const q of r?.researchQuestions ?? []) out.push(numbered(q));
++    if (r?.kpis.length) { out.push(label("KPIs")); out.push(gridTable(["KPI", "Variable", "Measure", "Target"], r.kpis.map((k) => [k.name, k.variable ?? "", k.measure ?? "", k.target != null ? `${k.target}${k.direction ? ` (${k.direction} is better)` : ""}` : k.direction ? `${k.direction} is better` : ""]), [2600, 1800, 2600, 2000])); }
++  }
++
++  const hyps = structuredHypotheses(def);
++  out.push(h1(`${r?.researchQuestions.length || r?.kpis.length ? 3 : 2}. Hypotheses`));
++  if (!hyps.length) out.push(muted("No hypotheses are recorded."));
++  else {
++    const byId = new Map(def.questions.map((q) => [q.id, q]));
++    out.push(gridTable(["", "Hypothesis", "Reading", "Measured by", "Effect"], hyps.map((h) => {
++      const qs = [...new Set(Object.values(h.constructs).filter(Boolean).flatMap((c) => c!.questionIds.map((id) => byId.get(id)?.code).filter(Boolean)))];
++      const tagged = def.questions.filter((q) => q.analysis?.hypotheses?.includes(h.label)).map((q) => q.code);
++      return [h.label, h.text, describeHypothesis(h), [...new Set([...qs, ...tagged])].join(", ") || "—", h.expectedEffect ?? "—"];
++    }), [600, 3300, 2300, 1900, 900]));
++  }
++  if (r?.constructs.length) {
++    out.push(h2("Constructs"));
++    out.push(gridTable(["Construct", "Role", "Definition", "Questions"], r.constructs.map((c) => [c.name, c.role, c.definition ?? "", c.questionIds.map((id) => def.questions.find((q) => q.id === id)?.code ?? id).join(", ")]), [2200, 1400, 3400, 2000]));
++  }
++
++  let n = (r?.researchQuestions.length || r?.kpis.length ? 3 : 2) + 1;
++  out.push(h1(`${n++}. Questionnaire`));
++  const order = placedOrder(def);
++  const asked = def.questions.filter((q) => order.includes(q.id) && !["html", "custom_component", "media_timeline"].includes(q.type));
++  const minutes = Math.max(1, Math.round(asked.length / 4));
++  out.push(body(`${asked.length} questions in ${listBlocks(def.flow as unknown[]).length} sections — about ${minutes} minute${minutes === 1 ? "" : "s"} at four questions a minute.`));
++  for (const b of listBlocks(def.flow as unknown[])) {
++    const qs = b.pages.flatMap((p) => p.node.questionIds.map((id: string) => def.questions.find((q) => q.id === id)).filter((q): q is Question => !!q && !["html", "custom_component", "media_timeline"].includes(q.type)));
++    if (!qs.length) continue;
++    out.push(label(`${b.title ?? "Section"} · ${qs.length} question${qs.length === 1 ? "" : "s"}`));
++    out.push(gridTable(["Code", "Question", "Type", "Role"], qs.map((q) => [String(q.code), plain(q.text, 90), `${q.type.replace(/_/g, " ")} (${measurementOf(q)})`, inferRole(def, q)]), [800, 4800, 1900, 1500]));
++  }
++
++  out.push(h1(`${n++}. Sample and fieldwork`));
++  const size = planSampleSize(def);
++  const exp = expectedSample(def);
++  if (r?.population) out.push(body(`Population: ${r.population}.`));
++  out.push(body(`${r?.sampleSize ? `Target sample: ${r.sampleSize} completes. ` : ""}${exp ? `Expected sample from the ${exp.source}: ${exp.n} — ${exp.note}. ` : ""}${size.minimum ? `The analysis plan needs at least ${size.minimum} completes${size.driver ? ` (${size.driver.title}: ${size.driver.requiredBase.note})` : ""}.` : ""}`.trim() || "No sample size is recorded."));
++  if (size.items.length) out.push(gridTable(["Analysis", "Minimum base", "Why"], size.items.slice(0, 12).map((i) => [i.title, String(i.minimum), i.note]), [3400, 1400, 4200]));
++  if (opts.fieldwork?.from || opts.fieldwork?.to) out.push(body(`Fieldwork: ${opts.fieldwork.from ?? "—"} to ${opts.fieldwork.to ?? "—"}.`));
++
++  out.push(h1(`${n++}. Analysis plan`));
++  const plan = explainPlan(def);
++  if (!plan.length) out.push(muted("No analysis follows from the design yet."));
++  else out.push(gridTable(["Analysis", "Serves", "Why this method", "Output", "Base"], plan.slice(0, 30).map((x) => [x.title, x.hypotheses.map((h) => h.label).join(", ") || x.objective.slice(0, 40), x.why, x.expectedOutput, `${x.requiredBase.minimum}`]), [2200, 900, 2900, 2200, 800]));
++
++  out.push(h1(`${n++}. Deliverables`));
++  for (const d of opts.deliverables ?? ["Topline findings at the first readable base (30 completes), run automatically", "The findings report with the verdict on each hypothesis, at target and at the end of fieldwork", "The findings presentation, with the key findings, who differs, and what to do next", "The data: respondent-level export (SPSS, Excel, CSV) with the variable dictionary"]) out.push(bullet(d));
++
++  if (r?.assumptions.length || r?.sources.length) {
++    out.push(h1(`${n++}. Assumptions and sources`));
++    for (const a of r?.assumptions ?? []) out.push(bullet(a));
++    if (r?.sources.length) { out.push(label("Sources")); for (const s of r.sources) out.push(bullet(s)); }
++  }
++  return document(`${title} — research proposal`, `Research proposal for ${def.meta.title}`, out);
++}
++
++/* ------------------------------------------------------------ the findings report */
++
++export interface FindingsDocxOptions extends Omit<DeckOptions, "results"> {
++  author?: string;
++  /** the results by analysis id, so the groups and the chart data can be tabled */
++  results?: Record<string, AnalysisResult>;
++}
++
++type RunForDocx = Parameters<typeof deckFromRun>[1];
++
++/** The findings report as a Word document, from a run. */
++export async function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, opts: FindingsDocxOptions = {}): Promise<Buffer> {
++  const deck = deckFromRun(def, run, { ...opts, results: opts.results });
++  const narrative = reportNarrative(def, run as never);
++  const date = (opts.date ?? run.computedAt).slice(0, 10);
++  const title = opts.title ?? deck.title;
++  const out: Block[] = [];
++  out.push(...cover("Findings report", title, [opts.client ? `Prepared for ${opts.client}` : "", `${run.n} ${run.environment.toLowerCase()} completes · ${run.trigger.replace(/_/g, " ")} · ${date}`, opts.author ?? ""]));
++
++  out.push(h1("Executive summary"));
++  const summary = deck.slides.find((s): s is Extract<DeckSlide, { type: "summary" }> => s.type === "summary")!;
++  out.push(lead(summary.headline));
++  if (opts.narrative?.summary?.length) for (const b of opts.narrative.summary) out.push(bullet(b));
++  else out.push(body(narrative.summary));
++
++  out.push(h1("The hypotheses"));
++  if (!run.verdicts.length) out.push(muted("No hypotheses are recorded in the research design."));
++  else out.push(gridTable(["", "Hypothesis", "Verdict", "Why"], run.verdicts.map((v) => [v.label, v.text, `${v.verdict.replace(/_/g, " ")}${v.corrected ? ` (${v.corrected.verdict.replace(/_/g, " ")} once corrected)` : ""}`, `${v.reason}${v.corrected ? ` ${v.corrected.note}` : ""}`]), [600, 2700, 1500, 4200]));
++
++  out.push(h1("Key findings"));
++  const keys = deck.slides.filter((s): s is Extract<DeckSlide, { type: "key_finding" }> => s.type === "key_finding" && !s.beyond);
++  if (!keys.length) out.push(muted("No planned test reached significance on this base."));
++  for (const k of keys) {
++    out.push(h2(k.title));
++    out.push(body(k.soWhat));
++    out.push(muted(k.evidence));
++    const result = k.analysisId ? opts.results?.[k.analysisId] : undefined;
++    if (result) {
++      const groups = result.tables.find((t) => t.id === "groups");
++      if (groups) out.push(resultTable(groups));
++      else {
++        const series = seriesForChart(result, k.chart);
++        if (series.length && series[0].labels.length) out.push(gridTable(["", ...series.map((s) => s.name)], series[0].labels.map((l, i) => [l, ...series.map((s) => fmtCell(s.values[i], s.meta?.pct ? "pct" : "number", 1))])));
++        else if (result.tables[0]) out.push(resultTable(result.tables[0]));
++      }
++    }
++  }
++  const segs = deck.slides.filter((s): s is Extract<DeckSlide, { type: "segment_comparison" }> => s.type === "segment_comparison");
++  if (segs.length) {
++    out.push(h1("Who differs"));
++    for (const s of segs) { out.push(h2(s.title)); out.push(body(s.differs)); out.push(gridTable(["Group", s.measure, "n"], s.groups.map((g) => [g.label, g.value, String(g.n)]), [4000, 3000, 2000])); }
++  }
++  const d = run.discoveries;
++  if (d && (d.segments.length || d.trends.length || d.anomalies.length)) {
++    out.push(h1("Beyond the plan"));
++    out.push(body(d.summary));
++    for (const f of [...d.segments, ...d.trends] as Finding[]) out.push(bullet(`${f.headline}${f.evidence.groups?.length ? ` — ${f.evidence.groups.map((g) => `${g.label} ${fmt(g.mean)} (n = ${g.n})`).join(", ")}` : ""}`));
++    if (d.anomalies.length) { out.push(label("Data anomalies")); for (const f of d.anomalies) out.push(bullet(f.headline)); }
++  }
++  if (run.advice?.length) {
++    out.push(h1("What the data says about the methods"));
++    out.push(gridTable(["Analysis", "Checks", "Recommended"], run.advice.map((a) => [a.name, a.checks.map((c) => c.message).join(" "), a.recommended ? `${a.recommended.label} — ${a.recommended.reason}` : "—"]), [2200, 4300, 2500]));
++  }
++  const imp = deck.slides.find((s): s is Extract<DeckSlide, { type: "implications" }> => s.type === "implications");
++  if (imp) { out.push(h1("What it means")); for (const b of imp.bullets) out.push(bullet(b)); }
++  const rec = deck.slides.find((s): s is Extract<DeckSlide, { type: "recommendations" }> => s.type === "recommendations");
++  if (rec) { out.push(h1("What to do next")); for (const b of rec.items) out.push(numbered(b)); }
++
++  out.push(h1("Method"));
++  const method = deck.slides.find((s): s is Extract<DeckSlide, { type: "method" }> => s.type === "method")!;
++  out.push(gridTable(["", ""], method.items.map((i) => [i.label, i.value]), [3000, 6000]));
++  out.push(body(`Planned analyses: ${run.items.filter((it) => !it.adaptedFrom).map((it) => it.definition.name).join("; ")}.`));
++  if (run.corrections) out.push(body(run.corrections.summary));
++  const findingsAll = run.findings.filter((f) => f.kind !== "inconclusive" && f.kind !== "low_base");
++  if (findingsAll.length) {
++    out.push(h2("Every finding"));
++    out.push(gridTable(["Finding", "Test", "p", "Adjusted", "Effect", "n"], findingsAll.slice(0, 40).map((f) => [f.headline, (f.evidence.test ?? f.analysis.kind).replace(/_/g, " "), fmtP(f.evidence.p), f.evidence.adjusted ? `${fmtP(f.evidence.adjusted.p)} (${CORRECTION_WORDS[f.evidence.adjusted.method]})` : "", f.evidence.effect ? `${f.evidence.effect.name} = ${fmt(f.evidence.effect.value)}` : "", String(f.evidence.n)]), [3600, 1300, 900, 1300, 1200, 700]));
++  }
++  const cav = deck.slides.find((s): s is Extract<DeckSlide, { type: "caveats" }> => s.type === "caveats" && s.title === "Caveats");
++  if (cav || narrative.caveats) { out.push(h1("Caveats")); for (const b of cav?.bullets ?? run.warnings) out.push(bullet(b)); }
++  out.push(divider());
++  out.push(muted(`Generated by Rescript from the analysis run of ${date}. Every number in this document is from that run.`));
++  return document(`${title} — findings report`, `Findings report for ${def.meta.title}`, out);
++}
+diff --git a/packages/analytics/src/export/index.ts b/packages/analytics/src/export/index.ts
+index 5316880..c7ebb62 100644
+--- a/packages/analytics/src/export/index.ts
++++ b/packages/analytics/src/export/index.ts
+@@ -1,3 +1,5 @@
+ export * from "./pptx.js";
+ export * from "./xlsx.js";
+ export * from "./shared.js";
++export * from "./deck.js";
++export * from "./docx.js";
+diff --git a/packages/analytics/src/export/pptx.ts b/packages/analytics/src/export/pptx.ts
+index df1e5ca..baaa611 100644
+--- a/packages/analytics/src/export/pptx.ts
++++ b/packages/analytics/src/export/pptx.ts
+@@ -9,9 +9,9 @@ import PptxModule from "pptxgenjs";
+ // pptxgenjs ships CJS-style typings; under Node ESM the default import is the class itself,
+ // while TypeScript sees the module namespace — resolve both shapes to the constructor.
+ type PptxCtorType = typeof PptxModule extends { default: infer D } ? D : typeof PptxModule;
+-const PptxCtor = (((PptxModule as unknown as { default?: unknown }).default ?? PptxModule) as unknown) as PptxCtorType;
+-type Pres = InstanceType<PptxCtorType>;
+-type Slide = ReturnType<Pres["addSlide"]>;
++export const PptxCtor = (((PptxModule as unknown as { default?: unknown }).default ?? PptxModule) as unknown) as PptxCtorType;
++export type Pres = InstanceType<PptxCtorType>;
++export type Slide = ReturnType<Pres["addSlide"]>;
+ type ChartName = Extract<Parameters<Slide["addChart"]>[0], string>;
+ import type { AnalysisResult, ChartSpec, ChartType, ExportSettings, ReportBlock, ReportDefinition, ReportTheme, ResultTable } from "../types.js";
+ import { DEFAULT_EXPORT_SETTINGS, DEFAULT_THEME } from "../types.js";
+@@ -55,7 +55,7 @@ export function isEmbeddableImage(uri: unknown): uri is string {
+   return b64.length > 64 && (b64.length * 3) / 4 <= MAX_EMBEDDED_IMAGE_BYTES;
+ }
+ 
+-const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
++export const hex = (c: string) => c.replace("#", "").slice(0, 6).toUpperCase();
+ 
+ function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record<string, unknown> } {
+   const T = p.ChartType;
+@@ -79,7 +79,7 @@ function pptChartType(p: Pres, type: ChartType): { type: ChartName; opts: Record
+   }
+ }
+ 
+-function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x: number; y: number; w: number }, maxRows = 14, fontSize = 9): number {
++export function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x: number; y: number; w: number }, maxRows = 14, fontSize = 9): number {
+   const cols = table.columns;
+   const head = cols.map((c) => ({ text: c.label, options: { bold: true, color: "FFFFFF", fill: { color: hex(theme.colors.primary) }, fontSize, align: "center" as const } }));
+   const body = table.rows.slice(0, maxRows).map((r, i) => cols.map((c) => {
+@@ -106,7 +106,7 @@ function addTable(slide: Slide, table: ResultTable, theme: ReportTheme, box: { x
+  * table geometry the export has always used, so an existing "chart" block
+  * that happens to fall back to a table renders pixel-identical to before.
+  */
+-function drawAnalysisVisual(
++export function drawAnalysisVisual(
+   p: Pres, s: Slide, result: AnalysisResult, spec: ChartSpec, theme: ReportTheme,
+   box: { x: number; y: number; w: number; h: number },
+   ctx: { font: string; text: string; subtle: string; primary: string; palette: string[] },
+diff --git a/packages/analytics/src/findings.ts b/packages/analytics/src/findings.ts
+index ab98435..f0c0f5b 100644
+--- a/packages/analytics/src/findings.ts
++++ b/packages/analytics/src/findings.ts
+@@ -437,7 +437,7 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
+       reason = `${agree.length} of ${tested.length} planned tests support it — ${agree[0].headline} — but ${contra.length === 1 ? "one is" : `${contra.length} are`} ${against(contra[0])}: ${contra[0].headline}`;
+     }
+     else if (agree.length && ns.length) { verdict = "mixed"; reason = `${agree.length} of ${tested.length} planned tests ${agree.length === 1 ? "is" : "are"} significant — ${agree[0].headline} — but ${ns[0].headline}`; }
+-    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
++    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is not" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
+     return { label, text, verdict, reason, findings: fs, analyses: mine.length, ...(dir.kind !== "none" ? { direction: { ...dir, agreeing: agree.length - unread, contradicting: contra.length, unread } } : {}) };
+   });
+ }
+diff --git a/packages/analytics/src/index.ts b/packages/analytics/src/index.ts
+index ad665cb..18cd08b 100644
+--- a/packages/analytics/src/index.ts
++++ b/packages/analytics/src/index.ts
+@@ -20,3 +20,6 @@ export * from "./posthoc.js";
+ export * from "./dataAdvice.js";
+ export * from "./synthesis.js";
+ export * from "./dataQuery.js";
++export * from "./chartPurpose.js";
++export * from "./deck.js";
++export * from "./narrative.js";
+diff --git a/packages/analytics/src/narrative.ts b/packages/analytics/src/narrative.ts
+new file mode 100644
+index 0000000..5828770
+--- /dev/null
++++ b/packages/analytics/src/narrative.ts
+@@ -0,0 +1,101 @@
++import type { AnalysisRun } from "./findings.js";
++import type { NarrativeSections } from "./deck.js";
++
++/**
++ * THE NARRATIVE GATE (Research Engine audit, Phase 5).
++ *
++ * The model may WRITE the story — a headline, the summary bullets, what it
++ * means, what to do next — from the run's brief and nothing else. The gate
++ * is how "nothing else" is enforced: every number a sentence carries must
++ * be a number the run printed (a base, a p, an effect, a mean, a share, a
++ * count), every hypothesis it names must exist, and a verdict it states
++ * must be the verdict the run gave. A sentence that fails is dropped with
++ * the reason; a section left empty falls back to the engine's own text.
++ * Numbers up to ten pass as counting words ("two of the three tests");
++ * years do not need to be in the run.
++ */
++export interface NarrativeCandidate { headline?: unknown; summary?: unknown; implications?: unknown; recommendations?: unknown }
++export interface NarrativeRejection { section: keyof NarrativeSections; text: string; reason: string }
++export interface GatedNarrative { accepted: NarrativeSections; rejected: NarrativeRejection[]; /** how many sentences were offered and how many kept */ offered: number; kept: number }
++
++type RunForGate = Pick<AnalysisRun, "n" | "findings" | "verdicts" | "warnings"> & { corrections?: AnalysisRun["corrections"]; discoveries?: AnalysisRun["discoveries"]; advice?: AnalysisRun["advice"] };
++
++const NUM = /-?\d+(?:[.,]\d+)?%?/g;
++/** a number as the gate compares it: "3.86" → "3.86", "3.9" → "3.9", "26.6%" → "26.6", ".021" → "0.021", "1,200" → "1200" */
++const norm = (s: string) => { let t = s.replace(/%$/, "").replace(/,(?=\d{3}\b)/g, ""); if (t.startsWith(".")) t = `0${t}`; if (t.startsWith("-.")) t = `-0${t.slice(1)}`; return t.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""); };
++
++/** every number the run printed, plus each at one decimal less, plus the counts a narrative may cite */
++export function runNumbers(run: RunForGate): Set<string> {
++  const out = new Set<string>();
++  const add = (x: number | null | undefined) => {
++    if (x == null || !Number.isFinite(x)) return;
++    for (const d of [0, 1, 2, 3]) { out.add(norm(x.toFixed(d))); out.add(norm(Math.abs(x).toFixed(d))); }
++    out.add(norm(String(x))); out.add(norm(String(Math.abs(x))));
++    if (Math.abs(x) <= 1) { for (const d of [0, 1]) out.add(norm((x * 100).toFixed(d))); } // a share as a percentage
++  };
++  const addText = (t: string | undefined) => { for (const m of (t ?? "").match(NUM) ?? []) out.add(norm(m)); };
++  add(run.n); add(run.verdicts.length); add(run.findings.length);
++  for (const f of run.findings) {
++    addText(f.headline); addText(f.detail);
++    add(f.evidence.n); add(f.evidence.p); add(f.evidence.effect?.value); add(f.evidence.statistic); add(f.evidence.adjusted?.p);
++    for (const g of f.evidence.groups ?? []) { add(g.mean); add(g.n); }
++    for (const p of f.evidence.pairwise?.pairs ?? []) { add(p.meanA); add(p.meanB); add(p.pAdj); add(p.p); }
++  }
++  for (const v of run.verdicts) { addText(v.reason); addText(v.corrected?.note); add(v.analyses); }
++  for (const w of run.warnings) addText(w);
++  addText(run.corrections?.summary);
++  for (const fam of run.corrections?.families ?? []) { add(fam.tests); add(fam.before); add(fam.after); }
++  for (const f of [...(run.discoveries?.segments ?? []), ...(run.discoveries?.trends ?? []), ...(run.discoveries?.anomalies ?? [])]) { addText(f.headline); add(f.evidence.n); add(f.evidence.effect?.value); for (const g of f.evidence.groups ?? []) { add(g.mean); add(g.n); } }
++  addText(run.discoveries?.summary);
++  for (const a of run.advice ?? []) addText(a.summary);
++  return out;
++}
++
++const SMALL = 10;
++const strs = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 400)) : typeof v === "string" && v.trim() ? [v.trim().slice(0, 400)] : []).slice(0, max);
++
++/** why a sentence fails the gate, or null when it passes */
++export function sentenceProblem(text: string, numbers: Set<string>, verdicts: RunForGate["verdicts"]): string | null {
++  for (const m of text.match(NUM) ?? []) {
++    const n = norm(m);
++    const v = Number(n);
++    if (Number.isInteger(v) && Math.abs(v) <= SMALL && !m.endsWith("%")) continue;
++    if (/^(?:19|20)\d\d$/.test(n)) continue;
++    if (!numbers.has(n)) return `the number ${m} is not in the run`;
++  }
++  for (const m of text.match(/\bH(\d+)\b/g) ?? []) {
++    const v = verdicts.find((x) => x.label === m);
++    if (!v) return `${m} is not a hypothesis of this run`;
++    const lower = text.toLowerCase();
++    const says = /\b(?:not supported|unsupported|rejected|refuted|disproved)\b/.test(lower) ? "not_supported" : /\bsupported\b|\bconfirmed\b|\bholds\b/.test(lower) ? "supported" : null;
++    if (says === "supported" && (v.verdict === "not_supported" || v.verdict === "untested")) return `${m} is ${v.verdict.replace(/_/g, " ")}, not supported`;
++    if (says === "not_supported" && v.verdict === "supported") return `${m} is supported, not rejected`;
++  }
++  return null;
++}
++
++/** The candidate narrative, sentence by sentence, against the run. */
++export function gateNarrative(run: RunForGate, candidate: NarrativeCandidate): GatedNarrative {
++  const numbers = runNumbers(run);
++  const rejected: NarrativeRejection[] = [];
++  let offered = 0, kept = 0;
++  const section = (key: keyof NarrativeSections, items: string[]): string[] => {
++    const ok: string[] = [];
++    for (const t of items) {
++      offered++;
++      const problem = sentenceProblem(t, numbers, run.verdicts);
++      if (problem) rejected.push({ section: key, text: t, reason: problem });
++      else { ok.push(t); kept++; }
++    }
++    return ok;
++  };
++  const headline = section("headline", strs(candidate.headline, 1));
++  const summary = section("summary", strs(candidate.summary, 6));
++  const implications = section("implications", strs(candidate.implications, 7));
++  const recommendations = section("recommendations", strs(candidate.recommendations, 7));
++  const accepted: NarrativeSections = { ...(headline[0] ? { headline: headline[0] } : {}), ...(summary.length ? { summary } : {}), ...(implications.length ? { implications } : {}), ...(recommendations.length ? { recommendations } : {}) };
++  return { accepted, rejected, offered, kept };
++}
++
++/** the prompt's instructions for the model, and the shape it must answer in */
++export const NARRATIVE_INSTRUCTIONS = `Write the story of this analysis run for the audience named, from the RUN BRIEF below and nothing else. Answer as JSON: {"headline": "<one sentence, the single most important finding>", "summary": ["<3-5 bullets: what we set out to learn, what we found>"], "implications": ["<3-5 bullets: what each verdict means for the objective>"], "recommendations": ["<3-5 bullets: what to do next, as the evidence calls for>"]}. Rules: every number you write must appear in the brief exactly as printed there (a base, a p-value, an effect size, a mean, a share); name hypotheses by their label (H1, H2) and state only the verdict the brief gives; do not invent causes, segments or figures; plain sentences, no markdown.`;
+diff --git a/packages/analytics/src/phase5.test.ts b/packages/analytics/src/phase5.test.ts
+new file mode 100644
+index 0000000..729da6c
+--- /dev/null
++++ b/packages/analytics/src/phase5.test.ts
+@@ -0,0 +1,268 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { inflateRawSync } from "node:zlib";
++import { SurveyDefinition } from "@rescript/schema";
++import { def as base, synthDataset, synthRows, spec, D } from "./analyses/fixture.js";
++import { buildDataset, type AnalyticsRow } from "./dataset.js";
++import { runAnalysis } from "./analyses/index.js";
++import { runPlan, type AnalysisRun } from "./findings.js";
++import { chooseChart, purposeOf, describeChoice } from "./chartPurpose.js";
++import { deckFromRun, describeDeck, type DeckSlide } from "./deck.js";
++import { gateNarrative, runNumbers, sentenceProblem } from "./narrative.js";
++import { buildDeckPptx } from "./export/deck.js";
++import { buildProposalDocx, buildFindingsDocx } from "./export/docx.js";
++
++/*
++ * RESEARCH ENGINE PHASE 5 — automated reporting: the chart chosen for why
++ * it is shown and to whom, the storytelling deck in its fixed order with
++ * the engine's words, the narrative gate, the two Word documents, and the
++ * PowerPoint design system. The synthetic data plants a gender effect on
++ * satisfaction and no region effect.
++ */
++
++/** the text of a .docx — `word/document.xml` inflated from the zip, tags stripped */
++function docxText(buf: Buffer): string {
++  const name = Buffer.from("word/document.xml");
++  for (let i = 0; i + 30 < buf.length; i++) {
++    if (buf.readUInt32LE(i) !== 0x04034b50) continue;
++    const nameLen = buf.readUInt16LE(i + 26), extraLen = buf.readUInt16LE(i + 28);
++    if (nameLen !== name.length || !buf.subarray(i + 30, i + 30 + nameLen).equals(name)) continue;
++    return inflateRawSync(buf.subarray(i + 30 + nameLen + extraLen)).toString("utf8").replace(/<[^>]+>/g, " ").replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
++  }
++  return "";
++}
++/** how many slides a .pptx holds: its slide parts */
++const slideCount = (buf: Buffer) => (buf.toString("latin1").match(/ppt\/slides\/slide\d+\.xml/g) ?? []).filter((v, i, a) => a.indexOf(v) === i).length;
++
++function planned() {
++  const def = structuredClone(base);
++  def.research = {
++    objective: "What drives satisfaction and recommendation", population: "Adults 18+ who bought in the last year", methodology: "Online panel, 10 minutes",
++    hypotheses: ["Women are more satisfied than men", "Satisfaction differs by region", "Awareness of Gamma raises consideration"], hypothesisDetails: [], researchQuestions: ["Which groups are most satisfied?"], kpis: [{ name: "NPS", variable: "NPS", measure: "promoters − detractors", target: "30", direction: "higher" }],
++    constructs: [{ name: "Satisfaction", role: "dependent", questionIds: ["q_sat"] }], analysis: [], assumptions: ["The panel is representative"], sources: ["Brief v2"],
++    analysisPlan: {
++      crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER"], priority: 1, hypotheses: ["H1"] }],
++      tests: [
++        { id: "t1", method: "t_test", outcome: "SAT", variables: ["SAT"], groupBy: "GENDER", priority: 1, hypotheses: ["H1"] },
++        { id: "t2", method: "anova", outcome: "SAT", variables: ["SAT"], groupBy: "REGION", priority: 1, hypotheses: ["H2"] },
++        { id: "t3", method: "anova", outcome: "NPS", variables: ["NPS"], groupBy: "COUNTRY", priority: 2, hypotheses: ["H2"] },
++        { id: "t4", method: "correlation", variables: ["SAT", "NPS"], priority: 2, hypotheses: [] },
++      ],
++      derived: [], segments: [],
++    },
++  } as never;
++  return def;
++}
++const resultsOf = (run: AnalysisRun) => Object.fromEntries(run.items.map((it) => [it.definition.options?.planned ? String(it.definition.options.planned) : it.definition.name, it.result]));
++
++test("the purpose is read from the analysis — comparison, significance, relationship, distribution, kpi, ranking, trend — and the chart chosen lifts the types that serve it; the audience lifts or lowers families, never past what the data can draw", () => {
++  const ds = synthDataset(400);
++  const xt = runAnalysis(D("crosstab", [], { rows: ["SAT"], columns: ["GENDER"] }), ds);
++  assert.equal(purposeOf(D("crosstab", [], { rows: ["SAT"], columns: ["GENDER"] }), xt).purpose, "comparison");
++  const t = runAnalysis(D("test", ["SAT", "GENDER"]), ds);
++  assert.equal(purposeOf(D("test", ["SAT", "GENDER"]), t).purpose, "significance");
++  assert.equal(purposeOf(D("correlation", ["SAT", "NPS"]), runAnalysis(D("correlation", ["SAT", "NPS"]), ds)).purpose, "relationship");
++  const desc = runAnalysis(D("descriptive", ["SAT"]), ds);
++  assert.equal(purposeOf(D("descriptive", ["SAT"]), desc).purpose, "distribution");
++  assert.equal(purposeOf(D("nps", ["NPS"]), runAnalysis(D("nps", ["NPS"]), ds)).purpose, "kpi");
++  assert.equal(purposeOf(D("ranking", ["RANK"]), runAnalysis(D("ranking", ["RANK"]), ds)).purpose, "ranking");
++  assert.equal(purposeOf(D("descriptive", ["SAT"]), { ...desc, chart: { categories: ["2026-06", "2026-07", "2026-08"], series: [{ name: "x", values: [1, 2, 3] }] } }).purpose, "trend", "time-like categories are a trend whatever the kind");
++  // the group comparison: a researcher gets the interval chart, an executive the bars; the reason says why
++  const r = chooseChart(D("test", ["SAT", "GENDER"]), t, { audience: "researcher" });
++  const e = chooseChart(D("test", ["SAT", "GENDER"]), t, { audience: "executive" });
++  assert.equal(r[0].purpose, "significance");
++  assert.ok(["mean_ci", "ci_plot", "diff_means"].includes(r[0].type), `researcher: ${r[0].type}`);
++  assert.ok(["bar_grouped", "bar_vertical", "column_clustered"].includes(e[0].type), `executive: ${e[0].type}`);
++  assert.match(r[0].reason, /show a difference with its uncertainty \(\+\d+\); researcher audience \(\+\d+\)/);
++  assert.match(describeChoice(e[0]), /^(?:bar grouped|bar vertical|column clustered) — to show a difference with its uncertainty, for an executive audience$/);
++  // a purpose asked for outright
++  const comp = chooseChart(D("test", ["SAT", "GENDER"]), t, { purpose: "composition", audience: "client" });
++  assert.equal(comp[0].purpose, "composition"); assert.equal(comp[0].purposeWhy, "as asked");
++  // never a chart the data cannot draw: a descriptive with no points never gets a scatter, whatever the purpose
++  const rel = chooseChart(D("descriptive", ["SAT"]), desc, { purpose: "relationship" });
++  assert.ok(!rel.some((c) => c.type === "scatter" || c.type === "bubble"));
++  assert.ok(rel.every((c) => c.score > 0));
++});
++
++test("the deck tells the story in its fixed order, every sentence from the run; groups highest first; nothing beyond the plan means no such section; a model narrative replaces the words, never the numbers", () => {
++  const def = planned();
++  const run = runPlan(def, synthDataset(400), { trigger: "halfway", now: "2026-10-09T09:00:00Z" });
++  const deck = deckFromRun(def, run, { audience: "client", client: "Acme", results: resultsOf(run) });
++  const types = deck.slides.map((s) => s.type);
++  assert.deepEqual(types.slice(0, 3), ["title", "summary", "section"]);
++  assert.equal(types.indexOf("implications") > types.lastIndexOf("key_finding"), true, "implications after the findings");
++  assert.equal(types.indexOf("recommendations"), types.indexOf("implications") + 1);
++  assert.equal(types[types.length - 1], "method", "no caveats when the run has none");
++  assert.ok(!types.includes("caveats"));
++  const t0 = deck.slides[0] as Extract<DeckSlide, { type: "title" }>;
++  assert.equal(t0.title, "What drives satisfaction and recommendation — findings");
++  assert.equal(t0.subtitle, "400 live completes · 2026-10-09 · prepared for Acme");
++  assert.equal(t0.audience, "client");
++  const sum = deck.slides[1] as Extract<DeckSlide, { type: "summary" }>;
++  assert.equal(sum.headline, "Overall satisfaction across Gender: a strong difference", "the headline is the strongest finding, without its test parenthesis");
++  assert.deepEqual(sum.bullets.slice(0, 4), ["Objective: What drives satisfaction and recommendation", "H1 supported: Women are more satisfied than men", "H2 mixed: Satisfaction differs by region", "H3 untested: Awareness of Gamma raises consideration"]);
++  const keys = deck.slides.filter((s): s is Extract<DeckSlide, { type: "key_finding" }> => s.type === "key_finding" && !s.beyond);
++  assert.equal(keys.length, 4);
++  assert.equal(keys[0].hypothesis, "H1"); assert.equal(keys[0].analysisId, "t1"); assert.equal(keys[0].significant, true);
++  assert.match(keys[0].soWhat, /^This is the evidence for H1 \(“Women are more satisfied than men”\), which is supported overall; a strong effect, so it is a difference worth acting on\.$/);
++  assert.match(keys[0].evidence, /^t welch, p < \.001, Cohen's d = -?1\.01, n = 400 · Holm-adjusted p < \.001$/);
++  assert.ok(["bar_grouped", "bar_vertical", "column_clustered"].includes(keys[0].chart.type), keys[0].chart.type);
++  const corr = keys.find((k) => k.analysisId === "t4")!;
++  assert.equal(corr.chart.type, "scatter_trendline", "a relationship gets the scatter");
++  assert.match(corr.soWhat, /^A strong effect on 400 respondents — the objective was: What drives satisfaction and recommendation\.$/);
++  const weak = keys.find((k) => k.analysisId === "t3")!;
++  assert.match(weak.soWhat, /a small effect — real, but modest in size\.$/);
++  const segs = deck.slides.filter((s): s is Extract<DeckSlide, { type: "segment_comparison" }> => s.type === "segment_comparison");
++  assert.ok(segs.length >= 3);
++  assert.deepEqual(segs[0].groups.map((g) => g.label), ["Female", "Male"], "highest first");
++  assert.equal(segs[0].differs, "Female (3.86) vs Male (3.07) — a strong effect");
++  const country = segs.find((s) => s.analysisId === "t3")!;
++  assert.match(country.differs, /— a small effect\. Pairwise \(Holm-adjusted, 28 pairs\): UK > France/);
++  const stat = deck.slides.filter((s): s is Extract<DeckSlide, { type: "statistical_highlight" }> => s.type === "statistical_highlight");
++  assert.equal(stat.length, 2);
++  assert.equal(stat[0].stat, "Cohen's d = -1.01"); assert.equal(stat[0].label, "a strong effect"); assert.equal(stat[0].context, "H1 · Holm-adjusted p < .001 — holds");
++  assert.ok(types.includes("section") && deck.slides.some((s) => s.type === "section" && s.title === "Who differs"));
++  const imp = deck.slides.find((s): s is Extract<DeckSlide, { type: "implications" }> => s.type === "implications")!;
++  assert.equal(imp.bullets.length, 3);
++  assert.match(imp.bullets[0], /^H1 \(Women are more satisfied than men\) is supported: the design's expectation holds — Overall satisfaction across Gender: a strong difference\.$/);
++  assert.match(imp.bullets[2], /^H3 \(Awareness of Gamma raises consideration\) is untested: no analysis in the plan serves it, so the data says nothing about it yet\.$/);
++  const rec = deck.slides.find((s): s is Extract<DeckSlide, { type: "recommendations" }> => s.type === "recommendations")!;
++  assert.match(rec.items[0], /^Lead the story with the strongest finding: Overall satisfaction across Gender: a strong difference\.$/);
++  assert.ok(rec.items.some((r) => /^Plan a test for H3 \(“Awareness of Gamma raises consideration”\) before the next wave/.test(r)));
++  assert.ok(rec.items.some((r) => /^Add \w+ by GENDER to the analysis plan — it was found outside it and holds after correction\.$/.test(r)));
++  const method = deck.slides.find((s): s is Extract<DeckSlide, { type: "method" }> => s.type === "method")!;
++  assert.deepEqual(method.items.slice(0, 4).map((i) => i.value), ["400 (live)", "halfway, 2026-10-09", "5", "α = 0.05, Holm correction by hypothesis family"]);
++  assert.equal(method.items.find((i) => i.label === "Population")?.value, "Adults 18+ who bought in the last year");
++  assert.match(describeDeck(deck), /^\d+ slides: title, summary, 3 sections, 5 key findings, 4 segment comparisons, 2 statistical highlights, implications, recommendations, method$/, "four planned key findings and one beyond the plan");
++  assert.deepEqual(deck.analysisIds.sort(), ["t1", "t3", "t4", "x1"]);
++  // the executive deck chooses differently and fewer
++  const exec = deckFromRun(def, run, { audience: "executive", maxFindings: 2, results: resultsOf(run) });
++  assert.equal(exec.slides.filter((s) => s.type === "key_finding" && !(s as { beyond?: boolean }).beyond).length, 2);
++  assert.equal((exec.slides[0] as Extract<DeckSlide, { type: "title" }>).audience, "executive");
++  // a model narrative replaces the words
++  const told = deckFromRun(def, run, { narrative: { headline: "Women are the more satisfied customers.", summary: ["We set out to learn what drives satisfaction.", "Women score 3.86 against 3.07 for men."], implications: ["Gender is the lever."], recommendations: ["Segment the communication by gender."] } });
++  assert.equal((told.slides[1] as Extract<DeckSlide, { type: "summary" }>).headline, "Women are the more satisfied customers.");
++  assert.deepEqual((told.slides[1] as Extract<DeckSlide, { type: "summary" }>).bullets, ["We set out to learn what drives satisfaction.", "Women score 3.86 against 3.07 for men."]);
++  assert.deepEqual((told.slides.find((s) => s.type === "implications") as Extract<DeckSlide, { type: "implications" }>).bullets, ["Gender is the lever."]);
++  assert.deepEqual((told.slides.find((s) => s.type === "recommendations") as Extract<DeckSlide, { type: "recommendations" }>).items, ["Segment the communication by gender."]);
++  assert.equal((told.slides.find((s) => s.type === "key_finding") as Extract<DeckSlide, { type: "key_finding" }>).evidence, keys[0].evidence, "the numbers are untouched");
++  // discoveries all shown already as segment comparisons, nothing else beyond the plan: no "Beyond the plan" section
++  const shown = deckFromRun(def, { ...run, discoveries: { ...run.discoveries!, segments: [], trends: [], anomalies: [] } });
++  assert.ok(!shown.slides.some((s) => s.type === "section" && s.title === "Beyond the plan"), "no section with nothing after it");
++  assert.ok(deck.slides.some((s) => s.type === "section" && s.title === "Beyond the plan"), "the full run has one, with a discovery after it");
++  // a single not-significant test behind a hypothesis: the verdict says so in words
++  const one = structuredClone(def);
++  one.research!.analysisPlan!.tests = [{ id: "t2", method: "anova", outcome: "SAT", variables: ["SAT"], groupBy: "REGION", priority: 1, hypotheses: ["H2"] }];
++  const r1 = runPlan(one, synthDataset(400), { discover: false });
++  assert.match(r1.verdicts[1].reason, /^The planned test is not significant: Overall satisfaction across Region: no significant difference/);
++  // a small base: the caveat slide
++  const small = deckFromRun(def, runPlan(def, synthDataset(20), { now: "2026-10-09T09:00:00Z" }));
++  assert.equal(small.slides[small.slides.length - 1].type, "caveats");
++  assert.ok((small.slides[small.slides.length - 1] as Extract<DeckSlide, { type: "caveats" }>).bullets.some((b) => /^Only 20 completes — nothing here is conclusive yet\.$/.test(b)));
++});
++
++test("the narrative gate: every number must be the run's, hypotheses must exist and keep their verdict, counting words and years pass; a section left empty falls back", () => {
++  const def = planned();
++  const run = runPlan(def, synthDataset(400), { now: "2026-10-09T09:00:00Z" });
++  const nums = runNumbers(run);
++  for (const n of ["400", "3.86", "3.07", "3.9", "1.01", "0.86", "26.6", "0.021", "28"]) assert.ok(nums.has(n), n);
++  assert.equal(sentenceProblem("Women score 3.86 against 3.07 for men.", nums, run.verdicts), null);
++  assert.equal(sentenceProblem("Women score 3.9 against 3.1 for men.", nums, run.verdicts), null, "one decimal less of a printed mean");
++  assert.equal(sentenceProblem("Satisfaction is 4.2 among women.", nums, run.verdicts), "the number 4.2 is not in the run");
++  assert.equal(sentenceProblem("Two of the three hypotheses held, 2 of 3.", nums, run.verdicts), null, "counting words pass");
++  assert.equal(sentenceProblem("Fieldwork ran in 2026.", nums, run.verdicts), null, "a year passes");
++  assert.equal(sentenceProblem("A 77.7% lift.", nums, run.verdicts), "the number 77.7% is not in the run", "a percentage must be printed");
++  assert.equal(sentenceProblem("H1 is supported: women are more satisfied.", nums, run.verdicts), null);
++  assert.equal(sentenceProblem("H2 is supported.", nums, run.verdicts), null, "mixed may be called supported in part — only the clear contradictions are refused");
++  assert.equal(sentenceProblem("H3 is confirmed by the data.", nums, run.verdicts), "H3 is untested, not supported");
++  assert.equal(sentenceProblem("H1 was rejected.", nums, run.verdicts), "H1 is supported, not rejected");
++  assert.equal(sentenceProblem("H9 says otherwise.", nums, run.verdicts), "H9 is not a hypothesis of this run");
++  const g = gateNarrative(run, { headline: "Women are the more satisfied customers (3.86 vs 3.07).", summary: ["Of the 3 hypotheses, H1 is supported.", "Satisfaction reaches 4.5 among women in the north.", 42], implications: ["H1 holds, with a strong effect (d = 1.01)."], recommendations: ["Raise satisfaction among men by 77.7% next year.", "Plan a test for H3."] });
++  assert.equal(g.offered, 6); assert.equal(g.kept, 4);
++  assert.deepEqual(g.rejected.map((r) => [r.section, r.reason]), [["summary", "the number 4.5 is not in the run"], ["recommendations", "the number 77.7% is not in the run"]]);
++  assert.deepEqual(g.accepted, { headline: "Women are the more satisfied customers (3.86 vs 3.07).", summary: ["Of the 3 hypotheses, H1 is supported."], implications: ["H1 holds, with a strong effect (d = 1.01)."], recommendations: ["Plan a test for H3."] });
++  const empty = gateNarrative(run, { summary: ["A 77.7% lift."], headline: "" });
++  assert.deepEqual(empty.accepted, {});
++  assert.equal(empty.kept, 0);
++  assert.deepEqual(gateNarrative(run, {}), { accepted: {}, rejected: [], offered: 0, kept: 0 });
++});
++
++test("the deck as PowerPoint: one slide per story slide, the design system's words on them, the significance badge, the statistic callout, the native charts", async () => {
++  const def = planned();
++  const run = runPlan(def, synthDataset(400), { trigger: "halfway", now: "2026-10-09T09:00:00Z" });
++  const results = resultsOf(run);
++  const deck = deckFromRun(def, run, { audience: "client", client: "Acme", results });
++  const buf = await buildDeckPptx({ deck, results, footer: "Prepared for Acme" });
++  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
++  assert.ok(buf.length > 40_000, `${buf.length} bytes`);
++  assert.equal(slideCount(buf), deck.slides.length, "one slide per story slide");
++  const raw = buf.toString("latin1");
++  for (const w of ["SIGNIFICANT", "So what", "Who differs", "STATISTICAL HIGHLIGHT", "Cohen", "What it means", "What to do next", "How this was done", "Prepared for Acme", "client edition"]) assert.ok(raw.includes(w), w);
++  assert.ok(/<c:barChart>|<c:scatterChart>/.test(raw), "native charts");
++  // the executive deck is shorter
++  const exec = await buildDeckPptx({ deck: deckFromRun(def, run, { audience: "executive", maxFindings: 1, results }), results });
++  assert.ok(slideCount(exec) < slideCount(buf));
++  // a slide whose analysis is not in the results says so instead of drawing nothing
++  const noRes = await buildDeckPptx({ deck, results: {} });
++  assert.ok(noRes.toString("latin1").includes("Chart data not available in this export"));
++  // a hand-built deck: the badge says NOT SIGNIFICANT when the finding is not, the statistic callout carries the statistic
++  const hand = await buildDeckPptx({ deck: { title: "T", subtitle: "S", audience: "client", analysisIds: [], slides: [
++    { type: "key_finding", title: "No difference by region", chart: { type: "bar_vertical", options: {} }, evidence: "ANOVA, p = .171", soWhat: "Nothing to act on.", significant: false },
++    { type: "statistical_highlight", title: "Big", stat: "η² = 0.42", label: "a strong effect", test: "ANOVA", p: "p < .001", n: 400, context: "H1" },
++  ] }, results: {} });
++  const hr = hand.toString("latin1");
++  assert.ok(hr.includes("NOT SIGNIFICANT"), "the badge says not significant");
++  assert.ok(hr.includes("η² = 0.42") || hr.includes("&#951;") || /0\.42/.test(hr), "the statistic is on the callout");
++});
++
++test("the research proposal (Word): cover, objective, research questions and KPIs, hypotheses with their readings and the questions that measure them, the questionnaire by section, sample and the plan's base, the analysis plan with its reasons, deliverables, assumptions and sources", async () => {
++  const def = planned();
++  const buf = await buildProposalDocx(def, { client: "Acme", author: "R. Smith", date: "2026-10-09", fieldwork: { from: "2026-11-01", to: "2026-11-21" } });
++  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
++  const t = docxText(buf);
++  assert.match(t, /RESEARCH PROPOSAL What drives satisfaction and recommendation Prepared for Acme 2026-10-09 · R\. Smith Survey: Synthetic v1\.0/);
++  assert.match(t, /1\. Background and objective What drives satisfaction and recommendation POPULATION Adults 18\+ who bought in the last year METHODOLOGY Online panel, 10 minutes/);
++  assert.match(t, /2\. Research questions and KPIs Which groups are most satisfied\? KPIS KPI Variable Measure Target NPS NPS promoters − detractors 30 \(higher is better\)/);
++  assert.match(t, /3\. Hypotheses Hypothesis Reading Measured by Effect H1 Women are more satisfied than men difference · women > men on satisfied Q4 — H2 Satisfaction differs by region difference · region ↔ Satisfaction Q4 — H3/);
++  assert.match(t, /Constructs Construct Role Definition Questions Satisfaction dependent Q4/);
++  assert.match(t, /4\. Questionnaire 18 questions in 1 sections — about 5 minutes at four questions a minute\. SECTION · 18 QUESTIONS Code Question Type Role Q1 Gender single select \(nominal\) segmentation/);
++  assert.match(t, /5\. Sample and fieldwork Population: Adults 18\+ who bought in the last year\. The analysis plan needs at least \d+ completes/);
++  assert.match(t, /Fieldwork: 2026-11-01 to 2026-11-21\./);
++  assert.match(t, /6\. Analysis plan Analysis Serves Why this method Output Base/);
++  assert.match(t, /t-test[^]*H1[^]*/);
++  assert.match(t, /7\. Deliverables Topline findings at the first readable base/);
++  assert.match(t, /8\. Assumptions and sources The panel is representative SOURCES Brief v2/);
++  // a bare survey: the proposal still builds, and says what is missing
++  const bare = SurveyDefinition.parse({ meta: { id: "b", code: "B", title: "Bare" }, questions: [{ id: "q1", code: "Q1", variableName: "A", type: "single_select", text: "A?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] }], flow: [{ type: "page", id: "p1", questionIds: ["q1"] }] });
++  const bt = docxText(await buildProposalDocx(bare));
++  assert.match(bt, /RESEARCH PROPOSAL Bare/);
++  assert.match(bt, /No research objective is recorded yet/);
++  assert.match(bt, /2\. Hypotheses No hypotheses are recorded\./);
++  assert.match(bt, /No sample size is recorded\.|The analysis plan needs/);
++});
++
++test("the findings report (Word): the executive summary, the verdicts, each key finding with its so-what, evidence and groups, who differs, beyond the plan, what it means, what to do next, the method, every finding, the caveats; a narrative replaces the summary", async () => {
++  const def = planned();
++  const run = runPlan(def, synthDataset(400), { trigger: "halfway", now: "2026-10-09T09:00:00Z" });
++  const buf = await buildFindingsDocx(def, run, { client: "Acme", results: resultsOf(run) });
++  assert.equal(buf.subarray(0, 2).toString("latin1"), "PK");
++  const t = docxText(buf);
++  assert.match(t, /FINDINGS REPORT What drives satisfaction and recommendation — findings Prepared for Acme 400 live completes · halfway · 2026-10-09/);
++  assert.match(t, /Executive summary Overall satisfaction across Gender: a strong difference This report reads the 5 planned analyses run on 400 live completes/);
++  assert.match(t, /The hypotheses Hypothesis Verdict Why H1 Women are more satisfied than men supported All 2 planned tests are significant/);
++  assert.match(t, /H3 Awareness of Gamma raises consideration untested No analysis in the plan serves this hypothesis\./);
++  assert.match(t, /Key findings Overall satisfaction across Gender: a strong difference This is the evidence for H1 .* t welch, p < \.001, Cohen's d = -?1\.01, n = 400 · Holm-adjusted p < \.001 Gender n Mean SD Median 95% CI low 95% CI high (?:Male|Female) \d+ 3\.\d\d/);
++  assert.match(t, /Who differs Overall satisfaction across Gender: a strong difference Female \(3\.86\) vs Male \(3\.07\) — a strong effect Group SAT n Female 3\.86 208 Male 3\.07 192/);
++  assert.match(t, /Beyond the plan: \d segment differences the plan did not test/);
++  assert.match(t, /What it means H1 \(Women are more satisfied than men\) is supported/);
++  assert.match(t, /What to do next Lead the story with the strongest finding/);
++  assert.match(t, /Method Completes analysed 400 \(live\) Run halfway, 2026-10-09 Planned analyses 5 Significance α = 0\.05, Holm correction by hypothesis family Population Adults 18\+/);
++  assert.match(t, /Every finding Finding Test p Adjusted Effect n/);
++  assert.match(t, /Generated by Rescript from the analysis run of 2026-10-09\. Every number in this document is from that run\./);
++  const told = docxText(await buildFindingsDocx(def, run, { narrative: { headline: "Women are the more satisfied customers.", summary: ["We set out to learn what drives satisfaction.", "Women score 3.86 against 3.07 for men."] } }));
++  assert.match(told, /Executive summary Women are the more satisfied customers\. We set out to learn what drives satisfaction\. Women score 3\.86 against 3\.07 for men\. The hypotheses/);
++  // a run with data advice carries the method table
++  const rows: AnalyticsRow[] = synthRows(44).map((r, i) => ({ ...r, answers: { ...r.answers, q_gender: i < 12 ? 1 : 2, q_sat: i < 12 ? (i === 0 ? 5 : 1) : 3 + (i % 3) } }));
++  const adv = docxText(await buildFindingsDocx(def, runPlan(def, buildDataset(def, rows, { spec }), { discover: false })));
++  assert.match(adv, /What the data says about the methods Analysis Checks Recommended .*Mann–Whitney/);
++});
+diff --git a/packages/analytics/src/planBridge.ts b/packages/analytics/src/planBridge.ts
+index 9760044..4b7d08b 100644
+--- a/packages/analytics/src/planBridge.ts
++++ b/packages/analytics/src/planBridge.ts
+@@ -56,7 +56,8 @@ export function testDefinition(t: PlannedTest, dataset: DatasetSpec): AnalysisDe
+   switch (kind) {
+     case "test": {
+       // the runner reads [measured, grouping]: the outcome first, then the group or the second variable
+-      const variables = [t.outcome, t.groupBy ?? t.variables[0], ...(t.groupBy ? t.variables : t.variables.slice(1))].filter((v): v is string => !!v);
++      // a test planned by sentence (Phase 4) lists the outcome in `variables` too: the same variable once, never "SAT across GENDER and SAT"
++      const variables = [...new Set([t.outcome, t.groupBy ?? t.variables[0], ...(t.groupBy ? t.variables : t.variables.slice(1))].filter((v): v is string => !!v))];
+       return { ...base, name, kind, variables, options: { ...base.options, test: TEST_NAME[t.method] ?? "auto" } };
+     }
+     case "regression": {
+diff --git a/packages/engine/src/nlIntent.ts b/packages/engine/src/nlIntent.ts
+index 82eea3b..eb8ac37 100644
+--- a/packages/engine/src/nlIntent.ts
++++ b/packages/engine/src/nlIntent.ts
+@@ -100,6 +100,8 @@ export type Interpretation =
+   | { kind: "refused"; category: IntentCategory; understood: string; reason: string; detected: Detected[]; suggestion?: { text: string; actions?: SurveyAction[] }; /** nothing to do: the survey already is as asked */ noop?: boolean }
+   /** a question about the DATA (Phase 4): read into a query the Studio answers on the dataset — the engine has no data */
+   | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
++  /** a document to produce (Phase 5): the proposal, the findings report or the findings deck — the Studio builds the file */
++  | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
+   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
+       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
+       fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
+@@ -113,6 +115,15 @@ export interface InterpretContext {
+   selectedIds?: string[] | null;
+ }
+ 
++/** what the Studio produces for an output request (Phase 5) */
++export interface OutputRequest {
++  type: "proposal_docx" | "findings_docx" | "findings_pptx";
++  audience: "executive" | "client" | "researcher";
++  client?: string;
++  /** the words that named the document, for the card */
++  words: string;
++}
++
+ /** the `reason` of a `model` result that hands the sentence to the Studio's deterministic grammar instead */
+ export const DEFER_TO_GRAMMAR = "defer:grammar";
+ 
+@@ -2142,6 +2153,51 @@ const scaleChange: Recogniser = (r) => {
+   return act(r, "question_modification", `Change ${code(target)}'s ${what} to a ${scale.name}: ${labels.join(" · ")}${have.length ? ` — this replaces its ${have.length} current ${what}${(target.options ?? []).some((o) => o.flags?.length) ? " (flags such as exclusive or Other are not carried over)" : ""}` : ""}.`, [{ op: "update_question", target: code(target), scale: spec }], detected);
+ };
+ 
++/* ---------------------------------------------------------- documents to produce (Phase 5) */
++
++/*
++ * "CREATE THE CLIENT-READY RESEARCH PROPOSAL", "create the final findings
++ * presentation", "write the findings report as a Word document" — the
++ * output the sentence asks for, read exactly: the document type from its
++ * noun, the audience from its words ("for the board" is an executive
++ * deck, "for the analysts" a researcher's), the client from "for Acme".
++ * The engine builds nothing: the Studio makes the file from the design or
++ * the run. A sentence about an executive summary, a slide to edit or a
++ * report to draft in the analytics workspace is not this.
++ */
++const OUTPUT_VERB = String.raw`(?:create|write|draft|prepare|produce|generate|build|make|export|compile|assemble|put\s+together|give\s+me)`;
++const OUTPUT_MOD = String.raw`(?:(?:client[-\s]ready|client|final|full|formal|complete|executive|research|findings|results|study|topline|detailed|polished|professional)\s+)*`;
++const outputRequest: Recogniser = (r) => {
++  const t = r.text.replace(/[.!]+$/, "").trim();
++  let m: RegExpExecArray | null;
++  let type: OutputRequest["type"] | null = null;
++  let tail = "";
++  const lead = String.raw`^${OUTPUT_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|our\s+|my\s+)?${OUTPUT_MOD}`;
++  if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
++  else if ((m = new RegExp(String.raw`${lead}(?:findings\s+|results\s+)?(?:presentation|deck|slide\s+deck|slides|powerpoint|pptx)(?:\s+of\s+(?:the\s+)?(?:findings|results))?(.*)$`, "i").exec(t))) { type = "findings_pptx"; tail = m[1]; }
++  else if ((m = new RegExp(String.raw`${lead}(?:findings|results|final)\s+report(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?|\s+(?:document|doc))?(.*)$`, "i").exec(t))
++    || (m = new RegExp(String.raw`${lead}(?:word|docx)\s+(?:document|doc|report|version)\s+(?:of|with|for)\s+(?:the\s+)?(?:findings|results|report)(.*)$`, "i").exec(t))) { type = "findings_docx"; tail = m[1]; }
++  if (!type) return null;
++  tail = tail.trim();
++  // the tail: an audience, a client, a language level — anything else is not this recogniser's sentence
++  let audience: OutputRequest["audience"] = /\bexecutive\b/i.test(t) ? "executive" : "client";
++  let client: string | undefined;
++  const rest = tail.replace(/^,?\s*/, "");
++  if (rest) {
++    let n: RegExpExecArray | null;
++    if ((n = /^for\s+(?:the\s+)?(board|executives?|leadership|c-suite|ceo|management|senior\s+team|steering\s+(?:group|committee))$/i.exec(rest))) audience = "executive";
++    else if ((n = /^for\s+(?:the\s+)?(researchers?|analysts?|research\s+team|technical\s+(?:team|readers?)|methodologists?|statisticians?)$/i.exec(rest))) audience = "researcher";
++    else if ((n = /^for\s+(?:the\s+)?(client|clients|customer|stakeholders?|team)$/i.exec(rest))) audience = audience === "executive" ? "executive" : "client";
++    else if (/^(?:for|of|on)\s+(?:the\s+|this\s+|our\s+|my\s+)?(?:survey|study|project|questionnaire|research|findings|results)$/i.test(rest)) { /* "for this survey": what it is for anyway */ }
++    else if ((n = /^for\s+(.+)$/i.exec(rest)) && !/\b(?:survey|study|questionnaire|this|that|it|them|us|me)\b/i.test(n[1])) client = unquote(n[1]).slice(0, 80);
++    else return null;
++  }
++  const words = type === "proposal_docx" ? "the research proposal (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
++  const hasDesign = !!(r.def.research?.objective || r.def.research?.hypotheses.length);
++  if (type === "proposal_docx" && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, "There is nothing to write a proposal from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.", []);
++  return { kind: "output", category: "reporting", understood: `Produce ${words}${client ? ` for ${client}` : ""}${type !== "proposal_docx" ? " from the latest analysis run" : " from the research design"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
++};
++
+ /* ---------------------------------------------------------- data questions (Phase 4) */
+ 
+ /*
+@@ -2645,7 +2701,7 @@ function fallback(r: Run): Interpretation {
+  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
+  */
+ const RECOGNISERS: Recogniser[] = [
+-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion,
++  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest,
+   deferred, longBrief,
+   surveySettings, languages, objective, audience, research, variables, pageBreaks,
+   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
+@@ -2725,7 +2781,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
+     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
+     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
+     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
+-    if (it.kind === "answer" || it.kind === "query") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
++    if (it.kind === "answer" || it.kind === "query" || it.kind === "output") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+     category ??= it.category;
+     actions.push(...it.actions);
+     detected.push(...it.detected);
+diff --git a/packages/engine/src/nlPhase4.test.ts b/packages/engine/src/nlPhase4.test.ts
+index 92f9c5a..9968b25 100644
+--- a/packages/engine/src/nlPhase4.test.ts
++++ b/packages/engine/src/nlPhase4.test.ts
+@@ -183,3 +183,37 @@ test("data questions are read into queries — the option, the question, the cut
+   // a data question and an edit in one sentence: the model's
+   assert.equal(interpretRequest(def, "does satisfaction differ by gender and make Q1 required").kind, "model");
+ });
++
++/* ------------------------------------------------------------ Phase 5: documents by sentence */
++test("a document by sentence (Phase 5): the proposal from the design, the findings report or deck from a run — the type from the noun, the audience and the client from the words; an executive summary or a report to draft stays the model's", () => {
++  const def = survey();
++  const outputOf = (t: string) => { const r = interpretRequest(def, t); assert.equal(r.kind, "output", JSON.stringify(r)); return r as Extract<Interpretation, { kind: "output" }>; };
++  let o = outputOf("Create the client-ready research proposal");
++  assert.deepEqual(o.output, { type: "proposal_docx", audience: "client", words: "the research proposal (Word)" });
++  assert.equal(o.category, "reporting");
++  assert.equal(o.understood, "Produce the research proposal (Word) from the research design.");
++  assert.deepEqual(o.detected, [{ what: "document", value: "the research proposal (Word)" }, { what: "audience", value: "client" }]);
++  o = outputOf("write the research design document for Acme Ltd");
++  assert.equal(o.output.type, "proposal_docx"); assert.equal(o.output.client, "Acme Ltd");
++  assert.equal(o.understood, "Produce the research proposal (Word) for Acme Ltd from the research design.");
++  assert.equal(outputOf("create a proposal for the survey").output.type, "proposal_docx", "'for the survey' is what it is for anyway");
++  o = outputOf("create the final findings presentation");
++  assert.deepEqual(o.output, { type: "findings_pptx", audience: "client", words: "the findings presentation (PowerPoint, client edition)" });
++  assert.equal(o.understood, "Produce the findings presentation (PowerPoint, client edition) from the latest analysis run.");
++  assert.equal(outputOf("Create the findings deck for the board").output.audience, "executive");
++  assert.equal(outputOf("give me the executive findings deck").output.audience, "executive");
++  assert.equal(outputOf("build the results deck for the analysts").output.audience, "researcher");
++  assert.equal(outputOf("prepare the slides for the client").output.audience, "client");
++  o = outputOf("write the findings report as a Word document");
++  assert.deepEqual(o.output, { type: "findings_docx", audience: "client", words: "the findings report (Word)" });
++  assert.equal(outputOf("draft the final report in Word").output.type, "findings_docx");
++  assert.equal(outputOf("make a Word document of the findings").output.type, "findings_docx");
++  // not this recogniser's: the executive summary in words, the analytics report to draft, a deck with an edit in the same sentence, a tail it cannot read
++  assert.equal(interpretRequest(def, "Write the executive summary for the client report").kind, "model");
++  assert.equal(interpretRequest(def, "draft the report").kind, "model");
++  assert.equal(interpretRequest(def, "create the findings presentation and make Q1 required").kind, "model");
++  assert.equal(interpretRequest(def, "create the findings deck with three slides per hypothesis").kind, "model");
++  // nothing to write a proposal from
++  const bare = SurveyDefinition.parse({ meta: { id: "b", code: "B", title: "Bare" }, questions: [], flow: [] });
++  refusal(interpretRequest(bare, "create the research proposal"), /^There is nothing to write a proposal from yet/);
++});
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index b8d8356..620e11b 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -263,6 +263,9 @@ importers:
+       '@rescript/schema':
+         specifier: workspace:*
+         version: link:../schema
++      docx:
++        specifier: ^9.7.1
++        version: 9.7.1
+       exceljs:
+         specifier: ^4.4.0
+         version: 4.4.0
+diff --git a/scripts/phase5-reporting-test.mjs b/scripts/phase5-reporting-test.mjs
+new file mode 100644
+index 0000000..061eb48
+--- /dev/null
++++ b/scripts/phase5-reporting-test.mjs
+@@ -0,0 +1,170 @@
++/**
++ * RESEARCH ENGINE — PHASE 5 (automated reporting), in the browser.
++ *
++ *   - "create the client-ready research proposal" → the Word document from
++ *     the research design, on the card with its size and what it holds
++ *   - the findings outputs without respondents are said to be unanswerable
++ *   - rows handed in through the seam → "create the final findings
++ *     presentation" with a scripted narrative: the deck is built from a run
++ *     on the data, the gate keeps the sentences the run supports and names
++ *     the one it dropped, the card shows both; the file is a real deck
++ *   - "write the findings report as a Word document" → the Word report
++ *   - the Findings tab's Documents buttons go through the engine; the
++ *     executive deck is the executive edition
++ *   - the output route's gate
++ *
++ *   node scripts/phase5-reporting-test.mjs      (studio on 3000, fake AI provider)
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import assert from "node:assert/strict";
++import { openTab, switchMode } from "./lib/nav.mjs";
++import { def as synthDef, synthRows } from "/home/claude/rescript/packages/analytics/dist/analyses/fixture.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++
++const FIXTURE = structuredClone(synthDef);
++FIXTURE.meta = { ...FIXTURE.meta, id: "sandbox", code: "SANDBOX" };
++FIXTURE.research = {
++  objective: "What drives satisfaction and recommendation", population: "Adults 18+ who bought in the last year",
++  hypotheses: ["Women are more satisfied than men", "Satisfaction differs by region"], researchQuestions: ["Which groups are most satisfied?"], kpis: [{ name: "NPS", variable: "NPS", measure: "promoters − detractors", target: "30", direction: "higher" }],
++  constructs: [{ name: "Satisfaction", role: "dependent", questionIds: ["q_sat"] }], analysis: [], assumptions: ["The panel is representative"], sources: ["Brief v2"],
++  analysisPlan: {
++    crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER"], priority: 1, hypotheses: ["H1"], reason: "satisfaction by gender" }],
++    tests: [
++      { id: "t1", method: "t_test", outcome: "SAT", variables: ["SAT"], groupBy: "GENDER", priority: 1, hypotheses: ["H1"] },
++      { id: "t2", method: "anova", outcome: "SAT", variables: ["SAT"], groupBy: "REGION", priority: 1, hypotheses: ["H2"] },
++    ],
++    derived: [], segments: [], source: "researcher",
++  },
++};
++const ROWS = synthRows(400);
++const NARRATIVE = { headline: "Women are the more satisfied customers.", summary: ["We set out to learn what drives satisfaction and recommendation.", "Women score 3.86 against 3.07 for men, a strong difference.", "Satisfaction rose 77.7% in the north."], implications: ["H1 is supported: gender is the largest difference measured."], recommendations: ["Plan a follow-up on the gender gap before the next wave."] };
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
++page.on("dialog", (d) => d.accept());
++const errors = [];
++page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402|409|401|400)/.test(m.text())) errors.push(m.text()); });
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(600);
++};
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++const turns = () => page.$$('[data-testid="cp-turn"]');
++const settled = async (n) => {
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 90000 });
++  await page.waitForTimeout(300);
++  return (await turns()).at(-1);
++};
++const say = async (text, fake) => {
++  if (fake) await page.evaluate((r) => window.__rescriptCopilotFake(r), fake);
++  const n = (await turns()).length;
++  await page.fill('[data-testid="iq-input"]', text);
++  await page.keyboard.press("Enter");
++  const last = await settled(n);
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  return last;
++};
++const textOf = async (h) => (await h.evaluate((e) => e.innerText)).replace(/\s+/g, " ");
++/** the produced file, read back from the card's link: its first bytes and its slide parts */
++const fileOf = (h) => h.$eval('[data-testid="cp-output-download"]', async (a) => { const buf = new Uint8Array(await (await fetch(a.href)).arrayBuffer()); let s = ""; for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]); const slides = new Set(s.match(/ppt\/slides\/slide\d+\.xml/g) ?? []).size; return { name: a.getAttribute("download"), bytes: buf.length, head: s.slice(0, 2), slides, hasWord: s.includes("word/document.xml") }; });
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++await intelligent();
++if (!(await page.evaluate(() => typeof window.__rescriptCopilotFake === "function"))) { console.log("  skip  no fake copilot provider in this build"); await browser.close(); process.exit(0); }
++
++/* ------------------------------------------------ 1. the proposal, from the design alone */
++{
++  const t = await say("Create the client-ready research proposal");
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  const text = await textOf(t);
++  assert.match(text, /The research proposal \(Word\) is ready: What_drives_satisfaction_and_recommendation-research-proposal\.docx \(\d+ KB\)\. Research proposal: 2 hypotheses, 18 questions, the saved analysis plan/);
++  const out = await t.$('[data-testid="cp-output"]');
++  assert.equal(await out.getAttribute("data-kind"), "docx");
++  const f = await fileOf(t);
++  assert.equal(f.head, "PK"); assert.ok(f.hasWord, "a Word document"); assert.ok(f.bytes > 5000, `${f.bytes} bytes`);
++  assert.equal(await (await t.$('[data-testid="cp-engine-detail"]')).getAttribute("data-kind"), "answer");
++  assert.equal(await t.$('[data-testid="cp-output-narrative"]'), null, "no narrative on a proposal");
++  ok("the research proposal: a Word document from the design, on the card with its name, size and what it holds — no model, no data needed");
++}
++
++/* ------------------------------------------------ 2. the findings outputs need respondents */
++{
++  const t = await say("create the final findings presentation");
++  assert.match(await textOf(t), /The sandbox has no respondents to report on\. Open a survey with fieldwork and ask there/);
++  assert.equal(await (await t.$('[data-testid="cp-engine-detail"]')).getAttribute("data-kind"), "refused");
++  ok("a findings deck with no respondents: said to be unanswerable here");
++}
++
++/* ------------------------------------------------ 3. the deck from a run, with the narrative through the gate */
++await page.evaluate((rows) => window.__rescriptAnalyticsRows(rows), ROWS);
++{
++  const t = await say("create the final findings presentation", NARRATIVE);
++  const text = await textOf(t);
++  assert.match(text, /The findings presentation \(PowerPoint, client edition\) is ready: What_drives_satisfaction_and_recommendation-findings-client\.pptx \(\d+ KB\)\. \d+ slides: title, summary, .* - 400 completes Narrative gate: 5 of 6 sentences kept; dropped: summary: the number 77\.7% is not in the run\./);
++  const f = await fileOf(t);
++  assert.equal(f.head, "PK"); assert.equal(f.name, "What_drives_satisfaction_and_recommendation-findings-client.pptx");
++  assert.ok(f.slides >= 9, `${f.slides} slides`);
++  assert.match(await page.textContent('[data-testid="cp-output-narrative"]'), /5 of 6 sentences kept/);
++  ok("the findings deck: a run on the rows, the story slides, the model's narrative kept where the run supports it and dropped where it does not — said on the card");
++}
++{
++  const t = await say("write the findings report as a Word document");
++  const text = await textOf(t);
++  assert.match(text, /The findings report \(Word\) is ready: What_drives_satisfaction_and_recommendation-findings-report\.docx \(\d+ KB\)\. Findings report: 2 hypotheses, \d significant findings - 400 completes Narrative gate: the model gave nothing - the engine's words stand\./);
++  const f = await fileOf(t);
++  assert.ok(f.hasWord && f.head === "PK");
++  ok("the findings report as Word: from the same run, the engine's words when the model has nothing");
++}
++
++/* ------------------------------------------------ 4. the Findings tab's Documents buttons, through the engine */
++await page.click('[data-testid="cp-tab-findings"]');
++await page.waitForSelector('[data-testid="fd-outputs"]');
++{
++  const n = (await turns()).length;
++  await page.click('[data-testid="fd-output-deck-exec"]');
++  const t = await settled(n);
++  assert.match(await textOf(t), /The findings presentation \(PowerPoint, executive edition\) is ready: .*-findings-executive\.pptx/);
++  const f = await fileOf(t);
++  assert.equal(f.name, "What_drives_satisfaction_and_recommendation-findings-executive.pptx");
++  await page.click('[data-testid="cp-tab-findings"]');
++  const n2 = (await turns()).length;
++  await page.click('[data-testid="fd-output-proposal"]');
++  const t2 = await settled(n2);
++  assert.match(await textOf(t2), /The research proposal \(Word\) is ready/);
++  ok("the Findings tab's Documents: each button is a sentence the engine reads — the executive deck is the executive edition, the proposal the proposal");
++}
++
++/* ------------------------------------------------ 5. the output route's gate */
++{
++  const post = (body) => page.evaluate(async (b) => { const x = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }); const ct = x.headers.get("content-type") ?? ""; return [x.status, ct.includes("json") ? await x.json() : { bytes: (await x.arrayBuffer()).byteLength, disposition: x.headers.get("content-disposition"), output: x.headers.get("x-rescript-output"), narrative: x.headers.get("x-rescript-narrative") }]; }, body);
++  let r = await post({ surveyId: "00000000-0000-0000-0000-000000000000", output: { type: "proposal_docx", audience: "client" } });
++  assert.equal(r[0], 401, "a real survey needs a session");
++  r = await post({ surveyId: "sandbox", output: { type: "findings_pptx", audience: "client" }, definition: FIXTURE, rows: [] });
++  assert.equal(r[0], 409); assert.equal(r[1].code, "no_data");
++  r = await post({ surveyId: "sandbox", output: { type: "nope" }, definition: FIXTURE });
++  assert.equal(r[0], 400);
++  r = await post({ surveyId: "sandbox", output: { type: "findings_docx", audience: "researcher" }, definition: FIXTURE, rows: ROWS.slice(0, 60), narrative: false });
++  assert.equal(r[0], 200); assert.ok(r[1].bytes > 5000); assert.match(r[1].disposition, /findings-report\.docx/); assert.equal(r[1].narrative, "not asked");
++  const noPlan = { ...FIXTURE, research: { ...FIXTURE.research, analysisPlan: undefined } };
++  r = await post({ surveyId: "sandbox", output: { type: "findings_pptx", audience: "client" }, definition: noPlan, rows: ROWS.slice(0, 60) });
++  assert.ok(r[0] === 200 || r[0] === 409, `the design's own framework runs, or says nothing is planned: ${r[0]}`);
++  ok("the output route: a session for a real survey, rows for the sandbox, a known type; narrative off when not asked");
++}
++
++assert.deepEqual(errors, [], `console errors: ${errors.join("\n")}`);
++await browser.close();
++console.log(`\n${passed} passed`);
+-- 
+2.43.0
+

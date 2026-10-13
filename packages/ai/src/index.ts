@@ -841,10 +841,39 @@ export function acceptsJsonMode(base: string): boolean {
   if (NO_JSON_MODE.has(base)) return false;
   try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
 }
-async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal): Promise<{ r: Response; detail?: string }> {
-  const send = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
+/**
+ * ONE RETRY, WITH BACK-OFF, FOR WHAT IS TRANSIENT (Data Analytics audit A-5).
+ * A 429 or a 5xx (not 501) and a dropped connection are retried — once by
+ * default — after the provider's own `Retry-After` when it gives one, else a
+ * short doubling pause. Never inside the caller's time budget: if the wait
+ * would outlast the abort signal the response stands. A 4xx other than 429 is
+ * the request's fault and is returned at once, as is an abort (the timeout).
+ */
+export interface RetryPolicy { retries: number; delayMs: number }
+const DEFAULT_RETRY: RetryPolicy = { retries: 1, delayMs: 800 };
+const transient = (status: number) => status === 429 || (status >= 500 && status !== 501);
+const wait = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true }); });
+
+async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy = DEFAULT_RETRY): Promise<{ r: Response; detail?: string }> {
+  const once = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
     method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
   });
+  const send = async (b: Record<string, unknown>): Promise<Response> => {
+    for (let attempt = 0; ; attempt++) {
+      let r: Response | null = null;
+      try { r = await once(b); }
+      catch (e) {
+        if ((e as Error)?.name === "AbortError" || signal.aborted) throw e;
+        if (attempt >= retry.retries) { const err = new Error(`could not reach the analysis provider (${(e as Error)?.message ?? "network error"})`); (err as Error & { transient?: boolean }).transient = true; throw err; }
+      }
+      if (r && (!transient(r.status) || attempt >= retry.retries)) return r;
+      const ra = r ? Number(r.headers.get("retry-after")) : NaN;
+      const pause = Math.min(5000, Number.isFinite(ra) && ra > 0 ? ra * 1000 : retry.delayMs * 2 ** attempt);
+      await r?.text().catch(() => "");
+      await wait(pause, signal);
+      if (signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    }
+  };
   const { response_format: format, ...plain } = body;
   const schema = !!format && typeof format === "object" && (format as { type?: string }).type === "json_schema";
   /*
@@ -940,6 +969,9 @@ export interface CompleteJsonOptions {
   continuations?: number;
   /** the tier to call — the small model for a short structuring reply (Phase 6); the large tier when absent */
   tier?: AiModelTier;
+  /** retries on a 429, a 5xx or a dropped connection (default 1; 0 turns it off) and the first pause in ms (default 800, doubling; a `Retry-After` wins) — audit A-5 */
+  retries?: number;
+  retryDelayMs?: number;
 }
 
 /**
@@ -1004,6 +1036,7 @@ export async function completeJson(
   let limit = Math.max(1, Math.round(maxTokens));
   const known = OUTPUT_CEILING.get(`${base} ${model}`);
   if (known && known < limit) limit = known;
+  const retry: RetryPolicy = { retries: Number.isFinite(options.retries) ? Math.max(0, Math.min(3, Math.round(options.retries as number))) : DEFAULT_RETRY.retries, delayMs: Number.isFinite(options.retryDelayMs) ? Math.max(0, Math.min(5000, Math.round(options.retryDelayMs as number))) : DEFAULT_RETRY.delayMs };
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   type Msg = { role: "system" | "user" | "assistant"; content: string };
@@ -1012,12 +1045,12 @@ export async function completeJson(
     : { type: "json_object" };
   /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
   const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
-    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal);
+    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry);
     if (!r.ok) {
       const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 300);
       const ceiling = r.status === 400 && !lowered ? outputCeilingFrom(detail, limit) : null;
       if (ceiling) { OUTPUT_CEILING.set(`${base} ${model}`, ceiling); limit = ceiling; return call(messages, true); }
-      const err = new Error(`the analysis provider refused the request (${r.status}) ${detail.slice(0, 200)}`.trim());
+      const err = new Error(r.status === 429 ? `the analysis provider is rate-limiting requests (429) ${detail.slice(0, 160)}`.trim() : r.status >= 500 ? `the analysis provider is unavailable (${r.status}) ${detail.slice(0, 160)}`.trim() : `the analysis provider refused the request (${r.status}) ${detail.slice(0, 200)}`.trim());
       (err as Error & { status?: number }).status = r.status;
       throw err;
     }

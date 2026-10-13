@@ -1,0 +1,59 @@
+QSF import: loss-aware pipeline, measured fidelity, structure and runtime verification, corpus
+
+Audit (brief Priority 2): the QSF path — readQsf → canonical → mapCanonical →
+schema → quality check → report — was traced field by field against what the
+Rescript schema can hold. The causes found: a grid row's display logic was
+attached to the column with the same number; quota conditions never converted
+(the operator lookup came first), so a "quota met" branch applied to everyone
+and QuotaNotMet read as met; SelectedChoicesCount, BlockRandomizer,
+carry-forward, advanced randomization (anchors, subsets, undisplayed),
+translations, choice images and graphic blocks, side-by-side columns,
+DefaultChoices, DataVisibility, layout configuration, survey options and the
+end-of-survey message id were lost or flattened; unknown piping stayed in the
+text unreported; the children of an Authenticator were hidden behind a
+never-true branch; element kinds the reader does not know were never
+mentioned; and the report could not say, per element, what came across.
+
+Fixes (Priority 3): every element the adapter or the mapper decides is an
+inventory item — imported / partial / unsupported, with the reason — and the
+report's new `fidelity` section counts them per feature, lists unresolved
+references, assets with their hosting risk, languages and the file's element
+table; the summary states the measured share. Row logic goes to the row;
+quota conditions become count-against-limit (a group cell flagged partial);
+choice counts, BlockRandomizer, carry-forward, anchors / pick / always_hide,
+translations (through recordTranslation, origin import, in_review), option
+imageUrl and asset listing, side by side as a composite grid with every
+column, piping for ChoiceDescription / QuestionText / counts / displayed /
+remaining with the rest reported, defaults, hidden, headerRepeat,
+fieldLabelPosition, decimalPlaces, ValidURL, branding from survey options,
+signature / PGR / bipolar / Likert homes, Authenticator children kept, SC
+scoring and unknown kinds in the element table.
+
+Verification (Priority 4): packages/import/src/verify.ts checks the result's
+structure against the source (families, choices, rows, variable names, every
+code, blocks, quotas; analysis compatibility as numbers) and walks it with
+the engine under eight strategies — a look-ahead "deepest" walk that passes
+screeners, first, last, five random seeds — reporting pages, questions,
+loops, end status, refusals, exceptions and unreached questions with a reason
+(by source / no walk). /api/import/analyze returns it for a new project; the
+ImportCard shows the fidelity bar, the per-feature detail, unresolved
+references, assets, languages, the element table and the engine check.
+
+Corpus (Priority 5): three synthetic, sanitized QSF files (simple → screener
+with logic, quotas, embedded data → complex tracker with loops, block
+randomizer, SBS, PGR, images, ES/FR) in packages/import/corpus/qsf, built by
+scripts/qsf-corpus-build.mjs; scripts/qsf-fidelity.mjs measures them, pins
+the whole measurement in expected.json (--update), and takes --dir for real
+exports. Measured: 93.3 % / 84.4 % / 75.9 % of elements as-is; runtime 6/6,
+12/12, 26/27 questions reached (the one left is a block outside the source
+flow); before the fixes the screener file screened out every walk (4/12).
+No real client export was available, so these numbers are for the corpus
+only — the report says so.
+
+Tests: packages/import 49 (21 new; mutation-checked 25/25), import-engine
+browser suite extended (UI mutations 2/2), pnpm -r test green, Studio
+typecheck, guard audit and docs check clean. Report:
+docs/DASHBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

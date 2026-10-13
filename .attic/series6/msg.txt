@@ -1,0 +1,33 @@
+Super Intelligent import: questionnaire files reverse-engineered into Rescript, reviewed, then created or merged
+
+A new package, @rescript/import, reads a survey from another platform or a
+document by its CONTENT (a QSF renamed .txt is still a QSF): Qualtrics QSF,
+Decipher/Forsta XML, Word, Excel/CSV, PDF (text layer) and plain text. Each
+source adapter produces one platform-neutral canonical model; the mapping
+engine turns it into a Rescript definition with identity preserved (QID15
+stays QID15, export tags are the variables, recodes are the codes; a clash
+becomes QID15_Imported with the reason in the source -> Rescript map), and
+the engine's own schema and quality check validate it. Nothing is guessed:
+a condition with an unreadable part is not converted (the source is kept in
+the notes), an instruction a document does not define is reported as
+ambiguous, and custom JavaScript/Python is kept as a DISABLED script.
+
+In Intelligent mode a file arrives by the paperclip, a drop, or "import this
+file": an estimate first (what it is, how big, what it would cost - nothing
+charged), then a preview (detected vs created, confidence, risks by severity,
+the issue list, the map, the actual charge), then Create project (strict:
+an invalid definition is refused before any row exists, never swapped for a
+blank survey) or Add to this survey (beside what is there, identical
+questions not duplicated, one undoable edit). "What could not be migrated?"
+answers from the survey's own import record in any later session; Deep
+analysis of kept code runs one metered model call per item and comes back as
+an ordinary proposal the planner checks. "Why is Q25 not showing?" is a new
+read-only diagnosis (engine diagnoseQuestion): every reason, which are
+certain. Imports are audited (survey.imported) and metered with existing
+events (FILE_UPLOAD, DATA_PROCESSING; AI_REQUEST for deep analysis).
+
+Tests: import 17, engine diagnose 6, studio 6, browser import-engine 8;
+fixes mutation-checked. Plan: docs/SURVEY-IMPORT-ENGINE-PLAN.md.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

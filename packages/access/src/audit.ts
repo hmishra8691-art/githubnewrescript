@@ -157,6 +157,9 @@ export const AUDIT_EVENTS = [
   "analytics.export_generated",
   "analytics.export_failed",
   "analytics.report_downloaded",
+  /* a model wrote text for a project (audit A-6): the model, the prompt version, the claims it rested on and what the checker did — and the call a project's AI switch refused */
+  "analytics.ai_text_generated",
+  "analytics.ai_refused",
 
   /* collaboration */
   "comment.created",
@@ -273,6 +276,8 @@ export function describeEvent(r: AuditRow): string {
     case "analytics.export_failed": return `${who} tried to export “${str(d.name)}” as ${str(d.format || "").toUpperCase()} and the file could not be built (ref ${str(d.ref)})`;
     case "analytics.export_generated": return `${who} generated a ${str(d.format || "").toUpperCase()} export of “${str(d.name)}”`;
     case "analytics.report_downloaded": return `A ${str(d.format || "").toUpperCase()} of “${str(d.name)}” was downloaded${d.viewer ? ` by ${str(d.viewer)}` : " from a share link"}`;
+    case "analytics.ai_text_generated": return `${who} had ${str(d.model) || "a model"} write ${str(d.operation) || "text"}: ${str(d.kept) || "0"} of ${str(d.offered) || "0"} sentences passed the claim check${Number(d.replaced) ? `, ${str(d.replaced)} replaced by the engine's wording` : ""}${d.cached ? " (reused from an earlier identical request)" : ""}`;
+    case "analytics.ai_refused": return `AI was not used for ${str(d.operation) || "a request"} by ${who.toLowerCase()}: ${str(d.why) === "feature_off" ? "the feature is switched off for this project" : str(d.why) === "unreadable" ? "the project's AI setting could not be read" : "the project runs in Internal mode"}`;
     case "version.restored": return `${who} restored version ${str(d.version) || "?"}`;
     case "deployment.started": return `${who} started a ${str(d.mode) || ""} deployment`.replace("  ", " ");
     case "deployment.completed": return `${who} completed a ${str(d.mode) || ""} deployment`.replace("  ", " ");

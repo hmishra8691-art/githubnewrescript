@@ -1,0 +1,33 @@
+From b5a55bb96bc7b7018b7ec3e860f789aa09118c51 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 19:07:51 +0000
+Subject: [PATCH 2/2] Plan: record Phase 2 (Architect) as delivered
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ docs/MULTI-MODAL-PROGRAMMING-PLAN.md | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+index 9620d6a..3230487 100644
+--- a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
++++ b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+@@ -14,7 +14,13 @@ the Questions tab renders the grid; every other tab is unchanged. Measured at
+ scroll step, 17 keystrokes in a cell in 273 ms. Two shell fixes came with
+ it: RightPanel's click-outside deselect now exempts the grid, and the grid
+ toolbar never wraps (it moved rows under the cursor mid double-click).
+-Phases 2–5 are not started.
++**Phase 2 (Architect) delivered 2026-09-24** — `apps/studio/components/
++architect/`, `apps/studio/lib/architect/map.ts`, `scripts/architect-mode-
++test.mjs`. Map · workspace · inspector; the inspector's Dependencies section
++is §12's Smart Selection; Focus (§14) shipped here as a mode-level flag.
++DisplayRuleCard / CalculationCard were extracted from the Logic and
++Calculations tabs so both surfaces render one component. Phases 3–5 are not
++started.
+ 
+ Three things learned while building Phase 0 that the plan did not know:
+ 
+-- 
+2.43.0
+

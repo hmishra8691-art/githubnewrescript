@@ -1,0 +1,36 @@
+A researcher asks in words; the server answers with a PROPOSAL of concrete,
+individually reviewable items from a closed vocabulary (add_crosstab, add_test,
+add_descriptive, remove_analysis, set_chart, build_report). Nothing runs until it
+is applied, and applying re-validates every item against the live survey, saved
+analyses and computed results. No operation carries a statistic.
+
+- analyticsIntent (pure): findVariables (code or label words; option-flag
+  columns excluded; ambiguity reported, never guessed), proposeFromText
+  (cross-tabs per banner variable, tests, distributions, remove redundant /
+  duplicate analyses, best chart per question with reasons and alternatives, a
+  named chart, management summary / report / animated report), validateAskOp
+  (duplicates via planCheck, analyses a report uses, charts the result cannot
+  draw), parseAskOps / parseUndo (the browser's copy is rebuilt, not trusted),
+  itemsFromModel (model operations coerced into the same vocabulary).
+- planCheck: a significance test of a variable against itself is an error;
+  crosstabCarriesChiSquare exported; "requested" provenance ignored by the
+  analysis signature.
+- Routes: intelligent/propose (read-only), apply, undo (analytics.edit). Apply is
+  its own module (lib/analyticsAskApply.ts) so its real statements are tested
+  against an in-memory database. Every applied change is audited with the
+  request text. Reports are not created from Ask: they open in the report
+  builder, pre-filled, for its review step.
+- Studio: Ask tab (Proposed / Done / Blocked / Failed per item, per-item
+  checkboxes, swap a chart for another that suits the result, undo the last
+  batch, history on this device); the report builder accepts a pre-filled brief.
+- docs/DATA-ANALYTICS-AUDIT-2026-10-12.md: root causes, what was delivered,
+  verification, limits, configuration.
+
+Tests: 19 reading-engine + 6 apply/undo + planCheck regression unit tests;
+browser suite scripts/analytics-ask-test.mjs (17 checks); every source, apply
+and UI mutation caught after strengthening the tests that first let mutants
+survive. analytics 332, studio lib 304, pnpm -r test green, auth-guard audit
+0 problems, public docs current.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

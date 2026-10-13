@@ -90,7 +90,7 @@ export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial
         {draft && <div data-testid="ax-builder-review">
           <p className="muted" style={{ marginTop: 0 }}>Review what the builder chose before anything is saved. It read {draft.analysesRead} saved {draft.analysesRead === 1 ? "analysis" : "analyses"}{draft.truncated ? " (the first 60)" : ""}.</p>
           {draft.notes.map((n, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-builder-note">{n}</div>)}
-          {draft.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-builder-model">Interpretation: {draft.model.detail}</div>}
+          {draft.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-builder-model" data-status={draft.model.status}>Interpretation: {draft.model.detail}</div>}
           <div className="flabel">Included ({draft.included.length})</div>
           {!draft.included.length && <div className="muted">Nothing could be shown — see the reasons below.</div>}
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>

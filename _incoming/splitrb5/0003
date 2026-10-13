@@ -1,0 +1,2309 @@
+From 8dca80b3b8884a19d64d42f674d60e9bf51e1398 Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Mon, 12 Oct 2026 21:51:43 +0000
+Subject: [PATCH 3/4] Data Analytics audit, phase 4: intelligent report builder
+ and animated story
+
+The Reports tab gets "Build with Rescript": the researcher states the
+objective, key questions, audience, tone and scope; the builder drafts a report
+(and optionally a story) ONLY from the saved analyses and their computed
+results, shows a review (what was chosen and why, each chart's reason and
+denominator, what was left out and why, key questions no analysis answers) and
+saves nothing until Create.
+
+- reportBuilder: usability checks, ranking against the key questions, chart per
+  question (adviseChart), captions from the analyses' own insights, scenes in
+  story order, per-scene regenerate keeping a still-valid chart choice, a model
+  interpretation gated sentence by sentence against the results' numbers.
+- storyHtml: the story as one self-contained animated HTML file (inline SVG
+  charts drawn from the results, transitions, captions, keyboard controls,
+  optional narration audio). No video renderer exists, so MP4 is not offered.
+- routes: report-builder/draft | scene | story (analytics.edit / .export);
+  narration through the existing TTS provider and meter; a story that would
+  play blank is refused. Stories are read by publish/snapshot (reportAnalysisIds)
+  and shared pages play them from the frozen snapshot in a sandboxed iframe.
+- Studio: builder dialog with review, Story tab (preview, edit, chart, hide,
+  reorder, regenerate, export), "Play story" on shared links.
+
+Tests: 16 builder + 8 renderer unit tests (26/26 source mutations caught),
+parseBrief tests, browser suite scripts/report-builder-test.mjs (22 checks incl.
+playback in Chromium and the shared-link story; 8 UI mutations caught).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/share/[token]/route.ts    |   2 +-
+ .../[id]/analytics/[[...path]]/route.ts       |  71 ++-
+ apps/studio/app/share/[token]/page.tsx        |  14 +-
+ .../analytics/ReportBuilderDialog.tsx         | 119 ++++
+ .../components/analytics/ReportsPanel.tsx     |  14 +-
+ .../components/analytics/StoryPanel.tsx       | 136 +++++
+ apps/studio/components/analytics/api.ts       |  17 +-
+ apps/studio/lib/analyticsBrief.test.ts        |  27 +
+ apps/studio/lib/analyticsBrief.ts             |  23 +
+ apps/studio/lib/analyticsBuilder.ts           |  87 +++
+ packages/analytics/src/blockRefs.ts           |   6 +-
+ packages/analytics/src/index.ts               |   2 +
+ packages/analytics/src/reportBuilder.test.ts  | 197 +++++++
+ packages/analytics/src/reportBuilder.ts       | 363 ++++++++++++
+ packages/analytics/src/storyHtml.test.ts      | 102 ++++
+ packages/analytics/src/storyHtml.ts           | 230 ++++++++
+ packages/analytics/src/types.ts               |  38 ++
+ scripts/report-builder-test.mjs               | 541 ++++++++++++++++++
+ 18 files changed, 1978 insertions(+), 11 deletions(-)
+ create mode 100644 apps/studio/components/analytics/ReportBuilderDialog.tsx
+ create mode 100644 apps/studio/components/analytics/StoryPanel.tsx
+ create mode 100644 apps/studio/lib/analyticsBrief.test.ts
+ create mode 100644 apps/studio/lib/analyticsBrief.ts
+ create mode 100644 apps/studio/lib/analyticsBuilder.ts
+ create mode 100644 packages/analytics/src/reportBuilder.test.ts
+ create mode 100644 packages/analytics/src/reportBuilder.ts
+ create mode 100644 packages/analytics/src/storyHtml.test.ts
+ create mode 100644 packages/analytics/src/storyHtml.ts
+ create mode 100644 scripts/report-builder-test.mjs
+
+diff --git a/apps/studio/app/api/share/[token]/route.ts b/apps/studio/app/api/share/[token]/route.ts
+index f392e40..6d1dd5b 100644
+--- a/apps/studio/app/api/share/[token]/route.ts
++++ b/apps/studio/app/api/share/[token]/route.ts
+@@ -101,7 +101,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
+   // ONLY the snapshot leaves: no analysis ids that could be used elsewhere, no dataset spec beyond its summary
+   const definition = r.definition!;
+   return NextResponse.json({
+-    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
++    report: { name: r.report_name, title: definition.title, subtitle: definition.subtitle, blocks: definition.blocks, story: (definition as { story?: unknown }).story ?? null, viewerSegments: definition.viewerSegments ?? [], branding: definition.branding ?? {}, widgets: (definition as unknown as { widgets?: unknown[] }).widgets ?? null, crossFilter: (definition as unknown as { crossFilter?: boolean }).crossFilter ?? false, /* §41 — the scenery travels with the dashboard, or a shared one loses its banner */ hero: (definition as unknown as { hero?: unknown }).hero ?? null, bands: (definition as unknown as { bands?: unknown[] }).bands ?? null },
+     theme: r.theme ?? DEFAULT_THEME,
+     results: r.snapshot,
+     /* the filters this viewer may switch to, and the answer for each — no ids they could use elsewhere */
+diff --git a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+index ff2cc3a..6711ce4 100644
+--- a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+@@ -5,10 +5,11 @@ import type { AuditEvent, Capability } from "@rescript/access";
+ import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
+ import {
+   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
+-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition } from "@rescript/analytics";
++  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, type StoryDefinition } from "@rescript/analytics";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { supabaseService } from "@/lib/authServer";
+ import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
++import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/lib/analyticsBuilder";
+ import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
+ import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
+ 
+@@ -317,6 +318,72 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     log(ctx, "analytics.report_created", String(r.report.id), { name: r.report.name, fromRun: run.id, blocks: r.definition.blocks.length });
+     return json({ report: r.report }, 201);
+   }
++  /*
++   * THE REPORT BUILDER. `draft` reads the saved analyses and their computed
++   * results and returns a proposed report (and story) for REVIEW — nothing is
++   * written; the person creates it from the response. `scene` rebuilds one
++   * story scene from its analysis as it is now. `story` renders the story of a
++   * saved report as one self-contained animated HTML file, optionally narrated.
++   */
++  if (head === "report-builder") {
++    if (itemId === "draft") {
++      const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
++      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++      const brief = parseBrief(body.brief);
++      if (!brief.objective && !brief.keyQuestions.length) return bad("State the objective or at least one key question — the report is built around what you want to learn.");
++      const { items, truncated } = await builderItems(db, surveyId, loaded, brief.analysisIds);
++      if (!items.length) return bad("This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report.", 409);
++      const model = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: body.interpretation === true, fake: body.fake });
++      const draft = draftReport(brief, items, variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden), { story: body.story === true, interpretation: model.interpretation });
++      return json({ ...draft, model: { status: model.status, detail: model.detail }, truncated, analysesRead: items.length });
++    }
++    if (itemId === "scene") {
++      const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
++      const reportId = typeof body.reportId === "string" ? body.reportId : "";
++      const sceneId = typeof body.sceneId === "string" ? body.sceneId : "";
++      if (!isUuid(reportId) || !sceneId) return bad("reportId and sceneId are required.");
++      const { data: report } = await db.from("analytics_reports").select("definition").eq("id", reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
++      const story = (report?.definition as ReportDefinition | undefined)?.story;
++      if (!story) return bad("This report has no story.", 404);
++      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++      const old = story.scenes.find((s) => s.id === sceneId);
++      if (!old) return bad("That scene is no longer in the story.", 404);
++      const ids = [...new Set(story.scenes.map((s) => s.analysisId).filter((x): x is string => !!x && isUuid(x)))];
++      const { items } = await builderItems(db, surveyId, loaded, ids.length ? ids : undefined);
++      const vars = variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden);
++      if (old.source === "model") {
++        /* a model-written scene is asked for again, through the same number gate */
++        const brief = { objective: story.brief?.objective ?? "", audience: story.audience, tone: story.tone, keyQuestions: story.brief?.keyQuestions ?? [] };
++        const m = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: true, fake: body.fake });
++        const pool = old.title === "Suggested next steps" ? [m.interpretation?.recommendations.join(" ") ?? ""] : (m.interpretation?.implications ?? []);
++        const text = pool.find((t) => t && t !== old.text);
++        if (!text) return bad(`${m.detail} No different sentence passed the number check, so the scene is unchanged.`, 409);
++        return json({ scene: { ...old, text, narration: text } });
++      }
++      const r = regenerateScene(story, sceneId, items, vars);
++      if ("error" in r) return bad(r.error, 409);
++      return json({ scene: r.scene });
++    }
++    if (itemId === "story") {
++      const ctx = await gate(req, surveyId, "analytics.export"); if (isFailure(ctx)) return ctx.response;
++      const reportId = typeof body.reportId === "string" ? body.reportId : "";
++      if (!isUuid(reportId)) return bad("reportId is required.");
++      const { data: report } = await db.from("analytics_reports").select("name, definition").eq("id", reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
++      const story = (report?.definition as ReportDefinition | undefined)?.story as StoryDefinition | undefined;
++      if (!story?.scenes?.length) return bad("This report has no story to export. Build one with the report builder first.", 404);
++      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++      const results = await computeReport(db, surveyId, loaded, { story } as never);
++      /* never hand back a story that would play blank: the same check publish and export use */
++      const check = checkSnapshot({ story }, results as never);
++      if (!check.ok) return json({ error: `The story cannot be exported yet: ${check.problems.join(" ")}`, code: "story_blank", problems: check.problems }, 409);
++      const narration = body.narration === true ? await narrateStory(ctx.user, surveyId, story) : null;
++      const html = storyHtml(story, { results, audio: narration?.audio });
++      const notes = [narration ? narration.message : "Exported without narration.", `${story.scenes.filter((s) => !s.hidden).length} scenes, from the latest computed results.`];
++      log(ctx, "analytics.report_modified", reportId, { storyExport: true, narrated: narration?.narrated ?? 0 });
++      return new NextResponse(html, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-disposition": `attachment; filename="${String(report?.name ?? "story").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "story"}-story.html"`, "cache-control": "no-store", "x-rescript-export-notes": encodeURIComponent(JSON.stringify(notes)) } });
++    }
++    return bad("Unknown report-builder endpoint.", 404);
++  }
+   if (head === "run") {
+     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+     const def = body.definition as AnalysisDefinition | undefined;
+@@ -731,7 +798,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     } else if (head === "reports") {
+       if (!body.name) return bad("name is required.");
+       const kind = body.kind === "dashboard" ? "dashboard" : "report";
+-      const definition = (body.definition as object) ?? (kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: body.mode === "snapshot" ? "snapshot" : "live", blocks: [{ id: "cover", type: "cover", title: body.name }] });
++      const definition = (body.definition ? normalizeReportDefinition(body.definition as object) : null) ?? (kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: body.mode === "snapshot" ? "snapshot" : "live", blocks: [{ id: "cover", type: "cover", title: body.name }] });
+       row = { survey_id: surveyId, kind, name: String(body.name), definition, theme_id: body.themeId ?? null, mode: body.mode === "snapshot" ? "snapshot" : "live", ...now };
+     } else {
+       // shares (§18, §21): a report must be PUBLISHED before it can be shared — a link only ever reaches a version
+diff --git a/apps/studio/app/share/[token]/page.tsx b/apps/studio/app/share/[token]/page.tsx
+index a6fdf09..4a5a452 100644
+--- a/apps/studio/app/share/[token]/page.tsx
++++ b/apps/studio/app/share/[token]/page.tsx
+@@ -1,6 +1,6 @@
+ "use client";
+ import React from "react";
+-import type { AnalysisResult, DashboardWidget, ReportBlock, ReportTheme, DashboardBand, DashboardHero } from "@rescript/analytics";
++import { storyHtml, type AnalysisResult, type DashboardWidget, type ReportBlock, type ReportTheme, type DashboardBand, type DashboardHero, type StoryDefinition } from "@rescript/analytics";
+ import { ReportView } from "@/components/analytics/ReportView";
+ import { downloadBlob } from "@/components/analytics/api";
+ 
+@@ -13,7 +13,7 @@ import { downloadBlob } from "@/components/analytics/api";
+  */
+ 
+ interface Payload {
+-  report: { name: string | null; title: string; subtitle?: string; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
++  report: { name: string | null; title: string; subtitle?: string; story?: StoryDefinition | null; blocks?: ReportBlock[]; widgets?: DashboardWidget[] | null; crossFilter?: boolean; hero?: DashboardHero | null; bands?: DashboardBand[] | null; viewerSegments: string[]; branding: { showLogo?: boolean; footer?: string; header?: string } };
+   theme: ReportTheme; results: Record<string, AnalysisResult>; version: number; publishedAt: string; mode: "snapshot"; dataset: { responses?: number; surveyVersion?: string; computedAt?: string } | null; permission: "viewer" | "download";
+   /** §36 — allowed viewer filters and their frozen results (absent on versions published before 0014) */
+   viewerFilters?: { id: string; name: string }[];
+@@ -25,6 +25,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
+   const [gate, setGate] = React.useState<{ status: string; message: string; reportName?: string } | null>(null);
+   const [password, setPassword] = React.useState("");
+   const [busy, setBusy] = React.useState(false);
++  const [playing, setPlaying] = React.useState(false);
+   const load = React.useCallback(async (pw?: string) => {
+     setBusy(true);
+     try {
+@@ -66,6 +67,14 @@ export default function SharePage({ params }: { params: { token: string } }) {
+   const rep = data.report;
+   return (
+     <div className="ax-share-page" data-testid="ax-share-view">
++      {/* the story plays from the SAME frozen snapshot as the report beside it — no live data, no second source of numbers */}
++      {playing && rep.story && (
++        <div className="modal-back" onClick={() => setPlaying(false)} style={{ zIndex: 50 }}>
++          <div style={{ width: "min(96vw, 1100px)", aspectRatio: "16 / 9", position: "relative" }} onClick={(e) => e.stopPropagation()}>
++            <iframe title="Story" sandbox="allow-scripts" srcDoc={storyHtml(rep.story, { results: data.results, autoplay: true })} data-testid="ax-share-story-frame" style={{ width: "100%", height: "100%", border: 0, borderRadius: 10 }} />
++            <button className="btn small" style={{ position: "absolute", top: 8, left: 8 }} onClick={() => setPlaying(false)}>✕ Close</button>
++          </div>
++        </div>)}
+       <ReportView title={rep.title} subtitle={rep.subtitle} blocks={rep.widgets ? undefined : rep.blocks} widgets={rep.widgets ?? undefined} hero={rep.hero ?? undefined} bands={rep.bands ?? undefined} crossFilter={!!rep.crossFilter} results={data.results} theme={data.theme} mode="snapshot" version={data.version} publishedAt={data.publishedAt} branding={rep.branding} viewerSegments={rep.viewerSegments}
+         /*
+          * §36 — the filters this link is allowed to switch, and the answer
+@@ -84,6 +93,7 @@ export default function SharePage({ params }: { params: { token: string } }) {
+             * the share's permission: printing what you can already see on the
+             * page is not a download permission, it is a browser.
+             */}
++          {rep.story?.scenes?.length ? <button className="btn small" onClick={() => setPlaying(true)} data-testid="ax-share-story">▶ Play story</button> : null}
+           {rep.widgets && <button className="btn small" onClick={() => window.print()} data-testid="ax-share-print"
+             title="Opens your browser's print dialog — choose “Save as PDF” there.">Print / PDF</button>}
+         </>} />
+diff --git a/apps/studio/components/analytics/ReportBuilderDialog.tsx b/apps/studio/components/analytics/ReportBuilderDialog.tsx
+new file mode 100644
+index 0000000..b513bd6
+--- /dev/null
++++ b/apps/studio/components/analytics/ReportBuilderDialog.tsx
+@@ -0,0 +1,119 @@
++"use client";
++import React from "react";
++import type { BuilderDraft, ReportBrief } from "@rescript/analytics";
++import { AxApi, type Row } from "./api";
++
++/**
++ * "BUILD WITH RESCRIPT" — the intelligent report builder's front door.
++ *
++ * Step 1 asks for what the report is FOR (objective, key questions, audience,
++ * tone, scope, format). Step 2 is a REVIEW: what the builder chose and why
++ * (each chart's reason and denominator), what it left out and why, and which
++ * key questions no saved analysis answers. Nothing is saved until the person
++ * presses Create — and unticking an analysis here rebuilds the draft without it.
++ */
++type Draft = BuilderDraft & { model: { status: string; detail: string }; truncated: boolean; analysesRead: number };
++
++const ROLE_WORD: Record<string, string> = { key: "answers a key question", finding: "finding", comparison: "group comparison", difference: "tested difference" };
++
++export function ReportBuilderDialog({ api, analyses, onClose, onCreated }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void }) {
++  const [objective, setObjective] = React.useState("");
++  const [questions, setQuestions] = React.useState("");
++  const [audience, setAudience] = React.useState<ReportBrief["audience"]>("client");
++  const [tone, setTone] = React.useState<ReportBrief["tone"]>("plain");
++  const [title, setTitle] = React.useState("");
++  const [client, setClient] = React.useState("");
++  const [tests, setTests] = React.useState(true);
++  const [crosstabs, setCrosstabs] = React.useState(true);
++  const [maxItems, setMaxItems] = React.useState("");
++  const [picked, setPicked] = React.useState<Set<string> | null>(null);   // null = every saved analysis
++  const [withStory, setWithStory] = React.useState(true);
++  const [withModel, setWithModel] = React.useState(false);
++  const [draft, setDraft] = React.useState<Draft | null>(null);
++  const [excluded, setExcluded] = React.useState<Set<string>>(new Set());
++  const [busy, setBusy] = React.useState(false);
++  const [error, setError] = React.useState<string | null>(null);
++
++  const brief = (ids?: string[]): ReportBrief => ({
++    objective: objective.trim(), audience, tone, keyQuestions: questions.split(/\n/).map((q) => q.trim()).filter(Boolean),
++    ...(ids?.length ? { analysisIds: ids } : picked ? { analysisIds: [...picked] } : {}),
++    ...(tests ? {} : { includeTests: false }), ...(crosstabs ? {} : { includeCrosstabs: false }),
++    ...(Number(maxItems) > 0 ? { maxItems: Number(maxItems) } : {}), ...(title.trim() ? { title: title.trim() } : {}), ...(client.trim() ? { client: client.trim() } : {}),
++  });
++
++  const run = async (ids?: string[]) => {
++    setBusy(true); setError(null);
++    try { const d = await api.reportBuilderDraft({ brief: brief(ids), story: withStory, interpretation: withModel }); setDraft(d); setExcluded(new Set()); }
++    catch (e) { setError((e as Error).message); }
++    finally { setBusy(false); }
++  };
++  const rebuildWithout = async () => { if (!draft) return; await run(draft.included.filter((i) => !excluded.has(i.id)).map((i) => i.id)); };
++  const create = async () => {
++    if (!draft) return;
++    setBusy(true); setError(null);
++    try { const r = await api.create("reports", { name: draft.report.title, kind: "report", mode: "live", definition: draft.report }); onCreated(r.item); onClose(); }
++    catch (e) { setError((e as Error).message); setBusy(false); }
++  };
++  const toggleAnalysis = (id: string) => { const cur = picked ?? new Set(analyses.map((a) => a.id)); const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); setPicked(next.size === analyses.length ? null : next); };
++
++  return (
++    <div className="modal-back" onClick={onClose}>
++      <div className="modal" style={{ maxWidth: 760, width: "92vw", maxHeight: "88vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()} data-testid="ax-builder">
++        <h3 style={{ marginTop: 0 }}>Build a report</h3>
++        {!draft && <>
++          <p className="muted" style={{ marginTop: 0 }}>Tell the builder what the report is for. It drafts only from the analyses you have already saved and their computed results — it never writes a number that is not in them.</p>
++          <label className="ax-field"><span>Objective</span><textarea className="input" rows={2} value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="e.g. Understand how satisfied customers are and which brands they consider" data-testid="ax-builder-objective" /></label>
++          <label className="ax-field"><span>Key questions (one per line)</span><textarea className="input" rows={3} value={questions} onChange={(e) => setQuestions(e.target.value)} placeholder={"How satisfied are customers overall?\nDoes satisfaction differ by gender?"} data-testid="ax-builder-questions" /></label>
++          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
++            <label className="ax-field"><span>Audience</span><select className="select" value={audience} onChange={(e) => setAudience(e.target.value as ReportBrief["audience"])} data-testid="ax-builder-audience"><option value="executive">Executive — few messages</option><option value="client">Client</option><option value="researcher">Researcher — with test detail</option></select></label>
++            <label className="ax-field"><span>Tone</span><select className="select" value={tone} onChange={(e) => setTone(e.target.value as ReportBrief["tone"])}><option value="plain">Plain</option><option value="formal">Formal</option><option value="concise">Concise</option></select></label>
++            <label className="ax-field"><span>Prepared for</span><input className="input" value={client} onChange={(e) => setClient(e.target.value)} placeholder="optional" /></label>
++            <label className="ax-field"><span>Title</span><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="from the objective" /></label>
++          </div>
++          <div className="flabel" style={{ marginTop: 8 }}>Scope</div>
++          <div className="row" style={{ gap: 14, flexWrap: "wrap" }}>
++            <label className="ax-toggle"><input type="checkbox" checked={tests} onChange={(e) => setTests(e.target.checked)} /> include significance tests</label>
++            <label className="ax-toggle"><input type="checkbox" checked={crosstabs} onChange={(e) => setCrosstabs(e.target.checked)} /> include cross-tabs</label>
++            <label className="ax-toggle">at most <input className="input small" style={{ width: 60 }} value={maxItems} onChange={(e) => setMaxItems(e.target.value.replace(/\D/g, ""))} placeholder="auto" /> analyses</label>
++          </div>
++          <details style={{ marginTop: 6 }}><summary className="muted">Choose which saved analyses to read ({picked ? picked.size : analyses.length} of {analyses.length})</summary>
++            <div className="ax-chips" style={{ marginTop: 6 }}>{analyses.map((a) => { const on = picked ? picked.has(a.id) : true; return <button key={a.id} type="button" className={`ax-chip ${on ? "on" : ""}`} onClick={() => toggleAnalysis(a.id)}>{a.name}</button>; })}</div>
++          </details>
++          <div className="flabel" style={{ marginTop: 8 }}>Format</div>
++          <label className="ax-toggle"><input type="checkbox" checked={withStory} onChange={(e) => setWithStory(e.target.checked)} data-testid="ax-builder-story" /> also build an animated story (plays scene by scene; downloads as one HTML file)</label>
++          <label className="ax-toggle"><input type="checkbox" checked={withModel} onChange={(e) => setWithModel(e.target.checked)} /> add an AI-written interpretation (what the findings may mean) — labelled as interpretation and checked against the numbers</label>
++          {!analyses.length && <div className="ax-warn" style={{ marginTop: 8 }}>There are no saved analyses yet. Create them first — the Analysis tab can create them from the analysis plan.</div>}
++          {error && <div className="ax-error" style={{ marginTop: 8 }} data-testid="ax-builder-error">{error}</div>}
++          <div className="row" style={{ marginTop: 14 }}><span className="grow" /><button className="btn" onClick={onClose}>Cancel</button><button className="btn primary" onClick={() => void run()} disabled={busy || (!objective.trim() && !questions.trim())} data-testid="ax-builder-draft">{busy ? "Reading your analyses…" : "Draft the report"}</button></div>
++        </>}
++
++        {draft && <div data-testid="ax-builder-review">
++          <p className="muted" style={{ marginTop: 0 }}>Review what the builder chose before anything is saved. It read {draft.analysesRead} saved {draft.analysesRead === 1 ? "analysis" : "analyses"}{draft.truncated ? " (the first 60)" : ""}.</p>
++          {draft.notes.map((n, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-builder-note">{n}</div>)}
++          {draft.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-builder-model">Interpretation: {draft.model.detail}</div>}
++          <div className="flabel">Included ({draft.included.length})</div>
++          {!draft.included.length && <div className="muted">Nothing could be shown — see the reasons below.</div>}
++          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
++            {draft.included.map((i) => (
++              <li key={i.id} className="card" style={{ padding: "8px 10px", marginBottom: 6 }} data-testid="ax-builder-included">
++                <label className="ax-toggle"><input type="checkbox" checked={!excluded.has(i.id)} onChange={() => setExcluded((x) => { const n = new Set(x); if (n.has(i.id)) n.delete(i.id); else n.add(i.id); return n; })} /> <b>{i.name}</b> <span className="muted">— {ROLE_WORD[i.role]}</span></label>
++                <div className="muted" style={{ fontSize: 12.5, marginLeft: 22 }}>Chart: <b>{i.chart.replace(/_/g, " ")}</b> — {i.chartReason}. {i.denominator}</div>
++                {i.answers.length > 0 && <div className="muted" style={{ fontSize: 12.5, marginLeft: 22 }}>Answers: {i.answers.map((q) => `“${q}”`).join("; ")}</div>}
++                {i.notes.map((n, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 22, color: "#b45309" }}>{n}</div>)}
++              </li>))}
++          </ul>
++          {draft.skipped.length > 0 && <><div className="flabel" style={{ marginTop: 8 }}>Left out ({draft.skipped.length})</div>
++            <ul style={{ margin: "0 0 0 18px", padding: 0 }}>{draft.skipped.map((s) => <li key={s.id} className="muted" style={{ fontSize: 13 }} data-testid="ax-builder-skipped"><b>{s.name}</b> — {s.reason}</li>)}</ul></>}
++          {draft.story && <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>The animated story has {draft.story.scenes.length} scenes: {draft.story.scenes.map((s) => s.type).join(" → ")}.</div>}
++          {error && <div className="ax-error" style={{ marginTop: 8 }}>{error}</div>}
++          <div className="row" style={{ marginTop: 14 }}>
++            <button className="btn" onClick={() => { setDraft(null); setError(null); }}>← Change the brief</button>
++            <span className="grow" />
++            {excluded.size > 0 && <button className="btn" onClick={() => void rebuildWithout()} disabled={busy} data-testid="ax-builder-rebuild">Rebuild without {excluded.size}</button>}
++            <button className="btn primary" onClick={() => void create()} disabled={busy || !draft.included.length} data-testid="ax-builder-create">{busy ? "Creating…" : "Create the report"}</button>
++          </div>
++        </div>}
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/analytics/ReportsPanel.tsx b/apps/studio/components/analytics/ReportsPanel.tsx
+index 87f382f..bbcad17 100644
+--- a/apps/studio/components/analytics/ReportsPanel.tsx
++++ b/apps/studio/components/analytics/ReportsPanel.tsx
+@@ -1,10 +1,13 @@
+ "use client";
+ import { StoryReports } from "./StoryStudio";
+ import React from "react";
++import { reportAnalysisIds } from "@rescript/analytics";
+ import type { AnalysisDefinition, AnalysisResult, ChartSpec, DashboardBand, DashboardDefinition, DashboardWidget, ExportSettings, ReportBlock, ReportDefinition, ReportTheme } from "@rescript/analytics";
+ import { CHART_CATALOG, DEFAULT_EXPORT_SETTINGS, describeTemplate, compactLayout, describeDashboardTemplate, firstFreeSlot, layoutRows, normalizeLayout, placeWidget, scrimFor, templateKind, type LayoutBox, type ReportTemplate } from "@rescript/analytics";
+ import { AxApi, ApiError, type Row, type RunResult, timeAgo } from "./api";
+ import { ReportView } from "./ReportView";
++import { ReportBuilderDialog } from "./ReportBuilderDialog";
++import { StoryPanel } from "./StoryPanel";
+ import { mapImagesOnScreen } from "./ResultView";
+ import { ICON_OPTIONS } from "./charts/Icons";
+ import { MediaUrlInput } from "../studio/MediaUrlInput";
+@@ -284,6 +287,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+   const [error, setError] = React.useState<string | null>(null);
+   const [creating, setCreating] = React.useState<"report" | "dashboard" | null>(null);
+   /* a story report open in its storyboard takes the whole panel */
++  const [builder, setBuilder] = React.useState(false);
+   const [storyOpen, setStoryOpen] = React.useState(false);
+   const [newName, setNewName] = React.useState("");
+   /* §36 — report templates, and the saved filters a viewer may switch */
+@@ -328,6 +332,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+   }, [api, analyses, results]);
+ 
+   const openReport = async (r: Row) => {
++    setStoryOpen(false);
+     setOpen(r); setDef(r.definition as ReportDefinition); setDirty(false); setViewVersion(null); setShownVersion(null); setMsg(null);
+     await load(r);
+     const v = await api.versions("reports", r.id).catch(() => ({ versions: [] })); setVersions(v.versions);
+@@ -495,9 +500,10 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+     <div className="ax-panel" data-testid="ax-reports">
+       <StoryReports surveyId={api.surveyId} onOpen={setStoryOpen} />
+       {!storyOpen && <>
+-      <div className="row" style={{ margin: "18px 0 10px" }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Blank report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
++      <div className="row" style={{ margin: "18px 0 10px" }}><h2 style={{ margin: 0 }}>Reports & dashboards</h2><span className="grow" /><button className="btn primary small" onClick={() => setBuilder(true)} data-testid="ax-build-report" title="Draft a report from your saved analyses, around an objective and key questions">✦ Build with Rescript</button><button className="btn small" onClick={() => setCreating("report")} data-testid="ax-new-report">+ Blank report</button><button className="btn small" onClick={() => setCreating("dashboard")} data-testid="ax-new-dashboard">+ Dashboard</button></div>
+       {creating && <div className="card row"><input className="input" autoFocus placeholder={`${creating === "report" ? "Report" : "Dashboard"} name`} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} data-testid="ax-report-name" /><button className="btn primary small" onClick={create} data-testid="ax-report-create">Create</button><button className="btn small" onClick={() => setCreating(null)}>Cancel</button></div>}
+       {error && <div className="ax-error">{error}</div>}
++      {builder && <ReportBuilderDialog api={api} analyses={analyses} onClose={() => setBuilder(false)} onCreated={(r) => { onChange(); void openReport(r); }} />}
+       <div className="ax-cards">
+         {items.map((r) => <div key={r.id} className="card selectable" onClick={() => openReport(r)} data-testid="ax-report-card"><div className="card-title">{r.kind === "dashboard" ? "▦" : "▤"} {r.name}</div><div className="muted" style={{ fontSize: 13 }}>{r.kind} · {r.mode} · {r.published_version ? `published v${r.published_version}` : "not published"} · updated {timeAgo(r.updated_at)}</div></div>)}
+         {!items.length && <div className="muted">No reports yet. Create one, then add saved analyses as charts, tables and KPIs.</div>}
+@@ -511,7 +517,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+   return (
+     <div className="ax-panel ax-report-builder" data-testid="ax-report-builder">
+       <div className="ax-rb-bar">
+-        <button className="btn small" onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) { setOpen(null); setDef(null); } }}>← Reports</button>
++        <button className="btn small" onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) { setOpen(null); setDef(null); setStoryOpen(false); } }}>← Reports</button>
+         <input className="input" value={(rd?.title as string) ?? open.name} onChange={(e) => { setDef({ ...(def as ReportDefinition), title: e.target.value }); setDirty(true); }} style={{ maxWidth: 300, fontWeight: 600 }} />
+         {!isDash && <input className="input" placeholder="Subtitle" value={rd?.subtitle ?? ""} onChange={(e) => { setDef({ ...rd, subtitle: e.target.value }); setDirty(true); }} style={{ maxWidth: 240 }} />}
+         <select className="select small" value={open.theme_id ?? ""} onChange={async (e) => { const r = await api.update("reports", open.id, { themeId: e.target.value || null }); setOpen(r.item); onChange(); }} title="Report theme"><option value="">Default theme</option>{themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+@@ -521,6 +527,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+         <button className="btn small" onClick={save} disabled={!dirty} data-testid="ax-report-save">{dirty ? "Save" : "Saved"}</button>
+         <button className="btn primary small" onClick={publish} data-testid="ax-report-publish">Publish {open.published_version ? `v${open.published_version + 1}` : "v1"}</button>
+         <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>
++        {!isDash && <button className={`btn small ${storyOpen ? "primary" : ""}`} onClick={() => setStoryOpen((o) => !o)} data-testid="ax-story-toggle" title="The animated story of this report">{rd?.story ? "Story ●" : "Story"}</button>}
+         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
+         <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
+         {/*
+@@ -670,7 +677,8 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
+         </aside>
+         <div className="ax-rb-main">
+           {loading && <div className="muted" style={{ padding: 8 }}>Computing…</div>}
+-          {def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} hero={isDash ? dd.hero : undefined} bands={isDash ? dd.bands : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
++          {!isDash && storyOpen && def && <StoryPanel api={api} reportId={open.id} story={rd.story} results={results} dirty={dirty} analysisIds={reportAnalysisIds(rd)} title={rd.title ?? open.name} onChange={(story) => { setDef({ ...rd, story }); setDirty(true); }} />}
++          {!(storyOpen && !isDash) && def && <ReportView title={rd.title ?? open.name} subtitle={rd.subtitle} blocks={isDash ? undefined : rd.blocks} widgets={isDash ? dd.widgets : undefined} hero={isDash ? dd.hero : undefined} bands={isDash ? dd.bands : undefined} crossFilter={isDash ? dd.crossFilter !== false : false} results={results} theme={theme} mode={shownVersion ? "snapshot" : "live"} version={shownVersion} publishedAt={shownVersion ? versions.find((v) => v.version === shownVersion)?.published_at : undefined} branding={rd.branding} viewerSegments={rd.viewerSegments} onBlockAction={viewVersion ? undefined : onBlockAction} onLayout={isDash && !viewVersion ? onLayout : undefined} />}
+         </div>
+       </div>
+       {editing && items_.find((b) => b.id === editing) && <BlockEditor block={items_.find((b) => b.id === editing)!} analyses={analyses} onChange={(nb) => { setItems(items_.map((b) => (b.id === nb.id ? nb : b))); void ensure(idsOf(nb)); }} onClose={() => setEditing(null)} />}
+diff --git a/apps/studio/components/analytics/StoryPanel.tsx b/apps/studio/components/analytics/StoryPanel.tsx
+new file mode 100644
+index 0000000..e6f1613
+--- /dev/null
++++ b/apps/studio/components/analytics/StoryPanel.tsx
+@@ -0,0 +1,136 @@
++"use client";
++import React from "react";
++import { checkChartChoice, sceneDuration, storyHtml, type AnalysisResult, type ChartType, type StoryDefinition, type StoryScene } from "@rescript/analytics";
++import { AxApi } from "./api";
++
++/**
++ * THE ANIMATED STORY of a report: scenes that play one after another —
++ * objective, sample, findings, comparisons, differences, interpretation,
++ * summary. The preview is the very file that is exported (the same renderer),
++ * drawn from the same results as the report. Words from the engine are labelled
++ * as such; a sentence a model wrote is marked as interpretation; a sentence
++ * the researcher typed is theirs. MP4 video is NOT offered: nothing here can
++ * render one, and a button that pretended to would fail.
++ */
++const CHARTS: { type: ChartType; label: string }[] = [
++  { type: "bar_vertical", label: "Columns" }, { type: "bar_horizontal", label: "Horizontal bars" }, { type: "bar_grouped", label: "Grouped bars" },
++  { type: "bar_stacked_100", label: "Stacked 100%" }, { type: "diverging_likert", label: "Diverging (scales)" }, { type: "donut", label: "Donut" }, { type: "line", label: "Line (ordered / time)" }, { type: "table", label: "Table" },
++];
++const SOURCE_WORD: Record<StoryScene["source"], string> = { engine: "written from the results", model: "model-written, number-checked", manual: "written by you" };
++
++export function StoryPanel({ api, reportId, story, results, dirty, analysisIds, title, onChange }: {
++  api: AxApi; reportId: string; story: StoryDefinition | undefined; results: Record<string, AnalysisResult>; dirty: boolean; analysisIds: string[]; title: string; onChange: (s: StoryDefinition | undefined) => void;
++}) {
++  const [sel, setSel] = React.useState<string | null>(null);
++  const [busy, setBusy] = React.useState<string | null>(null);
++  const [msg, setMsg] = React.useState<{ kind: "ok" | "error"; text: string } | null>(null);
++  const [narrate, setNarrate] = React.useState(false);
++  const html = React.useMemo(() => (story ? storyHtml(story, { results }) : ""), [story, results]);
++
++  if (!story) {
++    return (
++      <div className="card" data-testid="ax-story-empty" style={{ padding: 16 }}>
++        <h3 style={{ marginTop: 0 }}>Animated story</h3>
++        <p className="muted">This report has no story yet. A story plays its findings scene by scene — objective, sample, findings, comparisons, differences, summary — from the same analyses and results as the report. It exports as one self-contained animated HTML file.</p>
++        {analysisIds.length === 0 && <div className="ax-warn">Add charts or tables to the report first — a story is told from its analyses.</div>}
++        {msg && <div className={msg.kind === "error" ? "ax-error" : "ax-ok"}>{msg.text}</div>}
++        <button className="btn primary" disabled={!analysisIds.length || busy === "make"} data-testid="ax-story-make"
++          onClick={async () => {
++            setBusy("make"); setMsg(null);
++            try { const d = await api.reportBuilderDraft({ brief: { objective: title, analysisIds, audience: "client", tone: "plain", keyQuestions: [] }, story: true }); if (d.story) onChange(d.story); else setMsg({ kind: "error", text: d.notes.join(" ") || "Nothing in this report could be turned into scenes." }); }
++            catch (e) { setMsg({ kind: "error", text: (e as Error).message }); } finally { setBusy(null); }
++          }}>{busy === "make" ? "Building…" : "Build a story from this report"}</button>
++      </div>
++    );
++  }
++
++  const scenes = story.scenes;
++  const patch = (id: string, p: Partial<StoryScene>) => onChange({ ...story, scenes: scenes.map((s) => (s.id === id ? { ...s, ...p } : s)) });
++  const move = (id: string, d: -1 | 1) => { const i = scenes.findIndex((s) => s.id === id), j = i + d; if (j < 0 || j >= scenes.length) return; const next = [...scenes]; [next[i], next[j]] = [next[j], next[i]]; onChange({ ...story, scenes: next }); };
++  const remove = (id: string) => { onChange({ ...story, scenes: scenes.filter((s) => s.id !== id) }); if (sel === id) setSel(null); };
++  const regenerate = async (id: string) => {
++    setBusy(id); setMsg(null);
++    try {
++      const r = await api.regenerateScene(reportId, id);
++      /* the chart the person chose survives — the server only knows the SAVED story — unless the data can no longer draw it */
++      const mine = scenes.find((s) => s.id === id)?.chart; const res = r.scene.analysisId ? results[r.scene.analysisId] : undefined;
++      const keep = mine && res && !res.error && checkChartChoice(res, mine.type).valid ? mine : r.scene.chart;
++      patch(id, { ...r.scene, ...(keep ? { chart: keep } : {}) });
++      setMsg({ kind: "ok", text: "Scene rebuilt from its analysis as it is now." });
++    }
++    catch (e) { setMsg({ kind: "error", text: dirty ? `${(e as Error).message} (Save the report first if this scene was added after the last save.)` : (e as Error).message }); }
++    finally { setBusy(null); }
++  };
++  const addManual = () => { const id = `sc_${Math.random().toString(36).slice(2, 9)}`; onChange({ ...story, scenes: [...scenes, { id, type: "interpretation", title: "Our reading", text: "", narration: "", nature: "interpretation", source: "manual", durationMs: 5000 }] }); setSel(id); };
++  const cur = scenes.find((s) => s.id === sel) ?? null;
++  const curResult = cur?.analysisId ? results[cur.analysisId] : undefined;
++  const charts = curResult && !curResult.error ? CHARTS.filter((c) => checkChartChoice(curResult, c.type).valid) : [];
++  const totalSec = Math.round(scenes.filter((s) => !s.hidden).reduce((a, s) => a + s.durationMs, 0) / 1000);
++
++  return (
++    <div data-testid="ax-story" style={{ display: "grid", gap: 12 }}>
++      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
++        <label className="ax-field"><span>Story title</span><input className="input" value={story.title} onChange={(e) => onChange({ ...story, title: e.target.value })} data-testid="ax-story-title" /></label>
++        <label className="ax-field"><span>Subtitle</span><input className="input" value={story.subtitle ?? ""} onChange={(e) => onChange({ ...story, subtitle: e.target.value })} /></label>
++        <label className="ax-field"><span>Transition</span><select className="select" value={story.transition} onChange={(e) => onChange({ ...story, transition: e.target.value as StoryDefinition["transition"] })}><option value="fade">Fade</option><option value="slide">Slide</option><option value="zoom">Zoom</option></select></label>
++        <label className="ax-field"><span>Accent colour</span><input type="color" value={/^#[0-9a-f]{6}$/i.test(story.accent ?? "") ? story.accent : "#2563eb"} onChange={(e) => onChange({ ...story, accent: e.target.value })} /></label>
++        <label className="ax-field"><span>Logo URL (https)</span><input className="input" value={story.logoUrl ?? ""} onChange={(e) => onChange({ ...story, logoUrl: e.target.value })} placeholder="optional" /></label>
++      </div>
++      <div className="muted" style={{ fontSize: 13 }}>{scenes.filter((s) => !s.hidden).length} scenes · about {totalSec}s · built for a {story.audience} audience, {story.tone} tone. To change audience, tone or scope, build the report again from the builder.</div>
++      {msg && <div className={msg.kind === "error" ? "ax-error" : "ax-ok"} data-testid="ax-story-msg">{msg.text}</div>}
++      <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) 1fr", gap: 12 }}>
++        <div>
++          <ol style={{ listStyle: "none", margin: 0, padding: 0 }} data-testid="ax-story-scenes">
++            {scenes.map((s, i) => (
++              <li key={s.id} className={`card selectable ${sel === s.id ? "on" : ""}`} style={{ padding: "6px 8px", marginBottom: 4, opacity: s.hidden ? 0.5 : 1 }} onClick={() => setSel(s.id)} data-testid="ax-story-scene">
++                <div className="row" style={{ gap: 4 }}>
++                  <span className="muted" style={{ width: 18 }}>{i + 1}</span>
++                  <b style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</b>
++                  {s.nature === "interpretation" && <span className="ax-chip on" title="An interpretation, not a finding" style={{ fontSize: 11 }}>reading</span>}
++                  <button className="btn small ghost" title="Move up" onClick={(e) => { e.stopPropagation(); move(s.id, -1); }}>▲</button>
++                  <button className="btn small ghost" title="Move down" onClick={(e) => { e.stopPropagation(); move(s.id, 1); }}>▼</button>
++                </div>
++                <div className="muted" style={{ fontSize: 12 }}>{s.type} · {s.source === "engine" ? "from the results" : s.source === "model" ? "model-written" : "yours"}{s.hidden ? " · hidden" : ""}</div>
++              </li>))}
++          </ol>
++          <button className="btn small" style={{ marginTop: 4 }} onClick={addManual} data-testid="ax-story-add">+ Add a scene of your own</button>
++        </div>
++        <div>
++          <iframe title="Story preview" sandbox="allow-scripts" srcDoc={html} data-testid="ax-story-preview" style={{ width: "100%", aspectRatio: "16 / 9", border: "1px solid var(--border, #cbd5e1)", borderRadius: 10, background: "#0f172a" }} />
++        </div>
++      </div>
++      {cur && (
++        <div className="card" style={{ padding: 12 }} data-testid="ax-story-editor">
++          <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>{cur.nature === "interpretation" ? "Interpretation — shown as “not a finding”." : cur.nature === "frame" ? "Framing scene." : "Finding — drawn from the analysis' results."} Words: {SOURCE_WORD[cur.source]}.</div>
++          <label className="ax-field"><span>Scene title</span><input className="input" value={cur.title} onChange={(e) => patch(cur.id, { title: e.target.value })} /></label>
++          <label className="ax-field"><span>On-screen text</span><textarea className="input" rows={3} value={cur.text} onChange={(e) => { const text = e.target.value; const narration = [text, cur.base ?? ""].filter(Boolean).join(" "); patch(cur.id, { text, narration, source: "manual", durationMs: sceneDuration(narration) }); }} data-testid="ax-story-text" /></label>
++          {cur.analysisId && (
++            <label className="ax-field"><span>Chart</span>
++              <select className="select" value={cur.chart?.type ?? "bar_vertical"} onChange={(e) => patch(cur.id, { chart: { type: e.target.value as ChartType } })} data-testid="ax-story-chart">
++                {charts.length === 0 && <option value="table">Table (no chart can draw this result)</option>}
++                {charts.map((c) => <option key={c.type} value={c.type}>{c.label}</option>)}
++              </select></label>
++          )}
++          {cur.base && <div className="muted" style={{ fontSize: 12.5 }}>Base shown: {cur.base}</div>}
++          <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
++            <label className="ax-field"><span>Seconds on screen</span><input className="input small" style={{ width: 70 }} value={Math.round(cur.durationMs / 1000)} onChange={(e) => { const n = Number(e.target.value.replace(/\D/g, "")); if (n) patch(cur.id, { durationMs: Math.min(60, Math.max(2, n)) * 1000 }); }} /></label>
++            <label className="ax-toggle"><input type="checkbox" checked={!cur.hidden} onChange={(e) => patch(cur.id, { hidden: !e.target.checked })} /> show this scene</label>
++            <span className="grow" />
++            {(cur.analysisId || cur.source === "model" || cur.type === "sample" || cur.type === "objective") && <button className="btn small" disabled={busy === cur.id} onClick={() => void regenerate(cur.id)} data-testid="ax-story-regenerate">{busy === cur.id ? "Rebuilding…" : "↻ Regenerate this scene"}</button>}
++            <button className="btn small" onClick={() => remove(cur.id)}>Delete scene</button>
++          </div>
++        </div>
++      )}
++      <div className="card" style={{ padding: 12 }}>
++        <div className="flabel">Export</div>
++        <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
++          <button className="btn primary" disabled={dirty || busy === "export"} data-testid="ax-story-export"
++            onClick={async () => { setBusy("export"); setMsg(null); try { const { notes } = await api.exportStory(reportId, narrate); setMsg({ kind: "ok", text: `Story downloaded. ${notes.join(" ")}` }); } catch (e) { setMsg({ kind: "error", text: (e as Error).message }); } finally { setBusy(null); } }}>{busy === "export" ? "Preparing…" : "Download animated story (HTML)"}</button>
++          <label className="ax-toggle"><input type="checkbox" checked={narrate} onChange={(e) => setNarrate(e.target.checked)} /> add spoken narration (uses the workspace's speech provider; charged per character)</label>
++        </div>
++        {dirty && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>Save the report first — the file is made from the saved story and the latest computed results.</div>}
++        <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>Video (MP4) is not available: this workspace has no video renderer. The HTML story plays in any browser, works offline and can be screen-recorded if you need a video.</div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/analytics/api.ts b/apps/studio/components/analytics/api.ts
+index f36830c..fdd58fb 100644
+--- a/apps/studio/components/analytics/api.ts
++++ b/apps/studio/components/analytics/api.ts
+@@ -1,5 +1,5 @@
+ "use client";
+-import type { AnalysisDefinition, AnalysisResult, ChartAdvice, ChartRecommendation, ReportTemplate, VariableMeta } from "@rescript/analytics";
++import type { AnalysisDefinition, AnalysisResult, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, VariableMeta } from "@rescript/analytics";
+ import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
+ 
+ /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
+@@ -38,6 +38,21 @@ export class AxApi {
+   applyReportTemplate(reportId: string, templateId: string) {
+     return this.req<{ definition: unknown; appliedTemplate: string }>(`reports/${reportId}/apply-template`, { method: "POST", body: JSON.stringify({ templateId }) });
+   }
++  /** the report builder: a proposed report (and story) from the saved analyses and their results — nothing is saved until the person creates it */
++  reportBuilderDraft(body: { brief: unknown; story?: boolean; interpretation?: boolean }) { return this.req<BuilderDraft & { model: { status: string; detail: string }; truncated: boolean; analysesRead: number }>("report-builder/draft", { method: "POST", body: JSON.stringify(body) }); }
++  /** one story scene rebuilt from its analysis as it is now (or, for a model-written scene, asked for again through the number gate) */
++  regenerateScene(reportId: string, sceneId: string) { return this.req<{ scene: StoryScene }>("report-builder/scene", { method: "POST", body: JSON.stringify({ reportId, sceneId }) }); }
++  /** the story as one animated HTML file; `notes` says what it does not contain (narration that could not be made) */
++  async exportStory(reportId: string, narration: boolean): Promise<{ notes: string[] }> {
++    const r = await fetch(`${this.base()}/report-builder/story`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reportId, narration }) });
++    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error((j as { error?: string }).error ?? `Story export failed (${r.status})`); }
++    const blob = await r.blob();
++    const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? "story.html";
++    downloadBlob(blob, name);
++    let notes: string[] = [];
++    try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
++    return { notes };
++  }
+   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
+   /* the analysis plan (Data Analytics → Analysis plan): read, edit with analysis actions, apply */
+   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
+diff --git a/apps/studio/lib/analyticsBrief.test.ts b/apps/studio/lib/analyticsBrief.test.ts
+new file mode 100644
+index 0000000..0ec1c24
+--- /dev/null
++++ b/apps/studio/lib/analyticsBrief.test.ts
+@@ -0,0 +1,27 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { parseBrief } from "./analyticsBrief.ts";
++
++const id = "11111111-1111-4111-8111-111111111111";
++
++test("a brief is bounded and unknown fields are dropped", () => {
++  const b = parseBrief({ objective: "x".repeat(5000), audience: "board", tone: "angry", keyQuestions: ["a", "", "  b  ", ...Array(20).fill("q")], analysisIds: [id, "not-a-uuid", 7], maxItems: 9999, includeTests: false, includeCrosstabs: true, title: "T", client: "C", evil: "<script>" });
++  assert.equal(b.objective.length, 1000);
++  assert.equal(b.audience, "client", "unknown audience falls back");
++  assert.equal(b.tone, "plain", "unknown tone falls back");
++  assert.equal(b.keyQuestions.length, 10);
++  assert.deepEqual(b.keyQuestions.slice(0, 2), ["a", "b"]);
++  assert.deepEqual(b.analysisIds, [id]);
++  assert.equal(b.maxItems, 40);
++  assert.equal(b.includeTests, false);
++  assert.equal("includeCrosstabs" in b, false, "true is the default and is not stored");
++  assert.ok(!("evil" in b));
++});
++
++test("key questions may arrive as one multi-line string, and garbage becomes an empty brief", () => {
++  assert.deepEqual(parseBrief({ keyQuestions: "first\n\nsecond" }).keyQuestions, ["first", "second"]);
++  const empty = parseBrief(null);
++  assert.equal(empty.objective, ""); assert.deepEqual(empty.keyQuestions, []);
++  assert.equal(parseBrief({ maxItems: -3 }).maxItems, 1);
++  assert.equal(parseBrief({ maxItems: "5" }).maxItems, undefined);
++});
+diff --git a/apps/studio/lib/analyticsBrief.ts b/apps/studio/lib/analyticsBrief.ts
+new file mode 100644
+index 0000000..a17a325
+--- /dev/null
++++ b/apps/studio/lib/analyticsBrief.ts
+@@ -0,0 +1,23 @@
++import type { ReportBrief } from "@rescript/analytics";
++
++const MAX_ANALYSES = 60;
++/* ------------------------------------------------------------ request parsing */
++
++const isUuid = (s: unknown): s is string => typeof s === "string" && /^[0-9a-f-]{36}$/i.test(s);
++const str = (v: unknown, max: number): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
++
++/** A brief from a request body: every field checked and bounded, unknown fields dropped. */
++export function parseBrief(raw: unknown): ReportBrief {
++  const b = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
++  const audience = b.audience === "executive" || b.audience === "researcher" ? b.audience : "client";
++  const tone = b.tone === "formal" || b.tone === "concise" ? b.tone : "plain";
++  const keyQuestions = (Array.isArray(b.keyQuestions) ? b.keyQuestions : typeof b.keyQuestions === "string" ? b.keyQuestions.split(/\r?\n/) : []).map((q) => str(q, 300)).filter(Boolean).slice(0, 10);
++  const analysisIds = Array.isArray(b.analysisIds) ? b.analysisIds.filter(isUuid).slice(0, MAX_ANALYSES) : undefined;
++  const maxItems = typeof b.maxItems === "number" && Number.isFinite(b.maxItems) ? Math.max(1, Math.min(40, Math.round(b.maxItems))) : undefined;
++  return {
++    objective: str(b.objective, 1000), audience, tone, keyQuestions,
++    ...(analysisIds?.length ? { analysisIds } : {}), ...(maxItems ? { maxItems } : {}),
++    ...(b.includeTests === false ? { includeTests: false } : {}), ...(b.includeCrosstabs === false ? { includeCrosstabs: false } : {}),
++    ...(str(b.title, 120) ? { title: str(b.title, 120) } : {}), ...(str(b.client, 120) ? { client: str(b.client, 120) } : {}),
++  };
++}
+diff --git a/apps/studio/lib/analyticsBuilder.ts b/apps/studio/lib/analyticsBuilder.ts
+new file mode 100644
+index 0000000..157bdb4
+--- /dev/null
++++ b/apps/studio/lib/analyticsBuilder.ts
+@@ -0,0 +1,87 @@
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { aiConfigured, aiProviderName, collectUsage, completeJson, synthesizeSpeech } from "@rescript/ai";
++import {
++  failedResult, gateInterpretation, interpretationBrief, INTERPRETATION_INSTRUCTIONS,
++  type AnalysisDefinition, type AnalysisResult, type BuilderItem, type GatedInterpretation, type ReportBrief, type StoryDefinition,
++} from "@rescript/analytics";
++import type { AuthedUser } from "@/lib/guard";
++import { billingProjectFor, meteredAi, meterModel, meterProvider, usageToSpec } from "@/lib/metering";
++import { compute, type LoadedContext } from "@/lib/analytics";
++export { parseBrief } from "@/lib/analyticsBrief";
++
++/**
++ * SERVER SIDE OF THE REPORT BUILDER — reads the saved analyses and their
++ * computed results, asks the model (when there is one) for an interpretation
++ * that must pass the number gate, and, on request, narrates a story.
++ * Keys never leave this process; nothing here is reachable from a shared page.
++ */
++const MAX_ANALYSES = 60;
++
++export async function builderItems(db: SupabaseClient, surveyId: string, loaded: LoadedContext, ids?: readonly string[]): Promise<{ items: BuilderItem[]; truncated: boolean }> {
++  let q = db.from("analytics_analyses").select("id, name, definition, position").eq("survey_id", surveyId).is("deleted_at", null).order("position", { ascending: true, nullsFirst: false });
++  if (ids?.length) q = q.in("id", [...ids]);
++  const { data } = await q;
++  const rows = (data ?? []) as { id: string; name: string; definition: AnalysisDefinition }[];
++  const items: BuilderItem[] = [];
++  for (const a of rows.slice(0, MAX_ANALYSES)) {
++    const definition = { ...a.definition, id: a.id, name: a.name } as AnalysisDefinition;
++    /* one that cannot be computed is reported as such by the builder; it must not stop the others */
++    try { items.push({ id: a.id, name: a.name, definition, result: await compute(db, surveyId, loaded, definition) as AnalysisResult }); }
++    catch (e) { console.error(`[analytics] report builder: analysis ${a.id} failed:`, e); items.push({ id: a.id, name: a.name, definition, result: failedResult(a.name, a.definition.kind) }); }
++  }
++  return { items, truncated: rows.length > MAX_ANALYSES };
++}
++
++export type ModelStatus = "not_asked" | "no_model" | "gated" | "nothing";
++
++/** The model's reading of the results — only when asked for, only when a model is configured, and only what passes the gate. */
++export async function modelInterpretation(user: AuthedUser | null, surveyId: string, brief: ReportBrief, items: readonly BuilderItem[], opts: { ask: boolean; fake?: unknown }): Promise<{ interpretation: GatedInterpretation | null; status: ModelStatus; detail: string }> {
++  if (!opts.ask) return { interpretation: null, status: "not_asked", detail: "Interpretation was not requested." };
++  if (!aiConfigured()) return { interpretation: null, status: "no_model", detail: "No AI model is configured for this workspace, so no interpretation was written. Findings are unaffected." };
++  const usable = items.filter((i) => !i.result.error && i.result.base.n > 0).slice(0, 12);
++  if (!usable.length) return { interpretation: null, status: "nothing", detail: "There are no usable results to interpret." };
++  let raw: unknown = aiProviderName() === "fake" && opts.fake && typeof opts.fake === "object" ? opts.fake : null;
++  if (!raw) {
++    const billing = await billingProjectFor(user, surveyId, "analytics.edit");
++    if ("response" in billing) return { interpretation: null, status: "nothing", detail: "The workspace could not be charged for the model call, so no interpretation was written." };
++    const prompt = `${INTERPRETATION_INSTRUCTIONS}\n\n${interpretationBrief(brief, usable)}`;
++    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 1500, operation: "analytics_interpretation" }, () => completeJson("You interpret survey results for a research team. Answer with JSON only.", prompt, 1500, { timeoutMs: 45_000 })).catch(() => null);
++    raw = m && m.ok ? m.value : null;
++  }
++  if (!raw) return { interpretation: null, status: "nothing", detail: "The model gave nothing usable, so no interpretation was written." };
++  const g = gateInterpretation(usable, raw);
++  const kept = g.implications.length + g.recommendations.length;
++  return { interpretation: kept ? g : null, status: kept ? "gated" : "nothing", detail: `${kept} of ${g.offered} model sentences passed the number check${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `“${r.text.slice(0, 60)}” (${r.reason})`).join(" | ")}` : ""}.` };
++}
++
++export interface Narration { audio: Record<string, string>; narrated: number; failed: string[]; status: "ok" | "not_configured" | "partial" | "refused"; message: string }
++
++/**
++ * One audio clip per scene, through the existing TTS provider and meter. Not
++ * configured → no audio and an honest message (the story still exports, silent).
++ * A wallet that runs dry mid-way keeps the clips made so far and says so.
++ */
++export async function narrateStory(user: AuthedUser | null, surveyId: string, story: Pick<StoryDefinition, "scenes">, opts: { language?: string } = {}): Promise<Narration> {
++  const audio: Record<string, string> = {}; const failed: string[] = [];
++  const scenes = story.scenes.filter((s) => !s.hidden && s.narration.trim());
++  if (!aiConfigured()) return { audio, narrated: 0, failed, status: "not_configured", message: "No speech provider is configured (AI_API_URL / AI_API_KEY, optionally AI_TTS_MODEL), so the story was exported without narration." };
++  const billing = await billingProjectFor(user, surveyId, "analytics.export");
++  if ("response" in billing) return { audio, narrated: 0, failed, status: "refused", message: "The workspace could not be charged for narration, so the story was exported without it." };
++  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
++  let chars = 0;
++  for (const s of scenes) {
++    const text = s.narration.slice(0, 1200);
++    if (chars + text.length > 8000) { failed.push(s.id); continue; }
++    chars += text.length;
++    const hold = await billing.meter.reserve(billing.ctx, { eventType: "TEXT_TO_SPEECH_CHARACTER", provider: meterProvider(providerName, "tts"), service: "tts", model: meterModel(providerName, (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", "tts"), quantity: text.length, metadata: { operation: "story_narration" } });
++    if (!hold.ok) { failed.push(...scenes.slice(scenes.indexOf(s)).map((x) => x.id).filter((id) => !failed.includes(id))); return { audio, narrated: Object.keys(audio).length, failed, status: Object.keys(audio).length ? "partial" : "refused", message: `Narration stopped: ${hold.message}` }; }
++    try {
++      const { value: out, usage } = await collectUsage(() => synthesizeSpeech(text, { language: opts.language ?? "en", format: "mp3" }));
++      if (!out || !usage.length) { await billing.meter.release(hold).catch(() => {}); failed.push(s.id); continue; }
++      await billing.meter.settle(hold, { ...usageToSpec(usage, { kind: "tts" }), metadata: { operation: "story_narration" } }).catch((e: unknown) => console.warn("[rescript:billing] story narration settle failed", (e as Error)?.message));
++      audio[s.id] = `data:${out.mimeType};base64,${Buffer.from(out.bytes).toString("base64")}`;
++    } catch (e) { await billing.meter.release(hold).catch(() => {}); console.warn("[analytics] narration failed for a scene:", (e as Error)?.message); failed.push(s.id); }
++  }
++  const narrated = Object.keys(audio).length;
++  return { audio, narrated, failed, status: !narrated ? "not_configured" : failed.length ? "partial" : "ok", message: !narrated ? "The speech provider returned no audio, so the story was exported without narration." : failed.length ? `${narrated} of ${scenes.length} scenes were narrated; the others are silent.` : `All ${narrated} scenes narrated.` };
++}
+diff --git a/packages/analytics/src/blockRefs.ts b/packages/analytics/src/blockRefs.ts
+index 9ab208b..fa97abc 100644
+--- a/packages/analytics/src/blockRefs.ts
++++ b/packages/analytics/src/blockRefs.ts
+@@ -34,10 +34,12 @@ const own = (b: AnyBlock): string[] => {
+ export function explicitAnalysisIds(block: AnyBlock): string[] { return own(block); }
+ 
+ /** Every analysis a report's data blocks read (what must be computed / snapshotted). */
+-export function reportAnalysisIds<R extends { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] }>(report: R): string[] {
++export function reportAnalysisIds<R extends { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[]; story?: { scenes?: readonly { analysisId?: string }[] } }>(report: R): string[] {
+   const ids = new Set<string>();
+   for (const b of report.blocks ?? []) for (const id of own(b)) ids.add(id);
+   for (const w of report.widgets ?? []) if (w?.analysisId) ids.add(w.analysisId);
++  /* an animated story reads analyses too — they are computed, snapshotted and checked with the rest */
++  for (const sc of report.story?.scenes ?? []) if (typeof sc?.analysisId === "string" && sc.analysisId) ids.add(sc.analysisId);
+   return [...ids];
+ }
+ 
+@@ -71,7 +73,7 @@ export function normalizeBlocks<T extends AnyBlock>(blocks: readonly T[]): T[] {
+ export interface SnapshotCheck { responses: number; missing: string[]; failed: string[]; empty: boolean; ok: boolean; problems: string[] }
+ 
+ export function checkSnapshot(
+-  definition: { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[] },
++  definition: { blocks?: readonly AnyBlock[]; widgets?: readonly { analysisId?: string }[]; story?: { scenes?: readonly { analysisId?: string }[] } },
+   snapshot: Record<string, { name?: string; base?: { total?: number; n?: number }; error?: unknown } | undefined>,
+ ): SnapshotCheck {
+   const referenced = reportAnalysisIds(definition);
+diff --git a/packages/analytics/src/index.ts b/packages/analytics/src/index.ts
+index b7f0b21..abd078b 100644
+--- a/packages/analytics/src/index.ts
++++ b/packages/analytics/src/index.ts
+@@ -28,3 +28,5 @@ export * from "./planWorkspace.js";
+ export * from "./blockRefs.js";
+ export * from "./questionChart.js";
+ export * from "./planCheck.js";
++export * from "./reportBuilder.js";
++export * from "./storyHtml.js";
+diff --git a/packages/analytics/src/reportBuilder.test.ts b/packages/analytics/src/reportBuilder.test.ts
+new file mode 100644
+index 0000000..2bcd97c
+--- /dev/null
++++ b/packages/analytics/src/reportBuilder.test.ts
+@@ -0,0 +1,197 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset, variableMetadata } from "./dataset.js";
++import { runAnalysis } from "./analyses/index.js";
++import { isSignificant, draftReport, usability, rankItems, regenerateScene, gateInterpretation, resultNumbers, sampleSentence, testLine, type BuilderItem, type ReportBrief } from "./reportBuilder.js";
++import { reportAnalysisIds, checkSnapshot } from "./blockRefs.js";
++import type { AnalysisDefinition } from "./types.js";
++import { def, synthRows } from "./analyses/fixture.js";
++
++const spec = { environment: "LIVE" as const, dataset: "all" as const };
++const ds = buildDataset(def, synthRows(), { spec });
++const vars = variableMetadata(def);
++let n = 0;
++const item = (name: string, kind: AnalysisDefinition["kind"], variables: string[], extra: Partial<AnalysisDefinition> = {}): BuilderItem => {
++  const definition = { name, kind, dataset: spec, variables, ...extra } as AnalysisDefinition;
++  return { id: `a${++n}`, name, definition, result: runAnalysis(definition, ds) };
++};
++const sat = item("Overall satisfaction", "descriptive", ["SAT"]);
++const consider = item("Brands considered", "descriptive", ["CONSIDER"]);
++const region = item("Region", "descriptive", ["REGION"]);
++const satGender = item("Satisfaction by gender", "crosstab", [], { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col" });
++const tGender = item("Satisfaction gap by gender", "test", ["SAT", "GENDER"], { options: { test: "auto" } });
++const all = [sat, consider, region, satGender, tGender];
++const brief = (b: Partial<ReportBrief> = {}): ReportBrief => ({ objective: "Understand satisfaction and which brands people consider", audience: "client", tone: "plain", keyQuestions: [], ...b });
++const blocksOf = (d: ReturnType<typeof draftReport>, type: string) => d.report.blocks.filter((b) => b.type === type);
++
++test("every sentence and number in the draft comes from the results", () => {
++  const d = draftReport(brief({ keyQuestions: ["How satisfied are customers?"] }), all, vars);
++  const numbers = resultNumbers(all);
++  const exec = blocksOf(d, "executive_summary")[0] as { text?: string };
++  for (const m of (exec.text ?? "").match(/-?\d+(?:\.\d+)?/g) ?? []) assert.ok(numbers.has(m.replace(/(\.\d*?)0+$/, "$1")) || Number(m) <= 10, `${m} is in no result`);
++  for (const c of blocksOf(d, "chart") as { caption?: string }[]) for (const m of (c.caption ?? "").match(/-?\d+(?:\.\d+)?/g) ?? []) assert.ok(numbers.has(m) || Number(m) <= 10, `caption number ${m} is in no result`);
++  assert.match(exec.text ?? "", /400 respondents/);
++});
++
++test("the key question lifts the analysis that answers it, and the question nothing answers is reported", () => {
++  const d = draftReport(brief({ keyQuestions: ["How satisfied are customers overall?", "What is the average delivery time?"] }), all, vars);
++  const keyed = d.included.filter((i) => i.role === "key").map((i) => i.name).sort();
++  assert.deepEqual(keyed, ["Overall satisfaction", "Satisfaction by gender", "Satisfaction gap by gender"], "everything that reads satisfaction answers the question");
++  assert.ok(d.included.slice(0, 3).every((i) => i.role === "key"), "and they come first");
++  assert.ok(!d.included.find((i) => i.name === "Region")!.answers.length);
++  assert.deepEqual(d.uncovered, ["What is the average delivery time?"]);
++  assert.ok(d.notes.some((x) => /No saved analysis answers/.test(x) && /delivery time/.test(x)));
++});
++
++test("charts follow the question: multiple-choice is horizontal bars with its denominator, never a pie", () => {
++  const d = draftReport(brief(), all, vars);
++  const c = d.included.find((i) => i.name === "Brands considered")!;
++  assert.equal(c.chart, "bar_horizontal");
++  assert.match(c.denominator, /several answers were allowed/);
++  const chart = (blocksOf(d, "chart") as { title?: string; caption?: string; chart: { type: string } }[]).find((b) => b.title === "Brands considered")!;
++  assert.match(chart.caption ?? "", /more than 100%/);
++});
++
++test("analyses that cannot be shown are left out with the reason — failed, empty, repeated", () => {
++  const failed: BuilderItem = { id: "f1", name: "Broken", definition: { name: "Broken", kind: "descriptive", dataset: spec, variables: ["NOPE"] } as AnalysisDefinition, result: { ...sat.result, name: "Broken", error: { code: "not_computable", message: "NOPE is not in this survey's data." } } };
++  const empty: BuilderItem = { id: "e1", name: "Nobody", definition: { ...region.definition, name: "Nobody", variables: ["COUNTRY"] }, result: { ...region.result, base: { total: 400, filtered: 0, n: 0, weightedN: 0, label: "x" } } };
++  const dupe: BuilderItem = { ...sat, id: "d1", name: "Satisfaction again", definition: { ...sat.definition, name: "Satisfaction again" } };
++  const { usable, skipped } = usability([sat, failed, empty, dupe]);
++  assert.deepEqual(usable.map((u) => u.id), [sat.id]);
++  assert.equal(skipped.length, 3);
++  assert.match(skipped.find((s) => s.id === "f1")!.reason, /NOPE/);
++  assert.match(skipped.find((s) => s.id === "e1")!.reason, /No respondent/);
++  assert.match(skipped.find((s) => s.id === "d1")!.reason, /exactly what “Overall satisfaction”/);
++});
++
++test("scope: tests and crosstabs can be left out, an analysis list restricts, the audience caps the length", () => {
++  const noTests = draftReport(brief({ includeTests: false }), all, vars);
++  assert.ok(!noTests.included.some((i) => i.name === "Satisfaction gap by gender"));
++  assert.ok(noTests.skipped.some((s) => /Significance tests were left out/.test(s.reason)));
++  const only = draftReport(brief({ analysisIds: [sat.id, region.id] }), all, vars);
++  assert.deepEqual(only.included.map((i) => i.id).sort(), [sat.id, region.id].sort());
++  const capped = draftReport(brief({ maxItems: 2 }), all, vars);
++  assert.equal(capped.included.length, 2);
++  assert.equal(capped.skipped.filter((s) => /Left out to keep the report to 2/.test(s.reason)).length, 3);
++});
++
++test("the report only points at analyses that exist, and its story reads the same ones", () => {
++  const d = draftReport(brief({ keyQuestions: ["How satisfied?"] }), all, vars, { story: true });
++  const ids = new Set(all.map((a) => a.id));
++  for (const id of reportAnalysisIds(d.report)) assert.ok(ids.has(id), `${id} is not a saved analysis`);
++  assert.ok(d.story && d.report.story === d.story);
++  for (const s of d.story!.scenes) if (s.analysisId) assert.ok(ids.has(s.analysisId));
++  /* a snapshot missing an analysis the story reads is caught by the publish check */
++  const only = reportAnalysisIds({ story: { scenes: [{ analysisId: "x1" }] } });
++  assert.deepEqual(only, ["x1"]);
++  assert.equal(checkSnapshot({ story: { scenes: [{ analysisId: "x1" }] } }, {}).ok, false);
++});
++
++test("the story is ordered title → objective → sample → findings → summary, and findings are never mixed with interpretation", () => {
++  const d = draftReport(brief({ keyQuestions: ["How satisfied?"] }), all, vars, { story: true });
++  const types = d.story!.scenes.map((s) => s.type);
++  assert.equal(types[0], "title"); assert.equal(types[1], "objective"); assert.equal(types[2], "sample"); assert.equal(types[types.length - 1], "summary");
++  assert.ok(types.includes("finding") && types.includes("comparison") && types.includes("difference"));
++  assert.ok(!types.includes("interpretation"), "no model, no interpretation — nothing is invented to fill the slot");
++  for (const s of d.story!.scenes) assert.ok(s.nature !== "interpretation" || s.source === "model");
++  const diff = d.story!.scenes.find((s) => s.type === "difference")!;
++  assert.match(diff.text, /Welch|χ²|p < \.001|p = /);
++});
++
++test("interpretation from a model passes the number gate or is dropped with the reason", () => {
++  const g = gateInterpretation(all, { implications: ["Satisfaction may differ by gender (Cohen's d = -1.01), which suggests gender-specific follow-up.", "Satisfaction rose by 37% last quarter.", "Brand Alpha may be the strongest in consideration, at 77.8%."], recommendations: ["Follow up with the 400 respondents on the drivers of the gap."] });
++  assert.equal(g.implications.length, 2);
++  assert.equal(g.rejected.length, 1);
++  assert.match(g.rejected[0].reason, /37%.*not in the run/);
++  assert.equal(g.recommendations.length, 1);
++  const d = draftReport(brief(), all, vars, { story: true, interpretation: g });
++  const interp = d.story!.scenes.filter((s) => s.type === "interpretation");
++  assert.ok(interp.length >= 2 && interp.every((s) => s.nature === "interpretation" && s.source === "model"));
++  assert.ok(d.report.blocks.some((b) => b.type === "section" && (b as { title: string }).title === "Interpretation"));
++  assert.ok(!JSON.stringify(d.report.blocks).includes("37%"));
++});
++
++test("regenerating a scene rebuilds it from the analysis as it is now, and keeps a still-valid chart choice", () => {
++  const d = draftReport(brief({ keyQuestions: ["How satisfied?"] }), all, vars, { story: true });
++  const sc = d.story!.scenes.find((s) => s.analysisId === sat.id)!;
++  const edited = { ...d.story!, scenes: d.story!.scenes.map((s) => (s.id === sc.id ? { ...s, text: "Somebody typed this", chart: { type: "bar_horizontal" as const } } : s)) };
++  const r = regenerateScene(edited, sc.id, all, vars);
++  assert.ok("scene" in r);
++  if ("scene" in r) { assert.equal(r.scene.id, sc.id); assert.notEqual(r.scene.text, "Somebody typed this"); assert.match(r.scene.text, /Overall satisfaction/); assert.equal(r.scene.chart?.type, "bar_horizontal"); }
++  const gone = regenerateScene(edited, sc.id, all.filter((a) => a.id !== sat.id), vars);
++  assert.ok("error" in gone && /deleted/.test(gone.error));
++  assert.ok("error" in regenerateScene(edited, "nope", all, vars));
++});
++
++test("a small base is flagged, not hidden", () => {
++  const small: BuilderItem = { ...sat, id: "s1", name: "Tiny", result: { ...sat.result, base: { ...sat.result.base, n: 12 } } };
++  const d = draftReport(brief(), [small], vars);
++  assert.ok(d.included[0].notes.some((x) => /Only 12 respondents/.test(x)));
++  assert.ok(JSON.stringify(d.report.blocks).includes("only 12 respondents"));
++});
++
++test("with nothing usable the report says so instead of showing zeros", () => {
++  const d = draftReport(brief({ keyQuestions: ["Anything?"] }), [], vars);
++  assert.equal(d.included.length, 0);
++  assert.deepEqual(d.report.blocks.map((b) => b.type), ["cover"]);
++  assert.ok(d.notes.some((x) => /None of the saved analyses/.test(x)));
++  assert.deepEqual(d.uncovered, ["Anything?"]);
++});
++
++test("sample sentence and test line are built from the printed numbers", () => {
++  assert.equal(sampleSentence([sat]), "400 respondents in the selected data; 400 answered the questions shown.");
++  assert.match(testLine(tGender.result) ?? "", /p < \.001/);
++  assert.equal(rankItems([], vars, brief()).ranked.length, 0);
++});
++
++test("the story is told findings → comparisons → differences, but an audience's limit keeps the best-ranked analyses, and the summary only cites scenes that are in it", () => {
++  const many = [sat, consider, region, satGender, tGender, item("Gender", "descriptive", ["GENDER"]), item("Age", "descriptive", ["AGE"]), item("Country", "descriptive", ["COUNTRY"]), item("NPS", "descriptive", ["NPS"])];
++  const d = draftReport(brief({ audience: "executive", keyQuestions: ["How satisfied are customers?"] }), many, vars, { story: true });
++  const sc = d.story!.scenes;
++  assert.ok(sc.length <= 9, `an executive story is short: ${sc.length}`);
++  const kinds = sc.filter((s) => s.analysisId).map((s) => s.type);
++  const order = { finding: 0, comparison: 1, difference: 2 } as Record<string, number>;
++  assert.deepEqual(kinds, [...kinds].sort((a, b) => order[a] - order[b]), "told in story order");
++  const names = sc.filter((s) => s.analysisId).map((s) => s.title);
++  for (const keyed of ["Overall satisfaction", "Satisfaction by gender", "Satisfaction gap by gender"]) assert.ok(names.includes(keyed), `${keyed} answers the key question, so it survives the limit`);
++  const summary = sc[sc.length - 1];
++  assert.equal(summary.type, "summary");
++  for (const m of many) if (!names.includes(m.name) && m.result.insights[0]) assert.ok(!summary.text.includes(m.result.insights[0]), `“${m.name}” is not in the story, so the summary must not cite it`);
++  assert.ok(summary.text.includes(sat.result.insights[0]), "and it does cite one that is");
++});
++
++test("key-question matching: variable names and shared content words match; a generic word alone does not", () => {
++  const match = (q: string) => rankItems(all, vars, brief({ keyQuestions: [q] })).ranked.filter((r) => r.answers.length).map((r) => r.item.name).sort();
++  assert.deepEqual(match("How satisfied are customers?"), ["Overall satisfaction", "Satisfaction by gender", "Satisfaction gap by gender"]);
++  assert.deepEqual(match("Which brands do people consider?"), ["Brands considered"]);
++  assert.deepEqual(match("What does REGION look like?"), ["Region"], "a variable named in the question matches by name");
++  assert.deepEqual(match("How do customers feel about us?"), [], "'customers' alone is not about anything saved");
++  assert.deepEqual(match("How do customers rate our brand awareness and loyalty?"), [], "one shared word out of five content words is not enough");
++  assert.deepEqual(match("What is the average delivery time?"), []);
++});
++
++test("a keyed analysis outranks a significant one that nothing asked for, and the scope switches really exclude", () => {
++  const d = draftReport(brief({ keyQuestions: ["Which brands do people consider?"] }), all, vars);
++  const order = d.included.map((i) => i.name);
++  assert.ok(order.indexOf("Brands considered") < order.indexOf("Satisfaction by gender"), `the question's own analysis comes first: ${order.join(" > ")}`);
++  const noX = draftReport(brief({ includeCrosstabs: false }), all, vars);
++  assert.ok(!noX.included.some((i) => i.name === "Satisfaction by gender"));
++  assert.ok(noX.skipped.some((s) => /Cross-tabulations were left out/.test(s.reason)));
++  assert.ok(noX.included.some((i) => i.name === "Satisfaction gap by gender"), "tests stay when only cross-tabs are excluded");
++});
++
++test("the story's summary cites only analyses that are in the story", () => {
++  const sig = item("Satisfaction by country", "crosstab", [], { rows: ["SAT"], columns: ["COUNTRY"], measure: "pct_col" });
++  const pool = [consider, satGender, tGender, sig, sat];
++  /* three interpretation scenes leave room for only two analyses in an executive story */
++  const interp = gateInterpretation(pool, { implications: ["Brand consideration may be uneven.", "Satisfaction may vary by country.", "Gender may matter for satisfaction."] });
++  assert.equal(interp.implications.length, 3);
++  const d = draftReport(brief({ audience: "executive", keyQuestions: ["Which brands do people consider?"] }), pool, vars, { story: true, interpretation: interp });
++  const inStory = new Set(d.story!.scenes.filter((s) => s.analysisId).map((s) => s.title));
++  const summary = d.story!.scenes[d.story!.scenes.length - 1].text;
++  assert.equal(inStory.size, 2, `room for two: ${[...inStory]}`);
++  assert.ok(inStory.has("Brands considered"), "the key question's analysis is one of them");
++  const left = pool.filter((m) => !inStory.has(m.name) && (isSignificant(m.result) || false));
++  assert.ok(left.length >= 1, "a significant analysis was left out of the story");
++  for (const m of left) assert.ok(!summary.includes(m.result.insights[0]), `${m.name} is not in the story, so the summary must not cite it`);
++});
+diff --git a/packages/analytics/src/reportBuilder.ts b/packages/analytics/src/reportBuilder.ts
+new file mode 100644
+index 0000000..39404a2
+--- /dev/null
++++ b/packages/analytics/src/reportBuilder.ts
+@@ -0,0 +1,363 @@
++import type { AnalysisDefinition, AnalysisResult, ChartType, ReportBlock, ReportDefinition, StoryDefinition, StoryScene } from "./types.js";
++import type { VariableMeta } from "./dataset.js";
++import type { Audience } from "./chartPurpose.js";
++import { adviseChart, checkChartChoice, type ChartAdvice } from "./questionChart.js";
++import { analysisSignature } from "./planCheck.js";
++import { sentenceProblem } from "./narrative.js";
++import { mentionsVariable } from "./analyses/index.js";
++
++/**
++ * THE INTELLIGENT REPORT BUILDER (Data Analytics audit, Oct 2026).
++ *
++ * A report is drafted from what the analytics module has ALREADY computed:
++ * the saved analyses and their results. Nothing here computes a statistic and
++ * nothing invents one — every sentence is an insight the analysis produced, a
++ * base it printed, or a test line built from its own numbers; a sentence a
++ * model offers (the optional interpretation) must pass the same number gate
++ * the Research Engine uses, or it is dropped with the reason.
++ *
++ * The researcher states the objective, audience, tone, scope and the key
++ * questions. The builder then:
++ *   1. checks each analysis can be shown at all (computed, has respondents,
++ *      not a repeat of another) and says why one is left out;
++ *   2. ranks the rest against the key questions and the evidence in them;
++ *   3. chooses each chart from the question's structure (adviseChart) and
++ *      keeps the denominator beside it;
++ *   4. lays out the report and, on request, the animated story — and lists
++ *      the key questions no saved analysis answers, instead of papering over
++ *      the gap.
++ */
++export type ReportTone = "plain" | "formal" | "concise";
++export interface ReportBrief {
++  objective: string;
++  audience: Audience;
++  tone: ReportTone;
++  /** key questions the report must answer, in the researcher's words */
++  keyQuestions: string[];
++  /** restrict to these saved analyses; absent = every usable one */
++  analysisIds?: string[];
++  /** at most this many analyses (defaults by audience) */
++  maxItems?: number;
++  includeTests?: boolean;
++  includeCrosstabs?: boolean;
++  title?: string;
++  client?: string;
++}
++
++export interface BuilderItem { id: string; name: string; definition: AnalysisDefinition; result: AnalysisResult }
++export type ItemRole = "key" | "finding" | "comparison" | "difference";
++export interface IncludedItem {
++  id: string; name: string; role: ItemRole; chart: ChartType; chartReason: string; denominator: string; scale: string;
++  /** the key questions this analysis answers */
++  answers: string[]; significant: boolean; notes: string[];
++}
++export interface SkippedItem { id: string; name: string; reason: string }
++export interface BuilderDraft {
++  report: ReportDefinition;
++  story?: StoryDefinition;
++  included: IncludedItem[];
++  skipped: SkippedItem[];
++  /** key questions that no saved analysis speaks to */
++  uncovered: string[];
++  notes: string[];
++}
++
++const ALPHA = 0.05;
++const SMALL = 30;
++const DEFAULT_MAX: Record<Audience, number> = { executive: 6, client: 10, researcher: 16 };
++
++/* ------------------------------------------------------------ small helpers */
++
++let seq = 0;
++const bid = (p: string) => `${p}_${(++seq).toString(36)}${Date.now().toString(36).slice(-4)}`;
++const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
++const analysesOf = (n: number) => `${n} ${n === 1 ? "analysis" : "analyses"}`;
++const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
++const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
++
++export const isSignificant = (r: AnalysisResult): boolean => r.tests.some((t) => t.p != null && t.p < ALPHA);
++
++/** the test line of a result, built from its own numbers: "Chi-square: χ² = 12.4, p = .002, Cramér's V = 0.21" */
++export function testLine(r: AnalysisResult): string | undefined {
++  const t = r.tests.find((x) => x.p != null) ?? r.tests[0];
++  if (!t) return undefined;
++  const parts = [t.statistic != null && Number.isFinite(t.statistic) ? `statistic = ${Math.round(t.statistic * 100) / 100}` : "", fmtP(t.p), t.effectSize && t.effectSize.value != null ? `${t.effectSize.name} = ${Math.round(t.effectSize.value * 100) / 100}` : ""].filter(Boolean);
++  return `${t.test}: ${parts.join(", ")}`;
++}
++
++const STOP = new Set(["what", "which", "does", "have", "with", "that", "this", "from", "about", "their", "they", "them", "your", "how", "why", "who", "when", "are", "the", "and", "for", "our", "do", "is", "of", "to", "in", "on", "by", "a", "an", "we", "us", "more", "most", "between", "among", "across", "than", "like", "would", "should", "can", "will", "any", "all", "per", "each", "over", "into", "differ", "differs", "difference", "differences", "vary", "varies"]);
++const tokens = (s: string): string[] => [...new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
++
++/** the words an analysis is about: its name, and the labels of the variables it reads */
++function aboutWords(item: BuilderItem, byName: Map<string, VariableMeta>): { words: Set<string>; names: string[] } {
++  const d = item.definition;
++  const names = [...(d.variables ?? []), ...(d.rows ?? []), ...(d.columns ?? [])].filter(Boolean);
++  const text = [item.name, ...names.map((n) => byName.get(n)?.label ?? ""), ...names.map((n) => byName.get(n)?.itemLabel ?? "")].join(" ");
++  return { words: new Set(tokens(text)), names };
++}
++
++/** does this key question speak to this analysis? Named variable, or enough shared words. */
++function answers(question: string, about: ReturnType<typeof aboutWords>): boolean {
++  if (about.names.some((n) => mentionsVariable(question, n))) return true;
++  const q = tokens(question);
++  if (!q.length) return false;
++  const shared = q.filter((w) => about.words.has(w) || [...about.words].some((a) => a.length > 4 && w.length > 4 && (a.startsWith(w.slice(0, 5)) || w.startsWith(a.slice(0, 5)))));
++  return shared.length >= Math.max(1, Math.ceil(q.length / 2));
++}
++
++/* ------------------------------------------------------------ 1–2: what can be shown, in what order */
++
++export function usability(items: readonly BuilderItem[]): { usable: BuilderItem[]; skipped: SkippedItem[] } {
++  const skipped: SkippedItem[] = []; const usable: BuilderItem[] = [];
++  const seen = new Map<string, string>();
++  for (const it of items) {
++    const r = it.result;
++    if (r.error) { skipped.push({ id: it.id, name: it.name, reason: r.error.message }); continue; }
++    if ((r.base?.n ?? 0) === 0) { skipped.push({ id: it.id, name: it.name, reason: "No respondent is in this analysis' selected data, so there is nothing to report." }); continue; }
++    const empty = !r.tables.length && !(r.chart.series?.length) && !r.chart.matrix && !r.chart.points?.length && !r.chart.kpis?.length && !r.chart.words?.length && !r.insights.length;
++    if (empty) { skipped.push({ id: it.id, name: it.name, reason: "It produced no table, chart or finding." }); continue; }
++    const sig = analysisSignature(it.definition);
++    const dup = seen.get(sig);
++    if (dup) { skipped.push({ id: it.id, name: it.name, reason: `It computes exactly what “${dup}” already does.` }); continue; }
++    seen.set(sig, it.name); usable.push(it);
++  }
++  return { usable, skipped };
++}
++
++export interface Ranked { item: BuilderItem; role: ItemRole; score: number; answers: string[]; significant: boolean; advice: ChartAdvice }
++
++export function rankItems(items: readonly BuilderItem[], variables: readonly VariableMeta[], brief: ReportBrief): { ranked: Ranked[]; skipped: SkippedItem[]; uncovered: string[] } {
++  const byName = new Map(variables.map((v) => [v.name, v]));
++  const wanted = brief.analysisIds?.length ? new Set(brief.analysisIds) : null;
++  const pool = wanted ? items.filter((i) => wanted.has(i.id)) : items;
++  const { usable, skipped } = usability(pool);
++  const questions = brief.keyQuestions.map((q) => q.trim()).filter(Boolean);
++  const covered = new Set<string>();
++  const ranked: Ranked[] = [];
++  for (const it of usable) {
++    const kind = it.definition.kind;
++    const significant = isSignificant(it.result);
++    if (kind === "test" && brief.includeTests === false) { skipped.push({ id: it.id, name: it.name, reason: "Significance tests were left out of the scope." }); continue; }
++    if (kind === "crosstab" && brief.includeCrosstabs === false) { skipped.push({ id: it.id, name: it.name, reason: "Cross-tabulations were left out of the scope." }); continue; }
++    const about = aboutWords(it, byName);
++    const hit = questions.filter((q) => answers(q, about));
++    hit.forEach((q) => covered.add(q));
++    const role: ItemRole = hit.length ? "key" : kind === "test" || (kind !== "crosstab" && significant) ? "difference" : kind === "crosstab" ? "comparison" : "finding";
++    const n = it.result.base.n;
++    const score = (hit.length ? 50 + 5 * hit.length : 0) + (significant ? 20 : 0) + (kind === "crosstab" ? 4 : 0) + (it.result.insights.length ? 6 : 0) - (n < SMALL ? 10 : 0) - Math.min(6, it.result.warnings.length * 2);
++    ranked.push({ item: it, role, score, answers: hit, significant, advice: adviseChart(it.definition, it.result, variables, { audience: brief.audience }) });
++  }
++  ranked.sort((a, b) => b.score - a.score);
++  const max = brief.maxItems && brief.maxItems > 0 ? brief.maxItems : DEFAULT_MAX[brief.audience];
++  const keep = ranked.slice(0, max);
++  for (const r of ranked.slice(max)) skipped.push({ id: r.item.id, name: r.item.name, reason: `Left out to keep the report to ${max} analyses for a${brief.audience === "executive" ? "n" : ""} ${brief.audience} audience; raise the limit to include it.` });
++  /* a key question counts as covered by the analyses that made the cut, not by those dropped */
++  const kept = new Set(keep.flatMap((k) => k.answers));
++  const uncovered = questions.filter((q) => !kept.has(q));
++  return { ranked: keep, skipped, uncovered };
++}
++
++/* ------------------------------------------------------------ sentences, all from the results */
++
++/** the sample, from the bases the analyses printed */
++export function sampleSentence(items: readonly BuilderItem[]): string {
++  const ns = items.map((i) => i.result.base.n).filter((n) => n > 0);
++  const total = items.reduce((m, i) => Math.max(m, i.result.base.total ?? 0), 0);
++  if (!ns.length) return "No respondents are in the data selected for these analyses.";
++  const lo = Math.min(...ns), hi = Math.max(...ns);
++  const who = plural(total || hi, "respondent");
++  return lo === hi ? `${who} in the selected data; ${hi} answered the questions shown.` : `${who} in the selected data; between ${lo} and ${hi} answered each question shown.`;
++}
++
++const headline = (r: AnalysisResult): string => (r.insights[0] ?? "").trim() || `${r.name}: ${plural(r.base.n, "respondent")}.`;
++
++function captionFor(r: Ranked, brief: ReportBrief): string {
++  const lines = [headline(r.item.result)];
++  if (brief.tone !== "concise" && r.item.result.insights[1]) lines.push(r.item.result.insights[1].trim());
++  if (brief.audience === "researcher") { const t = testLine(r.item.result); if (t) lines.push(t + "."); }
++  lines.push(r.advice.denominator);
++  return lines.join(" ");
++}
++
++/* ------------------------------------------------------------ the report */
++
++const HEAD: Record<ReportTone, { key: string; comparison: string; difference: string }> = {
++  plain: { key: "What you asked", comparison: "How groups compare", difference: "Where answers differ" },
++  formal: { key: "Findings on the key questions", comparison: "Comparisons between groups", difference: "Statistically significant differences" },
++  concise: { key: "Key findings", comparison: "Group comparisons", difference: "Significant differences" },
++};
++
++export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], variables: readonly VariableMeta[], opts: { story?: boolean; interpretation?: GatedInterpretation | null; now?: Date } = {}): BuilderDraft {
++  const { ranked, skipped, uncovered } = rankItems(items, variables, brief);
++  const notes: string[] = [];
++  const title = brief.title?.trim() || clip(brief.objective.trim() || "Survey findings", 90);
++  const blocks: ReportBlock[] = [];
++  blocks.push({ id: bid("cover"), type: "cover", title, subtitle: `${analysesOf(ranked.length)}${brief.client ? ` · prepared for ${brief.client}` : ""}`, date: (opts.now ?? new Date()).toISOString().slice(0, 10) });
++  if (!ranked.length) {
++    notes.push("None of the saved analyses could be shown, so the report has only its cover. Create or repair analyses first.");
++    const report: ReportDefinition = { title, mode: "live", blocks };
++    return { report, included: [], skipped, uncovered: brief.keyQuestions.filter(Boolean), notes };
++  }
++  const shown = ranked.map((r) => r.item);
++  const lead = ranked.filter((r) => r.role === "key" || r.significant).slice(0, 6);
++  const summaryText = [sampleSentence(shown), ...lead.map((r) => headline(r.item.result))].join(" ");
++  blocks.push({ id: bid("exec"), type: "executive_summary", title: "Executive summary", analysisIds: lead.map((r) => r.item.id), text: summaryText });
++  if (brief.objective.trim()) blocks.push({ id: bid("obj"), type: "text", title: "Objective", markdown: [brief.objective.trim(), ...(brief.keyQuestions.filter(Boolean).length ? ["", "**Key questions**", ...brief.keyQuestions.filter(Boolean).map((q) => `- ${q}`)] : [])].join("\n") });
++  blocks.push({ id: bid("samp"), type: "text", title: "Who answered", markdown: sampleSentence(shown) });
++  const H = HEAD[brief.tone];
++  const section = (heading: string, group: Ranked[]) => {
++    if (!group.length) return;
++    blocks.push({ id: bid("sec"), type: "section", title: heading });
++    for (const r of group) blocks.push({ id: bid("ch"), type: "chart", title: r.item.name, analysisId: r.item.id, chart: { type: r.advice.type, options: { title: r.item.name, dataLabels: true } }, caption: captionFor(r, brief) });
++  };
++  section(H.key, ranked.filter((r) => r.role === "key"));
++  section(H.comparison, ranked.filter((r) => r.role === "comparison" || r.role === "finding"));
++  section(H.difference, ranked.filter((r) => r.role === "difference"));
++  if (opts.interpretation && (opts.interpretation.implications.length || opts.interpretation.recommendations.length)) {
++    blocks.push({ id: bid("sec"), type: "section", title: "Interpretation", subtitle: "What the findings may mean — these are readings of the results above, not results themselves" });
++    const md = [...opts.interpretation.implications.map((s) => `- ${s}`), ...(opts.interpretation.recommendations.length ? ["", "**Suggested next steps**", ...opts.interpretation.recommendations.map((s) => `- ${s}`)] : [])].join("\n");
++    blocks.push({ id: bid("interp"), type: "text", markdown: md });
++  }
++  blocks.push({ id: bid("meth"), type: "methodology", title: "Methodology", includeStandardNotes: true, items: [{ label: "Analyses shown", value: `${ranked.length}, from the saved analyses of this survey` }, { label: "Respondents", value: sampleSentence(shown) }, { label: "Significance", value: `α = ${ALPHA}` }] });
++  const caveats = [...new Set([
++    ...ranked.filter((r) => r.item.result.base.n < SMALL).map((r) => `${r.item.name}: only ${r.item.result.base.n} respondents — read as indicative.`),
++    ...ranked.flatMap((r) => r.item.result.warnings.map((w) => `${r.item.name}: ${w}`)),
++  ])].slice(0, 12);
++  if (caveats.length) blocks.push({ id: bid("cav"), type: "text", title: "Caveats", markdown: caveats.map((c) => `- ${c}`).join("\n") });
++  if (uncovered.length) notes.push(`No saved analysis answers: ${uncovered.map((q) => `“${clip(q, 70)}”`).join("; ")}. Add an analysis for ${uncovered.length === 1 ? "it" : "them"} and build again — the report does not guess.`);
++  if (skipped.length) notes.push(`${analysesOf(skipped.length)} left out — see the reasons.`);
++
++  const included: IncludedItem[] = ranked.map((r) => ({
++    id: r.item.id, name: r.item.name, role: r.role, chart: r.advice.type, chartReason: r.advice.reason, denominator: r.advice.denominator, scale: r.advice.scale, answers: r.answers, significant: r.significant,
++    notes: [...r.advice.notes],
++  }));
++  const report: ReportDefinition = { title, subtitle: `Built from ${analysesOf(ranked.length)}`, mode: "live", blocks };
++  const story = opts.story ? buildStory(brief, ranked, { interpretation: opts.interpretation ?? null, now: opts.now }) : undefined;
++  if (story) report.story = story;
++  return { report, ...(story ? { story } : {}), included, skipped, uncovered, notes };
++}
++
++/* ------------------------------------------------------------ the story */
++
++/** seconds on screen from the words read: 140 words a minute, never under 4s or over 14s */
++export const sceneDuration = (text: string, extraMs = 0): number => Math.min(14000, Math.max(4000, Math.round((text.split(/\s+/).filter(Boolean).length / 140) * 60000) + 1500 + extraMs));
++
++function scene(type: StoryScene["type"], nature: StoryScene["nature"], title: string, text: string, extra: Partial<StoryScene> = {}): StoryScene {
++  const narration = extra.narration ?? [text, extra.base ?? ""].filter(Boolean).join(" ");
++  return { id: bid("sc"), type, title, text, narration, nature, source: "engine", durationMs: sceneDuration(narration), ...extra };
++}
++
++/** a crosstab is a comparison, a test is a difference, anything else a finding — whatever question it answers */
++const sceneTypeOf = (item: BuilderItem): "finding" | "comparison" | "difference" => item.definition.kind === "crosstab" ? "comparison" : item.definition.kind === "test" ? "difference" : "finding";
++
++/** one analysis as the scene the story tells about it */
++export function sceneForItem(r: Ranked): StoryScene {
++  const type = sceneTypeOf(r.item);
++  const r0 = r.item.result;
++  const text = type === "difference" && testLine(r0) ? `${headline(r0)} (${testLine(r0)}.)` : headline(r0);
++  return scene(type, "finding", clip(r.item.name, 80), text, { analysisId: r.item.id, chart: { type: r.advice.type }, base: r.advice.denominator });
++}
++
++export function buildStory(brief: ReportBrief, ranked: readonly Ranked[], opts: { interpretation?: GatedInterpretation | null; now?: Date } = {}): StoryDefinition {
++  const title = brief.title?.trim() || clip(brief.objective.trim() || "Survey findings", 90);
++  const shown = ranked.map((r) => r.item);
++  const scenes: StoryScene[] = [];
++  scenes.push(scene("title", "frame", title, brief.client ? `Prepared for ${brief.client}` : "Survey findings", { narration: title }));
++  if (brief.objective.trim()) scenes.push(scene("objective", "frame", "What we set out to learn", [brief.objective.trim(), ...brief.keyQuestions.filter(Boolean).slice(0, 4)].join(" · ")));
++  scenes.push(scene("sample", "finding", "Who answered", sampleSentence(shown)));
++  /*
++   * The scenes an audience can take in are the best-ranked analyses (key
++   * questions first, then the strongest evidence) — and they are TOLD in the
++   * order a story reads: findings, then comparisons, then tested differences.
++   */
++  const max = brief.audience === "executive" ? 9 : brief.audience === "client" ? 14 : 22;
++  const interp = opts.interpretation;
++  const interpScenes: StoryScene[] = [];
++  if (interp) {
++    for (const s of interp.implications) interpScenes.push(scene("interpretation", "interpretation", "What this may mean", s, { source: "model" }));
++    if (interp.recommendations.length) interpScenes.push(scene("interpretation", "interpretation", "Suggested next steps", interp.recommendations.join(" "), { source: "model" }));
++  }
++  const room = Math.max(1, max - 4 - interpScenes.length);   // title, objective, sample, summary are always there
++  const chosen = ranked.slice(0, room);
++  for (const type of ["finding", "comparison", "difference"] as const) for (const r of chosen) if (sceneTypeOf(r.item) === type) scenes.push(sceneForItem(r));
++  scenes.push(...interpScenes);
++  const heads = chosen.filter((r) => r.role === "key" || r.significant).slice(0, 5).map((r) => headline(r.item.result));
++  scenes.push(scene("summary", "finding", "In summary", heads.length ? heads.join(" ") : sampleSentence(shown)));
++  const kept = scenes;
++  return { title, subtitle: analysesOf(ranked.length), audience: brief.audience, tone: brief.tone, scenes: kept, transition: "fade", ...(brief.objective.trim() ? { brief: { objective: brief.objective.trim(), keyQuestions: brief.keyQuestions.filter(Boolean), ...(brief.client ? { client: brief.client } : {}) } } : {}), builtAt: (opts.now ?? new Date()).toISOString() };
++}
++
++/**
++ * Rebuild one scene from the analysis it reads, as it is now — the "regenerate
++ * this scene" action. A scene the researcher wrote (`manual`) or a model
++ * wrote is left to the caller (a model scene is asked for again, through the
++ * gate); a frame scene is rebuilt from the brief.
++ */
++export function regenerateScene(story: StoryDefinition, sceneId: string, items: readonly BuilderItem[], variables: readonly VariableMeta[]): { scene: StoryScene } | { error: string } {
++  const old = story.scenes.find((s) => s.id === sceneId);
++  if (!old) return { error: "That scene is no longer in the story." };
++  if (old.analysisId) {
++    const item = items.find((i) => i.id === old.analysisId);
++    if (!item) return { error: "The analysis this scene reads has been deleted." };
++    const { usable, skipped } = usability([item]);
++    if (!usable.length) return { error: skipped[0]?.reason ?? "This analysis cannot be shown." };
++    const advice = adviseChart(item.definition, item.result, variables, { audience: story.audience });
++    const significant = isSignificant(item.result);
++    const role: ItemRole = old.type === "difference" ? "difference" : old.type === "comparison" ? "comparison" : "finding";
++    const fresh = sceneForItem({ item, role, score: 0, answers: [], significant, advice });
++    return { scene: { ...fresh, id: old.id, ...(old.chart && checkChartChoice(item.result, old.chart.type).valid ? { chart: old.chart } : {}) } };
++  }
++  if (old.type === "sample") return { scene: { ...scene("sample", "finding", old.title, sampleSentence(items)), id: old.id } };
++  if (old.type === "objective" && story.brief) return { scene: { ...scene("objective", "frame", old.title, [story.brief.objective, ...story.brief.keyQuestions.slice(0, 4)].join(" · ")), id: old.id } };
++  return { error: "This scene is not built from an analysis — edit its text directly." };
++}
++
++/* ------------------------------------------------------------ the model's part: interpretation, through the gate */
++
++export interface GatedInterpretation { implications: string[]; recommendations: string[]; rejected: { text: string; reason: string }[]; offered: number }
++
++/** every number the results printed — bases, cells, chart values, tests, insight text */
++export function resultNumbers(items: readonly Pick<BuilderItem, "result">[]): Set<string> {
++  const out = new Set<string>();
++  const norm = (s: string) => { let t = s.replace(/%$/, "").replace(/,(?=\d{3}\b)/g, ""); if (t.startsWith(".")) t = `0${t}`; if (t.startsWith("-.")) t = `-0${t.slice(1)}`; return t.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ""); };
++  const add = (x: unknown) => {
++    if (typeof x !== "number" || !Number.isFinite(x)) return;
++    for (const d of [0, 1, 2, 3]) { out.add(norm(x.toFixed(d))); out.add(norm(Math.abs(x).toFixed(d))); }
++    out.add(norm(String(x))); out.add(norm(String(Math.abs(x))));
++    if (Math.abs(x) <= 1) for (const d of [0, 1]) out.add(norm((x * 100).toFixed(d)));
++  };
++  const text = (t: unknown) => { if (typeof t === "string") for (const m of t.match(/-?\d+(?:[.,]\d+)?%?/g) ?? []) out.add(norm(m)); };
++  for (const { result: r } of items) {
++    for (const k of ["total", "filtered", "n", "weightedN"] as const) add(r.base?.[k]);
++    r.insights.forEach(text); r.warnings.forEach(text);
++    for (const s of r.chart.series ?? []) { s.values.forEach(add); s.errors?.forEach(add); }
++    r.chart.kpis?.forEach((k) => { add(typeof k.value === "number" ? k.value : NaN); add(k.delta); });
++    for (const t of r.tables) for (const row of t.rows) for (const v of Object.values(row)) { if (typeof v === "number") add(v); else text(v); }
++    for (const t of r.tests) { add(t.statistic); add(t.p); add(t.effectSize?.value); if (typeof t.df === "number") add(t.df); else if (Array.isArray(t.df)) t.df.forEach(add); }
++  }
++  return out;
++}
++
++/** what the model is asked, and the shape it answers in */
++export const INTERPRETATION_INSTRUCTIONS = `You are helping a research team write the INTERPRETATION of survey results. Use ONLY the RESULTS below. Answer as JSON: {"implications": ["<what a finding may mean for the stated objective, one sentence each, at most 4>"], "recommendations": ["<a next step the evidence supports, one sentence each, at most 4>"]}. Rules: every number you write must appear in the results exactly as printed; never state a result that is not listed; say "may" or "suggests" — these are readings, not findings; do not mention analyses that are not listed; no marketing language.`;
++
++/** the facts the model sees — the same sentences and numbers the report prints, nothing else */
++export function interpretationBrief(brief: ReportBrief, items: readonly BuilderItem[]): string {
++  const lines = [`OBJECTIVE: ${brief.objective || "(not stated)"}`, `AUDIENCE: ${brief.audience}; TONE: ${brief.tone}`, brief.keyQuestions.length ? `KEY QUESTIONS: ${brief.keyQuestions.join(" | ")}` : "", "RESULTS:"];
++  for (const it of items) {
++    const r = it.result;
++    lines.push(`- ${it.name} (n = ${r.base.n}): ${r.insights.slice(0, 3).join(" ") || "no finding text"}${testLine(r) ? ` [${testLine(r)}]` : ""}`);
++  }
++  return lines.filter(Boolean).join("\n");
++}
++
++const sentences = (v: unknown, max: number): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 400)).slice(0, max) : []);
++
++/** the model's interpretation, sentence by sentence, against the results — what passes is kept, what does not is listed with why */
++export function gateInterpretation(items: readonly BuilderItem[], candidate: unknown): GatedInterpretation {
++  const c = (candidate && typeof candidate === "object" ? candidate : {}) as Record<string, unknown>;
++  const numbers = resultNumbers(items);
++  const rejected: GatedInterpretation["rejected"] = []; let offered = 0;
++  const pass = (list: string[]): string[] => list.filter((t) => { offered++; const p = sentenceProblem(t, numbers, []); if (p) { rejected.push({ text: t, reason: p }); return false; } return true; });
++  return { implications: pass(sentences(c.implications, 4)), recommendations: pass(sentences(c.recommendations, 4)), rejected, offered };
++}
+diff --git a/packages/analytics/src/storyHtml.test.ts b/packages/analytics/src/storyHtml.test.ts
+new file mode 100644
+index 0000000..1a4756c
+--- /dev/null
++++ b/packages/analytics/src/storyHtml.test.ts
+@@ -0,0 +1,102 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset, variableMetadata } from "./dataset.js";
++import { runAnalysis } from "./analyses/index.js";
++import { draftReport, type BuilderItem } from "./reportBuilder.js";
++import { storyHtml, storyChart, esc } from "./storyHtml.js";
++import type { AnalysisDefinition, StoryDefinition } from "./types.js";
++import { def, synthRows } from "./analyses/fixture.js";
++
++const spec = { environment: "LIVE" as const, dataset: "all" as const };
++const ds = buildDataset(def, synthRows(), { spec });
++const vars = variableMetadata(def);
++let n = 0;
++const item = (name: string, kind: AnalysisDefinition["kind"], variables: string[], extra: Partial<AnalysisDefinition> = {}): BuilderItem => {
++  const definition = { name, kind, dataset: spec, variables, ...extra } as AnalysisDefinition;
++  return { id: `a${++n}`, name, definition, result: runAnalysis(definition, ds) };
++};
++const sat = item("Overall satisfaction", "descriptive", ["SAT"]);
++const battery = item("Quality, value, service", "descriptive", ["ITEMS_a", "ITEMS_b", "ITEMS_c"]);
++const xt = item("Satisfaction by gender", "crosstab", [], { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col" });
++const items = [sat, battery, xt];
++const results = Object.fromEntries(items.map((i) => [i.id, i.result]));
++const story = () => draftReport({ objective: "Understand satisfaction", audience: "client", tone: "plain", keyQuestions: [] }, items, vars, { story: true }).story!;
++const bars = (svg: string) => [...svg.matchAll(/<rect class="bar v"[^>]*height="([\d.]+)"/g)].map((m) => Number(m[1]));
++
++test("every visible scene is on the page, in order, and hidden ones are not", () => {
++  const s = story();
++  const html = storyHtml({ ...s, scenes: s.scenes.map((x, i) => (i === 3 ? { ...x, hidden: true } : x)) }, { results });
++  const ids = [...html.matchAll(/data-scene="([^"]+)"/g)].map((m) => m[1]);
++  assert.deepEqual(ids, s.scenes.filter((_, i) => i !== 3).map((x) => x.id));
++  assert.match(html, /<!doctype html>/);
++  assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(html), "no network references");
++  assert.ok(!/<script[^>]+src=/.test(html), "no external script");
++});
++
++test("charts are drawn from the results: bar heights are proportional to the values", () => {
++  const c = storyChart(sat.result, "bar_vertical").svg;
++  const values = sat.result.chart.series![0].values.map((v) => v ?? 0), hs = bars(c);
++  assert.equal(hs.length, values.length);
++  const max = Math.max(...values);
++  hs.forEach((h, i) => assert.ok(Math.abs(h / (hs[values.indexOf(max)]) - values[i] / max) < 0.02, `bar ${i}`));
++  assert.match(c, new RegExp(`>${values[3]}%<`), "labels carry the printed percentage");
++  /* change the result and the drawing changes — it is not a picture of the scene's text */
++  const other = { ...sat.result, chart: { ...sat.result.chart, series: [{ name: "x", values: [10, 10, 10, 10, 10] }] } };
++  const flat = bars(storyChart(other, "bar_vertical").svg);
++  assert.equal(flat.length, 5); assert.ok(flat.every((h) => Math.abs(h - flat[0]) < 0.01), "equal values draw equal bars");
++});
++
++test("a battery of scale items is drawn as a diverging bar around the midpoint, and a pie of it is a table with the reason", () => {
++  const d = storyChart(battery.result, "diverging_likert");
++  assert.match(d.svg, /stroke-dasharray="3 3"/, "midpoint line");
++  assert.equal(d.note, undefined);
++  const hbars = [...d.svg.matchAll(/<rect class="bar h"/g)].length;
++  assert.equal(hbars, battery.result.chart.categories!.length * battery.result.chart.series!.length);
++  const unsupported = storyChart(sat.result, "box_plot");
++  assert.match(unsupported.note ?? "", /box plot chart is not drawn in the animated story, so the result is shown as a table/);
++  const noSeries = storyChart({ ...sat.result, chart: { points: [{ x: 1, y: 2 }] } }, "bar_vertical");
++  assert.match(noSeries.note ?? "", /no series to draw as a bar vertical chart/);
++  assert.match(unsupported.svg, /<text[^>]*class="th"/);
++});
++
++test("the chart a scene chose is used, and one the data cannot draw falls back with a note", () => {
++  const s = story();
++  const sc = s.scenes.find((x) => x.analysisId === xt.id)!;
++  const html = storyHtml({ ...s, scenes: s.scenes.map((x) => (x.id === sc.id ? { ...x, chart: { type: "scatter" as const } } : x)) }, { results });
++  assert.match(html, /scatter chart is not drawn in the animated story, so the result is shown as a table/);
++});
++
++test("text from people and models is escaped; unsafe colours, logos and audio are refused", () => {
++  const s = story();
++  const evil: StoryDefinition = { ...s, title: `<img src=x onerror=alert(1)>`, accent: `red;}</style><script>alert(1)</script>`, logoUrl: `javascript:alert(1)`, scenes: s.scenes.map((x, i) => (i === 1 ? { ...x, text: `</div><script>alert(2)</script>"'` } : x)) };
++  const html = storyHtml(evil, { results, audio: { [s.scenes[0].id]: `data:audio/mpeg;base64,AAAA" onerror="alert(3)` } });
++  assert.ok(!/<img src=x/.test(html) && !/<script>alert/.test(html) && !/javascript:/.test(html) && !/onerror="alert/.test(html));
++  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
++  assert.match(html, /--accent:#2563eb/, "a bad colour falls back to the default");
++  assert.ok(!html.includes("<audio"), "a malformed audio URL is not embedded");
++  assert.equal(esc(`<&>"'`), "&lt;&amp;&gt;&quot;&#39;");
++});
++
++test("narration audio is embedded only where it exists, and the player advances by audio when there is some", () => {
++  const s = story();
++  const html = storyHtml(s, { results, audio: { [s.scenes[2].id]: "data:audio/mpeg;base64,AAAA" } });
++  assert.equal([...html.matchAll(/<audio /g)].length, 1);
++  assert.match(html, /A=true/);
++  assert.match(storyHtml(s, { results }), /A=false/);
++});
++
++test("interpretation scenes are labelled as not findings, and a scene whose analysis has no result says so", () => {
++  const s: StoryDefinition = { ...story(), scenes: [...story().scenes, { id: "i1", type: "interpretation", title: "What this may mean", text: "Satisfaction may differ by gender.", narration: "x", nature: "interpretation", source: "model", durationMs: 5000 }, { id: "g1", type: "finding", title: "Gone", text: "t", narration: "t", nature: "finding", source: "engine", durationMs: 5000, analysisId: "deleted", chart: { type: "bar_vertical" } }] };
++  const html = storyHtml(s, { results });
++  assert.match(html, /Interpretation<span class="tag">not a finding<\/span>/);
++  assert.match(html, /This analysis has no results to draw \(it was not computed\)/);
++});
++
++test("durations are bounded and autoplay is opt-in", () => {
++  const s = story();
++  const html = storyHtml({ ...s, scenes: s.scenes.map((x, i) => (i === 0 ? { ...x, durationMs: 1 } : i === 1 ? { ...x, durationMs: 9e9 } : x)) }, { results });
++  const d = JSON.parse(/D=(\[[^\]]*\])/.exec(html)![1]) as number[];
++  assert.equal(d[0], 2000); assert.equal(d[1], 60000);
++  assert.ok(!/show\(0\);toggle\(\)/.test(html));
++  assert.match(storyHtml(s, { results, autoplay: true }), /show\(0\);toggle\(\)/);
++});
+diff --git a/packages/analytics/src/storyHtml.ts b/packages/analytics/src/storyHtml.ts
+new file mode 100644
+index 0000000..d6241e7
+--- /dev/null
++++ b/packages/analytics/src/storyHtml.ts
+@@ -0,0 +1,230 @@
++import type { AnalysisResult, ChartType, StoryDefinition, StoryScene } from "./types.js";
++
++/**
++ * THE ANIMATED STORY, AS ONE SELF-CONTAINED HTML FILE.
++ *
++ * The platform has no video renderer — and a promise of an MP4 that nothing can
++ * produce would be a lie — so the story is delivered in the one animated format
++ * it can truly generate: a single HTML page (inline CSS, inline SVG charts, a
++ * few lines of script, no network, no libraries) that plays scene by scene with
++ * transitions, bars that grow, captions, play / pause / back / next, keyboard
++ * control and optional narration audio. It opens from a file, an e-mail
++ * attachment or an iframe, and prints as a document when scripts are off.
++ *
++ * Every number on screen is drawn from the `results` it is given — the
++ * snapshot a share is built from, or the latest computed results — never from
++ * the scene's own text alone. Everything that came from a person or a model is
++ * escaped; the page contains no way to run it.
++ */
++export interface StoryRenderOptions {
++  results: Record<string, AnalysisResult | undefined>;
++  /** narration audio per scene id, as data: URLs — present only when it was really generated */
++  audio?: Record<string, string>;
++  /** start playing at once (a preview) or wait for the first click (a file opened cold) */
++  autoplay?: boolean;
++}
++
++export const esc = (s: unknown): string => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
++const safeColor = (c: string | undefined, fallback: string) => (c && /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : fallback);
++const safeImg = (u: string | undefined) => (u && /^(https:\/\/|data:image\/(png|jpeg|gif|webp|svg\+xml);base64,)/i.test(u) ? u : "");
++const safeAudio = (u: string | undefined) => (u && /^data:audio\/(mpeg|mp3|wav|x-wav|ogg|webm);base64,[A-Za-z0-9+/=]+$/.test(u) ? u : "");
++
++const PALETTE = ["#2563eb", "#f59e0b", "#10b981", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
++const num = (x: number | null | undefined, pct: boolean) => (x == null || !Number.isFinite(x) ? "–" : `${Math.round(x * 10) / 10}${pct ? "%" : ""}`);
++const W = 640, H = 340;
++
++/* ------------------------------------------------------------ charts: small, honest SVG */
++
++type Kind = "hbar" | "vbar" | "stack" | "diverge" | "donut" | "line" | "table";
++const KIND: Partial<Record<ChartType, Kind>> = {
++  bar_horizontal: "hbar", ranking_bar: "hbar", lollipop: "hbar", dot_plot: "hbar", pareto: "hbar",
++  bar_vertical: "vbar", bar_grouped: "vbar", column_clustered: "vbar", histogram: "vbar",
++  bar_stacked: "stack", bar_stacked_100: "stack", diverging_likert: "diverge",
++  pie: "donut", donut: "donut", donut_semi: "donut",
++  line: "line", line_multi: "line", area: "line", spline: "line", wave_trend: "line",
++};
++
++/** the chart a result is drawn as in the story — the scene's choice when the data can draw it, otherwise a table, and a note saying so */
++export function storyChart(result: AnalysisResult, type: ChartType | undefined): { svg: string; note?: string } {
++  const want = type ?? "bar_vertical";
++  const kind = KIND[want];
++  const c = result.chart;
++  const hasSeries = !!c.series?.length && !!c.categories?.length;
++  if (!kind || !hasSeries) {
++    const label = want.replace(/_/g, " ");
++    const note = want === "table" ? undefined : !kind ? `A ${label} chart is not drawn in the animated story, so the result is shown as a table.` : `This result has no series to draw as a ${label} chart, so it is shown as a table.`;
++    return { svg: tableSvg(result), ...(note ? { note } : {}) };
++  }
++  const pct = c.valueFormat === "pct";
++  switch (kind) {
++    case "hbar": return { svg: bars(result, true, pct) };
++    case "vbar": return { svg: bars(result, false, pct) };
++    case "stack": return { svg: stacked(result, pct, false) };
++    case "diverge": return { svg: stacked(result, pct, true) };
++    case "donut": return { svg: donut(result, pct) };
++    case "line": return { svg: lines(result, pct) };
++  }
++  return { svg: tableSvg(result) };
++}
++
++const legend = (names: string[], y: number) => names.length > 1 ? names.slice(0, 8).map((n, i) => `<g transform="translate(${10 + i * 110},${y})"><rect width="10" height="10" rx="2" fill="${PALETTE[i % PALETTE.length]}"/><text x="15" y="9" class="sm">${esc(n.slice(0, 16))}</text></g>`).join("") : "";
++const frame = (inner: string) => `<svg viewBox="0 0 ${W} ${H}" role="img" class="chart" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
++
++function bars(r: AnalysisResult, horizontal: boolean, pct: boolean): string {
++  const cats = r.chart.categories!.slice(0, 12), S = r.chart.series!.slice(0, 6);
++  const max = Math.max(1e-9, ...S.flatMap((s) => s.values.slice(0, 12).map((v) => v ?? 0)));
++  const top = S.length > 1 ? 24 : 8;
++  let out = legend(S.map((s) => s.name), 4);
++  if (horizontal) {
++    const label = 150, rowH = (H - top - 8) / cats.length, bh = Math.min(26, (rowH - 6) / S.length);
++    cats.forEach((cat, i) => {
++      out += `<text x="${label - 8}" y="${top + i * rowH + rowH / 2 + 4}" text-anchor="end" class="lbl">${esc(cat.slice(0, 26))}</text>`;
++      S.forEach((s, j) => { const v = s.values[i] ?? 0, w = (v / max) * (W - label - 60), y = top + i * rowH + (rowH - bh * S.length) / 2 + j * bh;
++        out += `<rect class="bar h" style="animation-delay:${(i * 60 + j * 30)}ms" x="${label}" y="${y}" width="${Math.max(0, w)}" height="${bh - 2}" rx="3" fill="${PALETTE[j % PALETTE.length]}"/><text x="${label + w + 6}" y="${y + bh / 2 + 3}" class="val">${num(v, pct)}</text>`; });
++    });
++  } else {
++    const base = H - 44, area = base - top - 14, colW = (W - 20) / cats.length, bw = Math.min(54, (colW - 8) / S.length);
++    cats.forEach((cat, i) => {
++      S.forEach((s, j) => { const v = s.values[i] ?? 0, h = (v / max) * area, x = 10 + i * colW + (colW - bw * S.length) / 2 + j * bw;
++        out += `<rect class="bar v" style="animation-delay:${(i * 60 + j * 30)}ms" x="${x}" y="${base - h}" width="${bw - 2}" height="${h}" rx="3" fill="${PALETTE[j % PALETTE.length]}"/><text x="${x + (bw - 2) / 2}" y="${base - h - 4}" text-anchor="middle" class="val">${num(v, pct)}</text>`; });
++      out += `<text x="${10 + i * colW + colW / 2}" y="${base + 16}" text-anchor="middle" class="lbl">${esc(cat.slice(0, colW < 70 ? 8 : 16))}</text>`;
++    });
++  }
++  return frame(out);
++}
++
++/** stacked bars to 100% — or the same split around the midpoint of an ordered scale (a diverging bar) */
++function stacked(r: AnalysisResult, pct: boolean, diverging: boolean): string {
++  const cats = r.chart.categories!.slice(0, 10), S = r.chart.series!;
++  const label = 150, rowH = (H - 40) / cats.length, bh = Math.min(30, rowH - 8), span = W - label - 20;
++  let out = legend(S.map((s) => s.name), 4);
++  const k = S.length;
++  cats.forEach((cat, i) => {
++    const vals = S.map((s) => Math.max(0, s.values[i] ?? 0)); const tot = vals.reduce((a, b) => a + b, 0) || 1;
++    const shares = vals.map((v) => (v / tot) * 100);
++    const left = diverging ? shares.slice(0, Math.floor(k / 2)).reduce((a, b) => a + b, 0) + (k % 2 ? shares[Math.floor(k / 2)] / 2 : 0) : 0;
++    const y = 28 + i * rowH + (rowH - bh) / 2; let x = diverging ? label + (50 - left) / 100 * span : label;
++    out += `<text x="${label - 8}" y="${y + bh / 2 + 4}" text-anchor="end" class="lbl">${esc(cat.slice(0, 26))}</text>`;
++    shares.forEach((sh, j) => { const w = (sh / 100) * span; out += `<rect class="bar h" style="animation-delay:${i * 60 + j * 25}ms" x="${x}" y="${y}" width="${w}" height="${bh}" fill="${PALETTE[j % PALETTE.length]}"><title>${esc(S[j].name)}: ${num(vals[j], pct)}</title></rect>${w > 30 ? `<text x="${x + w / 2}" y="${y + bh / 2 + 4}" text-anchor="middle" class="inbar">${num(vals[j], false)}</text>` : ""}`; x += w; });
++  });
++  if (diverging) out += `<line x1="${label + span / 2}" x2="${label + span / 2}" y1="22" y2="${H - 8}" stroke="#94a3b8" stroke-dasharray="3 3"/>`;
++  return frame(out);
++}
++
++function donut(r: AnalysisResult, pct: boolean): string {
++  const cats = r.chart.categories!.slice(0, 8), vals = cats.map((_, i) => Math.max(0, r.chart.series![0].values[i] ?? 0));
++  const tot = vals.reduce((a, b) => a + b, 0) || 1, cx = 170, cy = H / 2, R = 120, ri = 68;
++  let a0 = -Math.PI / 2, out = "";
++  vals.forEach((v, i) => { const a1 = a0 + (v / tot) * Math.PI * 2, large = a1 - a0 > Math.PI ? 1 : 0, p = (r2: number, a: number) => `${cx + r2 * Math.cos(a)},${cy + r2 * Math.sin(a)}`;
++    if (v > 0) out += `<path class="arc" style="animation-delay:${i * 90}ms" d="M${p(R, a0)} A${R},${R} 0 ${large} 1 ${p(R, Math.min(a1, a0 + Math.PI * 2 - 1e-4))} L${p(ri, Math.min(a1, a0 + Math.PI * 2 - 1e-4))} A${ri},${ri} 0 ${large} 0 ${p(ri, a0)} Z" fill="${PALETTE[i % PALETTE.length]}"/>`;
++    out += `<g transform="translate(340,${50 + i * 30})"><rect width="12" height="12" rx="2" fill="${PALETTE[i % PALETTE.length]}"/><text x="18" y="11" class="lbl">${esc(cats[i].slice(0, 28))} — ${num(v, pct)}</text></g>`; a0 = a1; });
++  return frame(out);
++}
++
++function lines(r: AnalysisResult, pct: boolean): string {
++  const cats = r.chart.categories!.slice(0, 40), S = r.chart.series!.slice(0, 6);
++  const all = S.flatMap((s) => s.values.slice(0, 40)).filter((v): v is number => v != null);
++  const lo = Math.min(0, ...all), hi = Math.max(1e-9, ...all), left = 40, base = H - 36, top = 28, step = cats.length > 1 ? (W - left - 20) / (cats.length - 1) : 0;
++  const y = (v: number) => base - ((v - lo) / (hi - lo || 1)) * (base - top);
++  let out = legend(S.map((s) => s.name), 4);
++  S.forEach((s, j) => { const pts = s.values.slice(0, 40).map((v, i) => (v == null ? null : [left + i * step, y(v)] as const));
++    const d = pts.filter(Boolean).map((p, i) => `${i ? "L" : "M"}${p![0]},${p![1]}`).join(" ");
++    out += `<path class="line" d="${d}" fill="none" stroke="${PALETTE[j % PALETTE.length]}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" pathLength="1"/>`;
++    pts.forEach((p) => { if (p) out += `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="${PALETTE[j % PALETTE.length]}"/>`; }); });
++  cats.forEach((c, i) => { if (cats.length <= 12 || i % Math.ceil(cats.length / 12) === 0) out += `<text x="${left + i * step}" y="${H - 14}" text-anchor="middle" class="lbl">${esc(c.slice(0, 10))}</text>`; });
++  out += `<text x="4" y="${y(hi) + 4}" class="sm">${num(hi, pct)}</text><text x="4" y="${y(lo) + 4}" class="sm">${num(lo, pct)}</text>`;
++  return frame(out);
++}
++
++/** the first table of the result, as SVG text — what every chart type falls back to */
++function tableSvg(r: AnalysisResult): string {
++  const t = r.tables[0];
++  if (!t) return frame(`<text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="lbl">No chart or table for this result.</text>`);
++  const cols = t.columns.filter((c) => !/^__/.test(c.key)).slice(0, 5), rows = t.rows.filter((row) => row.__kind !== "base").slice(0, 9);
++  const cw = (W - 20) / cols.length; let out = "";
++  cols.forEach((c, i) => { out += `<text x="${10 + i * cw}" y="20" class="th">${esc(String(c.label).slice(0, Math.floor(cw / 7)))}</text>`; });
++  rows.forEach((row, ri) => { cols.forEach((c, i) => { const v = row[c.key]; const txt = typeof v === "number" ? num(v, c.type === "pct") : String(v ?? "").slice(0, Math.floor(cw / 7)); out += `<text x="${10 + i * cw}" y="${46 + ri * 28}" class="lbl">${esc(txt)}</text>`; }); out += `<line x1="10" x2="${W - 10}" y1="${30 + ri * 28}" y2="${30 + ri * 28}" stroke="#e2e8f0"/>`; });
++  return frame(out);
++}
++
++/* ------------------------------------------------------------ the page */
++
++export function storyHtml(story: StoryDefinition, opts: StoryRenderOptions): string {
++  const accent = safeColor(story.accent, "#2563eb");
++  const logo = safeImg(story.logoUrl);
++  const scenes = story.scenes.filter((s) => !s.hidden);
++  const body = scenes.map((s, i) => sceneHtml(s, i, opts, story.transition)).join("\n");
++  const dur = JSON.stringify(scenes.map((s) => Math.max(2000, Math.min(60000, Math.round(s.durationMs || 6000)))));
++  const hasAudio = scenes.some((s) => safeAudio(opts.audio?.[s.id]));
++  return `<!doctype html>
++<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(story.title)}</title>
++<style>
++:root{--accent:${accent};--bg:#0f172a;--fg:#f8fafc;--muted:#94a3b8;--card:#ffffff;--ink:#0f172a}
++*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
++.stage{position:relative;height:100vh;overflow:hidden}
++.scene{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:6vh 7vw 14vh;opacity:0;pointer-events:none;transition:opacity .6s ease,transform .6s ease}
++.scene.tr-slide{transform:translateX(6vw)}.scene.tr-zoom{transform:scale(.94)}
++.scene.on{opacity:1;pointer-events:auto;transform:none}
++.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:.8rem}
++.scene h1,.scene h2{margin:.2em 0 .4em;line-height:1.15}.scene h1{font-size:clamp(2rem,5vw,3.6rem)}.scene h2{font-size:clamp(1.4rem,3vw,2.2rem)}
++.text{font-size:clamp(1.05rem,2vw,1.5rem);max-width:60ch}.base{color:var(--muted);font-size:.9rem;margin-top:.8em;max-width:70ch}
++.interp .eyebrow{color:#fbbf24}.tag{display:inline-block;border:1px solid #fbbf24;color:#fbbf24;border-radius:99px;padding:1px 10px;font-size:.75rem;margin-left:8px}
++.panel{background:var(--card);color:var(--ink);border-radius:14px;padding:14px;margin-top:18px;max-width:760px;width:100%}
++.chart{width:100%;height:auto;display:block}.chart text{fill:#0f172a;font:12px system-ui,sans-serif}.chart .lbl{font-size:12px}.chart .sm{font-size:10px;fill:#475569}.chart .val{font-size:11px;font-weight:600}.chart .inbar{fill:#fff;font-size:11px;font-weight:600}.chart .th{font-weight:700;fill:#475569}
++.note{color:#b45309;font-size:.8rem;margin-top:6px}
++.on .bar.h{transform-origin:left center;animation:growx .9s cubic-bezier(.2,.7,.2,1) both}.on .bar.v{transform-origin:center bottom;transform-box:fill-box;animation:growy .9s cubic-bezier(.2,.7,.2,1) both}
++.on .arc{animation:fade .8s ease both}.on .line{stroke-dasharray:1;animation:draw 1.4s ease both}
++.on .text,.on h1,.on h2,.on .base{animation:rise .7s ease both}
++@keyframes growx{from{transform:scaleX(0)}to{transform:scaleX(1)}}@keyframes growy{from{transform:scaleY(0)}to{transform:scaleY(1)}}
++@keyframes fade{from{opacity:0}to{opacity:1}}@keyframes draw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
++.bar{transform-box:fill-box}
++.logo{position:absolute;top:3vh;right:4vw;max-height:6vh;max-width:18vw;z-index:3}
++.bar-ui{position:absolute;left:0;right:0;bottom:0;padding:10px 4vw 14px;background:linear-gradient(transparent,rgba(15,23,42,.92) 40%);z-index:2}
++.progress{height:4px;background:#334155;border-radius:2px;overflow:hidden;margin-bottom:10px}.progress i{display:block;height:100%;width:0;background:var(--accent)}
++.ctl{display:flex;gap:8px;align-items:center}.ctl button{background:#1e293b;color:var(--fg);border:1px solid #334155;border-radius:8px;padding:6px 14px;font:inherit;cursor:pointer}.ctl button:hover{border-color:var(--accent)}
++.ctl .count{color:var(--muted);margin-left:auto;font-size:.85rem}
++.cap{position:absolute;left:7vw;right:7vw;bottom:9vh;text-align:center;color:#e2e8f0;font-size:1rem;z-index:2;display:none}.caps .cap{display:block}
++@media print,(prefers-reduced-motion:reduce){.scene,.on .bar,.on .arc,.on .line,.on .text,.on h1,.on h2,.on .base{transition:none!important;animation:none!important}}
++html:not(.js) .stage{height:auto;overflow:visible}html:not(.js) .scene{position:static;opacity:1;pointer-events:auto;transform:none;padding:5vh 7vw;border-bottom:1px solid #1e293b;min-height:70vh}html:not(.js) .bar-ui,html:not(.js) .cap{display:none}
++@media print{html,body{background:#fff;color:#000}.scene{position:static!important;opacity:1!important;page-break-after:always;color:#000}.bar-ui,.logo{display:none}}
++</style></head>
++<body><div class="stage" id="stage">${logo ? `<img class="logo" src="${esc(logo)}" alt="">` : ""}
++${body}
++<div class="bar-ui"><div class="progress"><i id="prog"></i></div><div class="ctl"><button id="prev" aria-label="Previous scene">◀</button><button id="play" aria-label="Play or pause">▶ Play</button><button id="next" aria-label="Next scene">▶▶</button><button id="cc" aria-pressed="false" aria-label="Captions">CC</button><span class="count" id="count"></span></div></div>
++</div>
++<script>
++(function(){document.documentElement.className+=" js";
++var S=[].slice.call(document.querySelectorAll(".scene")),D=${dur},i=0,playing=false,t=null,A=${hasAudio ? "true" : "false"};
++var prog=document.getElementById("prog"),pb=document.getElementById("play"),cnt=document.getElementById("count"),st=document.getElementById("stage");
++function audio(k){return S[k]&&S[k].querySelector("audio")}
++function stopAudio(){S.forEach(function(s){var a=s.querySelector("audio");if(a){a.pause();a.currentTime=0}})}
++function show(k){if(k<0||k>=S.length)return;stopAudio();clearTimeout(t);i=k;S.forEach(function(s,j){s.classList.toggle("on",j===k)});
++prog.style.transition="none";prog.style.width=(k/Math.max(1,S.length-1)*100)+"%";cnt.textContent=(k+1)+" / "+S.length;
++if(playing)arm()}
++function arm(){var a=audio(i);if(A&&a){a.onended=function(){next()};var p=a.play();if(p&&p.catch)p.catch(function(){t=setTimeout(next,D[i])});return}t=setTimeout(next,D[i])}
++function next(){if(i<S.length-1)show(i+1);else{playing=false;pb.textContent="↻ Replay";stopAudio()}}
++function toggle(){if(!playing){playing=true;pb.textContent="❚❚ Pause";if(i>=S.length-1)i=0;show(i)}else{playing=false;pb.textContent="▶ Play";clearTimeout(t);stopAudio()}}
++document.getElementById("play").onclick=toggle;document.getElementById("next").onclick=function(){show(i+1)};document.getElementById("prev").onclick=function(){show(i-1)};
++document.getElementById("cc").onclick=function(e){var on=st.classList.toggle("caps");e.target.setAttribute("aria-pressed",on)};
++document.addEventListener("keydown",function(e){if(e.key==="ArrowRight")show(i+1);else if(e.key==="ArrowLeft")show(i-1);else if(e.key===" "){e.preventDefault();toggle()}});
++show(0);${opts.autoplay ? "toggle();" : ""}})();
++</script></body></html>`;
++}
++
++function sceneHtml(s: StoryScene, _i: number, opts: StoryRenderOptions, transition: StoryDefinition["transition"]): string {
++  const r = s.analysisId ? opts.results[s.analysisId] : undefined;
++  const interp = s.nature === "interpretation";
++  let chart = "";
++  if (s.analysisId) {
++    if (!r || r.error) chart = `<div class="panel"><p class="note">This analysis has no results to draw (${esc(r?.error?.message ?? "it was not computed")}).</p></div>`;
++    else { const c = storyChart(r, s.chart?.type); chart = `<div class="panel">${c.svg}${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}</div>`; }
++  }
++  const audio = safeAudio(opts.audio?.[s.id]);
++  const label = s.type === "title" ? "" : interp ? `Interpretation<span class="tag">not a finding</span>` : s.type === "summary" ? "Summary" : s.type === "sample" ? "Sample" : s.type === "objective" ? "Objective" : s.type === "comparison" ? "Comparison" : s.type === "difference" ? "Difference" : "Finding";
++  const tr = `tr-${transition === "slide" ? "slide" : transition === "zoom" ? "zoom" : "fade"}`;
++  return `<section class="scene ${interp ? "interp " : ""}${tr}" data-scene="${esc(s.id)}" aria-label="${esc(s.title)}">
++${label ? `<div class="eyebrow">${label}</div>` : ""}${s.type === "title" ? `<h1>${esc(s.title)}</h1>` : `<h2>${esc(s.title)}</h2>`}
++<div class="text">${esc(s.text)}</div>${chart}${s.base && s.analysisId ? `<div class="base">${esc(s.base)}</div>` : ""}
++<div class="cap">${esc(s.narration)}</div>${audio ? `<audio preload="auto" src="${esc(audio)}"></audio>` : ""}
++</section>`;
++}
+diff --git a/packages/analytics/src/types.ts b/packages/analytics/src/types.ts
+index 11f694d..022ef4d 100644
+--- a/packages/analytics/src/types.ts
++++ b/packages/analytics/src/types.ts
+@@ -448,6 +448,44 @@ export interface ReportDefinition {
+   branding?: { showLogo?: boolean; footer?: string; header?: string };
+   exportDefaults?: ExportSettings;
+   origin?: OutputOrigin;
++  /** the animated story told from the same analyses (Data Analytics audit, Oct 2026) — scenes, not a second source of numbers */
++  story?: StoryDefinition;
++}
++
++/* ------------------------------------------------------------ the animated story */
++
++export type SceneType = "title" | "objective" | "sample" | "finding" | "comparison" | "difference" | "interpretation" | "summary";
++export interface StoryScene {
++  id: string;
++  type: SceneType;
++  title: string;
++  /** what is on screen: the sentence(s) of this scene */
++  text: string;
++  /** what is read aloud, when narration is added (the text, plus the base it stands on) */
++  narration: string;
++  analysisId?: string;
++  chart?: { type: ChartType };
++  /** what the figures are percentages / means of */
++  base?: string;
++  /** "finding" is a number the data produced; "interpretation" is what it might mean — never mixed */
++  nature: "frame" | "finding" | "interpretation";
++  /** who wrote the words: the engine from the results, a model that passed the number gate, or the researcher */
++  source: "engine" | "model" | "manual";
++  durationMs: number;
++  hidden?: boolean;
++}
++export interface StoryDefinition {
++  title: string;
++  subtitle?: string;
++  audience: "executive" | "client" | "researcher";
++  tone: "plain" | "formal" | "concise";
++  scenes: StoryScene[];
++  transition: "fade" | "slide" | "zoom";
++  accent?: string;
++  logoUrl?: string;
++  /** the brief it was built from, so a scene can be rebuilt */
++  brief?: { objective: string; keyQuestions: string[]; client?: string };
++  builtAt: string;
+ }
+ 
+ /**
+diff --git a/scripts/report-builder-test.mjs b/scripts/report-builder-test.mjs
+new file mode 100644
+index 0000000..5d2e904
+--- /dev/null
++++ b/scripts/report-builder-test.mjs
+@@ -0,0 +1,541 @@
++/**
++ * REPORT BUILDER + ANIMATED STORY (Data Analytics audit, Phase 4) — through the
++ * real UI against the in-process fake backend (REAL analytics engine: the same
++ * draftReport / regenerateScene / storyHtml / gateInterpretation the route uses).
++ *
++ *  1. "Build with Rescript": brief → REVIEW (what was chosen and why, what was
++ *     left out and why, key questions nothing answers) → create. Nothing is
++ *     saved before Create.
++ *  2. the created report has real captions from the results, no invented numbers
++ *  3. the Story tab: preview, edit text, change chart (only valid ones), hide,
++ *     regenerate, save → reload keeps it; export is blocked while unsaved
++ *  4. the exported HTML plays in a real browser: scenes advance, keyboard works,
++ *     no network, no console errors
++ *  5. publish → the SHARED page plays the story from the frozen snapshot
++ *  6. a model's interpretation passes the number gate or is dropped — and is
++ *     labelled "not a finding" on screen
++ *  7. empty state: no saved analyses → an actionable message, no blank report
++ *
++ * Needs `pnpm dev:studio` (3000).   node scripts/report-builder-test.mjs
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { navLabels } from "./lib/nav.mjs";
++import assert from "node:assert/strict";
++import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages, draftReport, regenerateScene, storyHtml, gateInterpretation } from "../packages/analytics/dist/index.js";
++import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
++import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
++import { variableMetadata } from "../packages/analytics/dist/dataset.js";
++
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const SURVEY = "11111111-1111-4111-8111-111111111111";
++
++/* ------------------------------------------------------------ fake backend */
++const rows = synthRows(400);
++const store = { analyses: [], charts: [], segments: [], themes: [], reports: [], shares: [], analysisVersions: [], reportVersions: [], reportTemplates: [], exports: 0, audit: [] };
++const uid = () => crypto.randomUUID();
++const now = () => new Date().toISOString();
++const compute = (definition) => {
++  const ds = buildDataset(def, rows, { spec: definition.dataset ?? { environment: "LIVE", dataset: "all" }, weighting: definition.weighting ?? null });
++  const result = runAnalysis(definition, ds);
++  const advice = adviseChart(definition, result, variableMetadata(def));
++  return { ...result, recommendations: advice.alternatives, advice };
++};
++const reportResults = (definition) => {
++  const out = {};
++  for (const id of reportAnalysisIds(definition)) { const a = store.analyses.find((x) => x.id === id && !x.deleted_at); if (!a) continue; try { if (store.failIds?.has(id)) throw new Error("boom"); out[id] = compute({ ...a.definition, id, name: a.name }); } catch { out[id] = { ...failedResult(a.name, a.definition.kind), recommendations: [] }; } }
++  return out;
++};
++const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
++
++async function fakeApi(route) {
++  const req = route.request();
++  const url = new URL(req.url());
++  const m = req.method();
++  const body = m === "POST" || m === "PUT" || m === "PATCH" ? JSON.parse(req.postData() || "{}") : {};
++  const path = url.pathname.replace(`/api/surveys/${SURVEY}/analytics`, "").replace(/^\//, "").split("/").filter(Boolean);
++  const [head, itemId, action] = path;
++  const coll = (k) => store[k];
++  /* §36 — report templates, and laying one over a report */
++  if (head === "report-templates") {
++    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates], available: true });
++    if (m === "POST") {
++      const src = store.reports.find((r) => r.id === body.fromReportId);
++      // §42 — a dashboard's shape is its widgets and scenery, not blocks
++      if (src?.kind === "dashboard") {
++        const t = { id: uid(), builtIn: false, ...dashboardAsTemplate(body.name, src.definition, body.description) };
++        store.reportTemplates.push(t);
++        return json(route, { template: t }, 201);
++      }
++      const blocks = (src?.definition?.blocks ?? []).map((b) => {
++        if (b.type === "panel_grid") return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) };
++        const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type };
++      });
++      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, kind: "report", blocks };
++      store.reportTemplates.push(t);
++      return json(route, { template: t }, 201);
++    }
++    if (m === "DELETE") { store.reportTemplates = store.reportTemplates.filter((t) => t.id !== itemId); return json(route, { ok: true }); }
++  }
++  if (head === "reports" && action === "apply-template" && m === "POST") {
++    const r = store.reports.find((x) => x.id === itemId);
++    const t = [...BUILT_IN_REPORT_TEMPLATES, ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
++    if (!r || !t) return json(route, { error: "Unknown template." }, 404);
++    // §42 — the two kinds share a gallery, so a mismatch is refused rather
++    // than left to produce a definition nothing can render
++    const wantKind = r.kind === "dashboard" ? "dashboard" : "report";
++    const gotKind = templateKind(t);
++    if (wantKind !== gotKind) return json(route, { error: `That is a ${gotKind} template, and this is a ${wantKind}. Pick a ${wantKind} template.` }, 409);
++    r.definition = wantKind === "dashboard" ? applyDashboardTemplate(t, r.definition) : applyTemplate(t, r.definition);
++    store.audit.push("analytics.report_modified");
++    return json(route, { definition: r.definition, appliedTemplate: t.name });
++  }
++  /* the report builder — the same engine calls the real route makes */
++  if (head === "report-builder") {
++    const vars = variableMetadata(def).filter((v) => !v.hidden);
++    if (itemId === "draft") {
++      store.drafts = (store.drafts ?? 0) + 1;
++      const b = body.brief ?? {};
++      const brief = { objective: String(b.objective ?? ""), audience: b.audience ?? "client", tone: b.tone ?? "plain", keyQuestions: b.keyQuestions ?? [], ...(b.analysisIds?.length ? { analysisIds: b.analysisIds } : {}), ...(b.includeTests === false ? { includeTests: false } : {}), ...(b.includeCrosstabs === false ? { includeCrosstabs: false } : {}), ...(b.maxItems ? { maxItems: b.maxItems } : {}) };
++      if (!brief.objective && !brief.keyQuestions.length) return json(route, { error: "State the objective or at least one key question — the report is built around what you want to learn." }, 400);
++      const live = store.analyses.filter((a) => !a.deleted_at && (!brief.analysisIds || brief.analysisIds.includes(a.id)));
++      if (!live.length) return json(route, { error: "This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report." }, 409);
++      const items = live.map((a) => { try { if (store.failIds?.has(a.id)) throw new Error("boom"); return { id: a.id, name: a.name, definition: { ...a.definition, id: a.id, name: a.name }, result: compute({ ...a.definition, id: a.id, name: a.name }) }; } catch { return { id: a.id, name: a.name, definition: a.definition, result: failedResult(a.name, a.definition.kind) }; } });
++      let model = { status: "not_asked", detail: "Interpretation was not requested." }, interpretation = null;
++      if (body.interpretation) {
++        if (!store.fakeModel) model = { status: "no_model", detail: "No AI model is configured for this workspace, so no interpretation was written. Findings are unaffected." };
++        else { const g = gateInterpretation(items, store.fakeModel); const kept = g.implications.length + g.recommendations.length; interpretation = kept ? g : null; model = { status: kept ? "gated" : "nothing", detail: `${kept} of ${g.offered} model sentences passed the number check${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `“${r.text.slice(0, 60)}” (${r.reason})`).join(" | ")}` : ""}.` }; }
++      }
++      const draft = draftReport(brief, items, vars, { story: body.story === true, interpretation });
++      return json(route, { ...draft, model, truncated: false, analysesRead: items.length });
++    }
++    if (itemId === "scene") {
++      const r = store.reports.find((x) => x.id === body.reportId); const story = r?.definition?.story;
++      if (!story) return json(route, { error: "This report has no story." }, 404);
++      const items = store.analyses.filter((a) => !a.deleted_at).map((a) => ({ id: a.id, name: a.name, definition: { ...a.definition, id: a.id, name: a.name }, result: compute({ ...a.definition, id: a.id, name: a.name }) }));
++      const out = regenerateScene(story, body.sceneId, items, vars);
++      return "error" in out ? json(route, { error: out.error }, 409) : json(route, { scene: out.scene });
++    }
++    if (itemId === "story") {
++      const r = store.reports.find((x) => x.id === body.reportId); const story = r?.definition?.story;
++      if (!story?.scenes?.length) return json(route, { error: "This report has no story to export. Build one with the report builder first." }, 404);
++      const results = reportResults({ story }); const chk = checkSnapshot({ story }, results);
++      if (!chk.ok) return json(route, { error: `The story cannot be exported yet: ${chk.problems.join(" ")}`, code: "story_blank" }, 409);
++      store.lastStoryExport = { narration: body.narration === true };
++      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "content-disposition": 'attachment; filename="story.html"', "x-rescript-export-notes": encodeURIComponent(JSON.stringify([body.narration ? "No speech provider is configured, so the story was exported without narration." : "Exported without narration.", `${story.scenes.filter((s) => !s.hidden).length} scenes, from the latest computed results.`])), "access-control-expose-headers": "x-rescript-export-notes, content-disposition" }, body: storyHtml(story, { results }) });
++    }
++  }
++  if (head === "variables") return json(route, { variables: variableMetadata(def).filter((v) => !v.hidden), counts: { LIVE: rows.length, TEST: 0 }, surveyVersion: "1.0", revision: 3 });
++  if (head === "home") return json(route, { analyses: store.analyses.filter((a) => !a.deleted_at), charts: store.charts, reports: store.reports.filter((r) => !r.deleted_at), shares: store.shares.filter((s) => !s.revoked_at) });
++  if (head === "run") { try { if (store.failRunNames?.has(body.definition?.name)) throw new Error("boom"); return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: "The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref abc123)" }, 500); } }
++  if (head === "export") {
++    store.exports++;
++    let report, results;
++    if (body.reportId) { const r = store.reports.find((x) => x.id === body.reportId); report = r.definition; results = body.version ? store.reportVersions.find((v) => v.report_id === r.id && v.version === body.version).snapshot : reportResults(r.definition); }
++    else { const a = body.analysisId ? store.analyses.find((x) => x.id === body.analysisId) : { id: "adhoc", name: body.definition.name, definition: body.definition }; const res = compute({ ...a.definition, name: a.name }); results = { [a.id]: res }; report = { title: a.name, mode: "live", blocks: [{ id: "c", type: "chart", analysisId: a.id, chart: body.chart ?? { type: res.recommendedCharts[0], options: {} } }, ...res.tables.map((t, i) => ({ id: `t${i}`, type: "table", analysisId: a.id, tableId: t.id }))] }; }
++    /*
++     * §43 — the same validation the real route does, so the test exercises the
++     * path a customer's deck actually takes. AX_DEBUG_IMG prints what arrived
++     * and which blocks the export is building from: the first version of this
++     * check passed while exporting an UNSAVED report that contained no map at
++     * all, and that is what showed it.
++     */
++    const images = {};
++    for (const [blockId, uri] of Object.entries(body.images ?? {}).slice(0, 40)) {
++      const okImg = isEmbeddableImage(uri);
++      if (process.env.AX_DEBUG_IMG) console.log("  [img]", blockId, typeof uri === "string" ? `${uri.slice(0, 32)}… len=${uri.length}` : typeof uri, "accepted:", okImg);
++      if (typeof blockId === "string" && blockId.length <= 64 && okImg) images[blockId] = uri;
++    }
++    if (process.env.AX_DEBUG_IMG) console.log("  [img] blocks being exported:", (report.blocks ?? []).map((b) => `${b.id}:${b.type}`).join(", "));
++    const chk = checkSnapshot(report, results);
++    const withData = reportAnalysisIds(report).filter((id) => results[id] && !results[id].error && (results[id].base?.n ?? 0) > 0);
++    if (reportAnalysisIds(report).length && !withData.length) return json(route, { error: `Nothing to export. ${chk.problems.join(" ")}` }, 409);
++    if (store.breakExport) return json(route, { error: "The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference abc123 to support." }, 500);
++    const buf = body.format === "xlsx" ? await buildXlsx({ report, results, theme: DEFAULT_THEME, settings: body.settings }) : await buildPptx({ report, results, theme: DEFAULT_THEME, settings: body.settings, images });
++    store.lastExport = { format: body.format ?? "pptx", bytes: buf.length, images: Object.keys(images).length, mapNote: buf.toString("latin1").includes("Shown as ranked bars"), hasMedia: /ppt\/media\/image/.test(buf.toString("latin1")) };
++    if (process.env.AX_SHOTS && Object.keys(images).length) (await import("node:fs")).writeFileSync(`${process.env.AX_SHOTS}/map-deck.pptx`, buf);
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { ...(chk.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(chk.problems)) } : {}), "access-control-expose-headers": "x-rescript-export-notes", "content-disposition": `attachment; filename="x.${body.format ?? "pptx"}"` }, body: buf });
++  }
++  if (head === "reports" && itemId && action === "publish") {
++    const r = store.reports.find((x) => x.id === itemId); const version = (r.published_version ?? 0) + 1;
++    const snapshot = reportResults(r.definition);
++    const chk = checkSnapshot(r.definition, snapshot);
++    if (!chk.ok && body.force !== true) return json(route, { error: `Not published. ${chk.problems.join(" ")}`, problems: chk.problems, canForce: true }, 409);
++    store.reportVersions.push({ id: uid(), report_id: r.id, version, definition: r.definition, theme: DEFAULT_THEME, snapshot, dataset: { responses: chk.responses }, published_at: now(), note: body.note ?? null });
++    r.published_version = version; store.audit.push("analytics.report_published");
++    return json(route, { version, publishedAt: now() });
++  }
++  if (head === "reports" && itemId && action === "results") {
++    const r = store.reports.find((x) => x.id === itemId); const v = url.searchParams.get("version");
++    if (v) { const rv = store.reportVersions.find((x) => x.report_id === r.id && x.version === Number(v)); return json(route, { mode: "snapshot", version: rv.version, definition: rv.definition, theme: rv.theme, results: rv.snapshot, publishedAt: rv.published_at }); }
++    return json(route, { mode: "live", definition: r.definition, theme: DEFAULT_THEME, results: reportResults(r.definition), computedAt: now() });
++  }
++  if (action === "versions") return json(route, { versions: (head === "analyses" ? store.analysisVersions.filter((v) => v.analysis_id === itemId) : store.reportVersions.filter((v) => v.report_id === itemId)).sort((a, b) => b.version - a.version) });
++  if (action === "access") return json(route, { events: [] });
++  /* the rail's verbs (route: POST analyses/reorder, POST analyses/<id>/duplicate; PUT accepts position) */
++  if (head === "analyses" && itemId === "reorder" && m === "POST") { let pos = 0; for (const id of body.ids) { const a = store.analyses.find((x) => x.id === id); if (a) a.position = pos++; } return json(route, { ok: true, ordered: pos }); }
++  if (head === "analyses" && action === "duplicate" && m === "POST") {
++    const src = store.analyses.find((x) => x.id === itemId); if (!src) return json(route, { error: "Unknown item." }, 404);
++    const name = body.name?.trim() || `${src.name} (copy)`;
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind: src.kind, definition: { ...src.definition, name }, version: 1, position: null };
++    store.analyses.push(row); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: `Duplicated from “${src.name}”`, created_at: now() }); store.audit.push("analytics.analysis_created");
++    return json(route, { item: row }, 201);
++  }
++  if (!store[head]) return json(route, { error: "Unknown analytics endpoint." }, 404);
++  if (m === "GET" && !itemId) {
++    const kind = url.searchParams.get("kind");
++    const items = coll(head).filter((x) => !x.deleted_at && (!kind || x.kind === kind));
++    // analyses: arranged first in their order, then newest first — the route's ORDER BY
++    if (head === "analyses") items.sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || (a.updated_at < b.updated_at ? 1 : -1));
++    return json(route, { items });
++  }
++  if (m === "GET") return json(route, { item: coll(head).find((x) => x.id === itemId) });
++  if (m === "POST") {
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now() };
++    if (head === "analyses") { Object.assign(row, { name: body.name, kind: body.definition.kind, definition: { ...body.definition, name: body.name }, version: 1 }); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: "Created", created_at: now() }); store.audit.push("analytics.analysis_created"); }
++    if (head === "charts") { Object.assign(row, { analysis_id: body.analysisId, name: body.name, spec: body.spec, theme_id: body.themeId ?? null, style_version: 1 }); store.audit.push("analytics.chart_created"); }
++    if (head === "segments") Object.assign(row, { kind: body.kind ?? "segment", name: body.name, description: body.description, color: body.color, condition: body.condition });
++    if (head === "themes") Object.assign(row, { name: body.name, theme: body.theme, survey_id: body.scope === "survey" ? SURVEY : null, customer_id: "c" });
++    if (head === "reports") Object.assign(row, { kind: body.kind ?? "report", name: body.name, mode: body.mode ?? "live", theme_id: null, published_version: null, definition: body.definition ?? (body.kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: "live", blocks: [{ id: "cover", type: "cover", title: body.name }] }) });
++    if (head === "shares") { const r = store.reports.find((x) => x.id === body.reportId); if (!r.published_version) return json(route, { error: "Publish the report before sharing it — a share link always points at a published version." }, 409); Object.assign(row, { report_id: body.reportId, token: uid().replace(/-/g, "") + "tok", access: body.access ?? "link", permission: body.permission ?? "viewer", report_version: body.pinVersion ? r.published_version : null, has_password: !!body.password, password: body.password ?? null, expires_at: body.expiresAt ?? null, revoked_at: null, allowed_emails: body.emails ?? [], view_count: 0, label: body.label ?? null }); store.audit.push("analytics.report_shared"); }
++    coll(head).push(row);
++    return json(route, { item: row }, 201);
++  }
++  if (m === "PUT") {
++    const row = coll(head).find((x) => x.id === itemId);
++    if (head === "analyses" && body.definition) { const strip = (d) => { const { formatting: _f, ...o } = d.options ?? {}; return JSON.stringify({ ...d, name: 0, options: o }); }; const changed = strip(row.definition) !== strip(body.definition); row.definition = body.definition; if (changed) { row.version++; store.analysisVersions.push({ analysis_id: row.id, version: row.version, definition: body.definition, created_at: now() }); } }
++    if (head === "analyses" && (body.position === null || typeof body.position === "number")) row.position = body.position;
++    if (head === "charts" && body.spec) { row.spec = body.spec; row.style_version++; }
++    for (const k of ["name", "definition", "mode", "condition", "theme", "description", "color"]) if (body[k] !== undefined && !(head === "analyses" && k === "definition")) row[k] = body[k];
++    if (body.themeId !== undefined) row.theme_id = body.themeId;
++    row.updated_at = now();
++    return json(route, { item: row });
++  }
++  if (m === "PATCH") { const row = coll(head).find((x) => x.id === itemId); if (body.revoke) { row.revoked_at = now(); store.audit.push("analytics.share_revoked"); } if (body.reshare) { row.revoked_at = null; row.token = uid().replace(/-/g, "") + "tok"; } for (const k of ["access", "permission"]) if (body[k]) row[k] = body[k]; if (body.expiresAt !== undefined) row.expires_at = body.expiresAt; return json(route, { item: row }); }
++  if (m === "DELETE") { const row = coll(head).find((x) => x.id === itemId); if (head === "shares") row.revoked_at = now(); else row.deleted_at = now(); return json(route, { ok: true }); }
++  return json(route, { error: "unhandled" }, 500);
++}
++
++/** The public door, mirroring rescript_resolve_share: revoked / expired / password / snapshot only. */
++async function fakeShare(route) {
++  const req = route.request(); const url = new URL(req.url());
++  const token = url.pathname.split("/").pop();
++  const s = store.shares.find((x) => x.token === token);
++  if (!s) return json(route, { error: "This link is not valid." }, 404);
++  const r = store.reports.find((x) => x.id === s.report_id);
++  if (s.revoked_at) return json(route, { error: "This shared report has been revoked by its owner.", status: "revoked" }, 410);
++  if (s.expires_at && new Date(s.expires_at) < new Date()) return json(route, { error: "This shared link has expired.", status: "expired" }, 410);
++  const pw = req.headers()["x-share-password"];
++  if (s.password && pw !== s.password) return json(route, { error: pw ? "That password is not correct." : "This report is password protected.", status: "password", reportName: r.name }, 401);
++  const v = store.reportVersions.filter((x) => x.report_id === r.id).find((x) => x.version === (s.report_version ?? r.published_version));
++  if (!v) return json(route, { error: "This report is not available.", status: "unpublished" }, 404);
++  if (req.method() === "POST") {
++    if (s.permission !== "download") return json(route, { error: "Downloads are not enabled for this shared report.", status: "no_download" }, 403);
++    const body = JSON.parse(req.postData() || "{}");
++    const buf = body.format === "xlsx" ? await buildXlsx({ report: v.definition, results: v.snapshot, theme: v.theme }) : await buildPptx({ report: v.definition, results: v.snapshot, theme: v.theme });
++    store.lastShareDownload = { format: body.format, bytes: buf.length };
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "content-disposition": `attachment; filename="r.${body.format}"` }, body: buf });
++  }
++  s.view_count++;
++  return json(route, { report: { name: r.name, title: v.definition.title, subtitle: v.definition.subtitle, blocks: v.definition.blocks, story: v.definition.story ?? null, widgets: v.definition.widgets ?? null, hero: v.definition.hero ?? null, bands: v.definition.bands ?? null, viewerSegments: v.definition.viewerSegments ?? [], branding: v.definition.branding ?? {} }, theme: v.theme, results: v.snapshot, version: v.version, publishedAt: v.published_at, mode: "snapshot", dataset: v.dataset, permission: s.permission });
++}
++
++/* ------------------------------------------------------------ browser */
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
++await ctx.addCookies([{ name: "rescript_session", value: "fake", url: STUDIO }]);
++const page = await ctx.newPage();
++page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
++/*
++ * One dialog handler for the whole run. `promptAnswer` lets a test decide what
++ * a prompt() should return — Playwright allows only ONE handler, so a
++ * `page.once` alongside this one throws "already handled" rather than winning.
++ */
++let promptAnswer = "";
++let confirmAnswer = true; const dialogs = [];
++page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); if (d.type() === "confirm" && !confirmAnswer) return d.dismiss(); return d.accept(d.type() === "prompt" ? promptAnswer : undefined); });
++const user = { userId: "u1", userCode: "U-0001", name: "Ana Lyst", email: "ana@example.com", platformRole: "user", isPlatformAdmin: false, sessionId: "s1", unread: 0, policies: { heartbeatSeconds: 600 } };
++await page.route("**/api/auth/me", (r) => json(r, user));
++await page.route("**/api/auth/heartbeat**", (r) => json(r, { ok: true }));
++await page.route("**/api/surveys", (r) => json(r, { surveys: [{ id: SURVEY, code: "SYN", title: "Synthetic Study 2026", status: "live", myRole: "owner", roleSource: "owner", updated_at: now(), version: "1.0" }] }));
++await page.route(`**/api/surveys/${SURVEY}/analytics/**`, fakeApi);
++await page.route(`**/api/surveys/${SURVEY}/analytics`, fakeApi);
++await page.route("**/api/share/**", fakeShare);
++
++const text = (sel) => page.$eval(sel, (e) => e.textContent.replace(/\s+/g, " ").trim());
++/* AX_SHOTS=<dir> writes a screenshot at each named point — for visual review, not assertions */
++const shot = async (name) => { if (process.env.AX_SHOTS) await page.screenshot({ path: `${process.env.AX_SHOTS}/${name}.png`, fullPage: false }); };
++const count = (sel) => page.$$eval(sel, (es) => es.length);
++
++
++const mkAnalysis = (name, { env = "LIVE", kind = "descriptive", variables = ["SAT"], extra = {} } = {}) => {
++  const id = uid(); const definition = { name, kind, dataset: { environment: env, dataset: "all" }, variables, ...extra };
++  const row = { id, survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind, definition, version: 1, position: null };
++  store.analyses.push(row); store.analysisVersions.push({ analysis_id: id, version: 1, definition, summary: "", created_at: now() });
++  return row;
++};
++const mkReport = (name, definition) => {
++  const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
++  store.reports.push(row); return row;
++};
++const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
++const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
++const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
++
++/* ------------------------------------------------------------------ 1 */
++
++/* ------------------------------------------------------------------ seed */
++const sat = mkAnalysis("Overall satisfaction", { variables: ["SAT"] });
++const consider = mkAnalysis("Brands considered", { variables: ["CONSIDER"] });
++const xt = mkAnalysis("Satisfaction by gender", { kind: "crosstab", variables: [], extra: { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col" } });
++const broken = mkAnalysis("Region split", { variables: ["REGION"] });
++const dupe = mkAnalysis("Satisfaction again", { variables: ["SAT"] });
++store.failIds = new Set([broken.id]);
++const framed = (sel) => page.frameLocator(sel);
++const fx = '[data-testid="ax-story-preview"]';
++
++/* ------------------------------------------------------------------ 1 */
++console.log("\n§1 THE BUILDER — brief, review, create");
++await openReports();
++await page.click('[data-testid="ax-build-report"]');
++await page.waitForSelector('[data-testid="ax-builder"]');
++assert.equal(await page.$eval('[data-testid="ax-builder-draft"]', (b) => b.disabled), true, "no objective and no question: nothing to build around");
++await page.fill('[data-testid="ax-builder-objective"]', "Understand how satisfied customers are and which brands they consider");
++await page.fill('[data-testid="ax-builder-questions"]', "How satisfied are customers overall?\nWhat is the average delivery time?");
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-review"]');
++assert.equal(store.reports.length, 0, "a draft saves nothing — the review comes first");
++const incl = await page.$$eval('[data-testid="ax-builder-included"]', (es) => es.map((e) => e.textContent.replace(/\s+/g, " ")));
++assert.equal(incl.length, 3, `satisfaction, brands, satisfaction by gender: ${incl.join(" || ")}`);
++const consText = incl.find((t) => t.includes("Brands considered"));
++assert.match(consText, /bar horizontal/, "multiple-choice: horizontal bars");
++assert.match(consText, /several answers were allowed.*more than 100%/, "with its denominator");
++assert.match(incl.find((t) => t.includes("Overall satisfaction")), /answers a key question/);
++ok("the review shows each chart, why it was chosen and what its percentages are of");
++const skipped = await page.$$eval('[data-testid="ax-builder-skipped"]', (es) => es.map((e) => e.textContent.replace(/\s+/g, " ")));
++assert.equal(skipped.length, 2);
++assert.ok(skipped.some((s) => /Region split.*could not be computed|Region split — /.test(s)), `the failed analysis is listed: ${skipped.join(" | ")}`);
++assert.ok(skipped.some((s) => /Satisfaction again.*exactly what “Overall satisfaction”/.test(s)), "the repeat names what it repeats");
++ok("analyses that cannot be shown or repeat another are left out, each with its reason");
++const notes = await page.$$eval('[data-testid="ax-builder-note"]', (es) => es.map((e) => e.textContent));
++assert.ok(notes.some((n) => /No saved analysis answers/.test(n) && /delivery time/.test(n)), "the key question nothing answers is named, not papered over");
++ok("a key question no saved analysis answers is reported");
++// untick one and rebuild
++await page.click('[data-testid="ax-builder-included"]:has-text("Brands considered") input[type=checkbox]');
++await page.click('[data-testid="ax-builder-rebuild"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-builder-included"]').length === 2);
++assert.equal(store.drafts, 2); assert.equal(store.reports.length, 0);
++ok("unticking an analysis rebuilds the draft without it, still saving nothing");
++// put it back through a fresh brief so the story has a battery of scales later: go back and re-draft with everything
++await page.click('text=← Change the brief');
++await page.fill('[data-testid="ax-builder-objective"]', "Understand how satisfied customers are and which brands they consider");
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-review"]');
++await page.click('[data-testid="ax-builder-create"]');
++await page.waitForSelector('[data-testid="ax-report-builder"]');
++assert.equal(store.reports.length, 1);
++const made = store.reports[0];
++assert.equal(made.definition.blocks[0].type, "cover");
++ok("Create writes one report and opens it");
++
++/* ------------------------------------------------------------------ 2 */
++console.log("\n§2 THE REPORT — every sentence from the results");
++const bodyText = await page.$eval('[data-testid="ax-report-builder"]', (e) => e.textContent.replace(/\s+/g, " "));
++assert.match(bodyText, /400 respondents in the selected data/);
++assert.match(bodyText, /% of all 400 respondents/);
++assert.match(bodyText, /several answers were allowed, so the bars add to more than 100%/);
++assert.match(bodyText, /39\.5%/, "the headline of the satisfaction analysis, as the analysis printed it");
++for (const b of made.definition.blocks.filter((x) => x.type === "chart")) assert.ok(store.analyses.some((a) => a.id === b.analysisId), "every chart block points at a saved analysis");
++ok("captions are the analyses' own insights with their denominators; every chart reads a saved analysis");
++
++/* ------------------------------------------------------------------ 3 */
++console.log("\n§3 THE STORY — preview, edit, regenerate, save");
++await page.click('[data-testid="ax-story-toggle"]');
++await page.waitForSelector('[data-testid="ax-story"]');
++const nScenes = await count('[data-testid="ax-story-scene"]');
++assert.ok(nScenes >= 6, `title, objective, sample, findings, summary: ${nScenes}`);
++await page.waitForSelector(fx);
++assert.equal(await framed(fx).locator(".scene").count(), nScenes, "the preview has every scene");
++assert.match(await framed(fx).locator(".scene").first().textContent(), /Understand how satisfied|Survey findings/);
++ok("the story the builder made opens in the Story tab and is previewed with the real renderer");
++// edit a finding
++await page.click('[data-testid="ax-story-scene"]:has-text("Overall satisfaction")');
++await page.waitForSelector('[data-testid="ax-story-editor"]');
++const original = await page.inputValue('[data-testid="ax-story-text"]');
++assert.match(original, /Overall satisfaction/);
++await page.fill('[data-testid="ax-story-text"]', "Most customers are fairly satisfied.");
++await page.waitForFunction(() => document.querySelector('[data-testid="ax-story-preview"]').srcdoc.includes("Most customers are fairly satisfied."));
++assert.match(await page.$eval('[data-testid="ax-story-editor"]', (e) => e.textContent), /written by you/);
++ok("edited text shows in the preview and is marked as the researcher's own");
++const opts = await page.$$eval('[data-testid="ax-story-chart"] option', (os) => os.map((o) => o.value));
++assert.ok(opts.includes("bar_vertical") && !opts.includes("nonsense") && opts.length >= 2, `only charts the result can draw: ${opts}`);
++await page.selectOption('[data-testid="ax-story-chart"]', "bar_horizontal");
++await page.waitForFunction(() => document.querySelector('[data-testid="ax-story-preview"]').srcdoc.includes('class="bar h"'));
++ok("the chart can be changed per scene, to one the data can draw");
++// regenerate restores the engine's words
++await page.click('[data-testid="ax-story-regenerate"]');
++await page.waitForFunction((o) => document.querySelector('[data-testid="ax-story-text"]').value === o, original);
++assert.equal(await page.$eval('[data-testid="ax-story-chart"]', (s) => s.value), "bar_horizontal", "a chart choice that is still valid survives regeneration");
++ok("regenerating a scene rebuilds it from its analysis and keeps a still-valid chart choice");
++// hide a scene
++await page.click('[data-testid="ax-story-scene"]:has-text("Brands considered")');
++await page.uncheck('[data-testid="ax-story-editor"] input[type=checkbox]');
++await page.waitForFunction((n) => document.querySelector('[data-testid="ax-story-preview"]').srcdoc.split('data-scene="').length - 1 === n - 1, nScenes);
++ok("a scene can be hidden from the story");
++// export is blocked while there are unsaved edits
++assert.equal(await page.$eval('[data-testid="ax-story-export"]', (b) => b.disabled), true, "export reads the saved story");
++await page.click('[data-testid="ax-report-save"]');
++await page.waitForFunction(() => document.querySelector('[data-testid="ax-report-save"]').textContent.trim() === "Saved");
++assert.equal(store.reports[0].definition.story.scenes.filter((s) => s.hidden).length, 1);
++ok("saving persists the story, hidden scene included");
++// reload: still there
++await openReport(made.name);
++assert.match(await text('[data-testid="ax-story-toggle"]'), /Story ●/);
++await page.click('[data-testid="ax-story-toggle"]');
++await page.waitForSelector(fx);
++assert.equal(await count('[data-testid="ax-story-scene"]'), nScenes);
++ok("after a reload the story is as saved");
++
++/* a report that has no story offers to build one from its own analyses */
++const handmade = mkReport("Hand-made", { title: "Hand-made", mode: "live", blocks: [{ id: "c0", type: "cover", title: "Hand-made" }, { id: "c1", type: "chart", title: "Satisfaction", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } }, { id: "c2", type: "chart", title: "By gender", analysisId: xt.id, chart: { type: "bar_grouped", options: {} } }] });
++await openReport("Hand-made");
++await page.click('[data-testid="ax-story-toggle"]');
++await page.waitForSelector('[data-testid="ax-story-empty"]');
++await page.click('[data-testid="ax-story-make"]');
++await page.waitForSelector(fx);
++const types = await page.$$eval('[data-testid="ax-story-scene"]', (es) => es.map((e) => e.textContent));
++assert.ok(types.length >= 4 && /Overall satisfaction|Satisfaction/.test(types.join(" ")));
++assert.equal(await page.$eval('[data-testid="ax-report-save"]', (b) => b.textContent.trim()), "Save", "the new story is an unsaved edit until saved");
++ok("a report with no story offers to build one from its own charts — as an unsaved edit");
++confirmAnswer = true;
++await openReport(made.name);
++await page.click('[data-testid="ax-story-toggle"]'); await page.waitForSelector(fx);
++
++/* ------------------------------------------------------------------ 4 */
++console.log("\n§4 EXPORT — one HTML file that really plays");
++const [dl] = await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-story-export"]')]);
++const fs = await import("node:fs");
++const file = `${process.env.AX_OUT ?? "/tmp"}/story-test.html`;
++await dl.saveAs(file);
++const html = fs.readFileSync(file, "utf8");
++assert.match(html, /^<!doctype html>/);
++assert.equal((html.match(/data-scene="/g) ?? []).length, nScenes - 1, "every visible scene, no hidden one");
++assert.ok(!/(src|href)="https?:/.test(html), "no network reference");
++assert.match(await text('[data-testid="ax-story-msg"]'), /Story downloaded.*without narration/);
++ok("the story downloads as a self-contained file, and says it has no narration");
++await page.check('[data-testid="ax-story"] .card:has-text("Export") input[type=checkbox]');
++await Promise.all([page.waitForEvent("download"), page.click('[data-testid="ax-story-export"]')]);
++assert.equal(store.lastStoryExport.narration, true);
++assert.match(await text('[data-testid="ax-story-msg"]'), /No speech provider is configured, so the story was exported without narration/);
++ok("asking for narration without a speech provider says so — never a silent success");
++assert.match(await text('[data-testid="ax-story"]'), /Video \(MP4\) is not available/);
++ok("video is not offered, and the page says why");
++// play the file in a real browser
++const net = []; const errs = [];
++const player = await ctx.newPage();
++player.on("pageerror", (e) => errs.push(e.message)); player.on("console", (m) => m.type() === "error" && errs.push(m.text()));
++await player.route("**/*", (r) => { const u = r.request().url(); if (u.startsWith("file:") || u.startsWith("data:") || u.startsWith("about:")) return r.continue(); net.push(u); return r.abort(); });
++await player.goto(`file://${file}`);
++await player.waitForSelector(".scene.on");
++const total = await player.$$eval(".scene", (s) => s.length);
++assert.equal((await player.$eval("#count", (e) => e.textContent)), `1 / ${total}`);
++await player.keyboard.press("ArrowRight");
++assert.equal((await player.$eval("#count", (e) => e.textContent)), `2 / ${total}`);
++await player.keyboard.press("ArrowLeft");
++await player.click("#play");
++await player.waitForFunction(() => document.querySelector("#count").textContent.startsWith("2 /"), null, { timeout: 12000 });
++await player.click("#play");
++assert.match(await player.$eval("#play", (e) => e.textContent), /Play/, "pauses");
++await player.click("#cc");
++assert.ok(await player.$eval("#stage", (e) => e.classList.contains("caps")), "captions toggle");
++if (process.env.AX_SHOTS) { await player.keyboard.press("ArrowRight"); await player.waitForTimeout(1200); await player.screenshot({ path: `${process.env.AX_SHOTS}/story-scene.png` }); }
++assert.deepEqual(errs, [], "no console errors while playing");
++assert.deepEqual(net, [], "no network request while playing");
++ok("the exported file plays: scenes advance by themselves, keyboard and captions work, no errors, no network");
++await player.close();
++
++/* ------------------------------------------------------------------ 5 */
++console.log("\n§5 SHARING — the shared page plays the frozen story");
++await page.click('[data-testid="ax-report-publish"]');
++await page.waitForSelector('.ax-ok:has-text("Published version 1")');
++const snap = store.reportVersions[0].snapshot;
++assert.ok(Object.keys(snap).length >= 3, "the snapshot holds every analysis the report and story read");
++await page.click('[data-testid="ax-report-share"]');
++await page.waitForSelector('[data-testid="ax-share-dialog"]');
++await page.click('[data-testid="ax-share-create"]');
++await page.waitForSelector('[data-testid="ax-share-link"] input');
++const link = await page.$eval('[data-testid="ax-share-link"] input', (e) => e.value);
++const anon = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
++await anon.route("**/api/share/**", fakeShare);
++const pub = await anon.newPage();
++await pub.goto(link, { waitUntil: "networkidle" });
++await pub.waitForSelector('[data-testid="ax-share-view"]');
++await pub.click('[data-testid="ax-share-story"]');
++const sf = pub.frameLocator('[data-testid="ax-share-story-frame"]');
++await sf.locator(".scene.on").first().waitFor();
++assert.equal(await sf.locator(".scene").count(), nScenes - 1);
++const shared = await pub.frameLocator('[data-testid="ax-share-story-frame"]').locator("body").innerHTML();
++assert.ok(/<text[^>]*class="val"[^>]*>39\.5%</.test(shared), "the shared story DRAWS the frozen snapshot's number in a chart, not only in its sentence");
++assert.ok(!shared.includes("has no results to draw"), "no scene of the shared story is blank");
++// change the live data: the shared story must not move
++store.analyses.find((a) => a.id === sat.id).definition.variables = ["REGION"];
++await pub.reload({ waitUntil: "networkidle" }); await pub.click('[data-testid="ax-share-story"]');
++assert.ok(/<text[^>]*class="val"[^>]*>39\.5%</.test(await pub.frameLocator('[data-testid="ax-share-story-frame"]').locator("body").innerHTML()), "a saved-analysis edit after publishing does not change the shared story");
++store.analyses.find((a) => a.id === sat.id).definition.variables = ["SAT"];
++ok("the shared story plays from the published snapshot — not live data, not blank");
++await anon.close();
++
++/* ------------------------------------------------------------------ 6 */
++console.log("\n§6 INTERPRETATION — a model's words pass the number gate or are dropped");
++store.fakeModel = { implications: ["The most common satisfaction answer may be “4”, at 39.5%, which suggests broad satisfaction.", "Satisfaction rose by 37% last quarter."], recommendations: ["Follow up with the 400 respondents on what drives the gap."] };
++await openReports();
++await page.click('[data-testid="ax-build-report"]');
++await page.fill('[data-testid="ax-builder-objective"]', "Understand satisfaction");
++await page.check('text=add an AI-written interpretation >> input');
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-review"]');
++const mtxt = await text('[data-testid="ax-builder-model"]');
++assert.match(mtxt, /2 of 3 model sentences passed the number check/);
++assert.match(mtxt, /37%.*not in the run/);
++await page.click('[data-testid="ax-builder-create"]');
++await page.waitForSelector('[data-testid="ax-report-builder"]');
++const rep2 = store.reports[store.reports.length - 1];
++assert.ok(rep2.definition.blocks.some((b) => b.type === "section" && b.title === "Interpretation"));
++assert.ok(!JSON.stringify(rep2.definition).includes("37%"), "the invented number is in nothing that was saved");
++await page.click('[data-testid="ax-story-toggle"]');
++await page.waitForSelector(fx);
++const frameHtml = await page.$eval(fx, (f) => f.srcdoc);
++assert.match(frameHtml, /Interpretation<span class="tag">not a finding<\/span>/, "the reading is labelled on screen");
++assert.ok(!frameHtml.includes("37%"));
++ok("the review states what passed and what was dropped; the dropped sentence is nowhere in the saved report");
++store.fakeModel = null;
++
++/* ------------------------------------------------------------------ 7 */
++console.log("\n§7 EMPTY STATE — no analyses, no blank report");
++const keep = store.analyses.splice(0, store.analyses.length);
++await openReports();
++await page.click('[data-testid="ax-build-report"]');
++await page.fill('[data-testid="ax-builder-objective"]', "Anything");
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-error"]');
++assert.match(await text('[data-testid="ax-builder-error"]'), /no saved analyses yet.*Create the analyses first/);
++assert.equal(store.reports.length, 3, "nothing was created");
++store.analyses.push(...keep);
++ok("with no saved analyses the builder says what to do instead of producing an empty report");
++
++/* every analysis failing: the review says nothing could be shown and creating is not offered */
++store.failIds = new Set(store.analyses.map((a) => a.id));
++await openReports();
++await page.click('[data-testid="ax-build-report"]');
++await page.fill('[data-testid="ax-builder-objective"]', "Anything");
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-review"]');
++assert.match(await text('[data-testid="ax-builder-review"]'), /Nothing could be shown/);
++assert.equal(await page.$eval('[data-testid="ax-builder-create"]', (b) => b.disabled), true);
++assert.equal(await count('[data-testid="ax-builder-included"]'), 0);
++assert.ok((await count('[data-testid="ax-builder-skipped"]')) >= 3, "every analysis is listed with its reason");
++ok("when nothing can be shown the review says so and Create is not offered");
++
++console.log(`\n${passed} checks passed`);
++await browser.close();
+-- 
+2.43.0
+
+

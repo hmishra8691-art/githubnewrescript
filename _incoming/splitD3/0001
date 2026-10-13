@@ -1,0 +1,80 @@
+From 1ef3704bbd0f7c3bbd15ae1fdc41823ee0b54c1d Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Sun, 11 Oct 2026 07:45:48 +0000
+Subject: [PATCH 3/3] Page-guard suite: the bare project URL is the overview;
+ the editor is ?tab=
+
+blocker-fixes-test R3 fetched /studio/<id> expecting the questionnaire in
+the server HTML. Since the overview landing (058da08) the bare URL is the
+overview shell, which carries no definition; the editor with the definition
+is the ?tab= URL. The check now covers both: a member gets the overview
+shell (no question text in it) and the editor at ?tab=questions (with it);
+a stranger is told "not found" on both URLs and sees neither the question
+nor the option labels. 30/30. The report records the full browser-corpus
+result (128/137; the 9 failures are the known baseline set).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ ...HBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md |  2 +-
+ scripts/blocker-fixes-test.mjs                | 24 ++++++++++++-------
+ 2 files changed, 17 insertions(+), 9 deletions(-)
+
+diff --git a/docs/DASHBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md b/docs/DASHBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md
+index dd63546..81dfb85 100644
+--- a/docs/DASHBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md
++++ b/docs/DASHBOARD-OVERVIEW-QSF-FIDELITY-2026-10-11.md
+@@ -113,7 +113,7 @@ All in `packages/import` (`src/adapters/qsf.ts`, `src/map.ts`, `src/canonical.ts
+ - `scripts/import-engine-test.mjs` (browser): 8 pass, extended with the fidelity bar, the per-feature detail, the element table, and the engine check on a new-project preview (absent on a merge preview, where nothing is claimed). UI mutations: 2 / 2 caught.
+ - Priority 1: `lib/projectOverview.test.ts` (mutation 5 / 5), `scripts/dashboard-overview-test.mjs` 5 checks (UI mutations 5 / 5 caught after the pill test was strengthened with a sub-cent balance), `scripts/project-meter-test.mjs` rewritten.
+ - Every package: `pnpm -r test` green (engine 1772, analytics 255, studio 295, import 49, …). Studio typecheck, `auth-guard-audit` (171 handlers, 0 problems), public docs check: clean.
+-- Full browser corpus (137 suites): running at the time of writing; the result is appended in §7a of the commit message / the project note. Known baseline failures (ai-conversation, auth-collaboration, billing, dashboard-outage, listfill-allocation, lock-concurrency, picker-taxonomy, qa-fixes, quality, version-scoped-export) are unchanged by this work.
++- Full browser corpus (137 suites, `$SP/batch.sh`, servers restarted every 6): **128 pass**; the 9 failures are the known baseline set (auth-collaboration, billing at "insufficient balance → 402", dashboard-outage, listfill-allocation, lock-concurrency, picker-taxonomy, qa-fixes, quality, version-scoped-export) and are unchanged by this work; ai-conversation, also in the baseline set, passed this time. Six suites that failed under load (blocks, brand-url-import, analytics, p0-session, response-data — dev-server restarts and toast timing — and blocker-fixes) were rerun alone: five pass unchanged; **blocker-fixes was a real regression of Priority 1** — its page-guard check fetched the bare `/studio/<id>` expecting the questionnaire in the HTML, which is now the overview shell. The check was extended rather than weakened: a member gets the overview shell (no definition in it) and the editor at `?tab=questions` (with the definition); a stranger gets "not found" on both URLs. 30 / 30 pass.
+ 
+ ## 8. Remaining limitations — partial / recommended
+ 
+diff --git a/scripts/blocker-fixes-test.mjs b/scripts/blocker-fixes-test.mjs
+index 4c67d5c..8418083 100644
+--- a/scripts/blocker-fixes-test.mjs
++++ b/scripts/blocker-fixes-test.mjs
+@@ -315,7 +315,13 @@ try {
+   console.log("\nR3 — the studio page authorizes before it reads");
+   {
+     role = "owner";
+-    const mine = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
++    /* the bare project URL is the overview (dashboard brief §2); the editor, with the definition in the page, is the ?tab= URL */
++    const overview = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
++    const overviewPage = await overview.text();
++    eq("a member gets the project overview", overview.status, 200);
++    ok("...and is not turned away", !/not found|cannot open this project/i.test(overviewPage), overviewPage.replace(/\s+/g, " ").slice(0, 200));
++    ok("...the overview shell, which carries no questionnaire of its own", overviewPage.includes("project-overview") && !overviewPage.includes(SECRET_QUESTION), "the overview page served the definition in its HTML");
++    const mine = await fetch(`${BASE}/studio/${SURVEY}?tab=questions`, { headers: cookie });
+     const minePage = await mine.text();
+     eq("a member gets the editor", mine.status, 200);
+     ok("...and is not turned away", !/not found|cannot open this project/i.test(minePage),
+@@ -325,13 +331,15 @@ try {
+   }
+   {
+     role = null;   // not a member of this project at all
+-    const theirs = await fetch(`${BASE}/studio/${SURVEY}`, { headers: cookie });
+-    const page = await theirs.text();
+-    ok("a stranger does NOT get the questionnaire", !page.includes(SECRET_QUESTION),
+-      "the survey's question text was served to a user with no role on it");
+-    ok("...nor the option labels", !page.includes("Under 20k"), "option labels leaked");
+-    ok("...and is told 'not found', the same as a project that does not exist",
+-      /not found/i.test(page), page.replace(/\s+/g, " ").slice(0, 300));
++    for (const url of [`${BASE}/studio/${SURVEY}`, `${BASE}/studio/${SURVEY}?tab=questions`]) {
++      const theirs = await fetch(url, { headers: cookie });
++      const page = await theirs.text();
++      ok(`a stranger does NOT get the questionnaire (${url.includes("tab=") ? "editor" : "overview"} URL)`, !page.includes(SECRET_QUESTION),
++        "the survey's question text was served to a user with no role on it");
++      ok("...nor the option labels", !page.includes("Under 20k"), "option labels leaked");
++      ok("...and is told 'not found', the same as a project that does not exist",
++        /not found/i.test(page), page.replace(/\s+/g, " ").slice(0, 300));
++    }
+     role = "owner";
+   }
+   {
+-- 
+2.43.0
+

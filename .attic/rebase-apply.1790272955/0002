@@ -1,0 +1,2175 @@
+From 487cb9b1e65da60a86fb93ef553269ce197058c8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 17:16:13 +0000
+Subject: [PATCH 2/3] =?UTF-8?q?Multi-modal=20foundation=20(2/2):=20mode,?=
+ =?UTF-8?q?=20one=20selection,=20commands,=20=E2=8C=98K?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Studio half of Phase 0. No new environment is visible yet; what lands
+is the layer every environment will be a renderer over, wired into the
+shell without changing what any existing panel does.
+
+  · Programming mode — lib/programmingMode.ts + ModeContext: studio | grid |
+    architect | flow | intelligent, resolved URL → memory → default, with an
+    unavailable mode falling back rather than opening on nothing. A selector
+    in the top bar shows all five; the four without a renderer are disabled
+    with their tagline. Switching is a state change: no reload, no refetch,
+    `?mode=` kept in step with replaceState.
+
+  · One selection — lib/selection.ts (a pure reducer: select / toggle /
+    shift-range / set / drop) + SelectionContext, keyed by the engine's
+    ObjectKey so a grid row, a flow node and a display rule are the same
+    kind of thing. The store's `selectedQuestionId` is now a mirror of the
+    question primary, in both directions, so every panel and browser suite
+    that reads it is untouched.
+
+  · Commands — lib/commands/core.ts (types, shortcut parsing, fuzzy ranking,
+    applicability) and builtins.ts (add question / block / branch /
+    randomizer / loop / quota check / embedded data / display rule /
+    calculation, duplicate, move, undo/redo, save, test, preview, one
+    "Open <tab>" per tab, and object finders for questions, calcs and
+    rules). Each calls the same engine function the panel button calls.
+    CommandContext is the one keyboard handler: a chord fires only when its
+    command applies and never while typing unless marked global (⌘K, ⌘S).
+    Shortcuts that browsers own (⌘1–9, ⌘⇧N, ⌘⇧T) were deliberately avoided.
+
+  · ⌘K — CommandPalette: empty query lists applicable commands grouped;
+    typing ranks commands and survey objects together, so "Q14" jumps to
+    Q14 and "adq" offers Add question. ↑ ↓ Enter Esc; a top-bar button for
+    people who do not know the key.
+
+  · Flow node defaults moved from FlowPanel to blockModel.newFlowNode so
+    the palette inserts exactly the node the panel would.
+
+Found along the way and fixed: PropertiesPanel called two hooks after its
+early returns, so every select/deselect logged React's hooks-order warning;
+hoisted. scripts/test-survey-sync-test.mjs still asserted the `?v=` pin and
+the "please retry" toast that the live-sync and save-flow fixes removed;
+brought up to the current contracts.
+
+Tests: lib/multimodalFoundation.test.ts (18, pure) and
+scripts/multimodal-foundation-test.mjs (31, browser; asserts a clean
+console). Mutation-checked: typing guard removed → caught; selection not
+mirrored → caught. Regression sweep green: context-right-panel,
+properties-accordion, block-actions, canvas (38), flow-dnd, logic-builder,
+save-integrity, blocks, expression-editor, collaboration (57),
+test-survey-sync. Packages: 2 416 tests, 0 failing. Studio lib: 115.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             |  83 ++++++
+ .../components/studio/CommandContext.tsx      | 164 +++++++++++
+ .../components/studio/CommandPalette.tsx      | 131 +++++++++
+ apps/studio/components/studio/FlowPanel.tsx   |  28 +-
+ apps/studio/components/studio/ModeContext.tsx |  58 ++++
+ .../studio/components/studio/ModeSelector.tsx |  42 +++
+ .../components/studio/PropertiesPanel.tsx     |  13 +-
+ .../components/studio/SelectionContext.tsx    |  80 +++++
+ apps/studio/components/studio/Studio.tsx      |  61 +++-
+ apps/studio/components/studio/blockModel.ts   |  26 ++
+ apps/studio/lib/commands/builtins.ts          | 268 +++++++++++++++++
+ apps/studio/lib/commands/core.ts              | 178 ++++++++++++
+ apps/studio/lib/multimodalFoundation.test.ts  | 258 +++++++++++++++++
+ apps/studio/lib/programmingMode.ts            |  72 +++++
+ apps/studio/lib/selection.ts                  |  98 +++++++
+ scripts/multimodal-foundation-test.mjs        | 274 ++++++++++++++++++
+ scripts/test-survey-sync-test.mjs             |  38 ++-
+ 17 files changed, 1833 insertions(+), 39 deletions(-)
+ create mode 100644 apps/studio/components/studio/CommandContext.tsx
+ create mode 100644 apps/studio/components/studio/CommandPalette.tsx
+ create mode 100644 apps/studio/components/studio/ModeContext.tsx
+ create mode 100644 apps/studio/components/studio/ModeSelector.tsx
+ create mode 100644 apps/studio/components/studio/SelectionContext.tsx
+ create mode 100644 apps/studio/lib/commands/builtins.ts
+ create mode 100644 apps/studio/lib/commands/core.ts
+ create mode 100644 apps/studio/lib/multimodalFoundation.test.ts
+ create mode 100644 apps/studio/lib/programmingMode.ts
+ create mode 100644 apps/studio/lib/selection.ts
+ create mode 100644 scripts/multimodal-foundation-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 87c5fac..b65e469 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -662,3 +662,86 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .media-url-compact > .input { width: 100%; min-width: 0; }
+ .media-url-actions { display: flex; gap: 6px; }
+ .media-url-actions > .btn { flex: 1 1 auto; justify-content: center; }
++
++/* ======================================================================
++   MULTI-MODAL PROGRAMMING — the shared shell pieces (Phase 0)
++   The mode selector in the top bar and the ⌘K palette. Both are chrome
++   over the existing shell, on the existing tokens; the environments
++   themselves arrive as renderers in the centre column.
++   ====================================================================== */
++
++/* the selector: a segmented control, mono-labelled like an instrument */
++.mode-selector {
++  display: inline-flex; align-items: center; gap: 2px; flex: none;
++  padding: 3px; margin-left: 6px; border-radius: 9px;
++  background: var(--c-surface-2); border: 1px solid var(--c-border);
++}
++.mode-selector-label {
++  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
++  color: var(--c-text-4); padding: 0 8px 0 6px; user-select: none;
++}
++.mode-option {
++  appearance: none; border: 0; background: transparent; color: var(--c-text-3);
++  font: inherit; font-size: 12.5px; font-weight: 550; letter-spacing: -.005em;
++  padding: 5px 11px; border-radius: 6px; cursor: pointer; line-height: 1;
++  transition: background var(--dur-1, 120ms) var(--ease, ease), color var(--dur-1, 120ms) var(--ease, ease);
++}
++.mode-option:hover:not(:disabled) { color: var(--c-text); background: var(--c-surface); }
++.mode-option.active {
++  color: var(--c-primary-700); background: var(--c-surface);
++  box-shadow: 0 1px 0 var(--c-border), 0 0 0 1px var(--c-primary-100) inset;
++}
++.mode-option.soon { color: var(--c-text-4); cursor: default; }
++.mode-option.soon::after {
++  content: ""; display: inline-block; width: 4px; height: 4px; border-radius: 50%;
++  background: var(--c-border-strong); margin-left: 6px; vertical-align: middle;
++}
++@media (max-width: 1400px) { .mode-selector-label { display: none; } }
++@media (max-width: 1180px) { .mode-option.soon { display: none; } }
++
++/* the ⌘K button */
++.topbar .btn.palette-open { padding: 0 10px; gap: 6px; color: var(--c-text-3); }
++.topbar .btn.palette-open:hover { color: var(--c-text); }
++.palette-kbd {
++  font-family: var(--mono); font-size: 11px; color: var(--c-text-3);
++  background: var(--c-surface-2); border: 1px solid var(--c-border); border-bottom-width: 2px;
++  border-radius: 5px; padding: 1px 6px; line-height: 1.4; white-space: nowrap;
++}
++
++/* the palette */
++.palette-backdrop {
++  position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center; align-items: flex-start;
++  padding-top: 12vh; background: rgba(19, 26, 43, .28); backdrop-filter: blur(2px);
++  animation: palette-in var(--dur-2, 160ms) var(--ease, ease);
++}
++@keyframes palette-in { from { opacity: 0; } to { opacity: 1; } }
++.palette {
++  width: min(640px, calc(100vw - 32px)); max-height: 66vh; display: flex; flex-direction: column;
++  background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 14px;
++  box-shadow: 0 24px 64px -24px rgba(19, 26, 43, .5), 0 0 0 1px rgba(255,255,255,.6) inset;
++  overflow: hidden;
++}
++.palette-input-row {
++  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
++  border-bottom: 1px solid var(--c-border); color: var(--c-text-3);
++}
++.palette-input {
++  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit;
++  font-size: 15.5px; color: var(--c-text); padding: 2px 0;
++}
++.palette-input::placeholder { color: var(--c-text-4); }
++.palette-list { overflow-y: auto; padding: 6px; }
++.palette-group {
++  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
++  color: var(--c-text-4); padding: 10px 10px 4px;
++}
++.palette-item {
++  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
++  appearance: none; border: 0; background: transparent; color: var(--c-text); font: inherit;
++  font-size: 14px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
++}
++.palette-item.active { background: var(--c-primary-50); color: var(--c-primary-700); }
++.palette-item-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.palette-item-group { font-size: 11.5px; color: var(--c-text-4); }
++.palette-item.active .palette-item-group { color: var(--c-primary-600); }
++.palette-empty { padding: 22px 12px; text-align: center; color: var(--c-text-3); font-size: 13.5px; }
+diff --git a/apps/studio/components/studio/CommandContext.tsx b/apps/studio/components/studio/CommandContext.tsx
+new file mode 100644
+index 0000000..68f803a
+--- /dev/null
++++ b/apps/studio/components/studio/CommandContext.tsx
+@@ -0,0 +1,164 @@
++"use client";
++import React from "react";
++import type { FlowNode, SurveyDefinition, Question } from "@rescript/schema";
++import { variantRegistry } from "@rescript/schema";
++import { nextQuestionNaming } from "@rescript/engine";
++import { useStudio, uid } from "./store";
++import { useMode } from "./ModeContext";
++import { useSelection } from "./SelectionContext";
++import { createFromVariant } from "./VariantPicker";
++import { newFlowNode } from "./blockModel";
++import { applicable, commandForKey, type Command } from "../../lib/commands/core";
++import {
++  builtinCommands, navigationCommands, findCommands, type StudioCommandContext,
++} from "../../lib/commands/builtins";
++
++/**
++ * THE COMMAND PROVIDER — one registry, one keyboard handler, one palette state.
++ *
++ * It assembles the context every command runs against from the pieces the
++ * Studio already has (the store, the mode, the selection, the shell's own
++ * actions) and exposes three things: the applicable commands, `run(id)`, and
++ * the palette's open/close. The shell registers its `save`/`test`/`preview`
++ * closures here rather than the other way round, so this file depends on
++ * nothing in `Studio.tsx`.
++ *
++ * Keyboard: one `keydown` listener on `window`. A chord fires only when its
++ * command applies right now, and — unless the command is `global` — never
++ * while the programmer is typing in a field, for the same reason the store's
++ * ⌘Z handler stands back: a text field's own shortcuts must keep meaning
++ * what they mean.
++ */
++
++export interface ShellActions {
++  save?(): void | Promise<void>;
++  testSurvey?(): void | Promise<void>;
++  preview?(): void;
++}
++
++interface CommandApi {
++  /** every command that applies right now, in registry order */
++  commands: Command<StudioCommandContext>[];
++  /** the object-finding commands (questions, calcs, rules) — searched, never listed whole */
++  finders: Command<StudioCommandContext>[];
++  run(id: string): void;
++  runCommand(cmd: Command<StudioCommandContext>): void;
++  paletteOpen: boolean;
++  openPalette(): void;
++  closePalette(): void;
++  /** the shell hands over its actions once it has them */
++  setShell(actions: ShellActions): void;
++  /** the current context, for renderers that want `when()` themselves */
++  context: StudioCommandContext;
++}
++
++const Ctx = React.createContext<CommandApi | null>(null);
++
++function isTyping(target: EventTarget | null): boolean {
++  const el = target as HTMLElement | null;
++  if (!el) return false;
++  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
++}
++
++export function CommandProvider({
++  tab, setTab, tabs, children,
++}: {
++  tab: string;
++  setTab(tab: string): void;
++  tabs: { key: string; label: string; group: string }[];
++  children: React.ReactNode;
++}) {
++  const s = useStudio();
++  const mode = useMode();
++  const selection = useSelection();
++  const [paletteOpen, setPaletteOpen] = React.useState(false);
++  const shellRef = React.useRef<ShellActions>({});
++  const [shellVersion, bumpShell] = React.useState(0);
++
++  const openPalette = React.useCallback(() => setPaletteOpen(true), []);
++  const closePalette = React.useCallback(() => setPaletteOpen(false), []);
++
++  const context = React.useMemo<StudioCommandContext>(() => {
++    const primary = selection?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null);
++    return {
++      tab,
++      mode: mode?.mode ?? "studio",
++      primary,
++      questionId: s.selectedQuestionId,
++      readOnly: s.readOnly,
++      def: s.def,
++      update(label, mutator) { s.labelNextEdit(label); s.update(mutator); },
++      undo: () => s.undo(),
++      redo: () => s.redo(),
++      canUndo: s.canUndo,
++      canRedo: s.canRedo,
++      selectQuestion(id) {
++        if (selection) selection.dispatch(id ? { type: "select", key: `question:${id}` } : { type: "clear" });
++        else s.select(id);
++      },
++      setTab,
++      setMode(m) { mode?.setMode(m); },
++      uid,
++      newQuestion(def: SurveyDefinition): Question {
++        const v = variantRegistry.get("single_select.radio")!;
++        return createFromVariant(v, nextQuestionNaming(def));
++      },
++      newFlowNode: (type: FlowNode["type"]) => newFlowNode(type),
++      shell: { ...shellRef.current, openPalette },
++      toast: (m, k) => s.toast(m, k),
++      tabs,
++    };
++    // shellVersion is read so a late-registered shell action is picked up
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [tab, setTab, tabs, s, mode, selection, openPalette, shellVersion]);
++
++  const registry = React.useMemo(() => [...builtinCommands(), ...navigationCommands(tabs)], [tabs]);
++  const commands = React.useMemo(() => applicable(registry, context), [registry, context]);
++  const finders = React.useMemo(() => findCommands(s.def), [s.def]);
++
++  const contextRef = React.useRef(context);
++  contextRef.current = context;
++
++  const runCommand = React.useCallback((cmd: Command<StudioCommandContext>) => {
++    const ctx = contextRef.current;
++    if (cmd.when && !cmd.when(ctx)) return;
++    if (cmd.edits && ctx.readOnly) { ctx.toast("This project is read-only right now.", "err"); return; }
++    void cmd.run(ctx);
++  }, []);
++  const run = React.useCallback((id: string) => {
++    const cmd = registry.find((c) => c.id === id) ?? finders.find((c) => c.id === id);
++    if (cmd) runCommand(cmd);
++  }, [registry, finders, runCommand]);
++
++  // the one keyboard handler
++  React.useEffect(() => {
++    const onKey = (e: KeyboardEvent) => {
++      if (e.defaultPrevented) return;
++      const cmd = commandForKey(registry, e, contextRef.current, isTyping(e.target));
++      if (!cmd) return;
++      e.preventDefault();
++      e.stopPropagation();
++      if (cmd.id === "palette.open") { setPaletteOpen((o) => !o); return; }
++      runCommand(cmd);
++    };
++    window.addEventListener("keydown", onKey);
++    return () => window.removeEventListener("keydown", onKey);
++  }, [registry, runCommand]);
++
++  // stable identity: the shell registers in an effect keyed on this function,
++  // so a new function per render would re-register per render, forever
++  const setShell = React.useCallback((actions: ShellActions) => {
++    shellRef.current = actions;
++    bumpShell((v) => v + 1);
++  }, []);
++
++  const value = React.useMemo<CommandApi>(() => ({
++    commands, finders, run, runCommand, paletteOpen, openPalette, closePalette, context, setShell,
++  }), [commands, finders, run, runCommand, paletteOpen, openPalette, closePalette, context, setShell]);
++
++  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
++}
++
++export function useCommands(): CommandApi | null {
++  return React.useContext(Ctx);
++}
+diff --git a/apps/studio/components/studio/CommandPalette.tsx b/apps/studio/components/studio/CommandPalette.tsx
+new file mode 100644
+index 0000000..7b1db63
+--- /dev/null
++++ b/apps/studio/components/studio/CommandPalette.tsx
+@@ -0,0 +1,131 @@
++"use client";
++import React from "react";
++import { useCommands } from "./CommandContext";
++import { rank, formatShortcut, type Command } from "../../lib/commands/core";
++import type { StudioCommandContext } from "../../lib/commands/builtins";
++import { Icon } from "../ui/Icon";
++
++/**
++ * ⌘K — everything the Studio can do, and everything in the survey, one list.
++ *
++ * Empty query: the applicable commands, grouped. Typing: commands AND
++ * survey objects (questions by code, variable and text; calculations; rules)
++ * ranked together, so "Q14" jumps to Q14 and "add" offers the Add group.
++ * Objects are searched, never listed whole — a 600-question survey would
++ * bury the commands.
++ *
++ * Keyboard only needs ↑ ↓ Enter Esc; the mouse works too. The input keeps
++ * focus throughout, and the list scrolls the highlighted row into view.
++ */
++
++const GROUP_ORDER = ["Add", "Edit", "Find", "Navigate", "Mode", "Survey"] as const;
++
++type Cmd = Command<StudioCommandContext>;
++
++export function CommandPalette() {
++  const api = useCommands();
++  const [query, setQuery] = React.useState("");
++  const [cursor, setCursor] = React.useState(0);
++  const inputRef = React.useRef<HTMLInputElement>(null);
++  const listRef = React.useRef<HTMLDivElement>(null);
++  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
++
++  const open = !!api?.paletteOpen;
++
++  React.useEffect(() => {
++    if (open) { setQuery(""); setCursor(0); setTimeout(() => inputRef.current?.focus(), 0); }
++  }, [open]);
++
++  // Escape closes from anywhere, not only from inside the input — focus may
++  // not have reached the field yet in the first frame after opening
++  React.useEffect(() => {
++    if (!open || !api) return;
++    const onKey = (e: KeyboardEvent) => {
++      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); api.closePalette(); }
++    };
++    window.addEventListener("keydown", onKey, true);
++    return () => window.removeEventListener("keydown", onKey, true);
++  }, [open, api]);
++
++  const results = React.useMemo<Cmd[]>(() => {
++    if (!api) return [];
++    const q = query.trim();
++    // the palette does not list the command that opens the palette
++    const cmds = api.commands.filter((c) => c.id !== "palette.open");
++    if (!q) {
++      return [...cmds].sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group));
++    }
++    const pool = [...cmds, ...api.finders];
++    return rank(q, pool, (c) => [c.title, ...(c.keywords ?? [])], 40).map((r) => r.item);
++  }, [api, query]);
++
++  React.useEffect(() => { setCursor(0); }, [query]);
++  React.useEffect(() => {
++    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${cursor}"]`);
++    el?.scrollIntoView({ block: "nearest" });
++  }, [cursor]);
++
++  if (!api || !open) return null;
++
++  const choose = (cmd: Cmd) => {
++    api.closePalette();
++    api.runCommand(cmd);
++  };
++
++  const onKey = (e: React.KeyboardEvent) => {
++    if (e.key === "ArrowDown") { e.preventDefault(); setCursor((c) => Math.min(c + 1, results.length - 1)); }
++    else if (e.key === "ArrowUp") { e.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
++    else if (e.key === "Enter") { e.preventDefault(); const cmd = results[cursor]; if (cmd) choose(cmd); }
++    else if (e.key === "Escape") { e.preventDefault(); api.closePalette(); }
++  };
++
++  // group headers only when the list is in group order (empty query)
++  const grouped = !query.trim();
++
++  return (
++    <div className="palette-backdrop" onMouseDown={api.closePalette} data-testid="command-palette">
++      <div className="palette" role="dialog" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
++        <div className="palette-input-row">
++          <Icon name="search" size={16} />
++          <input
++            ref={inputRef}
++            className="palette-input"
++            data-testid="palette-input"
++            placeholder="Type a command, a question code, a variable…"
++            value={query}
++            onChange={(e) => setQuery(e.target.value)}
++            onKeyDown={onKey}
++            spellCheck={false}
++            autoComplete="off"
++          />
++          <kbd className="palette-kbd">esc</kbd>
++        </div>
++        <div className="palette-list" ref={listRef} role="listbox">
++          {results.length === 0 && <div className="palette-empty">Nothing matches “{query}”.</div>}
++          {results.map((cmd, i) => {
++            const header = grouped && (i === 0 || results[i - 1].group !== cmd.group);
++            return (
++              <React.Fragment key={cmd.id}>
++                {header && <div className="palette-group">{cmd.group}</div>}
++                <button
++                  type="button"
++                  role="option"
++                  aria-selected={i === cursor}
++                  data-index={i}
++                  data-testid={`palette-item-${cmd.id}`}
++                  className={`palette-item${i === cursor ? " active" : ""}`}
++                  onMouseEnter={() => setCursor(i)}
++                  onClick={() => choose(cmd)}
++                >
++                  <span className="palette-item-title">{cmd.title}</span>
++                  {!grouped && <span className="palette-item-group">{cmd.group}</span>}
++                  {cmd.shortcut && <kbd className="palette-kbd">{formatShortcut(cmd.shortcut, mac)}</kbd>}
++                </button>
++              </React.Fragment>
++            );
++          })}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/FlowPanel.tsx b/apps/studio/components/studio/FlowPanel.tsx
+index 5c7f152..eabee2f 100644
+--- a/apps/studio/components/studio/FlowPanel.tsx
++++ b/apps/studio/components/studio/FlowPanel.tsx
+@@ -10,7 +10,7 @@ import {
+   FLOW_TYPE_LABELS, stripHtmlText, referencesToMany, pruneReferencesToMany,
+ } from "@rescript/engine";
+ import { useStudio, uid } from "./store";
+-import { newBlockNode, newGroupNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
++import { newFlowNode, ELEMENT_LABELS, INSERTABLE } from "./blockModel";
+ import { conditionToText } from "./ConditionBuilder";
+ import { NodeEditor } from "./FlowNodeEditors";
+ import {
+@@ -39,30 +39,8 @@ import {
+  * already in the definition. (reqs §1, §11, §22)
+  * ======================================================================== */
+ 
+-function newNode(type: FlowNode["type"]): FlowNode {
+-  const id = uid(type);
+-  switch (type) {
+-    case "page": return { type, id, title: "New block", questionIds: [] };
+-    case "section": return { type, id, title: "New group", children: [] };
+-    case "block": return { type, id, title: "Block", children: [] };
+-    case "randomizer": return { type, id, children: [] };
+-    case "branch": return {
+-      type, id,
+-      branches: [{ id: uid("br"), label: "Path 1", when: { type: "group", op: "and", children: [] }, children: [] }],
+-      otherwise: [],
+-    };
+-    case "loop": return { type, id, source: { kind: "static", items: [] }, loopVar: "item", children: [] };
+-    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "string" }] };
+-    case "quota_check": return { type, id, quotaIds: [], onFull: { kind: "terminate" } };
+-    case "redirect": return { type, id, url: "https://" };
+-    case "end": return { type, id, status: "complete" };
+-  }
+-}
+-
+-const makeNode = (type: string): FlowNode =>
+-  type === "page" ? (newBlockNode() as FlowNode)
+-  : type === "section" ? (newGroupNode() as FlowNode)
+-  : newNode(type as FlowNode["type"]);
++/* node defaults live in blockModel.newFlowNode, shared with the command palette */
++const makeNode = (type: string): FlowNode => newFlowNode(type as FlowNode["type"]);
+ 
+ /* ------------------------------------------------------ the element picker */
+ 
+diff --git a/apps/studio/components/studio/ModeContext.tsx b/apps/studio/components/studio/ModeContext.tsx
+new file mode 100644
+index 0000000..4caac6e
+--- /dev/null
++++ b/apps/studio/components/studio/ModeContext.tsx
+@@ -0,0 +1,58 @@
++"use client";
++import React from "react";
++import {
++  MODES, MODE_STORAGE_KEY, DEFAULT_MODE, resolveInitialMode, withModeInUrl, modeInfo,
++  type ProgrammingMode,
++} from "../../lib/programmingMode";
++
++/**
++ * WHICH ENVIRONMENT THE PROGRAMMER IS IN.
++ *
++ * Deliberately not in the survey store: the store is the SURVEY — the thing
++ * every environment edits — and the mode is a property of the person looking
++ * at it. Putting it in the store would make "switch to Grid" look like an
++ * edit, and two collaborators would fight over it.
++ *
++ * Switching is a state change and nothing more. No navigation, no reload,
++ * no refetch: the `?mode=` in the URL is kept in step with
++ * `history.replaceState` so a reload or a shared link lands in the same
++ * environment, and the last choice is remembered per browser.
++ */
++
++interface ModeState {
++  mode: ProgrammingMode;
++  setMode(mode: ProgrammingMode): void;
++  /** the modes, with availability, for selectors and the palette */
++  modes: typeof MODES;
++}
++
++const Ctx = React.createContext<ModeState | null>(null);
++
++export function ModeProvider({ children }: { children: React.ReactNode }) {
++  const [mode, setModeState] = React.useState<ProgrammingMode>(() => {
++    if (typeof window === "undefined") return DEFAULT_MODE;
++    let remembered: string | null = null;
++    try { remembered = window.localStorage.getItem(MODE_STORAGE_KEY); } catch { /* private mode, blocked storage */ }
++    return resolveInitialMode(window.location.search, remembered);
++  });
++
++  const setMode = React.useCallback((next: ProgrammingMode) => {
++    if (!modeInfo(next).available) return;
++    setModeState(next);
++    if (typeof window === "undefined") return;
++    try { window.localStorage.setItem(MODE_STORAGE_KEY, next); } catch { /* fine without memory */ }
++    const search = withModeInUrl(window.location.search, next);
++    const url = `${window.location.pathname}${search}${window.location.hash}`;
++    if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
++      window.history.replaceState(window.history.state, "", url);
++    }
++  }, []);
++
++  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES }), [mode, setMode]);
++  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
++}
++
++/** Null outside the provider, like `useCanvas` — a panel rendered elsewhere is simply in Studio mode. */
++export function useMode(): ModeState | null {
++  return React.useContext(Ctx);
++}
+diff --git a/apps/studio/components/studio/ModeSelector.tsx b/apps/studio/components/studio/ModeSelector.tsx
+new file mode 100644
+index 0000000..512102b
+--- /dev/null
++++ b/apps/studio/components/studio/ModeSelector.tsx
+@@ -0,0 +1,42 @@
++"use client";
++import React from "react";
++import { useMode } from "./ModeContext";
++
++/**
++ * PROGRAMMING MODE — the selector in the top bar.
++ *
++ * Five environments over one survey. The ones without a renderer yet are
++ * shown, disabled, with their tagline: the selector is also the place the
++ * product says what it is becoming, and a programmer who sees "Grid —
++ * program at scale" greyed out knows to expect it. Switching is instant and
++ * changes nothing but the view.
++ */
++export function ModeSelector() {
++  const m = useMode();
++  if (!m) return null;
++  return (
++    <div className="mode-selector" role="radiogroup" aria-label="Programming mode" data-testid="mode-selector">
++      <span className="mode-selector-label">Mode</span>
++      {m.modes.map((info) => {
++        const active = m.mode === info.id;
++        return (
++          <button
++            key={info.id}
++            type="button"
++            role="radio"
++            aria-checked={active}
++            className={`mode-option${active ? " active" : ""}${info.available ? "" : " soon"}`}
++            data-testid={`mode-${info.id}`}
++            data-mode={info.id}
++            data-available={info.available ? "1" : "0"}
++            disabled={!info.available}
++            title={info.available ? `${info.label} — ${info.tagline}. ${info.audience}` : `${info.label} — ${info.tagline}. Coming soon.`}
++            onClick={() => m.setMode(info.id)}
++          >
++            {info.label}
++          </button>
++        );
++      })}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/PropertiesPanel.tsx b/apps/studio/components/studio/PropertiesPanel.tsx
+index 57a9a11..4145e57 100644
+--- a/apps/studio/components/studio/PropertiesPanel.tsx
++++ b/apps/studio/components/studio/PropertiesPanel.tsx
+@@ -776,6 +776,16 @@ export function PropertiesPanel() {
+   const s = useStudio();
+   const q = selectedQuestion(s);
+   const canvas = useCanvas();
++  /*
++   * Every hook before any early return. These two sat below the "no question"
++   * and "element selected" returns, so the panel called a different number of
++   * hooks depending on the selection — React's "change in the order of Hooks"
++   * warning on every select/deselect, and state that could attach to the
++   * wrong slot. Surfaced by the multi-modal suite, which asserts a clean console.
++   */
++  /** What this question carries that its current type cannot read. */
++  const stale = React.useMemo(() => (q ? staleFields(q) : []), [q]);
++  const [search, setSearch] = React.useState("");
+ 
+   /*
+    * CONTEXTUAL, NOT SEPARATE.
+@@ -826,14 +836,11 @@ export function PropertiesPanel() {
+   const exprError =
+     q.type === "calculated" && q.settings.expression ? validateExpression(q.settings.expression) : null;
+   const logicIssues = lintQuestionLogic(s.def, q);
+-  /** What this question carries that its current type cannot read. */
+-  const stale = React.useMemo(() => staleFields(q), [q]);
+   /*
+    * The loops this question sits inside, so its display logic, skip logic and
+    * piping picker can offer the loops' reference columns — and only theirs.
+    */
+   const loopScope = loopsAroundQuestion(s.def, q.id);
+-  const [search, setSearch] = React.useState("");
+   const showSec = (title: string) =>
+     !search.trim() || title.toLowerCase().includes(search.trim().toLowerCase());
+ 
+diff --git a/apps/studio/components/studio/SelectionContext.tsx b/apps/studio/components/studio/SelectionContext.tsx
+new file mode 100644
+index 0000000..556b5a0
+--- /dev/null
++++ b/apps/studio/components/studio/SelectionContext.tsx
+@@ -0,0 +1,80 @@
++"use client";
++import React from "react";
++import type { ObjectKey } from "@rescript/engine";
++import { useStudio } from "./store";
++import {
++  selectionReducer, EMPTY_SELECTION, questionIdOf, type SelectionState, type SelectionAction,
++} from "../../lib/selection";
++
++/**
++ * THE SELECTION EVERY ENVIRONMENT SHARES — and its bridge to the old one.
++ *
++ * `useStudio().selectedQuestionId` is read by the Questions panel, the
++ * property panel and a hundred browser checks, so it stays exactly as it is.
++ * This provider keeps a richer selection (any object kind, several at once)
++ * and keeps the two in step in both directions:
++ *
++ *   · a panel that calls `s.select(id)` — every existing click — is seen
++ *     here and becomes the primary;
++ *   · an environment that selects here mirrors a question primary into
++ *     `s.select`, and a non-question primary clears it, so the property
++ *     panel (which only knows questions) hides rather than showing the
++ *     wrong thing.
++ *
++ * So `selectedQuestionId` is, from now on, a derived view of this selection
++ * — the alias the plan promised — without a single panel having changed.
++ */
++
++interface SelectionApi extends SelectionState {
++  dispatch(action: SelectionAction): void;
++  /** convenience: plain-select one key */
++  select(key: ObjectKey): void;
++  isSelected(key: ObjectKey): boolean;
++}
++
++const Ctx = React.createContext<SelectionApi | null>(null);
++
++export function SelectionProvider({ children }: { children: React.ReactNode }) {
++  const s = useStudio();
++  const [state, dispatchRaw] = React.useReducer(selectionReducer, EMPTY_SELECTION);
++  const stateRef = React.useRef(state);
++  stateRef.current = state;
++  /* what this provider last told the store, so the echo does not bounce back as a new event */
++  const mirrored = React.useRef<string | null>(null);
++
++  // store → selection: an old-style click somewhere becomes the primary here
++  React.useEffect(() => {
++    const id = s.selectedQuestionId;
++    if (id === mirrored.current) return;
++    mirrored.current = id;
++    if (id) dispatchRaw({ type: "select", key: `question:${id}` });
++    else if (questionIdOf(state.primary)) dispatchRaw({ type: "clear" });
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [s.selectedQuestionId]);
++
++  // selection → store: a question primary is what `selectedQuestionId` means
++  const dispatch = React.useCallback((action: SelectionAction) => {
++    const next = selectionReducer(stateRef.current, action);
++    stateRef.current = next;
++    dispatchRaw(action);
++    const qid = questionIdOf(next.primary);
++    if (qid !== mirrored.current) {
++      mirrored.current = qid;
++      s.select(qid);
++    }
++  }, [s]);
++
++  const value = React.useMemo<SelectionApi>(() => ({
++    ...state,
++    dispatch,
++    select: (key) => dispatch({ type: "select", key }),
++    isSelected: (key) => state.keys.includes(key),
++  }), [state, dispatch]);
++
++  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
++}
++
++/** Null outside the provider, so a component can be rendered in isolation. */
++export function useSelection(): SelectionApi | null {
++  return React.useContext(Ctx);
++}
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 7efaa2d..d57b96c 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -33,6 +33,11 @@ import { Icon, type IconName } from "@/components/ui/Icon";
+ import { LocalizationPanel } from "./localization/LocalizationPanel";
+ import { UsagePanel, useMeterView } from "./UsagePanel";
+ import { fmtMoney } from "@/components/billing/shared";
++import { ModeProvider } from "./ModeContext";
++import { SelectionProvider } from "./SelectionContext";
++import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
++import { CommandPalette } from "./CommandPalette";
++import { ModeSelector } from "./ModeSelector";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -853,7 +858,22 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+   const live = publishState?.find((p) => p.mode === "live");
+   const liveIsBehind = !!live && live.version !== s.def.meta.version;
+ 
++  /*
++   * The command layer sits over the whole shell: the palette and the
++   * keyboard handler need the tab and its setter, and the shell's own
++   * actions (save, test, preview) are handed to it below so "Save version"
++   * in the palette is the same function as the button.
++   */
++  const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
++  const setTabGuarded = React.useCallback((t: string) => {
++    if (t === tab || s.canLeaveTab()) setTab(t as Tab);
++  }, [tab, s]);
++  const shellActions: ShellActions = { save: async () => { await save(); }, testSurvey, preview };
++
+   return (
++    <CommandProvider tab={tab} setTab={setTabGuarded} tabs={navTabs}>
++    <ShellBridge actions={shellActions} />
++    <CommandPalette />
+     <div className="ide">
+       <div className="topbar">
+         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
+@@ -869,7 +889,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           </span>
+         </div>
+         <SaveIndicator />
++        <ModeSelector />
+         <span className="spacer" />
++        <PaletteButton />
+         <button className="btn" onClick={preview} disabled={saving}
+           title="Full-page preview of the survey you are editing right now"><Icon name="play" size={15} /> Preview</button>
+         <button className="btn" onClick={testSurvey} disabled={saving || roWrite} data-testid="test-survey"
+@@ -1074,6 +1096,37 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+       </div>
+       </CanvasProvider>
+     </div>
++    </CommandProvider>
++  );
++}
++
++/** Hands the shell's save/test/preview to the command layer once they exist. */
++function ShellBridge({ actions }: { actions: ShellActions }) {
++  const api = useCommands();
++  const ref = React.useRef(actions);
++  ref.current = actions;
++  const setShell = api?.setShell;
++  React.useEffect(() => {
++    // register once (setShell is stable); the ref keeps the latest closures
++    setShell?.({
++      save: () => ref.current.save?.(),
++      testSurvey: () => ref.current.testSurvey?.(),
++      preview: () => ref.current.preview?.(),
++    });
++  }, [setShell]);
++  return null;
++}
++
++/** The ⌘K affordance in the top bar — for people who do not know the key yet. */
++function PaletteButton() {
++  const api = useCommands();
++  if (!api) return null;
++  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
++  return (
++    <button className="btn palette-open" onClick={api.openPalette} data-testid="palette-open"
++      title="Commands, questions and variables — everything, one search">
++      <Icon name="search" size={15} /> <kbd className="palette-kbd">{mac ? "⌘K" : "Ctrl+K"}</kbd>
++    </button>
+   );
+ }
+ 
+@@ -1099,7 +1152,13 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
+     <StudioProvider initial={definition} surveyDbId={surveyDbId} versionId={versionId}
+       draftSavedAt={draftSavedAt} revision={revision}
+       readOnly={collaboration}>
+-      <StudioShell collaboration={collaboration} />
++      {/* the programming mode and the shared selection sit above the shell:
++          both survive a tab change, and every environment reads them */}
++      <ModeProvider>
++        <SelectionProvider>
++          <StudioShell collaboration={collaboration} />
++        </SelectionProvider>
++      </ModeProvider>
+     </StudioProvider>
+   );
+ }
+diff --git a/apps/studio/components/studio/blockModel.ts b/apps/studio/components/studio/blockModel.ts
+index 8c85591..4912765 100644
+--- a/apps/studio/components/studio/blockModel.ts
++++ b/apps/studio/components/studio/blockModel.ts
+@@ -1,5 +1,6 @@
+ import { uid } from "./store";
+ import type { BlockRef } from "@rescript/engine";
++import type { FlowNode } from "@rescript/schema";
+ 
+ /**
+  * Studio-side block operations.
+@@ -59,6 +60,31 @@ export function newGroupNode(title = "New group"): any {
+   return { type: "section", id: uid("section"), title, children: [] };
+ }
+ 
++/**
++ * A fresh flow node of any type, with the defaults the Survey Flow panel has
++ * always given it. Here rather than in the panel so that the command palette
++ * and every other environment insert exactly the node the panel would.
++ */
++export function newFlowNode(type: FlowNode["type"]): FlowNode {
++  const id = uid(type);
++  switch (type) {
++    case "page": return newBlockNode() as FlowNode;
++    case "section": return newGroupNode() as FlowNode;
++    case "block": return { type, id, title: "Block", children: [] };
++    case "randomizer": return { type, id, children: [] };
++    case "branch": return {
++      type, id,
++      branches: [{ id: uid("br"), label: "Path 1", when: { type: "group", op: "and", children: [] }, children: [] }],
++      otherwise: [],
++    };
++    case "loop": return { type, id, source: { kind: "static", items: [] }, loopVar: "item", children: [] };
++    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "string" }] };
++    case "quota_check": return { type, id, quotaIds: [], onFull: { kind: "terminate" } };
++    case "redirect": return { type, id, url: "https://" };
++    case "end": return { type, id, status: "complete" };
++  }
++}
++
+ /**
+  * Human labels for flow elements. The raw node type ("embedded_data") is what
+  * the flow used to show; these are what survey programmers call them.
+diff --git a/apps/studio/lib/commands/builtins.ts b/apps/studio/lib/commands/builtins.ts
+new file mode 100644
+index 0000000..8d57a74
+--- /dev/null
++++ b/apps/studio/lib/commands/builtins.ts
+@@ -0,0 +1,268 @@
++import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
++import {
++  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages,
++} from "@rescript/engine";
++import type { Command, CommandContextBase } from "./core.ts";
++import { MODES, type ProgrammingMode } from "../programmingMode.ts";
++
++/**
++ * THE BUILT-IN COMMANDS.
++ *
++ * Each wraps an operation the Studio already performs somewhere, and calls
++ * the same engine function that place calls — a palette "Add question" must
++ * produce exactly the question the "+ Question" bar produces. Nothing here
++ * knows how to mutate a survey; it knows which engine function to call and
++ * hands the mutation to the store's `update`, so every command is undoable,
++ * labelled, autosaved and refused in read-only, the same as a click.
++ *
++ * The context is everything a command may need, provided by the Studio
++ * shell. Commands that need something the shell has not provided (no
++ * `shell.save` in the sandbox, say) simply do not apply.
++ */
++
++export interface StudioCommandContext extends CommandContextBase {
++  def: SurveyDefinition;
++  /** run a labelled edit through the store */
++  update(label: string, mutator: (d: SurveyDefinition) => void): void;
++  undo(): boolean;
++  redo(): boolean;
++  canUndo: boolean;
++  canRedo: boolean;
++  /** select a question (mirrors into the store) or clear */
++  selectQuestion(id: string | null): void;
++  setTab(tab: string): void;
++  setMode(mode: ProgrammingMode): void;
++  /** the Studio's id generator, so ids look the way the browser suites expect */
++  uid(prefix: string): string;
++  /** build a fresh question of the default variant, named for this survey */
++  newQuestion(def: SurveyDefinition): Question;
++  /** a fresh flow node with the Survey Flow panel's defaults */
++  newFlowNode(type: FlowNode["type"]): FlowNode;
++  /** the shell's own actions; absent where the shell does not offer them */
++  shell?: {
++    save?(): void | Promise<void>;
++    testSurvey?(): void | Promise<void>;
++    preview?(): void;
++    openPalette?(): void;
++  };
++  toast(msg: string, kind?: "ok" | "err"): void;
++  /** the tabs the left nav offers, for the Navigate group */
++  tabs: { key: string; label: string; group: string }[];
++}
++
++type C = Command<StudioCommandContext>;
++
++const selectedQuestion = (ctx: StudioCommandContext): Question | null =>
++  ctx.questionId ? ctx.def.questions.find((q) => q.id === ctx.questionId) ?? null : null;
++
++/** the page and position right after the selected question — or the end of the last page */
++function insertionPoint(ctx: StudioCommandContext): { pageId?: string; index?: number } {
++  const qid = ctx.questionId;
++  if (!qid) return {};
++  for (const p of listPages(ctx.def.flow as unknown[])) {
++    const k = p.node.questionIds.indexOf(qid);
++    if (k >= 0) return { pageId: p.node.id, index: k + 1 };
++  }
++  return {};
++}
++
++export function builtinCommands(): C[] {
++  const cmds: C[] = [];
++
++  /* ------------------------------------------------------------ add */
++  cmds.push({
++    id: "question.add", title: "Add question", group: "Add", shortcut: "mod+shift+a", edits: true,
++    keywords: ["new question", "insert question", "create question"],
++    run(ctx) {
++      const q = ctx.newQuestion(ctx.def);
++      const at = insertionPoint(ctx);
++      ctx.update(`add ${q.code}`, (d) => { addQuestion(d, q, at); });
++      ctx.selectQuestion(q.id);
++      if (ctx.tab !== "questions") ctx.setTab("questions");
++    },
++  });
++  cmds.push({
++    id: "block.add", title: "Add block", group: "Add", edits: true,
++    keywords: ["new block", "page", "add page"],
++    run(ctx) {
++      const node = ctx.newFlowNode("page");
++      ctx.update("add block", (d) => {
++        const flow = d.flow as FlowNode[];
++        const at = flow.findIndex((n) => n?.type === "end");
++        flow.splice(at < 0 ? flow.length : at, 0, node);
++      });
++      ctx.toast("Block added");
++    },
++  });
++  for (const [type, title, kw] of [
++    ["branch", "Add branch / condition", ["create branch", "condition", "if then", "routing"]],
++    ["randomizer", "Add randomizer", ["randomize", "shuffle", "rotation"]],
++    ["loop", "Add loop", ["repeat", "iterate", "per item"]],
++    ["quota_check", "Add quota check", ["quota"]],
++    ["embedded_data", "Add embedded data", ["url parameter", "panel variable", "hidden variable"]],
++  ] as const) {
++    cmds.push({
++      id: `flow.add.${type}`, title, group: "Add", edits: true, keywords: [...kw],
++      run(ctx) {
++        const node = ctx.newFlowNode(type);
++        ctx.update(title.toLowerCase(), (d) => {
++          const flow = d.flow as FlowNode[];
++          const at = flow.findIndex((n) => n?.type === "end");
++          flow.splice(at < 0 ? flow.length : at, 0, node);
++        });
++        ctx.setTab("flow");
++      },
++    });
++  }
++  cmds.push({
++    id: "logic.addDisplayRule", title: "Add display rule", group: "Add", edits: true,
++    keywords: ["display logic", "show when", "hide when", "create logic", "new rule"],
++    run(ctx) {
++      const q = selectedQuestion(ctx);
++      const id = ctx.uid("rule");
++      ctx.update("add display rule", (d) => {
++        d.displayRules.push({
++          id,
++          label: q ? `Show ${q.code}` : "New rule",
++          target: { kind: "question", ref: q?.id ?? (d.questions[0]?.id ?? "") },
++          action: "show",
++          when: { type: "group", op: "and", children: [] },
++        } as never);
++      });
++      ctx.setTab("logic");
++    },
++  });
++  cmds.push({
++    id: "calculation.add", title: "Add calculation", group: "Add", edits: true,
++    keywords: ["calc", "computed variable", "formula", "score"],
++    run(ctx) {
++      const n = ctx.def.calculations.length + 1;
++      ctx.update("add calculation", (d) => {
++        d.calculations.push({ id: ctx.uid("calc"), targetVariable: `CALC_${n}`, expression: "", trigger: "on_page_submit", dataType: "numeric" } as never);
++      });
++      ctx.setTab("calculations");
++    },
++  });
++
++  /* ------------------------------------------------------------ edit */
++  cmds.push({
++    id: "question.duplicate", title: "Duplicate question", group: "Edit", shortcut: "mod+shift+d", edits: true,
++    keywords: ["copy question", "clone"],
++    when: (ctx) => !!selectedQuestion(ctx),
++    run(ctx) {
++      const q = selectedQuestion(ctx)!;
++      let copyId: string | null = null;
++      ctx.update(`duplicate ${q.code}`, (d) => { copyId = duplicateQuestion(d, q.id, ctx.uid)?.id ?? null; });
++      if (copyId) ctx.selectQuestion(copyId);
++    },
++  });
++  cmds.push({
++    id: "question.moveUp", title: "Move question up", group: "Edit", shortcut: "alt+arrowup", edits: true,
++    when: (ctx) => !!selectedQuestion(ctx),
++    run(ctx) { const q = selectedQuestion(ctx)!; ctx.update(`move ${q.code} up`, (d) => { moveQuestionBy(d, q.id, -1); }); },
++  });
++  cmds.push({
++    id: "question.moveDown", title: "Move question down", group: "Edit", shortcut: "alt+arrowdown", edits: true,
++    when: (ctx) => !!selectedQuestion(ctx),
++    run(ctx) { const q = selectedQuestion(ctx)!; ctx.update(`move ${q.code} down`, (d) => { moveQuestionBy(d, q.id, 1); }); },
++  });
++  cmds.push({
++    id: "edit.undo", title: "Undo", group: "Edit", keywords: ["revert", "take back"],
++    when: (ctx) => ctx.canUndo, run(ctx) { ctx.undo(); },
++  });
++  cmds.push({
++    id: "edit.redo", title: "Redo", group: "Edit",
++    when: (ctx) => ctx.canRedo, run(ctx) { ctx.redo(); },
++  });
++  cmds.push({
++    id: "selection.clear", title: "Deselect", group: "Edit",
++    when: (ctx) => !!ctx.primary, run(ctx) { ctx.selectQuestion(null); },
++  });
++
++  /* ------------------------------------------------------------ navigate */
++  cmds.push({
++    id: "palette.open", title: "Command palette", group: "Navigate", shortcut: "mod+k", global: true,
++    keywords: ["search", "commands", "find"],
++    run(ctx) { ctx.shell?.openPalette?.(); },
++  });
++
++  /* ------------------------------------------------------------ mode */
++  for (const m of MODES) {
++    cmds.push({
++      // no digit shortcut: ⌘1–9 switch browser tabs and ⇧/⌥ change what `key` reports
++      id: `mode.${m.id}`, title: `Switch to ${m.label}`, group: "Mode",
++      keywords: ["mode", "environment", m.tagline],
++      when: (ctx) => m.available && ctx.mode !== m.id,
++      run(ctx) { ctx.setMode(m.id); },
++    });
++  }
++
++  /* ------------------------------------------------------------ survey */
++  cmds.push({
++    id: "survey.save", title: "Save version", group: "Survey", shortcut: "mod+s", global: true,
++    keywords: ["snapshot", "cut version", "commit"],
++    when: (ctx) => !!ctx.shell?.save && !ctx.readOnly,
++    run(ctx) { return ctx.shell!.save!(); },
++  });
++  cmds.push({
++    id: "survey.test", title: "Test survey", group: "Survey",
++    keywords: ["run test", "test link", "test build"],
++    when: (ctx) => !!ctx.shell?.testSurvey && !ctx.readOnly,
++    run(ctx) { return ctx.shell!.testSurvey!(); },
++  });
++  cmds.push({
++    id: "survey.preview", title: "Preview survey", group: "Survey",
++    keywords: ["open preview", "respondent view"],
++    when: (ctx) => !!ctx.shell?.preview,
++    run(ctx) { ctx.shell!.preview!(); },
++  });
++
++  return cmds;
++}
++
++/** One "Open <tab>" command per left-nav tab, so navigation is searchable. */
++export function navigationCommands(tabs: { key: string; label: string; group: string }[]): C[] {
++  return tabs.map((t) => ({
++    id: `nav.${t.key}`,
++    title: `Open ${t.label}`,
++    group: "Navigate" as const,
++    keywords: [t.group, "go to", "show"],
++    when: (ctx: StudioCommandContext) => ctx.tab !== t.key,
++    run: (ctx: StudioCommandContext) => { ctx.setTab(t.key); },
++  }));
++}
++
++/**
++ * The palette also finds SURVEY OBJECTS, not only commands. Each result is a
++ * command built on the fly: pick it and the object is selected and its tab
++ * opened. Questions match on code, variable name and text; calculations on
++ * their variable; display rules on their label.
++ */
++export function findCommands(def: SurveyDefinition): C[] {
++  const out: C[] = [];
++  for (const q of def.questions) {
++    const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
++    out.push({
++      id: `find.question.${q.id}`,
++      title: `${q.code} · ${q.variableName}${text ? ` — ${text.slice(0, 80)}` : ""}`,
++      group: "Find",
++      keywords: [q.code, q.variableName, text, q.type],
++      run(ctx) { ctx.selectQuestion(q.id); ctx.setTab("questions"); },
++    });
++  }
++  for (const c of def.calculations) {
++    out.push({
++      id: `find.calculation.${c.id}`, title: `${c.targetVariable} — calculation`, group: "Find",
++      keywords: [c.targetVariable, c.label ?? "", "calc"],
++      run(ctx) { ctx.setTab("calculations"); },
++    });
++  }
++  for (const r of def.displayRules) {
++    out.push({
++      id: `find.rule.${r.id}`, title: `${r.label || r.id} — display rule`, group: "Find",
++      keywords: [r.label ?? "", "logic", "rule"],
++      run(ctx) { ctx.setTab("logic"); },
++    });
++  }
++  return out;
++}
+diff --git a/apps/studio/lib/commands/core.ts b/apps/studio/lib/commands/core.ts
+new file mode 100644
+index 0000000..8189a0f
+--- /dev/null
++++ b/apps/studio/lib/commands/core.ts
+@@ -0,0 +1,178 @@
++/**
++ * THE COMMAND LAYER — what every environment dispatches instead of editing.
++ *
++ * The brief's failure mode is `Mode A → separate logic`. The Studio is
++ * almost safe from it (one store, one write path), but every panel writes
++ * its own inline `update(d => …)`, so "add a question" already exists in
++ * three places. Five environments would make it fifteen, and the fifteenth
++ * is the one that forgets to re-mint the option ids.
++ *
++ * A command is one named, discoverable operation: what it is called, when it
++ * applies, what it does, and what key runs it. The palette lists them, the
++ * shortcut handler fires them, hover quick-actions will render them, and an
++ * AI proposal is a list of them to review. Environments contain no mutation
++ * code; they dispatch.
++ *
++ * This file is the pure half — types, matching, shortcuts — and has no React
++ * in it, so it is unit-tested directly. The built-in commands are in
++ * `builtins.ts`; the provider that wires keys and the palette is
++ * `components/studio/CommandContext.tsx`.
++ */
++
++export type CommandGroup = "Add" | "Edit" | "Navigate" | "Mode" | "Survey" | "Find";
++
++export interface CommandContextBase {
++  /** the active Studio tab */
++  tab: string;
++  /** the active programming mode */
++  mode: string;
++  /** the primary selection, as an engine ObjectKey, or null */
++  primary: string | null;
++  /** the selected question id, when the primary is a question */
++  questionId: string | null;
++  /** editing is refused right now (read-only, locked) */
++  readOnly: boolean;
++}
++
++export interface Command<Ctx extends CommandContextBase = CommandContextBase> {
++  /** stable id, `group.verb`: "question.add", "nav.logic" */
++  id: string;
++  title: string;
++  group: CommandGroup;
++  /** extra words the palette should match on: synonyms, the old label */
++  keywords?: string[];
++  /** e.g. "mod+shift+d"; `mod` is ⌘ on Mac and Ctrl elsewhere */
++  shortcut?: string;
++  /** the shortcut fires even while typing in a field (only for things like ⌘K) */
++  global?: boolean;
++  /** true when the command applies right now; absent means always */
++  when?(ctx: Ctx): boolean;
++  /** this command edits the survey, so it is refused in read-only */
++  edits?: boolean;
++  run(ctx: Ctx): void | Promise<void>;
++}
++
++/* ------------------------------------------------------------ shortcuts */
++
++export interface ParsedShortcut {
++  key: string;
++  mod: boolean;
++  shift: boolean;
++  alt: boolean;
++}
++
++/** "mod+shift+k" → { key: "k", mod, shift }. Case-insensitive; order-free. */
++export function parseShortcut(s: string): ParsedShortcut {
++  const parts = s.toLowerCase().split("+").map((p) => p.trim()).filter(Boolean);
++  const out: ParsedShortcut = { key: "", mod: false, shift: false, alt: false };
++  for (const p of parts) {
++    if (p === "mod" || p === "cmd" || p === "ctrl" || p === "meta") out.mod = true;
++    else if (p === "shift") out.shift = true;
++    else if (p === "alt" || p === "option") out.alt = true;
++    else out.key = p;
++  }
++  return out;
++}
++
++/** The subset of KeyboardEvent a match needs — so tests need no DOM. */
++export interface KeyLike {
++  key: string;
++  metaKey: boolean;
++  ctrlKey: boolean;
++  shiftKey: boolean;
++  altKey: boolean;
++}
++
++export function matchesShortcut(e: KeyLike, shortcut: string): boolean {
++  const p = parseShortcut(shortcut);
++  const mod = e.metaKey || e.ctrlKey;
++  if (p.mod !== mod) return false;
++  if (p.shift !== e.shiftKey) return false;
++  if (p.alt !== e.altKey) return false;
++  return e.key.toLowerCase() === p.key;
++}
++
++/** "mod+shift+k" → "⌘⇧K" on Mac, "Ctrl+Shift+K" elsewhere. */
++export function formatShortcut(shortcut: string, mac: boolean): string {
++  const p = parseShortcut(shortcut);
++  const key = p.key.length === 1 ? p.key.toUpperCase() : p.key[0].toUpperCase() + p.key.slice(1);
++  if (mac) return `${p.mod ? "⌘" : ""}${p.alt ? "⌥" : ""}${p.shift ? "⇧" : ""}${key}`;
++  return [p.mod && "Ctrl", p.alt && "Alt", p.shift && "Shift", key].filter(Boolean).join("+");
++}
++
++/* ------------------------------------------------------------ matching */
++
++/**
++ * Subsequence scoring — the kind every editor's palette uses. Every query
++ * character must appear in order; runs of consecutive matches and matches
++ * at word starts score higher, so "adq" finds "Add question" above "Add a
++ * display rule" and "logic" finds "Open Logic" before "Add display logic".
++ * Returns 0 for no match.
++ */
++export function fuzzyScore(query: string, text: string): number {
++  const q = query.toLowerCase();
++  const t = text.toLowerCase();
++  if (!q) return 1;
++  if (t.includes(q)) {
++    // a contiguous hit is always best; earlier and at a word start better still
++    const at = t.indexOf(q);
++    const wordStart = at === 0 || /[\s\-_./:]/.test(t[at - 1]);
++    return 1000 - at + (wordStart ? 200 : 0) + (t.length === q.length ? 500 : 0);
++  }
++  let score = 0;
++  let ti = 0;
++  let run = 0;
++  for (const ch of q) {
++    const at = t.indexOf(ch, ti);
++    if (at < 0) return 0;
++    const wordStart = at === 0 || /[\s\-_./:]/.test(t[at - 1]);
++    run = at === ti ? run + 1 : 0;
++    score += 10 + run * 5 + (wordStart ? 15 : 0) - Math.min(at - ti, 20);
++    ti = at + 1;
++  }
++  return Math.max(1, score);
++}
++
++export interface Ranked<T> { item: T; score: number }
++
++/**
++ * Rank a list by fuzzy score over one or more text fields. Items that do not
++ * match are dropped; ties keep input order (stable sort), so a caller can
++ * pre-order by importance.
++ */
++export function rank<T>(query: string, items: T[], fields: (item: T) => string[], limit = 50): Ranked<T>[] {
++  const out: Ranked<T>[] = [];
++  for (const item of items) {
++    let best = 0;
++    for (const f of fields(item)) {
++      const s = fuzzyScore(query, f);
++      if (s > best) best = s;
++    }
++    if (best > 0) out.push({ item, score: best });
++  }
++  out.sort((a, b) => b.score - a.score);
++  return out.slice(0, limit);
++}
++
++/** The commands that apply right now, in registry order. */
++export function applicable<Ctx extends CommandContextBase>(cmds: Command<Ctx>[], ctx: Ctx): Command<Ctx>[] {
++  return cmds.filter((c) => (!c.when || c.when(ctx)) && !(c.edits && ctx.readOnly));
++}
++
++/** The command whose shortcut this key event matches, if any and if applicable. */
++export function commandForKey<Ctx extends CommandContextBase>(
++  cmds: Command<Ctx>[],
++  e: KeyLike,
++  ctx: Ctx,
++  typing: boolean,
++): Command<Ctx> | null {
++  for (const c of cmds) {
++    if (!c.shortcut) continue;
++    if (typing && !c.global) continue;
++    if (!matchesShortcut(e, c.shortcut)) continue;
++    if (c.when && !c.when(ctx)) continue;
++    if (c.edits && ctx.readOnly) continue;
++    return c;
++  }
++  return null;
++}
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+new file mode 100644
+index 0000000..cebb049
+--- /dev/null
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -0,0 +1,258 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import type { Question, FlowNode } from "@rescript/schema";
++import {
++  resolveInitialMode, withModeInUrl, MODES, DEFAULT_MODE, isProgrammingMode,
++} from "./programmingMode.ts";
++import { selectionReducer, EMPTY_SELECTION, questionIdOf } from "./selection.ts";
++import {
++  parseShortcut, matchesShortcut, formatShortcut, fuzzyScore, rank, applicable, commandForKey,
++} from "./commands/core.ts";
++import { builtinCommands, navigationCommands, findCommands, type StudioCommandContext } from "./commands/builtins.ts";
++
++/**
++ * THE SHARED LAYER UNDER THE FIVE ENVIRONMENTS.
++ *
++ * Mode resolution, the selection reducer, shortcut matching, palette ranking
++ * and the built-in commands are all pure, so they are tested here without a
++ * browser. The palette UI and the mode selector are covered by
++ * scripts/multimodal-foundation-test.mjs.
++ */
++
++/* ------------------------------------------------------------ mode */
++
++test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
++  assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
++  // Grid is declared but has no renderer yet: never open on an empty screen
++  const grid = MODES.find((m) => m.id === "grid")!;
++  assert.equal(grid.available, false, "this test assumes Grid is not yet built; update it when it is");
++  assert.equal(resolveInitialMode("?mode=grid", null), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?tab=logic", "grid"), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?mode=nonsense", "alsononsense"), DEFAULT_MODE);
++  assert.equal(isProgrammingMode("flow"), true);
++  assert.equal(isProgrammingMode("Flow"), false);
++});
++
++test("withModeInUrl keeps the other params and drops the default", () => {
++  assert.equal(withModeInUrl("?tab=logic", "studio"), "?tab=logic");
++  assert.equal(withModeInUrl("?tab=logic&mode=grid", "studio"), "?tab=logic");
++  assert.equal(withModeInUrl("", "studio"), "");
++  assert.equal(withModeInUrl("?tab=logic", "grid"), "?tab=logic&mode=grid");
++});
++
++test("all five modes are declared with distinct ids and indexes", () => {
++  assert.deepEqual(MODES.map((m) => m.id), ["studio", "grid", "architect", "flow", "intelligent"]);
++  assert.deepEqual(MODES.map((m) => m.index), [1, 2, 3, 4, 5]);
++});
++
++/* ------------------------------------------------------------ selection */
++
++const Q = (id: string) => `question:${id}` as const;
++
++test("plain select replaces; toggle adds and removes; primary follows the last touch", () => {
++  let st = selectionReducer(EMPTY_SELECTION, { type: "select", key: Q("a") });
++  assert.deepEqual(st, { primary: Q("a"), keys: [Q("a")], anchor: Q("a") });
++  st = selectionReducer(st, { type: "toggle", key: Q("b") });
++  assert.deepEqual(st.keys, [Q("a"), Q("b")]);
++  assert.equal(st.primary, Q("b"));
++  st = selectionReducer(st, { type: "toggle", key: Q("b") });
++  assert.deepEqual(st.keys, [Q("a")]);
++  assert.equal(st.primary, Q("a"), "removing the primary promotes the last remaining key");
++  st = selectionReducer(st, { type: "select", key: Q("c") });
++  assert.deepEqual(st.keys, [Q("c")], "a plain click replaces the whole set");
++});
++
++test("shift-range selects between the anchor and the clicked key in the given order, keeping outside picks", () => {
++  const order = ["a", "b", "c", "d", "e"].map(Q);
++  let st = selectionReducer(EMPTY_SELECTION, { type: "select", key: Q("b") });
++  st = selectionReducer(st, { type: "toggle", key: Q("e") });   // an outside pick
++  st = selectionReducer(st, { type: "range", key: Q("d"), order });
++  assert.deepEqual(new Set(st.keys), new Set([Q("e"), Q("b"), Q("c"), Q("d")]));
++  assert.equal(st.primary, Q("d"));
++  assert.equal(st.anchor, Q("b"), "the anchor is the plain click, not the shift click");
++  // backwards range works too
++  st = selectionReducer(st, { type: "range", key: Q("a"), order });
++  assert.ok(st.keys.includes(Q("a")) && st.keys.includes(Q("b")));
++});
++
++test("range with no anchor degrades to a plain select", () => {
++  const st = selectionReducer(EMPTY_SELECTION, { type: "range", key: Q("c"), order: ["a", "b", "c"].map(Q) });
++  assert.deepEqual(st.keys, [Q("c")]);
++});
++
++test("drop removes deleted objects and promotes a new primary; clear and no-op selects keep identity", () => {
++  let st = selectionReducer(EMPTY_SELECTION, { type: "set", keys: ["a", "b", "c"].map(Q) });
++  assert.equal(st.primary, Q("a"));
++  st = selectionReducer(st, { type: "drop", keys: [Q("a")] });
++  assert.deepEqual(st.keys, [Q("b"), Q("c")]);
++  assert.equal(st.primary, Q("c"));
++  const same = selectionReducer(st, { type: "drop", keys: [Q("zzz")] });
++  assert.equal(same, st, "dropping something not selected returns the same object (no re-render)");
++  const again = selectionReducer(st, { type: "select", key: Q("c") });
++  assert.notEqual(again, st, "c was primary but not the only key, so this is a real change");
++  const only = selectionReducer(again, { type: "select", key: Q("c") });
++  assert.equal(only, again, "selecting the sole selected key again is a no-op");
++  assert.equal(selectionReducer(EMPTY_SELECTION, { type: "clear" }), EMPTY_SELECTION);
++  assert.equal(questionIdOf(Q("x")), "x");
++  assert.equal(questionIdOf("flowNode:x"), null);
++  assert.equal(questionIdOf(null), null);
++});
++
++/* ------------------------------------------------------------ shortcuts */
++
++const key = (k: string, mods: Partial<{ meta: boolean; ctrl: boolean; shift: boolean; alt: boolean }> = {}) =>
++  ({ key: k, metaKey: !!mods.meta, ctrlKey: !!mods.ctrl, shiftKey: !!mods.shift, altKey: !!mods.alt });
++
++test("shortcuts parse in any order and match ⌘ or Ctrl as `mod`", () => {
++  assert.deepEqual(parseShortcut("shift+mod+K"), { key: "k", mod: true, shift: true, alt: false });
++  assert.ok(matchesShortcut(key("k", { meta: true }), "mod+k"));
++  assert.ok(matchesShortcut(key("K", { ctrl: true }), "mod+k"), "Ctrl is mod on Windows/Linux");
++  assert.ok(!matchesShortcut(key("k", { meta: true, shift: true }), "mod+k"), "an extra modifier is a different chord");
++  assert.ok(!matchesShortcut(key("k"), "mod+k"));
++  assert.ok(matchesShortcut(key("ArrowUp", { alt: true }), "alt+arrowup"));
++  assert.equal(formatShortcut("mod+shift+d", true), "⌘⇧D");
++  assert.equal(formatShortcut("mod+shift+d", false), "Ctrl+Shift+D");
++  assert.equal(formatShortcut("alt+arrowup", true), "⌥Arrowup");
++});
++
++test("commandForKey respects typing, `global`, `when` and read-only", () => {
++  const cmds = builtinCommands();
++  const base: StudioCommandContext = fakeCtx();
++  const palette = commandForKey(cmds, key("k", { meta: true }), base, true);
++  assert.equal(palette?.id, "palette.open", "⌘K opens the palette even while typing");
++  const add = commandForKey(cmds, key("a", { meta: true, shift: true }), base, false);
++  assert.equal(add?.id, "question.add");
++  assert.equal(commandForKey(cmds, key("a", { meta: true, shift: true }), base, true), null, "not while typing");
++  assert.equal(commandForKey(cmds, key("a", { meta: true, shift: true }), { ...base, readOnly: true }, false), null, "an edit is refused in read-only");
++  assert.equal(commandForKey(cmds, key("d", { meta: true, shift: true }), base, false), null, "duplicate needs a selected question");
++  assert.equal(commandForKey(cmds, key("d", { meta: true, shift: true }), { ...base, questionId: "q1", primary: "question:q1" }, false)?.id, "question.duplicate");
++});
++
++/* ------------------------------------------------------------ matching */
++
++test("fuzzy ranking prefers contiguous, word-start and exact matches", () => {
++  assert.ok(fuzzyScore("logic", "Open Logic") > fuzzyScore("logic", "Add display logic rule"), "contiguous at a word start beats a later hit");
++  assert.ok(fuzzyScore("adq", "Add question") > 0, "subsequence matches");
++  assert.equal(fuzzyScore("xyz", "Add question"), 0, "no match is zero");
++  assert.ok(fuzzyScore("Undo", "Undo") > fuzzyScore("Undo", "Undo last edit"), "exact beats prefix");
++  const items = ["Add question", "Add block", "Open Questions", "Duplicate question"];
++  const r = rank("quest", items, (s) => [s]);
++  assert.equal(r[0].item, "Add question");
++  assert.ok(r.every((x) => x.item !== "Add block"));
++  assert.equal(rank("", items, (s) => [s]).length, items.length, "an empty query lists everything");
++});
++
++/* ------------------------------------------------------------ built-ins */
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "T" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "Age" },
++      { id: "q2", code: "Q2", variableName: "Q2", type: "text", text: "City" },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2"] }, { type: "end", id: "e", status: "complete" }],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++function fakeCtx(over: Partial<StudioCommandContext> = {}): StudioCommandContext {
++  let def = over.def ?? survey();
++  const log: string[] = [];
++  let n = 0;
++  const ctx: StudioCommandContext = {
++    tab: "questions", mode: "studio", primary: null, questionId: null, readOnly: false,
++    get def() { return def; },
++    update(label, mutator) { const d = structuredClone(def); mutator(d); def = d; log.push(`update:${label}`); },
++    undo: () => true, redo: () => true, canUndo: true, canRedo: false,
++    selectQuestion(id) { log.push(`select:${id}`); ctx.questionId = id; ctx.primary = id ? `question:${id}` : null; },
++    setTab(t) { log.push(`tab:${t}`); ctx.tab = t; },
++    setMode(m) { log.push(`mode:${m}`); ctx.mode = m; },
++    uid: (p) => `${p}_${n++}`,
++    newQuestion: (d) => ({ id: `q_new${n++}`, code: `Q${d.questions.length + 1}`, variableName: `Q${d.questions.length + 1}`, type: "text", text: "", options: [], rows: [], columns: [] } as unknown as Question),
++    newFlowNode: (type) => ({ type, id: `${type}_${n++}`, children: [], branches: [{ id: "b", when: { type: "group", op: "and", children: [] }, children: [] }], otherwise: [] } as unknown as FlowNode),
++    shell: { save: () => { log.push("save"); }, openPalette: () => { log.push("palette"); } },
++    toast: (m) => { log.push(`toast:${m}`); },
++    tabs: [{ key: "questions", label: "Questions", group: "Programming" }, { key: "logic", label: "Logic", group: "Programming" }],
++    ...over,
++  };
++  (ctx as unknown as { log: string[] }).log = log;
++  return ctx;
++}
++const logOf = (ctx: StudioCommandContext) => (ctx as unknown as { log: string[] }).log;
++
++test("question.add inserts after the selected question through the engine, selects the copy and goes to Questions", () => {
++  const ctx = fakeCtx({ tab: "logic" });
++  ctx.selectQuestion("q1");
++  builtinCommands().find((c) => c.id === "question.add")!.run(ctx);
++  const page = ctx.def.flow[0] as { questionIds: string[] };
++  assert.equal(page.questionIds[1], ctx.def.questions[2].id, "the new question sits right after Q1 on the page");
++  assert.ok(logOf(ctx).some((l) => l.startsWith("update:add ")), "a labelled edit");
++  assert.equal(ctx.tab, "questions");
++  assert.equal(ctx.questionId, ctx.def.questions[2].id);
++});
++
++test("question.duplicate is applicable only with a selection and produces a uniquely named copy", () => {
++  const ctx = fakeCtx();
++  const dup = builtinCommands().find((c) => c.id === "question.duplicate")!;
++  assert.ok(!applicable([dup], ctx).length, "nothing selected → not offered");
++  ctx.selectQuestion("q1");
++  assert.ok(applicable([dup], ctx).length);
++  dup.run(ctx);
++  assert.equal(ctx.def.questions.length, 3);
++  assert.equal(ctx.def.questions[2].code, "Q1_COPY");
++  assert.equal(ctx.questionId, ctx.def.questions[2].id, "the copy becomes the selection");
++});
++
++test("flow.add.branch inserts before the End and opens Survey Flow", () => {
++  const ctx = fakeCtx();
++  builtinCommands().find((c) => c.id === "flow.add.branch")!.run(ctx);
++  const types = ctx.def.flow.map((n) => n.type);
++  assert.deepEqual(types, ["page", "branch", "end"]);
++  assert.equal(ctx.tab, "flow");
++});
++
++test("logic.addDisplayRule targets the selected question and opens Logic", () => {
++  const ctx = fakeCtx();
++  ctx.selectQuestion("q2");
++  builtinCommands().find((c) => c.id === "logic.addDisplayRule")!.run(ctx);
++  assert.equal(ctx.def.displayRules.length, 1);
++  assert.equal(ctx.def.displayRules[0].target.ref, "q2");
++  assert.equal(ctx.tab, "logic");
++});
++
++test("edits are hidden in read-only; navigation and mode commands are not", () => {
++  const ctx = fakeCtx({ readOnly: true });
++  ctx.selectQuestion("q1");
++  const ids = applicable(builtinCommands(), ctx).map((c) => c.id);
++  assert.ok(!ids.includes("question.add") && !ids.includes("question.duplicate") && !ids.includes("block.add"));
++  assert.ok(ids.includes("palette.open"));
++  assert.ok(!ids.includes("survey.save"), "saving a version is a write");
++});
++
++test("mode commands offer only available modes other than the current one", () => {
++  const ctx = fakeCtx();
++  const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
++  assert.deepEqual(ids, [], "only Studio is available and we are in Studio → nothing to switch to");
++});
++
++test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
++  const ctx = fakeCtx();
++  const nav = applicable(navigationCommands(ctx.tabs), ctx);
++  assert.deepEqual(nav.map((c) => c.id), ["nav.logic"]);
++  const find = findCommands(ctx.def);
++  const r = rank("city", find, (c) => [c.title, ...(c.keywords ?? [])]);
++  assert.equal(r[0].item.id, "find.question.q2");
++  r[0].item.run(ctx);
++  assert.equal(ctx.questionId, "q2");
++  assert.equal(ctx.tab, "questions");
++});
++
++test("every built-in id is unique and every shortcut is unique", () => {
++  const cmds = builtinCommands();
++  const ids = cmds.map((c) => c.id);
++  assert.equal(new Set(ids).size, ids.length, "duplicate command ids");
++  const keys = cmds.map((c) => c.shortcut).filter(Boolean) as string[];
++  assert.equal(new Set(keys.map((k) => JSON.stringify(parseShortcut(k)))).size, keys.length, `two commands share a key: ${keys.join(", ")}`);
++});
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+new file mode 100644
+index 0000000..c6ffde5
+--- /dev/null
++++ b/apps/studio/lib/programmingMode.ts
+@@ -0,0 +1,72 @@
++/**
++ * PROGRAMMING MODES — the five environments over one survey.
++ *
++ * A mode is a way of LOOKING AT and INTERACTING WITH the survey, not a
++ * different survey. Switching one changes which renderer the centre column
++ * shows for the programming tabs and nothing else: the definition, the
++ * selection, the tab, the undo history and the autosave are all untouched,
++ * because none of them lives in the renderer.
++ *
++ * Only the modes with a renderer are `available`. The others are declared
++ * here so the selector shows what the Studio is becoming, and so their ids
++ * are fixed before the code that reads them exists — a `?mode=flow` link
++ * shared today keeps meaning Flow when Flow lands.
++ */
++
++export type ProgrammingMode = "studio" | "grid" | "architect" | "flow" | "intelligent";
++
++export interface ModeInfo {
++  id: ProgrammingMode;
++  /** one word, as on the selector */
++  label: string;
++  /** the tagline from the onboarding chooser */
++  tagline: string;
++  /** who it is for, one line */
++  audience: string;
++  /** false until the renderer exists */
++  available: boolean;
++  /** the keyboard number: ⌘1 … ⌘5 */
++  index: 1 | 2 | 3 | 4 | 5;
++}
++
++export const MODES: readonly ModeInfo[] = [
++  { id: "studio", label: "Studio", tagline: "Build visually", audience: "For researchers who want an intuitive modern builder.", available: true, index: 1 },
++  { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: false, index: 2 },
++  { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: false, index: 3 },
++  { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: false, index: 4 },
++  { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
++];
++
++export const DEFAULT_MODE: ProgrammingMode = "studio";
++
++/** the localStorage key the last-used mode is remembered under */
++export const MODE_STORAGE_KEY = "rescript.programmingMode";
++
++export function isProgrammingMode(v: unknown): v is ProgrammingMode {
++  return typeof v === "string" && MODES.some((m) => m.id === v);
++}
++
++export function modeInfo(id: ProgrammingMode): ModeInfo {
++  return MODES.find((m) => m.id === id) ?? MODES[0];
++}
++
++/**
++ * Which mode to open in. The URL wins over memory, and memory over the
++ * default — a shared link says what to show; a returning programmer gets
++ * what they last used. A mode that is not yet available falls back to the
++ * default rather than opening on an empty screen, whatever asked for it.
++ */
++export function resolveInitialMode(search: string, remembered: string | null | undefined): ProgrammingMode {
++  const fromUrl = new URLSearchParams(search).get("mode");
++  const pick = (v: unknown): ProgrammingMode | null =>
++    isProgrammingMode(v) && modeInfo(v).available ? v : null;
++  return pick(fromUrl) ?? pick(remembered) ?? DEFAULT_MODE;
++}
++
++/** The URL with `?mode=` set (or removed for the default), other params kept. */
++export function withModeInUrl(search: string, mode: ProgrammingMode): string {
++  const p = new URLSearchParams(search);
++  if (mode === DEFAULT_MODE) p.delete("mode"); else p.set("mode", mode);
++  const s = p.toString();
++  return s ? `?${s}` : "";
++}
+diff --git a/apps/studio/lib/selection.ts b/apps/studio/lib/selection.ts
+new file mode 100644
+index 0000000..9989697
+--- /dev/null
++++ b/apps/studio/lib/selection.ts
+@@ -0,0 +1,98 @@
++import type { ObjectKey } from "@rescript/engine";
++
++/**
++ * ONE SELECTION FOR EVERY ENVIRONMENT.
++ *
++ * The Studio had two: the store's `selectedQuestionId` (a single question,
++ * read by the Questions panel and the property panel) and the canvas's
++ * `SelectedEntity` (an element inside that question). Both are kept — every
++ * panel and browser test reads them — and this sits above them: a set of
++ * engine `ObjectKey`s (`question:…`, `flowNode:…`, `displayRule:…`, …) with
++ * one PRIMARY, so a grid can select twelve rows, a canvas can select a
++ * branch, and an inspector can show whichever one was touched last.
++ *
++ * The reducer is pure so it can be tested without React: it knows nothing
++ * about the store. The provider (components/studio/SelectionContext.tsx)
++ * mirrors the primary into `selectedQuestionId` when it is a question.
++ */
++
++export interface SelectionState {
++  /** the object the inspector shows; always a member of `keys` when non-null */
++  primary: ObjectKey | null;
++  /** everything selected, in the order it was selected */
++  keys: ObjectKey[];
++  /** the anchor for shift-range selection: the last plain click */
++  anchor: ObjectKey | null;
++}
++
++export const EMPTY_SELECTION: SelectionState = { primary: null, keys: [], anchor: null };
++
++export type SelectionAction =
++  /** a plain click: this and only this */
++  | { type: "select"; key: ObjectKey }
++  /** ⌘/ctrl-click: add or remove without touching the rest */
++  | { type: "toggle"; key: ObjectKey }
++  /** shift-click: everything between the anchor and this, in `order` */
++  | { type: "range"; key: ObjectKey; order: ObjectKey[] }
++  /** replace the whole set, e.g. "select all in block"; primary is the first */
++  | { type: "set"; keys: ObjectKey[]; primary?: ObjectKey | null }
++  | { type: "clear" }
++  /** an object was deleted: drop it, promote the next primary */
++  | { type: "drop"; keys: ObjectKey[] };
++
++export function selectionReducer(state: SelectionState, action: SelectionAction): SelectionState {
++  switch (action.type) {
++    case "select":
++      if (state.primary === action.key && state.keys.length === 1) return state;
++      return { primary: action.key, keys: [action.key], anchor: action.key };
++
++    case "toggle": {
++      if (state.keys.includes(action.key)) {
++        const keys = state.keys.filter((k) => k !== action.key);
++        return {
++          keys,
++          primary: state.primary === action.key ? (keys[keys.length - 1] ?? null) : state.primary,
++          anchor: state.anchor === action.key ? (keys[keys.length - 1] ?? null) : state.anchor,
++        };
++      }
++      return { primary: action.key, keys: [...state.keys, action.key], anchor: state.anchor ?? action.key };
++    }
++
++    case "range": {
++      const anchor = state.anchor ?? state.primary;
++      const a = anchor ? action.order.indexOf(anchor) : -1;
++      const b = action.order.indexOf(action.key);
++      if (a < 0 || b < 0) return selectionReducer(state, { type: "select", key: action.key });
++      const [lo, hi] = a <= b ? [a, b] : [b, a];
++      const span = action.order.slice(lo, hi + 1);
++      // keep anything already selected outside the span — shift extends, it does not replace
++      const outside = state.keys.filter((k) => !span.includes(k));
++      return { primary: action.key, keys: [...outside, ...span], anchor };
++    }
++
++    case "set": {
++      const keys = [...new Set(action.keys)];
++      const primary = action.primary !== undefined
++        ? (action.primary && keys.includes(action.primary) ? action.primary : null)
++        : (keys[0] ?? null);
++      return { primary, keys, anchor: primary };
++    }
++
++    case "clear":
++      return state.keys.length === 0 && state.primary === null ? state : EMPTY_SELECTION;
++
++    case "drop": {
++      const gone = new Set(action.keys);
++      if (!state.keys.some((k) => gone.has(k))) return state;
++      const keys = state.keys.filter((k) => !gone.has(k));
++      const primary = state.primary && !gone.has(state.primary) ? state.primary : (keys[keys.length - 1] ?? null);
++      const anchor = state.anchor && !gone.has(state.anchor) ? state.anchor : primary;
++      return { primary, keys, anchor };
++    }
++  }
++}
++
++/** `question:q_12` → "q_12" when the key is a question, else null. */
++export function questionIdOf(key: ObjectKey | null): string | null {
++  return key && key.startsWith("question:") ? key.slice("question:".length) : null;
++}
+diff --git a/scripts/multimodal-foundation-test.mjs b/scripts/multimodal-foundation-test.mjs
+new file mode 100644
+index 0000000..4691e8d
+--- /dev/null
++++ b/scripts/multimodal-foundation-test.mjs
+@@ -0,0 +1,274 @@
++/**
++ * MULTI-MODAL FOUNDATION — the shared shell layer (Phase 0).
++ *
++ * The mode selector, the ⌘K palette, the keyboard shortcuts, the selection
++ * bridge, and the question operations that moved into the engine. Nothing
++ * here needs a database: the sandbox drives the Studio in memory.
++ *
++ *   node scripts/multimodal-foundation-test.mjs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => {
++  if (m.type() !== "error") return;
++  const t = m.text();
++  // the sandbox has no session (401s) and the font host is blocked here
++  if (/401|ERR_TUNNEL|Failed to load resource/.test(t)) return;
++  pageErrors.push(t);
++});
++
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const readDef = async () => {
++  const before = await page.$eval(".leftnav .nav-item.active", (e) => e.textContent.trim());
++  await page.click(".leftnav >> text=JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await page.click(`.leftnav >> text=${before.replace(/\d+$/, "").trim()}`);
++  return JSON.parse(json);
++};
++const questionCount = async () => (await readDef()).questions.length;
++const activeTab = () => page.$eval(".leftnav .nav-item.active", (e) => e.textContent.replace(/\d+$/, "").trim());
++const paletteOpen = () => page.isVisible('[data-testid="command-palette"]');
++/* a card header TOGGLES: clicking the open question collapses it. Select for sure. */
++const selectCard = async (n) => {
++  for (let i = 0; i < 2; i++) {
++    await page.click(`.qlist-item >> nth=${n}`);
++    await page.waitForTimeout(150);
++    if (!(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")))) return;
++  }
++  throw new Error(`could not select card ${n}`);
++};
++
++await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++await page.waitForSelector(".block-badge");
++
++/* ----------------------------------------------------------- selector */
++{
++  const modes = await page.$$eval('[data-testid="mode-selector"] .mode-option', (els) =>
++    els.map((e) => ({ id: e.dataset.mode, active: e.classList.contains("active"), available: e.dataset.available, disabled: e.disabled })));
++  assert.deepEqual(modes.map((m) => m.id), ["studio", "grid", "architect", "flow", "intelligent"]);
++  ok("the mode selector shows all five environments in order");
++  assert.ok(modes[0].active && modes[0].available === "1" && !modes[0].disabled, JSON.stringify(modes[0]));
++  ok("Studio is the active, available mode");
++  for (const m of modes.slice(1)) assert.ok(!m.active && m.available === "0" && m.disabled, JSON.stringify(m));
++  ok("the four unbuilt modes are visible, disabled and marked coming-soon");
++  const title = await page.getAttribute('[data-testid="mode-grid"]', "title");
++  assert.match(title, /Program at scale/);
++  ok("a disabled mode still tells you what it will be");
++}
++
++/* ----------------------------------------------------------- palette */
++{
++  assert.equal(await paletteOpen(), false);
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]');
++  ok(`${mod}+K opens the palette`);
++  assert.equal(await page.evaluate(() => document.activeElement?.dataset.testid), "palette-input");
++  ok("the search field has focus on open");
++  const groups = await page.$$eval(".palette-group", (els) => els.map((e) => e.textContent));
++  assert.ok(groups.includes("Add") && groups.includes("Navigate"), groups.join(", "));
++  ok("an empty query lists commands grouped");
++  assert.equal(await page.$('[data-testid="palette-item-palette.open"]'), null);
++  ok("the palette does not list the command that opens it");
++  await page.keyboard.press("Escape");
++  await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  ok("Escape closes it");
++  await page.click('[data-testid="palette-open"]');
++  await page.waitForSelector('[data-testid="command-palette"]');
++  ok("the top-bar button opens it too");
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  ok(`${mod}+K again toggles it closed`);
++}
++
++/* ----------------------------------------------------------- add question via palette */
++{
++  const before = await questionCount();
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="palette-input"]');
++  await page.type('[data-testid="palette-input"]', "add quest");
++  await page.waitForSelector('.palette-item.active[data-testid="palette-item-question.add"]');
++  const first = await page.$eval(".palette-item.active .palette-item-title", (e) => e.textContent);
++  assert.equal(first, "Add question", `top result for "add quest" is ${first}`);
++  ok("fuzzy ranking puts 'Add question' first for 'add quest'");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  await page.waitForTimeout(250);
++  const after = await questionCount();
++  assert.equal(after, before + 1);
++  ok("Enter runs it: one more question in the definition");
++  const def = await readDef();
++  const q = def.questions[def.questions.length - 1];
++  assert.equal(def.flow[0].questionIds.includes(q.id), true, "the new question is on the first page");
++  ok("the new question landed on a page, not unplaced");
++  assert.ok(await page.isVisible(".qlist-item"), "a question card is rendered");
++  const rp = await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden"));
++  assert.equal(rp, false, "the property panel should show the new question");
++  ok("the command selected the new question — the property panel opened (selection bridge works)");
++}
++
++/* ----------------------------------------------------------- shortcuts */
++{
++  const before = await questionCount();
++  await page.click("main.center", { position: { x: 10, y: 10 } }); // a plain click on the canvas, not in a field
++  await page.keyboard.press(`${mod}+Shift+a`);
++  await page.waitForTimeout(250);
++  assert.equal(await questionCount(), before + 1);
++  ok(`${mod}+Shift+A adds a question when nothing is focused`);
++  // but not while typing: focus a text field and press it again
++  const b2 = await questionCount();               // (this navigates JSON → Questions, so query the input AFTER it)
++  const input = await page.$(".block input[type=text], .block input:not([type]), input.input");
++  assert.ok(input, "an input to type in");
++  await input.focus();
++  assert.equal(await page.evaluate(() => document.activeElement?.tagName), "INPUT");
++  await page.keyboard.press(`${mod}+Shift+a`);
++  await page.waitForTimeout(250);
++  assert.equal(await questionCount(), b2, "the shortcut must stand back while typing");
++  ok("the same chord inside a text field does nothing — the field keeps its own keys");
++}
++
++/* ----------------------------------------------------------- duplicate via shortcut + find via palette */
++{
++  const before = await readDef();
++  const first = before.questions[0];
++  await selectCard(0);
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="palette-input"]');
++  await page.type('[data-testid="palette-input"]', "duplicate");
++  await page.waitForSelector('[data-testid="palette-item-question.duplicate"]');
++  await page.click('[data-testid="palette-item-question.duplicate"]');
++  await page.waitForTimeout(250);
++  const after = await readDef();
++  assert.equal(after.questions.length, before.questions.length + 1);
++  const copy = after.questions.find((q) => q.code === `${first.code}_COPY`);
++  assert.ok(copy, `a ${first.code}_COPY exists: ${after.questions.map((q) => q.code).join(",")}`);
++  ok("'Duplicate question' from the palette copies the selected question with a fresh, unique code");
++  const page0 = after.flow[0].questionIds;
++  assert.equal(page0[page0.indexOf(first.id) + 1], copy.id, "the copy sits right after its source");
++  ok("the copy is placed directly after the original");
++
++  // the palette finds survey objects
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="palette-input"]');
++  await page.type('[data-testid="palette-input"]', copy.code);
++  await page.waitForSelector(`[data-testid="palette-item-find.question.${copy.id}"]`);
++  ok("typing a question code finds that question");
++  await page.click(`[data-testid="palette-item-find.question.${copy.id}"]`);
++  await page.waitForTimeout(200);
++  const rpHidden = await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden"));
++  assert.equal(rpHidden, false);
++  ok("picking it selects it — the property panel shows it");
++}
++
++/* ----------------------------------------------------------- navigation via palette */
++{
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="palette-input"]');
++  await page.type('[data-testid="palette-input"]', "open logic");
++  await page.waitForSelector('.palette-item.active[data-testid="palette-item-nav.logic"]');
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  await page.waitForSelector(".leftnav .nav-item.active >> text=Logic");
++  assert.equal(await activeTab(), "Logic");
++  ok("'Open Logic' switches the tab");
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="palette-input"]');
++  const hasSelf = await page.$('[data-testid="palette-item-nav.logic"]');
++  assert.equal(hasSelf, null, "the current tab is not offered");
++  ok("the current tab is not offered as a destination");
++  await page.keyboard.press("Escape");
++  await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  await page.click(".leftnav >> text=Questions");
++  await page.waitForSelector(".block-badge");
++}
++
++/* ----------------------------------------------------------- the card buttons still work (question ops moved to the engine) */
++{
++  const before = await readDef();
++  const codes = () => page.$$eval(".qlist-item strong.mono", (els) => els.map((e) => e.textContent));
++  const c0 = await codes();
++  assert.ok(c0.length >= 3, `need three questions, have ${c0.length}`);
++  // move the first question down with its ↓ button
++  const cards = await page.$$(".qlist-item");
++  await (await cards[0].$('button[title="Move down"]')).click();
++  await page.waitForTimeout(200);
++  const c1 = await codes();
++  assert.equal(c1[1], c0[0], `after ↓ the first card is second: ${c0.join(",")} → ${c1.join(",")}`);
++  assert.equal(c1[0], c0[1]);
++  ok("↓ swaps a question with the one below it");
++  const cards2 = await page.$$(".qlist-item");
++  await (await cards2[1].$('button[title="Move up"]')).click();
++  await page.waitForTimeout(200);
++  assert.deepEqual(await codes(), c0);
++  ok("↑ puts it back");
++  // duplicate button
++  const cards3 = await page.$$(".qlist-item");
++  await (await cards3[0].$('button[title="Duplicate"]')).click();
++  await page.waitForTimeout(200);
++  const c3 = await codes();
++  assert.equal(c3.length, c0.length + 1);
++  assert.equal(c3[1], `${c0[0]}_COPY_2`, `a second copy of ${c0[0]} gets _COPY_2, not a collision: ${c3.join(",")}`);
++  ok("the card's ⧉ duplicates with a unique name even when a _COPY already exists");
++  // delete via the dialog
++  const cards4 = await page.$$(".qlist-item");
++  await (await cards4[1].$('[data-testid="delete-question"]')).click();
++  await page.waitForSelector('[data-testid="delete-question-dialog"]');
++  await page.click('[data-testid="delete-question-confirm"]');
++  await page.waitForSelector('[data-testid="delete-question-dialog"]', { state: "detached" });
++  await page.waitForTimeout(200);
++  const after = await readDef();
++  assert.equal(after.questions.length, before.questions.length);
++  assert.ok(!after.questions.some((q) => q.code === `${c0[0]}_COPY_2`), "the deleted copy is gone");
++  for (const p of after.flow.filter((n) => n.type === "page")) {
++    for (const id of p.questionIds) assert.ok(after.questions.some((q) => q.id === id), `page still lists a deleted question ${id}`);
++  }
++  ok("× deletes through the dialog and no page keeps a dangling id");
++}
++
++/* ----------------------------------------------------------- read-only hides edits */
++{
++  // the sandbox opts into collaboration with ?collab=1, which lands read-only (no session) — the palette must offer no edits there
++  await page.goto(`${STUDIO}/sandbox?collab=1`, { waitUntil: "networkidle" });
++  await page.waitForSelector(".topbar");
++  await page.waitForTimeout(600);
++  const ro = await page.$eval("main.center", (e) => e.dataset.readonly);
++  if (ro === "1") {
++    await page.keyboard.press(`${mod}+k`);
++    await page.waitForSelector('[data-testid="palette-input"]');
++    assert.equal(await page.$('[data-testid="palette-item-question.add"]'), null, "Add question offered in read-only");
++    assert.ok(await page.$('[data-testid="palette-item-nav.logic"]'), "navigation still offered");
++    ok("in read-only, the palette offers navigation but no edits");
++    await page.keyboard.press("Escape");
++    await page.waitForSelector('[data-testid="command-palette"]', { state: "detached" });
++  } else {
++    console.log("  skip read-only check: sandbox did not land read-only here");
++  }
++}
++
++/* ----------------------------------------------------------- ?mode= */
++{
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="mode-selector"]');
++  const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
++  assert.equal(active, "studio");
++  ok("?mode=grid falls back to Studio while Grid has no renderer — never an empty screen");
++  const url = page.url();
++  assert.ok(url.includes("mode=grid") || !url.includes("mode="), "the url is left alone until a real switch happens");
++  ok("the URL is not rewritten by the fallback");
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no uncaught errors through any of it");
++
++await browser.close();
++console.log(`\nALL MULTI-MODAL FOUNDATION CHECKS PASSED (${passed})`);
+diff --git a/scripts/test-survey-sync-test.mjs b/scripts/test-survey-sync-test.mjs
+index a0e03aa..556599c 100644
+--- a/scripts/test-survey-sync-test.mjs
++++ b/scripts/test-survey-sync-test.mjs
+@@ -135,14 +135,23 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(()
+   console.log("✔ an edit made during an in-flight save is reported as unsaved until its own save lands");
+   await c2.close();
+ 
+-  /* ===================================== 3. Test Survey saves, then opens EXACTLY that */
++  /* ===================================== 3. Test Survey saves, deploys, then opens the LIVE-FOLLOWING link */
++  /*
++   * The link used to carry `?v=<versionId>`, pinning the tab to a frozen
++   * snapshot — which is why every later edit needed "restart the runtime"
++   * to show up. Since the live-sync change the tab opens the plain test link,
++   * which resolves the autosaved draft on every request. A version is still
++   * cut and deployed first, so the build is reproducible; the tab just is not
++   * chained to it.
++   */
+   await addQuestion(page, "Q6 added just before testing");     // unsaved at click time
+   const popupP = context.waitForEvent("page");
+   await page.click('[data-testid="test-survey"]');
+   const popup = await popupP;
+-  await popup.waitForURL(/\/t\/.*\?v=ver_\d+/, { timeout: 10000 });
++  await popup.waitForURL(/\/t\/client\/study-001(\?.*)?$/, { timeout: 10000 });
+   const url = popup.url();
+-  assert.match(url, /\/t\/client\/study-001\?v=ver_1$/, `the test tab opened with the saved version's id: ${url}`);
++  assert.doesNotMatch(url, /[?&]v=/, `the test tab must NOT pin a version any more: ${url}`);
++  assert.match(url, /\/t\/client\/study-001/, `the test tab opened the deployed test link: ${url}`);
+   assert.equal(server.versions.length, 1, "one version was cut");
+   assert.equal(server.versions[0].questions.length, 6, "the version contains the edit made just before the click — save-before-test");
+   assert.deepEqual(server.deploys.map((d) => d.versionId), ["ver_1"], "and that exact version was deployed");
+@@ -150,15 +159,18 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(()
+   assert.match(order, /draft,version,deploy$/, `draft flush → version → deploy, in that order: ${order}`);
+   assert.equal(await page.$eval('[data-testid="test-survey"]', (e) => e.title), await page.$eval('[data-testid="test-survey"]', (e) => e.title));
+   assert.match(await page.$eval('[data-testid="test-survey"]', (e) => e.title), /Last test build: v1\.1/, "the button remembers which build it opened");
+-  console.log("✔ Test Survey: flush → version (with the last-second edit) → deploy → open ?v=<that id>");
++  console.log("✔ Test Survey: flush → version (with the last-second edit) → deploy → open the unpinned test link");
+ 
+-  // a second click cuts a second version and opens THAT — never the first
++  // a second click cuts a second version carrying the newer edit; the same link keeps following the draft
+   await addQuestion(page, "Q7");
+-  // the named test window is reused, so the same popup navigates
+   await page.click('[data-testid="test-survey"]');
+-  await popup.waitForURL(/\?v=ver_2$/, { timeout: 10000 });
++  // the click is async: flush → version → deploy. Wait for the last step.
++  for (let i = 0; i < 100 && server.deploys.length < 2; i++) await page.waitForTimeout(100);
++  assert.equal(server.versions.length, 2, "a second version was cut");
+   assert.equal(server.versions[1].questions.length, 7);
+-  console.log("✔ the next Test Survey opens the NEXT version, carrying the newer edit");
++  assert.deepEqual(server.deploys.map((d) => d.versionId), ["ver_1", "ver_2"], "and deployed");
++  assert.doesNotMatch(popup.url(), /[?&]v=/, "still unpinned");
++  console.log("✔ the next Test Survey cuts and deploys the NEXT version; the tab is not pinned to either");
+   await context.close();
+ }
+ 
+@@ -170,8 +182,14 @@ const toastText = (page) => page.$eval(".toast", (e) => e.textContent).catch(()
+   const before = context.pages().length;
+   await page.click('[data-testid="test-survey"]');
+   await page.waitForSelector(".toast");
+-  assert.match(await toastText(page), /could not be saved.*retry before starting the test survey/i,
+-    "the tester is told the latest changes were not saved and testing is refused");
++  /*
++   * The server's OWN reason is what shows. It used to be overwritten a few
++   * milliseconds later by "could not be saved, please retry" — the one
++   * message that cannot be acted on, and the one in the bug report.
++   */
++  assert.match(await toastText(page), /database unavailable/i,
++    "the tester is told the server's actual reason, not a generic retry");
++  assert.doesNotMatch(await toastText(page), /retry before starting/i, "the vague overwrite is gone");
+   await page.waitForTimeout(500);
+   assert.equal(context.pages().length, before, "no test tab is left open on an older build");
+   assert.equal(server.deploys.length, 0, "nothing was deployed");
+-- 
+2.43.0
+
+

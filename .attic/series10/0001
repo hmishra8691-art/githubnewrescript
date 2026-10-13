@@ -1,0 +1,1281 @@
+From 6d0d5bc4276b5dc0453ac4869f74bb7dbe070d14 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 22:16:09 +0000
+Subject: [PATCH] Product surface: chooser, dual-mode split, selector, collapse
+ rules (Phase 5)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The five environments get their front door and their pairing.
+
+- Onboarding chooser (§10/§20): "How do you want to program your
+  research?" — five numbered cards with tagline, audience and three
+  particulars each; opens on a first run of a project (no ?mode=, no
+  remembered mode), on ?chooser=1, from the selector's ⓘ, and from ⌘K
+  "Choose how to program…"; Escape/backdrop/"Keep Studio" dismiss and
+  remember. The sandbox is exempt unless asked — it is scratch, and 48
+  browser suites open it expecting the Questions panel unobstructed.
+- Dual-mode split (§15): a {mode, split} pair in the mode layer with
+  ?split= in the URL and memory; nextPair swaps when the partner becomes
+  primary, refuses a mode with itself, drops an unavailable partner.
+  SplitCenter renders two panes from one ModeRenderer table (the single
+  view uses the same table), each with a head (index, name, tagline,
+  swap, close), a draggable remembered ratio; the outer property panel
+  steps aside. Both panes are views of the one store, so an edit in Grid
+  is on the Flow canvas on the same render and a node clicked in Flow is
+  the row selected in Grid — nothing was written to make that so.
+  Commands split.<mode>, split.off, mode.choose. Folds to the primary
+  below 1100px (matchMedia) and comes back when the window widens.
+- Selector (§11): numbered ranges (01 Studio … 05 Intelligent), the
+  paired mode marked, a Split menu, a Focus switch wired to the same
+  view-level flag every shell reads, and the ⓘ.
+- Visual language (§11): a --ide-* token extension read only by the mode
+  chrome and the .sg/.ar/.fc/.iq shells — type ramp, mono identifiers,
+  one pane-head height, hairlines, status colours. Nothing the respondent
+  renderer or an existing panel reads changed.
+- Collapse rules (§17): container queries on the split pane and the
+  centre column — Flow/Intelligent/Architect inspectors fold under 960px,
+  Architect's map under 640px; the mode bar folds its labels, then its
+  indexes, then its tools.
+- Flow: the first fit used a guessed 1200×700 before the canvas was
+  measured (wrong in a pane); size starts at 0×0 and fit waits.
+- Tests: lib (nextPair/resolveInitialSplit/withSplitInUrl/shouldShowChooser,
+  split + chooser commands; mutation-checked), scripts/product-surface-
+  test.mjs (31 checks). Foundation, Grid, Architect, Flow, Intelligent and
+  eight older shell suites still pass.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             | 165 +++++++++++
+ apps/studio/components/flow/FlowCanvas.tsx    |   4 +-
+ .../components/studio/CommandContext.tsx      |   4 +
+ apps/studio/components/studio/ModeChooser.tsx |  84 ++++++
+ apps/studio/components/studio/ModeContext.tsx |  86 +++++-
+ .../components/studio/ModeRenderers.tsx       |  81 ++++++
+ .../studio/components/studio/ModeSelector.tsx | 115 ++++++--
+ apps/studio/components/studio/Studio.tsx      |  23 +-
+ apps/studio/lib/commands/builtins.ts          |  29 ++
+ apps/studio/lib/multimodalFoundation.test.ts  |  44 +++
+ apps/studio/lib/programmingMode.ts            |  75 +++++
+ docs/MULTI-MODAL-PROGRAMMING-PLAN.md          |  28 +-
+ scripts/product-surface-test.mjs              | 267 ++++++++++++++++++
+ 13 files changed, 949 insertions(+), 56 deletions(-)
+ create mode 100644 apps/studio/components/studio/ModeChooser.tsx
+ create mode 100644 apps/studio/components/studio/ModeRenderers.tsx
+ create mode 100644 scripts/product-surface-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index bd9afd0..fa135b1 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1161,3 +1161,168 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+   .iq-divider, .iq-inspector { display: none; }
+   .iq-hint { display: none; }
+ }
++
++/* ======================================================================
++   PRODUCT SURFACE (Phase 5) — the mode shell's visual language (§11),
++   the chooser (§10), the split (§15), and the collapse rules (§17).
++
++   An EXTENSION of the design system, not a replacement: the `--ide-*`
++   tokens below are read only by the programming-mode chrome (selector,
++   pane heads, chooser, split) and the four mode shells. The respondent
++   renderer and every existing Studio panel keep their tokens untouched.
++   The look is a 2027 enterprise IDE — dense type ramp, mono identifiers,
++   hairlines, restrained status colour, no gradients, no glow.
++   ====================================================================== */
++:root {
++  --ide-fs: 12.5px;            /* body type in the mode shells */
++  --ide-fs-sm: 11.5px;
++  --ide-mono-fs: 10.5px;       /* identifiers, indexes, kickers */
++  --ide-track: .08em;          /* letter-spacing for kickers */
++  --ide-head-h: 38px;          /* every pane head, every toolbar, one height */
++  --ide-hairline: 1px solid var(--c-border);
++  --ide-r: 8px;
++  --ide-ink: var(--c-text);
++  --ide-ink-2: var(--c-text-3);
++  --ide-ink-3: var(--c-text-4);
++  --ide-accent: var(--c-primary-600);
++  --ide-accent-soft: var(--c-primary-100);
++  --ide-ok: var(--c-success);
++  --ide-warn: var(--c-warning);
++  --ide-err: var(--c-error);
++  --ide-dep: #0e7490;          /* dependency — the cyan the Flow canvas already uses upstream */
++  --ide-changed: #7c3aed;      /* changed since the last version */
++}
++
++/* the four mode shells share the type ramp; everything inside inherits */
++.sg, .ar, .fc, .iq { font-size: var(--ide-fs); color: var(--ide-ink); }
++.sg-toolbar, .fc-toolbar, .iq-toolbar, .ar-pane-head { min-height: var(--ide-head-h); }
++
++/* ---------- the selector: numbered ranges on an instrument ---------- */
++.mode-cluster { display: inline-flex; align-items: center; gap: 6px; flex: none; margin-left: 6px; }
++.mode-selector { margin-left: 0; }
++.mode-option { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 10px 5px 8px; }
++.mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }
++.mode-option.active .mode-index { color: var(--ide-accent); }
++.mode-option.paired { box-shadow: 0 0 0 1px var(--c-border) inset; color: var(--ide-ink-2); }
++.mode-option.paired .mode-index::after { content: "·"; margin-left: 3px; color: var(--ide-accent); }
++.mode-tools { display: inline-flex; align-items: center; gap: 2px; position: relative; }
++.mode-tool {
++  appearance: none; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px;
++  background: transparent; color: var(--ide-ink-2); font: inherit; font-size: 12px; font-weight: 550; padding: 5px 8px; cursor: pointer; line-height: 1; white-space: nowrap;
++}
++.mode-tool:hover:not(:disabled) { color: var(--ide-ink); background: var(--c-surface-2); }
++.mode-tool.on { color: var(--ide-accent); background: var(--c-surface-2); border-color: var(--ide-accent-soft); }
++.mode-tool:disabled { opacity: .4; cursor: not-allowed; }
++.mode-tool.quiet { padding: 5px 6px; }
++.mode-menu {
++  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60; min-width: 240px;
++  background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: var(--sh-3, 0 8px 24px rgba(19,26,43,.14)); padding: 6px;
++}
++.mode-menu-title { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: var(--ide-track); text-transform: uppercase; color: var(--ide-ink-3); padding: 6px 8px 4px; }
++.mode-menu-item {
++  appearance: none; display: flex; align-items: baseline; gap: 8px; width: 100%; border: 0; background: transparent; border-radius: 6px;
++  font: inherit; font-size: 12.5px; color: var(--ide-ink); padding: 6px 8px; cursor: pointer; text-align: left;
++}
++.mode-menu-item:hover { background: var(--c-surface-2); }
++.mode-menu-item.on { color: var(--ide-accent); }
++.mode-menu-item.off { color: var(--ide-ink-2); border-top: var(--ide-hairline); border-radius: 0; margin-top: 4px; padding-top: 8px; align-items: center; }
++.mode-menu-tag { margin-left: auto; font-size: var(--ide-fs-sm); color: var(--ide-ink-3); }
++
++/* ---------- the chooser ---------- */
++.chooser-backdrop {
++  position: fixed; inset: 0; z-index: 190; display: flex; align-items: center; justify-content: center; padding: 24px;
++  background: rgba(19, 26, 43, .32); backdrop-filter: blur(3px); animation: palette-in var(--dur-2, 160ms) var(--ease, ease);
++}
++.chooser {
++  width: min(1120px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: var(--c-surface);
++  border: var(--ide-hairline); border-radius: 14px; box-shadow: var(--sh-3, 0 24px 64px rgba(19,26,43,.22)); padding: 28px 28px 20px;
++}
++.chooser-head { text-align: center; margin-bottom: 22px; }
++.chooser-kicker { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .14em; text-transform: uppercase; color: var(--ide-ink-3); }
++.chooser-head h2 { margin: 8px 0 6px; font-size: 24px; font-weight: 650; letter-spacing: -.015em; color: var(--ide-ink); }
++.chooser-head p { margin: 0; color: var(--ide-ink-2); font-size: 13.5px; }
++.chooser-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
++.chooser-card {
++  appearance: none; position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
++  border: var(--ide-hairline); border-radius: 12px; background: var(--c-bg); padding: 16px 14px 14px; font: inherit; color: var(--ide-ink); cursor: pointer;
++  transition: border-color var(--dur-1, 120ms) var(--ease, ease), transform var(--dur-1, 120ms) var(--ease, ease), box-shadow var(--dur-1, 120ms) var(--ease, ease);
++}
++.chooser-card:hover:not(:disabled), .chooser-card:focus-visible { border-color: var(--ide-accent); box-shadow: 0 0 0 3px var(--ide-accent-soft); transform: translateY(-1px); outline: none; }
++.chooser-card.current { border-color: var(--c-border-strong); }
++.chooser-card:disabled { opacity: .5; cursor: default; }
++.chooser-glyph { color: var(--ide-accent); margin-bottom: 4px; }
++.chooser-index { font-size: var(--ide-mono-fs); letter-spacing: .1em; color: var(--ide-ink-3); }
++.chooser-name { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
++.chooser-tagline { font-size: 13px; color: var(--ide-ink); }
++.chooser-audience { font-size: var(--ide-fs-sm); color: var(--ide-ink-2); margin-bottom: 6px; }
++.chooser-detail { margin: auto 0 0; padding: 8px 0 0; list-style: none; border-top: var(--ide-hairline); width: 100%; display: flex; flex-direction: column; gap: 3px; }
++.chooser-detail li { font-size: var(--ide-fs-sm); color: var(--ide-ink-2); padding-left: 12px; position: relative; }
++.chooser-detail li::before { content: ""; position: absolute; left: 0; top: .55em; width: 5px; height: 1px; background: var(--c-border-strong); }
++.chooser-current { position: absolute; top: 10px; right: 10px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ide-accent); border: 1px solid var(--ide-accent-soft); border-radius: 999px; padding: 1px 6px; }
++.chooser-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; padding-top: 14px; border-top: var(--ide-hairline); }
++.chooser-foot-note { display: inline-flex; align-items: center; gap: 6px; font-size: var(--ide-fs-sm); color: var(--ide-ink-2); }
++
++/* ---------- the split ---------- */
++.center:has(> .split) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
++.split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); }
++.split-divider { cursor: col-resize; background: var(--c-border); position: relative; z-index: 2; }
++.split-divider:hover, .split-divider:active { background: var(--ide-accent-soft); }
++.split-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--c-surface); }
++.split-head {
++  display: flex; align-items: baseline; gap: 8px; padding: 0 10px; height: 30px; flex: none;
++  border-bottom: var(--ide-hairline); background: var(--c-surface-2); font-size: var(--ide-fs-sm);
++}
++.split-index { font-size: var(--ide-mono-fs); letter-spacing: .06em; color: var(--ide-accent); }
++.split-name { font-weight: 650; color: var(--ide-ink); }
++.split-tagline { color: var(--ide-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.split-spacer { flex: 1 1 auto; }
++.split-btn { appearance: none; align-self: center; display: inline-flex; border: 0; background: transparent; color: var(--ide-ink-3); padding: 3px; border-radius: 5px; cursor: pointer; }
++.split-btn:hover { color: var(--ide-ink); background: var(--c-surface); }
++.split-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
++/* the Studio (Questions panel) renderer expects the centre column's padding and scroll */
++.split-pane.studio .split-body { overflow-y: auto; padding: 18px 20px 40px; display: block; }
++
++/* ---------- collapse rules per mode (§17) ---------- */
++@media (max-width: 1400px) {
++  .mode-tool-label { display: none; }
++  .mode-option { padding: 5px 8px; }
++}
++@media (max-width: 1180px) {
++  .mode-index { display: none; }
++  .split-tagline { display: none; }
++}
++@media (max-width: 1100px) {
++  /* two renderers would each be unusable: the shell renders the primary alone (ModeContext.splitAllowed) */
++  .mode-tools .mode-tool[data-testid="split-toggle"] { display: none; }
++  .chooser-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
++  .chooser-detail { display: none; }
++}
++@media (max-width: 900px) {
++  .mode-selector-label, .mode-tools { display: none; }
++  .mode-option .mode-name { font-size: 12px; }
++  .chooser { padding: 18px 16px 14px; }
++  .chooser-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
++  .chooser-head h2 { font-size: 19px; }
++  .chooser-foot { flex-direction: column; align-items: stretch; }
++}
++@media (max-width: 620px) {
++  .chooser-cards { grid-template-columns: minmax(0, 1fr); }
++}
++
++/* ---------- a renderer in a narrow home (§17) ----------
++   A split pane is a container; the same rules apply to the whole centre
++   column on a narrow window. Inspectors and side panes fold; the main
++   pane keeps every control. Each shell's own toggle still opens them. */
++.split-pane, .center { container-type: inline-size; }
++@container (max-width: 960px) {
++  .fc, .iq { grid-template-columns: minmax(0, 1fr) !important; }
++  .fc-inspector, .iq-inspector, .iq-divider { display: none; }
++  .ar { grid-template-columns: 220px 6px minmax(0, 1fr) !important; }
++  .ar-inspector, [data-testid="ar-divider-inspector"] { display: none; }
++  .iq-hint { display: none; }
++}
++@container (max-width: 640px) {
++  .ar { grid-template-columns: minmax(0, 1fr) !important; }
++  .ar-map, [data-testid="ar-divider-map"] { display: none; }
++  .sg-toolbar .sg-search { min-width: 120px; }
++}
+diff --git a/apps/studio/components/flow/FlowCanvas.tsx b/apps/studio/components/flow/FlowCanvas.tsx
+index b289b21..e1c0e84 100644
+--- a/apps/studio/components/flow/FlowCanvas.tsx
++++ b/apps/studio/components/flow/FlowCanvas.tsx
+@@ -117,7 +117,9 @@ export function FlowCanvas() {
+ 
+   /* ------------------------------------------------------------ viewport */
+   const hostRef = React.useRef<HTMLDivElement>(null);
+-  const [size, setSize] = React.useState({ w: 1200, h: 700 });
++  // 0×0 until measured: the first fit must use the real viewport, or a
++  // canvas mounted in a split pane fits to a width it does not have
++  const [size, setSize] = React.useState({ w: 0, h: 0 });
+   const [view, setView] = React.useState<View>({ k: 1, tx: 40, ty: 40 });
+   const fitted = React.useRef(false);
+   React.useEffect(() => {
+diff --git a/apps/studio/components/studio/CommandContext.tsx b/apps/studio/components/studio/CommandContext.tsx
+index 9c0796f..fcbd5e2 100644
+--- a/apps/studio/components/studio/CommandContext.tsx
++++ b/apps/studio/components/studio/CommandContext.tsx
+@@ -106,6 +106,10 @@ export function CommandProvider({
+       setMode(m) { mode?.setMode(m); },
+       focus: mode?.focus ?? false,
+       setFocus(on) { mode?.setFocus(on); },
++      split: mode?.split ?? null,
++      setSplit: mode ? (m) => mode.setSplit(m) : undefined,
++      splitAllowed: mode?.splitAllowed ?? false,
++      openChooser: mode ? () => mode.openChooser() : undefined,
+       uid,
+       newQuestion(def: SurveyDefinition): Question {
+         const v = variantRegistry.get("single_select.radio")!;
+diff --git a/apps/studio/components/studio/ModeChooser.tsx b/apps/studio/components/studio/ModeChooser.tsx
+new file mode 100644
+index 0000000..79c9582
+--- /dev/null
++++ b/apps/studio/components/studio/ModeChooser.tsx
+@@ -0,0 +1,84 @@
++"use client";
++import React from "react";
++import { useMode } from "./ModeContext";
++import { Icon } from "../ui/Icon";
++import type { ProgrammingMode } from "../../lib/programmingMode";
++
++/**
++ * THE ONBOARDING CHOOSER — "How do you want to program your research?"
++ *
++ * Five cards, one survey. Shown once, the first time this browser opens
++ * the programming tabs without a `?mode=` link or a remembered choice; a
++ * card picks the mode and the chooser is remembered as seen. It is not a
++ * gate — Escape, the backdrop or "Start in Studio" all dismiss it — and it
++ * can be reopened from the selector's ⓘ or ⌘K "Choose how to program…",
++ * because the answer is not permanent: the point of five environments is
++ * that a person changes their mind between Tuesday and Wednesday.
++ */
++
++const GLYPH: Record<ProgrammingMode, React.ReactNode> = {
++  studio: <><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M4 10h16M9 10v9" /></>,
++  grid: <><rect x="3" y="5" width="18" height="14" rx="1.5" /><path d="M3 10h18M3 14.5h18M8.5 5v14M14 5v14" /></>,
++  architect: <><rect x="3" y="5" width="18" height="14" rx="1.5" /><path d="M8 5v14M16 5v14M10 9h4M10 12h4" /></>,
++  flow: <><rect x="9" y="3" width="6" height="4" rx="1" /><rect x="3" y="15" width="6" height="4" rx="1" /><rect x="15" y="15" width="6" height="4" rx="1" /><path d="M12 7v3M12 10L6 15M12 10l6 5" /></>,
++  intelligent: <><path d="M12 3l1.8 4.6L18 9l-4.2 1.4L12 15l-1.8-4.6L6 9l4.2-1.4z" /><path d="M5 17l.8 1.8L7.5 19.5l-1.7.7L5 22l-.8-1.8-1.7-.7 1.7-.7z" /><path d="M18.5 15l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" /></>,
++};
++
++const DETAIL: Record<ProgrammingMode, string[]> = {
++  studio: ["Cards, panels and pickers", "Every property in one place", "Drag to reorder"],
++  grid: ["One row per question", "Type across the sheet", "Bulk edit, sort and filter"],
++  architect: ["Survey map · workspace · inspector", "Dependencies of anything selected", "Focus on what matters"],
++  flow: ["Branches, loops, skips as a canvas", "What can reach this, what this affects", "Debug a respondent's path"],
++  intelligent: ["Say the change in plain language", "Review the exact rule before it applies", "Nothing is written without Apply"],
++};
++
++export function ModeChooser() {
++  const m = useMode();
++  const first = React.useRef<HTMLButtonElement>(null);
++  const open = m?.chooserOpen ?? false;
++
++  React.useEffect(() => {
++    if (!open) return;
++    first.current?.focus();
++    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); m?.closeChooser(); } };
++    window.addEventListener("keydown", onKey, true);
++    return () => window.removeEventListener("keydown", onKey, true);
++  }, [open, m]);
++
++  if (!m || !open) return null;
++  const pick = (id: ProgrammingMode) => { m.setMode(id); m.closeChooser(); };
++
++  return (
++    <div className="chooser-backdrop" data-testid="mode-chooser" onMouseDown={(e) => { if (e.target === e.currentTarget) m.closeChooser(); }}>
++      <div className="chooser" role="dialog" aria-modal="true" aria-labelledby="chooser-title">
++        <div className="chooser-head">
++          <span className="chooser-kicker">Rescript Studio</span>
++          <h2 id="chooser-title">How do you want to program your research?</h2>
++          <p>One survey, one engine, five ways to build it. Switch at any time — nothing converts, nothing is lost.</p>
++        </div>
++        <div className="chooser-cards">
++          {m.modes.map((info, i) => (
++            <button
++              key={info.id} type="button" ref={i === 0 ? first : undefined}
++              className={`chooser-card${m.mode === info.id ? " current" : ""}`}
++              data-testid={`chooser-${info.id}`} onClick={() => pick(info.id)}
++              disabled={!info.available}
++            >
++              <span className="chooser-glyph"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">{GLYPH[info.id]}</svg></span>
++              <span className="chooser-index mono">0{info.index}</span>
++              <span className="chooser-name">{info.label}</span>
++              <span className="chooser-tagline">{info.tagline}</span>
++              <span className="chooser-audience">{info.audience}</span>
++              <ul className="chooser-detail">{DETAIL[info.id].map((d) => <li key={d}>{d}</li>)}</ul>
++              {m.mode === info.id && <span className="chooser-current">current</span>}
++            </button>
++          ))}
++        </div>
++        <div className="chooser-foot">
++          <span className="chooser-foot-note"><Icon name="info" size={13} /> Change your mind any time from the Mode switch in the top bar, or press ⌘K and type a mode.</span>
++          <button type="button" className="btn" onClick={() => m.closeChooser()} data-testid="chooser-dismiss">Keep {m.modes.find((x) => x.id === m.mode)?.label ?? "Studio"}</button>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/ModeContext.tsx b/apps/studio/components/studio/ModeContext.tsx
+index 8217583..7d10b23 100644
+--- a/apps/studio/components/studio/ModeContext.tsx
++++ b/apps/studio/components/studio/ModeContext.tsx
+@@ -1,7 +1,8 @@
+ "use client";
+ import React from "react";
+ import {
+-  MODES, MODE_STORAGE_KEY, DEFAULT_MODE, resolveInitialMode, withModeInUrl, modeInfo,
++  MODES, MODE_STORAGE_KEY, SPLIT_STORAGE_KEY, CHOOSER_STORAGE_KEY, SPLIT_MIN_WIDTH, DEFAULT_MODE,
++  resolveInitialMode, resolveInitialSplit, withModeInUrl, withSplitInUrl, modeInfo, nextPair, shouldShowChooser,
+   type ProgrammingMode,
+ } from "../../lib/programmingMode";
+ 
+@@ -14,7 +15,7 @@ import {
+  * edit, and two collaborators would fight over it.
+  *
+  * Switching is a state change and nothing more. No navigation, no reload,
+- * no refetch: the `?mode=` in the URL is kept in step with
++ * no refetch: the `?mode=` (and `?split=`) in the URL is kept in step with
+  * `history.replaceState` so a reload or a shared link lands in the same
+  * environment, and the last choice is remembered per browser.
+  */
+@@ -32,32 +33,89 @@ interface ModeState {
+    */
+   focus: boolean;
+   setFocus(on: boolean): void;
++  /**
++   * DUAL-MODE SPLIT (§15): a second renderer beside the first, over the
++   * same store. `null` is the ordinary single view. Not offered below
++   * `SPLIT_MIN_WIDTH` — `splitAllowed` says whether the window is wide
++   * enough; the value is kept so widening the window brings it back.
++   */
++  split: ProgrammingMode | null;
++  setSplit(mode: ProgrammingMode | null): void;
++  splitAllowed: boolean;
++  /** the onboarding chooser (§10): open on a first run, reopenable any time */
++  chooserOpen: boolean;
++  openChooser(): void;
++  closeChooser(): void;
+ }
+ 
+ const Ctx = React.createContext<ModeState | null>(null);
+ 
+-export function ModeProvider({ children }: { children: React.ReactNode }) {
+-  const [mode, setModeState] = React.useState<ProgrammingMode>(() => {
+-    if (typeof window === "undefined") return DEFAULT_MODE;
+-    let remembered: string | null = null;
+-    try { remembered = window.localStorage.getItem(MODE_STORAGE_KEY); } catch { /* private mode, blocked storage */ }
+-    return resolveInitialMode(window.location.search, remembered);
++const read = (key: string): string | null => {
++  try { return typeof window !== "undefined" ? window.localStorage.getItem(key) : null; } catch { return null; }
++};
++const write = (key: string, value: string | null) => {
++  try { if (value === null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, value); } catch { /* fine without memory */ }
++};
++
++export function ModeProvider({ children, sandbox = false }: { children: React.ReactNode; /** the scratch survey: no unasked-for chooser */ sandbox?: boolean }) {
++  const [pair, setPairState] = React.useState<{ mode: ProgrammingMode; split: ProgrammingMode | null }>(() => {
++    if (typeof window === "undefined") return { mode: DEFAULT_MODE, split: null };
++    const mode = resolveInitialMode(window.location.search, read(MODE_STORAGE_KEY));
++    return { mode, split: resolveInitialSplit(window.location.search, read(SPLIT_STORAGE_KEY), mode) };
+   });
+ 
+-  const setMode = React.useCallback((next: ProgrammingMode) => {
+-    if (!modeInfo(next).available) return;
+-    setModeState(next);
++  // the current pair, readable from a stable callback — a setState updater
++  // must stay pure, and the URL/memory write is not; kept current on commit
++  // as well as on render so two changes in one tick compose
++  const pairRef = React.useRef(pair);
++  pairRef.current = pair;
++
++  const commit = React.useCallback((next: { mode: ProgrammingMode; split: ProgrammingMode | null }) => {
++    pairRef.current = next;
++    setPairState(next);
+     if (typeof window === "undefined") return;
+-    try { window.localStorage.setItem(MODE_STORAGE_KEY, next); } catch { /* fine without memory */ }
+-    const search = withModeInUrl(window.location.search, next);
++    write(MODE_STORAGE_KEY, next.mode);
++    write(SPLIT_STORAGE_KEY, next.split);
++    const search = withSplitInUrl(withModeInUrl(window.location.search, next.mode), next.split);
+     const url = `${window.location.pathname}${search}${window.location.hash}`;
+     if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+       window.history.replaceState(window.history.state, "", url);
+     }
+   }, []);
+ 
++  const setMode = React.useCallback((next: ProgrammingMode) => {
++    if (!modeInfo(next).available) return;
++    commit(nextPair(pairRef.current, { mode: next }));
++  }, [commit]);
++  const setSplit = React.useCallback((next: ProgrammingMode | null) => {
++    commit(nextPair(pairRef.current, { split: next }));
++  }, [commit]);
++
++  /* the split needs room: two renderers under 1100px are two unusable ones */
++  const [splitAllowed, setSplitAllowed] = React.useState(() => typeof window === "undefined" ? true : window.innerWidth >= SPLIT_MIN_WIDTH);
++  React.useEffect(() => {
++    const mq = window.matchMedia(`(min-width: ${SPLIT_MIN_WIDTH}px)`);
++    const on = () => setSplitAllowed(mq.matches);
++    on();
++    mq.addEventListener("change", on);
++    return () => mq.removeEventListener("change", on);
++  }, []);
++
+   const [focus, setFocus] = React.useState(false);
+-  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES, focus, setFocus }), [mode, setMode, focus]);
++
++  /* the chooser: once, unless asked for again */
++  const [chooserOpen, setChooserOpen] = React.useState(false);
++  React.useEffect(() => {
++    if (shouldShowChooser(window.location.search, read(MODE_STORAGE_KEY), read(CHOOSER_STORAGE_KEY), { sandbox })) setChooserOpen(true);
++  }, [sandbox]);
++  const openChooser = React.useCallback(() => setChooserOpen(true), []);
++  const closeChooser = React.useCallback(() => { setChooserOpen(false); write(CHOOSER_STORAGE_KEY, "1"); }, []);
++
++  const value = React.useMemo<ModeState>(() => ({
++    mode: pair.mode, setMode, modes: MODES, focus, setFocus,
++    split: pair.split, setSplit, splitAllowed,
++    chooserOpen, openChooser, closeChooser,
++  }), [pair, setMode, focus, setSplit, splitAllowed, chooserOpen, openChooser, closeChooser]);
+   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+ }
+ 
+diff --git a/apps/studio/components/studio/ModeRenderers.tsx b/apps/studio/components/studio/ModeRenderers.tsx
+new file mode 100644
+index 0000000..59cd169
+--- /dev/null
++++ b/apps/studio/components/studio/ModeRenderers.tsx
+@@ -0,0 +1,81 @@
++"use client";
++import React from "react";
++import { QuestionsPanel } from "./QuestionsPanel";
++import { GridView } from "../grid/GridView";
++import { ArchitectView } from "../architect/ArchitectView";
++import { FlowCanvas } from "../flow/FlowCanvas";
++import { IntelligentView } from "../intelligent/IntelligentView";
++import { useMode } from "./ModeContext";
++import { Icon } from "../ui/Icon";
++import { modeInfo, type ProgrammingMode } from "../../lib/programmingMode";
++
++/**
++ * THE RENDERER SLOTS. One table, five renderers, no other place that maps
++ * a mode to a view — so the split screen and the single view cannot drift.
++ */
++export function ModeRenderer({ mode }: { mode: ProgrammingMode }) {
++  switch (mode) {
++    case "grid": return <GridView />;
++    case "architect": return <ArchitectView />;
++    case "flow": return <FlowCanvas />;
++    case "intelligent": return <IntelligentView />;
++    default: return <QuestionsPanel />;
++  }
++}
++
++const PREFS_KEY = "rescript.split";
++function loadRatio(): number {
++  try { const v = Number(window.localStorage.getItem(PREFS_KEY)); return v > 0.2 && v < 0.8 ? v : 0.5; } catch { return 0.5; }
++}
++
++/**
++ * DUAL-MODE SPLIT (§15). Two renderer slots in the centre column, over the
++ * one store: an edit typed in the left pane is on screen in the right pane
++ * on the same render, because both are views of `s.def` and neither owns
++ * any state the other lacks. The divider drags; the ratio is remembered.
++ * Each pane has its own small header naming the mode, with the swap and
++ * close controls, so the pair reads as what it is — two windows on one
++ * survey — rather than one wide screen that happens to be split.
++ */
++export function SplitCenter({ primary, secondary }: { primary: ProgrammingMode; secondary: ProgrammingMode }) {
++  const m = useMode();
++  const [ratio, setRatio] = React.useState(loadRatio);
++  const ref = React.useRef<HTMLDivElement>(null);
++  const drag = React.useRef<boolean>(false);
++  React.useEffect(() => { try { window.localStorage.setItem(PREFS_KEY, String(ratio)); } catch { /* fine */ } }, [ratio]);
++
++  const onDown = (e: React.PointerEvent) => { drag.current = true; (e.target as HTMLElement).setPointerCapture(e.pointerId); };
++  const onMove = (e: React.PointerEvent) => {
++    if (!drag.current || !ref.current) return;
++    const r = ref.current.getBoundingClientRect();
++    setRatio(Math.max(0.25, Math.min(0.75, (e.clientX - r.left) / r.width)));
++  };
++  const onUp = () => { drag.current = false; };
++
++  return (
++    <div className="split" ref={ref} data-testid="split-view" data-primary={primary} data-secondary={secondary} style={{ gridTemplateColumns: `minmax(0, ${ratio}fr) 6px minmax(0, ${1 - ratio}fr)` }}>
++      <SplitPane mode={primary} slot="primary" onClose={() => { m?.setMode(secondary); m?.setSplit(null); }} onSwap={() => m?.setMode(secondary)} />
++      <div className="split-divider" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} role="separator" aria-orientation="vertical" data-testid="split-divider" />
++      <SplitPane mode={secondary} slot="secondary" onClose={() => m?.setSplit(null)} onSwap={() => m?.setMode(secondary)} />
++    </div>
++  );
++}
++
++function SplitPane({ mode, slot, onClose, onSwap }: { mode: ProgrammingMode; slot: "primary" | "secondary"; onClose(): void; onSwap(): void }) {
++  const info = modeInfo(mode);
++  return (
++    <section className={`split-pane ${mode}`} data-testid={`split-${slot}`} data-mode={mode} aria-label={`${info.label} pane`}>
++      <div className="split-head">
++        <span className="split-index mono">0{info.index}</span>
++        <span className="split-name">{info.label}</span>
++        <span className="split-tagline">{info.tagline}</span>
++        <span className="split-spacer" />
++        <button type="button" className="split-btn" onClick={onSwap} title="Swap panes" data-testid={`split-swap-${slot}`}><Icon name="share" size={12} /></button>
++        <button type="button" className="split-btn" onClick={onClose} title={`Close this pane — keep ${slot === "primary" ? "the right pane" : "the left pane"}`} data-testid={`split-close-${slot}`}><Icon name="close" size={12} /></button>
++      </div>
++      <div className="split-body">
++        <ModeRenderer mode={mode} />
++      </div>
++    </section>
++  );
++}
+diff --git a/apps/studio/components/studio/ModeSelector.tsx b/apps/studio/components/studio/ModeSelector.tsx
+index 512102b..b7b1553 100644
+--- a/apps/studio/components/studio/ModeSelector.tsx
++++ b/apps/studio/components/studio/ModeSelector.tsx
+@@ -1,42 +1,103 @@
+ "use client";
+ import React from "react";
+ import { useMode } from "./ModeContext";
++import { Icon } from "../ui/Icon";
+ 
+ /**
+  * PROGRAMMING MODE — the selector in the top bar.
+  *
+- * Five environments over one survey. The ones without a renderer yet are
+- * shown, disabled, with their tagline: the selector is also the place the
+- * product says what it is becoming, and a programmer who sees "Grid —
+- * program at scale" greyed out knows to expect it. Switching is instant and
+- * changes nothing but the view.
++ * Five environments over one survey, numbered like an instrument's ranges
++ * so the eye finds "03 Architect" as fast as the word. Beside them, the
++ * view-level switches that apply in every mode: Split (a second renderer,
++ * §15), Focus (dependency neighbourhood only, §14) and the chooser (§10)
++ * for a person who wants the five explained again. Switching is instant
++ * and changes nothing but the view.
+  */
+ export function ModeSelector() {
+   const m = useMode();
++  const [splitMenu, setSplitMenu] = React.useState(false);
++  const menuRef = React.useRef<HTMLDivElement>(null);
++  React.useEffect(() => {
++    if (!splitMenu) return;
++    const onDown = (e: PointerEvent) => { if (!menuRef.current?.contains(e.target as Node)) setSplitMenu(false); };
++    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSplitMenu(false); };
++    window.addEventListener("pointerdown", onDown, true);
++    window.addEventListener("keydown", onKey, true);
++    return () => { window.removeEventListener("pointerdown", onDown, true); window.removeEventListener("keydown", onKey, true); };
++  }, [splitMenu]);
+   if (!m) return null;
++  const splitInfo = m.split ? m.modes.find((x) => x.id === m.split) : null;
++
+   return (
+-    <div className="mode-selector" role="radiogroup" aria-label="Programming mode" data-testid="mode-selector">
+-      <span className="mode-selector-label">Mode</span>
+-      {m.modes.map((info) => {
+-        const active = m.mode === info.id;
+-        return (
+-          <button
+-            key={info.id}
+-            type="button"
+-            role="radio"
+-            aria-checked={active}
+-            className={`mode-option${active ? " active" : ""}${info.available ? "" : " soon"}`}
+-            data-testid={`mode-${info.id}`}
+-            data-mode={info.id}
+-            data-available={info.available ? "1" : "0"}
+-            disabled={!info.available}
+-            title={info.available ? `${info.label} — ${info.tagline}. ${info.audience}` : `${info.label} — ${info.tagline}. Coming soon.`}
+-            onClick={() => m.setMode(info.id)}
+-          >
+-            {info.label}
+-          </button>
+-        );
+-      })}
++    <div className="mode-cluster" data-testid="mode-cluster">
++      <div className="mode-selector" role="radiogroup" aria-label="Programming mode" data-testid="mode-selector">
++        <span className="mode-selector-label">Mode</span>
++        {m.modes.map((info) => {
++          const active = m.mode === info.id;
++          const paired = m.split === info.id;
++          return (
++            <button
++              key={info.id}
++              type="button"
++              role="radio"
++              aria-checked={active}
++              className={`mode-option${active ? " active" : ""}${paired ? " paired" : ""}${info.available ? "" : " soon"}`}
++              data-testid={`mode-${info.id}`}
++              data-mode={info.id}
++              data-available={info.available ? "1" : "0"}
++              disabled={!info.available}
++              title={info.available ? `${info.label} — ${info.tagline}. ${info.audience}${paired ? " (open in the split)" : ""}` : `${info.label} — ${info.tagline}. Coming soon.`}
++              onClick={() => m.setMode(info.id)}
++            >
++              <span className="mode-index">0{info.index}</span>
++              <span className="mode-name">{info.label}</span>
++            </button>
++          );
++        })}
++      </div>
++
++      <div className="mode-tools" ref={menuRef}>
++        <button
++          type="button"
++          className={`mode-tool${m.split ? " on" : ""}`}
++          data-testid="split-toggle"
++          aria-pressed={!!m.split}
++          aria-expanded={splitMenu}
++          disabled={!m.splitAllowed}
++          title={!m.splitAllowed ? "Split view needs a wider window" : m.split ? `Split with ${splitInfo?.label} — click to change or close` : "Split: a second environment beside this one, over the same survey"}
++          onClick={() => setSplitMenu((v) => !v)}
++        >
++          <Icon name="layers" size={13} />
++          <span className="mode-tool-label">{m.split ? `Split · ${splitInfo?.label}` : "Split"}</span>
++        </button>
++        {splitMenu && (
++          <div className="mode-menu" role="menu" data-testid="split-menu">
++            <div className="mode-menu-title">Show beside {m.modes.find((x) => x.id === m.mode)?.label}</div>
++            {m.modes.filter((x) => x.available && x.id !== m.mode).map((x) => (
++              <button key={x.id} type="button" role="menuitemradio" aria-checked={m.split === x.id} className={`mode-menu-item${m.split === x.id ? " on" : ""}`} data-testid={`split-${x.id}`} onClick={() => { m.setSplit(x.id); setSplitMenu(false); }}>
++                <span className="mode-index">0{x.index}</span> {x.label}
++                <span className="mode-menu-tag">{x.tagline}</span>
++              </button>
++            ))}
++            {m.split && <button type="button" role="menuitem" className="mode-menu-item off" data-testid="split-off" onClick={() => { m.setSplit(null); setSplitMenu(false); }}><Icon name="close" size={12} /> Close split</button>}
++          </div>
++        )}
++        <button
++          type="button"
++          className={`mode-tool${m.focus ? " on" : ""}`}
++          data-testid="focus-mode-toggle"
++          aria-pressed={m.focus}
++          disabled={m.mode === "studio" && !m.split}
++          title={m.mode === "studio" && !m.split ? "Focus applies in Grid, Architect, Flow and Intelligent" : "Focus (⌘⇧F): only the selection's dependency neighbourhood stays lit"}
++          onClick={() => m.setFocus(!m.focus)}
++        >
++          <Icon name="sparkle" size={13} />
++          <span className="mode-tool-label">Focus</span>
++        </button>
++        <button type="button" className="mode-tool quiet" data-testid="open-chooser" title="How do you want to program your research? — the five environments explained" onClick={() => m.openChooser()}>
++          <Icon name="info" size={13} />
++        </button>
++      </div>
+     </div>
+   );
+ }
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 4594064..99e2965 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -4,7 +4,6 @@ import type { SurveyDefinition } from "@rescript/schema";
+ import { StudioProvider, useStudio, selectedQuestion } from "./store";
+ import { openPreview, pushPreview, previewWindowOpen, setPreviewDefinition, setPreviewRevision } from "./previewWindow";
+ import { ExportDialog } from "./ExportDialog";
+-import { QuestionsPanel } from "./QuestionsPanel";
+ import { CanvasProvider } from "../canvas/CanvasContext";
+ import { PropertiesPanel, SurveySettings } from "./PropertiesPanel";
+ import { FlowPanel } from "./FlowPanel";
+@@ -39,10 +38,8 @@ import { CommandProvider, useCommands, type ShellActions } from "./CommandContex
+ import { CommandPalette } from "./CommandPalette";
+ import { ModeSelector } from "./ModeSelector";
+ import { useMode } from "./ModeContext";
+-import { GridView } from "../grid/GridView";
+-import { ArchitectView } from "../architect/ArchitectView";
+-import { FlowCanvas } from "../flow/FlowCanvas";
+-import { IntelligentView } from "../intelligent/IntelligentView";
++import { ModeRenderer, SplitCenter } from "./ModeRenderers";
++import { ModeChooser } from "./ModeChooser";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -871,7 +868,10 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+    * in the palette is the same function as the button.
+    */
+   const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
+-  const programmingMode = useMode()?.mode ?? "studio";
++  const modeCtx = useMode();
++  const programmingMode = modeCtx?.mode ?? "studio";
++  // the split is a pair of renderers; below SPLIT_MIN_WIDTH it folds to the primary and comes back when the window widens
++  const splitMode = modeCtx?.split && modeCtx.splitAllowed ? modeCtx.split : null;
+   const setTabGuarded = React.useCallback((t: string) => {
+     if (t === tab || s.canLeaveTab()) setTab(t as Tab);
+   }, [tab, s]);
+@@ -881,6 +881,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+     <CommandProvider tab={tab} setTab={setTabGuarded} tabs={navTabs}>
+     <ShellBridge actions={shellActions} />
+     <CommandPalette />
++    <ModeChooser />
+     <div className="ide">
+       <div className="topbar">
+         <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
+@@ -1052,11 +1053,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+             * write the same store, so switching is a re-render, not a load.
+             */}
+           {tab === "questions" && (
+-            programmingMode === "grid" ? <GridView />
+-            : programmingMode === "architect" ? <ArchitectView />
+-            : programmingMode === "flow" ? <FlowCanvas />
+-            : programmingMode === "intelligent" ? <IntelligentView />
+-            : <QuestionsPanel />
++            splitMode ? <SplitCenter primary={programmingMode} secondary={splitMode} /> : <ModeRenderer mode={programmingMode} />
+           )}
+           {tab === "settings" && (
+             /*
+@@ -1113,7 +1110,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           )}
+         </main>
+         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
+-        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
++        <RightPanel tab={tab} hidden={(!!splitMode || programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
+       </div>
+       </CanvasProvider>
+     </div>
+@@ -1175,7 +1172,7 @@ export function Studio({ definition, surveyDbId, versionId, draftSavedAt, revisi
+       readOnly={collaboration}>
+       {/* the programming mode and the shared selection sit above the shell:
+           both survive a tab change, and every environment reads them */}
+-      <ModeProvider>
++      <ModeProvider sandbox={surveyDbId === "sandbox"}>
+         <SelectionProvider>
+           <StudioShell collaboration={collaboration} />
+         </SelectionProvider>
+diff --git a/apps/studio/lib/commands/builtins.ts b/apps/studio/lib/commands/builtins.ts
+index 1e3c004..53399f2 100644
+--- a/apps/studio/lib/commands/builtins.ts
++++ b/apps/studio/lib/commands/builtins.ts
+@@ -37,6 +37,13 @@ export interface StudioCommandContext extends CommandContextBase {
+   /** focus mode: dim everything outside the selection's dependency neighbourhood */
+   focus: boolean;
+   setFocus(on: boolean): void;
++  /** dual-mode split: the secondary renderer, or null; absent where no mode layer exists */
++  split?: ProgrammingMode | null;
++  setSplit?(mode: ProgrammingMode | null): void;
++  /** the window is wide enough for two renderers */
++  splitAllowed?: boolean;
++  /** the onboarding chooser */
++  openChooser?(): void;
+   /** the Studio's id generator, so ids look the way the browser suites expect */
+   uid(prefix: string): string;
+   /** build a fresh question of the default variant, named for this survey */
+@@ -212,6 +219,28 @@ export function builtinCommands(): C[] {
+     });
+   }
+ 
++  /* ------------------------------------------------------------ split (§15) */
++  for (const m of MODES) {
++    cmds.push({
++      id: `split.${m.id}`, title: `Split with ${m.label}`, group: "Mode",
++      keywords: ["split", "side by side", "dual", "two modes", m.tagline],
++      when: (ctx) => m.available && !!ctx.setSplit && ctx.splitAllowed !== false && ctx.mode !== m.id && ctx.split !== m.id,
++      run(ctx) { ctx.setSplit!(m.id); },
++    });
++  }
++  cmds.push({
++    id: "split.off", title: "Close split view", group: "Mode",
++    keywords: ["split", "single", "one mode", "unsplit"],
++    when: (ctx) => !!ctx.setSplit && !!ctx.split,
++    run(ctx) { ctx.setSplit!(null); },
++  });
++  cmds.push({
++    id: "mode.choose", title: "Choose how to program…", group: "Mode",
++    keywords: ["onboarding", "chooser", "which mode", "how do you want to program", "environment"],
++    when: (ctx) => !!ctx.openChooser,
++    run(ctx) { ctx.openChooser!(); },
++  });
++
+   /* ------------------------------------------------------------ survey */
+   cmds.push({
+     id: "survey.save", title: "Save version", group: "Survey", shortcut: "mod+s", global: true,
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index 4977053..4436c64 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -266,3 +266,47 @@ test("every built-in id is unique and every shortcut is unique", () => {
+   const keys = cmds.map((c) => c.shortcut).filter(Boolean) as string[];
+   assert.equal(new Set(keys.map((k) => JSON.stringify(parseShortcut(k)))).size, keys.length, `two commands share a key: ${keys.join(", ")}`);
+ });
++
++/* ------------------------------------------------------------ split + chooser (Phase 5) */
++
++test("the split comes from the URL, then memory, never the same mode as the primary", async () => {
++  const { resolveInitialSplit, withSplitInUrl, nextPair, shouldShowChooser } = await import("./programmingMode.ts");
++  assert.equal(resolveInitialSplit("?mode=grid&split=flow", null, "grid"), "flow");
++  assert.equal(resolveInitialSplit("?mode=grid&split=grid", "flow", "grid"), null, "a split of a mode with itself is refused, and memory does not rescue it");
++  assert.equal(resolveInitialSplit("", "flow", "grid"), "flow", "memory when the URL says nothing");
++  assert.equal(resolveInitialSplit("?mode=grid", "flow", "grid"), null, "a URL that names a mode but no split is a deliberate single view");
++  assert.equal(resolveInitialSplit("?split=nonsense", "alsononsense", "studio"), null);
++  assert.equal(withSplitInUrl("?mode=grid", "flow"), "?mode=grid&split=flow");
++  assert.equal(withSplitInUrl("?mode=grid&split=flow", null), "?mode=grid");
++  assert.equal(withSplitInUrl("", null), "");
++  // pairs
++  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { mode: "flow" }), { mode: "flow", split: "grid" }, "choosing the secondary as primary swaps");
++  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { mode: "architect" }), { mode: "architect", split: "flow" }, "another primary keeps the split");
++  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { split: "grid" }), { mode: "grid", split: null }, "secondary = primary clears");
++  assert.deepEqual(nextPair({ mode: "grid", split: null }, { split: "intelligent" }), { mode: "grid", split: "intelligent" });
++  assert.deepEqual(nextPair({ mode: "grid", split: "flow" }, { split: null }), { mode: "grid", split: null });
++  // chooser
++  assert.equal(shouldShowChooser("", null, null), true, "first run, nothing asked, nothing remembered");
++  assert.equal(shouldShowChooser("?mode=grid", null, null), false, "a shared link is an answer");
++  assert.equal(shouldShowChooser("", "flow", null), false, "a remembered mode is an answer");
++  assert.equal(shouldShowChooser("", null, "1"), false, "dismissed stays dismissed");
++  assert.equal(shouldShowChooser("?tab=logic", "nonsense", null), true, "junk memory is no answer");
++  assert.equal(shouldShowChooser("", null, null, { sandbox: true }), false, "the sandbox is not a first project");
++  assert.equal(shouldShowChooser("?chooser=1", "grid", "1", { sandbox: true }), true, "?chooser=1 always asks");
++});
++
++test("split commands: offered for other modes when the window is wide enough; off only when split; the chooser reopens", () => {
++  const split = (ctx: StudioCommandContext) => applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("split.") || i === "mode.choose");
++  const none = fakeCtx();
++  assert.deepEqual(split(none), [], "no mode layer (setSplit absent): nothing offered");
++  const log: string[] = [];
++  const wide = fakeCtx({ mode: "grid", split: null, splitAllowed: true, setSplit(m) { log.push(`split:${m}`); }, openChooser() { log.push("chooser"); } });
++  assert.deepEqual(split(wide), ["split.studio", "split.architect", "split.flow", "split.intelligent", "mode.choose"], "every other mode, no 'off' while single");
++  const already = fakeCtx({ mode: "grid", split: "flow", splitAllowed: true, setSplit(m) { log.push(`split:${m}`); } });
++  assert.deepEqual(split(already), ["split.studio", "split.architect", "split.intelligent", "split.off"], "the current partner is not offered again; off is");
++  const narrow = fakeCtx({ mode: "grid", split: null, splitAllowed: false, setSplit(m) { log.push(`split:${m}`); } });
++  assert.deepEqual(split(narrow), [], "too narrow: no split offered");
++  const run = (ctx: StudioCommandContext, id: string) => builtinCommands().find((c) => c.id === id)!.run(ctx);
++  run(wide, "split.flow"); run(already, "split.off"); run(wide, "mode.choose");
++  assert.deepEqual(log, ["split:flow", "split:null", "chooser"]);
++});
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index 0fdd0b6..026cdf6 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -70,3 +70,78 @@ export function withModeInUrl(search: string, mode: ProgrammingMode): string {
+   const s = p.toString();
+   return s ? `?${s}` : "";
+ }
++
++/* ================================================================ split */
++
++/**
++ * DUAL-MODE SPLIT (§15). A second renderer beside the first — Grid on the
++ * left, Flow on the right — both over the one store, so an edit in either
++ * shows in the other on the same render. The secondary is a property of
++ * the view like the mode is: URL (`?split=flow`) and memory, never the
++ * survey. A split of a mode with itself is refused; a split whose partner
++ * becomes the primary is dropped rather than doubled.
++ */
++export const SPLIT_STORAGE_KEY = "rescript.programmingSplit";
++
++/** below this width two renderers would each be too narrow to use; the split is not offered */
++export const SPLIT_MIN_WIDTH = 1100;
++
++export function resolveInitialSplit(search: string, remembered: string | null | undefined, primary: ProgrammingMode): ProgrammingMode | null {
++  const fromUrl = new URLSearchParams(search).get("split");
++  const pick = (v: unknown): ProgrammingMode | null =>
++    isProgrammingMode(v) && modeInfo(v).available && v !== primary ? v : null;
++  // a URL that names a mode is a deliberate view: it alone decides whether there is a split
++  if (new URLSearchParams(search).has("mode")) return pick(fromUrl);
++  return pick(fromUrl) ?? pick(remembered);
++}
++
++/** The URL with `?split=` set or removed, other params kept. */
++export function withSplitInUrl(search: string, split: ProgrammingMode | null): string {
++  const p = new URLSearchParams(search);
++  if (split) p.set("split", split); else p.delete("split");
++  const s = p.toString();
++  return s ? `?${s}` : "";
++}
++
++/**
++ * The pair after a change. Setting the primary to the current secondary
++ * swaps them (the programmer clearly wants both, the other way round);
++ * setting it to anything else keeps the secondary unless it would now be
++ * the same mode. `secondary === primary` clears the split.
++ */
++export function nextPair(cur: { mode: ProgrammingMode; split: ProgrammingMode | null }, change: { mode?: ProgrammingMode; split?: ProgrammingMode | null }): { mode: ProgrammingMode; split: ProgrammingMode | null } {
++  let mode = change.mode ?? cur.mode;
++  let split = change.split === undefined ? cur.split : change.split;
++  if (change.mode !== undefined && change.split === undefined && cur.split === change.mode) split = cur.mode;
++  if (split === mode) split = null;
++  if (split && !modeInfo(split).available) split = null;
++  return { mode, split };
++}
++
++/* ============================================================== chooser */
++
++/**
++ * THE ONBOARDING CHOOSER (§10, §20): "How do you want to program your
++ * research?" — shown once, the first time a browser opens the programming
++ * tabs with no mode asked for. A shared `?mode=` link is an answer already;
++ * a remembered mode is an answer already; a dismissed chooser stays
++ * dismissed. It can always be reopened from the selector or ⌘K.
++ */
++export const CHOOSER_STORAGE_KEY = "rescript.modeChooserSeen";
++
++export function shouldShowChooser(search: string, remembered: string | null | undefined, seen: string | null | undefined, opts: { sandbox?: boolean } = {}): boolean {
++  const p = new URLSearchParams(search);
++  // `?chooser=1` asks for it outright — the way to see the first run again, and the way the browser suite reaches it
++  if (p.get("chooser") === "1") return true;
++  if (seen) return false;
++  if (p.has("mode")) return false;
++  if (isProgrammingMode(remembered)) return false;
++  /*
++   * The sandbox is a scratch surface, not a project, and forty-odd browser
++   * suites open it expecting the Questions panel and nothing in front of
++   * it. A first run in the product is a first PROJECT; the sandbox gets
++   * the chooser only when asked (`?chooser=1`, the ⓘ, ⌘K).
++   */
++  if (opts.sandbox) return false;
++  return true;
++}
+diff --git a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+index 3413df1..8e0d6ca 100644
+--- a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
++++ b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+@@ -43,7 +43,33 @@ all-or-nothing and a chain of commands is not. The grammar runs first and
+ always; the model is consulted only for a sentence the grammar cannot read
+ (or reads but cannot resolve). "Reorder" is not in the vocabulary — it is
+ one keystroke in Grid and a drag in Flow, and a sentence for it would be
+-longer than either. Phase 5 is not started.
++longer than either.
++
++**Phase 5 (Product surface) delivered 2026-09-24** — `apps/studio/
++components/studio/{ModeChooser,ModeRenderers}.tsx`, `ModeContext.tsx` and
++`ModeSelector.tsx` extended, `lib/programmingMode.ts` (split + chooser
++helpers), `scripts/product-surface-test.mjs`. The chooser ("How do you want
++to program your research?") opens on a first run of a PROJECT with no
++`?mode=` link and no remembered mode, and always on `?chooser=1`, the ⓘ in
++the selector or ⌘K; the sandbox is exempt unless asked, because it is a
++scratch surface and 48 browser suites open it expecting nothing in front
++of the Questions panel. The split is a pair `{mode, split}` in the mode
++layer — URL `?split=`, memory, swap-not-double, refused with itself, folded
++below 1 100 px and restored on widening — rendered by one `ModeRenderer`
++table so the single and split views cannot drift. Two renderers over one
++store were the point: an edit in Grid is on the Flow canvas on the same
++render, with no code written for it. Responsive collapse is per renderer
++via container queries on the pane and on the centre column (inspectors
++fold under 960 px, Architect's map under 640 px), so the same rule serves a
++narrow pane and a narrow window. The visual language is a `--ide-*` token
++extension read only by the mode chrome and the four shells — numbered
++ranges on the selector, one pane-head height, hairlines, mono
++identifiers; nothing the respondent renderer or an existing panel reads
++changed. One Flow bug surfaced by the split and fixed: the first fit used
++a guessed 1200×700 before the canvas was measured. All five phases are
++delivered; Part D's open decisions are closed (hand-rolled everything;
++no selector store; a token extension; the grammar keeps Intelligent
++working without a provider).
+ 
+ Three things learned while building Phase 0 that the plan did not know:
+ 
+diff --git a/scripts/product-surface-test.mjs b/scripts/product-surface-test.mjs
+new file mode 100644
+index 0000000..42a0b83
+--- /dev/null
++++ b/scripts/product-surface-test.mjs
+@@ -0,0 +1,267 @@
++/**
++ * PRODUCT SURFACE — the chooser, the split, the selector, the collapse rules (Phase 5).
++ *
++ *   node scripts/product-surface-test.mjs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const browser = await chromium.launch();
++const pageErrors = [];
++const newPage = async (viewport = { width: 1600, height: 950 }) => {
++  // a fresh context is a fresh browser: no remembered mode, no dismissed chooser
++  const ctx = await browser.newContext({ viewport });
++  const page = await ctx.newPage();
++  page.on("pageerror", (e) => pageErrors.push(String(e)));
++  page.on("console", (m) => { if (m.type() === "error" && !/401|501|ERR_TUNNEL|Failed to load resource/.test(m.text())) pageErrors.push(m.text().slice(0, 300)); });
++  return page;
++};
++const goTab = async (page, name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
++const loadDemo = async (page) => {
++  await goTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => {
++    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v);
++    el.dispatchEvent(new Event("input", { bubbles: true }));
++  }, JSON.stringify(buildMasterDemoSurvey("sandbox")));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await goTab(page, "Questions");
++};
++const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(k), key);
++
++/* ------------------------------------------------------------ the chooser */
++{
++  const page = await newPage();
++  // the sandbox is exempt from the unasked-for chooser (it is not a first project); ?chooser=1 is the first-run path
++  await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++  await page.waitForSelector(".block-badge");
++  await page.waitForTimeout(300);
++  assert.equal(await page.$('[data-testid="mode-chooser"]'), null);
++  ok("the sandbox never puts the chooser in front of anyone unasked");
++  await page.goto(`${STUDIO}/sandbox?chooser=1`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="mode-chooser"]');
++  assert.equal(await page.textContent("#chooser-title"), "How do you want to program your research?");
++  const cards = await page.$$eval('[data-testid="mode-chooser"] .chooser-card', (els) => els.map((e) => ({ name: e.querySelector(".chooser-name").textContent, index: e.querySelector(".chooser-index").textContent, disabled: e.disabled })));
++  assert.deepEqual(cards.map((c) => c.name), ["Studio", "Grid", "Architect", "Flow", "Intelligent"]);
++  assert.deepEqual(cards.map((c) => c.index), ["01", "02", "03", "04", "05"]);
++  assert.ok(cards.every((c) => !c.disabled));
++  ok("first run: the chooser asks the brief's question with five numbered, enabled cards");
++  await page.keyboard.press("Escape");
++  await page.waitForSelector('[data-testid="mode-chooser"]', { state: "detached" });
++  assert.equal(await storage(page, "rescript.modeChooserSeen"), "1");
++  ok("Escape dismisses it and it is remembered as seen");
++  await page.goto(`${STUDIO}/sandbox?chooser=1`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="mode-chooser"]');
++  await page.keyboard.press("Escape");
++  await page.waitForSelector('[data-testid="mode-chooser"]', { state: "detached" });
++  ok("?chooser=1 asks again on purpose (the way to see the first run again)");
++  await page.click('[data-testid="open-chooser"]');
++  await page.waitForSelector('[data-testid="mode-chooser"]');
++  assert.equal(await page.$eval('[data-testid="chooser-studio"]', (e) => e.classList.contains("current")), true);
++  ok("the ⓘ in the top bar reopens it, marking the current mode");
++  await page.click('[data-testid="chooser-dismiss"]');
++  await page.waitForSelector('[data-testid="mode-chooser"]', { state: "detached" });
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]');
++  await page.fill('[data-testid="command-palette"] input', "choose how");
++  await page.waitForSelector(".palette-item.active");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="mode-chooser"]');
++  ok("⌘K → “Choose how to program…” reopens it too");
++  await page.click('[data-testid="chooser-flow"]');
++  await page.waitForSelector('[data-testid="flow-view"]');
++  assert.match(page.url(), /mode=flow/);
++  assert.equal(await storage(page, "rescript.programmingMode"), "flow");
++  ok("a card picks the mode: Flow opens, the URL and memory follow");
++  await page.context().close();
++}
++{
++  const page = await newPage();
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  await page.waitForTimeout(300);
++  assert.equal(await page.$('[data-testid="mode-chooser"]'), null);
++  ok("a shared ?mode= link is an answer already: no chooser");
++  await page.context().close();
++}
++
++/* ------------------------------------------------------------ the selector */
++{
++  const page = await newPage();
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  const idx = await page.$$eval('[data-testid="mode-selector"] .mode-index', (els) => els.map((e) => e.textContent));
++  assert.deepEqual(idx, ["01", "02", "03", "04", "05"]);
++  ok("the selector numbers the environments like an instrument's ranges");
++  assert.equal(await page.$eval('[data-testid="focus-mode-toggle"]', (b) => b.disabled), false);
++  await page.click('[data-testid="focus-mode-toggle"]');
++  assert.equal(await page.getAttribute('[data-testid="focus-mode-toggle"]', "aria-pressed"), "true");
++  await page.click('[data-testid="mode-flow"]');
++  await page.waitForSelector('[data-testid="flow-view"]');
++  assert.equal(await page.getAttribute('[data-testid="focus-toggle"]', "aria-pressed"), "true");
++  ok("Focus from the top bar is the same flag Flow's own chip shows — one view-level switch");
++  await page.click('[data-testid="focus-mode-toggle"]');
++  await page.context().close();
++}
++
++/* ------------------------------------------------------------ the split */
++{
++  const page = await newPage();
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  await loadDemo(page);
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.equal(await page.$eval('[data-testid="flow-inspector"], [data-testid="grid-view"]', () => true), true);
++
++  await page.click('[data-testid="split-toggle"]');
++  await page.waitForSelector('[data-testid="split-menu"]');
++  const offered = await page.$$eval('[data-testid="split-menu"] .mode-menu-item', (els) => els.map((e) => e.dataset.testid));
++  assert.deepEqual(offered, ["split-studio", "split-architect", "split-flow", "split-intelligent"], "every mode but the current one");
++  await page.click('[data-testid="split-flow"]');
++  await page.waitForSelector('[data-testid="split-view"]');
++  assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-primary"), "grid");
++  assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-secondary"), "flow");
++  assert.match(page.url(), /mode=grid&split=flow/);
++  await page.waitForSelector('[data-testid="split-secondary"] [data-testid="flow-view"]');
++  await page.waitForSelector('[data-testid="split-primary"] [data-testid="grid-view"]');
++  ok("Split · Flow: Grid on the left, Flow on the right, the URL says so");
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), true);
++  ok("the outer property panel steps aside for two renderers");
++  assert.equal(await page.$eval('[data-testid="mode-flow"]', (e) => e.classList.contains("paired")), true);
++  ok("the selector marks the paired mode");
++  const inspectorShown = await page.$eval('[data-testid="split-secondary"] [data-testid="flow-inspector"]', (e) => getComputedStyle(e).display !== "none").catch(() => false);
++  assert.equal(inspectorShown, false);
++  ok("in a narrow pane the Flow inspector folds (container query) — the canvas keeps the room");
++
++  // LIVE CROSS-MODE SYNC: edit in Grid, see it in Flow on the same render
++  await page.click('[data-testid="split-secondary"] [data-testid="flow-granularity"] [data-granularity="questions"]');
++  await page.waitForTimeout(500);
++  await page.fill('[data-testid="split-secondary"] [data-testid="flow-search"]', "Q3 ");
++  await page.waitForTimeout(400);
++  const before = await page.$eval('[data-testid="split-secondary"] [data-testid="flow-node"][data-node="q_age"]', (e) => e.textContent);
++  assert.match(before, /Q3/);
++  const textCell = await page.$('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="text"]');
++  await textCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-text"]');
++  await page.fill('[data-testid="grid-edit-text"]', "Your age in years");
++  await page.keyboard.press("Enter");
++  await page.waitForFunction(() => /Your age in years/.test(document.querySelector('[data-testid="split-secondary"] [data-testid="flow-node"][data-node="q_age"]')?.textContent ?? ""));
++  ok("an edit typed in Grid is on the Flow canvas at once — one store, two windows (§8)");
++  // and the selection is one too
++  await page.click('[data-testid="split-secondary"] [data-testid="flow-node"][data-node="q_age"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"]')?.getAttribute("aria-selected") === "true");
++  ok("selecting the node in Flow selects the row in Grid");
++
++  // swap, resize, close
++  await page.click('[data-testid="split-swap-primary"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="split-view"]')?.dataset.primary === "flow");
++  assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-secondary"), "grid");
++  assert.match(page.url(), /mode=flow&split=grid/);
++  ok("swap: choosing the partner as primary flips the pair rather than doubling it");
++  const box = await page.$eval('[data-testid="split-view"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, w: r.width, y: r.top + 300 }; });
++  const div = await page.$('[data-testid="split-divider"]');
++  const d = await div.boundingBox();
++  await page.mouse.move(d.x + 3, d.y + 300); await page.mouse.down(); await page.mouse.move(box.x + box.w * 0.35, box.y, { steps: 6 }); await page.mouse.up();
++  const ratio = await page.$eval('[data-testid="split-view"]', (e) => e.style.gridTemplateColumns);
++  assert.match(ratio, /0\.3[4-6]\d*fr/);
++  ok(`the divider drags and the ratio is kept: ${ratio}`);
++  await page.click('[data-testid="split-close-secondary"]');
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  await page.waitForSelector('[data-testid="flow-view"]');
++  assert.doesNotMatch(page.url(), /split=/);
++  ok("closing the right pane keeps the left one — a single Flow, the URL cleared");
++
++  // memory and URL precedence
++  await page.click('[data-testid="split-toggle"]'); await page.click('[data-testid="split-grid"]');
++  await page.waitForSelector('[data-testid="split-view"]');
++  await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="split-view"]');
++  ok("with no URL, the remembered pair (Flow + Grid) comes back");
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  await page.waitForTimeout(200);
++  assert.equal(await page.$('[data-testid="split-view"]'), null);
++  ok("a URL that names a mode is a deliberate single view — memory does not add a split");
++  await page.goto(`${STUDIO}/sandbox?mode=grid&split=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.equal(await page.$('[data-testid="split-view"]'), null);
++  ok("a split of a mode with itself is refused");
++
++  // closing the primary keeps the secondary
++  await page.goto(`${STUDIO}/sandbox?mode=grid&split=architect`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="split-view"]');
++  await page.click('[data-testid="split-close-primary"]');
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  await page.waitForSelector('[data-testid="architect-view"]');
++  assert.match(page.url(), /mode=architect/);
++  ok("closing the left pane keeps the right one as the mode");
++
++  // ⌘K
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]');
++  await page.fill('[data-testid="command-palette"] input', "split with intelligent");
++  await page.waitForSelector(".palette-item.active");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="split-view"][data-secondary="intelligent"]');
++  await page.waitForSelector('[data-testid="split-secondary"] [data-testid="intelligent-view"]');
++  ok("⌘K “Split with Intelligent” — the split is a command like any other");
++  await page.keyboard.press(`${mod}+k`);
++  await page.waitForSelector('[data-testid="command-palette"]');
++  await page.fill('[data-testid="command-palette"] input', "close split");
++  await page.waitForSelector(".palette-item.active");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  ok("and “Close split view” ends it");
++  await page.context().close();
++}
++
++/* ------------------------------------------------------------ responsive */
++{
++  const page = await newPage({ width: 1600, height: 950 });
++  await page.goto(`${STUDIO}/sandbox?mode=grid&split=flow`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="split-view"]');
++  await page.setViewportSize({ width: 1000, height: 900 });
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.equal(await page.$eval('[data-testid="split-toggle"]', (b) => b.disabled), true);
++  ok("below 1100px the split folds to the primary and the Split control is disabled");
++  await page.setViewportSize({ width: 1600, height: 950 });
++  await page.waitForSelector('[data-testid="split-view"]');
++  ok("widening the window brings the pair back — the split was kept, not dropped");
++  await page.click('[data-testid="split-toggle"]'); await page.click('[data-testid="split-off"]');
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  await page.click('[data-testid="mode-architect"]');
++  await page.waitForSelector('[data-testid="architect-view"]');
++  const wide = await page.$eval('[data-testid="architect-view"] .ar-inspector', (e) => getComputedStyle(e).display !== "none");
++  assert.equal(wide, true);
++  await page.setViewportSize({ width: 1150, height: 900 });
++  await page.waitForTimeout(300);
++  const narrow = await page.$eval('[data-testid="architect-view"] .ar-inspector', (e) => getComputedStyle(e).display !== "none");
++  assert.equal(narrow, false);
++  const map = await page.$eval('[data-testid="architect-view"] .ar-map', (e) => getComputedStyle(e).display !== "none");
++  assert.equal(map, true);
++  ok("Architect in a narrow centre folds its inspector and keeps the map (§17 collapse rules per mode)");
++  // under 900px the shell itself folds to one column, so the centre is the whole window; the map goes at phone width
++  await page.setViewportSize({ width: 620, height: 900 });
++  await page.waitForTimeout(300);
++  assert.equal(await page.$eval('[data-testid="architect-view"] .ar-map', (e) => getComputedStyle(e).display !== "none"), false);
++  ok("narrower still, the map folds too — the workspace is what remains");
++  await page.setViewportSize({ width: 880, height: 900 });
++  await page.waitForTimeout(300);
++  assert.equal(await page.$eval('[data-testid="mode-selector"]', (e) => getComputedStyle(e).display !== "none"), true);
++  ok("the mode selector survives the mobile fold");
++  await page.context().close();
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no page errors");
++await browser.close();
++console.log(`\n  ${passed} checks passed`);
+-- 
+2.43.0
+

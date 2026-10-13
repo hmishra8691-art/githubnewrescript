@@ -5,6 +5,7 @@ import {
 } from "@rescript/billing";
 import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
 import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate";
+import { aiAllowed, aiRefusal, type AiRefusal } from "./aiPolicy";
 export { aiSpec, meterModel, meterProvider, type AiEstimate };
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProjectFor, type AuthedUser, type ProjectContext } from "@/lib/guard";
@@ -192,7 +193,7 @@ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" |
   return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
 }
 
-export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | MeterRefusal;
+export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | MeterRefusal | AiRefusal;
 
 /**
  * Run an AI call under the meter: reserve from the prompt size and the
@@ -208,6 +209,9 @@ export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: str
 }
 
 export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate, fn: () => Promise<T>): Promise<Metered<T>> {
+  /* the project's AI switch (audit A-2) — asked before anything is reserved, so an off project makes no provider call and holds no balance */
+  const decision = await aiAllowed(ctx.surveyId, est.operation, { once: est.consent === "once" });
+  if (!decision.allowed) return aiRefusal(decision);
   const hold = await meter.reserve(ctx, aiSpec(eventType, est));
   if (!hold.ok) return hold;
   try {
@@ -263,6 +267,8 @@ export async function meteredStt<T>(meter: Meter, ctx: MeterContext, operation: 
 export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est: { characters: number; providerId: string; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
   const prov = est.providerId === "llm" ? "openai-compatible" : est.providerId;
   const isChat = prov === "openai-compatible";
+  /* a translation by the language model is an AI call; a dedicated translation service is not (audit A-2) */
+  if (isChat) { const decision = await aiAllowed(ctx.surveyId, est.operation); if (!decision.allowed) return aiRefusal(decision); }
   const hold = await meter.reserve(ctx, isChat
     ? { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: aiModelName(), inputUnits: estimateTokens("x".repeat(est.characters)) + 300, outputUnits: Math.max(200, estimateTokens("x".repeat(est.characters)) * 2), metadata: { operation: est.operation } }
     : { eventType: "TRANSLATION_CHARACTER", provider: meterProvider(prov, "translate"), service: "translate", model: meterModel(prov, prov === "google" ? "v2" : null, "translate"), quantity: Math.ceil(est.characters * 1.25), metadata: { operation: est.operation } });
@@ -281,7 +287,8 @@ export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est
 }
 
 /** The HTTP shape of a refusal: 402 when the balance is short, 423 when the project is read-only or suspended. */
-export function refusalResponse(r: MeterRefusal): NextResponse {
+export function refusalResponse(r: MeterRefusal | AiRefusal): NextResponse {
+  if (r.reason === "ai_off") return NextResponse.json({ error: r.message, code: "ai_disabled", why: (r as AiRefusal).why }, { status: 403 });
   const status = r.reason === "insufficient_balance" ? 402 : r.reason === "read_only" || r.reason === "suspended" ? 423 : 503;
   return NextResponse.json({ error: r.message, code: `wallet_${r.reason}`, wallet: r.wallet ? { balance: r.wallet.balance, state: r.wallet.state, currency: r.wallet.currency } : null, estimate: r.estimate ? { customerCharge: r.estimate.customerCharge } : null }, { status });
 }

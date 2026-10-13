@@ -1,0 +1,65 @@
+The audit's Phase 6 (RESEARCH-ENGINE-AUDIT-2026-10-08, §K; the execution router of §F):
+the Research Engine as an operating system the researcher directs in plain language and
+approves step by step.
+
+The planner (packages/engine/src/researchPlanner.ts). researchWorkflow(def, opts) reads the
+survey as it is into twelve ordered steps — objective, assumptions, structured hypotheses,
+research framework, questionnaire, variables, analysis plan, crosstab and test
+recommendations, reporting framework, design document, survey structure, deck — each done,
+ready (the engine's own actions, for approval), needs_input (only the researcher can say,
+with an example sentence that records it), model (a language model would do it, with the
+tier and the prompt the cost preview prices) or blocked (an earlier step first, named).
+Pure: it writes nothing and calls nothing. The engine does by itself what needs no prose:
+the objective; the population read from the objective and the methodology from its goal,
+as assumptions listed; the parsed readings of the hypotheses recorded; a construct per
+hypothesis side, named as a noun, with the questions that already measure it (by word
+family, or the standard measure's own words); a standard item for an unmeasured construct
+the library knows, linked to the construct in the same approval; a mean score for a
+multi-item construct; the plan; the test a measured hypothesis lacks (the score's, else the
+regression over the items) and a missing priority-1 crosstab; the KPIs from the dependent
+constructs; the proposal and the deck; the screener first and the demographics last. The
+model is asked only to draft hypotheses when none exist, to structure one the words cannot
+be read into, and to write a question for a construct with no standard item. In internal
+mode those steps ask the researcher instead — never a silent skip. "start the research
+workflow for …", "run the workflow", "what's next?" are read by the engine (a `workflow`
+interpretation); standardMeasure exported from nlIntent.
+
+Execution choice. The project setting surveys.settings.ai.mode (internal | cloud), read and
+written by POST /api/copilot/workflow (setMode under survey.edit; the sandbox keeps it in the
+browser) and switched in the new Workflow tab. Internal: nothing is sent to a language
+model — a model turn is refused on its card with its own failure code (internal_mode) and
+where the switch is, a sentence with an engine alternative gets the alternative, the
+findings outputs skip the narrative. Per request: one request let through to the cloud
+("once", used up by the call that takes it) and `mode` on the route for one reading.
+
+Tiers and the cost preview. AI_MODEL_SMALL beside AI_MODEL; aiModelName(tier),
+completeJson({ tier }); the meter's estimate and reservation carry the tier (AiEstimate.tier,
+aiSpec moved to lib/aiEstimate.ts so it is testable without a server; a fake report under
+simulation is still priced at the configured model, a real model name — the tier's — is
+kept). The route prices every model step through estimateAi, nothing reserved; the tab
+shows the model and the credits next to the button that runs the step and the total of the
+cloud steps from here.
+
+The Studio. useCopilot: executionMode/setExecutionMode, cloudOnce/setCloudOnce, workflow
+(the planner on the survey as it stands, the open proposal included, so a step applied is
+done at once), workflowInfo/refreshWorkflow, showWorkflow, runWorkflowStep (an engine step
+is a proposal in Changes recorded in History with workflow: <step>; an output step is the
+Phase 5 output and marks the document or the deck produced; a model step is a model turn);
+the internal-mode gate before any request leaves. WorkflowTab: the summary, the
+Internal/Cloud switch with the configured models, the cost line, the twelve steps with their
+marks, reasons, buttons, the examples as chips to the input box, what a blocked step waits
+on. The auth-guard audit records the route's setMode as writing the project-configuration
+bag, as the config route does.
+
+Tests: packages/engine/src/researchPlanner.test.ts (4; engine 1753 pass),
+packages/ai/src/tiers.test.ts (2; ai 33), apps/studio/lib/aiEstimate.test.ts (2; studio 286),
+failure.test.ts extended, scripts/phase6-agent-test.mjs (6 checks). Mutation checks: engine
+36 (35 caught, one by the type system; one made equivalent by simplifying modelSteps), ai 3/3,
+the meter 4/4, Studio 15 through the browser suite (14 caught; one equivalent under the fake
+provider — requireProject refuses the real survey either way). The full browser corpus (134
+suites) is green apart from the 10 known baseline failures; acbc-test and distribution-test
+failed once in the run (a random draw; the cold server) and pass on rerun. pnpm -r test green.
+Doc: docs/PHASE6-AGENT-2026-10-09.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

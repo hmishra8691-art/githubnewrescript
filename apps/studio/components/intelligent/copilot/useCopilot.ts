@@ -460,7 +460,9 @@ export function useCopilot(opts: {
       opts.patch(id, { status: "failed", error: failure.message, failure, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "", execution: "internal" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [] }) });
       return "unavailable";
     }
-    if (cloudOnceRef.current) { cloudOnceRef.current = false; setCloudOnceState(false); }
+    /* the one-time consent travels with the request: the server enforces the project's Internal setting and needs to know this call was allowed once (audit A-2) */
+    const usedOnce = cloudOnceRef.current;
+    if (usedOnce) { cloudOnceRef.current = false; setCloudOnceState(false); }
     setBusy(true);
     try {
       const proposal = session.proposal;
@@ -468,7 +470,7 @@ export function useCopilot(opts: {
       const fake = fakeRef.current.shift();
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...extra }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra }),
       });
       if (themeImage) setThemeImage(null);
       /* every model turn is in the history with the call it made and what it cost — a failed one too */

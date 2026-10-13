@@ -30,7 +30,7 @@ export function meterModel(provider: string, model: string | null, kind: "chat" 
 }
 
 /** what a model call is expected to cost: the prompt's size, the reply's cap, the number of requests — and the tier, the large model when none is named */
-export interface AiEstimate { estimateText: string; maxTokens: number; requests?: number; operation: string; tier?: AiModelTier }
+export interface AiEstimate { estimateText: string; maxTokens: number; requests?: number; operation: string; tier?: AiModelTier; /** the researcher's explicit one-time consent to send this call while the project runs Internal (the copilot's "send this once") */ consent?: "once" }
 
 /** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
 export function aiSpec(eventType: string, est: AiEstimate): UsageSpec {

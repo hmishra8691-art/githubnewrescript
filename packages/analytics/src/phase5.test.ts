@@ -169,8 +169,9 @@ test("the narrative gate: every number must be the run's, hypotheses must exist 
   assert.equal(sentenceProblem("Women score 3.86 against 3.07 for men.", nums, run.verdicts), null);
   assert.equal(sentenceProblem("Women score 3.9 against 3.1 for men.", nums, run.verdicts), null, "one decimal less of a printed mean");
   assert.equal(sentenceProblem("Satisfaction is 4.2 among women.", nums, run.verdicts), "the number 4.2 is not in the run");
-  assert.equal(sentenceProblem("Two of the three hypotheses held, 2 of 3.", nums, run.verdicts), null, "counting words pass");
-  assert.equal(sentenceProblem("Fieldwork ran in 2026.", nums, run.verdicts), null, "a year passes");
+  assert.equal(sentenceProblem("Two of the three hypotheses held, 3 in all.", nums, run.verdicts), null, "a count the run holds passes (3 verdicts)");
+  assert.equal(sentenceProblem("612 tests were significant.", nums, run.verdicts), "the number 612 is not in the run", "A-1: no whole number is exempt — a count is the run's or it is wrong");
+  assert.equal(sentenceProblem("Fieldwork ran in 2031.", nums, run.verdicts), "the number 2031 is not in the run", "A-1: a year is a number too");
   assert.equal(sentenceProblem("A 77.7% lift.", nums, run.verdicts), "the number 77.7% is not in the run", "a percentage must be printed");
   assert.equal(sentenceProblem("H1 is supported: women are more satisfied.", nums, run.verdicts), null);
   assert.equal(sentenceProblem("H2 is supported.", nums, run.verdicts), null, "mixed may be called supported in part — only the clear contradictions are refused");
@@ -184,7 +185,7 @@ test("the narrative gate: every number must be the run's, hypotheses must exist 
   const empty = gateNarrative(run, { summary: ["A 77.7% lift."], headline: "" });
   assert.deepEqual(empty.accepted, {});
   assert.equal(empty.kept, 0);
-  assert.deepEqual(gateNarrative(run, {}), { accepted: {}, rejected: [], offered: 0, kept: 0 });
+  assert.deepEqual(gateNarrative(run, {}), { accepted: {}, rejected: [], offered: 0, kept: 0, sentences: [], replaced: 0 });
 });
 
 test("the deck as PowerPoint: one slide per story slide, the design system's words on them, the significance badge, the statistic callout, the native charts", async () => {

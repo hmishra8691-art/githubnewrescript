@@ -1,0 +1,1808 @@
+From eb043a6685f9137eef300fb7e4c452a2f3c7c504 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 19:50:33 +0000
+Subject: [PATCH 1/2] Flow mode: the survey's behaviour as a canvas (Phase 3)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The fourth environment. The engine's `buildLogicFlow` was already the graph
+— pages or questions as nodes, every way a respondent moves between them as
+an edge, branches and loops and skips and quota exits included — and the
+Logic panel printed it as text. Now it is drawn, laid out, and answers the
+two questions the brief asks of it.
+
+  · Edges are TYPED at the source. `LogicFlowEdge.kind` (sequence · gate ·
+    branch · otherwise · skip · loop · quota) is an optional schema field
+    set by `buildLogicFlow`, so a canvas colours by meaning rather than by
+    guessing from labels; old graphs classify by label as a fallback.
+
+  · Layout is hand-rolled (lib/flow/layout.ts, 8 tests): cycles broken
+    (loop returns and backward skips become side-routed back edges),
+    longest-path layering, barycentre ordering, a stored position pins a
+    node. 600 questions lay out in 4 ms; the canvas opens on pages for
+    surveys over 150 questions and on questions below (switchable).
+
+  · Select a node and the canvas shows WHAT CAN REACH IT (upstream, cyan)
+    and WHAT IT CAN AFFECT (downstream via the routing graph plus whatever
+    the dependency index says reads it, amber); the edges between them
+    light; everything else recedes — harder in Focus. The inspector from
+    Architect sits beside it, so a branch's DEPENDS ON is one click from
+    its arms.
+
+  · Debug mode (lib/flow/debug.ts, 5 tests): type "Q2=A, Q1=30, Q11=1|3"
+    and a headless respondent WALKS the survey with those answers through
+    the real engine — so skips fire and loops repeat, not a compile — and
+    the taken path lights. The suite proves the same walk routes through
+    the Business arm or the Consumer arm on one answer, and screens out on
+    "no consent".
+
+  · Editing goes through the Survey Flow panel's own functions: dragging a
+    node stores its position on def.logicFlow by id (Auto-arrange forgets
+    them); dropping a node onto a container calls canDropFlowNode and
+    moveFlowNode, refusing with the engine's reason; "+ Add…" inserts
+    through the command registry and selects the new element. Pan, wheel
+    and ⌘-wheel zoom, fit, a minimap, search that centres on its match,
+    double-click to open in Architect.
+
+Tests: scripts/flow-mode-test.mjs (38, clean console, 600-question budget:
+463 ms to render, 10 zoom steps in 292 ms). Mutation-checked: highlight
+direction flipped, drop that never moves, debug that ignores answers —
+each caught. Sweep green: multimodal-foundation, grid-mode (45),
+architect-mode (32), context-right-panel, canvas (38), flow-dnd,
+flow-export, logic-builder, save-integrity. Studio lib: 148. Engine
+logicGraph tests unchanged: 19.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             |  92 +++-
+ apps/studio/components/flow/FlowCanvas.tsx    | 425 ++++++++++++++++++
+ .../components/studio/CommandContext.tsx      |   3 +-
+ apps/studio/components/studio/Studio.tsx      |   4 +-
+ apps/studio/lib/commands/builtins.ts          |   7 +-
+ apps/studio/lib/flow/debug.test.ts            |  66 +++
+ apps/studio/lib/flow/debug.ts                 |  83 ++++
+ apps/studio/lib/flow/layout.test.ts           | 135 ++++++
+ apps/studio/lib/flow/layout.ts                | 249 ++++++++++
+ apps/studio/lib/multimodalFoundation.test.ts  |  15 +-
+ apps/studio/lib/programmingMode.ts            |   2 +-
+ packages/engine/src/logicGraph.ts             |  19 +-
+ packages/schema/src/flow.ts                   |  17 +
+ scripts/flow-mode-test.mjs                    | 352 +++++++++++++++
+ scripts/multimodal-foundation-test.mjs        |  12 +-
+ 15 files changed, 1453 insertions(+), 28 deletions(-)
+ create mode 100644 apps/studio/components/flow/FlowCanvas.tsx
+ create mode 100644 apps/studio/lib/flow/debug.test.ts
+ create mode 100644 apps/studio/lib/flow/debug.ts
+ create mode 100644 apps/studio/lib/flow/layout.test.ts
+ create mode 100644 apps/studio/lib/flow/layout.ts
+ create mode 100644 scripts/flow-mode-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 14dffb1..0eebd2e 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -981,7 +981,95 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .ai-issues li { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--c-surface-2); border-left: 3px solid var(--c-warning); }
+ .ai-issues li.error { border-left-color: var(--c-error); }
+ .ai-none { font-size: 12.5px; margin: 4px 0 0; }
+-.ai-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
+-.ai-dl dt { color: var(--c-text-3); }
++.ai-dl { display: grid; grid-template-columns: minmax(72px, 38%) minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 12.5px; }
++.ai-dl dt { color: var(--c-text-3); overflow-wrap: anywhere; }
+ .ai-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+ .ai-props h2 { font-size: 14px; }
++
++/* ======================================================================
++   FLOW MODE — the survey's behaviour as a canvas (Phase 3)
++   SVG nodes and typed edges; colour carries the edge's meaning; selection
++   answers "what can reach this" (up) and "what can this affect" (down).
++   ====================================================================== */
++.center:has(> .fc) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
++.fc { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
++.fc-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
++.fc-inspector { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--c-border); background: var(--c-surface); }
++.fc-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; overflow-x: auto; scrollbar-width: none; }
++.fc-toolbar > * { flex: none; }
++.fc-seg { display: inline-flex; border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; background: var(--c-surface); }
++.fc-seg button { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12px; padding: 5px 10px; color: var(--c-text-3); cursor: pointer; white-space: nowrap; }
++.fc-seg button + button { border-left: 1px solid var(--c-border); }
++.fc-seg button.on { background: var(--c-surface-2); color: var(--c-text); font-weight: 600; }
++.fc-chip { appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2); font: inherit; font-size: 12px; font-weight: 500; padding: 5px 10px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
++.fc-chip:hover:not(:disabled) { color: var(--c-text); border-color: var(--c-border-strong); }
++.fc-chip.on { background: var(--c-primary-600); border-color: var(--c-primary-600); color: #fff; }
++.fc-chip:disabled { opacity: .5; cursor: default; }
++.fc-add { appearance: auto; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2); font: inherit; font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 999px; }
++.fc-search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 8px; padding: 0 8px; background: var(--c-bg); color: var(--c-text-3); width: 220px; }
++.fc-search-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 12.5px; padding: 6px 0; color: var(--c-text); }
++.fc-search-n { font-family: var(--mono); font-size: 11px; color: var(--c-text-4); }
++.fc-count { font-family: var(--mono); font-size: 11px; color: var(--c-text-4); }
++.fc-debug { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--c-primary-100); background: var(--c-primary-50); flex: none; }
++.fc-debug-kw { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; font-weight: 700; color: var(--c-primary-700); }
++.fc-debug-input { flex: 1; min-width: 0; border: 1px solid var(--c-primary-100); border-radius: 7px; padding: 6px 10px; font: inherit; font-family: var(--mono); font-size: 12.5px; background: var(--c-surface); color: var(--c-text); }
++.fc-debug-out { font-size: 12px; color: var(--c-primary-700); white-space: nowrap; }
++.fc-legend { display: flex; gap: 16px; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; }
++.fc-lg.up { color: #0e7490; }
++.fc-lg.down { color: #b45309; }
++.fc-host { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: var(--c-bg); cursor: grab; outline: none; touch-action: none;
++  background-image: radial-gradient(circle, rgba(19, 26, 43, .10) 1px, transparent 1px); background-size: 22px 22px; }
++.fc-host.panning { cursor: grabbing; }
++.fc-host:focus-visible { box-shadow: inset 0 0 0 2px var(--c-primary-100); }
++.fc-svg { display: block; user-select: none; }
++.fc-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--c-text-3); }
++
++/* nodes */
++.fc-node { cursor: pointer; transition: opacity var(--dur-2) var(--ease); }
++.fc-node rect { fill: var(--c-surface); stroke: var(--c-border-strong); stroke-width: 1; }
++.fc-node.fc-decision rect { fill: #f5f3ff; stroke: #c4b5fd; }
++.fc-node.fc-action rect { fill: var(--c-surface-2); stroke: var(--c-border-strong); }
++.fc-node.fc-end rect { fill: #ecfdf5; stroke: #6ee7b7; }
++.fc-node.fc-terminate rect { fill: #fff1f2; stroke: #fda4af; }
++.fc-node .fc-accent { fill: var(--c-primary-600); stroke: none; }
++.fc-node .fc-pin { fill: var(--c-text-4); }
++.fc-node .fc-status.warning { fill: var(--c-warning); }
++.fc-node .fc-status.error { fill: var(--c-error); }
++.fc-node-title { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--c-text); }
++.fc-node-sub { font-size: 11px; fill: var(--c-text-3); }
++.fc-node:hover rect { stroke: var(--c-primary-600); }
++.fc-node.selected rect { stroke: var(--c-primary-600); stroke-width: 2; }
++.fc-node.primary rect { stroke: var(--c-primary-700); stroke-width: 2.5; filter: drop-shadow(0 4px 10px rgba(79, 70, 229, .25)); }
++.fc-node.up rect { fill: #ecfeff; stroke: #06b6d4; }
++.fc-node.down rect { fill: #fffbeb; stroke: #f59e0b; }
++.fc-node.dim { opacity: .38; }
++.fc-node.dim-hard { opacity: .12; }
++.fc-node.nomatch { opacity: .2; }
++.fc-node.match rect { stroke: var(--c-primary-600); stroke-width: 2; stroke-dasharray: 4 3; }
++.fc-node.untaken { opacity: .18; }
++.fc-node.taken rect { stroke: #16a34a; stroke-width: 2; }
++.fc-node.drop rect { stroke: var(--c-primary-600); stroke-width: 3; stroke-dasharray: 6 4; }
++
++/* edges */
++.fc-edge path { fill: none; stroke: var(--c-border-strong); stroke-width: 1.4; transition: opacity var(--dur-2) var(--ease); }
++.fc-arrow { fill: var(--c-border-strong); }
++.fc-edge.fc-e-branch path, .fc-arrow.fc-e-branch { stroke: var(--c-primary-600); fill: var(--c-primary-600); }
++.fc-edge.fc-e-branch path { fill: none; }
++.fc-edge.fc-e-gate path { stroke: #7c3aed; stroke-dasharray: 5 3; } .fc-arrow.fc-e-gate { fill: #7c3aed; }
++.fc-edge.fc-e-otherwise path { stroke: #64748b; stroke-dasharray: 5 4; } .fc-arrow.fc-e-otherwise { fill: #64748b; }
++.fc-edge.fc-e-skip path { stroke: #d97706; stroke-dasharray: 6 3; } .fc-arrow.fc-e-skip { fill: #d97706; }
++.fc-edge.fc-e-loop path { stroke: #0d9488; } .fc-arrow.fc-e-loop { fill: #0d9488; }
++.fc-edge.fc-e-quota path { stroke: #dc2626; } .fc-arrow.fc-e-quota { fill: #dc2626; }
++.fc-edge.lit path { stroke-width: 2.4; }
++.fc-edge.dim { opacity: .25; }
++.fc-edge.dim-hard { opacity: .08; }
++.fc-edge.untaken { opacity: .12; }
++.fc-edge.taken path { stroke: #16a34a; stroke-width: 2.4; }
++.fc-edge-label { font-size: 10.5px; fill: var(--c-text-3); paint-order: stroke; stroke: var(--c-bg); stroke-width: 3px; text-anchor: middle; }
++.fc-edge.back .fc-edge-label { text-anchor: start; }
++
++/* minimap */
++.fc-minimap { position: absolute; right: 12px; bottom: 12px; background: rgba(255,255,255,.9); border: 1px solid var(--c-border); border-radius: 8px; box-shadow: var(--sh-2); cursor: pointer; }
++.fc-mm-node { fill: var(--c-border-strong); }
++.fc-mm-node.lit { fill: var(--c-primary-600); }
++.fc-mm-view { fill: rgba(79, 70, 229, .08); stroke: var(--c-primary-600); stroke-width: 6; }
+diff --git a/apps/studio/components/flow/FlowCanvas.tsx b/apps/studio/components/flow/FlowCanvas.tsx
+new file mode 100644
+index 0000000..b289b21
+--- /dev/null
++++ b/apps/studio/components/flow/FlowCanvas.tsx
+@@ -0,0 +1,425 @@
++"use client";
++import React from "react";
++import type { FlowNode, LogicFlow } from "@rescript/schema";
++import {
++  buildLogicFlow, buildDependencyIndex, objectStatus, flowNodeIndex, canDropFlowNode, moveFlowNode,
++  type ObjectKey,
++} from "@rescript/engine";
++import { useStudio } from "../studio/store";
++import { useSelection } from "../studio/SelectionContext";
++import { useMode } from "../studio/ModeContext";
++import { useCommands } from "../studio/CommandContext";
++import { Inspector } from "../architect/Inspector";
++import { Icon } from "../ui/Icon";
++import {
++  layoutFlow, upstream, downstream, edgesTouching, fitTransform,
++  type Layout, type LaidOutNode, type LaidOutEdge,
++} from "../../lib/flow/layout";
++import { debugPath, type DebugResult } from "../../lib/flow/debug";
++
++/**
++ * FLOW — the survey's behaviour, drawn.
++ *
++ * The engine's `buildLogicFlow` is the graph: pages or questions as nodes,
++ * and every way a respondent moves between them as a typed edge — the next
++ * page, a branch arm, an otherwise, a skip, a loop's next iteration, a
++ * quota's "full". This canvas lays it out (lib/flow/layout.ts) and lets a
++ * programmer read it, select in it, rearrange it and debug it.
++ *
++ * Select a node and two questions are answered at once, in colour: WHAT CAN
++ * REACH THIS (every node upstream, following the edges backwards) and WHAT
++ * CAN THIS AFFECT (downstream, plus everything the dependency index says
++ * reads it). Everything else recedes. Focus mode makes that receding
++ * stronger, for the same reason it exists everywhere: in a 600-question
++ * survey the twelve things that matter must stand out.
++ *
++ * Debug mode types hypothetical answers and lights the path a respondent
++ * with those answers would take — a real walk through the real engine, so
++ * skips fire and loops repeat.
++ *
++ * Editing goes through the same functions the Survey Flow panel uses:
++ * `moveFlowNode` with `canDropFlowNode`'s verdict when a node is dropped on
++ * another; a dragged position is stored on `def.logicFlow` by id so it
++ * survives a reload and every other environment leaves it alone.
++ *
++ * Hand-rolled: SVG, a `<g transform>`, wheel and pointer handlers. No graph
++ * library — the layout is 200 lines and the canvas owes nothing to anyone.
++ */
++
++const INSPECTOR_W = 380;
++const PREFS_KEY = "rescript.flow";
++interface Prefs { granularity: "auto" | "pages" | "questions"; inspector: boolean }
++function loadPrefs(): Prefs {
++  try { const raw = typeof window !== "undefined" ? window.localStorage.getItem(PREFS_KEY) : null; if (raw) return { ...{ granularity: "auto", inspector: true }, ...JSON.parse(raw) }; } catch { /* fine */ }
++  return { granularity: "auto", inspector: true };
++}
++
++type View = { k: number; tx: number; ty: number };
++
++export function FlowCanvas() {
++  const s = useStudio();
++  const sel = useSelection();
++  const mode = useMode();
++  const cmd = useCommands();
++  const def = s.def;
++  const focus = mode?.focus ?? false;
++
++  /* ------------------------------------------------------------ graph + layout */
++  const [prefs, setPrefs] = React.useState<Prefs>(loadPrefs);
++  const savePrefs = (p: Prefs) => { setPrefs(p); try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* fine */ } };
++  const questionsGranularity = prefs.granularity === "questions" || (prefs.granularity === "auto" && def.questions.length <= 150);
++  const graph = React.useMemo<LogicFlow>(() => buildLogicFlow(def, { questions: questionsGranularity, layout: def.logicFlow }), [def, questionsGranularity]);
++  const layout = React.useMemo<Layout>(() => layoutFlow(graph), [graph]);
++  const deferredDef = React.useDeferredValue(def);
++  const index = React.useMemo(() => buildDependencyIndex(deferredDef), [deferredDef]);
++  const status = React.useMemo(() => objectStatus(deferredDef), [deferredDef]);
++  const flowIdx = React.useMemo(() => flowNodeIndex(def.flow as FlowNode[]), [def.flow]);
++  const questionIds = React.useMemo(() => new Set(def.questions.map((q) => q.id)), [def.questions]);
++
++  /** a graph node's engine key — questions by id, everything else a flow node */
++  const keyOf = React.useCallback((nodeId: string): ObjectKey | null => {
++    if (questionIds.has(nodeId)) return `question:${nodeId}`;
++    if (flowIdx.has(nodeId)) return `flowNode:${nodeId}`;
++    return null;
++  }, [questionIds, flowIdx]);
++  /** the graph node for an engine key, if it is drawn */
++  const nodeOfKey = React.useCallback((key: ObjectKey | null): LaidOutNode | null => {
++    if (!key) return null;
++    const id = key.slice(key.indexOf(":") + 1);
++    if (layout.byId.has(id)) return layout.byId.get(id)!;
++    // a question selected elsewhere while the canvas shows pages: light its page
++    if (key.startsWith("question:")) {
++      for (const n of layout.nodes) { const fn = flowIdx.get(n.id); if (fn?.type === "page" && fn.questionIds.includes(id)) return n; }
++    }
++    return null;
++  }, [layout, flowIdx]);
++
++  /* ------------------------------------------------------------ selection + highlight */
++  const primary = (sel?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null)) as ObjectKey | null;
++  const selectedNode = nodeOfKey(primary);
++  const highlight = React.useMemo(() => {
++    if (!selectedNode) return null;
++    const up = upstream(graph, selectedNode.id);
++    const down = downstream(graph, selectedNode.id);
++    // the dependency index adds data effects the routing graph does not draw
++    if (primary) for (const k of index.affects(primary)) { const n = nodeOfKey(k as ObjectKey); if (n) down.add(n.id); }
++    const all = new Set([selectedNode.id, ...up, ...down]);
++    return { up, down, all, edges: edgesTouching(graph, all) };
++  }, [selectedNode, graph, index, primary, nodeOfKey]);
++
++  const select = (nodeId: string, e?: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
++    const key = keyOf(nodeId);
++    if (!key) return;
++    if (!sel) { s.select(key.startsWith("question:") ? nodeId : null); return; }
++    if (e?.metaKey || e?.ctrlKey) sel.dispatch({ type: "toggle", key });
++    else sel.dispatch({ type: "select", key });
++  };
++
++  /* ------------------------------------------------------------ viewport */
++  const hostRef = React.useRef<HTMLDivElement>(null);
++  const [size, setSize] = React.useState({ w: 1200, h: 700 });
++  const [view, setView] = React.useState<View>({ k: 1, tx: 40, ty: 40 });
++  const fitted = React.useRef(false);
++  React.useEffect(() => {
++    const el = hostRef.current; if (!el) return;
++    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
++    ro.observe(el); setSize({ w: el.clientWidth, h: el.clientHeight });
++    return () => ro.disconnect();
++  }, []);
++  const fit = React.useCallback(() => setView(fitTransform(layout.width, layout.height, size.w, size.h)), [layout.width, layout.height, size]);
++  React.useEffect(() => { if (!fitted.current && size.w > 100) { fitted.current = true; fit(); } }, [size, fit]);
++  const zoomBy = (factor: number, cx = size.w / 2, cy = size.h / 2) => setView((v) => {
++    const k = Math.max(0.05, Math.min(3, v.k * factor));
++    return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
++  });
++  const centreOn = React.useCallback((n: LaidOutNode) => setView((v) => ({ k: Math.max(v.k, 0.8), tx: size.w / 2 - (n.x + n.w / 2) * Math.max(v.k, 0.8), ty: size.h / 2 - (n.y + n.h / 2) * Math.max(v.k, 0.8) })), [size]);
++
++  const onWheel = (e: React.WheelEvent) => {
++    e.preventDefault();
++    const rect = hostRef.current!.getBoundingClientRect();
++    if (e.ctrlKey || e.metaKey) zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left, e.clientY - rect.top);
++    else setView((v) => ({ ...v, tx: v.tx - (e.shiftKey ? e.deltaY : e.deltaX), ty: v.ty - (e.shiftKey ? 0 : e.deltaY) }));
++  };
++
++  /* drag: background pans; a node moves (and pins) or drops onto another */
++  const drag = React.useRef<{ kind: "pan" | "node"; id?: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
++  const [dragPos, setDragPos] = React.useState<{ id: string; x: number; y: number } | null>(null);
++  const [dropOn, setDropOn] = React.useState<string | null>(null);
++  const toCanvas = (clientX: number, clientY: number) => { const r = hostRef.current!.getBoundingClientRect(); return { x: (clientX - r.left - view.tx) / view.k, y: (clientY - r.top - view.ty) / view.k }; };
++  const hit = (x: number, y: number, except?: string): LaidOutNode | null => {
++    for (const n of layout.nodes) if (n.id !== except && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n;
++    return null;
++  };
++  const onPointerDown = (e: React.PointerEvent, nodeId?: string) => {
++    if (e.button !== 0) return;
++    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
++    const n = nodeId ? layout.byId.get(nodeId) : undefined;
++    drag.current = { kind: nodeId ? "node" : "pan", id: nodeId, sx: e.clientX, sy: e.clientY, ox: n ? n.x : view.tx, oy: n ? n.y : view.ty, moved: false };
++  };
++  const onPointerMove = (e: React.PointerEvent) => {
++    const d = drag.current; if (!d) return;
++    const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
++    if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true;
++    if (d.kind === "pan") setView((v) => ({ ...v, tx: d.ox + dx, ty: d.oy + dy }));
++    else if (d.id && d.moved) {
++      const x = d.ox + dx / view.k, y = d.oy + dy / view.k;
++      setDragPos({ id: d.id, x, y });
++      const p = toCanvas(e.clientX, e.clientY);
++      const over = hit(p.x, p.y, d.id);
++      setDropOn(over && flowIdx.has(over.id) && flowIdx.has(d.id) ? over.id : null);
++    }
++  };
++  const onPointerUp = (e: React.PointerEvent) => {
++    const d = drag.current; drag.current = null;
++    if (!d) return;
++    if (d.kind === "node" && d.id) {
++      if (!d.moved) { select(d.id, e); }
++      else if (dropOn) { dropNode(d.id, dropOn); }
++      else if (dragPos && !s.readOnly) { pin(d.id, Math.round(dragPos.x), Math.round(dragPos.y)); }
++    }
++    setDragPos(null); setDropOn(null);
++  };
++
++  /** store a dragged position on the survey, by node id */
++  const pin = (id: string, x: number, y: number) => {
++    const node = graph.nodes.find((n) => n.id === id);
++    if (!node) return;
++    s.labelNextEdit("move flow node");
++    s.update((dd) => {
++      const lf = dd.logicFlow ?? { nodes: [], edges: [] };
++      const i = lf.nodes.findIndex((n) => n.id === id);
++      const stored = { id, kind: node.kind, ref: node.ref, label: node.label, x, y };
++      if (i >= 0) lf.nodes[i] = { ...lf.nodes[i], x, y }; else lf.nodes.push(stored);
++      dd.logicFlow = lf;
++    });
++  };
++  const autoArrange = () => {
++    s.labelNextEdit("auto-arrange flow");
++    s.update((dd) => { dd.logicFlow = { nodes: [], edges: [] }; });
++    setTimeout(fit, 0);
++  };
++
++  /** drop a flow node onto another: into a container, or after a sibling */
++  const dropNode = (draggedId: string, targetId: string) => {
++    if (s.readOnly) return;
++    const target = flowIdx.get(targetId);
++    if (!target) return;
++    const isContainer = target.type === "block" || target.type === "section" || target.type === "randomizer" || target.type === "loop";
++    const where = isContainer ? { kind: "inside" as const, ownerId: targetId, slot: "children" } : { kind: "after" as const, refId: targetId };
++    const verdict = canDropFlowNode(def.flow as FlowNode[], draggedId, where);
++    if (!verdict.ok) { s.toast(verdict.reason ?? "That cannot go there", "err"); return; }
++    s.labelNextEdit(isContainer ? "move into container" : "reorder flow");
++    s.update((dd) => {
++      const r = moveFlowNode(dd.flow as FlowNode[], draggedId, where);
++      if (r.moved) dd.flow = r.flow;
++    });
++    s.toast(isContainer ? `Moved into ${(target as { title?: string }).title ?? target.type}` : "Reordered");
++  };
++
++  /* ------------------------------------------------------------ search, debug */
++  const [search, setSearch] = React.useState("");
++  const matches = React.useMemo(() => {
++    const q = search.trim().toLowerCase();
++    if (!q) return null;
++    return new Set(layout.nodes.filter((n) => (n.label ?? "").toLowerCase().includes(q) || n.id.toLowerCase().includes(q)).map((n) => n.id));
++  }, [search, layout]);
++  React.useEffect(() => { if (matches && matches.size) { const n = layout.byId.get([...matches][0]); if (n) centreOn(n); } }, [matches, layout, centreOn]);
++
++  const [debugOn, setDebugOn] = React.useState(false);
++  const [answers, setAnswers] = React.useState("");
++  const debug = React.useMemo<DebugResult | null>(() => (debugOn ? debugPath(def, answers) : null), [debugOn, def, answers]);
++  const debugNodes = React.useMemo(() => {
++    if (!debug) return null;
++    const set = new Set<string>(debug.pageIds);
++    for (const q of debug.questionIds) set.add(q);
++    return set;
++  }, [debug]);
++
++  /* ------------------------------------------------------------ keyboard */
++  const onKeyDown = (e: React.KeyboardEvent) => {
++    if ((e.target as HTMLElement).tagName === "INPUT") return;
++    if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.2); }
++    else if (e.key === "-") { e.preventDefault(); zoomBy(1 / 1.2); }
++    else if (e.key === "0") { e.preventDefault(); fit(); }
++    else if (e.key === "Escape" && sel?.keys.length) { e.preventDefault(); sel.dispatch({ type: "clear" }); }
++  };
++
++  /* ------------------------------------------------------------ render */
++  const showLabels = view.k >= 0.55;
++  const inspectorOpen = prefs.inspector;
++  const nodeClass = (n: LaidOutNode) => {
++    const cls = [`fc-node fc-${n.kind}`];
++    const key = keyOf(n.id);
++    if (key && sel?.isSelected(key)) cls.push("selected");
++    if (selectedNode?.id === n.id) cls.push("primary");
++    if (highlight) {
++      if (highlight.up.has(n.id)) cls.push("up");
++      else if (highlight.down.has(n.id)) cls.push("down");
++      else if (n.id !== selectedNode?.id) cls.push(focus ? "dim-hard" : "dim");
++    }
++    if (matches) cls.push(matches.has(n.id) ? "match" : "nomatch");
++    if (debugNodes) cls.push(debugNodes.has(n.id) ? "taken" : "untaken");
++    if (dropOn === n.id) cls.push("drop");
++    if (key && status.statusOf(key).level !== "ok") cls.push(`st-${status.statusOf(key).level}`);
++    return cls.join(" ");
++  };
++  const edgeClass = (e: LaidOutEdge) => {
++    const cls = [`fc-edge fc-e-${e.kind}`];
++    if (e.back) cls.push("back");
++    if (highlight) cls.push(highlight.edges.has(e.id) ? "lit" : (focus ? "dim-hard" : "dim"));
++    if (debugNodes) cls.push(debugNodes.has(e.from) && debugNodes.has(e.to) ? "taken" : "untaken");
++    return cls.join(" ");
++  };
++  const pos = (n: LaidOutNode) => (dragPos?.id === n.id ? { x: dragPos.x, y: dragPos.y } : { x: n.x, y: n.y });
++
++  // minimap
++  const mm = { w: 160, h: Math.max(60, Math.min(220, Math.round(160 * layout.height / Math.max(1, layout.width)))) };
++  const mmk = Math.min(mm.w / Math.max(1, layout.width), mm.h / Math.max(1, layout.height));
++
++  return (
++    <div className="fc" data-testid="flow-view" style={{ gridTemplateColumns: inspectorOpen ? `minmax(0, 1fr) ${INSPECTOR_W}px` : "minmax(0, 1fr)" }}>
++      <div className="fc-main">
++        <div className="fc-toolbar">
++          <div className="fc-seg" role="radiogroup" aria-label="Granularity" data-testid="flow-granularity">
++            {(["auto", "pages", "questions"] as const).map((g) => (
++              <button key={g} role="radio" aria-checked={prefs.granularity === g} className={prefs.granularity === g ? "on" : ""} data-granularity={g}
++                onClick={() => { savePrefs({ ...prefs, granularity: g }); fitted.current = false; }}>{g === "auto" ? `Auto · ${questionsGranularity ? "questions" : "pages"}` : g}</button>
++            ))}
++          </div>
++          <div className="fc-search">
++            <Icon name="search" size={13} />
++            <input className="fc-search-input" data-testid="flow-search" placeholder="Find a node…" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
++            {matches && <span className="fc-search-n">{matches.size}</span>}
++          </div>
++          <span className="fc-count" data-testid="flow-count">{layout.nodes.length} nodes · {layout.edges.length} edges</span>
++          <span className="grow" />
++          <select className="fc-add" data-testid="flow-add" value="" disabled={s.readOnly}
++            onChange={(e) => { if (e.target.value) cmd?.run(e.target.value); }} title="Insert a flow element before the End">
++            <option value="">+ Add…</option>
++            <option value="flow.add.branch">Branch / condition</option>
++            <option value="flow.add.randomizer">Randomizer</option>
++            <option value="flow.add.loop">Loop</option>
++            <option value="flow.add.quota_check">Quota check</option>
++            <option value="flow.add.embedded_data">Embedded data</option>
++            <option value="block.add">Block</option>
++          </select>
++          <button className={`fc-chip${debugOn ? " on" : ""}`} data-testid="flow-debug-toggle" onClick={() => setDebugOn((v) => !v)} title="Type answers and see the path a respondent takes"><Icon name="flask" size={12} /> Debug</button>
++          <button className={`fc-chip${focus ? " on" : ""}`} data-testid="focus-toggle" aria-pressed={focus} onClick={() => mode?.setFocus(!focus)} title="Focus (⌘⇧F)"><Icon name="sparkle" size={12} /> Focus</button>
++          <button className="fc-chip" onClick={autoArrange} disabled={s.readOnly} title="Forget dragged positions and lay out afresh" data-testid="flow-arrange">Auto-arrange</button>
++          <div className="fc-seg">
++            <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out (−)" data-testid="flow-zoom-out">−</button>
++            <button onClick={fit} title="Fit (0)" data-testid="flow-fit">{Math.round(view.k * 100)}%</button>
++            <button onClick={() => zoomBy(1.2)} title="Zoom in (+)" data-testid="flow-zoom-in">+</button>
++          </div>
++          <button className={`fc-chip${inspectorOpen ? " on" : ""}`} onClick={() => savePrefs({ ...prefs, inspector: !inspectorOpen })} title="Inspector" data-testid="flow-inspector-toggle"><Icon name="info" size={12} /></button>
++        </div>
++        {debugOn && (
++          <div className="fc-debug" data-testid="flow-debug">
++            <span className="fc-debug-kw">ANSWERS</span>
++            <input className="fc-debug-input" data-testid="flow-debug-input" placeholder="Q2=A, Q1=30, Q11=1|3 — codes or labels; | separates a multi-select" value={answers} onChange={(e) => setAnswers(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
++            {debug && (
++              <span className="fc-debug-out" data-testid="flow-debug-out">
++                {debug.pageIds.length} page{debug.pageIds.length === 1 ? "" : "s"} · {debug.questionIds.size} questions
++                {debug.endStatus ? ` · ends ${debug.endStatus}` : ""}
++                {debug.unknown.length ? ` · unknown: ${debug.unknown.join(", ")}` : ""}
++                {debug.truncated ? " · stopped at the page guard" : ""}
++              </span>
++            )}
++          </div>
++        )}
++        {highlight && selectedNode && (
++          <div className="fc-legend" data-testid="flow-legend">
++            <span className="fc-lg up">◼ can reach {selectedNode.label?.split(" ")[0] ?? "this"} · {highlight.up.size}</span>
++            <span className="fc-lg down">◼ {selectedNode.label?.split(" ")[0] ?? "this"} can affect · {highlight.down.size}</span>
++            {focus && <span className="muted">focus: everything else dimmed</span>}
++          </div>
++        )}
++        <div
++          className={`fc-host${drag.current?.kind === "pan" ? " panning" : ""}`}
++          ref={hostRef}
++          tabIndex={0}
++          onWheel={onWheel}
++          onPointerDown={(e) => { if ((e.target as Element).closest(".fc-node")) return; onPointerDown(e); }}
++          onPointerMove={onPointerMove}
++          onPointerUp={onPointerUp}
++          onKeyDown={onKeyDown}
++          data-testid="flow-canvas"
++        >
++          <svg className="fc-svg" width="100%" height="100%">
++            <defs>
++              {(["sequence", "gate", "branch", "otherwise", "skip", "loop", "quota"] as const).map((k) => (
++                <marker key={k} id={`fc-arrow-${k}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
++                  <path d="M 0 0 L 10 5 L 0 10 z" className={`fc-arrow fc-e-${k}`} />
++                </marker>
++              ))}
++            </defs>
++            <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`} data-testid="flow-viewport">
++              {layout.edges.map((e) => {
++                const a = layout.byId.get(e.from), b = layout.byId.get(e.to);
++                if (!a || !b) return null;
++                // re-route while a node is being dragged
++                let d = e.d;
++                if (dragPos && (dragPos.id === e.from || dragPos.id === e.to)) {
++                  const pa = pos(a), pb = pos(b);
++                  const x1 = pa.x + a.w / 2, y1 = pa.y + a.h, x2 = pb.x + b.w / 2, y2 = pb.y;
++                  const c = Math.max(24, Math.abs(y2 - y1) / 2);
++                  d = `M ${x1} ${y1} C ${x1} ${y1 + c}, ${x2} ${y2 - c}, ${x2} ${y2}`;
++                }
++                return (
++                  <g key={e.id} className={edgeClass(e)} data-testid="flow-edge" data-kind={e.kind} data-from={e.from} data-to={e.to}>
++                    <path d={d} markerEnd={`url(#fc-arrow-${e.kind})`} />
++                    {showLabels && e.label && e.kind !== "sequence" && (
++                      <text x={e.lx} y={e.ly} className="fc-edge-label">{e.label.length > 42 ? `${e.label.slice(0, 40)}…` : e.label}</text>
++                    )}
++                  </g>
++                );
++              })}
++              {layout.nodes.map((n) => {
++                const p = pos(n);
++                const key = keyOf(n.id);
++                const st = key ? status.statusOf(key).level : "ok";
++                return (
++                  <g key={n.id} className={nodeClass(n)} transform={`translate(${p.x} ${p.y})`}
++                    data-testid="flow-node" data-node={n.id} data-kind={n.kind}
++                    onPointerDown={(e) => { e.stopPropagation(); onPointerDown(e, n.id); }}
++                    onDoubleClick={() => { if (key) { select(n.id); cmd?.run("mode.architect"); } }}
++                  >
++                    <rect width={n.w} height={n.h} rx={n.kind === "decision" ? 6 : 8} />
++                    {n.kind === "decision" && <rect className="fc-accent" width={4} height={n.h} rx={2} />}
++                    {n.pinned && <circle className="fc-pin" cx={n.w - 8} cy={8} r={2.5} />}
++                    {st !== "ok" && <circle className={`fc-status ${st}`} cx={n.w - 10} cy={n.h - 10} r={4} />}
++                    <text x={12} y={n.kind === "decision" ? 21 : 18} className="fc-node-title">
++                      {n.kind === "decision" ? n.label?.split(" — ")[0] : n.label?.split(" ")[0]}
++                    </text>
++                    {showLabels && (
++                      <text x={12} y={n.kind === "decision" ? 38 : 34} className="fc-node-sub">
++                        {(n.kind === "decision" ? (n.label?.split(" — ")[1] ?? "") : (n.label?.split(" ").slice(1).join(" ") ?? "")).slice(0, 34)}
++                      </text>
++                    )}
++                  </g>
++                );
++              })}
++            </g>
++          </svg>
++          {/* minimap */}
++          <svg className="fc-minimap" width={mm.w} height={mm.h} data-testid="flow-minimap"
++            onClick={(e) => { const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); const x = (e.clientX - r.left) / mmk, y = (e.clientY - r.top) / mmk; setView((v) => ({ ...v, tx: size.w / 2 - x * v.k, ty: size.h / 2 - y * v.k })); }}>
++            <g transform={`scale(${mmk})`}>
++              {layout.nodes.map((n) => <rect key={n.id} x={n.x} y={n.y} width={n.w} height={n.h} className={`fc-mm-node${highlight?.all.has(n.id) ? " lit" : ""}`} />)}
++              <rect className="fc-mm-view" x={-view.tx / view.k} y={-view.ty / view.k} width={size.w / view.k} height={size.h / view.k} />
++            </g>
++          </svg>
++          {layout.nodes.length === 0 && <div className="fc-empty">The survey has no flow yet.</div>}
++        </div>
++      </div>
++      {inspectorOpen && (
++        <aside className="fc-inspector" data-testid="flow-inspector">
++          <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
++          <div className="ar-inspector-body">
++            <Inspector primary={primary} index={index} status={status} onSelect={(k) => { if (sel) sel.dispatch({ type: "select", key: k }); const n = nodeOfKey(k); if (n) centreOn(n); }} />
++          </div>
++        </aside>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/CommandContext.tsx b/apps/studio/components/studio/CommandContext.tsx
+index c2690bf..9c0796f 100644
+--- a/apps/studio/components/studio/CommandContext.tsx
++++ b/apps/studio/components/studio/CommandContext.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import type { FlowNode, SurveyDefinition, Question } from "@rescript/schema";
+ import { variantRegistry } from "@rescript/schema";
+-import { nextQuestionNaming } from "@rescript/engine";
++import { nextQuestionNaming, type ObjectKey } from "@rescript/engine";
+ import { useStudio, uid } from "./store";
+ import { useMode } from "./ModeContext";
+ import { useSelection } from "./SelectionContext";
+@@ -101,6 +101,7 @@ export function CommandProvider({
+         if (selection) selection.dispatch(id ? { type: "select", key: `question:${id}` } : { type: "clear" });
+         else s.select(id);
+       },
++      selectKey(key) { selection?.dispatch({ type: "select", key: key as ObjectKey }); },
+       setTab,
+       setMode(m) { mode?.setMode(m); },
+       focus: mode?.focus ?? false,
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 98705ca..62e35d4 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -41,6 +41,7 @@ import { ModeSelector } from "./ModeSelector";
+ import { useMode } from "./ModeContext";
+ import { GridView } from "../grid/GridView";
+ import { ArchitectView } from "../architect/ArchitectView";
++import { FlowCanvas } from "../flow/FlowCanvas";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -1052,6 +1053,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           {tab === "questions" && (
+             programmingMode === "grid" ? <GridView />
+             : programmingMode === "architect" ? <ArchitectView />
++            : programmingMode === "flow" ? <FlowCanvas />
+             : <QuestionsPanel />
+           )}
+           {tab === "settings" && (
+@@ -1109,7 +1111,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           )}
+         </main>
+         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
+-        <RightPanel tab={tab} hidden={programmingMode === "architect" && tab === "questions"} />
++        <RightPanel tab={tab} hidden={(programmingMode === "architect" || programmingMode === "flow") && tab === "questions"} />
+       </div>
+       </CanvasProvider>
+     </div>
+diff --git a/apps/studio/lib/commands/builtins.ts b/apps/studio/lib/commands/builtins.ts
+index 3c8cf13..1e3c004 100644
+--- a/apps/studio/lib/commands/builtins.ts
++++ b/apps/studio/lib/commands/builtins.ts
+@@ -30,6 +30,8 @@ export interface StudioCommandContext extends CommandContextBase {
+   canRedo: boolean;
+   /** select a question (mirrors into the store) or clear */
+   selectQuestion(id: string | null): void;
++  /** select any object by engine key — a flow node, a rule; absent where no shared selection exists */
++  selectKey?(key: string): void;
+   setTab(tab: string): void;
+   setMode(mode: ProgrammingMode): void;
+   /** focus mode: dim everything outside the selection's dependency neighbourhood */
+@@ -113,7 +115,10 @@ export function builtinCommands(): C[] {
+           const at = flow.findIndex((n) => n?.type === "end");
+           flow.splice(at < 0 ? flow.length : at, 0, node);
+         });
+-        ctx.setTab("flow");
++        // the Flow canvas shows the new element where it is; anywhere else, go to the Survey Flow tab
++        if (ctx.mode !== "flow") ctx.setTab("flow");
++        ctx.selectQuestion(null);
++        ctx.selectKey?.(`flowNode:${node.id}`);
+       },
+     });
+   }
+diff --git a/apps/studio/lib/flow/debug.test.ts b/apps/studio/lib/flow/debug.test.ts
+new file mode 100644
+index 0000000..59c7de1
+--- /dev/null
++++ b/apps/studio/lib/flow/debug.test.ts
+@@ -0,0 +1,66 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond } from "@rescript/schema";
++import { parseAnswers, coerceAnswer, debugPath } from "./debug.ts";
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Debug" },
++    questions: [
++      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "Age",
++        skipLogic: [{ id: "sk", when: cond.rule("q_age", "lt", 18), target: { kind: "terminate", status: "screened" } }] },
++      { id: "q_type", code: "Q2", variableName: "TYPE", type: "single_select", text: "Type", options: [{ code: "A", label: "Consumer" }, { code: "B", label: "Business" }] },
++      { id: "q_c", code: "Q3", variableName: "C", type: "text", text: "Consumer only" },
++      { id: "q_b", code: "Q4", variableName: "B", type: "text", text: "Business only" },
++      { id: "q_end", code: "Q5", variableName: "E", type: "text", text: "Everyone" },
++    ],
++    flow: [
++      { type: "page", id: "p1", questionIds: ["q_age", "q_type"] },
++      { type: "branch", id: "br", branches: [
++        { id: "a", when: cond.rule("q_type", "eq", "A"), children: [{ type: "page", id: "pc", questionIds: ["q_c"] }] },
++        { id: "b", when: cond.rule("q_type", "eq", "B"), children: [{ type: "page", id: "pb", questionIds: ["q_b"] }] },
++      ] },
++      { type: "page", id: "p5", questionIds: ["q_end"] },
++      { type: "end", id: "e_ok", status: "complete" },
++      { type: "end", id: "e_out", status: "screened" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("parseAnswers reads codes, separators and multi-select lists", () => {
++  assert.deepEqual(parseAnswers("Q2=A, Q1: 30; Q11 = 1|3\nQ5=yes"), [["Q2", "A"], ["Q1", "30"], ["Q11", ["1", "3"]], ["Q5", "yes"]]);
++  assert.deepEqual(parseAnswers("garbage"), []);
++});
++
++test("coerceAnswer maps labels and codes to what the question stores", () => {
++  const def = survey();
++  assert.equal(coerceAnswer(def, "q_type", "Business"), "B", "a label resolves to its code");
++  assert.equal(coerceAnswer(def, "q_type", "A"), "A");
++  assert.equal(coerceAnswer(def, "q_age", "30"), 30);
++});
++
++test("the path follows a branch arm chosen by the typed answer", () => {
++  const def = survey();
++  const a = debugPath(def, "Q1=30, Q2=A");
++  assert.deepEqual(a.pageIds, ["p1", "pc", "p5"]);
++  assert.ok(a.questionIds.has("q_c") && !a.questionIds.has("q_b"));
++  assert.equal(a.endStatus, "complete");
++  const b = debugPath(def, "Q1=30, Q2=Business");
++  assert.deepEqual(b.pageIds, ["p1", "pb", "p5"]);
++  assert.equal(b.applied, 2);
++});
++
++test("a skip rule fires — this is a walk, not a compile", () => {
++  const r = debugPath(survey(), "Q1=16, Q2=A");
++  assert.deepEqual(r.pageIds, ["p1"], "screened out after the first page");
++  assert.equal(r.endStatus, "screened");
++});
++
++test("unknown codes are reported, not silently dropped; nothing typed still walks the default path", () => {
++  const r = debugPath(survey(), "Q99=1, Q1=30");
++  assert.deepEqual(r.unknown, ["Q99"]);
++  assert.equal(r.applied, 1);
++  const none = debugPath(survey(), "");
++  assert.ok(none.pageIds.length >= 1);
++  assert.equal(none.truncated, false);
++});
+diff --git a/apps/studio/lib/flow/debug.ts b/apps/studio/lib/flow/debug.ts
+new file mode 100644
+index 0000000..6834f73
+--- /dev/null
++++ b/apps/studio/lib/flow/debug.ts
+@@ -0,0 +1,83 @@
++import type { SurveyDefinition } from "@rescript/schema";
++import { getQuestionByCodeOrVar } from "@rescript/engine";
++import { simulateRespondent } from "@rescript/templates";
++
++/**
++ * DEBUG MODE — "with these answers, where does a respondent go?"
++ *
++ * The programmer types hypothetical answers ("Q2=A, Q1=30, Q11=1|3") and a
++ * headless respondent WALKS the survey with them, through the real engine —
++ * start, visibleQuestions, setAnswer, validatePage, advance — so branches,
++ * display logic, loops AND skip jumps (which happen at navigation, not at
++ * compile) all take effect. Questions the answers do not cover get the
++ * engine's default answer, the same as the test-data generator uses. The
++ * canvas then lights the path and dims the rest.
++ */
++
++export interface DebugResult {
++  /** page ids in the order they were visited (a loop repeats a page) */
++  pageIds: string[];
++  /** question ids shown along the way */
++  questionIds: Set<string>;
++  endStatus: string | null;
++  /** answers that named an unknown question */
++  unknown: string[];
++  applied: number;
++  /** the walk did not reach an end within the page guard */
++  truncated: boolean;
++}
++
++/** "Q2=A, Q1=30, Q11=1|3 ; Q5 = yes" → pairs; `|` separates a multi-select's codes */
++export function parseAnswers(text: string): [string, string | string[]][] {
++  const out: [string, string | string[]][] = [];
++  for (const part of text.split(/[,;\n]+/)) {
++    const m = /^\s*([A-Za-z_][\w.]*)\s*[=:]\s*(.+?)\s*$/.exec(part);
++    if (!m) continue;
++    const raw = m[2].trim();
++    out.push([m[1], raw.includes("|") ? raw.split("|").map((x) => x.trim()).filter(Boolean) : raw]);
++  }
++  return out;
++}
++
++/** a typed value into what the question stores: an option code (by code or label), a number, a list */
++export function coerceAnswer(def: SurveyDefinition, qid: string, v: string | string[]): unknown {
++  const q = def.questions.find((x) => x.id === qid);
++  const one = (s: string): unknown => {
++    const opt = q?.options?.find((o) => String(o.code) === s || (o.label ?? "").toLowerCase() === s.toLowerCase());
++    if (opt) return typeof opt.code === "number" ? opt.code : (/^-?\d+(\.\d+)?$/.test(String(opt.code)) ? Number(opt.code) : opt.code);
++    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
++    if (/^(yes|true)$/i.test(s)) return 1;
++    if (/^(no|false)$/i.test(s)) return 2;
++    return s;
++  };
++  if (Array.isArray(v)) return v.map(one);
++  if (q && /multi/.test(q.type)) return [one(v)];
++  return one(v);
++}
++
++export function debugPath(def: SurveyDefinition, answersText: string): DebugResult {
++  const answers: Record<string, unknown> = {};
++  const unknown: string[] = [];
++  let applied = 0;
++  for (const [name, v] of parseAnswers(answersText)) {
++    const q = getQuestionByCodeOrVar(def, name);
++    if (!q) { unknown.push(name); continue; }
++    answers[q.id] = coerceAnswer(def, q.id, v);
++    applied++;
++  }
++  const maxPages = 400;
++  try {
++    const r = simulateRespondent(def, { answers, seed: 1, maxPages });
++    const questionIds = new Set<string>();
++    for (const p of r.pages) for (const id of p.questionIds) questionIds.add(id);
++    return {
++      pageIds: r.pages.map((p) => p.pageId),
++      questionIds,
++      endStatus: r.endStatus ?? null,
++      unknown, applied,
++      truncated: r.pages.length >= maxPages,
++    };
++  } catch {
++    return { pageIds: [], questionIds: new Set(), endStatus: null, unknown, applied, truncated: false };
++  }
++}
+diff --git a/apps/studio/lib/flow/layout.test.ts b/apps/studio/lib/flow/layout.test.ts
+new file mode 100644
+index 0000000..2c775b5
+--- /dev/null
++++ b/apps/studio/lib/flow/layout.test.ts
+@@ -0,0 +1,135 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond } from "@rescript/schema";
++import { buildLogicFlow } from "@rescript/engine";
++import { buildScaleSurvey, buildMasterDemoSurvey } from "@rescript/templates";
++import { layoutFlow, assignLayers, upstream, downstream, edgeKind, fitTransform, NODE_W } from "./layout.ts";
++
++/**
++ * THE FLOW LAYOUT is deterministic, respects the graph's direction, honours
++ * pinned positions, and stays affordable at 600 questions.
++ */
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Laid out" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "One" },
++      { id: "q2", code: "Q2", variableName: "Q2", type: "single_select", text: "Two", options: [{ code: "A", label: "A" }, { code: "B", label: "B" }],
++        skipLogic: [{ id: "sk", when: cond.rule("q2", "eq", "B"), target: { kind: "question", ref: "q5" } }] },
++      { id: "q3", code: "Q3", variableName: "Q3", type: "text", text: "Three" },
++      { id: "q4", code: "Q4", variableName: "Q4", type: "text", text: "Four" },
++      { id: "q5", code: "Q5", variableName: "Q5", type: "text", text: "Five" },
++      { id: "q6", code: "Q6", variableName: "Q6", type: "text", text: "Per item" },
++    ],
++    flow: [
++      { type: "page", id: "p1", questionIds: ["q1", "q2"] },
++      { type: "branch", id: "br", branches: [
++        { id: "a1", label: "A", when: cond.rule("q2", "eq", "A"), children: [{ type: "page", id: "p2", questionIds: ["q3"] }] },
++      ], otherwise: [{ type: "page", id: "p3", questionIds: ["q4"] }] },
++      { type: "page", id: "p4", questionIds: ["q5"] },
++      { type: "loop", id: "lp", loopVar: "item", source: { kind: "static", items: [{ code: "x", label: "X" }, { code: "y", label: "Y" }] }, children: [{ type: "page", id: "p5", questionIds: ["q6"] }] },
++      { type: "end", id: "e1", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("edges carry their kind from the engine, and old graphs are classified by label", () => {
++  const g = buildLogicFlow(survey());
++  const kinds = new Set(g.edges.map((e) => e.kind));
++  for (const k of ["sequence", "branch", "otherwise", "skip", "loop"]) assert.ok(kinds.has(k as never), `missing edge kind ${k}: ${[...kinds].join(",")}`);
++  assert.equal(edgeKind({ id: "x", from: "a", to: "b", label: "next iteration" }), "loop");
++  assert.equal(edgeKind({ id: "x", from: "a", to: "b", label: "otherwise" }), "otherwise");
++  assert.equal(edgeKind({ id: "x", from: "a", to: "b", label: "skip: Q2 is B" }), "skip");
++  assert.equal(edgeKind({ id: "x", from: "a", to: "b" }), "sequence");
++});
++
++test("layers follow the flow: every forward edge goes to a strictly later layer; loop back-edges are the exception", () => {
++  const g = buildLogicFlow(survey());
++  const { layer, backEdges } = assignLayers(g.nodes, g.edges);
++  for (const e of g.edges) {
++    if (backEdges.has(e.id)) continue;
++    assert.ok(layer.get(e.to)! > layer.get(e.from)!, `${e.from} (L${layer.get(e.from)}) → ${e.to} (L${layer.get(e.to)}) must go down`);
++  }
++  const loopBack = g.edges.find((e) => e.kind === "loop")!;
++  assert.ok(backEdges.has(loopBack.id), "the loop's next-iteration edge is a back edge");
++  assert.equal(layer.get("q1"), 0, "the first question is at the top");
++  assert.ok(layer.get("q3")! > layer.get("br")!, "an arm's page sits below its branch");
++  assert.ok(layer.get("q4")! > layer.get("br")!, "so does the otherwise page");
++});
++
++test("coordinates: no two nodes overlap, the canvas box contains everything, and the result is deterministic", () => {
++  const g = buildLogicFlow(survey());
++  const a = layoutFlow(g);
++  const b = layoutFlow(g);
++  assert.deepEqual(a.nodes.map((n) => [n.id, n.x, n.y]), b.nodes.map((n) => [n.id, n.x, n.y]), "same input, same layout");
++  for (let i = 0; i < a.nodes.length; i++) for (let j = i + 1; j < a.nodes.length; j++) {
++    const p = a.nodes[i], q = a.nodes[j];
++    const overlap = p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h;
++    assert.ok(!overlap, `${p.id} and ${q.id} overlap`);
++  }
++  for (const n of a.nodes) { assert.ok(n.x >= 0 && n.y >= 0); assert.ok(n.x + n.w <= a.width && n.y + n.h <= a.height); }
++  assert.equal(a.edges.length, g.edges.length, "every edge is drawn");
++  for (const e of a.edges) assert.match(e.d, /^M [\d.]+ [\d.]+ C /);
++});
++
++test("a stored position pins the node; the rest still lay out around it", () => {
++  const def = survey();
++  def.logicFlow = { nodes: [{ id: "q5", kind: "question", x: 900, y: 50 }], edges: [] } as never;
++  const g = buildLogicFlow(def, { layout: def.logicFlow });
++  const l = layoutFlow(g);
++  const q5 = l.byId.get("q5")!;
++  assert.equal(q5.pinned, true);
++  assert.equal(q5.x, 900); assert.equal(q5.y, 50);
++  assert.ok(l.width >= 900 + NODE_W, "the canvas grows to hold the pinned node");
++  assert.equal(l.byId.get("q1")!.pinned, false);
++  const unpinned = layoutFlow(g, { pinned: false });
++  assert.notEqual(unpinned.byId.get("q5")!.x, 900, "pinning can be switched off for 'auto-arrange'");
++});
++
++test("a skip drawn backwards and a loop edge are marked back and routed round the side", () => {
++  const def = survey();
++  // a skip from Q5 back to Q1
++  def.questions[4] = { ...def.questions[4], skipLogic: [{ id: "back", when: cond.rule("q5", "eq", "x"), target: { kind: "question", ref: "q1" } }] } as never;
++  const l = layoutFlow(buildLogicFlow(def));
++  const back = l.edges.filter((e) => e.back);
++  assert.ok(back.some((e) => e.kind === "skip" && e.to === "q1"), "the backward skip is a back edge");
++  assert.ok(back.some((e) => e.kind === "loop"), "the loop's return is a back edge");
++  for (const e of back) assert.ok(e.lx > l.byId.get(e.from)!.x + NODE_W, "a back edge's label sits out to the right");
++});
++
++test("upstream / downstream answer 'what can reach this' and 'what can this affect'", () => {
++  const g = buildLogicFlow(survey());
++  const up = upstream(g, "q5");
++  assert.ok(up.has("q1") && up.has("br") && up.has("q3") && up.has("q4"), [...up].join(","));
++  assert.ok(!up.has("q6"), "the loop comes after Q5");
++  const down = downstream(g, "q2");
++  assert.ok(down.has("q5") && down.has("q3") && down.has("q4") && down.has("q6"), [...down].join(","));
++  assert.ok(!down.has("q1"), "Q1 is before Q2 and nothing routes back to it");
++  assert.ok(!upstream(g, "q1").has("q1"), "a node never reaches itself");
++});
++
++test("fitTransform scales the whole graph into the viewport with a margin, never past 2×", () => {
++  const t = fitTransform(2000, 1000, 1000, 800);
++  assert.ok(Math.abs(t.k - (1000 - 48) / 2000) < 1e-9);
++  assert.ok(t.tx >= 0);
++  assert.equal(fitTransform(100, 100, 1000, 800).k, 2, "a tiny graph is not blown up past 2×");
++});
++
++test("the Master Demo lays out cleanly, and the 600-question fixture inside budget", () => {
++  const demo = buildLogicFlow(buildMasterDemoSurvey("layout-demo"));
++  const t0 = performance.now();
++  const l = layoutFlow(demo);
++  const demoMs = performance.now() - t0;
++  assert.ok(l.nodes.length > 150, `${l.nodes.length} nodes`);
++  assert.ok(demoMs < 300, `Master Demo laid out in ${demoMs.toFixed(0)}ms`);
++  const big = buildLogicFlow(buildScaleSurvey(600));
++  const t1 = performance.now();
++  const L = layoutFlow(big);
++  const bigMs = performance.now() - t1;
++  assert.ok(L.nodes.length >= 600, `${L.nodes.length} nodes at 600 questions`);
++  assert.ok(bigMs < 1500, `600 questions laid out in ${bigMs.toFixed(0)}ms (budget 1.5s)`);
++  // the page-level graph is the one a 600-question canvas opens on
++  const pages = layoutFlow(buildLogicFlow(buildScaleSurvey(600), { questions: false }));
++  assert.ok(pages.nodes.length < 200 && pages.nodes.length > 50, `${pages.nodes.length} page nodes`);
++});
+diff --git a/apps/studio/lib/flow/layout.ts b/apps/studio/lib/flow/layout.ts
+new file mode 100644
+index 0000000..898d3d3
+--- /dev/null
++++ b/apps/studio/lib/flow/layout.ts
+@@ -0,0 +1,249 @@
++import type { LogicFlow, LogicFlowEdge, LogicFlowNode, LogicFlowEdgeKind } from "@rescript/schema";
++
++/**
++ * LAYERED LAYOUT FOR THE FLOW CANVAS — hand-rolled, deterministic, pure.
++ *
++ * The engine's `buildLogicFlow` gives nodes and edges; this gives them
++ * coordinates. Sugiyama in miniature: break the cycles, assign every node
++ * to a layer by longest path from the start, order the nodes inside each
++ * layer by the barycentre of their neighbours (a few sweeps down and up),
++ * then hand out pixel positions top-to-bottom. Nodes with a stored position
++ * (the programmer dragged them; `def.logicFlow` keeps x/y by id) are pinned
++ * where they were left.
++ *
++ * Nothing here knows about React or SVG; it is tested directly, including
++ * against the 600-question fixture, because a canvas that lays out 30 nodes
++ * beautifully and 600 in a second is the failure the brief rules out.
++ */
++
++export interface LaidOutNode extends LogicFlowNode {
++  x: number;
++  y: number;
++  w: number;
++  h: number;
++  layer: number;
++  /** true when the position came from the survey (a drag), not the algorithm */
++  pinned: boolean;
++}
++
++export interface LaidOutEdge extends LogicFlowEdge {
++  kind: LogicFlowEdgeKind;
++  /** the edge goes to an earlier or same layer — drawn around the side */
++  back: boolean;
++  /** SVG path */
++  d: string;
++  /** label anchor */
++  lx: number;
++  ly: number;
++}
++
++export interface Layout {
++  nodes: LaidOutNode[];
++  edges: LaidOutEdge[];
++  width: number;
++  height: number;
++  byId: Map<string, LaidOutNode>;
++}
++
++export const NODE_W = 220;
++export const NODE_H: Record<LogicFlowNode["kind"], number> = { question: 44, decision: 52, action: 40, terminate: 40, end: 40 };
++const GAP_X = 40;
++const GAP_Y = 64;
++const PAD = 40;
++
++/** an edge's kind, for graphs built before `kind` existed */
++export function edgeKind(e: LogicFlowEdge): LogicFlowEdgeKind {
++  if (e.kind) return e.kind;
++  const l = (e.label ?? "").toLowerCase();
++  if (l === "otherwise") return "otherwise";
++  if (l === "next iteration") return "loop";
++  if (l === "full") return "quota";
++  if (l.startsWith("skip")) return "skip";
++  if (e.when) return "branch";
++  return "sequence";
++}
++
++/**
++ * Layers by longest path from the sources, on the graph with its cycles
++ * broken. Loop back-edges are known cycles; any other edge that closes a
++ * cycle (a skip backwards, a hand-drawn oddity) is found by DFS and treated
++ * the same way — kept, drawn as a back edge, ignored for layering.
++ */
++export function assignLayers(nodes: LogicFlowNode[], edges: LogicFlowEdge[]): { layer: Map<string, number>; backEdges: Set<string> } {
++  const ids = nodes.map((n) => n.id);
++  const idSet = new Set(ids);
++  const out = new Map<string, LogicFlowEdge[]>();
++  for (const id of ids) out.set(id, []);
++  const backEdges = new Set<string>();
++  for (const e of edges) {
++    if (!idSet.has(e.from) || !idSet.has(e.to)) continue;
++    if (edgeKind(e) === "loop") { backEdges.add(e.id); continue; }
++    out.get(e.from)!.push(e);
++  }
++  // DFS to find remaining cycles
++  const state = new Map<string, 0 | 1 | 2>();
++  const visit = (id: string) => {
++    state.set(id, 1);
++    for (const e of out.get(id) ?? []) {
++      if (backEdges.has(e.id)) continue;
++      const st = state.get(e.to) ?? 0;
++      if (st === 1) { backEdges.add(e.id); continue; }
++      if (st === 0) visit(e.to);
++    }
++    state.set(id, 2);
++  };
++  for (const id of ids) if ((state.get(id) ?? 0) === 0) visit(id);
++
++  // longest path (Kahn), in node order so ties are deterministic
++  const indeg = new Map<string, number>();
++  for (const id of ids) indeg.set(id, 0);
++  for (const e of edges) if (idSet.has(e.from) && idSet.has(e.to) && !backEdges.has(e.id)) indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
++  const layer = new Map<string, number>();
++  const queue = ids.filter((id) => (indeg.get(id) ?? 0) === 0);
++  for (const id of queue) layer.set(id, 0);
++  while (queue.length) {
++    const id = queue.shift()!;
++    for (const e of out.get(id) ?? []) {
++      if (backEdges.has(e.id)) continue;
++      layer.set(e.to, Math.max(layer.get(e.to) ?? 0, (layer.get(id) ?? 0) + 1));
++      indeg.set(e.to, (indeg.get(e.to) ?? 0) - 1);
++      if (indeg.get(e.to) === 0) queue.push(e.to);
++    }
++  }
++  for (const id of ids) if (!layer.has(id)) layer.set(id, 0);
++  return { layer, backEdges };
++}
++
++/** barycentre ordering within layers, a few sweeps each way */
++function orderLayers(nodes: LogicFlowNode[], edges: LogicFlowEdge[], layer: Map<string, number>, backEdges: Set<string>): Map<string, number> {
++  const layers = new Map<number, string[]>();
++  for (const n of nodes) { const l = layer.get(n.id) ?? 0; (layers.get(l) ?? layers.set(l, []).get(l)!).push(n.id); }
++  const pos = new Map<string, number>();
++  for (const ids of layers.values()) ids.forEach((id, i) => pos.set(id, i));
++  const up = new Map<string, string[]>(); const down = new Map<string, string[]>();
++  for (const e of edges) {
++    if (backEdges.has(e.id) || !layer.has(e.from) || !layer.has(e.to)) continue;
++    (down.get(e.from) ?? down.set(e.from, []).get(e.from)!).push(e.to);
++    (up.get(e.to) ?? up.set(e.to, []).get(e.to)!).push(e.from);
++  }
++  const maxLayer = Math.max(0, ...layers.keys());
++  const sweep = (l: number, nb: Map<string, string[]>) => {
++    const ids = layers.get(l);
++    if (!ids || ids.length < 2) return;
++    const bary = (id: string) => { const ns = nb.get(id) ?? []; return ns.length ? ns.reduce((a, b) => a + (pos.get(b) ?? 0), 0) / ns.length : pos.get(id) ?? 0; };
++    const sorted = [...ids].sort((a, b) => bary(a) - bary(b) || (pos.get(a)! - pos.get(b)!));
++    sorted.forEach((id, i) => pos.set(id, i));
++    layers.set(l, sorted);
++  };
++  for (let iter = 0; iter < 4; iter++) {
++    for (let l = 1; l <= maxLayer; l++) sweep(l, up);
++    for (let l = maxLayer - 1; l >= 0; l--) sweep(l, down);
++  }
++  return pos;
++}
++
++export function layoutFlow(graph: LogicFlow, opts: { pinned?: boolean } = {}): Layout {
++  const nodes = graph.nodes;
++  const edges = graph.edges;
++  const { layer, backEdges } = assignLayers(nodes, edges);
++  const pos = orderLayers(nodes, edges, layer, backEdges);
++
++  // layer geometry
++  const perLayer = new Map<number, LogicFlowNode[]>();
++  for (const n of nodes) { const l = layer.get(n.id) ?? 0; (perLayer.get(l) ?? perLayer.set(l, []).get(l)!).push(n); }
++  const maxLayer = Math.max(0, ...perLayer.keys());
++  const widest = Math.max(1, ...[...perLayer.values()].map((ns) => ns.length));
++  const totalW = widest * NODE_W + (widest - 1) * GAP_X + PAD * 2;
++
++  const laid: LaidOutNode[] = [];
++  const byId = new Map<string, LaidOutNode>();
++  let y = PAD;
++  const layerY = new Map<number, number>();
++  for (let l = 0; l <= maxLayer; l++) {
++    const ns = (perLayer.get(l) ?? []).sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
++    const rowH = Math.max(0, ...ns.map((n) => NODE_H[n.kind]));
++    layerY.set(l, y);
++    const rowW = ns.length * NODE_W + (ns.length - 1) * GAP_X;
++    let x = (totalW - rowW) / 2;
++    for (const n of ns) {
++      const pinned = opts.pinned !== false && typeof n.x === "number" && typeof n.y === "number";
++      const node: LaidOutNode = {
++        ...n, w: NODE_W, h: NODE_H[n.kind], layer: l, pinned,
++        x: pinned ? (n.x as number) : x,
++        y: pinned ? (n.y as number) : y,
++      };
++      laid.push(node); byId.set(n.id, node);
++      x += NODE_W + GAP_X;
++    }
++    y += rowH + GAP_Y;
++  }
++
++  const laidEdges: LaidOutEdge[] = [];
++  for (const e of edges) {
++    const a = byId.get(e.from), b = byId.get(e.to);
++    if (!a || !b) continue;
++    const kind = edgeKind(e);
++    const back = backEdges.has(e.id) || b.y <= a.y;
++    let d: string, lx: number, ly: number;
++    if (!back) {
++      const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y;
++      const c = Math.max(24, (y2 - y1) / 2);
++      d = `M ${x1} ${y1} C ${x1} ${y1 + c}, ${x2} ${y2 - c}, ${x2} ${y2}`;
++      // the label sits just above its TARGET: arms fan out to different
++      // targets, so labels that would collide at the midpoint separate here
++      lx = x2; ly = y2 - 10;
++    } else {
++      // around the right-hand side, back up to the target's top
++      const x1 = a.x + a.w, y1 = a.y + a.h / 2, x2 = b.x + b.w, y2 = b.y + b.h / 2;
++      const out = Math.max(x1, x2) + 36 + (kind === "loop" ? 12 : 0);
++      d = `M ${x1} ${y1} C ${out} ${y1}, ${out} ${y2}, ${x2} ${y2}`;
++      lx = out + 6; ly = (y1 + y2) / 2;
++    }
++    laidEdges.push({ ...e, kind, back, d, lx, ly });
++  }
++
++  const width = Math.max(totalW, ...laid.map((n) => n.x + n.w + PAD));
++  const height = Math.max(y - GAP_Y + PAD, ...laid.map((n) => n.y + n.h + PAD));
++  return { nodes: laid, edges: laidEdges, width, height, byId };
++}
++
++/* ------------------------------------------------------------ reachability */
++
++/** every node that can reach `id` (upstream), following the graph's edges backwards */
++export function upstream(graph: LogicFlow, id: string): Set<string> {
++  const rev = new Map<string, string[]>();
++  for (const e of graph.edges) (rev.get(e.to) ?? rev.set(e.to, []).get(e.to)!).push(e.from);
++  return bfs(id, rev);
++}
++
++/** every node `id` can lead to (downstream) */
++export function downstream(graph: LogicFlow, id: string): Set<string> {
++  const fwd = new Map<string, string[]>();
++  for (const e of graph.edges) (fwd.get(e.from) ?? fwd.set(e.from, []).get(e.from)!).push(e.to);
++  return bfs(id, fwd);
++}
++
++function bfs(start: string, adj: Map<string, string[]>): Set<string> {
++  const seen = new Set<string>();
++  const queue = [...(adj.get(start) ?? [])];
++  while (queue.length) {
++    const n = queue.shift()!;
++    if (seen.has(n) || n === start) continue;
++    seen.add(n);
++    queue.push(...(adj.get(n) ?? []));
++  }
++  return seen;
++}
++
++/** the edges on any path from `from` into `set` ∪ from `set` into `from` — for highlighting */
++export function edgesTouching(graph: LogicFlow, nodes: ReadonlySet<string>): Set<string> {
++  const out = new Set<string>();
++  for (const e of graph.edges) if (nodes.has(e.from) && nodes.has(e.to)) out.add(e.id);
++  return out;
++}
++
++/** fit a box of (w,h) into a viewport — the transform for "fit to screen" */
++export function fitTransform(w: number, h: number, vw: number, vh: number, margin = 24): { k: number; tx: number; ty: number } {
++  const k = Math.min(2, Math.max(0.05, Math.min((vw - margin * 2) / Math.max(1, w), (vh - margin * 2) / Math.max(1, h))));
++  return { k, tx: (vw - w * k) / 2, ty: margin };
++}
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index be8ef44..49cc1ef 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -25,11 +25,12 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
+ test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
+   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
+   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
+-  // Flow is declared but has no renderer yet: never open on an empty screen
+-  const flow = MODES.find((m) => m.id === "flow")!;
+-  assert.equal(flow.available, false, "this test assumes Flow is not yet built; update it when it is");
+-  assert.equal(resolveInitialMode("?mode=flow", null), DEFAULT_MODE);
+-  assert.equal(resolveInitialMode("?tab=logic", "flow"), DEFAULT_MODE);
++  // Intelligent is declared but has no renderer yet: never open on an empty screen
++  const intelligent = MODES.find((m) => m.id === "intelligent")!;
++  assert.equal(intelligent.available, false, "this test assumes Intelligent is not yet built; update it when it is");
++  assert.equal(resolveInitialMode("?mode=intelligent", null), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?tab=logic", "intelligent"), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?mode=flow", null), "flow");
+   // Grid and Architect ARE available: the URL and memory both work for them
+   assert.equal(resolveInitialMode("?mode=grid", null), "grid");
+   assert.equal(resolveInitialMode("", "grid"), "grid");
+@@ -240,9 +241,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
+ test("mode commands offer only available modes other than the current one", () => {
+   const ctx = fakeCtx();
+   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
+-  assert.deepEqual(ids, ["mode.grid", "mode.architect"], "in Studio, Grid and Architect are the other available modes");
++  assert.deepEqual(ids, ["mode.grid", "mode.architect", "mode.flow"], "in Studio, the three other built modes are offered");
+   const inGrid = fakeCtx({ mode: "grid" });
+-  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect"]);
++  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect", "mode.flow"]);
+ });
+ 
+ test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index d9399f4..6150019 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -33,7 +33,7 @@ export const MODES: readonly ModeInfo[] = [
+   { id: "studio", label: "Studio", tagline: "Build visually", audience: "For researchers who want an intuitive modern builder.", available: true, index: 1 },
+   { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
+   { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: true, index: 3 },
+-  { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: false, index: 4 },
++  { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: true, index: 4 },
+   { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
+ ];
+ 
+diff --git a/packages/engine/src/logicGraph.ts b/packages/engine/src/logicGraph.ts
+index 56bf98f..882dd48 100644
+--- a/packages/engine/src/logicGraph.ts
++++ b/packages/engine/src/logicGraph.ts
+@@ -1,4 +1,4 @@
+-import type {
++import type { LogicFlowEdgeKind,
+   Condition,
+   FlowNode,
+   LogicFlow,
+@@ -96,7 +96,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+     }
+     return n.id;
+   };
+-  const link = (from: string, to: string, when?: Condition | undefined, label?: string): void => {
++  const link = (from: string, to: string, when?: Condition | undefined, label?: string, kind: LogicFlowEdgeKind = "sequence"): void => {
+     const id = `e_${from}__${to}${label ? `_${edges.length}` : ""}`;
+     edges.push({
+       id,
+@@ -104,6 +104,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+       to,
+       ...(when ? { when } : {}),
+       ...(label ?? edgeLabel(when, def) ? { label: label ?? edgeLabel(when, def) } : {}),
++      kind,
+     });
+   };
+ 
+@@ -221,7 +222,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+             ref: node.id,
+             label: `${clean(node.title) || node.type} — shown when ${edgeLabel(when, def) ?? "condition holds"}`,
+           });
+-          for (const to of inner.entries) link(gate, to, when);
++          for (const to of inner.entries) link(gate, to, when, undefined, "gate");
+           return { entries: [gate], exits: [...inner.exits, gate] };
+         }
+         return inner;
+@@ -244,13 +245,13 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+             continue;
+           }
+           for (const to of inner.entries) {
+-            link(gate, to, arm.when, clean(arm.label) || edgeLabel(arm.when, def));
++            link(gate, to, arm.when, clean(arm.label) || edgeLabel(arm.when, def), "branch");
+           }
+           exits.push(...inner.exits);
+         }
+         const other = node.otherwise?.length ? walk(node.otherwise) : EMPTY;
+         if (other.entries.length) {
+-          for (const to of other.entries) link(gate, to, undefined, "otherwise");
++          for (const to of other.entries) link(gate, to, undefined, "otherwise", "otherwise");
+           exits.push(...other.exits);
+         } else {
+           everyArmClosed = false;
+@@ -297,7 +298,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+         const inner = walk(node.children);
+         for (const to of inner.entries) link(gate, to);
+         /* the edge back is what makes it a loop rather than a list */
+-        for (const from of inner.exits) link(from, gate, undefined, "next iteration");
++        for (const from of inner.exits) link(from, gate, undefined, "next iteration", "loop");
+         return { entries: [gate], exits: [gate] };
+       }
+ 
+@@ -320,10 +321,10 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+           ref: node.id,
+           label: `quota check (${node.quotaIds.length} quota${node.quotaIds.length === 1 ? "" : "s"})`,
+         });
+-        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "full");
++        if (node.onFull.kind === "terminate") link(id, endNodeFor("quota_full"), undefined, "full", "quota");
+         if (node.onFull.kind === "redirect") {
+           const away = add({ id: `${node.id}_redirect`, kind: "action", label: `redirect: ${node.onFull.url ?? ""}` });
+-          link(id, away, undefined, "full");
++          link(id, away, undefined, "full", "quota");
+         }
+         return { entries: [id], exits: [id] };
+       }
+@@ -382,7 +383,7 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions =
+         to = seen.has(t.ref) ? t.ref : firstInside(def, t.ref, seen);
+       }
+       if (!to) continue;
+-      link(from, to, rule.when, clean(rule.label) || `skip: ${edgeLabel(rule.when, def) ?? "condition"}`);
++      link(from, to, rule.when, clean(rule.label) || `skip: ${edgeLabel(rule.when, def) ?? "condition"}`, "skip");
+     }
+   }
+ 
+diff --git a/packages/schema/src/flow.ts b/packages/schema/src/flow.ts
+index d5500e1..e2af917 100644
+--- a/packages/schema/src/flow.ts
++++ b/packages/schema/src/flow.ts
+@@ -539,12 +539,29 @@ export const LogicFlowNode = z.object({
+   y: z.number().optional(),
+ });
+ 
++/**
++ * What an edge IS, so a canvas can draw it and a programmer can filter it.
++ * Optional and additive: graphs built before it existed still parse, and a
++ * consumer that does not care reads `when` and `label` as before.
++ *
++ *   sequence   the next page / question, unconditionally
++ *   gate       a container shown only when its condition holds
++ *   branch     one arm of a branch (carries `when`)
++ *   otherwise  the branch's fallthrough
++ *   skip       a skip rule's jump
++ *   loop       a loop's "next iteration" back edge
++ *   quota      what happens when a quota is full
++ */
++export const LogicFlowEdgeKind = z.enum(["sequence", "gate", "branch", "otherwise", "skip", "loop", "quota"]);
++export type LogicFlowEdgeKind = z.infer<typeof LogicFlowEdgeKind>;
++
+ export const LogicFlowEdge = z.object({
+   id: z.string(),
+   from: z.string(),
+   to: z.string(),
+   when: Condition.optional(),
+   label: z.string().optional(),
++  kind: LogicFlowEdgeKind.optional(),
+ });
+ 
+ export type LogicFlowNode = z.infer<typeof LogicFlowNode>;
+diff --git a/scripts/flow-mode-test.mjs b/scripts/flow-mode-test.mjs
+new file mode 100644
+index 0000000..28255be
+--- /dev/null
++++ b/scripts/flow-mode-test.mjs
+@@ -0,0 +1,352 @@
++/**
++ * FLOW MODE — the survey's behaviour as a canvas (Phase 3).
++ *
++ *   node scripts/flow-mode-test.mjs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { buildMasterDemoSurvey, buildScaleSurvey, MASTER_DEMO_TEST_PATHS } from "../packages/templates/dist/index.js";
++
++/** the demo's canonical path "B" as a debug-box string, with one override — codes, not ids */
++const demoDef = buildMasterDemoSurvey("sandbox");
++const codeOf = (id) => demoDef.questions.find((q) => q.id === id)?.code;
++const answersFor = (override) => {
++  const base = { ...MASTER_DEMO_TEST_PATHS.find((p) => p.id === "B").answers, ...override };
++  return Object.entries(base)
++    .filter(([, v]) => typeof v === "number" || typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x !== "object")))
++    .map(([id, v]) => `${codeOf(id)}=${Array.isArray(v) ? v.join("|") : v}`)
++    .filter((s) => !s.startsWith("undefined"))
++    .join(", ");
++};
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 950 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => {
++  if (m.type() !== "error") return;
++  const t = m.text();
++  if (/401|ERR_TUNNEL|Failed to load resource/.test(t)) return;
++  pageErrors.push(t.slice(0, 400));
++});
++
++const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
++const loadDef = async (def) => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => {
++    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v);
++    el.dispatchEvent(new Event("input", { bubbles: true }));
++  }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await goTab("Questions");
++};
++const readDef = async () => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await goTab("Questions");
++  await page.waitForSelector('[data-testid="flow-view"]');
++  return JSON.parse(json);
++};
++const node = (id) => page.$(`[data-testid="flow-node"][data-node="${id}"]`);
++const classesOf = (id) => page.$eval(`[data-testid="flow-node"][data-node="${id}"]`, (e) => e.getAttribute("class"));
++const count = () => page.$eval('[data-testid="flow-count"]', (e) => e.textContent);
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".block-badge");
++await loadDef(buildMasterDemoSurvey("sandbox"));
++
++/* ----------------------------------------------------------- switch + graph */
++{
++  await page.click('[data-testid="mode-flow"]');
++  await page.waitForSelector('[data-testid="flow-view"]');
++  ok("Flow renders in place — no reload");
++  assert.match(page.url(), /mode=flow/);
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), true);
++  ok("the outer property panel steps aside — the canvas has its own inspector");
++  assert.match(await count(), /^7\d nodes · 9\d edges$/);
++  ok(`the Master Demo at page granularity: ${await count()} (auto picks pages for 160 questions)`);
++  const kinds = await page.$$eval('[data-testid="flow-edge"]', (els) => [...new Set(els.map((e) => e.dataset.kind))].sort());
++  for (const k of ["sequence", "branch", "otherwise", "skip", "loop", "quota"]) assert.ok(kinds.includes(k), `edge kind ${k} drawn: ${kinds.join(",")}`);
++  ok(`six edge kinds are drawn and typed: ${kinds.join(", ")}`);
++  const decisions = await page.$$eval('[data-testid="flow-node"][data-kind="decision"]', (els) => els.length);
++  assert.ok(decisions >= 8, `${decisions} decision nodes (branches, loops, randomizers, gates, quota checks)`);
++  ok(`${decisions} decision nodes on the canvas`);
++  assert.ok(await page.$('[data-testid="flow-minimap"]'), "minimap");
++  ok("a minimap shows the whole graph and the viewport");
++}
++
++/* ----------------------------------------------------------- pan / zoom / fit */
++{
++  const t0 = await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform"));
++  for (let i = 0; i < 4; i++) await page.click('[data-testid="flow-zoom-in"]');
++  await page.waitForTimeout(100);
++  const t1 = await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform"));
++  assert.notEqual(t0, t1);
++  const k0 = Number(/scale\(([\d.]+)\)/.exec(t0)[1]), k1 = Number(/scale\(([\d.]+)\)/.exec(t1)[1]);
++  assert.ok(k1 > k0, `zoom in: ${k0} → ${k1}`);
++  ok("＋ zooms in (×4)");
++  await page.click('[data-testid="flow-fit"]');
++  await page.waitForTimeout(100);
++  const k2 = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
++  assert.ok(k2 < k1, `fit zooms back out: ${k1} → ${k2}`);
++  await page.click('[data-testid="flow-fit"]');
++  await page.waitForTimeout(100);
++  const k3 = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
++  assert.ok(Math.abs(k3 - k2) < 1e-6, "fit is idempotent");
++  ok("Fit brings the whole graph back into view, and is stable");
++  // drag the background pans
++  const host = await page.$('[data-testid="flow-canvas"]');
++  const box = await host.boundingBox();
++  await page.mouse.move(box.x + 100, box.y + 300);
++  await page.mouse.down();
++  await page.mouse.move(box.x + 180, box.y + 360, { steps: 5 });
++  await page.mouse.up();
++  await page.waitForTimeout(100);
++  const t3 = await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform"));
++  const tx2 = Number(/translate\(([-\d.]+) /.exec(t3)[1]);
++  const tx0 = Number(/translate\(([-\d.]+) /.exec(await (async () => { await page.click('[data-testid="flow-fit"]'); await page.waitForTimeout(100); return page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")); })())[1]);
++  assert.ok(Math.abs(tx2 - tx0) > 40, `dragging the background panned: ${tx0} → ${tx2}`);
++  ok("dragging empty canvas pans");
++}
++
++/* ----------------------------------------------------------- search + selection + highlight */
++{
++  await page.fill('[data-testid="flow-search"]', "Consumer / Business");
++  await page.waitForTimeout(300);
++  const cls = await classesOf("br_use_type");
++  assert.match(cls, /\bmatch\b/);
++  ok("search marks the matching node and centres on it");
++  await page.fill('[data-testid="flow-search"]', "");
++  await page.waitForTimeout(200);
++  const br = await node("br_use_type");
++  await br.click();
++  await page.waitForTimeout(300);
++  assert.match(await classesOf("br_use_type"), /\bprimary\b/);
++  ok("clicking a node selects it (primary)");
++  await page.waitForSelector('[data-testid="flow-legend"]');
++  const legend = await page.$eval('[data-testid="flow-legend"]', (e) => e.textContent);
++  assert.match(legend, /can reach .* · \d+/);
++  assert.match(legend, /can affect · \d+/);
++  ok(`the legend answers both questions: ${legend.replace(/\s+/g, " ").trim()}`);
++  const ups = await page.$$eval('[data-testid="flow-node"].up', (els) => els.map((e) => e.dataset.node));
++  const downs = await page.$$eval('[data-testid="flow-node"].down', (els) => els.map((e) => e.dataset.node));
++  assert.ok(ups.length >= 10 && downs.length >= 10, `${ups.length} upstream, ${downs.length} downstream`);
++  assert.ok(ups.includes("p_intro_welcome") || ups.some((u) => /intro|welcome|screen/.test(u)), `the first page can reach the branch: ${ups.slice(0, 5).join(",")}`);
++  assert.ok(!downs.some((d) => ups.includes(d)), "a node is never both upstream and downstream of a branch in a forward flow");
++  ok("upstream (cyan) and downstream (amber) node sets are disjoint and populated");
++  const lit = await page.$$eval('[data-testid="flow-edge"].lit', (els) => els.length);
++  const dim = await page.$$eval('[data-testid="flow-edge"].dim', (els) => els.length);
++  assert.ok(lit > 10 && dim >= 0, `${lit} edges lit`);
++  ok(`${lit} edges on the paths are lit`);
++  // the inspector follows
++  await page.waitForSelector('[data-testid="inspector"][data-kind="flowNode"]');
++  assert.match(await page.$eval('[data-testid="inspector"] .ai-title', (e) => e.textContent), /Consumer/);
++  ok("the inspector shows the selected branch: its dependencies and definition");
++  const deps = await page.$$eval('[data-testid="dep-depends-on"] [data-testid="dep-link"]', (els) => els.map((e) => e.dataset.key));
++  assert.ok(deps.includes("question:q_employment") && deps.includes("question:q_use_type"), deps.join(","));
++  ok("DEPENDS ON lists the two questions the branch's conditions read");
++}
++
++/* ----------------------------------------------------------- focus */
++{
++  await page.click('[data-testid="focus-toggle"]');
++  await page.waitForTimeout(200);
++  const hard = await page.$$eval('[data-testid="flow-node"].dim-hard', (els) => els.length);
++  assert.ok(hard > 0, "focus dims unrelated nodes hard");
++  ok(`focus: ${hard} unrelated nodes recede`);
++  await page.click('[data-testid="focus-toggle"]');
++  await page.waitForTimeout(150);
++  assert.equal(await page.$$eval('[data-testid="flow-node"].dim-hard', (els) => els.length), 0);
++  ok("focus off restores them");
++}
++
++/* ----------------------------------------------------------- debug mode: a real walk */
++{
++  await page.click('[data-testid="flow-debug-toggle"]');
++  await page.waitForSelector('[data-testid="flow-debug-input"]');
++  await page.fill('[data-testid="flow-debug-input"]', answersFor({ q_use_type: 2 }));   // path B, but business use
++  await page.waitForTimeout(800);
++  const out = await page.$eval('[data-testid="flow-debug-out"]', (e) => e.textContent);
++  assert.match(out, /\d+ pages · \d+ questions/);
++  ok(`debug walks the survey with typed answers: ${out}`);
++  const taken = await page.$$eval('[data-testid="flow-node"].taken', (els) => els.map((e) => e.dataset.node));
++  const untaken = await page.$$eval('[data-testid="flow-node"].untaken', (els) => els.length);
++  assert.ok(taken.length > 5 && untaken > 0, `${taken.length} taken, ${untaken} not`);
++  assert.ok(taken.includes("p_intro_welcome"), "the welcome page is on every path");
++  ok(`the taken path is lit (${taken.length} nodes) and the rest recedes`);
++  // Business path: the business section is taken, the consumer section not
++  const business = taken.some((t) => /business|04b/i.test(t));
++  const consumer = taken.some((t) => /consumer|04a/i.test(t) && !/business/i.test(t));
++  assert.ok(business && !consumer, `business use routes through the business section: taken=${taken.filter((t) => /04|consumer|business|combined/i.test(t)).join(",")}`);
++  ok("use type = Business routes the walk through the Business arm and not the Consumer one");
++  await page.fill('[data-testid="flow-debug-input"]', answersFor({ q_use_type: 1 }));
++  await page.waitForTimeout(800);
++  const taken2 = await page.$$eval('[data-testid="flow-node"].taken', (els) => els.map((e) => e.dataset.node));
++  assert.ok(taken2.some((t) => /consumer|04a/i.test(t) && !/business/i.test(t)) && !taken2.some((t) => /04b|p_business/i.test(t)), taken2.filter((t) => /04|consumer|business|combined/i.test(t)).join(","));
++  ok("changing one answer to Consumer re-routes the lit path through the Consumer arm");
++  // a screen-out: no consent
++  await page.fill('[data-testid="flow-debug-input"]', "Q1=2");
++  await page.waitForTimeout(500);
++  assert.match(await page.$eval('[data-testid="flow-debug-out"]', (e) => e.textContent), /ends screened/);
++  ok("Q1=No (no consent) ends screened after the first page — skip rules fire, this is a walk not a compile");
++  await page.fill('[data-testid="flow-debug-input"]', "Q999=1");
++  await page.waitForTimeout(400);
++  assert.match(await page.$eval('[data-testid="flow-debug-out"]', (e) => e.textContent), /unknown: Q999/);
++  ok("an unknown code is reported, not swallowed");
++  await page.click('[data-testid="flow-debug-toggle"]');
++  await page.waitForTimeout(150);
++}
++
++/* ----------------------------------------------------------- drag to reposition (pinned, persisted) */
++{
++  await page.click('[data-testid="flow-fit"]');
++  await page.waitForTimeout(150);
++  await page.fill('[data-testid="flow-search"]', "Consumer / Business");
++  await page.waitForTimeout(400);
++  await page.fill('[data-testid="flow-search"]', "");
++  await page.waitForTimeout(200);
++  const br = await node("br_use_type");
++  const before = await br.boundingBox();
++  await page.mouse.move(before.x + 30, before.y + before.height / 2);
++  await page.mouse.down();
++  await page.mouse.move(before.x + 30 + 140, before.y + before.height / 2 + 10, { steps: 8 });
++  await page.mouse.up();
++  await page.waitForTimeout(400);
++  const after = await (await node("br_use_type")).boundingBox();
++  assert.ok(after.x > before.x + 100, `the node moved: ${before.x} → ${after.x}`);
++  ok("dragging a node moves it");
++  const def = await readDef();
++  const stored = def.logicFlow.nodes.find((n) => n.id === "br_use_type");
++  assert.ok(stored && typeof stored.x === "number", "the position is stored on the survey by id");
++  ok("the dragged position is persisted on def.logicFlow — it survives a reload and other environments ignore it");
++  await page.waitForSelector('[data-testid="flow-view"]');
++  assert.ok(await page.$('[data-testid="flow-node"][data-node="br_use_type"] .fc-pin'), "the pin marker shows");
++  ok("a pinned node shows its pin");
++  await page.click('[data-testid="flow-arrange"]');
++  await page.waitForTimeout(400);
++  const def2 = await readDef();
++  assert.equal(def2.logicFlow.nodes.length, 0);
++  ok("Auto-arrange forgets the pins (one undoable edit)");
++}
++
++/* ----------------------------------------------------------- add an element from the canvas */
++{
++  const before = await readDef();
++  await page.selectOption('[data-testid="flow-add"]', "flow.add.randomizer");
++  await page.waitForTimeout(400);
++  const def = await readDef();
++  const types = def.flow.map((n) => n.type);
++  assert.equal(def.flow.length, before.flow.length + 1);
++  assert.ok(types.indexOf("randomizer") >= 0 && types.indexOf("randomizer") < types.lastIndexOf("end"), "the randomizer sits before the ends");
++  ok("'+ Add… Randomizer' inserts through the command registry, before the End");
++  await page.waitForSelector('[data-testid="flow-view"]');
++  assert.match(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), /flowNode/);
++  ok("and selects the new element, so the inspector opens on it");
++}
++
++/* ----------------------------------------------------------- drop a node into a container */
++{
++  await page.click('[data-testid="flow-fit"]');
++  await page.waitForTimeout(150);
++  const def = await readDef();
++  const rnd = def.flow.find((n) => n.type === "randomizer" && n.children.length === 0);
++  assert.ok(rnd, "the empty randomizer we just added");
++  // the demo's top level is all sections; take the last section's first page, which the canvas draws as a node
++  const lastSection = [...def.flow].reverse().find((n) => n.type === "section");
++  const firstIn = (nodes) => { for (const n of nodes) { if (n.type === "page") return n; if (n.children) { const h = firstIn(n.children); if (h) return h; } } return null; };
++  const topPage = firstIn(lastSection.children);
++  assert.ok(topPage, "a page to move");
++  await page.fill('[data-testid="flow-search"]', rnd.id);
++  await page.waitForTimeout(400);
++  const target = await node(rnd.id);
++  assert.ok(target, "the randomizer node is drawn");
++  const tb = await target.boundingBox();
++  await page.fill('[data-testid="flow-search"]', "");
++  await page.waitForTimeout(200);
++  // the source may be far away; zoom out so both are on screen
++  await page.click('[data-testid="flow-fit"]');
++  await page.waitForTimeout(150);
++  const src = await node(topPage.id);
++  const tgt = await node(rnd.id);
++  if (src && tgt) {
++    const sb = await src.boundingBox(); const tb2 = await tgt.boundingBox();
++    await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
++    await page.mouse.down();
++    await page.mouse.move(tb2.x + tb2.width / 2, tb2.y + tb2.height / 2, { steps: 12 });
++    await page.waitForTimeout(100);
++    await page.mouse.up();
++    await page.waitForTimeout(500);
++    const after = await readDef();
++    const rnd2 = after.flow.find((n) => n.id === rnd.id);
++    assert.ok(rnd2 && rnd2.children.some((c) => c.id === topPage.id), `${topPage.id} is now inside the randomizer: ${JSON.stringify(rnd2?.children.map((c) => c.id))}`);
++    ok("dropping a page onto a randomizer moves it inside — moveFlowNode, with canDropFlowNode's verdict");
++    const stillThere = (nodes) => nodes.some((n) => n.id === topPage.id || (n.children && n.id !== rnd.id && stillThere(n.children)) || (n.branches && n.branches.some((b) => stillThere(b.children))) || (n.otherwise && stillThere(n.otherwise)));
++    assert.ok(!stillThere(after.flow), "and it left where it was");
++    ok("the page is no longer in its old section");
++  } else {
++    console.log("  skip drop check: nodes not both drawn at fit zoom", !!src, !!tgt, tb);
++  }
++}
++
++/* ----------------------------------------------------------- shared selection across modes */
++{
++  await page.waitForSelector('[data-testid="flow-view"]');
++  await page.click('[data-testid="flow-granularity"] [data-granularity="questions"]');
++  await page.waitForTimeout(600);
++  assert.match(await count(), /1[5-9]\d nodes/);
++  ok(`question granularity: ${await count()}`);
++  await page.fill('[data-testid="flow-search"]', "Q3 ");
++  await page.waitForTimeout(400);
++  await page.fill('[data-testid="flow-search"]', "");
++  await page.waitForTimeout(150);
++  const q3 = await node("q_age");
++  assert.ok(q3, "Q3 is a node at question granularity");
++  await q3.click();
++  await page.waitForTimeout(300);
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.deepEqual(await page.$$eval('[data-testid="grid-row"][aria-selected="true"]', (els) => els.map((e) => e.dataset.code)), ["Q3"]);
++  ok("a question selected on the canvas is the selected row in Grid — one selection");
++  await page.click('[data-testid="mode-flow"]');
++  await page.waitForSelector('[data-testid="flow-view"]');
++  await page.waitForTimeout(300);
++  assert.match(await classesOf("q_age"), /\bprimary\b/);
++  ok("and back in Flow, Q3 is the primary node");
++  await page.click('[data-testid="flow-granularity"] [data-granularity="auto"]');
++}
++
++/* ----------------------------------------------------------- scale */
++{
++  await page.click('[data-testid="mode-studio"]');
++  await page.waitForSelector(".block-badge");
++  await loadDef(buildScaleSurvey(600));
++  const t0 = Date.now();
++  await page.click('[data-testid="mode-flow"]');
++  await page.waitForSelector('[data-testid="flow-node"]');
++  const ms = Date.now() - t0;
++  assert.ok(ms < 4000, `Flow at 600 questions appeared in ${ms}ms`);
++  ok(`Flow renders the 600-question survey in ${ms}ms (auto: pages)`);
++  assert.match(await count(), /1[0-9]\d nodes/);
++  const zoomMs = await page.evaluate(async () => {
++    const t = performance.now();
++    for (let i = 0; i < 10; i++) { document.querySelector('[data-testid="flow-zoom-in"]').click(); await new Promise((r) => requestAnimationFrame(r)); }
++    return performance.now() - t;
++  });
++  assert.ok(zoomMs < 2500, `10 zoom steps took ${zoomMs.toFixed(0)}ms`);
++  ok(`10 zoom steps rendered in ${zoomMs.toFixed(0)}ms`);
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no uncaught errors or React warnings through any of it");
++
++await browser.close();
++console.log(`\nALL FLOW MODE CHECKS PASSED (${passed})`);
+diff --git a/scripts/multimodal-foundation-test.mjs b/scripts/multimodal-foundation-test.mjs
+index 2c4da84..ed7582e 100644
+--- a/scripts/multimodal-foundation-test.mjs
++++ b/scripts/multimodal-foundation-test.mjs
+@@ -63,11 +63,11 @@ await page.waitForSelector(".block-badge");
+   ok("Studio is the active, available mode");
+   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
+   const unbuilt = modes.filter((m) => m.available === "0");
+-  assert.deepEqual(built, ["studio", "grid", "architect"], "the modes with a renderer so far");
++  assert.deepEqual(built, ["studio", "grid", "architect", "flow"], "the modes with a renderer so far");
+   for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
+   ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
+-  const title = await page.getAttribute('[data-testid="mode-flow"]', "title");
+-  assert.match(title, /See the survey's behavior/);
++  const title = await page.getAttribute('[data-testid="mode-intelligent"]', "title");
++  assert.match(title, /Describe what you want/);
+   ok("a disabled mode still tells you what it will be");
+ }
+ 
+@@ -261,13 +261,13 @@ await page.waitForSelector(".block-badge");
+ 
+ /* ----------------------------------------------------------- ?mode= */
+ {
+-  await page.goto(`${STUDIO}/sandbox?mode=flow`, { waitUntil: "networkidle" });
++  await page.goto(`${STUDIO}/sandbox?mode=intelligent`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="mode-selector"]');
+   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
+   assert.equal(active, "studio");
+-  ok("?mode=flow falls back to Studio while Flow has no renderer — never an empty screen");
++  ok("?mode=intelligent falls back to Studio while Intelligent has no renderer — never an empty screen");
+   const url = page.url();
+-  assert.ok(url.includes("mode=flow") || !url.includes("mode="), "the url is left alone until a real switch happens");
++  assert.ok(url.includes("mode=intelligent") || !url.includes("mode="), "the url is left alone until a real switch happens");
+   ok("the URL is not rewritten by the fallback");
+   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="grid-view"]');
+-- 
+2.43.0
+
+

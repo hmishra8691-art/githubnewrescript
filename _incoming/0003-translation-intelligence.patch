@@ -1,0 +1,1791 @@
+From cda56ee4b2c535eed4da19761e4eb75e3ba0cc4a Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Sun, 4 Oct 2026 18:44:59 +0000
+Subject: [PATCH] Translation intelligence: languages as copilot actions
+ (research intelligence, Phase 3)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The copilot now translates, and the engine keeps the translations honest.
+A request about languages brings the TRANSLATION GUIDE and, in the outline,
+every language version's state, the glossary, the routing and the named
+questions' elements with their existing translations; the model writes the
+translations and returns them as actions; the engine resolves each target
+against the survey (Q5, Q5.option:2 or by label, Q5.row:r1, Q5.instruction,
+end:complete, block:Brand, button:next, ui:required, meta:title, or the raw
+key) and refuses, element by element and by reason, a dropped or changed
+{{pipe}}, unbalanced or mismatched HTML, an empty text and a translated
+do-not-translate term — the rest is written as machine translation to review.
+
+Engine (packages/engine/src/localizationActions.ts, new): add_language,
+remove_language (destructive), set_language_status (refused for ready/live
+while anything blocks), set_translations (approved/reviewed entries kept
+unless overwriteApproved; glossary misses warned), approve_translations,
+confirm_translations, set_language_routing (country map, URL parameter,
+embedded field, rules, switcher, fallback; merge by default; the country and
+rules steps inserted ahead of browser detection, and said), set_glossary.
+Wired into surveyActions (ranked last, and ordered among themselves so the
+language exists before its translations whatever order the model listed),
+the Changes summary ("Add Deutsch as a language", "Translate 9 elements into
+Deutsch", "Approve…", "Confirm N outdated…", "Change the language routing")
+and the review's new localization findings. After every proposal the engine
+marks translations whose source changed as outdated — text kept and shown —
+and warns: "1 translation is now outdated (de) — the source text changed".
+
+Studio: the system prompt names the actions; COPILOT_TRANSLATION_GUIDE and
+translationIntent; the outline's languages block; a block named in a request
+focuses all of its questions; the turn route recognises translation turns.
+Intelligent → Languages (LanguagesTab): per language the completion bar and
+counts, outdated and blocking items, Translate the missing / Re-translate the
+outdated (requests), Confirm they still fit / Approve / Mark ready
+(proposals through Changes), who gets which language, the glossary. The
+Changes panel offers "Re-translate them in this proposal" on the outdated
+warning, chaining the re-translation onto the same proposal. Everything
+writes def.localization — one localization, shared with the Localization
+panel and the runtime.
+
+Tests: engine localizationActions.test.ts (5; 70 mutations, 69 caught, the
+one survivor behaviourally equivalent; the follow-up found and fixed a real
+gate bug — merge: false was dropped, so a routing replacement always merged);
+studio copilot.test.ts (+1; 10/10); browser
+scripts/translation-copilot-test.mjs (10 checks; 10/10 against the Studio
+surfaces). Engine 1419, Studio 221; copilot, ux-copilot, analysis-framework,
+localization, intelligent-mode and review-fixes browser suites green.
+Docs: docs/TRANSLATION-INTELLIGENCE-2026-10-04.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/copilot/turn/route.ts     |  10 +-
+ apps/studio/app/globals.css                   |   4 +
+ .../intelligent/copilot/CopilotPanel.tsx      |  17 +
+ .../intelligent/copilot/LanguagesTab.tsx      |  94 ++++
+ .../intelligent/copilot/useCopilot.ts         |   2 +-
+ apps/studio/lib/copilot/copilot.test.ts       |  48 +-
+ apps/studio/lib/copilot/outline.ts            |  63 ++-
+ apps/studio/lib/copilot/prompt.ts             |  49 +-
+ docs/TRANSLATION-INTELLIGENCE-2026-10-04.md   |  46 ++
+ packages/engine/src/index.ts                  |   1 +
+ .../engine/src/localizationActions.test.ts    | 240 ++++++++++
+ packages/engine/src/localizationActions.ts    | 432 ++++++++++++++++++
+ packages/engine/src/surveyActions.ts          |  60 ++-
+ packages/engine/src/surveyReview.ts           |  19 +-
+ scripts/translation-copilot-test.mjs          | 287 ++++++++++++
+ 15 files changed, 1354 insertions(+), 18 deletions(-)
+ create mode 100644 apps/studio/components/intelligent/copilot/LanguagesTab.tsx
+ create mode 100644 docs/TRANSLATION-INTELLIGENCE-2026-10-04.md
+ create mode 100644 packages/engine/src/localizationActions.test.ts
+ create mode 100644 packages/engine/src/localizationActions.ts
+ create mode 100644 scripts/translation-copilot-test.mjs
+
+diff --git a/apps/studio/app/api/copilot/turn/route.ts b/apps/studio/app/api/copilot/turn/route.ts
+index 0a97340..b114b3b 100644
+--- a/apps/studio/app/api/copilot/turn/route.ts
++++ b/apps/studio/app/api/copilot/turn/route.ts
+@@ -7,7 +7,7 @@ import { ResearchIndex } from "@rescript/import/research";
+ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
+ import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+ import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
+-import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
++import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+ import { researchCards, researchPassages } from "@/lib/copilot/research";
+ import { researchStoreFor } from "@/lib/copilot/store";
+ import { copilotOutline } from "@/lib/copilot/outline";
+@@ -81,7 +81,9 @@ export async function POST(req: NextRequest) {
+   const uxTurn = cls.ux || mode === "ux";
+   // the analysis framework: a request about it, or a generation (the design arrives with its analysis)
+   const analysisTurn = analysisIntent(message) || mode === "generate";
+-  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn });
++  // languages: the translation guide, and the named questions' elements with their existing translations
++  const translationTurn = translationIntent(message);
++  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn });
+   let research = "";
+   let passageIds: string[] = [];
+   let charge = 0;
+@@ -108,7 +110,7 @@ export async function POST(req: NextRequest) {
+     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
+     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
+     ux: uxTurn, uxOnly: cls.uxOnly,
+-    analysis: analysisTurn,
++    analysis: analysisTurn, translation: translationTurn,
+     ...(themeImageText ? { themeImage: themeImageText } : {}),
+     ...(themeScope ? { themeOnly: true } : {}),
+   });
+@@ -189,7 +191,7 @@ export async function POST(req: NextRequest) {
+     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
+     ...(deterministic ? { review: deterministic } : {}),
+     passages,
+-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, ...(repair ? { repair } : {}) },
++    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, ...(repair ? { repair } : {}) },
+     usage: { charge },
+   });
+ }
+diff --git a/apps/studio/app/globals.css b/apps/studio/app/globals.css
+index b73dd89..8291c54 100644
+--- a/apps/studio/app/globals.css
++++ b/apps/studio/app/globals.css
+@@ -2537,4 +2537,8 @@ p.qs-help { margin: -2px 0 10px; }
+ .cp-analysis { display: grid; gap: 14px; }
+ .cp-analysis section { display: grid; gap: 6px; }
+ .cp-analysis .iqi-table td { vertical-align: top; }
++/* the Languages tab: a completion bar per language, the outdated count in the warning colour */
++.cp-lang-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
++.cp-lang-bar span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
++.cp-outdated { color: var(--amber); }
+ .cp-analysis .cp-block { margin: 0; }
+diff --git a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+index e6ffe94..acb55d2 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+@@ -6,6 +6,7 @@ import { Icon } from "../../ui/Icon";
+ import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
+ import { UxPreview } from "./UxPreview";
+ import { AnalysisTab } from "./AnalysisTab";
++import { LanguagesTab } from "./LanguagesTab";
+ import { Linked } from "./CopilotCard";
+ import type { Copilot, PanelTab } from "./useCopilot";
+ 
+@@ -23,6 +24,8 @@ import type { Copilot, PanelTab } from "./useCopilot";
+  *   Research   the uploaded documents and their research cards
+  *   History    AI Change #001 … with what each created, modified and
+  *              removed, and Undo for the whole operation
++ *   Analysis   the analysis framework (AnalysisTab)
++ *   Languages  each language version's state and next step (LanguagesTab)
+  *   Inspector  the object in focus (the existing inspector)
+  */
+ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly }: {
+@@ -40,6 +43,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
+     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
+     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
++    { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
+     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
+     { id: "inspector", label: "Inspector" },
+   ];
+@@ -58,6 +62,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
+         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
+         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
++        {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
+         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
+         {copilot.tab === "inspector" && inspector}
+       </div>
+@@ -67,6 +72,12 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+ 
+ /* ------------------------------------------------------------ changes */
+ 
++/** the languages named by the engine's "N translations are now outdated (de, es)" warning — or null */
++function outdatedLanguages(warnings: string[]): string | null {
++  for (const w of warnings) { const m = /now outdated \(([^)]+)\)/.exec(w); if (m) return m[1]; }
++  return null;
++}
++
+ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void; onApply(): void; applyNote: string | null; readOnly: boolean }) {
+   const st = copilot.state;
+   const p = copilot.proposal;
+@@ -102,6 +113,12 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
+         <div className="cp-block warn" data-testid="cp-new-problems">
+           <div className="iq-label">The result would have {st.warnings.length} new problem{st.warnings.length === 1 ? "" : "s"}</div>
+           <ul>{st.warnings.map((e, i) => <li key={i}><Linked text={e} def={st.after} onSelect={onSelect} /></li>)}</ul>
++          {outdatedLanguages(st.warnings) && (
++            <p className="iqi-dim" data-testid="cp-outdated-note">
++              The translations stay until re-translated or confirmed; in the meantime those respondents see the outdated text.{" "}
++              <button type="button" className="iq-btn" data-testid="cp-retranslate" disabled={copilot.busy || readOnly} onClick={() => void copilot.ask(`Re-translate the outdated translations in ${outdatedLanguages(st.warnings)} — the source text changed in this proposal.`)}>Re-translate them in this proposal</button>
++            </p>
++          )}
+         </div>
+       )}
+       <div className="cp-structure-head">
+diff --git a/apps/studio/components/intelligent/copilot/LanguagesTab.tsx b/apps/studio/components/intelligent/copilot/LanguagesTab.tsx
+new file mode 100644
+index 0000000..675816d
+--- /dev/null
++++ b/apps/studio/components/intelligent/copilot/LanguagesTab.tsx
+@@ -0,0 +1,94 @@
++"use client";
++import React from "react";
++import type { SurveyDefinition } from "@rescript/schema";
++import { effectiveLocalization, languageName, lintLanguage, type SurveyAction } from "@rescript/engine";
++import { Icon } from "../../ui/Icon";
++import { Linked } from "./CopilotCard";
++import type { Copilot } from "./useCopilot";
++
++/**
++ * THE LANGUAGES — Intelligent → Languages.
++ *
++ * Where each language version stands, read from the definition the engine
++ * lints: how much is translated, what is missing, what went OUTDATED when
++ * the source text changed, what blocks "ready", what is still machine
++ * translation waiting for a reviewer — and the next step for each, as a
++ * proposal through Changes or as a request to the copilot in words.
++ *
++ * The translations themselves are edited in the Localization panel; this is
++ * the copilot's view of the same data, so nothing here is stored twice.
++ */
++export function LanguagesTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void }) {
++  const loc = React.useMemo(() => effectiveLocalization(def), [def]);
++  const reports = React.useMemo(() => loc.languages.map((l) => ({ cfg: l, r: lintLanguage(def, l.code) })), [def, loc]);
++  const empty = !def.questions.length;
++  const ask = (text: string) => void copilot.ask(text);
++
++  return (
++    <div className="cp-analysis cp-languages" data-testid="cp-languages">
++      <section>
++        <div className="iq-label">Source language · {languageName(loc.sourceLanguage)} ({loc.sourceLanguage}{loc.sourceLocale ? `, ${loc.sourceLocale}` : ""})</div>
++        {!loc.languages.length && <p className="cp-empty" data-testid="lg-none">{empty ? "Add questions first — then ask for the languages the fieldwork needs." : "No other language yet. Ask the copilot — “add Spanish and German”, “translate the survey into Hindi”, “route Mexican respondents to Spanish” — and the translations arrive as a proposal you review in Changes before anything is written."}</p>}
++      </section>
++
++      {reports.map(({ cfg, r }) => {
++        const stale = r.issues.filter((i) => i.kind === "stale_source");
++        const blocking = r.issues.filter((i) => i.blocking && i.kind !== "missing" && i.kind !== "stale_source");
++        const unreviewed = r.issues.filter((i) => i.kind === "not_approved").length;
++        const name = languageName(cfg.code, cfg);
++        const unapprovedTargets = Object.entries(loc.translations[cfg.code] ?? {}).filter(([, t]) => t.status === "ai" || t.status === "edited").map(([k]) => k);
++        const staleTargets = stale.map((i) => i.key);
++        return (
++          <section key={cfg.code} className="cp-block" data-testid="lg-language" data-code={cfg.code} data-status={cfg.status}>
++            <div className="row" style={{ alignItems: "center", gap: 8 }}>
++              <div><b>{name}</b> <span className="mono iqi-dim">{cfg.code}{cfg.locale ? ` · ${cfg.locale}` : ""}</span> <span className={`cp-sev v-${cfg.status === "live" ? "suggestion" : cfg.status === "ready" ? "suggestion" : "warning"}`}>{cfg.status}</span>{!cfg.enabled && <span className="iqi-dim"> · not offered</span>}</div>
++              <span className="grow" />
++              <span className="iqi-dim" data-testid="lg-completion">{r.completion}% translated</span>
++            </div>
++            <div className="cp-lang-bar" aria-hidden><span style={{ width: `${r.completion}%` }} /></div>
++            <p className="iqi-dim" data-testid="lg-counts">
++              {r.translated} of {r.mandatory} needed elements translated · {r.approved} approved{r.reviewed ? ` · ${r.reviewed} reviewed` : ""}{unreviewed ? ` · ${unreviewed} awaiting review` : ""}
++              {r.missing > 0 && <> · <b>{r.missing} missing</b></>}
++              {stale.length > 0 && <> · <b className="cp-outdated">{stale.length} outdated</b></>}
++              {blocking.length > 0 && <> · <b>{blocking.length} blocking</b></>}
++              {r.ready && cfg.status !== "live" && cfg.status !== "ready" && <> · ready to go live</>}
++            </p>
++            {stale.length > 0 && (
++              <ul className="cp-review-list" data-testid="lg-outdated">
++                {stale.slice(0, 6).map((i) => <li key={i.key} data-severity="warning"><span className="cp-sev v-warning">outdated</span> <Linked text={i.label} def={def} onSelect={onSelect} /></li>)}
++                {stale.length > 6 && <li className="iqi-dim">… and {stale.length - 6} more</li>}
++              </ul>
++            )}
++            {blocking.length > 0 && (
++              <ul className="cp-review-list" data-testid="lg-blocking">
++                {blocking.slice(0, 6).map((i, k) => <li key={`${i.key}${k}`} data-severity="critical"><span className="cp-sev v-critical">{i.kind.replace(/_/g, " ")}</span> <Linked text={`${i.label}: ${i.message}`} def={def} onSelect={onSelect} /></li>)}
++                {blocking.length > 6 && <li className="iqi-dim">… and {blocking.length - 6} more</li>}
++              </ul>
++            )}
++            <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
++              {r.missing > 0 && <button type="button" className="iq-btn primary" data-testid="lg-translate-missing" disabled={copilot.busy} onClick={() => ask(`Translate the ${r.missing} missing element${r.missing === 1 ? "" : "s"} into ${name} (${cfg.code}) — do not touch approved translations.`)}>Translate the missing {r.missing}</button>}
++              {stale.length > 0 && <button type="button" className="iq-btn primary" data-testid="lg-retranslate" disabled={copilot.busy} onClick={() => ask(`Re-translate the ${stale.length} outdated ${name} (${cfg.code}) translation${stale.length === 1 ? "" : "s"} — the source text changed: ${stale.slice(0, 12).map((i) => i.label).join("; ")}${stale.length > 12 ? "; …" : ""}.`)}>Re-translate the outdated</button>}
++              {stale.length > 0 && <button type="button" className="iq-btn" data-testid="lg-confirm" title="The source edit did not change the meaning — the existing translations still fit" onClick={() => copilot.previewFix([{ op: "confirm_translations", language: cfg.code, targets: staleTargets } as SurveyAction], `Confirm ${stale.length} outdated ${name} translation${stale.length === 1 ? "" : "s"}`)}>Confirm they still fit</button>}
++              {unapprovedTargets.length > 0 && <button type="button" className="iq-btn" data-testid="lg-approve" title="Lock the machine / edited translations as approved — the copilot will not overwrite them unless asked to" onClick={() => copilot.previewFix([{ op: "approve_translations", language: cfg.code, targets: unapprovedTargets } as SurveyAction], `Approve ${unapprovedTargets.length} ${name} translation${unapprovedTargets.length === 1 ? "" : "s"}`)}>Approve {unapprovedTargets.length}</button>}
++              {r.ready && cfg.status === "draft" && <button type="button" className="iq-btn" data-testid="lg-mark-ready" onClick={() => copilot.previewFix([{ op: "set_language_status", code: cfg.code, status: "ready" } as SurveyAction], `Mark ${name} ready`)}>Mark ready</button>}
++            </div>
++          </section>
++        );
++      })}
++
++      {loc.languages.length > 0 && (
++        <section data-testid="lg-routing">
++          <div className="iq-label">Who gets which language</div>
++          <p className="iqi-dim">
++            In order: {loc.routing.order.join(" → ")}. URL <span className="mono">?{loc.routing.urlParam}=</span>, embedded field <span className="mono">{loc.routing.embeddedField}</span>
++            {Object.keys(loc.routing.countryMap).length > 0 && <>; by country {Object.entries(loc.routing.countryMap).map(([c, l]) => `${c} → ${languageName(l, loc.languages.find((x) => x.code === l))}`).join(", ")}</>}
++            {loc.routing.rules.length > 0 && <>; {loc.routing.rules.length} rule{loc.routing.rules.length === 1 ? "" : "s"} ({loc.routing.rules.map((x) => `${x.label ?? x.when} → ${x.language}`).join("; ")})</>}
++            ; switcher {loc.routing.allowSwitch ? "shown" : "hidden"}{loc.routing.fallback ? `; fallback ${loc.routing.fallback}` : ""}.
++          </p>
++          {loc.glossary.length > 0 && <p className="iqi-dim" data-testid="lg-glossary">Glossary: {loc.glossary.map((g) => `${g.source}${g.doNotTranslate ? " (never translated)" : ""}`).join(", ")}.</p>}
++          <p className="iqi-dim"><Icon name="info" size={12} /> Change any of this in words — “US respondents get English, MX Spanish”, “never translate the brand name”, “hide the language switcher” — or edit it in Localization.</p>
++        </section>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index e4df3a6..4d4dfb6 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -41,7 +41,7 @@ export interface CopilotEntry {
+ }
+ export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
+ export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
+-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "ux" | "inspector";
++export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "languages" | "ux" | "inspector";
+ 
+ interface Session {
+   proposal: Proposal | null;
+diff --git a/apps/studio/lib/copilot/copilot.test.ts b/apps/studio/lib/copilot/copilot.test.ts
+index b8b8300..16cb8c4 100644
+--- a/apps/studio/lib/copilot/copilot.test.ts
++++ b/apps/studio/lib/copilot/copilot.test.ts
+@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
+ import { SurveyDefinition } from "@rescript/schema";
+ import { applySurveyActions } from "@rescript/engine";
+ import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
+-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE } from "./prompt.ts";
++import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE } from "./prompt.ts";
+ import { copilotOutline } from "./outline.ts";
+ import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
+ 
+@@ -182,12 +182,13 @@ test("a revised proposal numbers the questions it made in order — and replays
+ 
+ import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
+ test("the model is told about every action the engine accepts — and only those", () => {
+-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE;
++  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE;
+   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
+   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
+   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
+   assert.deepEqual(documented.filter((o) => ![...SURVEY_ACTION_OPS, ...UX_ACTION_ALIASES].includes(o as never)), [], "no action is advertised that the engine would refuse");
+-  assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_000, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
++  // the detail of each domain lives in its guide (UX, analysis, translation), sent only with requests about it; the system prompt only names the actions
++  assert.ok(COPILOT_SYSTEM_PROMPT.length < 12_500, `the system prompt stays compact: ${COPILOT_SYSTEM_PROMPT.length}`);
+ });
+ 
+ test("UX requests: recognised, look-only when they are, and given the UX guide only then", () => {
+@@ -321,3 +322,44 @@ test("analysis turns: the intent is recognised, the guide and the plan go with i
+   const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "add_crosstab", rows: ["FREQ"], columns: ["BUY"] }, { op: "add_analysis_test", method: "wizardry" }] })!;
+   assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
+ });
++
++test("translation turns: the intent, the guide, a block named in the request, and the outline's languages with the existing translations", () => {
++  for (const m of ["translate the Usage block into German", "add Spanish and French", "which languages are ready?", "route Mexican respondents to es", "add 'Gold' to the glossary as do-not-translate", "approve the German translations", "localize this for India"]) assert.ok(translationIntent(m), m);
++  for (const m of ["make Q7 a 5-point scale", "plan the analysis", "add a crosstab of FREQ by BUY", "randomize the options"]) assert.ok(!translationIntent(m), m);
++  const def = survey();
++  /* a block's title in the request focuses all of its questions */
++  assert.deepEqual(referencedQuestions(def, "translate the Usage block into German").map((id) => def.questions.find((q) => q.id === id)!.code), ["Q2"]);
++  assert.deepEqual(referencedQuestions(def, "translate Q1 into German").map((id) => def.questions.find((q) => q.id === id)!.code), ["Q1"]);
++  /* the outline: no languages yet → says so; with a language, its state, the glossary, the routing and the named questions' elements */
++  const none = copilotOutline(def, { translation: true });
++  assert.match(none, /Source language: en.*Language versions: none yet \(add_language\)/);
++  assert.match(none, /Language routing: order /);
++  const out = applySurveyActions(def, [
++    { op: "add_language", code: "de" },
++    { op: "set_glossary", entries: [{ source: "Skincare", doNotTranslate: true }, { source: "Monthly", targets: { de: "Monatlich" } }] },
++    { op: "set_translations", language: "de", entries: [{ target: "FREQ", text: "Wie oft kaufen Sie?" }, { target: "FREQ.option:2", text: "Monatlich" }] },
++    { op: "set_language_routing", countryMap: { DE: "de" }, fallback: "en" },
++  ], { ids });
++  assert.deepEqual(out.errors, []);
++  const o = copilotOutline(out.def, { translation: true, focusIds: referencedQuestions(out.def, "translate the Usage block") });
++  assert.match(o, /Language versions: de\/de-DE Deutsch \(draft; \d+% translated, \d+ missing, 0 approved\)/);
++  assert.match(o, /Glossary: Skincare \(never translate\); Monthly → de: Monatlich/);
++  assert.match(o, /Language routing: .*countries DE → de.*fallback en/);
++  assert.match(o, /Translatable elements of the named questions/);
++  assert.match(o, /  Q2 → "How often do you buy\?" \| de \[ai\] "Wie oft kaufen Sie\?"/, "the existing translation and its status");
++  assert.match(o, /  Q2\.option:2 → "Monthly" \| de \[ai\] "Monatlich"/);
++  assert.match(o, /  Q2\.option:1 → "Weekly" \| de —/, "a missing one");
++  assert.ok(!o.includes('Q1 → "Bought'), "the unnamed question is not listed");
++  assert.ok(!copilotOutline(out.def, {}).includes("Language versions:"), "a wording edit does not carry the languages");
++  /* the prompt */
++  const p = copilotUserPrompt({ message: "translate the Usage block into German", outline: "o", surveyLanguage: "en", mode: "edit", translation: true });
++  assert.ok(p.includes("TRANSLATION GUIDE") && p.includes("set_translations") && p.includes("approve_translations"));
++  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("TRANSLATION GUIDE"));
++  for (const w of ["add_language", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary", "overwriteApproved", "Q5.option:2", "countryMap"]) assert.ok(COPILOT_TRANSLATION_GUIDE.includes(w), w);
++  assert.ok(COPILOT_SYSTEM_PROMPT.includes("LANGUAGES are actions too"));
++  for (const op of ["add_language", "remove_language", "set_language_status", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary"]) assert.ok((SURVEY_ACTION_OPS as readonly string[]).includes(op), op);
++  /* the reply gate: a translation that drops the piping is refused by reason, the good one passes */
++  const r = coerceCopilotReply({ kind: "proposal", reply: "ok", actions: [{ op: "set_translations", language: "de", entries: [{ target: "FREQ", text: "Wie oft?" }] }, { op: "set_translations", language: "de" }] })!;
++  assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 1);
++  assert.match(r.rejected[0].reason, /entries/);
++});
+diff --git a/apps/studio/lib/copilot/outline.ts b/apps/studio/lib/copilot/outline.ts
+index 97f884b..9c82ad4 100644
+--- a/apps/studio/lib/copilot/outline.ts
++++ b/apps/studio/lib/copilot/outline.ts
+@@ -1,5 +1,5 @@
+ import type { SurveyDefinition } from "@rescript/schema";
+-import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis } from "@rescript/engine";
++import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName } from "@rescript/engine";
+ import { hypothesisLabel } from "@rescript/schema";
+ import { surveyContext } from "../intelligent/context.ts";
+ 
+@@ -14,7 +14,7 @@ import { surveyContext } from "../intelligent/context.ts";
+  * questions in full and the rest by code, plus the named ones in full, so
+  * the prompt stays bounded however large the survey is.
+  */
+-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean } = {}): string {
++export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean } = {}): string {
+   const n = def.questions.length;
+   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
+   const lines = [base];
+@@ -87,5 +87,64 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
+       if (plan.segments.length) lines.push(`  segments: ${plan.segments.map((sg) => `${sg.name} (${sg.by.join(",")})`).join("; ")}`);
+     } else lines.push("Analysis plan: none saved yet (propose_analysis_plan writes the engine's framework; set_analysis_plan writes yours).");
+   }
++  /*
++   * THE LANGUAGES, on a translation turn: which versions exist and how far
++   * along each is, the glossary (what never translates, what is preferred),
++   * the routing — and for every question the request names, its elements
++   * with the existing translation and status in each language, so the model
++   * translates what is missing or outdated and leaves the approved alone.
++   */
++  if (opts.translation) {
++    const loc = effectiveLocalization(def);
++    const targets = loc.languages;
++    lines.push(`Source language: ${loc.sourceLanguage}${loc.sourceLocale ? ` (${loc.sourceLocale})` : ""}. Language versions: ${targets.length ? targets.map((l) => { const r = lintLanguage(def, l.code); const stale = r.issues.filter((i) => i.kind === "stale_source").length; return `${l.code}${l.locale ? `/${l.locale}` : ""} ${languageName(l.code, l)} (${l.status}${l.enabled ? "" : ", not offered"}; ${r.completion}% translated, ${r.missing} missing${stale ? `, ${stale} outdated` : ""}, ${r.approved} approved${l.notes ? `; notes: ${l.notes}` : ""})`; }).join("; ") : "none yet (add_language)"}`);
++    if (loc.glossary.length) lines.push(`Glossary: ${loc.glossary.slice(0, 60).map((g) => `${g.source}${g.doNotTranslate ? " (never translate)" : Object.keys(g.targets).length ? ` → ${Object.entries(g.targets).map(([l, t]) => `${l}: ${t}`).join(", ")}` : ""}`).join("; ")}`);
++    const r = loc.routing;
++    lines.push(`Language routing: order ${r.order.join(" → ")}; URL ?${r.urlParam}=; embedded field ${r.embeddedField}${Object.keys(r.countryMap).length ? `; countries ${Object.entries(r.countryMap).map(([c, l]) => `${c} → ${l}`).join(", ")}` : ""}${r.rules.length ? `; ${r.rules.length} rule${r.rules.length === 1 ? "" : "s"}` : ""}; switcher ${r.allowSwitch ? "on" : "off"}${r.fallback ? `; fallback ${r.fallback}` : ""}`);
++    if (targets.length) {
++      const els = translatableElements(def);
++      const focusSet = new Set(opts.focusIds ?? []);
++      const shown = els.filter((e) => (e.questionId ? focusSet.has(e.questionId) : focusSet.size === 0 || e.kind === "end_message" || e.kind === "survey_title"));
++      const budget = shown.slice(0, 400);
++      if (budget.length) {
++        lines.push(`Translatable elements${focusSet.size ? " of the named questions" : ""} (target → source | existing translations):`);
++        for (const e of budget) {
++          const t = targetFor(e);
++          const existing = targets.map((l) => { const x = loc.translations[l.code]?.[e.key]; return x && x.status !== "not_translated" && x.text.trim() ? `${l.code} [${x.status}] "${x.text.replace(/\s+/g, " ").slice(0, 160)}"` : `${l.code} —`; }).join(" · ");
++          lines.push(`  ${t} → "${e.source.replace(/\s+/g, " ").slice(0, 240)}" | ${existing}`);
++        }
++        if (shown.length > budget.length) lines.push(`  … and ${shown.length - budget.length} more elements (name the questions to see them)`);
++      }
++    }
++  }
+   return lines.join("\n");
+ }
++
++/** an element's key as the model addresses it: Q5, Q5.option:2, Q5.row:r1, meta:title, end:<id>, ui:required… */
++function targetFor(e: { key: string; questionCode?: string; code?: string; kind: string }): string {
++  const q = e.questionCode;
++  switch (e.kind) {
++    case "question_text": return q!;
++    case "question_instruction": return `${q}.instruction`;
++    case "question_description": return `${q}.description`;
++    case "question_placeholder": return `${q}.placeholder`;
++    case "option": return `${q}.option:${e.code}`;
++    case "option_alt": return `${q}.alt:${e.code}`;
++    case "row": return `${q}.row:${e.code}`;
++    case "row_placeholder": return e.key;
++    case "column": return `${q}.column:${e.code}`;
++    case "column_option": return `${q}.column:${(e.code ?? "").split(":")[0]}.option:${(e.code ?? "").split(":")[1]}`;
++    case "column_placeholder": return e.key;
++    case "scale_label": return `${q}.scale:${/left/i.test(e.key) ? "low" : "high"}`;
++    case "validation_message": return `${q}.validation:${Number(e.key.split(":").pop()) + 1}`;
++    case "probe_prompt": return `${q}.probe`;
++    case "survey_title": return "meta:title";
++    case "survey_description": return "meta:description";
++    case "end_message": return `end:${e.key.split(":")[1]}`;
++    case "page_title": return `block:${e.key.split(":")[1]}`;
++    case "quota_message": return e.key;
++    case "button": return `button:${e.key.split(":").pop()}`;
++    case "ui": return e.key;
++    default: return e.key;
++  }
++}
+diff --git a/apps/studio/lib/copilot/prompt.ts b/apps/studio/lib/copilot/prompt.ts
+index 8a00e74..dec9ce6 100644
+--- a/apps/studio/lib/copilot/prompt.ts
++++ b/apps/studio/lib/copilot/prompt.ts
+@@ -1,5 +1,5 @@
+ import type { SurveyDefinition } from "@rescript/schema";
+-import { coerceSurveyActions, type SurveyAction } from "@rescript/engine";
++import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
+ 
+ /**
+  * THE COPILOT'S CONTRACT WITH THE MODEL.
+@@ -69,8 +69,9 @@ ACTIONS (each an object with "op"; use only these):
+ {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
+ {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
+ {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
+-THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (full shapes in the ANALYSIS GUIDE, included when a request is about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (a question's role — dependent|independent|mediator|moderator|control|segmentation|screening|descriptive — its measurement, how it is reported, what it is tabulated against, the hypotheses H1, H2… it serves), propose_analysis_plan (the engine's own plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE a survey from a hypothesis, tag the outcome and predictor questions with set_question_analysis and add {"op":"propose_analysis_plan"} so the design arrives with its analysis.
+-LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
++LANGUAGES are actions too (shapes in the TRANSLATION GUIDE, sent with requests about languages): add_language, set_translations (YOU write each translation, keeping every {{pipe}}, HTML tag and do-not-translate term exactly), approve_translations, confirm_translations, set_language_routing, set_glossary. Codes and logic never change.
++THE ANALYSIS FRAMEWORK is planned BEFORE fieldwork, as actions too (shapes in the ANALYSIS GUIDE, sent with requests about analysis, hypotheses, variables, crosstabs or tests): set_question_analysis (role dependent|independent|mediator|moderator|control|segmentation|screening|descriptive, measurement, reporting, crosstab banner, hypotheses H1, H2…), propose_analysis_plan (the engine's plan), set_analysis_plan / add_crosstab / add_analysis_test / add_derived_variable (and remove_…). When you GENERATE from a hypothesis, tag the outcome and predictors with set_question_analysis and add {"op":"propose_analysis_plan"}.
++LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them — never say the platform cannot style, animate or script a survey. Full shapes in the UX GUIDE, sent with requests about how the survey looks or behaves.
+ 
+ REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = 2", "{{BRAND}}". A new question's options are coded 1, 2, 3… in the order written ("None of these" 99, "Other" the next free code). Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
+ 
+@@ -237,6 +238,36 @@ ACTIONS:
+ {"op":"add_derived_variable","name":"TRUST_SCORE","kind":"mean_score|sum_score|top_box|bottom_box|recode|count|flag|index","from":["TRUST_1","TRUST_2"],"expression":"optional calc expression"}  /  {"op":"remove_derived_variable","name":"TRUST_SCORE"}
+ "Show me the most important crosstabs" is a question: answer from the outline's plan (priority 1, hypothesis-linked first) — no actions. "Which method should I use for X" is a question: weigh rating, ranking, MaxDiff, conjoint, TURF, pricing methods, driver analysis and name the trade-offs (length, discrimination, price trade-offs, sample) — propose a change only if asked.`;
+ 
++/**
++ * THE TRANSLATION GUIDE — sent with a request about languages. The model IS
++ * the translator here (it reads research terminology and context the way a
++ * word-for-word engine does not), and the engine is the checker: every
++ * target is resolved against the survey, every translation must keep its
++ * pipes, placeholders, HTML and do-not-translate terms, approved wordings
++ * are kept unless the researcher says to overwrite them, and nothing but
++ * `localization` changes.
++ */
++export const COPILOT_TRANSLATION_GUIDE = `TRANSLATION GUIDE.
++The survey has ONE source language (given above). A language version is translations of each ELEMENT: question text, instruction, each option (by code), each row and column, scale labels, validation messages, the end messages, the interface strings (ui:required …). Only the wording changes: codes, variables, logic, piping, randomization, quotas and analysis are the same in every language.
++Targets (in set_translations entries): "Q5" (its text), "Q5.instruction", "Q5.option:2" or "Q5.option:<label>", "Q5.row:r1" / "Q5.row:<label>", "Q5.column:<label>", "Q5.scale:low|high", "Q5.validation:1", "meta:title", "meta:description", "block:<title>", "end:complete", "ui:required", "ui:review_errors", "button:next|back|submit".
++Rules you must keep, or the engine refuses the entry: every {{pipe}} and {placeholder} token exactly as in the source (same count, same spelling); the same HTML tags, balanced; never an empty text; glossary terms marked do-not-translate (brand names) exactly as written; the glossary's preferred wording for a term. Translate for a questionnaire: natural, the register the language's notes ask for (formal "Sie" / "usted" unless told otherwise), the same meaning and the same scale anchors in order, options kept distinct from each other, units and date/number conventions as the locale writes them. Do not "localize" the research meaning — a 5-point agreement scale stays a 5-point agreement scale.
++Scope: "translate this section / block" means every element of every question in it; "translate the survey" means every element the outline shows; "translate Q5" means its text, instruction, options and rows. The outline lists the languages the survey has, their completion, and — on a translation turn — each named question's elements with any existing translation and status (approved ones are kept unless the researcher asks to overwrite: add "overwriteApproved": true only then). Translate the OUTDATED ones when asked to re-translate; confirm_translations when the researcher says the old wording still fits.
++ACTIONS:
++{"op":"add_language","code":"de","locale":"de-DE","country":"DE","notes":"formal register"}
++{"op":"set_translations","language":"de","entries":[{"target":"Q5","text":"Wie wahrscheinlich ist es, dass Sie {{BRAND}} kaufen?"},{"target":"Q5.option:1","text":"Sehr unwahrscheinlich"},{"target":"Q5.instruction","text":"Bitte eine Antwort auswählen"}],"status":"ai"}
++{"op":"approve_translations","language":"de","targets":["Q5","Q5.option:1"]}   // without targets: every translated element; "status":"reviewed" for review only
++{"op":"confirm_translations","language":"de","targets":["Q5"]}   // outdated → still fits the new source
++{"op":"set_language_status","code":"de","status":"ready|live|draft|in_review","enabled":true}   // ready/live are refused while blocking issues remain
++{"op":"set_language_routing","countryMap":{"US":"en","MX":"es","DE":"de"},"urlParam":"lang","fallback":"en","allowSwitch":true,"rules":[{"when":"COUNTRY = 3","language":"de","label":"German residents"}],"order":["url","embedded","country","rules","browser","respondent"]}
++{"op":"set_glossary","entries":[{"source":"Brand A","doNotTranslate":true},{"source":"purchase intention","targets":{"de":"Kaufabsicht","es":"intención de compra"}}],"remove":["old term"]}
++{"op":"remove_language","code":"de"}   // destructive: the researcher confirms
++Questions ("which languages are missing text?", "what is outdated in German?") are answered from the outline — no actions.`;
++
++/** a request about languages, translation or localization — the guide goes with it */
++export function translationIntent(text: string): boolean {
++  return /\b(?:translat\w*|localis\w*|localiz\w*|languages?|multilingual|bilingual|glossary|do[- ]not[- ]translate|spanish|french|german|hindi|japanese|arabic|chinese|portuguese|italian|dutch|korean|russian|turkish|welsh|tamil|telugu|bengali|marathi|gujarati|urdu|polish|swedish|in (?:german|spanish|french|hindi)|routing|rout(?:e|ing)\b.*\b(?:language|to (?:en|es|fr|de|hi|pt|it|nl|ja|zh|ar|ko|ru|tr|pl|sv)\b)|respondents? (?:get|see) (?:the )?(?:english|spanish|french|german)|language (?:selector|switch)|rtl)\b/i.test(text);
++}
++
+ /** a request about the analysis framework — the guide goes with it */
+ export function analysisIntent(text: string): boolean {
+   return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text);
+@@ -302,6 +333,8 @@ export function copilotUserPrompt(input: {
+   themeOnly?: boolean;
+   /** the request is about the analysis framework: the guide goes with it */
+   analysis?: boolean;
++  /** the request is about languages: the translation guide goes with it */
++  translation?: boolean;
+ }): string {
+   const parts: string[] = [];
+   parts.push(`Survey language: ${input.surveyLanguage}`);
+@@ -313,6 +346,7 @@ export function copilotUserPrompt(input: {
+   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
+   if (input.ux) parts.push(COPILOT_UX_GUIDE);
+   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
++  if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
+   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
+   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
+   if (input.themeImage) parts.push(input.themeImage);
+@@ -329,5 +363,12 @@ export function surveyLanguageOf(def: SurveyDefinition): string {
+ /** question codes and variables a message names — the outline shows these in full */
+ export function referencedQuestions(def: SurveyDefinition, message: string): string[] {
+   const words = new Set((message.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).map((w) => w.toLowerCase()));
+-  return def.questions.filter((q) => words.has(String(q.code).toLowerCase()) || words.has(q.variableName.toLowerCase())).map((q) => q.id);
++  const ids = def.questions.filter((q) => words.has(String(q.code).toLowerCase()) || words.has(q.variableName.toLowerCase())).map((q) => q.id);
++  // a named block or section ("translate the Brand section into German") focuses every question in it
++  const t = message.toLowerCase();
++  for (const b of listBlocks(def.flow as unknown[])) {
++    const title = (b.title ?? "").trim().toLowerCase();
++    if (title.length >= 3 && new RegExp(`(?<![\\p{L}\\p{N}])${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u").test(t)) for (const p of b.pages) for (const id of p.node.questionIds) if (!ids.includes(id)) ids.push(id);
++  }
++  return ids;
+ }
+diff --git a/docs/TRANSLATION-INTELLIGENCE-2026-10-04.md b/docs/TRANSLATION-INTELLIGENCE-2026-10-04.md
+new file mode 100644
+index 0000000..0c3219c
+--- /dev/null
++++ b/docs/TRANSLATION-INTELLIGENCE-2026-10-04.md
+@@ -0,0 +1,46 @@
++# Translation intelligence — languages as copilot actions
++
++*Research-intelligence brief, Phase 3 ("Multi-language & translation intelligence: copilot translation actions, per-market language routing, stale-translation detection and locking"). Built 2026-10-04 on the Intelligent copilot (INTELLIGENT-COPILOT.md) and the existing Localization layer (LOCALIZATION.md).*
++
++## What it does
++
++Languages were already a full system — language versions with a status, a translation table keyed by stable element addresses, a glossary, routing by URL / embedded field / country / rules / browser, audio, and a lint that decides whether a version is *ready*. What was missing was the copilot: asked to "translate the survey into German" it could only say that the Localization panel exists. Now:
++
++- **The copilot translates.** A request about languages brings the TRANSLATION GUIDE and, in the outline, each language version's state, the glossary, the routing, and for the questions the request names (or every question of a block it names) their translatable elements with the existing translation and its status in every language. The model writes the translations itself and returns them as `set_translations`; the engine resolves each target against the survey (`Q5`, `Q5.option:2` or by label, `Q5.row:r1`, `Q5.instruction`, `Q5.scale:low`, `end:complete`, `block:Brand`, `button:next`, `ui:required`, `meta:title`, or the raw key) and checks each text against its source before storing it: a dropped or changed `{{pipe}}` / placeholder, unbalanced or mismatched HTML, an empty text, a do-not-translate glossary term that is no longer there — each is refused *by element and by reason*, the rest is written, and the refusals are shown in Changes. Preferred glossary wordings not used are a warning. Everything is stored as machine translation (`ai`) to be reviewed.
++- **Locking.** An approved or reviewed translation is **kept** against a plain `set_translations` ("3 approved translations kept — ask to overwrite them if you mean to"); only `overwriteApproved: true` replaces it, and the replacement is `ai` again. `approve_translations` (or `status: "reviewed"`) locks; the Languages tab offers it as a proposal.
++- **Stale detection and the impact loop.** After every proposal the engine marks every translation whose source text changed as **outdated** — its text is kept and still shown, which is better than falling back to the source language — and tells the researcher: *"1 translation is now outdated (de) — the source text changed; ask to re-translate them, or confirm them in Localization."* The Changes panel shows the warning with **Re-translate them in this proposal**, which asks the copilot and chains the re-translation onto the same proposal, so the wording change and its translations are applied as one undoable change. A source edit made in Studio is detected the same way (by the stored source hash) and surfaces in the Languages tab, the Localization panel and the review. `confirm_translations` says an outdated translation still fits (it becomes `edited`, stamped against the new source).
++- **Routing in words.** `set_language_routing` takes a country map ("US → en, MX → es, DE → de"), the URL parameter, the embedded field, rules on conditions, the switcher and the fallback; every language named must exist; maps and rules merge by default; the country / rules steps are inserted into the precedence order ahead of browser detection and the respondent's choice, and the insertion is said.
++- **Languages and the glossary.** `add_language` (locale from the language library, refused for the source language or a non-code, appended to the deployment's languages), `remove_language` (destructive, drops its translations and audio), `set_language_status` (refused for *ready* / *live* while a blocking issue remains, naming the kinds), `set_glossary` (add / update / remove, removal destructive).
++- **Everything stays one localization.** The actions write `def.localization` — the same object the Localization panel edits and the runtime resolves — so nothing is stored twice and the Localization panel shows what the copilot did.
++
++## Where
++
++| Where | What |
++|---|---|
++| `packages/engine/src/localizationActions.ts` | The eight actions: gate (`coerceLocalizationAction`), apply (`applyLocalizationAction`), descriptions; `resolveTranslationTarget` (the grammar above), `translationProblem` (the refusals), `glossaryMisses`, `outdateTranslations`. |
++| `packages/engine/src/surveyActions.ts` | Wiring: the union, the ops, the gate's fallback, rank 4 (after structure, UX, research and analysis, so the elements to translate exist first), the per-action warnings, the post-batch outdating and its warning, `localizationDiff` → the Changes summary ("Add Deutsch as a language", "Translate 9 elements into Deutsch", "Approve 9 Deutsch translations", "Confirm 1 outdated Deutsch translation", "Change the language routing", "Add 1 glossary term"). |
++| `packages/engine/src/surveyReview.ts` | `localization` findings: missing (critical when the language is live), outdated, lost piping (critical), duplicate option wording (critical), unbalanced HTML (critical), untranslated-looking, inconsistent wording. |
++| `apps/studio/lib/copilot/prompt.ts` | The system prompt names the actions; `COPILOT_TRANSLATION_GUIDE` (the target grammar, the rules, the shapes); `translationIntent`; `referencedQuestions` also focuses every question of a block named in the request. |
++| `apps/studio/lib/copilot/outline.ts` | On translation turns: the language versions with completion / missing / outdated / approved, the glossary, the routing, and the named questions' elements as `target → "source" \| de [status] "existing"`. |
++| `apps/studio/app/api/copilot/turn/route.ts` | `translationIntent(message)` → the guide and the outline block. |
++| `apps/studio/components/intelligent/copilot/LanguagesTab.tsx` | Intelligent → **Languages**: per language the completion bar and counts, the outdated and blocking items, **Translate the missing N** / **Re-translate the outdated** (requests to the copilot), **Confirm they still fit** / **Approve N** / **Mark ready** (proposals through Changes); who gets which language; the glossary. |
++| `apps/studio/components/intelligent/copilot/CopilotPanel.tsx` | The tab; on the outdated warning, **Re-translate them in this proposal**. |
++
++## Principles kept
++
++- **Reasoning is separated from execution.** The model writes words; the engine decides what is storable, element by element, and the researcher applies. The model never writes `def.localization` directly, never a key it was not shown, never a code or a condition.
++- **Human in the loop.** Every translation arrives as a proposal in Changes; approval is a researcher's act and a lock; a source change asks, it does not silently leave the German behind or silently rewrite it.
++- **Nothing duplicated.** One localization object, one lint, one target grammar for the model and the Languages tab; the Localization panel is still where translations are edited by hand.
++
++## Tests
++
++- engine `localizationActions.test.ts` (5): the target grammar; the refusals; add → translate a block → approve → kept → overwritten → *ready* refused → removal destructive; the outdating loop with its warning, confirmation (stored and detected-only), re-translation and the review's findings; routing in words (merging, replacing, the order) with `resolveLanguage` following it; the order of language actions within a batch. **Mutation-checked: 70 mutations, 69 caught** — 17 first survivors closed with tests, which also found a real bug (`merge: false` was dropped at the gate, so a routing replacement always merged); the one survivor (localization ranked with the structural actions instead of after everything) is behaviourally equivalent because the sub-ranks still order it after the structure.
++- studio `copilot.test.ts` (+1): the intent, the block focus, the outline's languages block with existing translations and the missing one, the guide, the vocabulary, the gate. **Mutation-checked: 10 / 10** (prompt, outline, the guide sent only on translation turns).
++- browser `scripts/translation-copilot-test.mjs` (10): the copilot's actions through the fake provider with the refused entries shown; the Languages tab and Approve; kept vs overwritten; a copilot wording change → outdated warning → re-translation chained into the same proposal; a Studio edit → outdated → Confirm; routing; the Localization panel sees the same language; the review; the turn route recognising a translation request and sending the languages and the guide. **Mutation-checked against the Studio surfaces: 10 / 10** (route, Changes panel offer, Languages tab counts and actions).
++
++## Not done
++
++- The model's translations are not **machine-checked for meaning** beyond structure (pipes, HTML, glossary); a wrong translation that keeps the structure is stored as `ai` for review, as a human translator's would be.
++- **Audio** is untouched by the actions: a re-translated element's recording is reported stale by the existing lint, not regenerated.
++- `remove_language` and `set_language_status` are not offered as buttons; they are asked for in words (and the status change is refused while anything blocks).
++- Phases 4–6 of the brief (quota intelligence and import, automated analysis after fieldwork, reporting) are next.
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index 23d1d9c..0363d7f 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -16,6 +16,7 @@ export * from "./mediaDisplay.js";
+ export * from "./legacyMedia.js";
+ export * from "./analysisFramework.js";
+ export * from "./analysisActions.js";
++export * from "./localizationActions.js";
+ export * from "./optionsPaste.js";
+ export * from "./dependencies.js";
+ export * from "./dependencyIndex.js";
+diff --git a/packages/engine/src/localizationActions.test.ts b/packages/engine/src/localizationActions.test.ts
+new file mode 100644
+index 0000000..625f6f1
+--- /dev/null
++++ b/packages/engine/src/localizationActions.test.ts
+@@ -0,0 +1,240 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import {
++  coerceSurveyActions, applySurveyActions, reviewSurvey, resolveTranslationTarget, translatableElements, translationProblem,
++  resolveLanguage, lintLanguage, localizeDefinition, diffSurveys, applyLocalizationAction,
++} from "./index.js";
++
++/*
++ * TRANSLATION INTELLIGENCE (research-intelligence Phase 3): the copilot's
++ * localization actions — languages, the model's own translations checked
++ * against their source, locking, routing, the glossary — and the impact loop
++ * that marks translations outdated when a proposal changes their source.
++ */
++
++const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
++function survey() {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Brand study", version: "1.0" },
++    embeddedData: [{ name: "country", source: "url" }],
++    questions: [
++      { id: "q1", code: "Q1", variableName: "COUNTRY", type: "single_select", text: "Which country do you live in?", options: opts("United States", "Mexico", "Germany") },
++      { id: "q2", code: "Q2", variableName: "BRAND", type: "single_select", text: "Which brand did you buy last?", instruction: "Select one", options: opts("Brand A", "Brand B", "None of these") },
++      { id: "q3", code: "Q3", variableName: "WHY", type: "long_text", text: "Why did you choose {{BRAND}}?" },
++      { id: "q4", code: "Q4", variableName: "TRUST", type: "matrix_single", text: "How much do you <b>trust</b> each brand?", rows: [{ code: "r1", label: "Brand A" }, { code: "r2", label: "Brand B" }], options: opts("Not at all", "A little", "A lot") },
++    ],
++    flow: [
++      { type: "block", id: "b1", title: "Screening", children: [{ type: "page", id: "p1", questionIds: ["q1"] }] },
++      { type: "block", id: "b2", title: "Brand", children: [{ type: "page", id: "p2", questionIds: ["q2", "q3", "q4"] }] },
++      { type: "end", id: "e", status: "complete", message: "Thank you!" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s", languages: ["en"] },
++  });
++}
++const acts = (raw: unknown[]) => coerceSurveyActions(raw);
++const run = (def: SurveyDefinition, raw: unknown[]) => applySurveyActions(def, acts(raw).actions, { now: "2026-10-04T00:00:00Z" });
++
++test("targets: a translation names its element the way a person does — Q2, Q2.option:2 (or by label), Q4.row:r1, Q3.instruction, meta:title, end:complete, ui:required", () => {
++  const def = survey();
++  const els = translatableElements(def);
++  const q = (ref: string) => def.questions.find((x) => x.code === ref || x.variableName === ref);
++  const r = (t: string) => resolveTranslationTarget(def, els, t, q)?.key;
++  assert.equal(r("Q2"), "q:q2:text");
++  assert.equal(r("BRAND"), "q:q2:text", "by variable too");
++  assert.equal(r("Q2.instruction"), "q:q2:instruction");
++  assert.equal(r("Q2.option:2"), "q:q2:opt:2");
++  assert.equal(r("Q2.option:Brand B"), "q:q2:opt:2", "by label");
++  assert.equal(r("Q4.row:r1"), "q:q4:row:r1");
++  assert.equal(r("Q4.row:Brand B"), "q:q4:row:r2");
++  assert.equal(r("Q4.option:A lot"), "q:q4:opt:3");
++  assert.equal(r("meta:title"), "meta:title");
++  assert.equal(r("end:e"), "flow:e:message");
++  assert.equal(r("end:complete"), "flow:e:message");
++  assert.equal(r("ui:required"), "ui:required");
++  assert.equal(r("UI.required"), "ui:required", "the ui prefix in any spelling");
++  assert.equal(r("title"), "meta:title"); assert.equal(r("Survey title"), "meta:title");
++  assert.equal(r("button:next"), "branding:buttons:next");
++  assert.equal(r("block:Brand"), "flow:b2:title");
++  assert.equal(r("Q9"), undefined);
++  assert.equal(r("Q2.option:7"), undefined);
++  assert.equal(r("q:q2:opt:1"), "q:q2:opt:1", "an element key is accepted as it is");
++});
++
++test("a translation that would break the respondent's survey is refused: a dropped pipe, broken HTML, an empty text, a brand name translated", () => {
++  const glossary = [{ id: "g1", source: "Brand A", targets: {}, scope: "project" as const, caseSensitive: false, doNotTranslate: true }];
++  assert.equal(translationProblem("Why did you choose {{BRAND}}?", "Warum haben Sie {{BRAND}} gewählt?", glossary, "de"), null);
++  assert.match(translationProblem("Why did you choose {{BRAND}}?", "Warum haben Sie diese Marke gewählt?", glossary, "de")!, /piping \/ placeholders must be kept/);
++  assert.match(translationProblem("How much do you <b>trust</b> each brand?", "Wie sehr <b>vertrauen</b> Sie < jeder Marke?", glossary, "de")!, /unbalanced/);
++  assert.match(translationProblem("How much do you <b>trust</b> each brand?", "Wie sehr vertrauen Sie jeder Marke?", glossary, "de")!, /HTML tags must match/);
++  assert.match(translationProblem("Select one", "   ", glossary, "de")!, /empty/);
++  assert.match(translationProblem("Select one", "123", glossary, "de")!, /no words/);
++  assert.match(translationProblem("I trust Brand A", "Ich vertraue Marke A", glossary, "de")!, /“Brand A” is a term that is never translated/);
++  assert.equal(translationProblem("I trust Brand A", "Ich vertraue Brand A", glossary, "de"), null);
++  assert.equal(translationProblem("This question is required.", "Diese Frage ist erforderlich.", [], "de"), null);
++});
++
++test("add a language, translate a block into it, approve, then the model cannot overwrite what is approved without saying so", () => {
++  const def = survey();
++  const out = run(def, [
++    { op: "add_language", code: "de-DE" },
++    { op: "add_language", code: "klingon" },
++    { op: "set_glossary", entries: [{ source: "Brand A", doNotTranslate: true }, { source: "Brand B", doNotTranslate: true }, { source: "trust", targets: { de: "vertrauen" } }] },
++    { op: "set_translations", language: "de", entries: [
++      { target: "Q2", text: "Welche Marke haben Sie zuletzt gekauft?" },
++      { target: "Q2.instruction", text: "Eine auswählen" },
++      { target: "Q2.option:1", text: "Brand A" }, { target: "Q2.option:2", text: "Brand B" }, { target: "Q2.option:None of these", text: "Keine davon" },
++      { target: "Q3", text: "Warum haben Sie {{BRAND}} gewählt?" },
++      { target: "Q4", text: "Wie sehr <b>glauben</b> Sie jeder Marke?" },
++      { target: "Q4.row:r1", text: "Brand A" }, { target: "Q4.row:r2", text: "Marke B" },
++      { target: "Q4.option:1", text: "Gar nicht" }, { target: "Q4.option:2", text: "Ein wenig" }, { target: "Q4.option:3", text: "Sehr" },
++      { target: "Q7", text: "nichts" },
++      { target: "end:complete", text: "Vielen Dank!" },
++    ] },
++    { op: "set_translations", language: "fr", entries: [{ target: "Q2", text: "Quelle marque ?" }] },
++  ]);
++  assert.ok(out.valid);
++  assert.equal(acts([{ op: "add_language", code: "klingon" }]).rejected.length, 1, "not a language code");
++  assert.equal(acts([{ op: "set_translations", language: "de", entries: [] }]).rejected.length, 1, "nothing to translate is refused at the gate");
++  const env = { question: (ref: string) => def.questions.find((x) => x.code === ref || x.variableName === ref), condition: () => { throw new Error("no condition"); }, ids: (p: string) => `${p}_x`, now: "2026-10-04T00:00:00Z" };
++  assert.throws(() => applyLocalizationAction(structuredClone(def), { op: "add_language", code: "zzzz" }, env), /is not a language code/, "and refused again if it ever got through");
++  assert.match(run(def, [{ op: "add_language", code: "en" }]).errors[0], /source language/);
++  assert.match(run(def, [{ op: "set_translations", language: "en", entries: [{ target: "Q2", text: "x" }] }]).errors[0], /source language — edit the question text itself/);
++  const mx = run(def, [{ op: "add_language", code: "es", country: "MX" }]).def.localization!.languages[0];
++  assert.equal(mx.locale, "es-MX", "the locale is picked from the library for the country");
++  /* the Changes summary, and the order: translations listed before the language they need still work (localization runs last) */
++  const summary = diffSurveys(def, out.def).summary;
++  assert.ok(summary.includes("Add Deutsch as a language"), summary.join(" | "));
++  assert.ok(summary.includes("Translate 12 elements into Deutsch"), summary.join(" | "));
++  const reversed = run(def, [{ op: "set_translations", language: "es", status: "edited", entries: [{ target: "Q2", text: "¿Qué marca compró por última vez?" }] }, { op: "add_language", code: "es" }]);
++  assert.deepEqual(reversed.errors, []);
++  assert.equal(reversed.def.localization!.translations.es["q:q2:text"].status, "edited", "a human-edited status is kept through the gate");
++  const newQ = run(def, [{ op: "set_translations", language: "de", entries: [{ target: "AGE", text: "Wie alt sind Sie?" }] }, { op: "add_language", code: "de" }, { op: "create_question", ref: "AGE", type: "number", text: "How old are you?" }]);
++  assert.deepEqual(newQ.errors, [], "a translation of a question created in the same batch: the question first, then the language, then the translation");
++  const ageId = newQ.def.questions.find((x) => x.variableName === "AGE")!.id;
++  assert.equal(newQ.def.localization!.translations.de[`q:${ageId}:text`].text, "Wie alt sind Sie?");
++  assert.equal(acts([{ op: "set_language_routing", merge: false }]).rejected.length, 1, "replacing with nothing changes nothing");
++  const routed = run(def, [{ op: "set_language_routing", rules: [{ when: "REGION = 2", language: "de" }] }, { op: "add_language", code: "de" }, { op: "create_question", ref: "REGION", type: "single", text: "Region?", options: ["North", "South"] }]);
++  assert.deepEqual(routed.errors, [], "a routing rule on a question created in the same batch: every language action runs after the structure");
++  assert.equal(routed.def.localization!.routing.rules.length, 1);
++  assert.equal(out.errors.length, 1); assert.match(out.errors[0], /set_translations: the survey has no \S+ \(fr\) version — add the language first \(add_language\)/);
++  const loc = out.def.localization!;
++  assert.deepEqual(loc.languages.map((l) => [l.code, l.locale, l.status]), [["de", "de-DE", "draft"]]);
++  assert.deepEqual(out.def.deployment?.languages, ["en", "de"]);
++  const de = loc.translations.de;
++  assert.equal(de["q:q2:text"].text, "Welche Marke haben Sie zuletzt gekauft?");
++  assert.equal(de["q:q2:text"].status, "ai"); assert.equal(de["q:q2:text"].origin, "ai");
++  assert.equal(de["q:q2:opt:3"].text, "Keine davon", "an option by label");
++  assert.equal(de["q:q3:text"].text, "Warum haben Sie {{BRAND}} gewählt?", "the pipe is kept");
++  assert.equal(de["flow:e:message"].text, "Vielen Dank!");
++  assert.equal(de["q:q4:row:r2"], undefined, "“Marke B” translates a do-not-translate brand name: refused");
++  assert.ok(out.warnings.some((w) => /Q4 · row r2: “Brand B” is a term that is never translated/.test(w)), out.warnings.join("\n"));
++  assert.ok(out.warnings.some((w) => /Q7: not a translatable element/.test(w)));
++  assert.ok(out.warnings.some((w) => /Q4 · text \(de\): the glossary prefers “trust” → “vertrauen”/.test(w)), "a preferred term the translation did not use is a warning");
++  assert.ok(out.results.find((r) => r.op === "set_translations" && r.ok)!.description.includes("12 translations written"));
++  assert.ok(out.destructive.length === 0 && out.structureUnchanged === false, "translations change the definition but not its structure in any respondent-facing way other than language");
++  /* the German survey reads German */
++  const localized = localizeDefinition(out.def, "de");
++  assert.equal(localized.questions[1].text, "Welche Marke haben Sie zuletzt gekauft?");
++  assert.equal(localized.questions[1].options[2].label, "Keine davon");
++  assert.equal(localized.questions[1].options[2].code, 3, "codes never change");
++  /* approve = lock */
++  const approved = run(out.def, [{ op: "approve_translations", language: "de", targets: ["Q2", "Q2.option:3"] }]);
++  assert.equal(approved.def.localization!.translations.de["q:q2:text"].status, "approved");
++  assert.equal(approved.def.localization!.translations.de["q:q2:instruction"].status, "ai", "only the named ones");
++  const again = run(approved.def, [{ op: "set_translations", language: "de", entries: [{ target: "Q2", text: "Welche Marke kauften Sie zuletzt?" }, { target: "Q2.instruction", text: "Bitte eine auswählen" }] }]);
++  assert.equal(again.def.localization!.translations.de["q:q2:text"].text, "Welche Marke haben Sie zuletzt gekauft?", "approved: kept");
++  assert.equal(again.def.localization!.translations.de["q:q2:instruction"].text, "Bitte eine auswählen", "unapproved: replaced");
++  assert.match(again.results[0].description, /1 translation written \(1 approved translation kept/);
++  const edited = structuredClone(approved.def);
++  edited.questions[1].text = "Which brand did you buy most recently?";
++  const stale = run(edited, [{ op: "set_translations", language: "de", entries: [{ target: "Q2", text: "Welche Marke kauften Sie zuletzt?" }] }]);
++  assert.equal(stale.def.localization!.translations.de["q:q2:text"].text, "Welche Marke kauften Sie zuletzt?", "an approved translation whose source changed is not locked against its re-translation");
++  const forced = run(approved.def, [{ op: "set_translations", language: "de", overwriteApproved: true, entries: [{ target: "Q2", text: "Welche Marke kauften Sie zuletzt?" }] }]);
++  assert.equal(forced.def.localization!.translations.de["q:q2:text"].text, "Welche Marke kauften Sie zuletzt?");
++  assert.equal(forced.def.localization!.translations.de["q:q2:text"].status, "ai", "a new text is not approved by itself");
++  /* a language with blocking issues cannot go live; a complete one can */
++  const live = run(approved.def, [{ op: "set_language_status", code: "de", status: "live" }]);
++  assert.match(live.errors[0], /cannot be live: \d+ blocking issues? — missing/);
++  const dup = run(approved.def, [{ op: "set_translations", language: "de", entries: [{ target: "Q2.option:1", text: "Marke" }, { target: "Q2.option:2", text: "Marke" }] }]);
++  assert.ok(dup.errors.length, "do-not-translate brands refuse the rename — and the duplicate rule would catch it anyway");
++  /* the glossary: a term set twice is one term, removal is destructive */
++  const gl = run(approved.def, [{ op: "set_glossary", entries: [{ source: "brand a", targets: { de: "Brand A" }, notes: "the client" }] }, { op: "set_glossary", remove: ["Brand B"] }]);
++  assert.deepEqual(gl.def.localization!.glossary.map((g) => [g.source, g.doNotTranslate, g.targets.de ?? null]), [["Brand A", true, "Brand A"], ["trust", false, "vertrauen"]], "updated in place (case-insensitively), Brand B removed");
++  assert.match(gl.destructive[0], /Removes 1 glossary term/);
++  /* remove is destructive and takes the translations with it */
++  const removed = run(approved.def, [{ op: "remove_language", code: "de" }]);
++  assert.match(removed.destructive[0], /Removes the Deutsch version and its \d+ translations/);
++  assert.equal(removed.def.localization!.translations.de, undefined);
++  assert.deepEqual(removed.def.deployment?.languages, ["en"]);
++});
++
++test("a proposal that changes a translated question's wording marks its translations outdated and says so — the researcher is asked, not surprised", () => {
++  const def = survey();
++  const withDe = run(def, [{ op: "add_language", code: "de" }, { op: "set_translations", language: "de", entries: [{ target: "Q2", text: "Welche Marke haben Sie zuletzt gekauft?" }, { target: "Q2.option:3", text: "Keine davon" }, { target: "Q3", text: "Warum {{BRAND}}?" }] }]).def;
++  const edit = run(withDe, [{ op: "update_question", target: "Q2", text: "Which brand did you buy most recently?" }]);
++  assert.ok(edit.valid);
++  assert.ok(edit.warnings.some((w) => /^1 translation is now outdated \(de\) — the source text changed/.test(w)), edit.warnings.join("\n"));
++  const de = edit.def.localization!.translations.de;
++  assert.equal(de["q:q2:text"].status, "outdated");
++  assert.equal(de["q:q2:text"].text, "Welche Marke haben Sie zuletzt gekauft?", "the text is kept until re-translated");
++  assert.equal(de["q:q2:opt:3"].status, "ai", "untouched elements are untouched");
++  /* confirm: it still fits */
++  const confirmed = run(edit.def, [{ op: "confirm_translations", language: "de" }]);
++  assert.equal(confirmed.def.localization!.translations.de["q:q2:text"].status, "edited");
++  assert.match(confirmed.results[0].description, /1 outdated translation confirmed/);
++  assert.ok(diffSurveys(edit.def, confirmed.def).summary.includes("Confirm 1 outdated Deutsch translation"), "the Changes panel says what the confirmation is");
++  /* the stale state may be only DETECTED, not stored — the source was edited in Studio, so no action marked the entry — and a confirmation is still a confirmation */
++  const studioEdit = structuredClone(withDe);
++  studioEdit.questions.find((q) => q.code === "Q2")!.text = "Which brand did you buy most recently?";
++  assert.equal(studioEdit.localization!.translations.de["q:q2:text"].status, "ai", "nothing stored");
++  assert.equal(lintLanguage(studioEdit, "de").issues.filter((i) => i.kind === "stale_source").length, 1, "but detected");
++  const c2 = run(studioEdit, [{ op: "confirm_translations", language: "de" }]);
++  assert.equal(c2.def.localization!.translations.de["q:q2:text"].status, "edited");
++  assert.ok(diffSurveys(studioEdit, c2.def).summary.includes("Confirm 1 outdated Deutsch translation"), diffSurveys(studioEdit, c2.def).summary.join(" | "));
++  assert.ok(!diffSurveys(studioEdit, c2.def).summary.some((l) => /^Translate|^Approve/.test(l)), "not counted as a translation or an approval");
++  /* or re-translate */
++  const re = run(edit.def, [{ op: "set_translations", language: "de", entries: [{ target: "Q2", text: "Welche Marke haben Sie zuletzt gekauft (neu)?" }] }]);
++  assert.equal(re.def.localization!.translations.de["q:q2:text"].status, "ai");
++  assert.equal(lintLanguage(re.def, "de").issues.filter((i) => i.kind === "stale_source").length, 0);
++  /* the review reports it */
++  const rv = reviewSurvey(edit.def);
++  assert.ok(rv.findings.some((f) => f.category === "localization" && /Deutsch: 1 translation is outdated/.test(f.message)), rv.findings.map((f) => f.message).join("\n"));
++  assert.ok(rv.findings.some((f) => f.category === "localization" && /Deutsch: \d+ elements have no translation/.test(f.message)));
++  /* a translation with a lost pipe stored by hand is critical */
++  edit.def.localization!.translations.de["q:q3:text"] = { ...edit.def.localization!.translations.de["q:q3:text"], text: "Warum diese Marke?" };
++  assert.ok(reviewSurvey(edit.def).findings.some((f) => f.severity === "critical" && /lost or changed a piping token/.test(f.message)));
++});
++
++test("language routing in words: US → English, Mexico → Spanish, Germany → German; the URL parameter; a rule; the fallback — and the runtime follows it", () => {
++  const def = survey();
++  const out = run(def, [
++    { op: "add_language", code: "es", locale: "es-MX" }, { op: "add_language", code: "de" },
++    { op: "set_language_routing", countryMap: { US: "en", MX: "es" }, urlParam: "language", fallback: "en", allowSwitch: true, rules: [{ when: "COUNTRY = 3", language: "de", label: "German residents" }] },
++    { op: "set_language_routing", countryMap: { DE: "de" }, rules: [{ when: "COUNTRY = 2", language: "es" }] },
++    { op: "set_language_routing", countryMap: { FR: "fr" } },
++    { op: "set_language_routing", order: ["url", "teleport"] },
++  ]);
++  assert.equal(out.errors.length, 1); assert.match(out.errors[0], /country FR names \S+ \(fr\), which the survey does not have/);
++  assert.equal(acts([{ op: "set_language_routing", order: ["url", "teleport"] }]).rejected.length, 1);
++  const r = out.def.localization!.routing;
++  assert.deepEqual(r.countryMap, { US: "en", MX: "es", DE: "de" }, "a second country map merges into the first");
++  assert.equal(r.urlParam, "language"); assert.equal(r.fallback, "en"); assert.equal(r.allowSwitch, true);
++  assert.equal(r.rules.length, 2, "rules merge too"); assert.equal(r.rules[0].language, "de"); assert.equal(r.rules[0].when.type, "rule"); assert.equal(r.rules[1].language, "es");
++  assert.ok(r.order.includes("country") && r.order.includes("rules"));
++  assert.ok(r.order.indexOf("country") < r.order.indexOf("browser"), "country routing beats the browser's language");
++  assert.ok(r.order.indexOf("rules") < r.order.indexOf("browser"), "so do the rules");
++  const replaced = run(out.def, [{ op: "set_language_routing", merge: false, countryMap: { DE: "de" }, rules: [] }]).def.localization!.routing;
++  assert.deepEqual(replaced.countryMap, { DE: "de" }, "merge: false replaces");
++  const narrowed = run(out.def, [{ op: "set_language_routing", order: ["url", "browser"] }, { op: "set_language_routing", rules: [{ when: "COUNTRY = 1", language: "en" }] }]).def.localization!.routing;
++  assert.deepEqual(narrowed.order, ["url", "rules", "browser"], "a rule added to an order without a rules step puts the step in, before the browser");
++  assert.ok(out.warnings.some((w) => /Country routing was added to the precedence order/.test(w)));
++  /* the runtime: drafts are not offered, so make them ready for the check */
++  for (const l of out.def.localization!.languages) l.status = "ready";
++  assert.equal(resolveLanguage(out.def, { country: "MX" }, true), "es");
++  assert.equal(resolveLanguage(out.def, { urlParams: { language: "de" } }, true), "de");
++  assert.equal(resolveLanguage(out.def, { country: "FR", browserLanguages: ["fr-FR"] }, true), "en", "nothing decides → the fallback");
++  const rv = out.results.find((x) => x.op === "set_language_routing" && x.ok)!;
++  assert.match(rv.description, /US → English, MX → Español/);
++  assert.match(rv.description, /1 routing rule/);
++});
+diff --git a/packages/engine/src/localizationActions.ts b/packages/engine/src/localizationActions.ts
+new file mode 100644
+index 0000000..d4b6f4b
+--- /dev/null
++++ b/packages/engine/src/localizationActions.ts
+@@ -0,0 +1,432 @@
++import type { Condition, GlossaryEntry, LanguageConfig, Localization, SurveyDefinition, TranslationEntry } from "@rescript/schema";
++import { LANGUAGE_LIBRARY, LANGUAGE_ROUTING_MODES, LANGUAGE_STATUSES } from "@rescript/schema";
++import type { IdMinter } from "./questionOps.js";
++import {
++  effectiveLocalization, translatableElements, recordTranslation, setTranslationStatus, confirmTranslation, glossaryFor, languageName, languageReady,
++  lintLanguage, surveyLanguages, textHash, type TranslatableElement,
++} from "./localization.js";
++import { stripHtmlText } from "./html.js";
++
++/**
++ * THE LOCALIZATION ACTIONS — how the copilot (and the Studio's own buttons)
++ * write the survey's languages, translations, glossary and language routing.
++ *
++ * Like the survey, UX and analysis actions: a closed vocabulary, a gate that
++ * reads the model's JSON into typed actions or refuses them with a reason,
++ * and an apply step that resolves every target against the real survey and
++ * refuses what would break a respondent's experience. They write
++ * `def.localization` (and `deployment.languages`) and nothing else: no
++ * action here can change a question, an option code, a condition or a
++ * variable — "only the respondent-facing language changes".
++ *
++ *   add_language / remove_language / set_language_status
++ *   set_translations        the model's own translations, element by element;
++ *                           a translation that drops a piping token, breaks
++ *                           the HTML, empties the text or translates a
++ *                           do-not-translate term is refused; an approved
++ *                           translation is kept unless overwriteApproved
++ *   approve_translations    lock (approve / review) what is there
++ *   confirm_translations    an outdated translation still fits the new source
++ *   set_language_routing    "US → English, Mexico → Spanish", the URL
++ *                           parameter, the order of precedence, the fallback
++ *   set_glossary            preferred terms and brand names never translated
++ */
++
++export type TranslationTarget = string;
++export interface TranslationSpec { target: TranslationTarget; text: string }
++
++export type LocalizationAction =
++  | { op: "add_language"; code: string; locale?: string; country?: string; name?: string; notes?: string; enabled?: boolean }
++  | { op: "remove_language"; code: string }
++  | { op: "set_language_status"; code: string; status?: (typeof LANGUAGE_STATUSES)[number]; enabled?: boolean }
++  | { op: "set_translations"; language: string; entries: TranslationSpec[]; status?: "ai" | "edited"; overwriteApproved?: boolean }
++  | { op: "approve_translations"; language: string; targets?: TranslationTarget[]; status?: "approved" | "reviewed" }
++  | { op: "confirm_translations"; language: string; targets?: TranslationTarget[] }
++  | { op: "set_language_routing"; order?: string[]; urlParam?: string; embeddedField?: string; countryMap?: Record<string, string>; rules?: { when: string | Condition; language: string; label?: string }[]; allowSwitch?: boolean; fallback?: string; merge?: boolean }
++  | { op: "set_glossary"; entries?: { source: string; targets?: Record<string, string>; doNotTranslate?: boolean; notes?: string }[]; remove?: string[] };
++
++/**
++ * Within one batch the language must exist before anything is written into
++ * it, the glossary before the translations it checks, the translations
++ * before their approval, and a status or the routing last — whatever order
++ * the model listed them in. 0 first.
++ */
++export function localizationRank(op: string): number {
++  switch (op) {
++    case "add_language": return 0;
++    case "set_glossary": return 1;
++    case "approve_translations": case "confirm_translations": return 3;
++    case "set_language_status": case "set_language_routing": return 4;
++    case "remove_language": return 5;
++    default: return 2; // set_translations
++  }
++}
++
++export const LOCALIZATION_ACTION_OPS = [
++  "add_language", "remove_language", "set_language_status", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary",
++] as const;
++const OPS = new Set<string>(LOCALIZATION_ACTION_OPS);
++export const isLocalizationOp = (op: string): boolean => OPS.has(op);
++
++/* ------------------------------------------------------------ the gate */
++
++const str = (v: unknown, max = 400): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
++const strs = (v: unknown, max = 60): string[] | undefined => (Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).slice(0, max) : undefined);
++const LANG_RE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
++const langCode = (v: unknown): string | undefined => { const s = str(v, 12); if (!s) return undefined; const c = s.replace(/_/g, "-"); return LANG_RE.test(c) ? c.split("-")[0].toLowerCase() + (c.includes("-") ? "-" + c.split("-").slice(1).join("-") : "") : undefined; };
++const base = (code: string) => code.split("-")[0].toLowerCase();
++
++/** The model's JSON as a typed action, a reason it was refused, or null when the op is not one of ours. */
++export function coerceLocalizationAction(op: string, o: Record<string, unknown>): LocalizationAction | string | null {
++  switch (op) {
++    case "add_language": {
++      const raw = langCode(o.code ?? o.language);
++      if (!raw) return "add_language needs a language code (de, es-MX, hi)";
++      const code = base(raw);
++      const locale = str(o.locale, 12) ?? (raw.includes("-") ? raw : undefined);
++      return { op, code, ...(locale ? { locale } : {}), ...(str(o.country, 2) ? { country: str(o.country, 2)!.toUpperCase() } : {}), ...(str(o.name, 60) ? { name: str(o.name, 60) } : {}), ...(str(o.notes, 600) ? { notes: str(o.notes, 600) } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}) };
++    }
++    case "remove_language": { const code = langCode(o.code ?? o.language); return code ? { op, code: base(code) } : "remove_language needs a language code"; }
++    case "set_language_status": {
++      const code = langCode(o.code ?? o.language); if (!code) return "set_language_status needs a language code";
++      const status = str(o.status);
++      if (status && !(LANGUAGE_STATUSES as readonly string[]).includes(status)) return `“${status}” is not a language status (${LANGUAGE_STATUSES.join(", ")})`;
++      if (!status && typeof o.enabled !== "boolean") return "set_language_status needs a status or enabled";
++      return { op, code: base(code), ...(status ? { status: status as (typeof LANGUAGE_STATUSES)[number] } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}) };
++    }
++    case "set_translations": {
++      const code = langCode(o.language ?? o.lang ?? o.code); if (!code) return "set_translations needs a language";
++      const entries = Array.isArray(o.entries ?? o.translations) ? (o.entries ?? o.translations as unknown[]) as unknown[] : [];
++      const list: TranslationSpec[] = entries.map((e) => { const x = (e ?? {}) as Record<string, unknown>; const target = str(x.target ?? x.key ?? x.element, 120); const text = typeof x.text === "string" ? x.text.slice(0, 8000) : typeof x.translation === "string" ? x.translation.slice(0, 8000) : undefined; return target && text !== undefined ? { target, text } : null; }).filter((x): x is TranslationSpec => !!x).slice(0, 400);
++      if (!list.length) return "set_translations needs entries with target and text";
++      const status = str(o.status);
++      return { op, language: base(code), entries: list, ...(status === "edited" ? { status: "edited" as const } : {}), ...(o.overwriteApproved === true ? { overwriteApproved: true } : {}) };
++    }
++    case "approve_translations": case "confirm_translations": {
++      const code = langCode(o.language ?? o.lang ?? o.code); if (!code) return `${op} needs a language`;
++      const targets = strs(o.targets ?? o.elements, 400);
++      if (op === "approve_translations") { const status = str(o.status); return { op, language: base(code), ...(targets ? { targets } : {}), ...(status === "reviewed" ? { status: "reviewed" as const } : {}) }; }
++      return { op, language: base(code), ...(targets ? { targets } : {}) };
++    }
++    case "set_language_routing": {
++      const a: LocalizationAction = { op, merge: o.merge !== false };
++      const order = strs(o.order ?? o.precedence, 10)?.map((x) => x.toLowerCase());
++      if (order) { const bad = order.find((x) => !(LANGUAGE_ROUTING_MODES as readonly string[]).includes(x)); if (bad) return `“${bad}” is not a language-routing mode (${LANGUAGE_ROUTING_MODES.join(", ")})`; a.order = order; }
++      if (str(o.urlParam ?? o.url_param, 40)) a.urlParam = str(o.urlParam ?? o.url_param, 40);
++      if (str(o.embeddedField ?? o.embedded_field, 60)) a.embeddedField = str(o.embeddedField ?? o.embedded_field, 60);
++      const cm = (o.countryMap ?? o.country_map ?? o.countries) as unknown;
++      if (cm && typeof cm === "object" && !Array.isArray(cm)) {
++        const map: Record<string, string> = {};
++        for (const [k, v] of Object.entries(cm as Record<string, unknown>)) { const c = str(k, 3)?.toUpperCase(); const l = langCode(v); if (c && /^[A-Z]{2}$/.test(c) && l) map[c] = base(l); }
++        if (Object.keys(map).length) a.countryMap = map;
++      } else if (Array.isArray(cm)) {
++        const map: Record<string, string> = {};
++        for (const e of cm) { const x = (e ?? {}) as Record<string, unknown>; const c = str(x.country ?? x.code, 3)?.toUpperCase(); const l = langCode(x.language ?? x.lang); if (c && /^[A-Z]{2}$/.test(c) && l) map[c] = base(l); }
++        if (Object.keys(map).length) a.countryMap = map;
++      }
++      if (Array.isArray(o.rules)) a.rules = o.rules.map((r) => { const x = (r ?? {}) as Record<string, unknown>; const l = langCode(x.language ?? x.lang); const when = typeof x.when === "string" ? x.when : x.when && typeof x.when === "object" ? x.when as Condition : undefined; return l && when ? { when, language: base(l), ...(str(x.label, 80) ? { label: str(x.label, 80) } : {}) } : null; }).filter((x): x is NonNullable<typeof x> => !!x).slice(0, 40);
++      if (typeof o.allowSwitch === "boolean") a.allowSwitch = o.allowSwitch;
++      if (langCode(o.fallback ?? o.default)) a.fallback = base(langCode(o.fallback ?? o.default)!);
++      if (Object.keys(a).length <= 2) return "set_language_routing changes nothing";
++      return a;
++    }
++    case "set_glossary": {
++      const entries = Array.isArray(o.entries ?? o.terms) ? ((o.entries ?? o.terms) as unknown[]).map((e) => {
++        const x = (e ?? {}) as Record<string, unknown>; const source = str(x.source ?? x.term, 120); if (!source) return null;
++        const targets: Record<string, string> = {};
++        if (x.targets && typeof x.targets === "object") for (const [k, v] of Object.entries(x.targets as Record<string, unknown>)) { const l = langCode(k); const t = str(v, 200); if (l && t) targets[base(l)] = t; }
++        return { source, ...(Object.keys(targets).length ? { targets } : {}), ...(x.doNotTranslate === true || x.keep === true ? { doNotTranslate: true } : {}), ...(str(x.notes, 300) ? { notes: str(x.notes, 300) } : {}) };
++      }).filter((x): x is NonNullable<typeof x> => !!x).slice(0, 200) : undefined;
++      const remove = strs(o.remove, 200);
++      if (!entries?.length && !remove?.length) return "set_glossary needs entries or remove";
++      return { op, ...(entries?.length ? { entries } : {}), ...(remove?.length ? { remove } : {}) };
++    }
++    default: return null;
++  }
++}
++
++/* ------------------------------------------------------------ targets */
++
++/**
++ * A translation target as the model (or a person) names it, resolved to an
++ * element key: `Q5` (the text), `Q5.instruction`, `Q5.option:2` (by code or
++ * label), `Q5.row:r1`, `Q5.column:<id or label>`, `Q5.column:<id>.option:2`,
++ * `Q5.scale:low|high`, `Q5.validation:1`, `Q5.probe`, `meta:title`,
++ * `meta:description`, `end:<node id>`, `block:<title>` (its title),
++ * `button:next`, `ui:required` — or an element key itself.
++ */
++export function resolveTranslationTarget(def: SurveyDefinition, elements: TranslatableElement[], target: string, question: (ref: string) => { id: string; code: string } | undefined): TranslatableElement | undefined {
++  const t = target.trim();
++  const byKey = elements.find((e) => e.key === t);
++  if (byKey) return byKey;
++  const low = t.toLowerCase();
++  if (low === "title" || low === "meta:title" || low === "survey title") return elements.find((e) => e.key === "meta:title");
++  if (low === "description" || low === "meta:description") return elements.find((e) => e.key === "meta:description");
++  const m = /^(?:q(?:uestion)?:)?([A-Za-z_][A-Za-z0-9_]*)(?:[.:](.+))?$/.exec(t);
++  if (!m) return undefined;
++  const [, ref, partRaw] = m;
++  const prefix = ref.toLowerCase();
++  if (prefix === "ui" && partRaw) return elements.find((e) => e.key === `ui:${partRaw}`);
++  if (prefix === "button" && partRaw) return elements.find((e) => e.key === `branding:buttons:${partRaw.toLowerCase()}`);
++  if (prefix === "end" && partRaw) return elements.find((e) => e.key === `flow:${partRaw}:message`) ?? elements.filter((e) => e.kind === "end_message")[partRaw === "complete" ? 0 : -1];
++  if (prefix === "block" || prefix === "page") { const want = (partRaw ?? "").toLowerCase(); return elements.find((e) => e.kind === "page_title" && (e.key === `flow:${partRaw}:title` || stripHtmlText(e.source).toLowerCase() === want)); }
++  const q = question(ref);
++  if (!q) return undefined;
++  const mine = elements.filter((e) => e.questionId === q.id);
++  const part = (partRaw ?? "text").trim();
++  const pl = part.toLowerCase();
++  if (pl === "text" || pl === "question") return mine.find((e) => e.kind === "question_text");
++  if (pl === "instruction" || pl === "instructions") return mine.find((e) => e.kind === "question_instruction");
++  if (pl === "description") return mine.find((e) => e.kind === "question_description");
++  if (pl === "placeholder") return mine.find((e) => e.kind === "question_placeholder");
++  if (pl === "probe") return mine.find((e) => e.kind === "probe_prompt");
++  const sub = /^(option|opt|choice|row|column|col|scale|validation|optalt|alt)\s*[:=]?\s*(.+)$/i.exec(part);
++  if (!sub) return undefined;
++  const [, kindRaw, valueRaw] = sub;
++  const kind = kindRaw.toLowerCase(), value = valueRaw.trim();
++  const byCodeOrLabel = (k: TranslatableElement["kind"]) => mine.find((e) => e.kind === k && e.code !== undefined && e.code.toLowerCase() === value.toLowerCase()) ?? mine.find((e) => e.kind === k && stripHtmlText(e.source).toLowerCase() === value.toLowerCase());
++  if (kind === "option" || kind === "opt" || kind === "choice") return byCodeOrLabel("option");
++  if (kind === "optalt" || kind === "alt") return byCodeOrLabel("option_alt");
++  if (kind === "row") return byCodeOrLabel("row");
++  if (kind === "column" || kind === "col") {
++    const co = /^(.+?)[.:]\s*(?:option|opt)\s*[:=]?\s*(.+)$/i.exec(value);
++    if (co) return mine.find((e) => e.kind === "column_option" && e.code?.toLowerCase() === `${co[1]}:${co[2]}`.toLowerCase()) ?? mine.find((e) => e.kind === "column_option" && e.code?.toLowerCase().endsWith(`:${co[2].toLowerCase()}`) && e.label.toLowerCase().includes(co[1].toLowerCase()));
++    return byCodeOrLabel("column");
++  }
++  if (kind === "scale") { const w = value.toLowerCase(); return mine.find((e) => e.kind === "scale_label" && (e.key.toLowerCase().endsWith(`:${w}`) || (w === "low" || w === "left" ? /leftlabel$/i.test(e.key) : /rightlabel$/i.test(e.key)))); }
++  if (kind === "validation") return mine.find((e) => e.kind === "validation_message" && e.key.endsWith(`:validation:${Number(value) - 1}`));
++  return undefined;
++}
++
++/* ------------------------------------------------------------ checks */
++
++const PIPE_RE = /\{\{[^}]+\}\}|\{answer\}|\{(?:n|min|max|total|target|date|row)\}/g;
++const TAG_RE = /<\/?([a-zA-Z][\w-]*)/g;
++const tokensOf = (s: string) => (s.match(PIPE_RE) ?? []).map((x) => x.replace(/\s+/g, "")).sort();
++const tagsOf = (s: string) => (s.match(TAG_RE) ?? []).map((x) => x.toLowerCase()).sort();
++
++/** Why a proposed translation of `source` cannot be stored — null when it can. */
++export function translationProblem(source: string, text: string, glossary: GlossaryEntry[], lang: string): string | null {
++  if (!text.trim()) return "the translation is empty";
++  if (/\p{L}/u.test(stripHtmlText(source)) && !/\p{L}/u.test(stripHtmlText(text))) return "the translation has no words in it";
++  const a = tokensOf(source), b = tokensOf(text);
++  if (a.join("|") !== b.join("|")) return `the piping / placeholders must be kept exactly — the source has ${a.length ? a.join(" ") : "none"}, the translation has ${b.length ? b.join(" ") : "none"}`;
++  if ((text.match(/</g) ?? []).length !== (text.match(/>/g) ?? []).length || /<[^>]*$/.test(text)) return "the HTML in the translation is unbalanced";
++  const ta = tagsOf(source), tb = tagsOf(text);
++  if (ta.join("|") !== tb.join("|")) return `the HTML tags must match the source (${ta.length ? ta.join(" ") : "none"})`;
++  for (const g of glossary) {
++    if (!g.doNotTranslate) continue;
++    const re = new RegExp(`(?<![\\p{L}\\p{N}])${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, g.caseSensitive ? "u" : "iu");
++    if (re.test(stripHtmlText(source)) && !re.test(stripHtmlText(text))) return `“${g.source}” is a term that is never translated (glossary) and must appear as written`;
++  }
++  void lang;
++  return null;
++}
++
++/** Preferred glossary wordings the translation does not use — a warning, not a refusal. */
++export function glossaryMisses(source: string, text: string, loc: Localization, lang: string): string[] {
++  const out: string[] = [];
++  for (const g of glossaryFor(loc, lang)) {
++    const re = new RegExp(`(?<![\\p{L}\\p{N}])${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, g.caseSensitive ? "u" : "iu");
++    if (re.test(stripHtmlText(source)) && !new RegExp(g.target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), g.caseSensitive ? "u" : "iu").test(stripHtmlText(text))) out.push(`“${g.source}” → “${g.target}”`);
++  }
++  return out;
++}
++
++/* ------------------------------------------------------------ applying */
++
++export interface LocalizationEnv {
++  question(ref: string): { id: string; code: string } | undefined;
++  condition(input: string | Condition): Condition;
++  ids: IdMinter;
++  now: string;
++  by?: string;
++}
++export interface LocalizationApplied { description: string; destructive?: string; warnings: string[]; touched: string[] }
++
++class ActionError extends Error {}
++const fail = (m: string): never => { throw new ActionError(m); };
++
++function locOf(def: SurveyDefinition): Localization {
++  const loc = effectiveLocalization(def);
++  def.localization = loc;
++  return loc;
++}
++function langOrFail(def: SurveyDefinition, code: string, what: string): LanguageConfig | "source" {
++  const loc = effectiveLocalization(def);
++  if (code === loc.sourceLanguage) return "source";
++  const cfg = surveyLanguages(def).find((l) => l.code === code);
++  if (!cfg) fail(`${what}: the survey has no ${languageName(code)} (${code}) version — add the language first (add_language)`);
++  return cfg!;
++}
++const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
++
++export function applyLocalizationAction(def: SurveyDefinition, a: LocalizationAction, env: LocalizationEnv): LocalizationApplied {
++  const warnings: string[] = [];
++  switch (a.op) {
++    case "add_language": {
++      const loc = locOf(def);
++      if (a.code === loc.sourceLanguage) fail(`${languageName(a.code)} is the survey's source language`);
++      const known = LANGUAGE_LIBRARY.find((l) => l.code === a.code);
++      if (!known && !/^[a-z]{2,3}$/.test(a.code)) fail(`“${a.code}” is not a language code`);
++      const existing = loc.languages.find((l) => l.code === a.code);
++      const locale = a.locale ?? known?.locales.find((l) => !a.country || l.country === a.country)?.tag;
++      if (existing) {
++        Object.assign(existing, { ...(locale ? { locale } : {}), ...(a.country ? { country: a.country } : {}), ...(a.name ? { name: a.name } : {}), ...(a.notes ? { notes: a.notes } : {}), ...(a.enabled !== undefined ? { enabled: a.enabled } : {}) });
++        return { description: `${languageName(a.code, existing)} version updated`, warnings, touched: [] };
++      }
++      const cfg: LanguageConfig = { code: a.code, ...(locale ? { locale } : {}), ...(a.country ? { country: a.country } : {}), ...(a.name ? { name: a.name } : {}), direction: known?.direction ?? "ltr", status: "draft", enabled: a.enabled ?? true, format: {}, ...(a.notes ? { notes: a.notes } : {}) };
++      loc.languages = [...loc.languages, cfg];
++      if (!loc.translations[a.code]) loc.translations = { ...loc.translations, [a.code]: {} };
++      const langs = def.deployment?.languages ?? [];
++      if (def.deployment && !langs.includes(a.code)) def.deployment.languages = [...langs, a.code];
++      const n = translatableElements(def).filter((e) => e.mandatory).length;
++      return { description: `Added ${languageName(a.code, cfg)}${locale ? ` (${locale})` : ""} as a draft language — ${plural(n, "element")} to translate`, warnings, touched: [] };
++    }
++    case "remove_language": {
++      const loc = locOf(def);
++      if (a.code === loc.sourceLanguage) fail("the source language cannot be removed");
++      const cfg = loc.languages.find((l) => l.code === a.code) ?? fail(`the survey has no ${languageName(a.code)} version`);
++      const n = Object.keys(loc.translations[a.code] ?? {}).length;
++      loc.languages = loc.languages.filter((l) => l.code !== a.code);
++      const { [a.code]: _gone, ...rest } = loc.translations; void _gone;
++      loc.translations = rest;
++      loc.audio = (loc.audio ?? []).filter((x) => x.language !== a.code);
++      if (def.deployment?.languages) def.deployment.languages = def.deployment.languages.filter((l) => l !== a.code);
++      return { description: `Removed the ${languageName(a.code, cfg!)} version`, destructive: `Removes the ${languageName(a.code, cfg!)} version${n ? ` and its ${plural(n, "translation")}` : ""}${cfg!.status === "live" ? " — it is LIVE" : ""}`, warnings, touched: [] };
++    }
++    case "set_language_status": {
++      const loc = locOf(def);
++      const cfg = loc.languages.find((l) => l.code === a.code) ?? fail(`the survey has no ${languageName(a.code)} version`);
++      if (a.status && (a.status === "ready" || a.status === "live") && !languageReady(def, a.code)) {
++        const blocking = lintLanguage(def, a.code).issues.filter((i) => i.blocking);
++        fail(`${languageName(a.code, cfg!)} cannot be ${a.status}: ${plural(blocking.length, "blocking issue")} — ${[...new Set(blocking.map((i) => i.kind.replace(/_/g, " ")))].join(", ")}`);
++      }
++      if (a.status) cfg!.status = a.status;
++      if (a.enabled !== undefined) cfg!.enabled = a.enabled;
++      return { description: `${languageName(a.code, cfg!)}: ${[a.status, a.enabled === undefined ? "" : a.enabled ? "offered to respondents" : "not offered"].filter(Boolean).join(", ")}`, warnings, touched: [] };
++    }
++    case "set_translations": {
++      let loc = locOf(def);
++      langOrFail(def, a.language, "set_translations") === "source" && fail(`${languageName(a.language)} is the source language — edit the question text itself`);
++      const elements = translatableElements(def);
++      const glossary = loc.glossary ?? [];
++      let written = 0, kept = 0;
++      const touched = new Set<string>();
++      const refused: string[] = [];
++      for (const e of a.entries) {
++        const el = resolveTranslationTarget(def, elements, e.target, env.question);
++        if (!el) { refused.push(`${e.target}: not a translatable element of this survey`); continue; }
++        const prev = loc.translations[a.language]?.[el.key];
++        if (prev && (prev.status === "approved" || prev.status === "reviewed") && !a.overwriteApproved && prev.sourceHash === textHash(el.source)) { kept++; continue; }
++        const problem = translationProblem(el.source, e.text, glossary, a.language);
++        if (problem) { refused.push(`${el.label}: ${problem}`); continue; }
++        const misses = glossaryMisses(el.source, e.text, loc, a.language);
++        if (misses.length) warnings.push(`${el.label} (${a.language}): the glossary prefers ${misses.join(", ")}`);
++        loc = recordTranslation(loc, a.language, el.key, e.text, el.source, { origin: "ai", status: a.status ?? "ai", by: env.by, now: env.now });
++        written++;
++        if (el.questionId) touched.add(el.questionId);
++      }
++      def.localization = loc;
++      if (!written && refused.length) fail(refused.join("; "));
++      if (refused.length) warnings.push(...refused.map((r) => `Not translated — ${r}`));
++      const approvedKept = kept ? ` (${plural(kept, "approved translation")} kept — ask to overwrite them if you mean to)` : "";
++      return { description: `${languageName(a.language)}: ${plural(written, "translation")} written${approvedKept}`, warnings, touched: [...touched] };
++    }
++    case "approve_translations": case "confirm_translations": {
++      let loc = locOf(def);
++      langOrFail(def, a.language, a.op) === "source" && fail(`${languageName(a.language)} is the source language`);
++      const elements = translatableElements(def);
++      const picked = a.targets ? a.targets.map((t) => resolveTranslationTarget(def, elements, t, env.question) ?? fail(`${t}: not a translatable element of this survey`)) : elements;
++      let n = 0;
++      for (const el of picked) {
++        const t = loc.translations[a.language]?.[el.key];
++        if (!t || t.status === "not_translated" || !t.text.trim()) continue;
++        if (a.op === "confirm_translations") { if (t.status === "outdated" || t.sourceHash !== textHash(el.source)) { loc = confirmTranslation(loc, a.language, el.key, el.source, env.by); n++; } continue; }
++        const status: TranslationEntry["status"] = a.status ?? "approved";
++        if (t.status === status) continue;
++        if (t.status === "outdated") { warnings.push(`${el.label} (${a.language}) is outdated — confirmed as fitting the new source before approval`); loc = confirmTranslation(loc, a.language, el.key, el.source, env.by); }
++        loc = setTranslationStatus(loc, a.language, el.key, status, env.by); n++;
++      }
++      def.localization = loc;
++      return { description: a.op === "confirm_translations" ? `${languageName(a.language)}: ${plural(n, "outdated translation")} confirmed` : `${languageName(a.language)}: ${plural(n, "translation")} ${a.status ?? "approved"}${(a.status ?? "approved") === "approved" ? " (locked)" : ""}`, warnings, touched: [] };
++    }
++    case "set_language_routing": {
++      const loc = locOf(def);
++      const offered = new Set([loc.sourceLanguage, ...loc.languages.map((l) => l.code)]);
++      const check = (l: string, what: string) => { if (!offered.has(l)) fail(`${what} names ${languageName(l)} (${l}), which the survey does not have — add the language first`); };
++      const r = { ...loc.routing };
++      const changed: string[] = [];
++      if (a.order) { r.order = a.order as typeof r.order; changed.push(`precedence ${a.order.join(" → ")}`); }
++      if (a.urlParam) { r.urlParam = a.urlParam; changed.push(`URL parameter ?${a.urlParam}=`); }
++      if (a.embeddedField) { r.embeddedField = a.embeddedField; changed.push(`embedded field ${a.embeddedField}`); }
++      if (a.countryMap) {
++        for (const [c, l] of Object.entries(a.countryMap)) check(l, `country ${c}`);
++        r.countryMap = a.merge === false ? a.countryMap : { ...r.countryMap, ...a.countryMap };
++        changed.push(Object.entries(a.countryMap).map(([c, l]) => `${c} → ${languageName(l)}`).join(", "));
++        if (!r.order.includes("country")) { r.order = [...r.order.filter((m) => m !== "browser" && m !== "respondent"), "country", ...r.order.filter((m) => m === "browser" || m === "respondent")] as typeof r.order; warnings.push("Country routing was added to the precedence order, before browser detection and the respondent's own choice."); }
++      }
++      if (a.rules) {
++        const rules = a.rules.map((x) => { check(x.language, "a routing rule"); return { id: env.ids("langrule"), when: env.condition(x.when), language: x.language, ...(x.label ? { label: x.label } : {}) }; });
++        r.rules = a.merge === false ? rules : [...r.rules, ...rules];
++        changed.push(plural(rules.length, "routing rule"));
++        if (!r.order.includes("rules")) r.order = [...r.order.filter((m) => m !== "browser" && m !== "respondent"), "rules", ...r.order.filter((m) => m === "browser" || m === "respondent")] as typeof r.order;
++      }
++      if (a.allowSwitch !== undefined) { r.allowSwitch = a.allowSwitch; changed.push(a.allowSwitch ? "respondents may switch language" : "no language switcher"); }
++      if (a.fallback) { check(a.fallback, "the fallback"); r.fallback = a.fallback; changed.push(`fallback ${languageName(a.fallback)}`); }
++      loc.routing = r;
++      return { description: `Language routing: ${changed.join("; ")}`, warnings, touched: [] };
++    }
++    case "set_glossary": {
++      const loc = locOf(def);
++      let list = [...(loc.glossary ?? [])];
++      let added = 0, updated = 0, removed = 0;
++      for (const src of a.remove ?? []) { const before = list.length; list = list.filter((g) => g.source.toLowerCase() !== src.toLowerCase()); removed += before - list.length; }
++      for (const e of a.entries ?? []) {
++        const cur = list.find((g) => g.source.toLowerCase() === e.source.toLowerCase());
++        if (cur) { cur.targets = { ...cur.targets, ...(e.targets ?? {}) }; if (e.doNotTranslate !== undefined) cur.doNotTranslate = e.doNotTranslate; if (e.notes) cur.notes = e.notes; updated++; }
++        else { list.push({ id: env.ids("gloss"), source: e.source, targets: e.targets ?? {}, scope: "project", caseSensitive: false, doNotTranslate: e.doNotTranslate ?? false, ...(e.notes ? { notes: e.notes } : {}) }); added++; }
++      }
++      loc.glossary = list;
++      return { description: `Glossary: ${[added && `${plural(added, "term")} added`, updated && `${plural(updated, "term")} updated`, removed && `${plural(removed, "term")} removed`].filter(Boolean).join(", ") || "unchanged"}`, ...(removed ? { destructive: `Removes ${plural(removed, "glossary term")}` } : {}), warnings, touched: [] };
++    }
++  }
++}
++
++export function describeLocalizationAction(a: LocalizationAction): string {
++  switch (a.op) {
++    case "add_language": return `Add ${languageName(a.code)}`;
++    case "remove_language": return `Remove the ${languageName(a.code)} version`;
++    case "set_language_status": return `${languageName(a.code)}: ${a.status ?? (a.enabled ? "offered" : "not offered")}`;
++    case "set_translations": return `Translate ${a.entries.length} element${a.entries.length === 1 ? "" : "s"} into ${languageName(a.language)}`;
++    case "approve_translations": return `${a.status === "reviewed" ? "Review" : "Approve"} the ${languageName(a.language)} translations${a.targets ? ` of ${a.targets.length} element${a.targets.length === 1 ? "" : "s"}` : ""}`;
++    case "confirm_translations": return `Confirm the outdated ${languageName(a.language)} translations`;
++    case "set_language_routing": return "Set the language routing";
++    case "set_glossary": return "Change the glossary";
++  }
++}
++
++/* ------------------------------------------------------------ impact */
++
++/**
++ * WHAT A PROPOSAL DOES TO THE TRANSLATIONS. After the actions ran, every
++ * translation whose source text changed is marked outdated (its text is kept
++ * and still shown — better than the source language — until it is
++ * re-translated or confirmed), and the count is reported so the researcher
++ * is asked, not surprised: "7 translations (de, es) are now outdated".
++ */
++export function outdateTranslations(def: SurveyDefinition): { outdated: number; languages: string[]; keys: string[] } {
++  const loc = def.localization;
++  if (!loc || !Object.keys(loc.translations ?? {}).length) return { outdated: 0, languages: [], keys: [] };
++  const elements = translatableElements(def);
++  const langs = new Set<string>(); const keys: string[] = [];
++  let outdated = 0;
++  for (const [lang, table] of Object.entries(loc.translations)) {
++    for (const el of elements) {
++      const t = table[el.key];
++      if (!t || t.status === "not_translated" || t.status === "outdated" || !t.sourceHash || !t.text.trim()) continue;
++      if (t.sourceHash !== textHash(el.source)) { table[el.key] = { ...t, status: "outdated" }; outdated++; langs.add(lang); keys.push(el.key); }
++    }
++  }
++  return { outdated, languages: [...langs], keys };
++}
+diff --git a/packages/engine/src/surveyActions.ts b/packages/engine/src/surveyActions.ts
+index 52016cb..5aaed79 100644
+--- a/packages/engine/src/surveyActions.ts
++++ b/packages/engine/src/surveyActions.ts
+@@ -15,6 +15,8 @@ import { questionOrder, conditionRefs } from "./dependencies.js";
+ import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
+ import { applyAnalysisAction, coerceAnalysisAction, describeAnalysisAction, isAnalysisOp, ANALYSIS_ACTION_OPS, type AnalysisAction } from "./analysisActions.js";
+ import { describeAnalysisImpact } from "./analysisFramework.js";
++import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
++import { languageName } from "./localization.js";
+ import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
+ import { authoringQuestionView } from "./carryforward.js";
+ import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
+@@ -98,7 +100,9 @@ export type SurveyAction =
+   /* the survey's look and behaviour — see uxActions.ts; they write def.ux and nothing else */
+   | UxAction
+   /* the analysis framework — see analysisActions.ts; they write question.analysis and research.analysisPlan and nothing else */
+-  | AnalysisAction;
++  | AnalysisAction
++  /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
++  | LocalizationAction;
+ 
+ export const SURVEY_ACTION_OPS = [
+   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
+@@ -106,6 +110,7 @@ export const SURVEY_ACTION_OPS = [
+   "create_randomizer", "create_branch", "create_loop", "create_quota", "set_research", "add_punch", "remove_punches",
+   ...UX_ACTION_OPS,
+   ...ANALYSIS_ACTION_OPS,
++  ...LOCALIZATION_ACTION_OPS,
+ ] as const;
+ 
+ /** Friendly question types → the Studio variant that makes them. */
+@@ -290,6 +295,8 @@ function coerceOne(item: unknown): SurveyAction | string {
+       if (ux !== null) return ux;
+       const an = op ? coerceAnalysisAction(op, o) : null;
+       if (an !== null) return an;
++      const lc = op ? coerceLocalizationAction(op, o) : null;
++      if (lc !== null) return lc;
+       return op ? `unknown action “${op}”` : "an action needs an op";
+     }
+   }
+@@ -344,7 +351,8 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
+   const results: ActionResult[] = [];
+   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
+   // …and the analysis framework names questions and constructs: after both
+-  const rank = (a: SurveyAction) => (isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
++  // …and translations name the question texts as they will be: last of all
++  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : 0);
+   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
+   order.forEach(({ a, index }) => {
+     const snapshot = structuredClone(def) as SurveyDefinition;
+@@ -362,6 +370,14 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
+     }
+     def = ctx.def;
+   });
++  /*
++   * TRANSLATIONS WHOSE SOURCE THIS BATCH CHANGED are marked outdated now, not
++   * discovered later in the Localization panel — and reported, so the
++   * researcher is asked whether to re-translate rather than finding German
++   * respondents reading last week's question.
++   */
++  const stale = outdateTranslations(def);
++  if (stale.outdated) ctx.uxWarnings.push(`${stale.outdated} translation${stale.outdated === 1 ? " is" : "s are"} now outdated (${stale.languages.join(", ")}) — the source text changed; ask to re-translate them, or confirm them in Localization.`);
+   const parsed = SurveyDefinitionSchema.safeParse(def);
+   results.sort((x, y) => x.index - y.index);
+   const errors = results.filter((r) => !r.ok).map((r) => `${describeAction(actions[r.index])}: ${r.error}`);
+@@ -746,6 +762,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?:
+     default: {
+       // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
+       if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
++      // the languages: def.localization only; every target resolved, every translation checked against its source
++      if (isLocalizationOp(a.op)) {
++        const r = applyLocalizationAction(def, a as LocalizationAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids, now: ctx.now });
++        ctx.uxWarnings.push(...r.warnings);
++        return r;
++      }
+       // the look and behaviour: def.ux only, through the UX gate
+       const r = applyUxAction(def, a as UxAction, { lookups: { question: (x) => tryQuestion(ctx, x), block: (x) => tryBlock(ctx, x) }, ids: ctx.ids, now: ctx.now, refs: ctx.uxRefs });
+       ctx.uxWarnings.push(...r.warnings);
+@@ -1094,7 +1116,7 @@ export function describeAction(a: SurveyAction): string {
+     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
+     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
+     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
+-    default: return describeAnalysisAction(a as AnalysisAction);
++    default: return isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+   }
+ }
+ 
+@@ -1185,6 +1207,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition):
+   const designOf = (d: SurveyDefinition) => { const r = d.research; return r ? JSON.stringify({ ...r, analysisPlan: undefined }) : null; };
+   const researchChanged = designOf(before) !== designOf(after);
+   const planLines = analysisPlanDiff(before.research?.analysisPlan, after.research?.analysisPlan);
++  const langLines = localizationDiff(before, after);
+   const ux = diffUx(before, after);
+   const theme = diffTheme(before.branding, after.branding);
+   const randomizedAdded = after.questions.filter((q) => q.randomization?.enabled && !bq.get(q.id)?.randomization?.enabled).length;
+@@ -1215,6 +1238,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition):
+     sRemoved ? `Remove ${n(sRemoved, "skip condition")}` : "",
+     researchChanged ? "Record the research design (objective, hypotheses, constructs)" : "",
+     ...planLines,
++    ...langLines,
+     ...(theme.length ? [`Theme: ${theme.slice(0, 6).join("; ")}${theme.length > 6 ? ` and ${theme.length - 6} more` : ""}`] : []),
+     ...ux.added.map((x) => `Add ${x.kind} “${x.label}” on ${x.target}`),
+     ...ux.changed.map((x) => `Change ${x.kind} “${x.label}” on ${x.target}`),
+@@ -1276,6 +1300,36 @@ function analysisPlanDiff(before: AnalysisPlan | undefined, after: AnalysisPlan
+   return out;
+ }
+ 
++/** the languages, translations, glossary and routing: what changed, as summary lines */
++function localizationDiff(before: SurveyDefinition, after: SurveyDefinition): string[] {
++  const b = before.localization, a = after.localization;
++  if (!b && !a) return [];
++  const out: string[] = [];
++  const bl = new Set((b?.languages ?? []).map((l) => l.code)), al = new Set((a?.languages ?? []).map((l) => l.code));
++  for (const l of al) if (!bl.has(l)) out.push(`Add ${languageName(l, a!.languages.find((x) => x.code === l))} as a language`);
++  for (const l of bl) if (!al.has(l)) out.push(`Remove the ${languageName(l, b!.languages.find((x) => x.code === l))} version`);
++  for (const l of al) {
++    const bc = (b?.languages ?? []).find((x) => x.code === l), ac = a!.languages.find((x) => x.code === l)!;
++    if (bc && (bc.status !== ac.status || bc.enabled !== ac.enabled)) out.push(`${languageName(l, ac)}: ${bc.status !== ac.status ? ac.status : ""}${bc.enabled !== ac.enabled ? `${bc.status !== ac.status ? ", " : ""}${ac.enabled ? "offered" : "not offered"}` : ""}`);
++    const bt = b?.translations?.[l] ?? {}, at = a?.translations?.[l] ?? {};
++    let written = 0, approved = 0, confirmed = 0;
++    for (const [k, t] of Object.entries(at)) {
++      const p = bt[k];
++      if (!p || p.text !== t.text) { if (t.text.trim() && t.status !== "not_translated") written++; continue; }
++      // a confirmation re-stamps the source hash without changing the text — whether the stale state was stored ("outdated") or only detected (the hash no longer matched)
++      if (p.sourceHash !== t.sourceHash && (p.status === "outdated" || t.status === "edited")) { confirmed++; continue; }
++      if (p.status !== t.status && (t.status === "approved" || t.status === "reviewed")) approved++;
++    }
++    if (written) out.push(`Translate ${written} element${written === 1 ? "" : "s"} into ${languageName(l, ac)}`);
++    if (approved) out.push(`Approve ${approved} ${languageName(l, ac)} translation${approved === 1 ? "" : "s"}`);
++    if (confirmed) out.push(`Confirm ${confirmed} outdated ${languageName(l, ac)} translation${confirmed === 1 ? "" : "s"}`);
++  }
++  if (JSON.stringify(b?.routing ?? null) !== JSON.stringify(a?.routing ?? null)) out.push("Change the language routing");
++  const bg = (b?.glossary ?? []).length, ag = (a?.glossary ?? []).length;
++  if (JSON.stringify(b?.glossary ?? []) !== JSON.stringify(a?.glossary ?? [])) out.push(ag > bg ? `Add ${ag - bg} glossary term${ag - bg === 1 ? "" : "s"}` : ag < bg ? `Remove ${bg - ag} glossary term${bg - ag === 1 ? "" : "s"}` : "Change the glossary");
++  return out;
++}
++
+ export function renumberNewQuestions(base: SurveyDefinition, after: SurveyDefinition): SurveyDefinition {
+   const old = new Set(base.questions.map((q) => q.id));
+   const fresh = questionOrder(after).map((id) => after.questions.find((q) => q.id === id)!).filter((q) => q && !old.has(q.id) && /^Q\d+$/.test(String(q.code)));
+diff --git a/packages/engine/src/surveyReview.ts b/packages/engine/src/surveyReview.ts
+index ca53cb2..b6b8ba9 100644
+--- a/packages/engine/src/surveyReview.ts
++++ b/packages/engine/src/surveyReview.ts
+@@ -7,6 +7,7 @@ import { questionOrder } from "./dependencies.js";
+ import type { SurveyAction } from "./surveyActions.js";
+ import { reviewUx } from "./ux.js";
+ import { reviewAnalysisPlan } from "./analysisFramework.js";
++import { lintLocalization } from "./localization.js";
+ 
+ /**
+  * "REVIEW MY SURVEY" — the part of a survey review that is a matter of fact.
+@@ -36,7 +37,7 @@ import { reviewAnalysisPlan } from "./analysisFramework.js";
+ export type ReviewSeverity = "critical" | "warning" | "suggestion";
+ export interface ReviewFinding {
+   severity: ReviewSeverity;
+-  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux";
++  category: "logic" | "reachability" | "structure" | "wording" | "options" | "scales" | "duplicates" | "length" | "screening" | "sequencing" | "hypothesis" | "analysis" | "ux" | "localization";
+   message: string;
+   questionIds: string[];
+   suggestion?: string;
+@@ -104,6 +105,22 @@ export function reviewSurvey(def: SurveyDefinition): SurveyReview {
+   /* the analysis framework against the survey: dead references, tests on the wrong level, untested hypotheses */
+   for (const i of reviewAnalysisPlan(def)) add({ severity: i.level, category: /hypothes/i.test(i.message) ? "hypothesis" : "analysis", message: i.message, questionIds: i.questionIds, ...(i.suggestion ? { suggestion: i.suggestion } : {}) });
+ 
++  /* the languages: a version respondents can be routed to must be complete and intact */
++  for (const rep of lintLocalization(def)) {
++    if (rep.language === (def.localization?.sourceLanguage ?? "en")) continue;
++    const by = (kind: string) => rep.issues.filter((i) => i.kind === kind);
++    const ids = (xs: { questionId?: string }[]) => [...new Set(xs.map((x) => x.questionId).filter((x): x is string => !!x))];
++    const missing = by("missing"), stale = by("stale_source"), pipes = by("placeholder_mismatch"), dup = by("duplicate"), same = by("untranslated"), incons = by("inconsistent"), html = by("html_mismatch");
++    const live = (def.localization?.languages ?? []).find((l) => l.code === rep.language)?.status === "live";
++    if (missing.length) add({ severity: live ? "critical" : "warning", category: "localization", message: `${rep.name}: ${missing.length} element${missing.length === 1 ? " has" : "s have"} no translation (${rep.completion}% complete)${live ? " — and the language is live" : ""}.`, questionIds: ids(missing), suggestion: `Ask “translate the missing ${rep.name} text”, or translate in Localization.` });
++    if (stale.length) add({ severity: "warning", category: "localization", message: `${rep.name}: ${stale.length} translation${stale.length === 1 ? " is" : "s are"} outdated — the source text changed after they were made.`, questionIds: ids(stale), suggestion: `Ask “re-translate the outdated ${rep.name} text”, or confirm them in Localization.` });
++    if (pipes.length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${pipes.length} translation${pipes.length === 1 ? "" : "s"} lost or changed a piping token — respondents would see a gap or a wrong value.`, questionIds: ids(pipes) });
++    if (dup.length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${dup.map((d) => d.message).join(" ")}`, questionIds: ids(dup) });
++    if (html.filter((i) => i.blocking).length) add({ severity: "critical", category: "localization", message: `${rep.name}: ${html.filter((i) => i.blocking).length} translation${html.filter((i) => i.blocking).length === 1 ? " has" : "s have"} unbalanced HTML.`, questionIds: ids(html) });
++    if (same.length) add({ severity: "suggestion", category: "localization", message: `${rep.name}: ${same.length} translation${same.length === 1 ? " is" : "s are"} identical to the source — still in the original language?`, questionIds: ids(same) });
++    if (incons.length) add({ severity: "suggestion", category: "localization", message: `${rep.name}: ${incons.map((i) => i.message).slice(0, 3).join(" ")}${incons.length > 3 ? ` (+${incons.length - 3} more)` : ""}`, questionIds: ids(incons), suggestion: "Add the term to the glossary so every occurrence uses one wording." });
++  }
++
+   /* ---------------------------------------------------------- warnings */
+   for (const q of asked) {
+     const t = plain(q.text);
+diff --git a/scripts/translation-copilot-test.mjs b/scripts/translation-copilot-test.mjs
+new file mode 100644
+index 0000000..e2a30af
+--- /dev/null
++++ b/scripts/translation-copilot-test.mjs
+@@ -0,0 +1,287 @@
++/**
++ * TRANSLATION INTELLIGENCE (research-intelligence Phase 3).
++ *
++ *   - the copilot's language actions, through the fake provider: a language
++ *     is added, a block is translated, the glossary is set — as one proposal
++ *     in Changes; an entry that drops the piping is refused by reason and
++ *     the rest is written; Apply writes the real localization
++ *   - Intelligent → Languages: the language's completion, the missing count,
++ *     and "Approve" as a proposal that locks the translations
++ *   - editing a translated question's text in Studio marks its translation
++ *     OUTDATED; a copilot change to that text warns in Changes and offers
++ *     the re-translation in the same proposal; "Confirm they still fit"
++ *     clears the flag through Changes
++ *   - routing: a country map and a fallback by action; the Localization
++ *     panel and the runtime's language resolution reflect it
++ *   - the review reports the missing and outdated translations
++ *
++ *   node scripts/translation-copilot-test.mjs      (studio on 3000)
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, switchMode } from "./lib/nav.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (...ls) => ls.map((l, i) => ({ code: i + 1, label: l }));
++
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "Brand A tracker", version: "1.0" },
++  questions: [
++    { id: "country", code: "S1", variableName: "COUNTRY", type: "single_select", text: "Which country do you live in?", options: opts("United States", "Mexico", "Germany") },
++    { id: "freq", code: "Q1", variableName: "FREQ", type: "single_select", text: "How often do you buy Brand A?", options: opts("Weekly", "Monthly", "Rarely") },
++    { id: "sat", code: "Q2", variableName: "SAT", type: "single_select", text: "How satisfied are you with Brand A?", options: opts("Very satisfied", "Satisfied", "Not satisfied") },
++    { id: "why", code: "Q3", variableName: "WHY", type: "long_text", text: "Why do you say that about {{FREQ}}?" },
++  ],
++  flow: [
++    { type: "block", id: "b0", title: "Screening", children: [{ type: "page", id: "p0", questionIds: ["country"] }] },
++    { type: "block", id: "b1", title: "Brand", children: [{ type: "page", id: "p1", questionIds: ["freq", "sat", "why"] }] },
++    { type: "end", id: "e", status: "complete", message: "Thank you!" },
++  ],
++};
++
++const browser = await chromium.launch();
++const context = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
++const page = await context.newPage();
++const errors = [];
++page.on("pageerror", (e) => errors.push(String(e)));
++page.on("dialog", (d) => d.accept());
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(600);
++};
++const readDef = async () => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  return JSON.parse(await page.$eval("textarea.code", (e) => e.value));
++};
++const texts = (sel) => page.$$eval(sel, (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++/** one copilot turn through the fake provider: the reply the model would give, the message typed */
++const turn = async (reply, message) => {
++  await page.evaluate((r) => window.__rescriptCopilotFake(r), reply);
++  const n = (await page.$$('[data-testid="cp-turn"]')).length;
++  await page.fill('[data-testid="iq-input"]', message);
++  await page.keyboard.press("Enter");
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
++  await page.click('[data-testid="cp-tab-changes"]');
++  await page.waitForSelector('[data-testid="cp-changes"]');
++};
++const apply = async () => { await page.click('[data-testid="cp-panel-apply"]'); await page.waitForTimeout(600); };
++const tr = (def, lang, key) => def.localization?.translations?.[lang]?.[key];
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++ok("fixture loaded: an English survey with a Brand block, a piped question and an end message");
++
++await intelligent();
++const fake = await page.evaluate(() => typeof window.__rescriptCopilotFake === "function");
++if (!fake) { console.log("  skip  no fake copilot provider in this build"); await browser.close(); process.exit(0); }
++
++/* ------------------------------------------------ add a language + translate a block, with one refused entry */
++await turn({
++  kind: "proposal", reply: "I'll add German, keep “Brand A” untranslated, and translate the Brand block.",
++  actions: [
++    { op: "add_language", code: "de" },
++    { op: "set_glossary", entries: [{ source: "Brand A", doNotTranslate: true }] },
++    { op: "set_translations", language: "de", entries: [
++      { target: "Q1", text: "Wie oft kaufen Sie Brand A?" },
++      { target: "Q1.option:1", text: "Wöchentlich" }, { target: "Q1.option:2", text: "Monatlich" }, { target: "Q1.option:Rarely", text: "Selten" },
++      { target: "Q2", text: "Wie zufrieden sind Sie mit Brand A?" },
++      { target: "Q2.option:1", text: "Sehr zufrieden" }, { target: "Q2.option:2", text: "Zufrieden" }, { target: "Q2.option:3", text: "Nicht zufrieden" },
++      { target: "Q3", text: "Warum sagen Sie das?" },
++      { target: "end:complete", text: "Vielen Dank!" },
++      { target: "Q9", text: "nichts" },
++    ] },
++  ],
++}, "Translate the Brand block into German; never translate the brand name");
++{
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Add Deutsch as a language/.test(t)), sm.join(" | "));
++  assert.ok(sm.some((t) => /Translate 9 elements into Deutsch/.test(t)), sm.join(" | "));
++  assert.ok(sm.some((t) => /Add 1 glossary term/.test(t)), sm.join(" | "));
++  const problems = await page.textContent('[data-testid="cp-new-problems"]');
++  assert.match(problems, /Not translated — Q3 · text: the piping \/ placeholders must be kept exactly/, problems);
++  assert.match(problems, /Not translated — Q9: not a translatable element/, problems);
++  assert.equal(await page.$('[data-testid="cp-destructive"]'), null, "adding a language and translations is not destructive");
++}
++await apply();
++let def = await readDef();
++assert.equal(def.localization.languages[0].code, "de");
++assert.equal(def.localization.languages[0].locale, "de-DE", "the locale comes from the library");
++assert.equal(def.localization.languages[0].status, "draft");
++assert.equal(tr(def, "de", "q:freq:text").text, "Wie oft kaufen Sie Brand A?");
++assert.equal(tr(def, "de", "q:freq:text").status, "ai");
++assert.equal(tr(def, "de", "q:freq:opt:3").text, "Selten", "an option named by its label");
++assert.equal(tr(def, "de", "flow:e:message").text, "Vielen Dank!");
++assert.equal(tr(def, "de", "q:why:text"), undefined, "the entry that dropped the pipe was not written");
++assert.deepEqual(def.localization.glossary.map((g) => [g.source, g.doNotTranslate]), [["Brand A", true]]);
++assert.ok(def.deployment.languages.includes("de"), "the deployment offers the language");
++ok("copilot: add_language + set_glossary + set_translations as one proposal; a dropped pipe and an unknown target are refused by reason, the rest is written");
++
++/* ------------------------------------------------ Intelligent → Languages */
++await intelligent();
++await page.click('[data-testid="cp-tab-languages"]');
++await page.waitForSelector('[data-testid="cp-languages"]');
++{
++  const card = await page.$('[data-testid="lg-language"][data-code="de"]');
++  assert.ok(card, "the German card");
++  const counts = await card.$eval('[data-testid="lg-counts"]', (e) => e.textContent);
++  assert.match(counts, /9 of \d+ needed elements translated · 0 approved · 9 awaiting review · \d+ missing/, counts);
++  assert.ok(await card.$('[data-testid="lg-translate-missing"]'), "the missing ones can be requested");
++  assert.equal(await card.$('[data-testid="lg-retranslate"]'), null, "nothing outdated yet");
++  await (await card.$('[data-testid="lg-approve"]')).click();
++  await page.waitForSelector('[data-testid="cp-changes"]');
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Approve 9 Deutsch translations/.test(t)), sm.join(" | "));
++  await apply();
++  def = await readDef();
++  assert.equal(tr(def, "de", "q:freq:text").status, "approved");
++  assert.equal(tr(def, "de", "q:sat:opt:2").status, "approved");
++}
++ok("Intelligent → Languages: completion and counts per language; Approve is a proposal that locks the translations");
++
++/* ------------------------------------------------ an approved translation is kept unless asked to overwrite */
++await intelligent();
++await turn({ kind: "proposal", reply: "Rewording the German.", actions: [{ op: "set_translations", language: "de", entries: [{ target: "Q1", text: "Wie häufig kaufen Sie Brand A?" }] }] }, "Reword Q1 in German");
++{
++  const body = await page.textContent('[data-testid="cp-changes"]');
++  assert.ok(await page.$('[data-testid="cp-panel-apply"][disabled]') || /Nothing to apply|approved translation kept/.test(body), "an approved translation is kept, so there is nothing to write");
++  await page.click('[data-testid="cp-panel-cancel"]');
++}
++await intelligent();
++await turn({ kind: "proposal", reply: "Overwriting the approved German.", actions: [{ op: "set_translations", language: "de", overwriteApproved: true, entries: [{ target: "Q1", text: "Wie häufig kaufen Sie Brand A?" }] }] }, "Overwrite the approved German for Q1");
++{
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Translate 1 element into Deutsch/.test(t)), sm.join(" | "));
++  await apply();
++  def = await readDef();
++  assert.equal(tr(def, "de", "q:freq:text").text, "Wie häufig kaufen Sie Brand A?");
++  assert.equal(tr(def, "de", "q:freq:text").status, "ai", "overwritten: back to machine translation, to be reviewed again");
++}
++ok("an approved translation is kept against a plain set_translations and overwritten only with overwriteApproved");
++
++/* ------------------------------------------------ a source edit by the copilot → outdated, with the re-translate offer */
++await intelligent();
++await turn({ kind: "proposal", reply: "Rewording Q2.", actions: [{ op: "update_question", target: "Q2", text: "Overall, how satisfied are you with Brand A?" }] }, "Reword Q2 to start with Overall");
++{
++  const problems = await page.textContent('[data-testid="cp-new-problems"]');
++  assert.match(problems, /1 translation is now outdated \(de\)/, problems);
++  assert.ok(await page.$('[data-testid="cp-retranslate"]'), "the re-translation is offered in the same proposal");
++  // the offer is a copilot turn: the fake answers it with the re-translation, chained onto the proposal
++  await page.evaluate((r) => window.__rescriptCopilotFake(r), { kind: "proposal", reply: "Re-translated.", actions: [{ op: "set_translations", language: "de", overwriteApproved: true, entries: [{ target: "Q2", text: "Wie zufrieden sind Sie insgesamt mit Brand A?" }] }] });
++  const n = (await page.$$('[data-testid="cp-turn"]')).length;
++  await page.click('[data-testid="cp-retranslate"]');
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
++  await page.click('[data-testid="cp-tab-changes"]');
++  await page.waitForSelector('[data-testid="cp-changes"]');
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Change Q2: wording/.test(t)) && sm.some((t) => /Translate 1 element into Deutsch/.test(t)), sm.join(" | "));
++  assert.equal(await page.$('[data-testid="cp-outdated-note"]'), null, "re-translated in the same proposal: nothing is outdated any more");
++  await apply();
++  def = await readDef();
++  assert.equal(def.questions.find((x) => x.id === "sat").text, "Overall, how satisfied are you with Brand A?");
++  assert.equal(tr(def, "de", "q:sat:text").text, "Wie zufrieden sind Sie insgesamt mit Brand A?");
++  assert.equal(tr(def, "de", "q:sat:text").status, "ai");
++}
++ok("a copilot edit to translated text warns that the translation is outdated and re-translates it in the same proposal");
++
++/* ------------------------------------------------ a source edit in Studio → outdated; Confirm through Changes */
++def.questions.find((x) => x.id === "freq").text = "How often do you buy Brand A products?";
++await loadDef(def);
++await intelligent();
++await page.click('[data-testid="cp-tab-languages"]');
++await page.waitForSelector('[data-testid="cp-languages"]');
++{
++  const card = await page.$('[data-testid="lg-language"][data-code="de"]');
++  const counts = await card.$eval('[data-testid="lg-counts"]', (e) => e.textContent);
++  assert.match(counts, /1 outdated/, counts);
++  assert.match(await card.$eval('[data-testid="lg-outdated"]', (e) => e.textContent), /Q1 · text/);
++  await (await card.$('[data-testid="lg-confirm"]')).click();
++  await page.waitForSelector('[data-testid="cp-changes"]');
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Confirm 1 outdated Deutsch translation/.test(t)), sm.join(" | "));
++  await apply();
++  def = await readDef();
++  const t = tr(def, "de", "q:freq:text");
++  assert.equal(t.status, "edited", "confirmed: the translation stands against the new source, as a human decision");
++  assert.equal(t.text, "Wie häufig kaufen Sie Brand A?");
++}
++await intelligent();
++await page.click('[data-testid="cp-tab-languages"]');
++await page.waitForSelector('[data-testid="cp-languages"]');
++assert.equal(await page.$('[data-testid="lg-outdated"]'), null, "nothing outdated after the confirmation");
++ok("a source edit in Studio marks the translation outdated; Confirm through Changes keeps it against the new source");
++
++/* ------------------------------------------------ routing by action */
++await intelligent();
++await turn({ kind: "proposal", reply: "German for Germany, English otherwise.", actions: [{ op: "set_language_routing", countryMap: { DE: "de", US: "en", MX: "en" }, urlParam: "language", fallback: "en", allowSwitch: true }] }, "German respondents get German, everyone else English; the URL parameter is language");
++{
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Change the language routing/.test(t)), sm.join(" | "));
++  const problems = (await page.$('[data-testid="cp-new-problems"]')) ? await page.textContent('[data-testid="cp-new-problems"]') : "";
++  assert.match(problems, /Country routing was added to the precedence order, before browser detection/, `the country step is put into the routing order, and said so: ${problems}`);
++  await apply();
++  def = await readDef();
++  assert.deepEqual(def.localization.routing.countryMap, { DE: "de", US: "en", MX: "en" });
++  assert.equal(def.localization.routing.urlParam, "language");
++  assert.equal(def.localization.routing.fallback, "en");
++  assert.ok(def.localization.routing.order.indexOf("country") < def.localization.routing.order.indexOf("browser"));
++}
++await intelligent();
++await page.click('[data-testid="cp-tab-languages"]');
++await page.waitForSelector('[data-testid="lg-routing"]');
++assert.match(await page.textContent('[data-testid="lg-routing"]'), /DE → Deutsch, US → English, MX → English/);
++ok("routing: a country map, URL parameter and fallback by action; the country step joins the order ahead of the browser");
++
++/* ------------------------------------------------ the Localization panel sees the same language */
++await switchMode(page, "studio");
++await openTab(page, "Translation");
++await page.waitForSelector('[data-testid="localization-panel"]');
++assert.ok(await page.$('[data-testid="loc-card-de"]'), "the Localization panel lists the language the copilot added");
++{
++  const c = Number(await page.getAttribute('[data-testid="loc-card-de"]', "data-completion"));
++  assert.ok(c > 0 && c < 100, `partly translated: ${c}%`);
++}
++ok("the Localization panel shows the copilot's language — one localization, not two");
++
++/* ------------------------------------------------ the review reports the languages */
++await intelligent();
++await page.click('[data-testid="cp-tab-review"]');
++await page.click('[data-testid="cp-run-review"]');
++await page.waitForTimeout(800);
++{
++  const review = await page.textContent('[data-testid="cp-panel"]');
++  assert.match(review, /Deutsch: \d+ elements have no translation \(\d+% complete\)/, review.slice(0, 600));
++}
++ok("the review reports what the German version still lacks");
++
++/* ------------------------------------------------ the route: a translation turn is recognised and gets the languages in its outline */
++{
++  const call = async (message) => {
++    const r = await fetch(`${STUDIO}/api/copilot/turn`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: "sandbox", message, definition: def, fake: { kind: "answer", reply: "ok" } }) });
++    assert.equal(r.status, 200);
++    return (await r.json()).context;
++  };
++  const t = await call("Translate the Brand block into German");
++  const plain = await call("Reword the Brand block");
++  assert.equal(t.translation, true); assert.equal(plain.translation, false);
++  assert.ok(t.outlineChars > plain.outlineChars + 200, `the translation turn's outline carries the languages and the elements with their translations: ${t.outlineChars} vs ${plain.outlineChars}`);
++  assert.ok(t.promptChars - t.outlineChars > plain.promptChars - plain.outlineChars + 1500, `and the prompt carries the guide beyond the outline: ${t.promptChars - t.outlineChars} vs ${plain.promptChars - plain.outlineChars}`);
++}
++ok("the turn route recognises a translation request and sends the languages with it");
++
++assert.deepEqual(errors.filter((e) => !/ResizeObserver/.test(e)), [], errors.join("\n"));
++await browser.close();
++console.log(`\n${passed} checks passed`);
+-- 
+2.43.0
+

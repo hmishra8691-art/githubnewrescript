@@ -1,0 +1,37 @@
+Modes round 3: stable Grid with contextual Properties, Architect structure outline, Flow as a logic map, Intelligent structure intents and voice
+
+Grid: every column has a fixed width and a filler cell takes the spare room,
+so opening the Properties panel or showing the hover actions moves nothing;
+the row actions sit out of the flow and lose Move up/down. The panel is
+contextual: a Display logic, Skip logic or Validation cell opens it on that
+section (ModeContext.requestPanel / CollapsibleSection reveal); ordinary
+content closes it.
+
+Architect: lib/architect/structure.ts builds blocks > pages > questions with
+page breaks drawn as boundaries, object tags (hidden, calculated, conjoint,
+MaxDiff, screening) and logic chips that open the matching inspector section
+or the rule/calculation/quota holding them. Page breaks are added and removed
+in place through the engine's new splitPageAfter/joinPageAfter
+(pageBreaks.ts, which now owns wrapBlock/unwrapIfSingle). The Add menu is
+structured (Where; Structure, Flow, Data), with hidden variables, calculated
+values and page breaks, and elements land after the selection's block.
+
+Flow: no editing - a drag pans, nothing is pinned or written. Graph nodes
+carry tag/condition/page (additive schema fields): badges with a legend,
+display conditions on nodes, page frames, and labels on every decision edge
+("otherwise", "quota full"/"quota available"). The read-only inspector adds
+page, loop, routing and what reads the question, with Open in Studio.
+
+Intelligent: page breaks, embedded variables, hidden variables, loops
+(structureOps.wrapInLoop), multi-question skips, options by code, the
+selection as context, and screening explanations, all validated before Apply.
+Voice: microphone -> /api/ai/transcribe (the ai package's swappable STT
+adapter, metered per minute via the shared meteredStt) -> transcript tidy-up
+-> English via the chat model when needed -> the same review pipeline.
+
+Tests: engine 1314, Studio lib 194; Grid 57, Architect 48, Flow 47,
+Intelligent 54 browser checks, new assertions mutation-checked. Corpus
+sweep: only the previously known red suites and the Postgres-only ones fail.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

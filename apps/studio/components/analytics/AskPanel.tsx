@@ -104,7 +104,7 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged }: { api: 
       {error && <div className="ax-error" style={{ marginTop: 8 }} data-testid="ax-ask-error">{error}</div>}
 
       {proposal && <div style={{ marginTop: 14 }} data-testid="ax-ask-review">
-        {proposal.model && proposal.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-ask-model">{proposal.model.detail}</div>}
+        {proposal.model && proposal.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-ask-model" data-status={proposal.model.status}>{proposal.model.detail}</div>}
         {proposal.notes.map((n, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-ask-note">{n}</div>)}
         {proposal.unread.map((u, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-ask-unread">Not understood: {u}</div>)}
         {!shown.length && !proposal.unread.length && !proposal.notes.length && <div className="muted">Nothing to propose for that request.</div>}

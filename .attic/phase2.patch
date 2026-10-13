@@ -1,0 +1,2110 @@
+From 384d0c48814750e98012752a9e9049d57a98b61f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 19:07:30 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?Architect=20mode:=20survey=20map=20=C2=B7?=
+ =?UTF-8?q?=20workspace=20=C2=B7=20inspector=20(Phase=202)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The third environment: a development environment for survey programming,
+in the three panes the brief draws.
+
+  SURVEY MAP (lib/architect/map.ts, pure, 8 tests). The flow as a tree —
+  blocks, groups, branches with their arms and otherwise, loops,
+  randomizers, pages, questions — and beneath it the survey's other
+  programmable objects: named display rules, calculations, quotas. Every
+  row is an engine ObjectKey; every row carries its status (rolled up, so a
+  collapsed block still shows the red dot inside it) and its dependency
+  counts. Search keeps the path to each match; collapse state is per
+  container; ← → walk the tree; a selection made anywhere else expands its
+  own path. A question placed on two pages appears at both positions.
+
+  WORKSPACE. Whatever is selected is programmed with the editor the Studio
+  already has for it: QuestionEditor for a question, NodeEditor for a flow
+  element, DisplayRuleCard / CalculationCard for a rule / calculation
+  (extracted from the Logic and Calculations tabs, which render the same
+  components now). Nothing selected shows the survey at a glance with
+  every object that needs attention, clickable.
+
+  INSPECTOR. For a question, the property panel the Studio has always had,
+  with one section above it: DEPENDENCIES — used by / depends on / affects,
+  from the dependency index, each entry a link that selects that object.
+  For a branch, a rule, a calculation or a quota: identity, its condition
+  in English, its issues, its dependencies, its definition.
+
+  FOCUS (§14). A view-level flag on the mode context (so Flow and Grid can
+  honour it too), toggled by a button or ⌘⇧F through the command registry:
+  everything in the map outside the selection's reach ∪ affects dims;
+  ancestors of anything in focus stay legible. "FOCUSING ON Q10 · 22
+  related objects, everything else dimmed."
+
+  Panes resize by dragging; widths remembered per browser. The outer
+  property panel steps aside while Architect is showing (its inspector is
+  inside), and returns when you leave.
+
+Engine: containerList / replaceFlowNode in flowTree.ts, so a node edited in
+Architect lands in the same slot the Survey Flow panel would write.
+
+Also: the palette cleared its query on OPEN, which raced the first
+keystrokes of anyone typing the instant it appeared; it clears on close.
+
+Tests: lib/architect/map.test.ts (8), scripts/architect-mode-test.mjs (32,
+clean console). Mutation-checked: focus without `affects`, inspector
+direction flipped, dependency links inert — each caught. Sweep green:
+multimodal-foundation (updated for three built modes, pinned to
+?mode=studio so a remembered mode cannot leak in), grid-mode (45),
+context-right-panel, properties-accordion, canvas (38), blocks,
+save-integrity, logic-builder, block-actions, flow-dnd, expression-editor.
+Studio lib: 135.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             | 117 ++++++++
+ .../components/architect/ArchitectView.tsx    | 176 +++++++++++
+ .../studio/components/architect/Inspector.tsx | 181 ++++++++++++
+ .../studio/components/architect/SurveyMap.tsx | 150 ++++++++++
+ .../studio/components/architect/Workspace.tsx | 183 ++++++++++++
+ .../components/studio/CommandContext.tsx      |   2 +
+ .../components/studio/CommandPalette.tsx      |   5 +-
+ apps/studio/components/studio/LogicPanel.tsx  | 112 ++++---
+ apps/studio/components/studio/ModeContext.tsx |  11 +-
+ apps/studio/components/studio/Studio.tsx      |  18 +-
+ apps/studio/lib/architect/map.test.ts         | 134 +++++++++
+ apps/studio/lib/architect/map.ts              | 271 +++++++++++++++++
+ apps/studio/lib/commands/builtins.ts          |  10 +
+ apps/studio/lib/multimodalFoundation.test.ts  |  19 +-
+ apps/studio/lib/programmingMode.ts            |   2 +-
+ packages/engine/src/flowTree.ts               |  29 ++
+ scripts/architect-mode-test.mjs               | 274 ++++++++++++++++++
+ scripts/multimodal-foundation-test.mjs        |  17 +-
+ 18 files changed, 1645 insertions(+), 66 deletions(-)
+ create mode 100644 apps/studio/components/architect/ArchitectView.tsx
+ create mode 100644 apps/studio/components/architect/Inspector.tsx
+ create mode 100644 apps/studio/components/architect/SurveyMap.tsx
+ create mode 100644 apps/studio/components/architect/Workspace.tsx
+ create mode 100644 apps/studio/lib/architect/map.test.ts
+ create mode 100644 apps/studio/lib/architect/map.ts
+ create mode 100644 scripts/architect-mode-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index c0e3115..14dffb1 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -868,3 +868,120 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .sg-actions button:hover:not(:disabled) { background: var(--c-surface-2); color: var(--c-text); }
+ .sg-actions button.danger:hover:not(:disabled) { background: var(--c-error-bg); color: var(--c-error-fg); }
+ .sg-actions button:disabled { opacity: .4; cursor: default; }
++
++/* ======================================================================
++   ARCHITECT MODE — three panes: survey map · workspace · inspector (Phase 2)
++   The centre column hands Architect its whole area; each pane scrolls on
++   its own. Dividers drag. The map is dense and mono-coded like the grid;
++   the inspector reuses the property panel's own styling.
++   ====================================================================== */
++.center:has(> .ar) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
++.ar { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
++.ar-map, .ar-work, .ar-inspector { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--c-surface); }
++.ar-map { border-right: 1px solid var(--c-border); }
++.ar-inspector { border-left: 1px solid var(--c-border); }
++.ar-divider { cursor: col-resize; background: transparent; position: relative; z-index: 2; }
++.ar-divider:hover, .ar-divider:active { background: var(--c-primary-100); }
++.ar-pane-head {
++  display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 38px; flex: none;
++  border-bottom: 1px solid var(--c-border); background: var(--c-surface-2);
++}
++.ar-pane-title { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3); }
++.ar-pane-meta { font-family: var(--mono); font-size: 11px; color: var(--c-text-4); margin-left: auto; }
++.ar-crumb { font-size: 12px; color: var(--c-primary-700); font-weight: 600; }
++.ar-work-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 18px 22px 40px; }
++.ar-inspector-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 16px 32px; }
++.ar-focus {
++  appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2);
++  font: inherit; font-size: 12px; font-weight: 550; padding: 4px 10px; border-radius: 999px; cursor: pointer;
++  display: inline-flex; align-items: center; gap: 5px;
++}
++.ar-focus.on { background: var(--c-primary-600); border-color: var(--c-primary-600); color: #fff; }
++.ar-focus-bar {
++  display: flex; align-items: center; gap: 8px; padding: 6px 14px; flex: none; font-size: 12.5px;
++  background: var(--c-primary-50); border-bottom: 1px solid var(--c-primary-100); color: var(--c-primary-700);
++}
++.ar-focus-kw { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; font-weight: 700; }
++
++/* the map */
++.am { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
++.am-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--c-border); flex: none; }
++.am-search { flex: 1; display: flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); border-radius: 7px; padding: 0 8px; background: var(--c-bg); color: var(--c-text-3); min-width: 0; }
++.am-search:focus-within { border-color: var(--c-primary-600); }
++.am-search-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 12.5px; padding: 5px 0; color: var(--c-text); }
++.am-tool { appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-3); font: inherit; font-family: var(--mono); width: 24px; height: 24px; border-radius: 6px; cursor: pointer; }
++.am-tool:hover { color: var(--c-text); }
++.am-list { flex: 1 1 auto; min-height: 0; overflow: auto; outline: none; padding: 4px 0 24px; }
++.am-list:focus-visible .am-row.cursor { box-shadow: inset 0 0 0 1px var(--c-primary-600); }
++.am-row {
++  display: flex; align-items: center; gap: 6px; height: 28px; padding-right: 8px; cursor: pointer;
++  font-size: 12.5px; color: var(--c-text); white-space: nowrap; border-left: 2px solid transparent; user-select: none;
++}
++.am-row:hover { background: var(--c-bg); }
++.am-row.selected { background: var(--c-primary-50); }
++.am-row.primary { border-left-color: var(--c-primary-600); }
++.am-row.static { cursor: default; }
++.am-row.section { margin-top: 8px; color: var(--c-text-3); font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
++.am-row.section .am-detail, .am-row.section .am-deps { display: none; }
++.am-row.dim { opacity: .28; filter: saturate(.3); }
++.am-row.dim:hover { opacity: .6; }
++.am-disc { appearance: none; border: 0; background: transparent; color: var(--c-text-3); width: 14px; padding: 0; cursor: pointer; font-size: 10px; flex: none; }
++.am-disc.none { visibility: hidden; }
++.am-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--c-border-strong); opacity: .35; }
++.am-dot.warning { background: var(--c-warning); opacity: 1; }
++.am-dot.error { background: var(--c-error); opacity: 1; box-shadow: 0 0 0 2px rgba(220, 38, 38, .14); }
++.am-row > svg { color: var(--c-text-4); flex: none; }
++.am-label { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; }
++.am-code { font-size: 11.5px; font-weight: 600; color: var(--c-text-2); flex: none; }
++.am-text { overflow: hidden; text-overflow: ellipsis; }
++.am-detail { color: var(--c-text-4); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
++.am-cond { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; color: var(--c-primary-600); background: var(--c-primary-50); border-radius: 4px; padding: 1px 4px; flex: none; }
++.am-deps { display: inline-flex; gap: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--c-text-4); flex: none; }
++.am-count { font-family: var(--mono); font-size: 10.5px; color: var(--c-text-4); background: var(--c-surface-2); border-radius: 999px; padding: 0 6px; flex: none; }
++.am-empty { padding: 24px 12px; color: var(--c-text-3); text-align: center; }
++
++/* the workspace */
++.aw { max-width: 980px; }
++.aw-overview h2 { margin: 0 0 14px; font-size: 20px; }
++.aw-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-bottom: 22px; }
++.aw-stat { background: var(--c-surface-2); border: 1px solid var(--c-border); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
++.aw-stat-n { font-family: var(--mono); font-size: 22px; font-weight: 600; color: var(--c-text); letter-spacing: -.02em; }
++.aw-stat-l { font-size: 12px; color: var(--c-text-3); }
++.aw-sec { margin-top: 18px; }
++.aw-sec h3 { font-size: 14px; margin: 0 0 8px; }
++.aw-broken { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
++.aw-broken li.warning, .aw-broken li.error { padding: 6px 10px; border-radius: 6px; background: var(--c-surface-2); font-size: 12.5px; }
++.aw-issue-msg { color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.aw-node-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
++.aw-title { max-width: 420px; }
++.aw-qlist { list-style: none; padding: 0; margin: 0 0 16px; display: flex; flex-direction: column; gap: 2px; }
++
++/* the inspector */
++.ai-empty { padding: 28px 12px; color: var(--c-text-3); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 13px; }
++.ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
++.ai-kind { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3); background: var(--c-surface-2); border-radius: 4px; padding: 2px 6px; }
++.ai-title { font-size: 15px; font-weight: 600; }
++.ai-status { font-size: 11.5px; border-radius: 999px; padding: 2px 8px; font-weight: 600; }
++.ai-status.warning { background: #fff4d6; color: #8a5a00; }
++.ai-status.error { background: var(--c-error-bg); color: var(--c-error-fg); }
++.ai-sec { margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--c-border); }
++.ai-sec h4 { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3); margin: 0 0 8px; }
++.ai-sub { font-size: 12px; font-weight: 600; color: var(--c-text-2); margin: 8px 0 4px; display: flex; gap: 6px; align-items: center; }
++.ai-n { font-family: var(--mono); font-size: 10.5px; color: var(--c-text-4); background: var(--c-surface-2); border-radius: 999px; padding: 0 6px; }
++.ai-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
++.ai-link {
++  appearance: none; border: 0; background: transparent; font: inherit; font-size: 12.5px; color: var(--c-text); text-align: left;
++  display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; border-radius: 6px; cursor: pointer; min-width: 0;
++}
++.ai-link:hover { background: var(--c-primary-50); color: var(--c-primary-700); }
++.ai-link-kind { font-size: 10.5px; color: var(--c-text-4); font-family: var(--mono); flex: none; min-width: 64px; }
++.ai-link-why { margin-left: auto; font-size: 11px; color: var(--c-text-4); flex: none; }
++.ai-more { appearance: none; border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--c-primary-600); cursor: pointer; padding: 6px 0 0; }
++.ai-issues { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
++.ai-issues li { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--c-surface-2); border-left: 3px solid var(--c-warning); }
++.ai-issues li.error { border-left-color: var(--c-error); }
++.ai-none { font-size: 12.5px; margin: 4px 0 0; }
++.ai-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: 12.5px; }
++.ai-dl dt { color: var(--c-text-3); }
++.ai-dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
++.ai-props h2 { font-size: 14px; }
+diff --git a/apps/studio/components/architect/ArchitectView.tsx b/apps/studio/components/architect/ArchitectView.tsx
+new file mode 100644
+index 0000000..51f7a9b
+--- /dev/null
++++ b/apps/studio/components/architect/ArchitectView.tsx
+@@ -0,0 +1,176 @@
++"use client";
++import React from "react";
++import { buildDependencyIndex, objectStatus, parseObjectKey, type ObjectKey } from "@rescript/engine";
++import { useStudio } from "../studio/store";
++import { useSelection } from "../studio/SelectionContext";
++import { useMode } from "../studio/ModeContext";
++import { buildSurveyMap, flattenMap, ancestorKeys, containerKeys, findMapNode } from "../../lib/architect/map";
++import { SurveyMap } from "./SurveyMap";
++import { Workspace } from "./Workspace";
++import { Inspector } from "./Inspector";
++import { Icon } from "../ui/Icon";
++
++/**
++ * ARCHITECT — a development environment for survey programming.
++ *
++ *   ┌────────────────┬──────────────────────────────┬─────────────────┐
++ *   │ SURVEY MAP     │ PROGRAMMING WORKSPACE       │ INSPECTOR       │
++ *   └────────────────┴──────────────────────────────┴─────────────────┘
++ *
++ * Three panes over one survey. The map is the structure (lib/architect/
++ * map.ts); the workspace is the editor for whatever is selected; the
++ * inspector is how it is wired. Selection is the Studio's shared selection,
++ * so a question picked here is the question Grid has selected and the
++ * question the Studio's property panel would show.
++ *
++ * Focus mode dims everything in the map outside the selection's dependency
++ * neighbourhood — what it reads, what reads it, transitively — so in a
++ * 600-question survey the twelve objects that matter to Q14 stand out.
++ *
++ * Panes resize by dragging their divider; widths are remembered per browser.
++ */
++
++const PREFS_KEY = "rescript.architect";
++interface Prefs { map: number; inspector: number }
++const DEFAULT_PREFS: Prefs = { map: 300, inspector: 400 };
++function loadPrefs(): Prefs {
++  try {
++    const raw = typeof window !== "undefined" ? window.localStorage.getItem(PREFS_KEY) : null;
++    if (raw) { const p = JSON.parse(raw); if (typeof p.map === "number" && typeof p.inspector === "number") return p; }
++  } catch { /* fine */ }
++  return DEFAULT_PREFS;
++}
++
++export function ArchitectView() {
++  const s = useStudio();
++  const sel = useSelection();
++  const mode = useMode();
++  const focus = mode?.focus ?? false;
++
++  /* ------------------------------------------------------------ derived */
++  const deferredDef = React.useDeferredValue(s.def);
++  const status = React.useMemo(() => objectStatus(deferredDef), [deferredDef]);
++  const index = React.useMemo(() => buildDependencyIndex(deferredDef), [deferredDef]);
++  const root = React.useMemo(() => buildSurveyMap(s.def, { status, index }), [s.def, status, index]);
++
++  const primary = (sel?.primary ?? (s.selectedQuestionId ? `question:${s.selectedQuestionId}` : null)) as ObjectKey | null;
++  const selectedKeys = React.useMemo(() => new Set<string>(sel?.keys ?? (primary ? [primary] : [])), [sel?.keys, primary]);
++
++  /* ------------------------------------------------------------ collapse + search */
++  const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set());
++  const [search, setSearch] = React.useState("");
++  const toggle = (key: string) => setCollapsed((c) => { const n = new Set(c); if (n.has(key)) n.delete(key); else n.add(key); return n; });
++  // a selection made elsewhere (Grid, palette, a dependency link) must be visible: expand its ancestors
++  React.useEffect(() => {
++    if (!primary) return;
++    const path = ancestorKeys(root, primary);
++    if (path.some((k) => collapsed.has(k))) setCollapsed((c) => { const n = new Set(c); for (const k of path) n.delete(k); return n; });
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [primary, root]);
++
++  const rows = React.useMemo(() => {
++    const all = flattenMap(root, search ? new Set() : collapsed);
++    if (!search.trim()) return all;
++    const q = search.trim().toLowerCase();
++    // keep a row when it matches, or when a descendant matches (so the path stays visible)
++    const matches = new Set<string>();
++    const visit = (n: typeof root): boolean => {
++      const self = `${n.label} ${n.code ?? ""} ${n.detail ?? ""}`.toLowerCase().includes(q);
++      let any = self;
++      for (const c of n.children) if (visit(c)) any = true;
++      if (any) matches.add(n.key);
++      return any;
++    };
++    visit(root);
++    return all.filter((r) => matches.has(r.key));
++  }, [root, collapsed, search]);
++
++  /* ------------------------------------------------------------ focus */
++  const focusSet = React.useMemo(() => {
++    if (!focus || !primary) return null;
++    const set = new Set<string>([primary, ...index.reach(primary), ...index.affects(primary)]);
++    // containers on the path to any focused object stay legible too
++    for (const k of [...set]) for (const a of ancestorKeys(root, k)) set.add(a);
++    return set;
++  }, [focus, primary, index, root]);
++
++  /* ------------------------------------------------------------ selection */
++  const select = (key: ObjectKey, e?: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
++    if (!sel) { const { kind, id } = parseObjectKey(key); s.select(kind === "question" ? id : null); return; }
++    if (e?.metaKey || e?.ctrlKey) sel.dispatch({ type: "toggle", key });
++    else if (e?.shiftKey) sel.dispatch({ type: "range", key, order: rows.filter((r) => r.selectable).map((r) => r.key as ObjectKey) });
++    else sel.dispatch({ type: "select", key });
++  };
++
++  /* ------------------------------------------------------------ panes */
++  const [prefs, setPrefs] = React.useState<Prefs>(loadPrefs);
++  const save = (p: Prefs) => { setPrefs(p); try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* fine */ } };
++  const startDrag = (which: "map" | "inspector") => (e: React.PointerEvent) => {
++    e.preventDefault();
++    const startX = e.clientX;
++    const start = prefs[which];
++    const onMove = (ev: PointerEvent) => {
++      const dx = ev.clientX - startX;
++      const next = which === "map" ? start + dx : start - dx;
++      setPrefs((p) => ({ ...p, [which]: Math.max(200, Math.min(720, next)) }));
++    };
++    const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); setPrefs((p) => { save(p); return p; }); };
++    window.addEventListener("pointermove", onMove);
++    window.addEventListener("pointerup", onUp);
++  };
++
++  const primaryNode = primary ? findMapNode(root, primary) : null;
++
++  return (
++    <div className="ar" data-testid="architect-view" style={{ gridTemplateColumns: `${prefs.map}px 6px minmax(0, 1fr) 6px ${prefs.inspector}px` }}>
++      <aside className="ar-map">
++        <div className="ar-pane-head">
++          <span className="ar-pane-title">Survey map</span>
++          <span className="ar-pane-meta">{s.def.questions.length} questions</span>
++        </div>
++        <SurveyMap
++          rows={rows} selectedKeys={selectedKeys} primary={primary} focusSet={focusSet}
++          onSelect={select} onToggle={toggle} onOpen={(k) => select(k)}
++          search={search} onSearch={setSearch}
++          onCollapseAll={() => setCollapsed(new Set(containerKeys(root)))}
++          onExpandAll={() => setCollapsed(new Set())}
++        />
++      </aside>
++      <div className="ar-divider" onPointerDown={startDrag("map")} role="separator" aria-orientation="vertical" data-testid="ar-divider-map" />
++      <main className="ar-work">
++        <div className="ar-pane-head">
++          <span className="ar-pane-title">Workspace</span>
++          {primaryNode && <span className="ar-crumb mono">{primaryNode.code ?? primaryNode.label}</span>}
++          <span className="grow" />
++          <button
++            className={`ar-focus${focus ? " on" : ""}`}
++            data-testid="focus-toggle"
++            aria-pressed={focus}
++            title="Focus mode — dim everything outside this object's dependencies (⌘⇧F)"
++            onClick={() => mode?.setFocus(!focus)}
++          >
++            <Icon name="sparkle" size={13} /> Focus
++          </button>
++        </div>
++        {focus && (
++          <div className="ar-focus-bar" data-testid="focus-bar">
++            <span className="ar-focus-kw">FOCUSING ON</span>
++            {primaryNode
++              ? <><span className="mono">{primaryNode.code ?? primaryNode.label}</span><span className="muted"> · {focusSet ? focusSet.size - 1 : 0} related objects, everything else dimmed</span></>
++              : <span className="muted">select something to focus on</span>}
++          </div>
++        )}
++        <div className="ar-work-body">
++          <Workspace primary={primary} status={status} onSelect={(k) => select(k)} />
++        </div>
++      </main>
++      <div className="ar-divider" onPointerDown={startDrag("inspector")} role="separator" aria-orientation="vertical" data-testid="ar-divider-inspector" />
++      <aside className="ar-inspector">
++        <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
++        <div className="ar-inspector-body">
++          <Inspector primary={primary} index={index} status={status} onSelect={(k) => select(k)} />
++        </div>
++      </aside>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/architect/Inspector.tsx b/apps/studio/components/architect/Inspector.tsx
+new file mode 100644
+index 0000000..eb6cd61
+--- /dev/null
++++ b/apps/studio/components/architect/Inspector.tsx
+@@ -0,0 +1,181 @@
++"use client";
++import React from "react";
++import type { FlowNode } from "@rescript/schema";
++import {
++  neighbours, parseObjectKey, conditionSummary, findNode,
++  type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge,
++} from "@rescript/engine";
++import { useStudio } from "../studio/store";
++import { PropertiesPanel } from "../studio/PropertiesPanel";
++import { Icon } from "../ui/Icon";
++
++/**
++ * THE INSPECTOR — the right pane of Architect.
++ *
++ * For a question it is the property panel the Studio has always had (the
++ * same component, the same seventeen sections), with one addition at the
++ * top: DEPENDENCIES — what this reads, what reads it, what it would affect —
++ * from the engine's dependency index, every entry clickable. Selecting a
++ * branch, a named rule, a calculation or a quota shows the same shape for
++ * that object: identity, its condition in English, its issues, its
++ * dependencies.
++ *
++ * Nothing here evaluates or edits logic itself: the editing happens in the
++ * workspace and in the property panel's own sections. The inspector is where
++ * you find out how an object is wired before you touch it.
++ */
++
++const KIND_LABEL: Record<string, string> = {
++  question: "Question", displayRule: "Display rule", skipRule: "Skip rule", calculation: "Calculation",
++  quota: "Quota", flowNode: "Flow element", namedExpression: "Named expression", listFill: "List fill", embedded: "Embedded data",
++};
++
++export function Inspector({
++  primary, index, status, onSelect,
++}: {
++  primary: ObjectKey | null;
++  index: DependencyIndex;
++  status: ObjectStatusMap;
++  onSelect(key: ObjectKey): void;
++}) {
++  const s = useStudio();
++  if (!primary) {
++    return (
++      <div className="ai-empty" data-testid="inspector-empty">
++        <Icon name="info" size={18} />
++        <p>Select anything in the map — a question, a branch, a rule, a calculation — to see how it is wired and to program it.</p>
++      </div>
++    );
++  }
++  const { kind, id } = parseObjectKey(primary);
++  const st = status.statusOf(primary);
++  const info = index.nodes.get(primary);
++
++  return (
++    <div className="ai" data-testid="inspector" data-kind={kind}>
++      <div className="ai-head">
++        <span className="ai-kind">{KIND_LABEL[kind] ?? kind}</span>
++        <span className="ai-title mono">{info?.code ?? id}</span>
++        {st.level !== "ok" && <span className={`ai-status ${st.level}`} data-testid="inspector-status">{st.issues.length} {st.level === "error" ? "problem" : "warning"}{st.issues.length === 1 ? "" : "s"}</span>}
++      </div>
++
++      {st.issues.length > 0 && (
++        <section className="ai-sec" data-testid="inspector-issues">
++          <h4>Issues</h4>
++          <ul className="ai-issues">
++            {st.issues.map((i, k) => <li key={k} className={i.level}>{i.message}</li>)}
++          </ul>
++        </section>
++      )}
++
++      <Dependencies primary={primary} index={index} onSelect={onSelect} />
++
++      {kind === "question" ? (
++        // the property panel reads the store's selectedQuestionId, which mirrors this primary
++        <div className="ai-props"><PropertiesPanel /></div>
++      ) : (
++        <ObjectSummary primary={primary} />
++      )}
++    </div>
++  );
++}
++
++/** USED BY / DEPENDS ON / AFFECTS — the dependency index, as a person reads it */
++function Dependencies({ primary, index, onSelect }: { primary: ObjectKey; index: DependencyIndex; onSelect(key: ObjectKey): void }) {
++  const reads = neighbours(index, primary, "dependsOn");
++  const readBy = neighbours(index, primary, "usedBy");
++  const affects = index.affects(primary).filter((k) => !readBy.some((n) => n.key === k));
++  const reach = index.reach(primary).filter((k) => !reads.some((n) => n.key === k));
++  const [showAll, setShowAll] = React.useState(false);
++
++  const Row = ({ k, reasons }: { k: ObjectKey; reasons?: DependencyEdge[] }) => {
++    const info = index.nodes.get(k);
++    const { kind, id } = parseObjectKey(k);
++    return (
++      <li>
++        <button className="ai-link" onClick={() => onSelect(k)} data-testid="dep-link" data-key={k} title={reasons?.map((r) => r.label).join("\n")}>
++          <span className="ai-link-kind">{(KIND_LABEL[kind] ?? kind).toLowerCase()}</span>
++          <span className="mono">{info?.code ?? id}</span>
++          {reasons && reasons.length > 0 && <span className="ai-link-why">{[...new Set(reasons.map((r) => r.kind))].join(", ")}</span>}
++        </button>
++      </li>
++    );
++  };
++
++  const empty = reads.length === 0 && readBy.length === 0;
++  return (
++    <section className="ai-sec" data-testid="inspector-deps">
++      <h4>Dependencies</h4>
++      {empty && <p className="muted ai-none">Nothing reads this and it reads nothing — it stands alone.</p>}
++      {readBy.length > 0 && (
++        <>
++          <div className="ai-sub">Used by <span className="ai-n">{readBy.length}</span></div>
++          <ul className="ai-list" data-testid="dep-used-by">{readBy.map((n) => <Row key={n.key} k={n.key} reasons={n.reasons} />)}</ul>
++        </>
++      )}
++      {reads.length > 0 && (
++        <>
++          <div className="ai-sub">Depends on <span className="ai-n">{reads.length}</span></div>
++          <ul className="ai-list" data-testid="dep-depends-on">{reads.map((n) => <Row key={n.key} k={n.key} reasons={n.reasons} />)}</ul>
++        </>
++      )}
++      {(affects.length > 0 || reach.length > 0) && (
++        <>
++          <button className="ai-more" onClick={() => setShowAll((v) => !v)} data-testid="dep-more">
++            {showAll ? "Hide" : "Show"} indirect · affects {affects.length} more, reaches {reach.length} more
++          </button>
++          {showAll && (
++            <>
++              {affects.length > 0 && <><div className="ai-sub">Affects, indirectly</div><ul className="ai-list" data-testid="dep-affects">{affects.map((k) => <Row key={k} k={k} />)}</ul></>}
++              {reach.length > 0 && <><div className="ai-sub">Reaches, indirectly</div><ul className="ai-list">{reach.map((k) => <Row key={k} k={k} />)}</ul></>}
++            </>
++          )}
++        </>
++      )}
++    </section>
++  );
++}
++
++/** what a non-question object IS, in one screen */
++function ObjectSummary({ primary }: { primary: ObjectKey }) {
++  const s = useStudio();
++  const { kind, id } = parseObjectKey(primary);
++  const def = s.def;
++  const rows: [string, React.ReactNode][] = [];
++  if (kind === "displayRule") {
++    const r = def.displayRules.find((x) => x.id === id);
++    if (r) {
++      const target = r.target.kind === "question" ? (def.questions.find((q) => q.id === r.target.ref)?.code ?? r.target.ref) : `${r.target.kind} ${r.target.ref}${r.target.subRef ? ` › ${r.target.subRef}` : ""}`;
++      rows.push(["Label", r.label || "—"], ["Action", r.action.toUpperCase()], ["Target", target], ["When", conditionSummary(def, r.when) || "always"]);
++    }
++  } else if (kind === "calculation") {
++    const c = def.calculations.find((x) => x.id === id);
++    if (c) rows.push(["Variable", <span className="mono">{c.targetVariable}</span>], ["Expression", <span className="mono">{c.expression || "—"}</span>], ["Runs", c.trigger.replace(/_/g, " ")], ["Type", c.dataType], ["Only when", c.when ? conditionSummary(def, c.when) : "always"]);
++  } else if (kind === "quota") {
++    const q = def.quotas.find((x) => x.id === id);
++    if (q) rows.push(["Name", q.name], ["Mode", q.mode], ["Cells", `${q.cells.length}`], ["When full", q.onFull.kind], ...q.cells.slice(0, 8).map((c): [string, React.ReactNode] => [`· ${c.label}`, `${conditionSummary(def, c.when)} — limit ${c.limit}`]));
++  } else if (kind === "flowNode") {
++    const n = findNode(def.flow as FlowNode[], id) as FlowNode | null;
++    if (n) {
++      rows.push(["Type", n.type.replace(/_/g, " ")]);
++      const title = (n as { title?: string }).title; if (title) rows.push(["Title", title]);
++      const vis = (n as { visibleIf?: unknown }).visibleIf; if (vis) rows.push(["Shown when", conditionSummary(def, vis as never)]);
++      if (n.type === "branch") n.branches.forEach((arm, i) => rows.push([arm.label ?? `Path ${i + 1}`, conditionSummary(def, arm.when) || "always"]));
++      if (n.type === "loop") { rows.push(["Loop variable", <span className="mono">{n.loopVar}</span>]); if (n.eligibleIf) rows.push(["Eligible when", conditionSummary(def, n.eligibleIf)]); if (n.breakIf) rows.push(["Stops when", conditionSummary(def, n.breakIf)]); }
++      if (n.type === "page") rows.push(["Questions", `${n.questionIds.length}`]);
++      if (n.type === "end") rows.push(["Status", n.status]);
++      if (n.type === "redirect") rows.push(["URL", n.url]);
++      if (n.type === "quota_check") rows.push(["Quotas", `${n.quotaIds.length}`], ["When full", n.onFull.kind]);
++    }
++  }
++  if (!rows.length) return null;
++  return (
++    <section className="ai-sec" data-testid="inspector-summary">
++      <h4>Definition</h4>
++      <dl className="ai-dl">
++        {rows.map(([k, v], i) => <React.Fragment key={i}><dt>{k}</dt><dd>{v}</dd></React.Fragment>)}
++      </dl>
++      <p className="muted ai-none">Edit it in the workspace to the left.</p>
++    </section>
++  );
++}
+diff --git a/apps/studio/components/architect/SurveyMap.tsx b/apps/studio/components/architect/SurveyMap.tsx
+new file mode 100644
+index 0000000..026ef12
+--- /dev/null
++++ b/apps/studio/components/architect/SurveyMap.tsx
+@@ -0,0 +1,150 @@
++"use client";
++import React from "react";
++import type { ObjectKey } from "@rescript/engine";
++import { Icon, type IconName } from "../ui/Icon";
++import type { FlatMapRow, MapKind } from "../../lib/architect/map";
++
++/**
++ * THE SURVEY MAP PANE — the tree, drawn.
++ *
++ * A flat list of rows from `flattenMap`, indented by depth, with a disclosure
++ * for containers, a status dot, and dependency counts. Selection is the
++ * shared selection; a click on a selectable row selects it, a click on a
++ * disclosure toggles collapse, arrow keys walk the list, ← collapses / goes
++ * to the parent, → expands / goes to the first child.
++ *
++ * In focus mode, rows outside the selection's dependency neighbourhood are
++ * dimmed rather than hidden — the structure stays legible, the relevant part
++ * stands out.
++ */
++
++const ICON: Partial<Record<MapKind, IconName>> = {
++  block: "layers", group: "layers", page: "layers", question: "questions",
++  branch: "flow", arm: "chevron-right", otherwise: "chevron-right", loop: "flow", randomizer: "flow",
++  embedded: "variables", quotaCheck: "quotas", redirect: "share", end: "check",
++  rules: "logic", rule: "logic", calculations: "calc", calculation: "calc", quotas: "quotas", quota: "quotas",
++};
++
++export function SurveyMap({
++  rows, selectedKeys, primary, focusSet, onSelect, onToggle, onOpen, search, onSearch, onCollapseAll, onExpandAll,
++}: {
++  rows: FlatMapRow[];
++  selectedKeys: ReadonlySet<string>;
++  primary: string | null;
++  /** keys inside the focus neighbourhood, or null when focus is off */
++  focusSet: ReadonlySet<string> | null;
++  onSelect(key: ObjectKey, e: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }): void;
++  onToggle(key: string): void;
++  /** Enter / double-click: open the object in the workspace (it already is — this scrolls/focuses it) */
++  onOpen(key: ObjectKey): void;
++  search: string;
++  onSearch(s: string): void;
++  onCollapseAll(): void;
++  onExpandAll(): void;
++}) {
++  const listRef = React.useRef<HTMLDivElement>(null);
++  const [cursor, setCursor] = React.useState(0);
++
++  // keep the cursor on the primary when the selection changes elsewhere
++  React.useEffect(() => {
++    if (!primary) return;
++    const i = rows.findIndex((r) => r.key === primary);
++    if (i >= 0) setCursor(i);
++  }, [primary, rows]);
++  React.useEffect(() => {
++    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${cursor}"]`);
++    el?.scrollIntoView({ block: "nearest" });
++  }, [cursor]);
++
++  const onKey = (e: React.KeyboardEvent) => {
++    const row = rows[cursor];
++    const go = (i: number) => { e.preventDefault(); const n = Math.max(0, Math.min(rows.length - 1, i)); setCursor(n); const r = rows[n]; if (r?.selectable) onSelect(r.key as ObjectKey, e); };
++    switch (e.key) {
++      case "ArrowDown": go(cursor + 1); break;
++      case "ArrowUp": go(cursor - 1); break;
++      case "ArrowRight":
++        if (row?.children.length && !row.expanded) { e.preventDefault(); onToggle(row.key); }
++        else if (row?.children.length) go(cursor + 1);
++        break;
++      case "ArrowLeft":
++        if (row?.children.length && row.expanded) { e.preventDefault(); onToggle(row.key); }
++        else if (row?.parentKey) { const p = rows.findIndex((r) => r.key === row.parentKey); if (p >= 0) go(p); }
++        break;
++      case "Enter": if (row?.selectable) { e.preventDefault(); onOpen(row.key as ObjectKey); } break;
++      case "Home": go(0); break;
++      case "End": go(rows.length - 1); break;
++      default: break;
++    }
++  };
++
++  return (
++    <div className="am" data-testid="survey-map">
++      <div className="am-head">
++        <div className="am-search">
++          <Icon name="search" size={13} />
++          <input className="am-search-input" data-testid="map-search" placeholder="Find in map…" value={search}
++            onChange={(e) => onSearch(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
++        </div>
++        <button className="am-tool" title="Collapse all" onClick={onCollapseAll} data-testid="map-collapse-all">−</button>
++        <button className="am-tool" title="Expand all" onClick={onExpandAll} data-testid="map-expand-all">+</button>
++      </div>
++      <div className="am-list" ref={listRef} role="tree" tabIndex={0} onKeyDown={onKey} data-testid="map-list">
++        {rows.length === 0 && <div className="am-empty">Nothing matches.</div>}
++        {rows.map((r, i) => {
++          const selected = selectedKeys.has(r.key);
++          const isPrimary = primary === r.key;
++          const dim = focusSet ? !focusSet.has(r.key) : false;
++          const section = r.kind === "rules" || r.kind === "calculations" || r.kind === "quotas";
++          return (
++            <div
++              key={r.rowId}
++              role="treeitem"
++              aria-selected={selected}
++              aria-expanded={r.children.length ? r.expanded : undefined}
++              aria-level={r.depth + 1}
++              data-index={i}
++              data-testid="map-row"
++              data-key={r.key}
++              data-kind={r.kind}
++              className={`am-row am-${r.kind}${selected ? " selected" : ""}${isPrimary ? " primary" : ""}${i === cursor ? " cursor" : ""}${dim ? " dim" : ""}${section ? " section" : ""}${r.selectable ? "" : " static"}`}
++              style={{ paddingLeft: 8 + r.depth * 14 }}
++              onClick={(e) => { setCursor(i); if (r.selectable) onSelect(r.key as ObjectKey, e); else if (r.children.length) onToggle(r.key); }}
++              onDoubleClick={() => { if (r.selectable) onOpen(r.key as ObjectKey); }}
++            >
++              <button
++                className={`am-disc${r.children.length ? "" : " none"}`}
++                aria-label={r.expanded ? "Collapse" : "Expand"}
++                tabIndex={-1}
++                data-testid="map-disclosure"
++                onClick={(e) => { e.stopPropagation(); if (r.children.length) onToggle(r.key); }}
++              >
++                {r.children.length ? (r.expanded ? "▾" : "▸") : ""}
++              </button>
++              <span className={`am-dot ${r.status}`} title={r.issueCount ? `${r.issueCount} issue${r.issueCount === 1 ? "" : "s"}` : undefined} />
++              <Icon name={ICON[r.kind] ?? "layers"} size={13} />
++              <span className="am-label">
++                {r.code && r.kind === "question" ? <span className="mono am-code">{r.code}</span> : null}
++                <span className="am-text">{r.kind === "question" ? (r.detail || r.label) : r.label}</span>
++                {r.kind !== "question" && r.detail && <span className="am-detail">{r.detail}</span>}
++              </span>
++              {r.conditional && r.kind !== "arm" && r.kind !== "otherwise" && r.kind !== "rule" && <span className="am-cond" title="Conditional">IF</span>}
++              {(r.dependsOn > 0 || r.usedBy > 0) && (
++                <span className="am-deps" title={`reads ${r.dependsOn} · read by ${r.usedBy}`}>
++                  {r.dependsOn > 0 && <span>←{r.dependsOn}</span>}{r.usedBy > 0 && <span>→{r.usedBy}</span>}
++                </span>
++              )}
++              {r.children.length > 0 && !r.expanded && <span className="am-count">{countLeaves(r)}</span>}
++            </div>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
++
++function countLeaves(r: FlatMapRow): number {
++  let n = 0;
++  const visit = (x: { children: { children: unknown[] }[] }) => { for (const c of x.children) { if (!c.children.length) n++; else visit(c as never); } };
++  visit(r);
++  return n;
++}
+diff --git a/apps/studio/components/architect/Workspace.tsx b/apps/studio/components/architect/Workspace.tsx
+new file mode 100644
+index 0000000..a49d50b
+--- /dev/null
++++ b/apps/studio/components/architect/Workspace.tsx
+@@ -0,0 +1,183 @@
++"use client";
++import React from "react";
++import type { FlowNode } from "@rescript/schema";
++import { parseObjectKey, findNode, replaceFlowNode, summarizeFlowNode, type ObjectKey, type ObjectStatusMap } from "@rescript/engine";
++import { useStudio } from "../studio/store";
++import { QuestionEditor } from "../studio/QuestionsPanel";
++import { NodeEditor } from "../studio/FlowNodeEditors";
++import { DisplayRuleCard, CalculationCard } from "../studio/LogicPanel";
++import { Icon } from "../ui/Icon";
++
++/**
++ * THE WORKSPACE — the centre pane of Architect.
++ *
++ * Whatever is selected in the map is programmed here, with the editor the
++ * Studio already has for that kind of object: `QuestionEditor` for a
++ * question (the same 760 lines the Questions panel expands inline),
++ * `NodeEditor` for a branch / loop / randomizer / embedded data / redirect /
++ * end, `DisplayRuleCard` for a named rule, `CalculationCard` for a
++ * calculation. The workspace adds no editing of its own — it chooses.
++ *
++ * With nothing selected it shows the survey at a glance: what there is, and
++ * what is wrong, as a place to start.
++ */
++export function Workspace({ primary, status, onSelect }: { primary: ObjectKey | null; status: ObjectStatusMap; onSelect(key: ObjectKey): void }) {
++  const s = useStudio();
++  const def = s.def;
++
++  if (!primary) {
++    const broken = [...status.byKey.values()].filter((x) => x.level !== "ok");
++    return (
++      <div className="aw aw-overview" data-testid="workspace-overview">
++        <h2>{def.meta.title}</h2>
++        <div className="aw-stats">
++          <Stat n={def.questions.length} label="questions" />
++          <Stat n={def.displayRules.length} label="display rules" />
++          <Stat n={def.calculations.length} label="calculations" />
++          <Stat n={def.quotas.length} label="quotas" />
++          <Stat n={def.questions.filter((q) => q.displayLogic).length} label="with display logic" />
++          <Stat n={def.questions.filter((q) => q.skipLogic?.length).length} label="with skips" />
++        </div>
++        {broken.length > 0 ? (
++          <section className="aw-sec">
++            <h3>{broken.length} object{broken.length === 1 ? "" : "s"} need attention</h3>
++            <ul className="aw-broken">
++              {broken.slice(0, 20).map((b) => (
++                <li key={b.key}>
++                  <button className="ai-link" onClick={() => onSelect(b.key)} data-testid="overview-issue">
++                    <span className={`am-dot ${b.level}`} />
++                    <span className="mono">{parseObjectKey(b.key).kind}:{parseObjectKey(b.key).id}</span>
++                    <span className="aw-issue-msg">{b.issues[0]?.message}</span>
++                  </button>
++                </li>
++              ))}
++            </ul>
++          </section>
++        ) : (
++          <p className="muted"><Icon name="check" size={14} /> Every check passes. Select something in the map to program it.</p>
++        )}
++        {status.unattributed.length > 0 && (
++          <section className="aw-sec">
++            <h3>Survey-level</h3>
++            <ul className="aw-broken">{status.unattributed.map((i, k) => <li key={k} className={i.level}>{i.message}</li>)}</ul>
++          </section>
++        )}
++      </div>
++    );
++  }
++
++  const { kind, id } = parseObjectKey(primary);
++
++  if (kind === "question") {
++    const q = def.questions.find((x) => x.id === id);
++    if (!q) return <Missing what="question" />;
++    return (
++      <div className="aw" data-testid="workspace-question">
++        <QuestionEditor q={q} />
++      </div>
++    );
++  }
++
++  if (kind === "flowNode") {
++    const node = findNode(def.flow as FlowNode[], id) as FlowNode | null;
++    if (!node) return <Missing what="flow element" />;
++    const sum = summarizeFlowNode(node);
++    const patch = (next: FlowNode) => {
++      s.labelNextEdit(`edit ${sum.label}`);
++      s.update((d) => { replaceFlowNode(d.flow as FlowNode[], id, next); });
++    };
++    const title = (node as { title?: string }).title;
++    return (
++      <div className="aw" data-testid="workspace-flow">
++        <div className="aw-node-head">
++          <span className="ai-kind">{node.type.replace(/_/g, " ")}</span>
++          {node.type !== "end" && node.type !== "quota_check" && (
++            <input className="input aw-title" placeholder={sum.label} value={title ?? ""} data-testid="workspace-node-title"
++              onChange={(e) => patch({ ...node, title: e.target.value } as FlowNode)} />
++          )}
++        </div>
++        {node.type === "page" ? (
++          <PageWorkspace node={node} onSelect={onSelect} />
++        ) : node.type === "block" || node.type === "section" ? (
++          <ContainerWorkspace node={node} onSelect={onSelect} patch={patch} />
++        ) : (
++          <NodeEditor node={node} onChange={patch} />
++        )}
++      </div>
++    );
++  }
++
++  if (kind === "displayRule") {
++    const i = def.displayRules.findIndex((r) => r.id === id);
++    if (i < 0) return <Missing what="display rule" />;
++    return <div className="aw" data-testid="workspace-rule"><DisplayRuleCard index={i} /></div>;
++  }
++
++  if (kind === "calculation") {
++    const i = def.calculations.findIndex((c) => c.id === id);
++    if (i < 0) return <Missing what="calculation" />;
++    return <div className="aw" data-testid="workspace-calculation"><CalculationCard index={i} /></div>;
++  }
++
++  if (kind === "quota") {
++    return (
++      <div className="aw" data-testid="workspace-quota">
++        <p className="muted">Quotas are edited on the Quotas tab, where the fieldwork counts live beside them.</p>
++        <button className="btn" onClick={() => s.goToTab?.("quotas")}>Open Quotas</button>
++      </div>
++    );
++  }
++
++  return <Missing what={kind} />;
++}
++
++function Stat({ n, label }: { n: number; label: string }) {
++  return <div className="aw-stat"><span className="aw-stat-n">{n}</span><span className="aw-stat-l">{label}</span></div>;
++}
++
++function Missing({ what }: { what: string }) {
++  return <div className="aw aw-overview"><p className="muted">That {what} is no longer in the survey.</p></div>;
++}
++
++/** a page: its questions, each a link into the map/inspector, plus its condition */
++function PageWorkspace({ node, onSelect }: { node: Extract<FlowNode, { type: "page" }>; onSelect(key: ObjectKey): void }) {
++  const s = useStudio();
++  return (
++    <div>
++      <ul className="aw-qlist" data-testid="workspace-page-questions">
++        {node.questionIds.map((qid) => {
++          const q = s.def.questions.find((x) => x.id === qid);
++          if (!q) return null;
++          return (
++            <li key={qid}>
++              <button className="ai-link" onClick={() => onSelect(`question:${qid}`)}>
++                <span className="mono am-code">{q.code}</span>
++                <span>{String(q.text ?? "").replace(/<[^>]*>/g, "").trim() || q.variableName}</span>
++              </button>
++            </li>
++          );
++        })}
++        {node.questionIds.length === 0 && <li className="muted">No questions on this page.</li>}
++      </ul>
++      <NodeEditor node={node} onChange={(next) => { s.labelNextEdit("edit page"); s.update((d) => { replaceFlowNode(d.flow as FlowNode[], node.id, next); }); }} />
++    </div>
++  );
++}
++
++function ContainerWorkspace({ node, onSelect, patch }: { node: Extract<FlowNode, { type: "block" | "section" }>; onSelect(key: ObjectKey): void; patch(next: FlowNode): void }) {
++  return (
++    <div>
++      <ul className="aw-qlist" data-testid="workspace-container-children">
++        {node.children.map((c) => (
++          <li key={c.id}>
++            <button className="ai-link" onClick={() => onSelect(`flowNode:${c.id}`)}>
++              <span className="ai-link-kind">{c.type.replace(/_/g, " ")}</span>
++              <span>{summarizeFlowNode(c).label}</span>
++            </button>
++          </li>
++        ))}
++      </ul>
++      <NodeEditor node={node} onChange={patch} />
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/CommandContext.tsx b/apps/studio/components/studio/CommandContext.tsx
+index a8ce9f3..c2690bf 100644
+--- a/apps/studio/components/studio/CommandContext.tsx
++++ b/apps/studio/components/studio/CommandContext.tsx
+@@ -103,6 +103,8 @@ export function CommandProvider({
+       },
+       setTab,
+       setMode(m) { mode?.setMode(m); },
++      focus: mode?.focus ?? false,
++      setFocus(on) { mode?.setFocus(on); },
+       uid,
+       newQuestion(def: SurveyDefinition): Question {
+         const v = variantRegistry.get("single_select.radio")!;
+diff --git a/apps/studio/components/studio/CommandPalette.tsx b/apps/studio/components/studio/CommandPalette.tsx
+index 7b1db63..b3dcaac 100644
+--- a/apps/studio/components/studio/CommandPalette.tsx
++++ b/apps/studio/components/studio/CommandPalette.tsx
+@@ -32,8 +32,11 @@ export function CommandPalette() {
+ 
+   const open = !!api?.paletteOpen;
+ 
++  // the query is cleared on CLOSE, not on open: clearing on open raced the
++  // first keystrokes of someone (or a test) who typed the instant it appeared
+   React.useEffect(() => {
+-    if (open) { setQuery(""); setCursor(0); setTimeout(() => inputRef.current?.focus(), 0); }
++    if (open) { setCursor(0); inputRef.current?.focus(); setTimeout(() => inputRef.current?.focus(), 0); }
++    else setQuery("");
+   }, [open]);
+ 
+   // Escape closes from anywhere, not only from inside the input — focus may
+diff --git a/apps/studio/components/studio/LogicPanel.tsx b/apps/studio/components/studio/LogicPanel.tsx
+index 399ab4e..aafdd8c 100644
+--- a/apps/studio/components/studio/LogicPanel.tsx
++++ b/apps/studio/components/studio/LogicPanel.tsx
+@@ -266,6 +266,75 @@ const TARGET_KINDS: { kind: DisplayRuleTarget["kind"]; label: string; hint: stri
+   { kind: "column", label: "Column", hint: "one column of a composite question" },
+ ];
+ 
++/**
++ * ONE NAMED DISPLAY RULE, EDITABLE. Extracted from the Logic panel's list so
++ * the Architect workspace can show a single rule; the Logic panel renders the
++ * same component per rule, so the two never drift.
++ */
++export function DisplayRuleCard({ index }: { index: number }) {
++  const s = useStudio();
++  const r = s.def.displayRules[index];
++  if (!r) return null;
++  return (
++    <div className="card" style={{ padding: 10 }} data-testid={`display-rule-${index}`}>
++      <div className="row" style={{ marginBottom: 6 }}>
++        <input className="input" style={{ width: 180 }} placeholder="rule label" value={r.label ?? ""}
++          onChange={(e) => s.update((d) => { d.displayRules[index].label = e.target.value; })} />
++        <select className="select" value={r.action}
++          onChange={(e) => s.update((d) => { d.displayRules[index].action = e.target.value as any; })}>
++          <option value="show">SHOW</option><option value="hide">HIDE</option>
++        </select>
++        <RuleTargetPicker index={index} />
++        <button className="btn small danger"
++          onClick={() => s.update((d) => { d.displayRules.splice(index, 1); })}>×</button>
++      </div>
++      <div className="flabel">WHEN</div>
++      <ConditionEditor value={r.when}
++        onChange={(when) => s.update((d) => { d.displayRules[index].when = when; })} />
++    </div>
++  );
++}
++
++/** ONE CALCULATION, EDITABLE — the Calculations tab's card, shared with Architect. */
++export function CalculationCard({ index, error }: { index: number; error?: string | null }) {
++  const s = useStudio();
++  const c = s.def.calculations[index];
++  // the Calculations tab validates in bulk (lazy engine import, see CalcPanel); a
++  // lone card validates itself the same way, only when nothing was passed in
++  const [own, setOwn] = React.useState<string | null>(null);
++  React.useEffect(() => {
++    if (error !== undefined || !c) return;
++    let live = true;
++    import("@rescript/engine").then(({ validateExpression }) => { if (live) setOwn(validateExpression(c.expression)); });
++    return () => { live = false; };
++  }, [error, c?.expression, c]);
++  if (!c) return null;
++  const err = error === undefined ? own : error;
++  return (
++    <div className="card" style={{ padding: 12 }} data-testid={`calculation-${index}`}>
++      <div className="row" style={{ marginBottom: 6 }}>
++        {/* renames through the safe path — see VariableNameInput */}
++        <VariableNameInput name={c.targetVariable} testId="calc-target-name"
++          placeholder="TARGET_VAR" style={{ width: 180 }} />
++        <span className="muted">=</span>
++        <input className="input mono grow" value={c.expression}
++          placeholder="Q1 + Q2 + Q3"
++          onChange={(e) => s.update((d) => { d.calculations[index].expression = e.target.value; })} />
++        <select className="select" style={{ width: 140 }} value={c.trigger}
++          onChange={(e) => s.update((d) => { d.calculations[index].trigger = e.target.value as any; })}>
++          <option value="on_change">on change</option>
++          <option value="on_page_submit">on page submit</option>
++          <option value="on_complete">on complete</option>
++        </select>
++        <button className="btn small danger" onClick={() => s.update((d) => { d.calculations.splice(index, 1); })}>×</button>
++      </div>
++      {err && <div className="chip warn">syntax: {err}</div>}
++      <OptionalCondition label="Only compute when" value={c.when}
++        onChange={(w) => s.update((d) => { d.calculations[index].when = w; })} />
++    </div>
++  );
++}
++
+ function RuleTargetPicker({ index }: { index: number }) {
+   const s = useStudio();
+   const rule = s.def.displayRules[index];
+@@ -481,24 +550,7 @@ export function LogicPanel() {
+         <strong> HIDE beats SHOW</strong>, and a SHOW rule whose condition is false hides its target.
+       </p>
+       <DeadRuleNotice />
+-      {s.def.displayRules.map((r, i) => (
+-        <div key={r.id} className="card" style={{ padding: 10 }}>
+-          <div className="row" style={{ marginBottom: 6 }}>
+-            <input className="input" style={{ width: 180 }} placeholder="rule label" value={r.label ?? ""}
+-              onChange={(e) => s.update((d) => { d.displayRules[i].label = e.target.value; })} />
+-            <select className="select" value={r.action}
+-              onChange={(e) => s.update((d) => { d.displayRules[i].action = e.target.value as any; })}>
+-              <option value="show">SHOW</option><option value="hide">HIDE</option>
+-            </select>
+-            <RuleTargetPicker index={i} />
+-            <button className="btn small danger"
+-              onClick={() => s.update((d) => { d.displayRules.splice(i, 1); })}>×</button>
+-          </div>
+-          <div className="flabel">WHEN</div>
+-          <ConditionEditor value={r.when}
+-            onChange={(when) => s.update((d) => { d.displayRules[i].when = when; })} />
+-        </div>
+-      ))}
++      {s.def.displayRules.map((r, i) => <DisplayRuleCard key={r.id} index={i} />)}
+       <button className="btn small" onClick={() =>
+         s.update((d) => {
+           d.displayRules.push({
+@@ -558,29 +610,7 @@ export function CalcPanel() {
+         <div key={p} className="chip warn qd-note" data-testid="calc-problem">{p}</div>
+       ))}
+ 
+-      {s.def.calculations.map((c, i) => (
+-        <div key={c.id} className="card" style={{ padding: 12 }}>
+-          <div className="row" style={{ marginBottom: 6 }}>
+-            {/* renames through the safe path — see VariableNameInput */}
+-            <VariableNameInput name={c.targetVariable} testId="calc-target-name"
+-              placeholder="TARGET_VAR" style={{ width: 180 }} />
+-            <span className="muted">=</span>
+-            <input className="input mono grow" value={c.expression}
+-              placeholder="Q1 + Q2 + Q3"
+-              onChange={(e) => s.update((d) => { d.calculations[i].expression = e.target.value; })} />
+-            <select className="select" style={{ width: 140 }} value={c.trigger}
+-              onChange={(e) => s.update((d) => { d.calculations[i].trigger = e.target.value as any; })}>
+-              <option value="on_change">on change</option>
+-              <option value="on_page_submit">on page submit</option>
+-              <option value="on_complete">on complete</option>
+-            </select>
+-            <button className="btn small danger" onClick={() => s.update((d) => { d.calculations.splice(i, 1); })}>×</button>
+-          </div>
+-          {exprErrors[c.id] && <div className="chip warn">syntax: {exprErrors[c.id]}</div>}
+-          <OptionalCondition label="Only compute when" value={c.when}
+-            onChange={(w) => s.update((d) => { d.calculations[i].when = w; })} />
+-        </div>
+-      ))}
++      {s.def.calculations.map((c, i) => <CalculationCard key={c.id} index={i} error={exprErrors[c.id]} />)}
+       <button className="btn small" onClick={() =>
+         s.update((d) => {
+           d.calculations.push({
+diff --git a/apps/studio/components/studio/ModeContext.tsx b/apps/studio/components/studio/ModeContext.tsx
+index 4caac6e..8217583 100644
+--- a/apps/studio/components/studio/ModeContext.tsx
++++ b/apps/studio/components/studio/ModeContext.tsx
+@@ -24,6 +24,14 @@ interface ModeState {
+   setMode(mode: ProgrammingMode): void;
+   /** the modes, with availability, for selectors and the palette */
+   modes: typeof MODES;
++  /**
++   * FOCUS MODE (§14): everything outside the selection's dependency
++   * neighbourhood goes visually secondary. A view-level switch, so it lives
++   * with the mode rather than in any one renderer — Architect dims its map,
++   * Flow will dim its canvas, Grid its rows, all from this one flag.
++   */
++  focus: boolean;
++  setFocus(on: boolean): void;
+ }
+ 
+ const Ctx = React.createContext<ModeState | null>(null);
+@@ -48,7 +56,8 @@ export function ModeProvider({ children }: { children: React.ReactNode }) {
+     }
+   }, []);
+ 
+-  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES }), [mode, setMode]);
++  const [focus, setFocus] = React.useState(false);
++  const value = React.useMemo<ModeState>(() => ({ mode, setMode, modes: MODES, focus, setFocus }), [mode, setMode, focus]);
+   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+ }
+ 
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 182f390..98705ca 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -40,6 +40,7 @@ import { CommandPalette } from "./CommandPalette";
+ import { ModeSelector } from "./ModeSelector";
+ import { useMode } from "./ModeContext";
+ import { GridView } from "../grid/GridView";
++import { ArchitectView } from "../architect/ArchitectView";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -319,7 +320,7 @@ function SaveIndicator() {
+  * own), so `main` actually uses the freed space instead of leaving a blank
+  * gutter where the panel used to be.
+  */
+-function RightPanel({ tab }: { tab: Tab }) {
++function RightPanel({ tab, hidden = false }: { tab: Tab; hidden?: boolean }) {
+   const s = useStudio();
+   /*
+    * COLLAPSED BY THE AUTHOR, as distinct from hidden because nothing is
+@@ -331,7 +332,7 @@ function RightPanel({ tab }: { tab: Tab }) {
+    */
+   const [collapsed, setCollapsed] = React.useState(false);
+   const selected = !!selectedQuestion(s);
+-  const showProperties = tab === "questions" && selected && !collapsed;
++  const showProperties = tab === "questions" && selected && !collapsed && !hidden;
+   const asideRef = React.useRef<HTMLElement>(null);
+ 
+   /*
+@@ -352,7 +353,7 @@ function RightPanel({ tab }: { tab: Tab }) {
+    * re-render can move the element out from under the event.
+    */
+   React.useEffect(() => {
+-    if (!selected || tab !== "questions") return;
++    if (!selected || tab !== "questions" || hidden) return;
+     const onDown = (e: PointerEvent) => {
+       const t = e.target as HTMLElement | null;
+       if (!t) return;
+@@ -364,7 +365,7 @@ function RightPanel({ tab }: { tab: Tab }) {
+     };
+     document.addEventListener("pointerdown", onDown, true);
+     return () => document.removeEventListener("pointerdown", onDown, true);
+-  }, [selected, tab, s]);
++  }, [selected, tab, s, hidden]);
+ 
+   return (
+     <>
+@@ -1048,7 +1049,11 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+             * been. Grid shows the same questions as rows. Both read and
+             * write the same store, so switching is a re-render, not a load.
+             */}
+-          {tab === "questions" && (programmingMode === "grid" ? <GridView /> : <QuestionsPanel />)}
++          {tab === "questions" && (
++            programmingMode === "grid" ? <GridView />
++            : programmingMode === "architect" ? <ArchitectView />
++            : <QuestionsPanel />
++          )}
+           {tab === "settings" && (
+             /*
+              * Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey
+@@ -1103,7 +1108,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+             </>
+           )}
+         </main>
+-        <RightPanel tab={tab} />
++        {/* Architect carries its own inspector, so the outer property panel steps aside there */}
++        <RightPanel tab={tab} hidden={programmingMode === "architect" && tab === "questions"} />
+       </div>
+       </CanvasProvider>
+     </div>
+diff --git a/apps/studio/lib/architect/map.test.ts b/apps/studio/lib/architect/map.test.ts
+new file mode 100644
+index 0000000..81c2b60
+--- /dev/null
++++ b/apps/studio/lib/architect/map.test.ts
+@@ -0,0 +1,134 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond } from "@rescript/schema";
++import { buildDependencyIndex, objectStatus } from "@rescript/engine";
++import { buildSurveyMap, flattenMap, ancestorKeys, containerKeys, findMapNode } from "./map.ts";
++
++/**
++ * THE SURVEY MAP mirrors the flow's structure and never loses a question.
++ */
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Mapped" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "Age?" },
++      { id: "q2", code: "Q2", variableName: "REGION", type: "single_select", text: "Region?", options: [{ code: "N", label: "North" }, { code: "S", label: "South" }] },
++      { id: "q3", code: "Q3", variableName: "WHY", type: "text", text: "Why north?", displayLogic: cond.rule("q2", "eq", "N") },
++      { id: "q4", code: "Q4", variableName: "WHYS", type: "text", text: "Why south?" },
++      { id: "q5", code: "Q5", variableName: "LOOPQ", type: "text", text: "Per region" },
++      { id: "q9", code: "Q9", variableName: "LOST", type: "text", text: "Nowhere" },
++    ],
++    displayRules: [{ id: "dr1", label: "Adults", target: { kind: "question", ref: "q2" }, action: "show", when: cond.rule("q1", "gte", 18) }],
++    calculations: [{ id: "c1", targetVariable: "AGE2", expression: "AGE * 2" }],
++    quotas: [{ id: "qt1", name: "North cap", cells: [{ id: "cell", label: "N", when: cond.rule("q2", "eq", "N"), limit: 50 }] }],
++    flow: [
++      { type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] },
++      { type: "branch", id: "br", title: "By region", branches: [
++        { id: "arm_n", label: "North", when: cond.rule("q2", "eq", "N"), children: [{ type: "page", id: "p2", questionIds: ["q3"] }] },
++      ], otherwise: [{ type: "page", id: "p3", questionIds: ["q4"] }] },
++      { type: "block", id: "blk", title: "Two pages", visibleIf: cond.rule("q1", "gte", 18), children: [
++        { type: "page", id: "p4", questionIds: [] },
++        { type: "loop", id: "lp", loopVar: "region", source: { kind: "question", questionId: "q2" }, children: [{ type: "page", id: "p5", questionIds: ["q5"] }] },
++      ] },
++      { type: "end", id: "e1", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("the map mirrors the flow: block, branch with arms and otherwise, conditional block, loop, end", () => {
++  const root = buildSurveyMap(survey());
++  const kinds = root.children.map((n) => n.kind);
++  assert.deepEqual(kinds, ["block", "branch", "block", "end", "group", "rules", "calculations", "quotas"]);
++  const branch = root.children[1];
++  assert.deepEqual(branch.children.map((n) => `${n.kind}:${n.label}`), ["arm:North", "otherwise:Otherwise"]);
++  assert.match(branch.children[0].detail!, /^IF Q2 is/);
++  const blk = root.children[2];
++  assert.equal(blk.conditional, true);
++  assert.match(blk.detail!, /^shown when/);
++  assert.deepEqual(blk.children.map((n) => n.kind), ["page", "loop"]);
++  assert.equal(blk.children[1].code, "region");
++  assert.match(blk.children[1].detail!, /over Q2/);
++});
++
++test("a lone-page block shows its questions directly; block numbering counts blocks in order", () => {
++  const root = buildSurveyMap(survey());
++  assert.equal(root.children[0].label, "Block 1 · Screener");
++  assert.deepEqual(root.children[0].children.map((n) => n.code), ["Q1", "Q2"]);
++  // pages inside the branch's arms are blocks too — the same numbering `listBlocks` gives the Questions panel
++  assert.equal(root.children[2].label, "Block 4 · Two pages");
++});
++
++test("every question appears exactly once, and an unplaced one lands under 'Not on any page'", () => {
++  const root = buildSurveyMap(survey());
++  const codes: string[] = [];
++  const visit = (n: typeof root) => { if (n.kind === "question") codes.push(n.code!); n.children.forEach(visit); };
++  visit(root);
++  assert.deepEqual([...codes].sort(), ["Q1", "Q2", "Q3", "Q4", "Q5", "Q9"]);
++  assert.equal(new Set(codes).size, codes.length, "no question twice");
++  const lost = root.children.find((n) => n.id === "unplaced")!;
++  assert.deepEqual(lost.children.map((n) => n.code), ["Q9"]);
++});
++
++test("rules, calculations and quotas are sections with selectable children keyed by engine ObjectKey", () => {
++  const root = buildSurveyMap(survey());
++  const rules = root.children.find((n) => n.kind === "rules")!;
++  assert.equal(rules.selectable, false);
++  assert.equal(rules.children[0].key, "displayRule:dr1");
++  assert.match(rules.children[0].detail!, /^SHOW Q2 when/);
++  const calcs = root.children.find((n) => n.kind === "calculations")!;
++  assert.equal(calcs.children[0].key, "calculation:c1");
++  assert.equal(calcs.children[0].detail, "AGE * 2");
++  const quotas = root.children.find((n) => n.kind === "quotas")!;
++  assert.equal(quotas.children[0].key, "quota:qt1");
++});
++
++test("status rolls up: a broken question colours its block, and the counts come from the engine", () => {
++  const def = survey();
++  def.questions[2] = { ...def.questions[2], displayLogic: cond.rule("q_missing", "eq", 1) } as never;
++  const root = buildSurveyMap(def, { status: objectStatus(def), index: buildDependencyIndex(def) });
++  const branch = root.children[1];
++  assert.notEqual(branch.status, "ok", "the branch holds the broken Q3");
++  assert.notEqual(branch.children[0].status, "ok", "and so does its North arm");
++  const q3 = findMapNode(root, "question:q3")!;
++  assert.notEqual(q3.status, "ok");
++  assert.ok(q3.issueCount >= 1);
++  const q2 = findMapNode(root, "question:q2")!;
++  assert.ok(q2.usedBy >= 3, `Q2 is read by the branch, the loop, a rule and a quota: ${q2.usedBy}`);
++  const clean = buildSurveyMap(survey(), { status: objectStatus(survey()) });
++  assert.equal(clean.children[1].status, "ok");
++});
++
++test("flattenMap honours collapse and reports depth and expansion", () => {
++  const root = buildSurveyMap(survey());
++  const all = flattenMap(root, new Set());
++  assert.equal(all[0].depth, 0);
++  assert.equal(all[0].label, "Block 1 · Screener");
++  assert.equal(all[1].depth, 1);
++  assert.equal(all[1].code, "Q1");
++  const collapsed = flattenMap(root, new Set(["flowNode:p1", "flowNode:br"]));
++  assert.ok(!collapsed.some((r) => r.code === "Q1"), "a collapsed block hides its questions");
++  assert.ok(!collapsed.some((r) => r.kind === "arm"), "a collapsed branch hides its arms");
++  assert.equal(collapsed.find((r) => r.key === "flowNode:p1")!.expanded, false);
++  assert.ok(collapsed.length < all.length);
++});
++
++test("a question placed on two pages appears at both positions, with distinct row ids", () => {
++  const def = survey();
++  (def.flow[2] as { children: { type: string; questionIds?: string[] }[] }).children[0].questionIds = ["q1"]; // Q1 also on p4
++  const rows = flattenMap(buildSurveyMap(def), new Set());
++  const q1 = rows.filter((r) => r.key === "question:q1");
++  assert.equal(q1.length, 2, "one object, two positions");
++  assert.notEqual(q1[0].rowId, q1[1].rowId);
++  assert.equal(new Set(rows.map((r) => r.rowId)).size, rows.length, "every row id unique");
++});
++
++test("ancestorKeys gives the path to expand for a deep selection; containerKeys lists what can collapse", () => {
++  const root = buildSurveyMap(survey());
++  assert.deepEqual(ancestorKeys(root, "question:q5"), ["flowNode:blk", "flowNode:lp", "flowNode:p5"]);
++  assert.deepEqual(ancestorKeys(root, "question:q3"), ["flowNode:br", "arm:arm_n", "flowNode:p2"]);
++  assert.deepEqual(ancestorKeys(root, "question:q1"), ["flowNode:p1"]);
++  const containers = containerKeys(root);
++  assert.ok(containers.includes("flowNode:br") && containers.includes("section:rules"));
++  assert.ok(!containers.includes("question:q1"));
++});
+diff --git a/apps/studio/lib/architect/map.ts b/apps/studio/lib/architect/map.ts
+new file mode 100644
+index 0000000..862322b
+--- /dev/null
++++ b/apps/studio/lib/architect/map.ts
+@@ -0,0 +1,271 @@
++import type { FlowNode, SurveyDefinition } from "@rescript/schema";
++import {
++  objectKey, stripHtmlText, conditionSummary,
++  type ObjectKey, type ObjectStatusMap, type DependencyIndex, type StatusLevel,
++} from "@rescript/engine";
++
++/**
++ * THE SURVEY MAP — the architecture of a survey as a tree.
++ *
++ * The Architect environment's left pane. Where the Questions panel shows
++ * blocks of cards and the Grid shows rows, the map shows STRUCTURE: the flow
++ * as nested containers (blocks, groups, branches with their arms, loops,
++ * randomizers), pages inside them, questions inside those — and beneath the
++ * flow, the survey's other programmable objects: named display rules,
++ * calculations, quotas. Everything selectable, everything an engine
++ * ObjectKey, so selecting a branch here and selecting a branch on the Flow
++ * canvas (Phase 3) are the same event.
++ *
++ * Every node carries its status and its dependency counts, so the map is
++ * also where a programmer sees at a glance which parts of a 600-question
++ * survey are healthy and which are wired to many others.
++ *
++ * Pure: no React, tested directly, cheap to memoise on the definition.
++ */
++
++export type MapKind =
++  | "root" | "block" | "group" | "page" | "question"
++  | "branch" | "arm" | "otherwise" | "loop" | "randomizer"
++  | "embedded" | "quotaCheck" | "redirect" | "end"
++  | "rules" | "rule" | "calculations" | "calculation" | "quotas" | "quota";
++
++export interface MapNode {
++  /** the engine key when the node is an addressable object; a synthetic key otherwise */
++  key: ObjectKey | `${string}:${string}`;
++  kind: MapKind;
++  id: string;
++  /** what the row shows: "Q14", "Block 3 · Brands", "IF Q3 = 1", "TOTAL" */
++  label: string;
++  /** the mono code, when the object has one */
++  code?: string;
++  /** a secondary line: question text, condition summary, expression */
++  detail?: string;
++  children: MapNode[];
++  /** true when this container has a condition (visibleIf, arm.when, loop filters) */
++  conditional: boolean;
++  status: StatusLevel;
++  issueCount: number;
++  /** distinct objects this reads / that read this — from the dependency index */
++  dependsOn: number;
++  usedBy: number;
++  /** true when the node can be selected and inspected */
++  selectable: boolean;
++}
++
++export interface FlatMapRow extends MapNode {
++  /**
++   * Unique per ROW, not per object: a question placed on two pages (both
++   * arms of a branch showing it) is one object at two positions, and the
++   * pane needs a key for each position.
++   */
++  rowId: string;
++  depth: number;
++  /** true when the node has children and is expanded */
++  expanded: boolean;
++  /** the parent's key, for collapsing "up" */
++  parentKey: string | null;
++}
++
++type Deco = { status?: ObjectStatusMap; index?: DependencyIndex };
++
++function deco(key: ObjectKey, d: Deco): Pick<MapNode, "status" | "issueCount" | "dependsOn" | "usedBy"> {
++  const st = d.status?.statusOf(key);
++  const dependsOn = d.index ? new Set(d.index.dependsOn(key).map((e) => e.to)).size : 0;
++  const usedBy = d.index ? new Set(d.index.usedBy(key).map((e) => e.from)).size : 0;
++  return { status: st?.level ?? "ok", issueCount: st?.issues.length ?? 0, dependsOn, usedBy };
++}
++
++const NONE = { status: "ok" as StatusLevel, issueCount: 0, dependsOn: 0, usedBy: 0 };
++
++/** a container's status is its worst child's, so a collapsed block still shows a red dot */
++function rollUp(node: MapNode): MapNode {
++  let status = node.status;
++  let issues = node.issueCount;
++  for (const c of node.children) {
++    if (c.status === "error" || (c.status === "warning" && status === "ok")) status = c.status;
++    issues += c.issueCount;
++  }
++  return status === node.status && issues === node.issueCount ? node : { ...node, status, issueCount: issues };
++}
++
++export function buildSurveyMap(def: SurveyDefinition, d: Deco = {}): MapNode {
++  const byId = new Map(def.questions.map((q) => [q.id, q]));
++  let blockNo = 0;
++
++  const question = (qid: string): MapNode | null => {
++    const q = byId.get(qid);
++    if (!q) return null;
++    const key = objectKey("question", q.id);
++    return {
++      key, kind: "question", id: q.id, label: q.code, code: q.code,
++      detail: stripHtmlText(q.text ?? "").trim() || q.variableName,
++      children: [], conditional: !!q.displayLogic, selectable: true, ...deco(key, d),
++    };
++  };
++
++  const page = (n: Extract<FlowNode, { type: "page" }>, asBlock: boolean): MapNode => {
++    const key = objectKey("flowNode", n.id);
++    const kids = n.questionIds.map(question).filter((x): x is MapNode => !!x);
++    const label = asBlock ? `Block ${++blockNo}${n.title ? ` · ${n.title}` : ""}` : (n.title ?? "Page");
++    return rollUp({
++      key, kind: asBlock ? "block" : "page", id: n.id, label,
++      detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
++      children: kids, conditional: !!n.visibleIf, selectable: true, ...(d.index || d.status ? deco(key, d) : NONE),
++    });
++  };
++
++  const walk = (nodes: FlowNode[]): MapNode[] => nodes.map((n): MapNode => {
++    switch (n.type) {
++      case "page": return page(n, true);
++      case "block": {
++        const key = objectKey("flowNode", n.id);
++        const no = ++blockNo;
++        const pages = n.children.map((c) => c.type === "page" ? page(c, false) : walk([c])[0]);
++        // a block with one page shows that page's questions directly — one level, not two
++        const children = pages.length === 1 && pages[0].kind === "page" ? pages[0].children : pages;
++        return rollUp({
++          key, kind: "block", id: n.id, label: `Block ${no}${n.title ? ` · ${n.title}` : ""}`,
++          detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
++          children, conditional: !!n.visibleIf, selectable: true, ...deco(key, d),
++        });
++      }
++      case "section": {
++        const key = objectKey("flowNode", n.id);
++        return rollUp({
++          key, kind: "group", id: n.id, label: n.title ?? "Group",
++          detail: n.visibleIf ? `shown when ${conditionSummary(def, n.visibleIf)}` : undefined,
++          children: walk(n.children), conditional: !!n.visibleIf, selectable: true, ...deco(key, d),
++        });
++      }
++      case "randomizer": {
++        const key = objectKey("flowNode", n.id);
++        return rollUp({
++          key, kind: "randomizer", id: n.id, label: n.title ?? "Randomizer",
++          detail: n.show ? `show ${n.show} of ${n.children.length}` : `shuffle ${n.children.length}`,
++          children: walk(n.children), conditional: false, selectable: true, ...deco(key, d),
++        });
++      }
++      case "branch": {
++        const key = objectKey("flowNode", n.id);
++        const arms: MapNode[] = n.branches.map((arm, i) => rollUp({
++          key: `arm:${arm.id}`, kind: "arm", id: arm.id,
++          label: arm.label ?? `Path ${i + 1}`, detail: `IF ${conditionSummary(def, arm.when)}`,
++          children: walk(arm.children), conditional: true, selectable: false, ...NONE,
++        }));
++        if (n.otherwise?.length) {
++          arms.push(rollUp({
++            key: `otherwise:${n.id}`, kind: "otherwise", id: `${n.id}:otherwise`, label: "Otherwise",
++            children: walk(n.otherwise), conditional: true, selectable: false, ...NONE,
++          }));
++        }
++        return rollUp({
++          key, kind: "branch", id: n.id, label: n.title ?? "Branch",
++          detail: `${n.branches.length} path${n.branches.length === 1 ? "" : "s"}${n.otherwise?.length ? " + otherwise" : ""}`,
++          children: arms, conditional: true, selectable: true, ...deco(key, d),
++        });
++      }
++      case "loop": {
++        const key = objectKey("flowNode", n.id);
++        const src = n.source as { kind: string; questionId?: string; listFillId?: string };
++        const over = src.kind === "question" ? `over ${byId.get(src.questionId ?? "")?.code ?? "?"}`
++          : src.kind === "listFill" ? "over a list fill" : `over ${src.kind}`;
++        return rollUp({
++          key, kind: "loop", id: n.id, label: n.title ?? `Loop ${n.loopVar}`, code: n.loopVar,
++          detail: over, children: walk(n.children), conditional: !!(n.eligibleIf || n.skipIf || n.breakIf), selectable: true, ...deco(key, d),
++        });
++      }
++      case "embedded_data": {
++        const key = objectKey("flowNode", n.id);
++        return { key, kind: "embedded", id: n.id, label: n.title ?? "Embedded data", detail: n.fields.map((f) => f.name).filter(Boolean).join(", "), children: [], conditional: false, selectable: true, ...NONE };
++      }
++      case "quota_check": {
++        const key = objectKey("flowNode", n.id);
++        return { key, kind: "quotaCheck", id: n.id, label: "Quota check", detail: `${n.quotaIds.length} quota${n.quotaIds.length === 1 ? "" : "s"}`, children: [], conditional: false, selectable: true, ...deco(key, d) };
++      }
++      case "redirect": {
++        const key = objectKey("flowNode", n.id);
++        return { key, kind: "redirect", id: n.id, label: n.title ?? "Redirect", detail: n.url, children: [], conditional: !!n.when, selectable: true, ...deco(key, d) };
++      }
++      case "end": {
++        const key = objectKey("flowNode", n.id);
++        return { key, kind: "end", id: n.id, label: `End · ${n.status}`, detail: n.message ? stripHtmlText(n.message) : undefined, children: [], conditional: false, selectable: true, ...deco(key, d) };
++      }
++    }
++  });
++
++  const flow = walk(def.flow);
++
++  // questions on no page still exist and must be reachable from the map
++  const placed = new Set<string>();
++  const collect = (nodes: MapNode[]) => { for (const n of nodes) { if (n.kind === "question") placed.add(n.id); collect(n.children); } };
++  collect(flow);
++  const unplaced = def.questions.filter((q) => !placed.has(q.id)).map((q) => question(q.id)!).filter(Boolean);
++  if (unplaced.length) {
++    flow.push(rollUp({ key: "section:unplaced", kind: "group", id: "unplaced", label: "Not on any page", detail: "respondents never see these", children: unplaced, conditional: false, selectable: false, ...NONE }));
++  }
++
++  const rules: MapNode = rollUp({
++    key: "section:rules", kind: "rules", id: "rules", label: "Display rules", children: def.displayRules.map((r, i) => {
++      const key = objectKey("displayRule", r.id);
++      const target = r.target.kind === "question" ? (byId.get(r.target.ref)?.code ?? r.target.ref) : `${r.target.kind} ${r.target.ref}`;
++      return { key, kind: "rule" as MapKind, id: r.id, label: r.label || `Rule ${i + 1}`, detail: `${r.action.toUpperCase()} ${target} when ${conditionSummary(def, r.when)}`, children: [], conditional: true, selectable: true, ...deco(key, d) };
++    }), conditional: false, selectable: false, ...NONE,
++  });
++  const calcs: MapNode = rollUp({
++    key: "section:calculations", kind: "calculations", id: "calculations", label: "Calculations", children: def.calculations.map((c) => {
++      const key = objectKey("calculation", c.id);
++      return { key, kind: "calculation" as MapKind, id: c.id, label: c.targetVariable, code: c.targetVariable, detail: c.expression, children: [], conditional: !!c.when, selectable: true, ...deco(key, d) };
++    }), conditional: false, selectable: false, ...NONE,
++  });
++  const quotas: MapNode = rollUp({
++    key: "section:quotas", kind: "quotas", id: "quotas", label: "Quotas", children: def.quotas.map((q) => {
++      const key = objectKey("quota", q.id);
++      return { key, kind: "quota" as MapKind, id: q.id, label: q.name, detail: `${q.cells.length} cell${q.cells.length === 1 ? "" : "s"} · ${q.mode}`, children: [], conditional: false, selectable: true, ...deco(key, d) };
++    }), conditional: false, selectable: false, ...NONE,
++  });
++
++  return rollUp({ key: "section:root", kind: "root", id: "root", label: def.meta.title, children: [...flow, rules, calcs, quotas], conditional: false, selectable: false, ...NONE });
++}
++
++/**
++ * The tree as the rows the pane draws, honouring collapse state. Section
++ * headers (rules / calculations / quotas) and containers are rows too.
++ */
++export function flattenMap(root: MapNode, collapsed: ReadonlySet<string>): FlatMapRow[] {
++  const out: FlatMapRow[] = [];
++  const visit = (n: MapNode, depth: number, parentKey: string | null, prefix: string) => {
++    const expanded = n.children.length > 0 && !collapsed.has(n.key);
++    const rowId = `${prefix}/${n.key}`;
++    out.push({ ...n, rowId, depth, expanded, parentKey });
++    if (expanded) for (const c of n.children) visit(c, depth + 1, n.key, rowId);
++  };
++  for (const c of root.children) visit(c, 0, null, "");
++  return out;
++}
++
++/** every ancestor key of `key`, outermost first — the path to expand to reach a selection */
++export function ancestorKeys(root: MapNode, key: string): string[] {
++  const path: string[] = [];
++  const find = (n: MapNode, trail: string[]): boolean => {
++    if (n.key === key) { path.push(...trail); return true; }
++    for (const c of n.children) if (find(c, [...trail, n.key])) return true;
++    return false;
++  };
++  find(root, []);
++  return path.filter((k) => k !== root.key);
++}
++
++/** the keys of every container, for "collapse all" */
++export function containerKeys(root: MapNode): string[] {
++  const out: string[] = [];
++  const visit = (n: MapNode) => { if (n.children.length && n.kind !== "root") out.push(n.key); n.children.forEach(visit); };
++  visit(root);
++  return out;
++}
++
++/** find a node by key */
++export function findMapNode(root: MapNode, key: string): MapNode | null {
++  if (root.key === key) return root;
++  for (const c of root.children) { const hit = findMapNode(c, key); if (hit) return hit; }
++  return null;
++}
+diff --git a/apps/studio/lib/commands/builtins.ts b/apps/studio/lib/commands/builtins.ts
+index 8d57a74..3c8cf13 100644
+--- a/apps/studio/lib/commands/builtins.ts
++++ b/apps/studio/lib/commands/builtins.ts
+@@ -32,6 +32,9 @@ export interface StudioCommandContext extends CommandContextBase {
+   selectQuestion(id: string | null): void;
+   setTab(tab: string): void;
+   setMode(mode: ProgrammingMode): void;
++  /** focus mode: dim everything outside the selection's dependency neighbourhood */
++  focus: boolean;
++  setFocus(on: boolean): void;
+   /** the Studio's id generator, so ids look the way the browser suites expect */
+   uid(prefix: string): string;
+   /** build a fresh question of the default variant, named for this survey */
+@@ -186,6 +189,13 @@ export function builtinCommands(): C[] {
+     run(ctx) { ctx.shell?.openPalette?.(); },
+   });
+ 
++  cmds.push({
++    id: "view.toggleFocus", title: "Toggle focus mode", group: "Navigate", shortcut: "mod+shift+f",
++    keywords: ["focus", "dim", "dependencies only", "isolate"],
++    when: (ctx) => ctx.mode !== "studio",
++    run(ctx) { ctx.setFocus(!ctx.focus); },
++  });
++
+   /* ------------------------------------------------------------ mode */
+   for (const m of MODES) {
+     cmds.push({
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index 5f9cbde..be8ef44 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -25,14 +25,15 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
+ test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
+   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
+   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
+-  // Architect is declared but has no renderer yet: never open on an empty screen
+-  const architect = MODES.find((m) => m.id === "architect")!;
+-  assert.equal(architect.available, false, "this test assumes Architect is not yet built; update it when it is");
+-  assert.equal(resolveInitialMode("?mode=architect", null), DEFAULT_MODE);
+-  assert.equal(resolveInitialMode("?tab=logic", "architect"), DEFAULT_MODE);
+-  // Grid IS available: the URL and memory both work for it
++  // Flow is declared but has no renderer yet: never open on an empty screen
++  const flow = MODES.find((m) => m.id === "flow")!;
++  assert.equal(flow.available, false, "this test assumes Flow is not yet built; update it when it is");
++  assert.equal(resolveInitialMode("?mode=flow", null), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?tab=logic", "flow"), DEFAULT_MODE);
++  // Grid and Architect ARE available: the URL and memory both work for them
+   assert.equal(resolveInitialMode("?mode=grid", null), "grid");
+   assert.equal(resolveInitialMode("", "grid"), "grid");
++  assert.equal(resolveInitialMode("?mode=architect", null), "architect");
+   assert.equal(resolveInitialMode("?mode=nonsense", "alsononsense"), DEFAULT_MODE);
+   assert.equal(isProgrammingMode("flow"), true);
+   assert.equal(isProgrammingMode("Flow"), false);
+@@ -172,6 +173,8 @@ function fakeCtx(over: Partial<StudioCommandContext> = {}): StudioCommandContext
+     selectQuestion(id) { log.push(`select:${id}`); ctx.questionId = id; ctx.primary = id ? `question:${id}` : null; },
+     setTab(t) { log.push(`tab:${t}`); ctx.tab = t; },
+     setMode(m) { log.push(`mode:${m}`); ctx.mode = m; },
++    focus: false,
++    setFocus(on) { log.push(`focus:${on}`); ctx.focus = on; },
+     uid: (p) => `${p}_${n++}`,
+     newQuestion: (d) => ({ id: `q_new${n++}`, code: `Q${d.questions.length + 1}`, variableName: `Q${d.questions.length + 1}`, type: "text", text: "", options: [], rows: [], columns: [] } as unknown as Question),
+     newFlowNode: (type) => ({ type, id: `${type}_${n++}`, children: [], branches: [{ id: "b", when: { type: "group", op: "and", children: [] }, children: [] }], otherwise: [] } as unknown as FlowNode),
+@@ -237,9 +240,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
+ test("mode commands offer only available modes other than the current one", () => {
+   const ctx = fakeCtx();
+   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
+-  assert.deepEqual(ids, ["mode.grid"], "in Studio, Grid is the one other available mode");
++  assert.deepEqual(ids, ["mode.grid", "mode.architect"], "in Studio, Grid and Architect are the other available modes");
+   const inGrid = fakeCtx({ mode: "grid" });
+-  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio"]);
++  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio", "mode.architect"]);
+ });
+ 
+ test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index 6947ba3..d9399f4 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -32,7 +32,7 @@ export interface ModeInfo {
+ export const MODES: readonly ModeInfo[] = [
+   { id: "studio", label: "Studio", tagline: "Build visually", audience: "For researchers who want an intuitive modern builder.", available: true, index: 1 },
+   { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
+-  { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: false, index: 3 },
++  { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: true, index: 3 },
+   { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: false, index: 4 },
+   { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
+ ];
+diff --git a/packages/engine/src/flowTree.ts b/packages/engine/src/flowTree.ts
+index 9a06c4b..fc7d2c2 100644
+--- a/packages/engine/src/flowTree.ts
++++ b/packages/engine/src/flowTree.ts
+@@ -607,3 +607,32 @@ export function validateFlowStructure(flow: FlowNode[]): FlowStructureIssue[] {
+ 
+   return issues;
+ }
++
++/**
++ * The list a container addresses, inside `flow` — the root, a container's
++ * `children`, a branch's `otherwise`, or one arm's `children`.
++ */
++export function containerList(flow: FlowNode[], c: FlowContainer): FlowNode[] | null {
++  if (c.ownerId === null) return flow;
++  const owner = findNode(flow, c.ownerId) as unknown as { children?: FlowNode[]; otherwise?: FlowNode[]; branches?: { id: string; children: FlowNode[] }[] } | null;
++  if (!owner) return null;
++  if (c.slot === "children") return owner.children ?? null;
++  if (c.slot === "otherwise") return owner.otherwise ?? [];
++  const b = owner.branches?.find((x) => x.id === c.slot.slice("branch:".length));
++  return b?.children ?? null;
++}
++
++/**
++ * Replace the node with `id` by `next`, wherever it sits, IN PLACE. Returns
++ * false when no such node exists. The Survey Flow panel and the Architect
++ * workspace both edit a node through this, so a node edited in either place
++ * lands in the same slot.
++ */
++export function replaceFlowNode(flow: FlowNode[], id: string, next: FlowNode): boolean {
++  const loc = locateNode(flow, id);
++  if (!loc) return false;
++  const list = containerList(flow, loc.container);
++  if (!list) return false;
++  list[loc.index] = next;
++  return true;
++}
+diff --git a/scripts/architect-mode-test.mjs b/scripts/architect-mode-test.mjs
+new file mode 100644
+index 0000000..1304e93
+--- /dev/null
++++ b/scripts/architect-mode-test.mjs
+@@ -0,0 +1,274 @@
++/**
++ * ARCHITECT MODE — survey map · workspace · inspector (Phase 2).
++ *
++ *   node scripts/architect-mode-test.mjs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 950 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => {
++  if (m.type() !== "error") return;
++  const t = m.text();
++  if (/401|ERR_TUNNEL|Failed to load resource/.test(t)) return;
++  pageErrors.push(t.slice(0, 400));
++});
++
++const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
++const loadDef = async (def) => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => {
++    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v);
++    el.dispatchEvent(new Event("input", { bubbles: true }));
++  }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await goTab("Questions");
++};
++const readDef = async () => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await goTab("Questions");
++  await page.waitForSelector('[data-testid="architect-view"]');
++  return JSON.parse(json);
++};
++const mapRow = (key) => page.$(`[data-testid="map-row"][data-key="${key}"]`);
++const rowKeys = () => page.$$eval('[data-testid="map-row"]', (els) => els.map((e) => e.dataset.key));
++
++await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++await page.waitForSelector(".block-badge");
++await loadDef(buildMasterDemoSurvey("sandbox"));
++
++/* ----------------------------------------------------------- switch + panes */
++{
++  await page.click('[data-testid="mode-architect"]');
++  await page.waitForSelector('[data-testid="architect-view"]');
++  ok("Architect renders in place — no reload");
++  assert.match(page.url(), /mode=architect/);
++  for (const t of ["survey-map", "workspace-overview", "inspector-empty"]) assert.ok(await page.$(`[data-testid="${t}"]`), t);
++  ok("three panes: map, workspace (overview), inspector (empty state)");
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), true);
++  ok("the outer property panel steps aside — the inspector lives inside Architect");
++  const stats = await page.$$eval(".aw-stat-n", (els) => els.map((e) => Number(e.textContent)));
++  assert.equal(stats[0], 160);
++  ok("the overview counts 160 questions");
++}
++
++/* ----------------------------------------------------------- the map */
++{
++  const keys = await rowKeys();
++  assert.ok(keys.length > 100, `${keys.length} rows`);
++  assert.ok(keys.some((k) => k.startsWith("flowNode:")) && keys.some((k) => k.startsWith("question:")), "containers and questions");
++  assert.ok(keys.includes("section:rules") && keys.includes("section:calculations") && keys.includes("section:quotas"));
++  ok("the map lists flow containers, questions, and the rules / calculations / quotas sections");
++  const branch = await mapRow("flowNode:br_use_type");
++  assert.ok(branch, "the Consumer/Business/Both branch is a row");
++  const branchKind = await branch.getAttribute("data-kind");
++  assert.equal(branchKind, "branch");
++  const arms = await page.$$('[data-testid="map-row"][data-kind="arm"]');
++  assert.equal(arms.length, 2, `${arms.length} arms — the demo branch has Consumer and Business`);
++  assert.ok(await page.$('[data-testid="map-row"][data-kind="otherwise"]'), "and an Otherwise");
++  const armDetail = await page.$eval('[data-testid="map-row"][data-kind="arm"] .am-detail', (e) => e.textContent);
++  assert.match(armDetail, /^IF /);
++  ok("a branch shows its arms and its otherwise as children, each arm with its IF");
++  // collapse the branch: its arms disappear
++  await (await branch.$('[data-testid="map-disclosure"]')).click();
++  await page.waitForTimeout(150);
++  const after = (await page.$$('[data-testid="map-row"][data-kind="arm"]')).length;
++  assert.ok(after < arms.length, "arms hidden after collapsing the branch");
++  ok("the disclosure collapses a container");
++  await (await (await mapRow("flowNode:br_use_type")).$('[data-testid="map-disclosure"]')).click();
++  await page.waitForTimeout(150);
++  await page.click('[data-testid="map-collapse-all"]');
++  await page.waitForTimeout(150);
++  const collapsedKeys = await rowKeys();
++  assert.ok(!collapsedKeys.some((k) => k.startsWith("question:")), "no questions visible when everything is collapsed");
++  ok("collapse all hides every question");
++  await page.click('[data-testid="map-expand-all"]');
++  await page.waitForTimeout(150);
++  assert.ok((await rowKeys()).some((k) => k.startsWith("question:")));
++  ok("expand all brings them back");
++  await page.fill('[data-testid="map-search"]', "employment");
++  await page.waitForTimeout(200);
++  const found = await rowKeys();
++  assert.ok(found.includes("question:q_employment"), found.join(","));
++  assert.ok(found.length < 40, `search narrows to ${found.length} rows including the path to each match`);
++  ok("map search keeps matches and the path to them");
++  await page.fill('[data-testid="map-search"]', "");
++  await page.waitForTimeout(200);
++}
++
++/* ----------------------------------------------------------- selection → workspace + inspector */
++{
++  await (await mapRow("question:q_employment")).click();
++  await page.waitForSelector('[data-testid="workspace-question"]');
++  assert.equal(await page.$eval('[data-testid="workspace-question"] input[value="Q10"]', (e) => e.value), "Q10");
++  ok("selecting a question opens the Studio's own question editor in the workspace");
++  await page.waitForSelector('[data-testid="inspector"][data-kind="question"]');
++  const usedBy = await page.$$eval('[data-testid="dep-used-by"] [data-testid="dep-link"]', (els) => els.map((e) => e.dataset.key));
++  assert.ok(usedBy.length >= 5, `Q10 (EMPLOYMENT) is read by a rule, a branch, a skip and several questions: ${usedBy.join(",")}`);
++  assert.ok(usedBy.includes("displayRule:dr_show_work_page"), "the named rule that reads it is listed");
++  assert.ok(usedBy.includes("flowNode:br_use_type") || usedBy.some((k) => k.startsWith("flowNode:")), "the branch that reads it is listed");
++  ok(`the inspector's USED BY lists ${usedBy.length} readers, across object kinds — from the dependency index`);
++  assert.ok(await page.$(".ai-props"), "the property panel sections follow");
++  ok("the question's property panel (all its sections) sits below the dependencies");
++  // follow a dependency link: the display rule
++  await page.click('[data-testid="dep-link"][data-key="displayRule:dr_show_work_page"]');
++  await page.waitForSelector('[data-testid="workspace-rule"]');
++  assert.equal(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), "displayRule");
++  ok("clicking a dependency selects that object: the rule opens in the workspace, the inspector describes it");
++  assert.ok(await page.$('[data-testid="inspector-summary"]'), "the rule's definition is summarised");
++  const dependsOn = await page.$$eval('[data-testid="dep-depends-on"] [data-testid="dep-link"]', (els) => els.map((e) => e.dataset.key));
++  assert.ok(dependsOn.includes("question:q_employment"), `the rule depends on Q10: ${dependsOn.join(",")}`);
++  ok("and the rule's DEPENDS ON points back at Q10 — the same edge, both directions");
++  // the map expanded the path to the rule and marks it primary
++  assert.equal(await page.$eval('[data-testid="map-row"][data-key="displayRule:dr_show_work_page"]', (e) => e.classList.contains("primary")), true);
++  ok("the map follows: the rule's row is the primary");
++}
++
++/* ----------------------------------------------------------- editing non-question objects */
++{
++  // rule label, through the shared DisplayRuleCard
++  const labelInput = await page.$('[data-testid="workspace-rule"] input[placeholder="rule label"]');
++  await labelInput.fill("Work page — employed only");
++  await page.waitForTimeout(250);
++  let def = await readDef();
++  assert.equal(def.displayRules.find((r) => r.id === "dr_show_work_page").label, "Work page — employed only");
++  ok("editing a rule in the workspace writes to the definition (the Logic panel's own card)");
++  // calculation
++  await (await mapRow("calculation:calc_n_used")).click();
++  await page.waitForSelector('[data-testid="workspace-calculation"]');
++  const expr = await page.$('[data-testid="workspace-calculation"] input.mono.grow');
++  await expr.fill("count(BRANDS_USED) + 0");
++  await page.waitForTimeout(250);
++  def = await readDef();
++  assert.equal(def.calculations.find((c) => c.id === "calc_n_used").expression, "count(BRANDS_USED) + 0");
++  ok("editing a calculation's expression in the workspace writes to the definition");
++  // a branch: NodeEditor
++  await (await mapRow("flowNode:br_use_type")).click();
++  await page.waitForSelector('[data-testid="workspace-flow"]');
++  assert.equal(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), "flowNode");
++  const title = await page.$('[data-testid="workspace-node-title"]');
++  await title.fill("Consumer / Business / Both (renamed)");
++  await page.waitForTimeout(250);
++  def = await readDef();
++  const findNode = (nodes) => { for (const n of nodes) { if (n.id === "br_use_type") return n; for (const kids of [n.children, n.otherwise, ...(n.branches ?? []).map((b) => b.children)]) { if (kids) { const hit = findNode(kids); if (hit) return hit; } } } return null; };
++  assert.equal(findNode(def.flow).title, "Consumer / Business / Both (renamed)");
++  ok("renaming a branch in the workspace lands on the right node in the flow (replaceFlowNode)");
++  const dl = await page.$$eval('[data-testid="inspector-summary"] dt', (els) => els.map((e) => e.textContent));
++  assert.ok(dl.some((t) => /Consumer|Business|Path/.test(t)), `the inspector lists the branch's paths: ${dl.join(" | ")}`);
++  ok("the inspector summarises each path of the branch with its condition");
++}
++
++/* ----------------------------------------------------------- editing a question in the workspace */
++{
++  await (await mapRow("question:q_city")).click();
++  await page.waitForSelector('[data-testid="workspace-question"]');
++  // the question editor's rich text field — type into the visible editor
++  const editor = await page.$('[data-testid="workspace-question"] [contenteditable="true"]');
++  assert.ok(editor, "the rich text editor is there");
++  await editor.click();
++  await page.keyboard.press(`${mod}+a`);
++  await page.keyboard.type("Which city do you call home?");
++  await page.waitForTimeout(400);
++  const def = await readDef();
++  assert.match(def.questions.find((q) => q.id === "q_city").text, /Which city do you call home\?/);
++  ok("typing in the workspace's question editor edits the survey — it is the Studio's editor");
++}
++
++/* ----------------------------------------------------------- focus mode */
++{
++  await (await mapRow("question:q_employment")).click();
++  await page.waitForTimeout(200);
++  const total = (await page.$$('[data-testid="map-row"]')).length;
++  assert.equal((await page.$$(".am-row.dim")).length, 0, "nothing dimmed before focus");
++  await page.click('[data-testid="focus-toggle"]');
++  await page.waitForSelector('[data-testid="focus-bar"]');
++  assert.match(await page.$eval('[data-testid="focus-bar"]', (e) => e.textContent), /FOCUSING ON\s*Q10/);
++  ok("Focus shows 'FOCUSING ON Q10'");
++  const dim = (await page.$$(".am-row.dim")).length;
++  assert.ok(dim > total / 2 && dim < total, `${dim} of ${total} rows dimmed`);
++  ok(`focus dims what is outside Q10's dependency neighbourhood (${dim} of ${total} rows)`);
++  assert.equal(await page.$eval('[data-testid="map-row"][data-key="question:q_employment"]', (e) => e.classList.contains("dim")), false);
++  assert.equal(await page.$eval('[data-testid="map-row"][data-key="displayRule:dr_show_work_page"]', (e) => e.classList.contains("dim")), false);
++  ok("the selection and the rule that reads it stay bright");
++  await page.click("main.center .ar-work-body", { position: { x: 5, y: 5 } }).catch(() => {});
++  await page.keyboard.press(`${mod}+Shift+f`);
++  await page.waitForSelector('[data-testid="focus-bar"]', { state: "detached" });
++  assert.equal((await page.$$(".am-row.dim")).length, 0);
++  ok(`${mod}+Shift+F toggles focus off — the command registry`);
++}
++
++/* ----------------------------------------------------------- keyboard in the map */
++{
++  await (await mapRow("question:q_age")).click();
++  await page.focus('[data-testid="map-list"]');
++  await page.keyboard.press("ArrowDown");
++  await page.waitForTimeout(150);
++  assert.equal(await page.$eval('[data-testid="inspector"] .ai-title', (e) => e.textContent), "Q4");
++  ok("↓ in the map moves the selection to the next row (Q3 → Q4), and the inspector follows");
++  // ← on a question goes to its parent block; ← again collapses it
++  await page.keyboard.press("ArrowLeft");
++  await page.waitForTimeout(100);
++  const primaryKey = await page.$eval(".am-row.primary", (e) => e.dataset.key);
++  assert.ok(primaryKey.startsWith("flowNode:"), `← from a question selects its block: ${primaryKey}`);
++  await page.keyboard.press("ArrowLeft");
++  await page.waitForTimeout(100);
++  assert.equal(await page.$eval(`[data-testid="map-row"][data-key="${primaryKey}"]`, (e) => e.getAttribute("aria-expanded")), "false");
++  ok("← on a block collapses it; → would expand it again");
++}
++
++/* ----------------------------------------------------------- resizing */
++{
++  const before = await page.$eval(".ar-map", (e) => e.getBoundingClientRect().width);
++  const divider = await page.$('[data-testid="ar-divider-map"]');
++  const box = await divider.boundingBox();
++  await page.mouse.move(box.x + 3, box.y + 200);
++  await page.mouse.down();
++  await page.mouse.move(box.x + 120, box.y + 200, { steps: 6 });
++  await page.mouse.up();
++  await page.waitForTimeout(150);
++  const after = await page.$eval(".ar-map", (e) => e.getBoundingClientRect().width);
++  assert.ok(after > before + 80, `map grew ${before} → ${after}`);
++  ok("dragging the divider resizes the map pane");
++}
++
++/* ----------------------------------------------------------- the selection is shared across modes */
++{
++  await page.click('[data-testid="map-expand-all"]');   // the keyboard check collapsed Q5's block
++  await page.waitForTimeout(150);
++  await (await mapRow("question:q_region")).click();
++  await page.waitForTimeout(150);
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  const sel = await page.$$eval('[data-testid="grid-row"][aria-selected="true"]', (els) => els.map((e) => e.dataset.code));
++  assert.deepEqual(sel, ["Q5"]);
++  ok("switching to Grid, Q5 is the selected row — one selection across environments");
++  await page.click('[data-testid="mode-architect"]');
++  await page.waitForSelector('[data-testid="architect-view"]');
++  assert.equal(await page.$eval(".am-row.primary", (e) => e.dataset.key), "question:q_region");
++  ok("and back in Architect it is the primary in the map");
++  await page.click('[data-testid="mode-studio"]');
++  await page.waitForSelector(".block-badge");
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q5/);
++  ok("and in Studio the property panel shows Q5 — the outer panel returns when Architect leaves");
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no uncaught errors or React warnings through any of it");
++
++await browser.close();
++console.log(`\nALL ARCHITECT MODE CHECKS PASSED (${passed})`);
+diff --git a/scripts/multimodal-foundation-test.mjs b/scripts/multimodal-foundation-test.mjs
+index 7059c8b..2c4da84 100644
+--- a/scripts/multimodal-foundation-test.mjs
++++ b/scripts/multimodal-foundation-test.mjs
+@@ -49,7 +49,8 @@ const selectCard = async (n) => {
+   throw new Error(`could not select card ${n}`);
+ };
+ 
+-await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++// a previous suite may have left another mode remembered in this browser profile; this suite is about the Studio shell
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
+ await page.waitForSelector(".block-badge");
+ 
+ /* ----------------------------------------------------------- selector */
+@@ -62,11 +63,11 @@ await page.waitForSelector(".block-badge");
+   ok("Studio is the active, available mode");
+   const built = modes.filter((m) => m.available === "1").map((m) => m.id);
+   const unbuilt = modes.filter((m) => m.available === "0");
+-  assert.deepEqual(built, ["studio", "grid"], "the modes with a renderer so far");
++  assert.deepEqual(built, ["studio", "grid", "architect"], "the modes with a renderer so far");
+   for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
+   ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
+-  const title = await page.getAttribute('[data-testid="mode-architect"]', "title");
+-  assert.match(title, /Control every detail/);
++  const title = await page.getAttribute('[data-testid="mode-flow"]', "title");
++  assert.match(title, /See the survey's behavior/);
+   ok("a disabled mode still tells you what it will be");
+ }
+ 
+@@ -76,7 +77,7 @@ await page.waitForSelector(".block-badge");
+   await page.keyboard.press(`${mod}+k`);
+   await page.waitForSelector('[data-testid="command-palette"]');
+   ok(`${mod}+K opens the palette`);
+-  assert.equal(await page.evaluate(() => document.activeElement?.dataset.testid), "palette-input");
++  await page.waitForFunction(() => document.activeElement?.dataset.testid === "palette-input", null, { timeout: 2000 });
+   ok("the search field has focus on open");
+   const groups = await page.$$eval(".palette-group", (els) => els.map((e) => e.textContent));
+   assert.ok(groups.includes("Add") && groups.includes("Navigate"), groups.join(", "));
+@@ -260,13 +261,13 @@ await page.waitForSelector(".block-badge");
+ 
+ /* ----------------------------------------------------------- ?mode= */
+ {
+-  await page.goto(`${STUDIO}/sandbox?mode=architect`, { waitUntil: "networkidle" });
++  await page.goto(`${STUDIO}/sandbox?mode=flow`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="mode-selector"]');
+   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
+   assert.equal(active, "studio");
+-  ok("?mode=architect falls back to Studio while Architect has no renderer — never an empty screen");
++  ok("?mode=flow falls back to Studio while Flow has no renderer — never an empty screen");
+   const url = page.url();
+-  assert.ok(url.includes("mode=architect") || !url.includes("mode="), "the url is left alone until a real switch happens");
++  assert.ok(url.includes("mode=flow") || !url.includes("mode="), "the url is left alone until a real switch happens");
+   ok("the URL is not rewritten by the fallback");
+   await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="grid-view"]');
+-- 
+2.43.0
+
+
+From b5a55bb96bc7b7018b7ec3e860f789aa09118c51 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 19:07:51 +0000
+Subject: [PATCH 2/2] Plan: record Phase 2 (Architect) as delivered
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ docs/MULTI-MODAL-PROGRAMMING-PLAN.md | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+index 9620d6a..3230487 100644
+--- a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
++++ b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+@@ -14,7 +14,13 @@ the Questions tab renders the grid; every other tab is unchanged. Measured at
+ scroll step, 17 keystrokes in a cell in 273 ms. Two shell fixes came with
+ it: RightPanel's click-outside deselect now exempts the grid, and the grid
+ toolbar never wraps (it moved rows under the cursor mid double-click).
+-Phases 2–5 are not started.
++**Phase 2 (Architect) delivered 2026-09-24** — `apps/studio/components/
++architect/`, `apps/studio/lib/architect/map.ts`, `scripts/architect-mode-
++test.mjs`. Map · workspace · inspector; the inspector's Dependencies section
++is §12's Smart Selection; Focus (§14) shipped here as a mode-level flag.
++DisplayRuleCard / CalculationCard were extracted from the Logic and
++Calculations tabs so both surfaces render one component. Phases 3–5 are not
++started.
+ 
+ Three things learned while building Phase 0 that the plan did not know:
+ 
+-- 
+2.43.0
+

@@ -1,0 +1,54 @@
+Multi-modal foundation (2/2): mode, one selection, commands, ⌘K
+
+The Studio half of Phase 0. No new environment is visible yet; what lands
+is the layer every environment will be a renderer over, wired into the
+shell without changing what any existing panel does.
+
+  · Programming mode — lib/programmingMode.ts + ModeContext: studio | grid |
+    architect | flow | intelligent, resolved URL → memory → default, with an
+    unavailable mode falling back rather than opening on nothing. A selector
+    in the top bar shows all five; the four without a renderer are disabled
+    with their tagline. Switching is a state change: no reload, no refetch,
+    `?mode=` kept in step with replaceState.
+
+  · One selection — lib/selection.ts (a pure reducer: select / toggle /
+    shift-range / set / drop) + SelectionContext, keyed by the engine's
+    ObjectKey so a grid row, a flow node and a display rule are the same
+    kind of thing. The store's `selectedQuestionId` is now a mirror of the
+    question primary, in both directions, so every panel and browser suite
+    that reads it is untouched.
+
+  · Commands — lib/commands/core.ts (types, shortcut parsing, fuzzy ranking,
+    applicability) and builtins.ts (add question / block / branch /
+    randomizer / loop / quota check / embedded data / display rule /
+    calculation, duplicate, move, undo/redo, save, test, preview, one
+    "Open <tab>" per tab, and object finders for questions, calcs and
+    rules). Each calls the same engine function the panel button calls.
+    CommandContext is the one keyboard handler: a chord fires only when its
+    command applies and never while typing unless marked global (⌘K, ⌘S).
+    Shortcuts that browsers own (⌘1–9, ⌘⇧N, ⌘⇧T) were deliberately avoided.
+
+  · ⌘K — CommandPalette: empty query lists applicable commands grouped;
+    typing ranks commands and survey objects together, so "Q14" jumps to
+    Q14 and "adq" offers Add question. ↑ ↓ Enter Esc; a top-bar button for
+    people who do not know the key.
+
+  · Flow node defaults moved from FlowPanel to blockModel.newFlowNode so
+    the palette inserts exactly the node the panel would.
+
+Found along the way and fixed: PropertiesPanel called two hooks after its
+early returns, so every select/deselect logged React's hooks-order warning;
+hoisted. scripts/test-survey-sync-test.mjs still asserted the `?v=` pin and
+the "please retry" toast that the live-sync and save-flow fixes removed;
+brought up to the current contracts.
+
+Tests: lib/multimodalFoundation.test.ts (18, pure) and
+scripts/multimodal-foundation-test.mjs (31, browser; asserts a clean
+console). Mutation-checked: typing guard removed → caught; selection not
+mirrored → caught. Regression sweep green: context-right-panel,
+properties-accordion, block-actions, canvas (38), flow-dnd, logic-builder,
+save-integrity, blocks, expression-editor, collaboration (57),
+test-survey-sync. Packages: 2 416 tests, 0 failing. Studio lib: 115.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

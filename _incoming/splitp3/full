@@ -1,0 +1,52 @@
+Research Engine Phase 3: structured hypotheses, research graph, relevance and the coverage gate
+
+The Research Engine audit's Phase 3 (research intelligence), on top of
+Phases 1 and 2. "Which questions measure H1" and "what is affected if I
+remove Q6" are one graph query; a generated questionnaire is checked for
+being connected to the design. Nothing existing was removed: hypotheses are
+still strings by position, every label, tag and plan item still works, and
+the verdicts read the same directions (now through one parser).
+
+Schema: HypothesisDetail (type, direction, independent/dependent,
+moderator/mediator, group/lower, expected effect, status, note) by index in
+research.hypothesisDetails; researchQuestions, kpis and audience on the
+research design.
+
+Engine: hypotheses.ts (parseHypothesis, structuredHypotheses, constructFor,
+describeHypothesis); set_hypothesis action, add/remove keep the readings
+aligned, set_research carries them by statement text and records the new
+fields; hypothesis and kpi nodes and edges in the dependency index; impact
+reports hypotheses left unmeasured and KPIs that break; relevance.ts
+(questionRelevance, removalSet, coverageReport); recognisers for "make the
+questionnaire shorter [to N questions | by N | to N minutes]", "remove the
+unnecessary questions", "which questions could be removed", "set the
+audience to", "make this survey more suitable for X", and H1/hypothesis
+labels and KPI names as graph objects; whole-sentence recognisers before the
+compound split; coverage links constructs through the resolved sides.
+
+Analytics: hypothesisDirection delegates to the engine's parser; a recorded
+direction overrides the words.
+
+Studio: the Research design editor shows each hypothesis's reading and
+sections for research questions, KPIs and the audience; the Analysis tab
+shows the reading; the outline carries them; the prompt documents
+set_hypothesis; "Use in the research design" merges a document card
+(mergeDoc.ts); the turn route checks a generation's coverage on the clone and
+asks the model once more when it is loose; the card shows the result.
+
+Regression found by the browser corpus and fixed: an applied change's record
+joined the AI change history only after the server had numbered it, so the
+entry read "Applied …" for a round-trip before "Created …" and undo was not
+watching it; commitApplied records it the moment the store takes it and
+patches the number in.
+
+Tests: engine 1744 (hypotheses 4, researchGraph 3, relevance 5),
+analytics 236, studio 281 (mergeDoc 1), scripts/phase3-research-test.mjs
+(8 checks); 13 history-related browser suites and the full corpus green
+apart from the 10 known baseline failures. Mutations: engine 36/36 caught,
+Studio 11/11 caught. impact.test, copilot.test (prompt cap 14,600) and
+phase1-reliability-test adjusted on purpose; see
+docs/PHASE3-RESEARCH-2026-10-09.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

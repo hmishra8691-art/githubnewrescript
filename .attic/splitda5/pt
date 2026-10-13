@@ -1,0 +1,2092 @@
+---
+ .../[id]/analytics/[[...path]]/route.ts       |  37 +-
+ .../analytics/AnalyticsWorkspace.tsx          |   6 +-
+ apps/studio/components/analytics/AskPanel.tsx | 147 +++++
+ .../analytics/ReportBuilderDialog.tsx         |  12 +-
+ apps/studio/components/analytics/api.ts       |   7 +-
+ apps/studio/lib/analyticsAsk.ts               |  81 +++
+ apps/studio/lib/analyticsAskApply.test.ts     | 138 +++++
+ apps/studio/lib/analyticsAskApply.ts          |  92 ++++
+ docs/DATA-ANALYTICS-AUDIT-2026-10-12.md       |  98 ++++
+ .../analytics/src/analyticsIntent.test.ts     | 216 ++++++++
+ packages/analytics/src/analyticsIntent.ts     | 458 +++++++++++++++
+ packages/analytics/src/index.ts               |   1 +
+ packages/analytics/src/planCheck.test.ts      |   6 +
+ packages/analytics/src/planCheck.ts           |   5 +-
+ packages/analytics/src/reportBuilder.ts       |   7 +-
+ scripts/analytics-ask-test.mjs                | 520 ++++++++++++++++++
+ scripts/lib/memdb.mjs                         |  30 +
+ 17 files changed, 1847 insertions(+), 14 deletions(-)
+ create mode 100644 apps/studio/components/analytics/AskPanel.tsx
+ create mode 100644 apps/studio/lib/analyticsAsk.ts
+ create mode 100644 apps/studio/lib/analyticsAskApply.test.ts
+ create mode 100644 apps/studio/lib/analyticsAskApply.ts
+ create mode 100644 docs/DATA-ANALYTICS-AUDIT-2026-10-12.md
+ create mode 100644 packages/analytics/src/analyticsIntent.test.ts
+ create mode 100644 packages/analytics/src/analyticsIntent.ts
+ create mode 100644 scripts/analytics-ask-test.mjs
+ create mode 100644 scripts/lib/memdb.mjs
+
+diff --git a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+index 9c586e0..3a8f031 100644
+--- a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+@@ -5,11 +5,12 @@ import type { AuditEvent, Capability } from "@rescript/access";
+ import { buildPptx, buildXlsx, isEmbeddableImage } from "@rescript/analytics/export";
+ import {
+   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
+-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, type StoryDefinition } from "@rescript/analytics";
++  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, type StoryDefinition } from "@rescript/analytics";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { supabaseService } from "@/lib/authServer";
+ import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
+ import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/lib/analyticsBuilder";
++import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords } from "@/lib/analyticsAsk";
+ import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
+ 
+ /**
+@@ -355,6 +356,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+     }
+     return bad("Unknown report-builder endpoint.", 404);
+   }
++  /*
++   * INTELLIGENT MODE FOR ANALYTICS — words → a reviewable proposal → applied item by item.
++   *   intelligent/propose  { request, dataset, model? }   read-only; writes nothing
++   *   intelligent/apply    { request, dataset, ops }      each op validated again, executed, undo records returned
++   *   intelligent/undo     { records }                    reverses what apply recorded, unless changed since
++   * Needs analytics.edit throughout; the browser's copy of a proposal is rebuilt field by field and re-validated.
++   */
++  if (head === "intelligent") {
++    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
++    const dataset = datasetFrom(body.dataset);
++    if (itemId === "propose") {
++      const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";
++      if (!request) return bad("Say what you want done, for example: “cross-tabs of satisfaction by age and gender”.");
++      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++      return json(await proposeAsk(db, ctx.user, surveyId, loaded, request, dataset, { model: body.model !== false, fake: body.fake }));
++    }
++    if (itemId === "apply") {
++      const request = typeof body.request === "string" ? body.request.trim().slice(0, 1200) : "";
++      const { ops, rejected } = parseAskOps(body.ops);
++      if (!ops.length) return bad(rejected[0] ?? "There is nothing to apply.");
++      const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++      const applied = await applyOps(db, surveyId, loaded.version ?? null, ctx.user.userId, ops, dataset, request, (needResults) => askContext(db, surveyId, loaded, dataset, { results: needResults }));
++      for (const a of applied) if (a.status === "done") log(ctx, a.undo?.kind === "removed_analysis" ? "analytics.analysis_deleted" : a.undo?.kind === "chart_changed" ? "analytics.chart_modified" : "analytics.analysis_created", a.createdId ?? (a.undo && "id" in a.undo ? a.undo.id : null), { name: a.name, intelligent: true, request: request.slice(0, 300) });
++      return json({ applied, rejected });
++    }
++    if (itemId === "undo") {
++      const records = parseUndo(body.records);
++      if (!records.length) return bad("There is nothing to undo.");
++      const undone = await undoRecords(db, surveyId, ctx.user.userId, records);
++      log(ctx, "analytics.analysis_modified", null, { intelligent: true, undo: records.length, restored: undone.filter((u) => u.status === "undone").length });
++      return json({ undone });
++    }
++    return bad("Unknown intelligent endpoint.", 404);
++  }
+   if (head === "run") {
+     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+     const def = body.definition as AnalysisDefinition | undefined;
+diff --git a/apps/studio/components/analytics/AnalyticsWorkspace.tsx b/apps/studio/components/analytics/AnalyticsWorkspace.tsx
+index 9740b46..7e363fa 100644
+--- a/apps/studio/components/analytics/AnalyticsWorkspace.tsx
++++ b/apps/studio/components/analytics/AnalyticsWorkspace.tsx
+@@ -3,6 +3,7 @@ import { Warnings } from "./Warnings";
+ import React from "react";
+ import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
+ import { ANALYSIS_KINDS } from "@rescript/analytics";
++import { AskPanel } from "./AskPanel";
+ import { AxApi, type Row, type RunResult, timeAgo } from "./api";
+ import { AnalysisBuilder } from "./AnalysisBuilder";
+ import { AnalysesRail } from "./AnalysesRail";
+@@ -20,10 +21,10 @@ import { Chart, ResultTableView } from "./charts/Chart";
+  * API; the browser never holds response rows.
+  */
+ 
+-export type WsTab = "home" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "themes" | "exports" | "sharing";
++export type WsTab = "home" | "analysis" | "charts" | "tables" | "segments" | "filters" | "reports" | "ask" | "themes" | "exports" | "sharing";
+ const TABS: { key: WsTab; label: string }[] = [
+   { key: "home", label: "Home" }, { key: "analysis", label: "Analysis" }, { key: "charts", label: "Charts" }, { key: "tables", label: "Tables" }, { key: "segments", label: "Segments" }, { key: "filters", label: "Filters" },
+-  { key: "reports", label: "Reports" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
++  { key: "reports", label: "Reports" }, { key: "ask", label: "Ask" }, { key: "themes", label: "Themes" }, { key: "exports", label: "Exports" }, { key: "sharing", label: "Sharing" },
+ ];
+ 
+ export interface WorkspaceProps { surveyId: string; surveyTitle: string; canEdit: boolean; canPublish: boolean; canExport: boolean; initialTab?: WsTab }
+@@ -120,6 +121,7 @@ export function AnalyticsWorkspace(p: WorkspaceProps) {
+         {tab === "segments" && <SegmentsPanel api={api} variables={vars} items={segments} kind="segment" onChange={() => void refresh()} />}
+         {tab === "filters" && <SegmentsPanel api={api} variables={vars} items={segments} kind="filter" onChange={() => void refresh()} />}
+         {tab === "reports" && <ReportsPanel api={api} analyses={analyses} themes={themes} items={reports} onChange={() => void refresh()} pendingAdd={pendingAdd} clearPending={() => setPendingAdd(null)} surveyTitle={p.surveyTitle} />}
++        {tab === "ask" && <AskPanel api={api} dataset={dataset} analyses={analyses} canEdit={p.canEdit} onChanged={refresh} />}
+         {tab === "themes" && <ThemesPanel api={api} items={themes} onChange={() => void refresh()} />}
+         {tab === "exports" && <ExportsPanel api={api} reports={reports} analyses={analyses} themes={themes} />}
+         {tab === "sharing" && <SharingPanel api={api} shares={shares} reports={reports} onChange={() => void refresh()} />}
+diff --git a/apps/studio/components/analytics/AskPanel.tsx b/apps/studio/components/analytics/AskPanel.tsx
+new file mode 100644
+index 0000000..04bc1f9
+--- /dev/null
++++ b/apps/studio/components/analytics/AskPanel.tsx
+@@ -0,0 +1,147 @@
++"use client";
++import React from "react";
++import type { AskItem, AskOp, AskProposal, DatasetSpec, UndoRecord } from "@rescript/analytics";
++import { AxApi, type Row } from "./api";
++import { ReportBuilderDialog } from "./ReportBuilderDialog";
++
++/**
++ * ASK — Intelligent Mode for analytics.
++ *
++ * You say what you want in words; the server answers with a PROPOSAL: concrete
++ * items, each with the reason it was proposed, what it would do, and anything
++ * that blocks it. Nothing has happened yet — an item says "Proposed" until you
++ * apply it, and then "Done" / "Blocked" / "Failed" with the server's reason
++ * (every item is validated again against the live data when applied). Charts can
++ * be swapped for another that suits the result; reports go through the report
++ * builder's review. The last batch can be undone. History lives in this browser
++ * (and every applied change is in the project's audit log).
++ */
++type Status = "proposed" | "done" | "blocked" | "failed";
++interface Shown { item: AskItem; status: Status; message?: string; checked: boolean }
++interface HistoryEntry { at: string; request: string; done: number; blocked: number; items: { title: string; status: Status }[] }
++
++const EXAMPLES = ["Create cross-tabs of satisfaction by age and gender", "Remove redundant analyses", "Choose the best chart for each question", "Prepare a management summary", "Make an animated report of the key findings"];
++const histKey = (id: string) => `ax-ask-history:${id}`;
++const loadHistory = (id: string): HistoryEntry[] => { try { const r = JSON.parse(localStorage.getItem(histKey(id)) ?? "[]"); return Array.isArray(r) ? r.slice(0, 20) : []; } catch { return []; } };
++const saveHistory = (id: string, h: HistoryEntry[]) => { try { localStorage.setItem(histKey(id), JSON.stringify(h.slice(0, 20))); } catch { /* history is a convenience */ } };
++const BADGE: Record<Status, { text: string; color: string }> = { proposed: { text: "Proposed — not applied", color: "#2563eb" }, done: { text: "Done", color: "#15803d" }, blocked: { text: "Blocked", color: "#b45309" }, failed: { text: "Failed", color: "#b91c1c" } };
++
++export function AskPanel({ api, dataset, analyses, canEdit, onChanged }: { api: AxApi; dataset: DatasetSpec; analyses: Row[]; canEdit: boolean; onChanged: () => Promise<void> | void }) {
++  const [request, setRequest] = React.useState("");
++  const [proposal, setProposal] = React.useState<AskProposal & { model?: { status: string; detail: string } } | null>(null);
++  const [shown, setShown] = React.useState<Shown[]>([]);
++  const [busy, setBusy] = React.useState<null | "propose" | "apply" | "undo">(null);
++  const [error, setError] = React.useState<string | null>(null);
++  const [msg, setMsg] = React.useState<string | null>(null);
++  const [undo, setUndo] = React.useState<UndoRecord[]>([]);
++  const [history, setHistory] = React.useState<HistoryEntry[]>([]);
++  const [builder, setBuilder] = React.useState<Extract<AskOp, { op: "build_report" }> | null>(null);
++  const [asked, setAsked] = React.useState("");
++  React.useEffect(() => { setHistory(loadHistory(api.surveyId)); }, [api.surveyId]);
++
++  const propose = async (text = request) => {
++    if (!text.trim() || busy) return;
++    setBusy("propose"); setError(null); setMsg(null); setUndo([]);
++    try {
++      const p = await api.askPropose({ request: text, dataset });
++      setProposal(p); setAsked(text);
++      setShown(p.items.map((item) => ({ item, status: "proposed", checked: !item.blocked.length && item.op.op !== "build_report" })));
++    } catch (e) { setError((e as Error).message); }
++    finally { setBusy(null); }
++  };
++
++  const apply = async () => {
++    const picked = shown.map((s, i) => ({ s, i })).filter(({ s }) => s.checked && s.status === "proposed" && !s.item.blocked.length && s.item.op.op !== "build_report");
++    if (!picked.length || busy) return;
++    setBusy("apply"); setError(null); setMsg(null);
++    try {
++      const r = await api.askApply({ request: asked, dataset, ops: picked.map(({ s }) => s.item.op) });
++      const next = shown.slice();
++      const records: UndoRecord[] = [];
++      for (const a of r.applied) {
++        const at = picked[a.index]?.i; if (at == null) continue;
++        next[at] = { ...next[at], status: a.status, message: a.message, checked: false };
++        if (a.status === "done" && a.undo) records.push(a.undo);
++      }
++      setShown(next); setUndo(records);
++      const done = r.applied.filter((a) => a.status === "done").length, blocked = r.applied.length - done;
++      setMsg(`${done} applied${blocked ? `, ${blocked} not applied (see the reason on each item)` : ""}.`);
++      const entry: HistoryEntry = { at: new Date().toISOString(), request: asked, done, blocked, items: r.applied.map((a) => ({ title: a.name, status: a.status })) };
++      const h = [entry, ...history].slice(0, 20); setHistory(h); saveHistory(api.surveyId, h);
++      if (done) await onChanged();
++    } catch (e) { setError((e as Error).message); }
++    finally { setBusy(null); }
++  };
++
++  const doUndo = async () => {
++    if (!undo.length || busy) return;
++    setBusy("undo"); setError(null);
++    try {
++      const r = await api.askUndo(undo);
++      const ok = r.undone.filter((u) => u.status === "undone").length;
++      setMsg(`${ok} change${ok === 1 ? "" : "s"} undone${ok < r.undone.length ? `; ${r.undone.length - ok} left as they are (${r.undone.filter((u) => u.status === "skipped").map((u) => u.message).join(" ")})` : ""}.`);
++      setUndo([]); setShown((s) => s.map((x) => (x.status === "done" ? { ...x, status: "proposed", message: "Undone.", checked: true } : x)));
++      await onChanged();
++    } catch (e) { setError((e as Error).message); }
++    finally { setBusy(null); }
++  };
++
++  const swapChart = (i: number, chart: string) => setShown((all) => all.map((s, k) => (k === i && s.item.op.op === "set_chart" ? { ...s, item: { ...s.item, op: { ...s.item.op, chart: chart as never }, title: s.item.title.replace(/ as [a-z0-9 ]+(?= \(now|$)/, ` as ${chart.replace(/_/g, " ")}`) , options: [...(s.item.options ?? []).filter((o) => o.chart !== chart), ...(s.item.op.op === "set_chart" ? [{ chart: s.item.op.chart, reason: "the first proposal" }] : [])] } } : s)));
++
++  const selected = shown.filter((s) => s.checked && s.status === "proposed" && !s.item.blocked.length && s.item.op.op !== "build_report").length;
++  return (
++    <div className="ax-panel" data-testid="ax-ask">
++      <h3 style={{ marginTop: 0 }}>Ask</h3>
++      <p className="muted" style={{ marginTop: 0 }}>Say what you want done with the analyses. You get a proposal to review first — nothing changes until you apply it, and no number is ever written for you: every statistic comes from your data.</p>
++      <textarea className="input" rows={2} value={request} onChange={(e) => setRequest(e.target.value)} placeholder="e.g. Create cross-tabs of satisfaction by age and gender" disabled={!canEdit} data-testid="ax-ask-input"
++        onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void propose(); }} />
++      <div className="row" style={{ marginTop: 6, gap: 6, flexWrap: "wrap" }}>
++        {EXAMPLES.map((x) => <button key={x} type="button" className="ax-chip" onClick={() => setRequest(x)} disabled={!canEdit}>{x}</button>)}
++        <span className="grow" />
++        <button className="btn primary" onClick={() => void propose()} disabled={!canEdit || !request.trim() || busy !== null} data-testid="ax-ask-propose">{busy === "propose" ? "Reading your request…" : "Propose"}</button>
++      </div>
++      {!canEdit && <div className="ax-warn" style={{ marginTop: 8 }}>You can read analyses here but not change them.</div>}
++      {error && <div className="ax-error" style={{ marginTop: 8 }} data-testid="ax-ask-error">{error}</div>}
++
++      {proposal && <div style={{ marginTop: 14 }} data-testid="ax-ask-review">
++        {proposal.model && proposal.model.status !== "not_asked" && <div className="muted" style={{ fontSize: 13, marginBottom: 6 }} data-testid="ax-ask-model">{proposal.model.detail}</div>}
++        {proposal.notes.map((n, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-ask-note">{n}</div>)}
++        {proposal.unread.map((u, i) => <div key={i} className="ax-warn" style={{ marginBottom: 6 }} data-testid="ax-ask-unread">Not understood: {u}</div>)}
++        {!shown.length && !proposal.unread.length && !proposal.notes.length && <div className="muted">Nothing to propose for that request.</div>}
++        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
++          {shown.map((s, i) => {
++            const b = BADGE[s.status]; const op = s.item.op;
++            return (
++              <li key={s.item.id} className="card" style={{ padding: "8px 10px", marginBottom: 6, opacity: s.item.blocked.length && s.status === "proposed" ? 0.85 : 1 }} data-testid="ax-ask-item" data-status={s.status} data-op={op.op}>
++                <div className="row" style={{ gap: 8, alignItems: "baseline" }}>
++                  {op.op !== "build_report" && <input type="checkbox" checked={s.checked} disabled={s.status !== "proposed" || s.item.blocked.length > 0} onChange={(e) => setShown((all) => all.map((x, k) => (k === i ? { ...x, checked: e.target.checked } : x)))} data-testid="ax-ask-check" aria-label={`Apply: ${s.item.title}`} />}
++                  <b style={{ flex: 1 }}>{s.item.title}</b>
++                  <span style={{ fontSize: 12, color: b.color, whiteSpace: "nowrap" }} data-testid="ax-ask-status">{b.text}</span>
++                </div>
++                <div className="muted" style={{ fontSize: 12.5, marginLeft: 24 }}>{s.item.why}</div>
++                {s.item.blocked.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "#b91c1c" }} data-testid="ax-ask-blocked">Cannot be applied: {t}</div>)}
++                {s.item.warnings.map((t, k) => <div key={k} style={{ fontSize: 12.5, marginLeft: 24, color: "#b45309" }}>{t}</div>)}
++                {s.message && <div style={{ fontSize: 12.5, marginLeft: 24, color: b.color }} data-testid="ax-ask-result">{s.message}</div>}
++                {op.op === "set_chart" && s.status === "proposed" && !!s.item.options?.length && !s.item.blocked.length && (
++                  <label className="ax-toggle" style={{ marginLeft: 24, fontSize: 12.5 }}>Or use <select className="select small" value="" onChange={(e) => e.target.value && swapChart(i, e.target.value)} data-testid="ax-ask-alt"><option value="">another chart that suits it…</option>{s.item.options!.map((o) => <option key={o.chart} value={o.chart}>{o.chart.replace(/_/g, " ")} — {o.reason}</option>)}</select></label>)}
++                {op.op === "build_report" && !s.item.blocked.length && <div style={{ marginLeft: 24, marginTop: 4 }}><button className="btn" onClick={() => setBuilder(op)} data-testid="ax-ask-builder">Review in the report builder</button> <span className="muted" style={{ fontSize: 12.5 }}>— you see what it includes and leaves out before anything is created.</span></div>}
++              </li>);
++          })}
++        </ul>
++        {shown.length > 0 && <div className="row" style={{ marginTop: 10, gap: 8 }}>
++          <button className="btn" onClick={() => void propose(asked)} disabled={busy !== null} data-testid="ax-ask-regenerate">Propose again</button>
++          <span className="grow" />
++          {undo.length > 0 && <button className="btn" onClick={() => void doUndo()} disabled={busy !== null} data-testid="ax-ask-undo">{busy === "undo" ? "Undoing…" : `Undo these ${undo.length}`}</button>}
++          <button className="btn primary" onClick={() => void apply()} disabled={busy !== null || selected === 0} data-testid="ax-ask-apply">{busy === "apply" ? "Applying…" : `Apply ${selected} selected`}</button>
++        </div>}
++        {msg && <div className="muted" style={{ marginTop: 8 }} data-testid="ax-ask-msg">{msg}</div>}
++      </div>}
++
++      {history.length > 0 && <details style={{ marginTop: 16 }} data-testid="ax-ask-history"><summary className="muted">Earlier requests on this device ({history.length})</summary>
++        <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>{history.map((h, i) => <li key={i} style={{ fontSize: 13 }} data-testid="ax-ask-history-item"><button type="button" className="ax-chip" onClick={() => setRequest(h.request)}>{h.request}</button> <span className="muted">— {new Date(h.at).toLocaleString()} · {h.done} applied{h.blocked ? `, ${h.blocked} not applied` : ""}</span></li>)}</ul>
++        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Kept in this browser only. Every applied change is also in the project's audit log, with the request text.</div></details>}
++
++      {builder && <ReportBuilderDialog api={api} analyses={analyses} initial={{ objective: builder.brief.objective, audience: builder.brief.audience, tone: builder.brief.tone, title: builder.brief.title, story: builder.story }} onClose={() => setBuilder(null)} onCreated={() => { setBuilder(null); setMsg("Report created — find it under Reports."); void onChanged(); }} />}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/analytics/ReportBuilderDialog.tsx b/apps/studio/components/analytics/ReportBuilderDialog.tsx
+index b513bd6..cca8bb6 100644
+--- a/apps/studio/components/analytics/ReportBuilderDialog.tsx
++++ b/apps/studio/components/analytics/ReportBuilderDialog.tsx
+@@ -16,18 +16,18 @@ type Draft = BuilderDraft & { model: { status: string; detail: string }; truncat
+ 
+ const ROLE_WORD: Record<string, string> = { key: "answers a key question", finding: "finding", comparison: "group comparison", difference: "tested difference" };
+ 
+-export function ReportBuilderDialog({ api, analyses, onClose, onCreated }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void }) {
+-  const [objective, setObjective] = React.useState("");
++export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void; initial?: Partial<Pick<ReportBrief, "objective" | "audience" | "tone" | "title">> & { story?: boolean } }) {
++  const [objective, setObjective] = React.useState(initial?.objective ?? "");
+   const [questions, setQuestions] = React.useState("");
+-  const [audience, setAudience] = React.useState<ReportBrief["audience"]>("client");
+-  const [tone, setTone] = React.useState<ReportBrief["tone"]>("plain");
+-  const [title, setTitle] = React.useState("");
++  const [audience, setAudience] = React.useState<ReportBrief["audience"]>(initial?.audience ?? "client");
++  const [tone, setTone] = React.useState<ReportBrief["tone"]>(initial?.tone ?? "plain");
++  const [title, setTitle] = React.useState(initial?.title ?? "");
+   const [client, setClient] = React.useState("");
+   const [tests, setTests] = React.useState(true);
+   const [crosstabs, setCrosstabs] = React.useState(true);
+   const [maxItems, setMaxItems] = React.useState("");
+   const [picked, setPicked] = React.useState<Set<string> | null>(null);   // null = every saved analysis
+-  const [withStory, setWithStory] = React.useState(true);
++  const [withStory, setWithStory] = React.useState(initial?.story ?? true);
+   const [withModel, setWithModel] = React.useState(false);
+   const [draft, setDraft] = React.useState<Draft | null>(null);
+   const [excluded, setExcluded] = React.useState<Set<string>>(new Set());
+diff --git a/apps/studio/components/analytics/api.ts b/apps/studio/components/analytics/api.ts
+index c4f8238..71022e3 100644
+--- a/apps/studio/components/analytics/api.ts
++++ b/apps/studio/components/analytics/api.ts
+@@ -1,5 +1,5 @@
+ "use client";
+-import type { AnalysisDefinition, AnalysisResult, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, VariableMeta } from "@rescript/analytics";
++import type { AnalysisDefinition, AnalysisResult, AskOp, AskProposal, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, UndoRecord, VariableMeta } from "@rescript/analytics";
+ 
+ /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
+ /** an API failure that keeps its status and body — a 409 "not published" carries the reasons and whether it may be forced */
+@@ -52,6 +52,11 @@ export class AxApi {
+     try { notes = JSON.parse(decodeURIComponent(r.headers.get("x-rescript-export-notes") ?? "[]")); } catch { /* no notes */ }
+     return { notes };
+   }
++  /** Intelligent Mode: words → a proposal (writes nothing) */
++  askPropose(body: { request: string; dataset: unknown; model?: boolean }) { return this.req<AskProposal & { model: { status: string; detail: string } }>("intelligent/propose", { method: "POST", body: JSON.stringify(body) }); }
++  /** the chosen items, each validated again by the server; returns what was done and how to undo it */
++  askApply(body: { request: string; dataset: unknown; ops: AskOp[] }) { return this.req<{ applied: { index: number; name: string; status: "done" | "blocked" | "failed"; message: string; undo?: UndoRecord; createdId?: string }[]; rejected: string[] }>("intelligent/apply", { method: "POST", body: JSON.stringify(body) }); }
++  askUndo(records: UndoRecord[]) { return this.req<{ undone: { name: string; status: "undone" | "skipped"; message: string }[] }>("intelligent/undo", { method: "POST", body: JSON.stringify({ records }) }); }
+   access(shareId: string) { return this.req<{ events: Row[] }>(`shares/${shareId}/access`); }
+   /** returns the notes the server attached — what the file does NOT contain — so the caller can say so beside "downloaded" */
+   async export(body: Record<string, unknown>): Promise<{ notes: string[] }> {
+diff --git a/apps/studio/lib/analyticsAsk.ts b/apps/studio/lib/analyticsAsk.ts
+new file mode 100644
+index 0000000..eb3aad3
+--- /dev/null
++++ b/apps/studio/lib/analyticsAsk.ts
+@@ -0,0 +1,81 @@
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { aiConfigured, aiProviderName, completeJson } from "@rescript/ai";
++import {
++  ASK_INSTRUCTIONS, askBrief, checkChartChoice, definitionFor, itemsFromModel, normalizeReportDefinition, proposeFromText, surveyKnownNames, validateAskOp, variableMetadata,
++  type AnalysisDefinition, type AnalysisResult, type AskContext, type AskItem, type AskOp, type AskProposal, type ChartSpec, type UndoRecord, type DatasetSpec, type ReportDefinition,
++} from "@rescript/analytics";
++import type { SurveyDefinition } from "@rescript/schema";
++import type { AuthedUser } from "@/lib/guard";
++import { billingProjectFor, meteredAi } from "@/lib/metering";
++import { compute, type LoadedContext } from "@/lib/analytics";
++export { applyOps, undoRecords, type AppliedItem, type Undone } from "@/lib/analyticsAskApply";
++
++/**
++ * SERVER SIDE OF INTELLIGENT MODE FOR ANALYTICS.
++ *
++ *   propose  — read-only. Words → reviewable items. Nothing is written.
++ *   apply    — each item is validated AGAIN against the live survey, saved
++ *              analyses and results, then executed; every executed item says
++ *              what it did and how to undo it. A blocked item is reported and
++ *              left alone — one failure never stops the others.
++ *   undo     — reverses what apply recorded, unless the thing was changed since.
++ *
++ * A report is never created from here: it goes through the report builder's
++ * review step (included / left out / why), which is the one place that draft is
++ * shown. No operation carries a statistic — the model, when there is one, only
++ * picks operations from the closed vocabulary.
++ */
++const MAX_ANALYSES = 80;
++
++export const datasetFrom = (raw: unknown): DatasetSpec => {
++  const d = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
++  return { environment: d.environment === "TEST" || d.environment === "ALL" ? d.environment : "LIVE", dataset: d.dataset === "clean" ? "clean" : "all" } as DatasetSpec;
++};
++
++export async function askContext(db: SupabaseClient, surveyId: string, loaded: LoadedContext, dataset: DatasetSpec, opts: { results: boolean }): Promise<AskContext> {
++  const [{ data: a }, { data: r }] = await Promise.all([
++    db.from("analytics_analyses").select("id, name, definition").eq("survey_id", surveyId).is("deleted_at", null).order("position", { ascending: true, nullsFirst: false }).limit(MAX_ANALYSES),
++    db.from("analytics_reports").select("id, name, definition, kind").eq("survey_id", surveyId).is("deleted_at", null).eq("kind", "report").limit(40),
++  ]);
++  const analyses = ((a ?? []) as { id: string; name: string; definition: AnalysisDefinition }[]).map((x) => ({ id: x.id, name: x.name, definition: { ...x.definition, id: x.id, name: x.name } as AnalysisDefinition }));
++  const reports = ((r ?? []) as { id: string; name: string; definition: ReportDefinition }[]).map((x) => ({ id: x.id, name: x.name, definition: x.definition }));
++  const results: Record<string, AnalysisResult | undefined> = {};
++  if (opts.results) {
++    /* only the analyses a chart block reads — computing all of them to answer a question about charts would be waste */
++    const wanted = new Set<string>();
++    for (const rep of reports) for (const b of rep.definition.blocks ?? []) if (b.type === "chart" && b.analysisId) wanted.add(b.analysisId);
++    for (const an of analyses) if (wanted.has(an.id)) {
++      try { results[an.id] = (await compute(db, surveyId, loaded, an.definition)) as AnalysisResult; } catch (e) { console.error(`[analytics] ask: analysis ${an.id} failed:`, e); }
++    }
++  }
++  const vmeta = variableMetadata(loaded.def as SurveyDefinition);
++  return { variables: vmeta, known: surveyKnownNames(loaded.def as SurveyDefinition, vmeta), analyses, reports, results, dataset };
++}
++
++export type ModelAsk = "not_asked" | "no_model" | "nothing" | "used";
++
++/** Rules first; a model only for a request the rules could not read at all, answering in the same closed vocabulary. */
++export async function propose(db: SupabaseClient, user: AuthedUser | null, surveyId: string, loaded: LoadedContext, request: string, dataset: DatasetSpec, opts: { model: boolean; fake?: unknown }): Promise<AskProposal & { model: { status: ModelAsk; detail: string } }> {
++  const ctx = await askContext(db, surveyId, loaded, dataset, { results: true });
++  const p = proposeFromText(request, ctx);
++  if (!opts.model || !p.unread.length) return { ...p, model: { status: "not_asked", detail: "" } };
++  if (!aiConfigured()) return { ...p, model: { status: "no_model", detail: "No AI model is configured, so only the parts that could be read by rules were proposed." } };
++  let raw: unknown = aiProviderName() === "fake" && opts.fake && typeof opts.fake === "object" ? opts.fake : null;
++  if (!raw) {
++    const billing = await billingProjectFor(user, surveyId, "analytics.edit");
++    if ("response" in billing) return { ...p, model: { status: "nothing", detail: "The workspace could not be charged for the model call." } };
++    const prompt = `${ASK_INSTRUCTIONS}\n\n${askBrief(p.unread.join("\n"), ctx.variables)}`;
++    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 800, operation: "analytics_ask" }, () => completeJson("You translate analysis requests into a closed set of operations. Answer with JSON only.", prompt, 800, { timeoutMs: 30_000 })).catch(() => null);
++    raw = m && m.ok ? m.value : null;
++  }
++  if (!raw) return { ...p, model: { status: "nothing", detail: "The model gave nothing usable for the parts that could not be read." } };
++  const { items, rejected } = itemsFromModel(raw, ctx);
++  const taken = new Set(p.items.map((i) => JSON.stringify({ ...i.op, name: undefined })));
++  const fresh = items.filter((i) => !taken.has(JSON.stringify({ ...i.op, name: undefined })));
++  return {
++    ...p, items: [...p.items, ...fresh.map((i) => ({ ...i, why: `Suggested by the model: ${i.why}` }))],
++    unread: fresh.length ? [] : p.unread,
++    notes: [...p.notes, ...(rejected.length ? [`The model suggested ${rejected.length} operation${rejected.length === 1 ? "" : "s"} that were dropped: ${rejected.join("; ")}.`] : [])],
++    model: { status: fresh.length ? "used" : "nothing", detail: fresh.length ? `${fresh.length} item${fresh.length === 1 ? "" : "s"} from the model — each checked like the rest.` : "The model had nothing to add." },
++  };
++}
+diff --git a/apps/studio/lib/analyticsAskApply.test.ts b/apps/studio/lib/analyticsAskApply.test.ts
+new file mode 100644
+index 0000000..36f8fd1
+--- /dev/null
++++ b/apps/studio/lib/analyticsAskApply.test.ts
+@@ -0,0 +1,138 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset, runAnalysis, variableMetadata, surveyKnownNames, type AnalysisDefinition, type AskContext, type AskOp, type ReportDefinition } from "@rescript/analytics";
++import { applyOps, undoRecords } from "./analyticsAskApply.ts";
++// the analytics fixture is test support inside the package, not part of its public surface
++// @ts-ignore
++import { def, synthRows } from "../../../packages/analytics/dist/analyses/fixture.js";
++
++/* a small in-memory stand-in for the database client: the chain the apply code uses, with real filter semantics */
++type Row = Record<string, any>;
++function memoryDb(seed: Record<string, Row[]>) {
++  const tables: Record<string, Row[]> = JSON.parse(JSON.stringify(seed));
++  let n = 0;
++  class Q {
++    mode: "select" | "insert" | "update" = "select"; payload: any; filters: ((r: Row) => boolean)[] = []; single_ = false; maybe = false;
++    table: string;
++    constructor(table: string) { this.table = table; }
++    select() { return this; }
++    insert(row: Row) { this.mode = "insert"; this.payload = row; return this; }
++    update(p: Row) { this.mode = "update"; this.payload = p; return this; }
++    eq(c: string, v: unknown) { this.filters.push((r) => r[c] === v); return this; }
++    is(c: string, v: unknown) { this.filters.push((r) => (r[c] ?? null) === v); return this; }
++    in(c: string, vs: unknown[]) { this.filters.push((r) => vs.includes(r[c])); return this; }
++    single() { this.single_ = true; return this; }
++    maybeSingle() { this.maybe = true; return this; }
++    run() {
++      const t = (tables[this.table] ??= []);
++      let rows: Row[];
++      if (this.mode === "insert") { const row = { id: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`, deleted_at: null, ...this.payload }; t.push(row); rows = [row]; }
++      else { rows = t.filter((r) => this.filters.every((f) => f(r))); if (this.mode === "update") for (const r of rows) Object.assign(r, this.payload); }
++      if (this.single_) return rows.length ? { data: { ...rows[0] }, error: null } : { data: null, error: { message: "no rows" } };
++      if (this.maybe) return { data: rows[0] ? { ...rows[0] } : null, error: null };
++      return { data: rows.map((r) => ({ ...r })), error: null };
++    }
++    then(ok?: (v: any) => unknown, no?: (e: any) => unknown) { return Promise.resolve(this.run()).then(ok, no); }
++  }
++  return { tables, from: (t: string) => new Q(t) } as unknown as { tables: Record<string, Row[]>; from: (t: string) => any };
++}
++
++const spec = { environment: "LIVE" as const, dataset: "all" as const };
++const ds = buildDataset(def, synthRows(), { spec });
++const vars = variableMetadata(def);
++const SURVEY = "11111111-1111-4111-8111-111111111111", OTHER = "22222222-2222-4222-8222-222222222222";
++const A = (n: number) => `a000000${n}-0000-4000-8000-000000000000`;
++const analysisRow = (i: number, name: string, definition: Partial<AnalysisDefinition>, survey = SURVEY): Row => ({ id: A(i), survey_id: survey, name, deleted_at: null, version: 1, definition: { name, dataset: spec, ...definition } });
++const R1 = "bbbbbbbb-0000-4000-8000-000000000001";
++
++const contextFor = (db: ReturnType<typeof memoryDb>) => async (needResults: boolean): Promise<AskContext> => {
++  const analyses = db.tables.analytics_analyses.filter((r) => r.survey_id === SURVEY && !r.deleted_at).map((r) => ({ id: r.id, name: r.name, definition: { ...r.definition, id: r.id, name: r.name } as AnalysisDefinition }));
++  const reports = (db.tables.analytics_reports ?? []).filter((r) => r.survey_id === SURVEY && !r.deleted_at).map((r) => ({ id: r.id, name: r.name, definition: r.definition as ReportDefinition }));
++  const results = needResults ? Object.fromEntries(analyses.map((a) => [a.id, runAnalysis(a.definition, ds)])) : {};
++  return { variables: vars, known: surveyKnownNames(def as never, vars), analyses, reports, results, dataset: spec };
++};
++/* undo records travel through the browser as JSON; a test that shares objects with the stored row would hide edits made in between */
++const wire = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
++const crosstab = (name: string, rows: string[], columns: string[]): AskOp => ({ op: "add_crosstab", name, rows, columns });
++const apply = (db: ReturnType<typeof memoryDb>, ops: AskOp[], request = "r") => applyOps(db as never, SURVEY, "1.0", "u1", ops, spec, request, contextFor(db));
++
++const seed = () => memoryDb({
++  analytics_analyses: [analysisRow(1, "Satisfaction", { kind: "descriptive", variables: ["SAT"] }), analysisRow(2, "Satisfaction (2)", { kind: "descriptive", variables: ["SAT"] }), analysisRow(3, "Brands considered", { kind: "descriptive", variables: ["CONSIDER"] }), analysisRow(9, "Elsewhere", { kind: "descriptive", variables: ["SAT"] }, OTHER)],
++  analytics_analysis_versions: [], analytics_charts: [],
++  analytics_reports: [{ id: R1, survey_id: SURVEY, name: "Report", deleted_at: null, definition: { title: "Report", mode: "live", blocks: [{ id: "c1", type: "chart", title: "Brands", analysisId: A(3), chart: { type: "pie", options: {} } }] } }],
++});
++
++test("creating: the analysis, its first version and where it came from are saved; the same item twice in one batch lands once", async () => {
++  const db = seed();
++  const out = await apply(db, [crosstab("Satisfaction by gender", ["SAT"], ["GENDER"]), crosstab("Satisfaction by gender again", ["SAT"], ["GENDER"])], "crosstab of satisfaction by gender");
++  assert.deepEqual(out.map((o) => o.status), ["done", "blocked"]);
++  assert.match(out[1].message, /already have “Satisfaction by gender”/);
++  const row = db.tables.analytics_analyses.find((r) => r.name === "Satisfaction by gender")!;
++  assert.equal(row.kind, "crosstab"); assert.equal(row.survey_id, SURVEY); assert.equal(row.created_by, "u1");
++  assert.equal(row.definition.options.requested, "crosstab of satisfaction by gender");
++  assert.deepEqual(row.definition.rows, ["SAT"]);
++  assert.equal(db.tables.analytics_analysis_versions.length, 1);
++  assert.equal(db.tables.analytics_analysis_versions[0].analysis_id, row.id);
++  assert.equal(db.tables.analytics_analyses.length, 5, "exactly one analysis was added");
++  assert.deepEqual(out[0].undo, { kind: "created_analysis", id: row.id });
++});
++
++test("a blocked item does not stop the ones after it, and an unknown variable is never saved", async () => {
++  const db = seed();
++  const out = await apply(db, [crosstab("Bad", ["NOPE"], ["GENDER"]), crosstab("Good", ["SAT"], ["REGION"])]);
++  assert.deepEqual(out.map((o) => o.status), ["blocked", "done"]);
++  assert.match(out[0].message, /NOPE/);
++  assert.equal(db.tables.analytics_analyses.filter((r) => r.name === "Bad").length, 0);
++});
++
++test("removing is a soft delete with its charts; undo brings both back, and only the charts it took", async () => {
++  const db = seed();
++  db.tables.analytics_charts.push({ id: "ch1", survey_id: SURVEY, analysis_id: A(2), deleted_at: null }, { id: "ch2", survey_id: SURVEY, analysis_id: A(2), deleted_at: "2026-01-01" });
++  const out = await apply(db, [{ op: "remove_analysis", name: "Satisfaction (2)", analysisId: A(2), keptId: A(1) }]);
++  assert.equal(out[0].status, "done");
++  assert.ok(db.tables.analytics_analyses.find((r) => r.id === A(2))!.deleted_at);
++  assert.ok(db.tables.analytics_charts.find((r) => r.id === "ch1")!.deleted_at);
++  const u = await undoRecords(db as never, SURVEY, "u1", [out[0].undo!]);
++  assert.equal(u[0].status, "undone");
++  assert.equal(db.tables.analytics_analyses.find((r) => r.id === A(2))!.deleted_at, null);
++  assert.equal(db.tables.analytics_charts.find((r) => r.id === "ch1")!.deleted_at, null);
++  assert.equal(db.tables.analytics_charts.find((r) => r.id === "ch2")!.deleted_at, "2026-01-01", "a chart that was already gone stays gone");
++});
++
++test("an analysis a report uses is not removed; another survey's analysis cannot be reached", async () => {
++  const db = seed();
++  const used = await apply(db, [{ op: "remove_analysis", name: "Brands", analysisId: A(3) }]);
++  assert.equal(used[0].status, "blocked"); assert.match(used[0].message, /used by “Report”/);
++  assert.equal(db.tables.analytics_analyses.find((r) => r.id === A(3))!.deleted_at, null);
++  const foreign = await apply(db, [{ op: "remove_analysis", name: "x", analysisId: A(9) }]);
++  assert.equal(foreign[0].status, "blocked");
++  assert.equal(db.tables.analytics_analyses.find((r) => r.id === A(9))!.deleted_at, null, "the other survey's analysis is untouched");
++  await undoRecords(db as never, SURVEY, "u1", [{ kind: "created_analysis", id: A(9) }]);
++  assert.equal(db.tables.analytics_analyses.find((r) => r.id === A(9))!.deleted_at, null, "undo is scoped to this survey too");
++});
++
++test("a chart change is saved on the report block and undone; a chart edited since is left alone", async () => {
++  const db = seed();
++  const op: AskOp = { op: "set_chart", name: "Brands", reportId: R1, blockId: "c1", analysisId: A(3), chart: "bar_horizontal", from: "pie" };
++  const out = wire(await apply(db, [op]));
++  assert.equal(out[0].status, "done");
++  const block = () => (db.tables.analytics_reports[0].definition.blocks as any[]).find((b) => b.id === "c1");
++  assert.equal(block().chart.type, "bar_horizontal");
++  const u = await undoRecords(db as never, SURVEY, "u1", [out[0].undo!]);
++  assert.equal(u[0].status, "undone"); assert.equal(block().chart.type, "pie");
++  const again = wire(await apply(db, [op]));
++  block().chart.type = "lollipop"; // someone changed it after the request did
++  const skipped = await undoRecords(db as never, SURVEY, "u1", [again[0].undo!]);
++  assert.equal(skipped[0].status, "skipped"); assert.match(skipped[0].message, /changed again/);
++  assert.equal(block().chart.type, "lollipop");
++});
++
++test("a chart the result cannot be drawn as is blocked and the report is unchanged; a report is never created from here", async () => {
++  const db = seed();
++  const before = JSON.stringify(db.tables.analytics_reports[0].definition);
++  const out = await apply(db, [{ op: "set_chart", name: "x", reportId: R1, blockId: "c1", analysisId: A(3), chart: "heatmap" }, { op: "build_report", name: "R", story: false, brief: { objective: "x", audience: "client", tone: "plain", keyQuestions: [] } }]);
++  assert.deepEqual(out.map((o) => o.status), ["blocked", "blocked"]);
++  assert.match(out[1].message, /report builder/);
++  assert.equal(JSON.stringify(db.tables.analytics_reports[0].definition), before);
++  assert.equal(db.tables.analytics_reports.length, 1);
++});
+diff --git a/apps/studio/lib/analyticsAskApply.ts b/apps/studio/lib/analyticsAskApply.ts
+new file mode 100644
+index 0000000..8ee48a2
+--- /dev/null
++++ b/apps/studio/lib/analyticsAskApply.ts
+@@ -0,0 +1,92 @@
++import type { SupabaseClient } from "@supabase/supabase-js";
++import { definitionFor, normalizeReportDefinition, validateAskOp, type AskContext, type AskOp, type ChartSpec, type DatasetSpec, type ReportDefinition, type UndoRecord } from "@rescript/analytics";
++
++/**
++ * APPLYING AND UNDOING WHAT INTELLIGENT MODE PROPOSED — the writes.
++ *
++ * Kept apart from the proposal code so it depends on nothing but the database
++ * client and the pure analytics package, which is what lets its tests run the
++ * real statements against an in-memory database. Each item is validated again
++ * against the context as it is NOW (the proposal may be minutes old and the
++ * browser's copy of it is not trusted), executed on its own, and reports what
++ * it did and how to reverse it.
++ */
++/* ------------------------------------------------------------------ apply / undo */
++
++export interface AppliedItem { index: number; name: string; status: "done" | "blocked" | "failed"; message: string; undo?: UndoRecord; createdId?: string }
++
++const now = () => new Date().toISOString();
++
++export async function applyOps(db: SupabaseClient, surveyId: string, surveyVersion: string | null, userId: string | null, ops: readonly AskOp[], dataset: DatasetSpec, request: string, contextFor: (needResults: boolean) => Promise<AskContext>): Promise<AppliedItem[]> {
++  const out: AppliedItem[] = [];
++  /* one context for the whole batch, rebuilt after every write so a later item sees what an earlier one did (two items for the same cross-tab cannot both land) */
++  for (let index = 0; index < ops.length; index++) {
++    const op = ops[index];
++    const name = op.name || op.op;
++    const ctx = await contextFor(op.op === "set_chart");
++    if (op.op === "build_report") { out.push({ index, name, status: "blocked", message: "A report is reviewed in the report builder before it is created — open it from this item." }); continue; }
++    const v = validateAskOp(op, ctx);
++    if (v.blocked.length) { out.push({ index, name, status: "blocked", message: v.blocked.join(" ") }); continue; }
++    try {
++      if (op.op === "add_crosstab" || op.op === "add_test" || op.op === "add_descriptive") {
++        const def = definitionFor(op, dataset, request)!;
++        const row = { survey_id: surveyId, name: op.name.slice(0, 160), kind: def.kind, definition: { ...def, name: op.name.slice(0, 160), surveyVersion: surveyVersion ?? undefined }, version: 1, folder: null, tags: [], created_by: userId, updated_by: userId };
++        const { data, error } = await db.from("analytics_analyses").insert(row).select("id, definition").single();
++        if (error || !data) { out.push({ index, name, status: "failed", message: error?.message ?? "The analysis could not be saved." }); continue; }
++        await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: data.definition, summary: "Created from a request", created_by: userId });
++        out.push({ index, name, status: "done", message: "Created.", createdId: String(data.id), undo: { kind: "created_analysis", id: String(data.id) } });
++      } else if (op.op === "remove_analysis") {
++        const { data: charts } = await db.from("analytics_charts").select("id").eq("analysis_id", op.analysisId).is("deleted_at", null);
++        const { error } = await db.from("analytics_analyses").update({ deleted_at: now(), updated_by: userId }).eq("id", op.analysisId).eq("survey_id", surveyId).is("deleted_at", null);
++        if (error) { out.push({ index, name, status: "failed", message: error.message }); continue; }
++        const chartIds = (charts ?? []).map((c) => String(c.id));
++        if (chartIds.length) await db.from("analytics_charts").update({ deleted_at: now() }).eq("survey_id", surveyId).in("id", chartIds);
++        out.push({ index, name, status: "done", message: "Removed (it can be restored with Undo).", undo: { kind: "removed_analysis", id: op.analysisId, chartIds } });
++      } else if (op.op === "set_chart") {
++        const { data: rep } = await db.from("analytics_reports").select("definition").eq("id", op.reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
++        const def = rep?.definition as ReportDefinition | undefined;
++        const block = def?.blocks?.find((b) => b.id === op.blockId);
++        if (!def || !block || block.type !== "chart") { out.push({ index, name, status: "blocked", message: "That chart is no longer in the report." }); continue; }
++        const before = block.chart as ChartSpec;
++        const after: ChartSpec = { ...before, type: op.chart };
++        const next = normalizeReportDefinition({ ...def, blocks: def.blocks!.map((b) => (b.id === op.blockId && b.type === "chart" ? { ...b, chart: after } : b)) } as never);
++        const { error } = await db.from("analytics_reports").update({ definition: next, updated_by: userId }).eq("id", op.reportId).eq("survey_id", surveyId);
++        if (error) { out.push({ index, name, status: "failed", message: error.message }); continue; }
++        out.push({ index, name, status: "done", message: `Now ${op.chart.replace(/_/g, " ")}.`, undo: { kind: "chart_changed", reportId: op.reportId, blockId: op.blockId, before, after } });
++      }
++    } catch (e) { console.error("[analytics] ask apply failed:", e); out.push({ index, name, status: "failed", message: (e as Error)?.message ?? "It could not be applied." }); }
++  }
++  return out;
++}
++
++export interface Undone { name: string; status: "undone" | "skipped"; message: string }
++
++export async function undoRecords(db: SupabaseClient, surveyId: string, userId: string | null, records: readonly UndoRecord[]): Promise<Undone[]> {
++  const out: Undone[] = [];
++  for (const r of records) {
++    try {
++      if (r.kind === "created_analysis") {
++        const { error } = await db.from("analytics_analyses").update({ deleted_at: now(), updated_by: userId }).eq("id", r.id).eq("survey_id", surveyId).is("deleted_at", null);
++        await db.from("analytics_charts").update({ deleted_at: now() }).eq("survey_id", surveyId).eq("analysis_id", r.id).is("deleted_at", null);
++        out.push({ name: r.id, status: error ? "skipped" : "undone", message: error ? error.message : "Analysis removed again." });
++      } else if (r.kind === "removed_analysis") {
++        const { error } = await db.from("analytics_analyses").update({ deleted_at: null, updated_by: userId }).eq("id", r.id).eq("survey_id", surveyId);
++        if (!error && r.chartIds.length) await db.from("analytics_charts").update({ deleted_at: null }).eq("survey_id", surveyId).in("id", r.chartIds);
++        out.push({ name: r.id, status: error ? "skipped" : "undone", message: error ? error.message : "Analysis restored." });
++      } else {
++        const { data: rep } = await db.from("analytics_reports").select("definition").eq("id", r.reportId).eq("survey_id", surveyId).is("deleted_at", null).maybeSingle();
++        const def = rep?.definition as ReportDefinition | undefined;
++        const block = def?.blocks?.find((b) => b.id === r.blockId);
++        if (!def || !block || block.type !== "chart") { out.push({ name: r.blockId, status: "skipped", message: "That chart is no longer in the report." }); continue; }
++        /* someone changed this chart after the request did — their choice stands */
++        if (block.chart?.type !== r.after.type) { out.push({ name: r.blockId, status: "skipped", message: "The chart was changed again since, so it was left as it is." }); continue; }
++        const next = normalizeReportDefinition({ ...def, blocks: def.blocks!.map((b) => (b.id === r.blockId && b.type === "chart" ? { ...b, chart: r.before } : b)) } as never);
++        const { error } = await db.from("analytics_reports").update({ definition: next, updated_by: userId }).eq("id", r.reportId).eq("survey_id", surveyId);
++        out.push({ name: r.blockId, status: error ? "skipped" : "undone", message: error ? error.message : "Chart restored." });
++      }
++    } catch (e) { out.push({ name: "item", status: "skipped", message: (e as Error)?.message ?? "It could not be undone." }); }
++  }
++  return out;
++}
++
++export type { UndoRecord };
+diff --git a/docs/DATA-ANALYTICS-AUDIT-2026-10-12.md b/docs/DATA-ANALYTICS-AUDIT-2026-10-12.md
+new file mode 100644
+index 0000000..e5879db
+--- /dev/null
++++ b/docs/DATA-ANALYTICS-AUDIT-2026-10-12.md
+@@ -0,0 +1,98 @@
++# Data Analytics audit — 2026-10-12
++
++Scope: the Data Analytics module (analysis plan → Analysis tab → reports → sharing / runtime → exports), plus the
++intelligent reporting and Intelligent Mode additions asked for in the brief. This was an audit and repair, not a
++redesign: the authoring / runtime separation, the single catch-all analytics route, the `analytics_*` tables and the
++existing export formats are unchanged. **No migration is required.**
++
++Commits (cloud repo, not pushed — only the user pushes): `98653c2` (phases 2–3: export, snapshot, state, charts),
++`54ed717` (plan review), `37f9704` (report builder + animated story), and the phase 5 commit (Ask tab).
++
++## 1. Root causes
++
++| Symptom in the brief | Root cause | Fix |
++|---|---|---|
++| Export failed (500) `Cannot read properties of undefined (reading 'flatMap')` | `insights` / `executive_summary` blocks saved without `analysisIds` (the "all analyses" default) were read unguarded by the PPTX builder, the compute step, the findings report and the viewer. | One helper, `blockRefs` (`reportAnalysisIds`, `summaryAnalysisIds`), answers "which analyses does this block read" everywhere; saved reports are normalised on PUT; the export route checks there is data, builds inside a guard, validates the file and returns a sentence + reference, never the raw exception. |
++| Shared report / runtime at 0% / n = 0 while the authoring preview was populated | (a) the builder rewrote a saved analysis's dataset with the workspace selector on mount (twice under React strict mode); (b) planned analyses kept a stale environment (plan defaulted to LIVE); (c) `responses` was the base of whichever analysis came back first; (d) publish froze blank reports silently. | Values are compared, not "first run" flags; planned analyses are re-pointed at the dataset the run used (only if never edited); `responses` is the largest base; publish and export refuse a blank or partial snapshot unless forced (`checkSnapshot`); the viewer says "no respondents" instead of drawing zeros. |
++| Columns showing only "has a base of 20…" and blank sections | One warning per column, zero bases rendered as 0.0%, runner exceptions surfaced raw. | Per-column base warnings collapse to one sentence, long lists fold behind the first three, zero bases render blank, weighted n follows the valid base, exceptions become a structured error with an actionable message. |
++| Save / unsaved / stale confusion, double requests | Order-sensitive JSON comparison, concurrent saves, late responses overwriting newer state, stale errors never cleared. | Canonical (key-sorted) comparison, one save at a time, latest-run-wins, export / save-chart / add-to-report refuse stale results, a failed save aborts publish, results reload after save. |
++| Irrelevant, duplicate or uncomputable analyses in the plan | Plan items were saved without review (variable not in the survey, mean of a text answer, a crosstab with an empty axis, a chi-square beside the crosstab that already carries it). | `planCheck`: `validateAnalysis`, `reviewPlanned`, `reviewAgainstSaved`, `analysisSignature`. "Create the planned analyses" reports what it blocked or skipped, with the reason; the rail separates generated analyses from the researcher's own. |
++| Wrong charts for the question type | Chart choice looked at result shape only. | `questionChart`: multi-select → horizontal bars with denominator, Likert → diverging, numeric → histogram / box, no means for categoricals, no lines without ordered data, small-base notes; a saved choice the data can no longer draw falls back and says so. The person can still choose any valid chart, and it persists. |
++
++Not proven (no database access from the audit environment): the exact producer of the undefined `analysisIds` in
++the reporter's saved report, and which of (a)–(d) above produced their particular 0% share. All four mechanisms were
++reproduced and fixed; to confirm on their data, compare `analytics_report_versions.snapshot` with
++`analytics_analyses.definition->'dataset'` for the affected report in Supabase.
++
++## 2. Delivered
++
++- **Plan & analysis integrity** — `planCheck` (shared by the plan, the builder and Ask); duplicate detection by what an
++  analysis computes, not its name; a significance test of a variable against itself is now an error.
++- **Sharing / runtime / exports** — snapshots are validated at publish, share and export; the share page reads only
++  the frozen snapshot (no authoring credentials, works after the author leaves); exports report gaps beside the
++  download and never claim success for an empty file.
++- **Report builder** (Reports → "Build with Rescript") — objective, key questions, audience, tone, scope; a review
++  step (what was chosen and why, each chart's reason and denominator, what was left out and why, key questions
++  nothing answers); nothing is saved until Create. Reports are drafted only from saved analyses and their computed
++  results.
++- **Animated story** — scene order objective → sample → findings → comparisons → differences → insights →
++  implications (labelled "not a finding") → summary; preview, edit text, change chart (valid ones only), hide,
++  reorder, regenerate a scene, export as one self-contained animated HTML file (inline SVG, keyboard controls,
++  optional narration through the existing TTS provider and meter). Shared links play the story from the frozen
++  snapshot in a sandboxed iframe. **MP4 is not offered**: no video renderer exists in the stack (the AI layer is
++  chat / TTS / STT / OCR / embeddings only). The HTML file plays in any browser and can be screen-recorded.
++- **Intelligent Mode for analytics** (new **Ask** tab) — plain-language requests become a *proposal*: cross-tabs
++  "X by Y and Z", significance tests, distributions, "remove redundant analyses", "choose the best chart for each
++  question", a named chart for a question, a management summary / report / animated report. Every item shows why it
++  was proposed, what it does, anything blocking it, and the status "Proposed — not applied" until applied. Applying
++  re-validates each item on the server against the live survey, saved analyses and results; blocked items are shown
++  with the reason and never run; one failure does not stop the rest. The last batch can be undone (a chart edited
++  since is left alone). Charts can be swapped for another that suits the result. Reports are not created from Ask —
++  they open in the report builder, pre-filled, for its review step. No operation carries a statistic; a model, when
++  configured, is only asked about the parts the rules could not read, answers in the same closed vocabulary, and its
++  operations go through the same validation.
++
++## 3. Verification (actual results)
++
++- `packages/analytics`: 332 tests pass (includes 19 reading-engine tests, the same-variable regression, builder /
++  story / plan tests).
++- `apps/studio` lib: 304 tests pass (includes 6 apply / undo tests that run the real statements against an
++  in-memory database: duplicate-in-batch, soft delete + chart restore, report-used analysis, tenant scoping, chart
++  change + undo, blocked chart).
++- Studio typecheck clean; `scripts/auth-guard-audit.mjs`: 171 handlers, 0 problems; public docs check current.
++- Browser suites (fake backend, **real** analytics engine, real UI): `analytics-audit-test` (16 checks),
++  `report-builder-test` (22 checks, incl. Chromium playback of the exported story with no console errors or network,
++  and the shared-link story), `analytics-ask-test` (17 checks).
++- Mutation checks ("every fix gets a test, and the test gets mutation-checked"): phase 4 26/26 source + 8/8 UI;
++  phase 5: every reading-engine, apply / undo and UI mutation is caught, after strengthening the tests that first
++  let mutants survive; one check in the apply code that validation already made unreachable was removed (option-flag columns, ids from the browser, stale-proposal status, workspace refresh).
++
++The brief's 12 scenarios: single + multi, rating / numeric / ranking, cross-tabs and segments, missing / filtered /
++small bases, open text, generated + manual plan, saved-plan reload, authoring preview vs shared runtime, exports,
++animated report, regeneration, multi-project no leakage — covered by the suites above at the engine / fake-backend
++level. See "Limits" for what was not exercised against a live database.
++
++## 4. Limits and remaining items
++
++- **Live database and real route code were not exercised by the browser suites** (they use an in-process fake
++  backend, with the real analytics engine and, for Ask, the real apply / undo code). The route shells, permissions
++  and RLS are typechecked and covered by the auth-guard audit but need a smoke test in a deployed environment.
++- **No MP4 / video export.** The animated report is an HTML file; narration needs a TTS provider.
++- **Ask history** is kept in the browser (per survey) plus the project audit log (each applied change records the
++  request text). There is no server-side history view; the survey Intelligent Mode history is coupled to survey
++  definitions and was deliberately not reused.
++- The model fallback in Ask and the AI interpretation in the builder are only as good as the configured provider;
++  with none configured, the deterministic features work unchanged and say so.
++- Ask reads English requests; unrecognised parts are reported as "not understood", never guessed.
++- Cross-tab proposals use one table per banner variable (a single wide table is hard to read); weighting is left to
++  the workspace dataset settings.
++
++## 5. Configuration / deployment
++
++- No migration. No new environment variable is required for the deterministic features.
++- Optional, for AI interpretation, Ask's model fallback and story narration: `AI_API_URL`, `AI_API_KEY`, and
++  `AI_TTS_MODEL` for narration (names only; keys are read from the environment on the server and never reach a
++  client or a shared page).
++- Deploy order: build `packages/analytics` (`dist` is consumed by the studio), then deploy the studio.
++- Post-deploy smoke test: build a report → publish → open the share link in a private window; export PPTX / XLSX;
++  Ask → "Create cross-tabs of <question> by <question>" → Apply → Undo.
+diff --git a/packages/analytics/src/analyticsIntent.test.ts b/packages/analytics/src/analyticsIntent.test.ts
+new file mode 100644
+index 0000000..2bd1a2d
+--- /dev/null
++++ b/packages/analytics/src/analyticsIntent.test.ts
+@@ -0,0 +1,216 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { buildDataset, variableMetadata } from "./dataset.js";
++import { runAnalysis } from "./analyses/index.js";
++import { findVariables, proposeFromText, redundantAnalyses, validateAskOp, itemsFromModel, parseAskOps, parseUndo, type AskContext, type AskOp } from "./analyticsIntent.js";
++import type { AnalysisDefinition, AnalysisResult, ReportDefinition } from "./types.js";
++import { def, synthRows } from "./analyses/fixture.js";
++
++const spec = { environment: "LIVE" as const, dataset: "all" as const };
++const ds = buildDataset(def, synthRows(), { spec });
++const vars = variableMetadata(def);
++const names = new Set(vars.map((v) => v.name));
++let n = 0;
++const saved = (name: string, kind: AnalysisDefinition["kind"], variables: string[], extra: Partial<AnalysisDefinition> = {}) => {
++  const definition = { name, kind, dataset: spec, variables, ...extra } as AnalysisDefinition;
++  return { id: `a${++n}`, name, definition, result: runAnalysis(definition, ds) as AnalysisResult };
++};
++const ctx = (analyses: ReturnType<typeof saved>[] = [], reports: AskContext["reports"] = []): AskContext => ({
++  variables: vars, known: names, dataset: spec, analyses, reports,
++  results: Object.fromEntries(analyses.map((a) => [a.id, a.result])),
++});
++const op = <T extends AskOp["op"]>(p: ReturnType<typeof proposeFromText>, kind: T) => p.items.filter((i) => i.op.op === kind).map((i) => i.op as Extract<AskOp, { op: T }>);
++
++test("findVariables reads a variable by its code or by the words of its label, never an option-flag column", () => {
++  const f = (t: string) => findVariables(t, vars).found.map((v) => v.name);
++  assert.deepEqual(f("satisfaction"), ["SAT"]);
++  assert.deepEqual(f("how satisfied were they"), ["SAT"]);
++  assert.deepEqual(f("NPS"), ["NPS"]);
++  assert.deepEqual(f("brands considered"), ["CONSIDER"], "the parent question, not Alpha/Beta/Gamma flags, and not the sibling 'aware' question");
++  assert.deepEqual(f("Alpha"), [], "an option flag column is not a question");
++  assert.deepEqual(findVariables("Alpha", vars).ambiguous, [], "and it is not even offered as a choice between two");
++  assert.deepEqual(f("age and gender").sort(), ["AGE", "GENDER"]);
++  assert.deepEqual(f("_status"), [], "system variables are not offered unless a person has them in the survey");
++});
++
++test("two questions that fit the same words are an ambiguity, never a guess", () => {
++  const r = findVariables("brands", vars);
++  assert.equal(r.found.length, 0);
++  assert.equal(r.ambiguous.length, 1);
++  assert.deepEqual(r.ambiguous[0].options.map((o) => o.name).sort(), ["AWARE", "CONSIDER"]);
++});
++
++test("'satisfaction by age and gender' proposes one cross-tab per banner variable, with the reason", () => {
++  const p = proposeFromText("Create cross-tabs of satisfaction by age and gender", ctx());
++  const x = op(p, "add_crosstab");
++  assert.equal(x.length, 2);
++  assert.deepEqual(x.map((o) => o.columns[0]).sort(), ["AGE", "GENDER"]);
++  assert.ok(x.every((o) => o.rows.join() === "SAT"));
++  assert.ok(p.items.every((i) => !i.blocked.length && i.why && i.effect === "creates an analysis"));
++  assert.ok(p.notes.some((t) => /one cross-tab was proposed for each/.test(t)));
++  assert.equal(p.unread.length, 0);
++});
++
++test("a question that is not in the survey is reported, and nothing is invented for it", () => {
++  const p = proposeFromText("cross-tab of loyalty by gender", ctx());
++  assert.equal(p.items.length, 0);
++  assert.equal(p.unread.length, 1);
++  assert.match(p.unread[0], /could not find a question on the left/);
++});
++
++test("an ambiguous name asks which one", () => {
++  const p = proposeFromText("brands by gender", ctx());
++  assert.equal(p.items.length, 0);
++  assert.match(p.unread.join(" "), /could mean/);
++  assert.match(p.unread.join(" "), /AWARE/); assert.match(p.unread.join(" "), /CONSIDER/);
++});
++
++test("a proposal that repeats a saved analysis is blocked, not silently dropped", () => {
++  const have = saved("Satisfaction by gender", "crosstab", [], { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col", options: { layout: "separate", significance: true } });
++  const p = proposeFromText("crosstab satisfaction by gender", ctx([have]));
++  assert.equal(p.items.length, 1);
++  assert.match(p.items[0].blocked.join(" "), /already have “Satisfaction by gender”/);
++});
++
++test("significance tests: 'does satisfaction differ by gender' → one test; the cross-tab that already carries it blocks a repeat", () => {
++  const p = proposeFromText("test whether satisfaction differs by gender", ctx());
++  const t = op(p, "add_test");
++  assert.deepEqual(t.map((o) => [o.outcome, o.groupBy]), [["SAT", "GENDER"]]);
++  const withX = saved("SAT x GENDER", "crosstab", [], { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col", options: { layout: "separate", significance: true } });
++  const q = proposeFromText("test whether satisfaction differs by gender", ctx([withX]));
++  assert.ok(q.items[0].blocked.length, "the chi-square is already in the cross-tab");
++});
++
++test("'remove redundant analyses' finds exact repeats and tests a cross-tab already carries, keeping the researcher's own", () => {
++  const mine = saved("My satisfaction", "descriptive", ["SAT"]);
++  const gen = saved("Generated satisfaction", "descriptive", ["SAT"], { options: { planned: "p1" } });
++  const x = saved("SAT x GENDER", "crosstab", [], { rows: ["SAT"], columns: ["GENDER"], measure: "pct_col" });
++  const t = saved("SAT gap", "test", ["SAT", "GENDER"], { options: { test: "auto" } });
++  const other = saved("Region", "descriptive", ["REGION"]);
++  const r = redundantAnalyses([gen, mine, x, t, other]);
++  assert.deepEqual(r.map((d) => d.id).sort(), [gen.id, t.id].sort());
++  assert.equal(r.find((d) => d.id === gen.id)!.keptId, mine.id);
++  const p = proposeFromText("Remove the redundant analyses", ctx([gen, mine, x, t, other]));
++  assert.equal(op(p, "remove_analysis").length, 2);
++  assert.ok(p.items.every((i) => i.effect === "removes an analysis" && /Kept:/.test(i.why)));
++});
++
++test("an analysis a report uses cannot be removed from the proposal, and nothing is redundant when nothing repeats", () => {
++  const a = saved("Satisfaction", "descriptive", ["SAT"]); const b = saved("Satisfaction (2)", "descriptive", ["SAT"]);
++  const rep: ReportDefinition = { title: "R", blocks: [{ id: "b1", type: "chart", analysisId: b.id, chart: { type: "bar_vertical", options: {} } }] } as never;
++  const p = proposeFromText("remove duplicate analyses", ctx([a, b], [{ id: "r1", name: "Quarterly", definition: rep }]));
++  const removed = p.items[0].op as Extract<AskOp, { op: "remove_analysis" }>;
++  assert.equal(removed.analysisId, b.id);
++  assert.match(p.items[0].blocked.join(" "), /used by “Quarterly”/);
++  const none = proposeFromText("remove redundant analyses", ctx([a, saved("Region", "descriptive", ["REGION"])]));
++  assert.equal(none.items.length, 0);
++  assert.match(none.notes.join(" "), /No redundant analyses were found/);
++});
++
++test("'choose the best chart for each question' changes only the charts that misfit, and says why", () => {
++  const multi = saved("Brands considered", "descriptive", ["CONSIDER"]);
++  const sat = saved("Satisfaction", "descriptive", ["SAT"]);
++  const rep: ReportDefinition = { title: "R", blocks: [
++    { id: "pie", type: "chart", title: "Brands considered", analysisId: multi.id, chart: { type: "pie", options: {} } },
++    { id: "ok", type: "chart", title: "Satisfaction", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } },
++  ] } as never;
++  const p = proposeFromText("choose the best chart for each question", ctx([multi, sat], [{ id: "r1", name: "R", definition: rep }]));
++  const ch = op(p, "set_chart");
++  assert.deepEqual(ch.map((c) => [c.blockId, c.from]), [["pie", "pie"]]);
++  assert.equal(ch[0].chart, "bar_horizontal");
++  assert.match(p.items[0].why, /implies the answers add up to 100%/);
++  assert.equal(p.items[0].blocked.length, 0);
++});
++
++test("a chart that cannot draw the result is blocked when applied, whatever the proposal said", () => {
++  const sat = saved("Satisfaction", "descriptive", ["SAT"]);
++  const rep: ReportDefinition = { title: "R", blocks: [{ id: "b", type: "chart", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } }] } as never;
++  const c = ctx([sat], [{ id: "r1", name: "R", definition: rep }]);
++  const bad = validateAskOp({ op: "set_chart", name: "x", reportId: "r1", blockId: "b", analysisId: sat.id, chart: "heatmap" }, c);
++  assert.ok(bad.blocked.length || bad.warnings.length);
++  const gone = validateAskOp({ op: "set_chart", name: "x", reportId: "r1", blockId: "missing", analysisId: sat.id, chart: "bar_vertical" }, c);
++  assert.match(gone.blocked.join(" "), /no longer in the report/);
++});
++
++test("reports: management summary → executive/concise; animated → story; video is declined honestly; no analyses → blocked", () => {
++  const a = saved("Satisfaction", "descriptive", ["SAT"]);
++  const m = proposeFromText("Prepare a management summary", ctx([a]));
++  const b = op(m, "build_report")[0];
++  assert.equal(b.brief.audience, "executive"); assert.equal(b.brief.tone, "concise"); assert.equal(b.story, false);
++  const s = proposeFromText("make an animated video report of the key findings", ctx([a]));
++  assert.equal(op(s, "build_report")[0].story, true);
++  assert.match(s.notes.join(" "), /MP4\) cannot be generated/);
++  const empty = proposeFromText("build a management summary", ctx());
++  assert.match(empty.items[0].blocked.join(" "), /no saved analyses/);
++});
++
++test("several clauses in one request each become their own items, and what is not understood is said", () => {
++  const p = proposeFromText("Add a cross-tab of satisfaction by region, remove redundant analyses and then do my taxes", ctx([saved("a", "descriptive", ["SAT"]), saved("b", "descriptive", ["SAT"])]));
++  assert.equal(op(p, "add_crosstab").length, 1);
++  assert.equal(op(p, "remove_analysis").length, 1);
++  assert.equal(p.unread.length, 1);
++  assert.match(p.unread[0], /do my taxes/);
++});
++
++test("the same operation asked twice is one item", () => {
++  const p = proposeFromText("satisfaction by gender. cross-tab satisfaction by gender", ctx());
++  assert.equal(op(p, "add_crosstab").length, 1);
++});
++
++test("an empty request says what to do", () => {
++  const p = proposeFromText("   ", ctx());
++  assert.equal(p.items.length, 0); assert.equal(p.unread.length, 1);
++});
++
++test("model operations: only the closed vocabulary, only this survey's variables, validated like any other", () => {
++  const { items, rejected } = itemsFromModel({ ops: [
++    { op: "add_crosstab", rows: ["SAT"], columns: ["GENDER"], why: "Compare" },
++    { op: "add_crosstab", rows: ["SAT"], columns: ["MADE_UP"], why: "bogus" },
++    { op: "delete_everything", why: "no" },
++    { op: "add_test", outcome: "SAT", groupBy: "SAT", why: "same variable" },
++    { op: "build_report", objective: "Summarise", audience: "executive", story: true, why: "asked" },
++  ] }, ctx());
++  assert.equal(items.length, 3);
++  assert.equal(rejected.length, 2);
++  assert.match(rejected.join(" "), /MADE_UP is not a variable/); assert.match(rejected.join(" "), /delete_everything/);
++  assert.ok(items.find((i) => i.op.op === "add_test")!.blocked.length, "a test of a variable against itself is blocked by the same validator");
++  assert.equal(itemsFromModel("garbage", ctx()).items.length, 0);
++  assert.ok(itemsFromModel({ ops: Array.from({ length: 30 }, () => ({ op: "add_descriptive", variables: ["SAT"] })) }, ctx()).items.length <= 8);
++});
++
++test("each chart change lists the other charts that suit the result, all of them drawable; a poor choice the person asks for is allowed but warned about", () => {
++  const multi = saved("Brands considered", "descriptive", ["CONSIDER"]);
++  const rep: ReportDefinition = { title: "R", blocks: [{ id: "pie", type: "chart", title: "Brands considered", analysisId: multi.id, chart: { type: "pie", options: {} } }] } as never;
++  const c = ctx([multi], [{ id: "r1", name: "R", definition: rep }]);
++  const best = proposeFromText("choose the best chart for each question", c).items[0];
++  assert.ok(best.options && best.options.length >= 1 && best.options.length <= 4);
++  assert.ok(best.options!.every((o) => o.chart !== (best.op as Extract<AskOp, { op: "set_chart" }>).chart && o.reason));
++  const asked = proposeFromText("use a donut chart for brands considered", c).items;
++  assert.equal(asked.length, 1);
++  assert.equal((asked[0].op as Extract<AskOp, { op: "set_chart" }>).chart, "donut");
++  assert.equal(asked[0].blocked.length, 0, "it is the person's call");
++  assert.ok(asked[0].warnings.length >= 1 && asked[0].warnings.length === new Set(asked[0].warnings).size, "said once, plainly");
++});
++
++test("parseAskOps and parseUndo rebuild what the browser sends: unknown operations, bad ids and unknown charts are dropped", () => {
++  const id = "11111111-1111-4111-8111-111111111111";
++  const { ops, rejected } = parseAskOps([
++    { op: "add_crosstab", rows: ["SAT"], columns: ["GENDER"], name: "x", evil: "<script>" },
++    { op: "drop_table" }, { op: "remove_analysis", analysisId: "not-a-uuid" },
++    { op: "set_chart", reportId: id, blockId: "b", analysisId: id, chart: "hologram" },
++    { op: "set_chart", reportId: id, blockId: "b", analysisId: id, chart: "bar_horizontal" },
++  ]);
++  assert.deepEqual(ops.map((o) => o.op), ["add_crosstab", "set_chart"]);
++  assert.equal(rejected.length, 3);
++  assert.equal("evil" in ops[0], false);
++  assert.deepEqual(parseUndo([{ kind: "created_analysis", id }, { kind: "created_analysis", id: "x" }, { kind: "chart_changed", reportId: id, blockId: "b", before: { type: "pie" }, after: { type: "nope" } }, { kind: "removed_analysis", id, chartIds: [id, "bad"] }]),
++    [{ kind: "created_analysis", id }, { kind: "removed_analysis", id, chartIds: [id] }]);
++});
++
++test("removing an analysis is blocked when the one it was a repeat of has gone — it is not a repeat any more", () => {
++  const a = saved("A", "descriptive", ["SAT"]); const b = saved("B", "descriptive", ["SAT"]);
++  const c = ctx([a, b]);
++  assert.deepEqual(validateAskOp({ op: "remove_analysis", name: "B", analysisId: b.id, keptId: a.id }, c).blocked, []);
++  assert.match(validateAskOp({ op: "remove_analysis", name: "B", analysisId: b.id, keptId: "00000000-0000-4000-8000-00000000dead" }, c).blocked.join(" "), /no longer exists, so it is not a repeat/);
++  assert.match(validateAskOp({ op: "remove_analysis", name: "x", analysisId: "00000000-0000-4000-8000-00000000beef" }, c).blocked.join(" "), /no longer exists/);
++});
+diff --git a/packages/analytics/src/analyticsIntent.ts b/packages/analytics/src/analyticsIntent.ts
+new file mode 100644
+index 0000000..abef619
+--- /dev/null
++++ b/packages/analytics/src/analyticsIntent.ts
+@@ -0,0 +1,458 @@
++import type { AnalysisDefinition, AnalysisResult, ChartSpec, ChartType, DatasetSpec, ReportDefinition } from "./types.js";
++import type { VariableMeta } from "./dataset.js";
++import { adviseChart, checkChartChoice } from "./questionChart.js";
++import { analysisSignature, crosstabCarriesChiSquare, findExistingDuplicate, validateAnalysis, type KnownNames } from "./planCheck.js";
++import { reportAnalysisIds } from "./blockRefs.js";
++import { CHART_CATALOG } from "./recommend.js";
++import { tokens, wordsMatch, type ReportBrief } from "./reportBuilder.js";
++
++/**
++ * INTELLIGENT MODE FOR ANALYTICS (Data Analytics audit, Phase 5).
++ *
++ * A researcher asks in words — "cross-tabs of satisfaction by age and gender",
++ * "remove the redundant analyses", "choose the best chart for each question",
++ * "a management summary", "an animated report" — and gets back a PROPOSAL:
++ * a list of concrete, individually reviewable operations from a CLOSED
++ * vocabulary. Nothing here runs anything. Every operation is validated against
++ * the survey's real variables, the saved analyses and the computed results
++ * (the same checks the Analysis tab uses), carries the reason it was proposed,
++ * and is re-validated by the server when the person applies it — so a stale or
++ * tampered proposal cannot do more than the vocabulary allows.
++ *
++ * Words are read by rules first (the same engine-first order the survey
++ * Intelligent Mode uses); a model is only asked about what the rules could not
++ * read, answers in the same closed vocabulary, and its operations go through
++ * the same validation. Nothing the model says is a statistic: there are no
++ * numbers in an operation.
++ */
++export type AskOp =
++  | { op: "add_crosstab"; name: string; rows: string[]; columns: string[] }
++  | { op: "add_test"; name: string; outcome: string; groupBy: string }
++  | { op: "add_descriptive"; name: string; variables: string[] }
++  | { op: "remove_analysis"; name: string; analysisId: string; keptId?: string }
++  | { op: "set_chart"; name: string; reportId: string; blockId: string; analysisId: string; chart: ChartType; from?: ChartType }
++  | { op: "build_report"; name: string; brief: ReportBrief; story: boolean };
++
++export interface AskItem {
++  id: string;
++  op: AskOp;
++  /** one line: what will happen */
++  title: string;
++  /** why it was proposed */
++  why: string;
++  /** reasons it cannot be applied as it stands — a blocked item is shown, never run */
++  blocked: string[];
++  /** things to know before applying it */
++  warnings: string[];
++  /** what applying it creates / changes, in words */
++  effect: "creates an analysis" | "removes an analysis" | "changes a chart" | "creates a report";
++  /** for a chart change: the other charts that suit this result, best first — the person can swap the proposed one for any of them */
++  options?: { chart: ChartType; reason: string }[];
++}
++
++export interface AskProposal { request: string; items: AskItem[]; /** the parts of the request that were understood */ read: string[]; /** the parts that were not, with what to say instead */ unread: string[]; notes: string[] }
++
++export interface AskContext {
++  variables: readonly VariableMeta[];
++  known: KnownNames;
++  analyses: readonly { id: string; name: string; definition: AnalysisDefinition }[];
++  reports: readonly { id: string; name: string; definition: ReportDefinition }[];
++  /** computed results by analysis id — needed to choose charts and to judge a chart */
++  results?: Readonly<Record<string, AnalysisResult | undefined>>;
++  dataset: DatasetSpec;
++}
++
++let seq = 0;
++const iid = () => `ask_${(++seq).toString(36)}${Date.now().toString(36).slice(-4)}`;
++const unique = <T,>(xs: readonly T[]) => [...new Set(xs)];
++const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
++
++/* ------------------------------------------------------------ variables, by the words a researcher uses */
++
++/** the label without its question-number prefix: "Q7 — Brands considered" → "Brands considered" */
++const core = (label: string) => label.replace(/^Q\d+[a-z]?\s*[—–-]\s*/i, "");
++const GENERIC = new Set(["overall", "customer", "customers", "respondent", "respondents", "people", "score", "scores", "rating", "ratings", "average", "mean", "level", "levels", "answer", "answers", "question", "questions", "variable", "variables", "data", "total", "survey"]);
++
++export interface Mention { variable: VariableMeta; score: number }
++export interface Ambiguity { phrase: string; options: VariableMeta[] }
++
++/**
++ * Every variable a piece of text names. A variable is named by its code
++ * ("SAT") or by the words of its label; the longest, best-matching one wins the
++ * words it matches, and two variables that match the same words equally are an
++ * ambiguity the person must resolve — never a coin toss.
++ */
++export function findVariables(text: string, variables: readonly VariableMeta[]): { found: VariableMeta[]; ambiguous: Ambiguity[] } {
++  const usable = variables.filter((v) => !v.hidden && !v.name.startsWith("_") && !v.optionCode);
++  const lower = text.toLowerCase();
++  const words = tokens(text);
++  const cand: { v: VariableMeta; score: number; used: string[] }[] = [];
++  for (const v of usable) {
++    const esc = v.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++    if (new RegExp(`(^|[^a-z0-9_])${esc}($|[^a-z0-9_])`).test(lower)) { cand.push({ v, score: 2, used: [`#${v.name}`] }); continue; }
++    const vt = tokens(core(v.label)).filter((t) => !GENERIC.has(t) || tokens(core(v.label)).length === 1);
++    if (!vt.length) continue;
++    const used = words.filter((w) => vt.some((t) => wordsMatch(t, w)) && !GENERIC.has(w));
++    const matched = vt.filter((t) => words.some((w) => wordsMatch(t, w)));
++    if (!matched.length) continue;
++    const score = matched.length / vt.length;
++    if (score >= 0.5) cand.push({ v, score, used });
++  }
++  cand.sort((a, b) => b.score - a.score || tokens(core(a.v.label)).length - tokens(core(b.v.label)).length);
++  const found: VariableMeta[] = []; const ambiguous: Ambiguity[] = []; const taken = new Set<string>();
++  for (let i = 0; i < cand.length; i++) {
++    const c = cand[i];
++    if (found.includes(c.v) || ambiguous.some((a) => a.options.includes(c.v))) continue;
++    if (c.used.length && c.used.every((u) => taken.has(u))) continue;
++    const rivals = cand.filter((o, j) => j !== i && o.score === c.score && o.used.length && o.used.join("|") === c.used.join("|") && !found.includes(o.v));
++    if (rivals.length && c.score < 2) { ambiguous.push({ phrase: c.used.join(" "), options: [c.v, ...rivals.map((r) => r.v)] }); c.used.forEach((u) => taken.add(u)); continue; }
++    found.push(c.v); c.used.forEach((u) => taken.add(u));
++  }
++  return { found, ambiguous };
++}
++
++const labelOf = (v: VariableMeta) => core(v.label);
++
++/* ------------------------------------------------------------ the rules */
++
++const CHART_WORDS: [RegExp, ChartType][] = [
++  [/\bhorizontal\s+bars?\b/, "bar_horizontal"], [/\b(?:100\s*%?\s*stacked|stacked\s*100)/, "bar_stacked_100"], [/\bstacked\b/, "bar_stacked"], [/\b(?:grouped|clustered)\b/, "bar_grouped"],
++  [/\bdiverging|\blikert\b/, "diverging_likert"], [/\b(?:donut|doughnut)\b/, "donut"], [/\bpie\b/, "pie"], [/\bline\b/, "line"], [/\bhistogram\b/, "histogram"], [/\bbox\s?plot\b/, "box_plot"],
++  [/\bheat\s?map\b/, "heatmap"], [/\b(?:column|vertical\s+bars?|bars?)\b/, "bar_vertical"], [/\btable\b/, "table"],
++];
++const NOISE = /\b(please|can you|could you|i want to|i would like to|i need to|i'd like to|let's|we need to|we want to|go ahead and)\b/g;
++const VERBS = "create|add|remove|delete|drop|choose|use|show|build|make|generate|run|test|pick|prepare|write|draft|do";
++const CLAUSE_SPLIT = new RegExp(`\\s*(?:[.;\\n]|,?\\s+and\\s+then\\s+|,?\\s+then\\s+|,?\\s+and\\s+also\\s+|,?\\s+and\\s+(?=(?:${VERBS})\\b)|,\\s+(?=(?:${VERBS})\\b))\\s*`, "i");
++
++/** "satisfaction, nps and age" → separate banner variables */
++const joinWords = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}` : xs[0] ?? "");
++
++function validate(op: AskOp, ctx: AskContext): { blocked: string[]; warnings: string[] } {
++  const blocked: string[] = []; const warnings: string[] = [];
++  const byName = new Map(ctx.variables.map((v) => [v.name, v]));
++  const def = definitionFor(op, ctx.dataset, "");
++  if (def) {
++    for (const i of validateAnalysis(def, ctx.variables, ctx.known)) (i.severity === "error" ? blocked : warnings).push(i.message);
++    const dup = findExistingDuplicate(def, ctx.analyses);
++    if (dup) blocked.push(`You already have “${dup.name}”, which computes the same thing.`);
++    return { blocked, warnings };
++  }
++  if (op.op === "remove_analysis") {
++    const a = ctx.analyses.find((x) => x.id === op.analysisId);
++    if (!a) { blocked.push("That analysis no longer exists."); return { blocked, warnings }; }
++    const users = ctx.reports.filter((r) => reportAnalysisIds(r.definition as never).includes(a.id));
++    if (users.length) blocked.push(`It is used by ${users.slice(0, 3).map((r) => `“${r.name}”`).join(", ")}${users.length > 3 ? ` and ${users.length - 3} more` : ""} — those reports would lose a chart. Remove it from them first.`);
++    if (op.keptId && !ctx.analyses.some((x) => x.id === op.keptId)) blocked.push("The analysis it duplicates no longer exists, so it is not a repeat any more.");
++    return { blocked, warnings };
++  }
++  if (op.op === "set_chart") {
++    const r = ctx.reports.find((x) => x.id === op.reportId);
++    const block = r?.definition.blocks?.find((b) => b.id === op.blockId);
++    if (!r || !block || block.type !== "chart") { blocked.push("That chart is no longer in the report."); return { blocked, warnings }; }
++    const res = ctx.results?.[op.analysisId];
++    if (!res || res.error) { blocked.push("The analysis behind this chart has no computed result to check the chart against."); return { blocked, warnings }; }
++    const chk = checkChartChoice(res, op.chart);
++    if (!chk.valid) blocked.push(`${op.chart.replace(/_/g, " ")} cannot draw this result (it needs a different data shape).`);
++    const def2 = ctx.analyses.find((a) => a.id === op.analysisId)?.definition;
++    if (def2) { const adv = adviseChart(def2, res, ctx.variables); const av = adv.avoided.find((x) => x.type === op.chart); if (av) warnings.push(`${op.chart.replace(/_/g, " ")} is usually a poor fit here: ${av.why}.`); }
++    return { blocked, warnings };
++  }
++  if (op.op === "build_report") {
++    if (!ctx.analyses.length) blocked.push("There are no saved analyses to build a report from. Create the analyses first.");
++    if (!op.brief.objective && !op.brief.keyQuestions.length) blocked.push("A report needs an objective or a key question.");
++    void byName;
++    return { blocked, warnings };
++  }
++  return { blocked, warnings };
++}
++
++const chartOptions = (def: AnalysisDefinition, res: AnalysisResult, ctx: AskContext, not: ChartType): { chart: ChartType; reason: string }[] =>
++  adviseChart(def, res, ctx.variables).alternatives.filter((a) => a.type !== not && checkChartChoice(res, a.type).valid).slice(0, 4).map((a) => ({ chart: a.type, reason: a.reason }));
++
++/** a requested chart that suits the result badly is allowed — it is the person's call — but said plainly */
++const chartWarning = (def: AnalysisDefinition, res: AnalysisResult, ctx: AskContext, chart: ChartType): string[] => {
++  const adv = adviseChart(def, res, ctx.variables);
++  const av = adv.avoided.find((x) => x.type === chart);
++  if (av) return [`${chart.replace(/_/g, " ")} is usually a poor fit here: ${av.why}.`];
++  if (adv.scale === "multi" && /pie|donut|stacked_100/.test(chart)) return [`${chart.replace(/_/g, " ")} implies the answers add up to 100%, but people could choose several.`];
++  return [];
++};
++
++function item(op: AskOp, ctx: AskContext, title: string, why: string, effect: AskItem["effect"], extraWarnings: string[] = []): AskItem {
++  const v = validate(op, ctx);
++  return { id: iid(), op, title, why, effect, blocked: v.blocked, warnings: [...new Set([...extraWarnings, ...v.warnings])] };
++}
++
++/** the one validation the server runs again when an item is applied */
++export function validateAskOp(op: AskOp, ctx: AskContext): { blocked: string[]; warnings: string[] } { return validate(op, ctx); }
++
++/* ------- the redundant analyses: exact repeats, and tests a cross-tab already carries */
++
++export function redundantAnalyses(analyses: ReadonlyArray<{ id: string; name: string; definition: AnalysisDefinition }>): { id: string; name: string; keptId: string; keptName: string; reason: string }[] {
++  const out: { id: string; name: string; keptId: string; keptName: string; reason: string }[] = [];
++  const isPlannedDef = (d: AnalysisDefinition) => typeof d.options?.planned === "string" && !!d.options.planned;
++  /* keep the researcher's own over a generated one; otherwise the earlier */
++  const order = [...analyses].sort((a, b) => Number(isPlannedDef(a.definition)) - Number(isPlannedDef(b.definition)));
++  const kept = new Map<string, { id: string; name: string }>();
++  const gone = new Set<string>();
++  for (const a of order) {
++    const sig = analysisSignature(a.definition);
++    const same = kept.get(sig);
++    if (same) { out.push({ id: a.id, name: a.name, keptId: same.id, keptName: same.name, reason: "It computes exactly what the other one does." }); gone.add(a.id); continue; }
++    kept.set(sig, a);
++  }
++  for (const t of analyses) {
++    if (gone.has(t.id) || t.definition.kind !== "test") continue;
++    const x = analyses.find((c) => !gone.has(c.id) && c.id !== t.id && crosstabCarriesChiSquare(c.definition, t.definition));
++    if (x) { out.push({ id: t.id, name: t.name, keptId: x.id, keptName: x.name, reason: "The cross-tab for the same two variables already reports this chi-square test." }); gone.add(t.id); }
++  }
++  return out;
++}
++
++export function proposeFromText(request: string, ctx: AskContext): AskProposal {
++  const text = request.trim();
++  const items: AskItem[] = []; const read: string[] = []; const unread: string[] = []; const notes: string[] = [];
++  const clauses = text.toLowerCase().replace(NOISE, " ").split(CLAUSE_SPLIT).map((c) => c.trim()).filter(Boolean);
++  const originals = text.replace(NOISE, " ").split(CLAUSE_SPLIT).map((c) => c.trim()).filter(Boolean);
++  const stems = (s: string) => s.replace(/\bcross[\s-]?tabs?(?:ulations?)?\b/g, "crosstab");
++
++  clauses.forEach((raw, ci) => {
++    const c = stems(raw);
++    const orig = originals[ci] ?? raw;
++    let handled = false;
++
++    /* ---- remove redundant / duplicate analyses */
++    if (/\b(remove|delete|drop|clean\s*up|get rid of|prune)\b/.test(c) && /\b(redundant|duplicate[ds]?|repeated|repeat(?:s|ed)?|same|overlapping|unnecessary)\b/.test(c)) {
++      const dups = redundantAnalyses(ctx.analyses);
++      if (!dups.length) notes.push("No redundant analyses were found: no two saved analyses compute the same thing, and no test repeats a cross-tab.");
++      for (const d of dups) items.push(item({ op: "remove_analysis", name: d.name, analysisId: d.id, keptId: d.keptId }, ctx, `Remove “${d.name}”`, `${d.reason} Kept: “${d.keptName}”.`, "removes an analysis"));
++      read.push(orig); handled = true;
++    }
++
++    /* ---- best chart for each question */
++    else if (/\b(chart|graph|plot|visuali[sz]ation)s?\b/.test(c) && /\b(best|right|appropriate|suitable|proper|correct|sensible)\b/.test(c) && /\b(each|every|all|per)\b/.test(c)) {
++      let any = 0;
++      for (const r of ctx.reports) for (const b of r.definition.blocks ?? []) {
++        if (b.type !== "chart") continue;
++        const a = ctx.analyses.find((x) => x.id === b.analysisId); const res = ctx.results?.[b.analysisId];
++        if (!a || !res || res.error) continue;
++        const adv = adviseChart(a.definition, res, ctx.variables);
++        const cur = b.chart?.type;
++        const misfit = cur && adv.avoided.find((x) => x.type === cur);
++        const ok = cur && (cur === adv.type || adv.alternatives.slice(0, 3).some((x) => x.type === cur)) && !misfit;
++        if (ok) continue;
++        any++;
++        const it0: AskItem = item({ op: "set_chart", name: b.title ?? a.name, reportId: r.id, blockId: b.id, analysisId: a.id, chart: adv.type, ...(cur ? { from: cur } : {}) }, ctx,
++          `In “${r.name}”, show “${b.title ?? a.name}” as ${adv.type.replace(/_/g, " ")}${cur ? ` (now ${cur.replace(/_/g, " ")})` : ""}`, `${misfit ? `${cur!.replace(/_/g, " ")} misrepresents it: ${misfit.why}. ` : cur && adv.scale === "multi" && /pie|donut|stacked_100/.test(cur) ? `${cur.replace(/_/g, " ")} implies the answers add up to 100%, but people could choose several. ` : cur ? `${cur.replace(/_/g, " ")} is not among the better fits for this question. ` : ""}${adv.reason}.`, "changes a chart");
++        items.push({ ...it0, options: chartOptions(a.definition, res, ctx, adv.type) });
++      }
++      if (!any) notes.push(ctx.reports.some((r) => (r.definition.blocks ?? []).some((b) => b.type === "chart")) ? "Every chart in your reports already suits its question." : "No report has a chart yet, so there is nothing to change.");
++      read.push(orig); handled = true;
++    }
++
++    /* ---- a specific chart for a question: "use a horizontal bar for satisfaction" */
++    else if (/\b(use|make|change|switch|show|display|draw|plot)\b/.test(c) && CHART_WORDS.some(([re]) => re.test(c)) && /\b(for|of|to show|as)\b/.test(c)) {
++      const chart = CHART_WORDS.find(([re]) => re.test(c))![1];
++      const { found, ambiguous } = findVariables(c.replace(/\b(horizontal|vertical|stacked|grouped|clustered|donut|doughnut|pie|line|bars?|columns?|chart|graph|table|heat\s?map|histogram|box\s?plot)\b/g, " "), ctx.variables);
++      const names = new Set(found.map((v) => v.name));
++      const matches = ctx.analyses.filter((a) => [...(a.definition.variables ?? []), ...(a.definition.rows ?? []), ...(a.definition.columns ?? [])].some((n) => names.has(n)));
++      let any = 0;
++      for (const r of ctx.reports) for (const b of r.definition.blocks ?? []) {
++        if (b.type !== "chart" || !matches.some((m) => m.id === b.analysisId) || b.chart?.type === chart) continue;
++        any++;
++        const an = ctx.analyses.find((x) => x.id === b.analysisId); const rs = ctx.results?.[b.analysisId];
++        items.push(item({ op: "set_chart", name: b.title ?? "chart", reportId: r.id, blockId: b.id, analysisId: b.analysisId, chart, ...(b.chart?.type ? { from: b.chart.type } : {}) }, ctx, `In “${r.name}”, show “${b.title ?? "chart"}” as ${chart.replace(/_/g, " ")}`, `You asked for ${chart.replace(/_/g, " ")} for ${joinWords(found.map(labelOf)) || "it"}.`, "changes a chart", an && rs && !rs.error ? chartWarning(an.definition, rs, ctx, chart) : []));
++      }
++      for (const a of ambiguous) unread.push(`“${a.phrase}” could mean ${joinWords(a.options.map((o) => `“${labelOf(o)}” (${o.name})`))} — name one.`);
++      if (!found.length && !ambiguous.length) unread.push(`${orig} — I could not tell which question the chart is for. Name a question or variable.`);
++      else if (!any && found.length) notes.push(`No chart in your reports shows ${joinWords(found.map(labelOf))} as something other than ${chart.replace(/_/g, " ")} — nothing to change.`);
++      read.push(orig); handled = true;
++    }
++
++    /* ---- reports */
++    else if (/\b(management|executive|leadership|board)\s+(summary|report|brief|overview)\b/.test(c) || /\b(animated|animation|video|story|storytelling|story-driven)\b/.test(c) || (/\b(create|build|make|generate|write|draft|prepare)\b/.test(c) && /\b(report|deck|presentation|summary)\b/.test(c))) {
++      const story = /\b(animated|animation|video|story|storytelling|story-driven)\b/.test(c);
++      const exec = /\b(management|executive|leadership|board)\b/.test(c);
++      if (/\bvideo\b/.test(c)) notes.push("Video files (MP4) cannot be generated here. The animated report is a self-contained HTML story that plays in any browser — it can be screen-recorded if a video is required.");
++      const brief: ReportBrief = { objective: orig.replace(/^(create|build|make|generate|write|draft|prepare)\s+(me\s+)?(an?\s+|the\s+)?/i, "").trim() || (exec ? "Management summary of the survey findings" : "Survey findings"), audience: exec ? "executive" : "client", tone: exec ? "concise" : "plain", keyQuestions: [] };
++      const title = exec ? "Management summary" : story ? "Animated report" : "Survey report";
++      items.push(item({ op: "build_report", name: title, brief: { ...brief, title }, story }, ctx, `Build “${title}”${story ? " with an animated story" : ""}`, `${exec ? "A short, executive-audience report" : "A report"} drafted only from your saved analyses and their results; you review it before it is created.`, "creates a report"));
++      read.push(orig); handled = true;
++    }
++
++    /* ---- a significance test: "test whether satisfaction differs by gender" */
++    else if (/\b(significan\w*|test|differ\w*|different|difference|compare|comparison|associat\w*)\b/.test(c) && /\b(by|across|between|among|per|and)\b/.test(c) && !/\bcrosstab\b/.test(c)) {
++      const m = /^(.*?)\b(?:by|across|between|among|per)\b(.*)$/.exec(c) ?? /^(.*?)\band\b(.*)$/.exec(c);
++      const L = findVariables(m?.[1] ?? c, ctx.variables), R = findVariables(m?.[2] ?? "", ctx.variables);
++      for (const a of [...L.ambiguous, ...R.ambiguous]) unread.push(`“${a.phrase}” could mean ${joinWords(a.options.map((o) => `“${labelOf(o)}” (${o.name})`))} — name one.`);
++      if (!L.found.length || !R.found.length) { if (!L.ambiguous.length && !R.ambiguous.length) unread.push(`${orig} — a test compares one question across another; name both (for example “does satisfaction differ by gender”).`); }
++      else for (const out of L.found) for (const g of R.found) {
++        if (out.name === g.name) continue;
++        items.push(item({ op: "add_test", name: `${labelOf(out)} across ${labelOf(g)}`, outcome: out.name, groupBy: g.name }, ctx, `Test ${labelOf(out)} across ${labelOf(g)}`, `You asked whether ${labelOf(out)} differs by ${labelOf(g)}; the test is chosen from the two questions' types when it runs.`, "creates an analysis"));
++      }
++      read.push(orig); handled = true;
++    }
++
++    /* ---- a cross-tab: "satisfaction by age and gender" */
++    else if (/\bcrosstab\b/.test(c) || /\bby\b/.test(c)) {
++      const m = /^(.*?)\b(?:by|against|across|vs\.?|versus)\b(.*)$/.exec(c);
++      if (!m) { unread.push(`${orig} — a cross-tab needs two sides, for example “satisfaction by age and gender”.`); read.push(orig); handled = true; }
++      else {
++        const L = findVariables(m[1], ctx.variables), R = findVariables(m[2], ctx.variables);
++        for (const a of [...L.ambiguous, ...R.ambiguous]) unread.push(`“${a.phrase}” could mean ${joinWords(a.options.map((o) => `“${labelOf(o)}” (${o.name})`))} — name one.`);
++        if (!L.found.length || !R.found.length) { if (!L.ambiguous.length && !R.ambiguous.length) unread.push(`${orig} — I could not find a question on ${!L.found.length ? "the left" : "the right"} of “by”. Name the survey question or its code.`); }
++        else {
++          for (const col of R.found) {
++            const rows = L.found.filter((r) => r.name !== col.name);
++            if (!rows.length) continue;
++            items.push(item({ op: "add_crosstab", name: `${rows.map(labelOf).join(", ")} by ${labelOf(col)}`, rows: rows.map((r) => r.name), columns: [col.name] }, ctx, `Cross-tab ${rows.map(labelOf).join(", ")} by ${labelOf(col)}`, `Rows: ${joinWords(rows.map(labelOf))}; columns: ${labelOf(col)} — with column percentages and significance letters.`, "creates an analysis"));
++          }
++          if (R.found.length > 1) notes.push(`“${m[2].trim()}” names ${R.found.length} banner variables, so one cross-tab was proposed for each (a single table with them side by side gets very wide).`);
++        }
++        read.push(orig); handled = true;
++      }
++    }
++
++    /* ---- a frequency / distribution */
++    else if (/\b(frequenc\w*|distribution|descriptives?|breakdown of|how many)\b/.test(c)) {
++      const { found, ambiguous } = findVariables(c, ctx.variables);
++      for (const a of ambiguous) unread.push(`“${a.phrase}” could mean ${joinWords(a.options.map((o) => `“${labelOf(o)}” (${o.name})`))} — name one.`);
++      for (const v of found) items.push(item({ op: "add_descriptive", name: labelOf(v), variables: [v.name] }, ctx, `Add the distribution of ${labelOf(v)}`, "A frequency table and chart of the answers.", "creates an analysis"));
++      if (!found.length && !ambiguous.length) unread.push(`${orig} — name the question whose answers you want to see.`);
++      read.push(orig); handled = true;
++    }
++
++    if (!handled) unread.push(`${orig} — I do not know how to do that here. I can add cross-tabs, significance tests and distributions, remove redundant analyses, choose charts, and build a report, a management summary or an animated report.`);
++  });
++
++  if (!clauses.length) unread.push("Say what you want, for example: “cross-tabs of satisfaction by age and gender”.");
++  /* the same operation asked for twice in one request is one item */
++  const seen = new Set<string>(); const dedup: AskItem[] = [];
++  for (const it of items) { const key = JSON.stringify({ ...it.op, name: undefined }); if (seen.has(key)) continue; seen.add(key); dedup.push(it); }
++  return { request: text, items: dedup, read, unread: unique(unread), notes: unique(notes) };
++}
++
++/* ------------------------------------------------------------ the model's part: the same vocabulary, nothing else */
++
++export const ASK_INSTRUCTIONS = `You turn a researcher's request about survey ANALYSIS into operations. Answer as JSON: {"ops": [ ... ]} using ONLY these operations, each with a short "why":
++{"op":"add_crosstab","rows":["<variable code>"],"columns":["<variable code>"],"why":"..."}
++{"op":"add_test","outcome":"<variable code>","groupBy":"<variable code>","why":"..."}
++{"op":"add_descriptive","variables":["<variable code>"],"why":"..."}
++{"op":"build_report","objective":"<one sentence>","audience":"executive|client|researcher","story":false,"why":"..."}
++Rules: variable codes must come from the VARIABLES list exactly; never invent a variable, a number or a result; if the request cannot be expressed with these operations answer {"ops": []}. At most 8 operations.`;
++
++export function askBrief(request: string, variables: readonly VariableMeta[]): string {
++  const vs = variables.filter((v) => !v.hidden && !v.name.startsWith("_") && !v.optionCode).slice(0, 120).map((v) => `${v.name}: ${labelOf(v)}${v.categories?.length ? ` (${v.categories.length} answers)` : ""}`);
++  return `REQUEST: ${request}\n\nVARIABLES:\n${vs.join("\n")}`;
++}
++
++/** The model's operations, coerced into the closed vocabulary and validated like any other; what is not in the vocabulary is dropped with the reason. */
++export function itemsFromModel(raw: unknown, ctx: AskContext): { items: AskItem[]; rejected: string[] } {
++  const ops = Array.isArray((raw as { ops?: unknown })?.ops) ? ((raw as { ops: unknown[] }).ops) : [];
++  const items: AskItem[] = []; const rejected: string[] = [];
++  const names = new Set(ctx.variables.map((v) => v.name));
++  const byName = new Map(ctx.variables.map((v) => [v.name, v]));
++  const vars = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
++  const L = (n: string) => labelOf(byName.get(n)!);
++  for (const o of ops.slice(0, 8) as Record<string, unknown>[]) {
++    const why = typeof o?.why === "string" ? o.why.slice(0, 300) : "Suggested by the model.";
++    const bad = (x: string[]) => x.filter((n) => !names.has(n));
++    if (o?.op === "add_crosstab") {
++      const rows = vars(o.rows), columns = vars(o.columns); const b = bad([...rows, ...columns]);
++      if (b.length || !rows.length || !columns.length) { rejected.push(`add_crosstab: ${b.length ? `${b.join(", ")} is not a variable of this survey` : "needs rows and columns"}`); continue; }
++      items.push(item({ op: "add_crosstab", name: `${rows.map(L).join(", ")} by ${columns.map(L).join(", ")}`, rows, columns }, ctx, `Cross-tab ${rows.map(L).join(", ")} by ${columns.map(L).join(", ")}`, why, "creates an analysis"));
++    } else if (o?.op === "add_test") {
++      const outcome = String(o.outcome ?? ""), groupBy = String(o.groupBy ?? ""); const b = bad([outcome, groupBy]);
++      if (b.length) { rejected.push(`add_test: ${b.join(", ")} is not a variable of this survey`); continue; }
++      items.push(item({ op: "add_test", name: `${L(outcome)} across ${L(groupBy)}`, outcome, groupBy }, ctx, `Test ${L(outcome)} across ${L(groupBy)}`, why, "creates an analysis"));
++    } else if (o?.op === "add_descriptive") {
++      const vs = vars(o.variables); const b = bad(vs);
++      if (b.length || !vs.length) { rejected.push(`add_descriptive: ${b.length ? `${b.join(", ")} is not a variable of this survey` : "needs a variable"}`); continue; }
++      for (const v of vs) items.push(item({ op: "add_descriptive", name: L(v), variables: [v] }, ctx, `Add the distribution of ${L(v)}`, why, "creates an analysis"));
++    } else if (o?.op === "build_report") {
++      const audience = o.audience === "executive" || o.audience === "researcher" ? o.audience : "client";
++      const objective = typeof o.objective === "string" ? o.objective.trim().slice(0, 500) : "";
++      const story = o.story === true;
++      items.push(item({ op: "build_report", name: story ? "Animated report" : "Survey report", brief: { objective, audience, tone: audience === "executive" ? "concise" : "plain", keyQuestions: [], title: story ? "Animated report" : "Survey report" }, story }, ctx, `Build a ${story ? "report with an animated story" : "report"}`, why, "creates a report"));
++    } else rejected.push(`${typeof o?.op === "string" ? o.op : "an unknown operation"} is not something this can do`);
++  }
++  return { items, rejected };
++}
++
++
++/* ------------------------------------------------------------ what comes back from the browser */
++
++const idOk = (s: unknown): s is string => typeof s === "string" && /^[0-9a-f-]{36}$/i.test(s);
++const nm = (s: unknown, n: number) => (typeof s === "string" ? s.trim().slice(0, n) : "");
++const codes = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string" && v.length > 0 && v.length <= 120).slice(0, 12) : []);
++
++/**
++ * An operation from a request body, rebuilt field by field. The browser sends back
++ * what the server proposed; it is not trusted to be that — anything outside the
++ * vocabulary, with a malformed id, or with an unknown chart type is dropped with
++ * the reason, and the survivors are validated again against the live data.
++ */
++export function parseAskOps(raw: unknown): { ops: AskOp[]; rejected: string[] } {
++  const ops: AskOp[] = []; const rejected: string[] = [];
++  const list = Array.isArray(raw) ? raw.slice(0, 30) : [];
++  for (const o of list as Record<string, unknown>[]) {
++    const name = nm(o?.name, 160);
++    switch (o?.op) {
++      case "add_crosstab": { const rows = codes(o.rows), columns = codes(o.columns); if (!rows.length || !columns.length) { rejected.push("A cross-tab needs rows and columns."); break; } ops.push({ op: "add_crosstab", name: name || `${rows.join(", ")} by ${columns.join(", ")}`, rows, columns }); break; }
++      case "add_test": { const outcome = nm(o.outcome, 120), groupBy = nm(o.groupBy, 120); if (!outcome || !groupBy) { rejected.push("A test needs an outcome and a grouping."); break; } ops.push({ op: "add_test", name: name || `${outcome} across ${groupBy}`, outcome, groupBy }); break; }
++      case "add_descriptive": { const variables = codes(o.variables); if (!variables.length) { rejected.push("A distribution needs a variable."); break; } ops.push({ op: "add_descriptive", name: name || variables.join(", "), variables }); break; }
++      case "remove_analysis": { if (!idOk(o.analysisId)) { rejected.push("An analysis to remove must be named by its id."); break; } ops.push({ op: "remove_analysis", name, analysisId: o.analysisId, ...(idOk(o.keptId) ? { keptId: o.keptId } : {}) }); break; }
++      case "set_chart": {
++        const chart = nm(o.chart, 40) as ChartType;
++        if (!idOk(o.reportId) || !nm(o.blockId, 80) || !idOk(o.analysisId)) { rejected.push("A chart change must name its report, block and analysis."); break; }
++        if (chart !== "table" && !CHART_CATALOG.some((c) => c.type === chart)) { rejected.push(`“${chart}” is not a chart type.`); break; }
++        const from = nm(o.from, 40) as ChartType;
++        ops.push({ op: "set_chart", name, reportId: o.reportId, blockId: nm(o.blockId, 80), analysisId: o.analysisId, chart, ...(from ? { from } : {}) }); break;
++      }
++      case "build_report": {
++        const b = (o.brief && typeof o.brief === "object" ? o.brief : {}) as Record<string, unknown>;
++        const audience = b.audience === "executive" || b.audience === "researcher" ? b.audience : "client";
++        ops.push({ op: "build_report", name, story: o.story === true, brief: { objective: nm(b.objective, 1000), audience, tone: b.tone === "formal" || b.tone === "concise" ? b.tone : "plain", keyQuestions: [], ...(nm(b.title, 120) ? { title: nm(b.title, 120) } : {}) } }); break;
++      }
++      default: rejected.push(`${typeof o?.op === "string" ? o.op : "An item"} is not something this can do.`);
++    }
++  }
++  return { ops, rejected };
++}
++
++/** The analysis a creating operation stands for — one place, so the proposal's validation and the saved row cannot disagree. */
++export function definitionFor(op: AskOp, dataset: DatasetSpec, request: string): AnalysisDefinition | null {
++  const requested = request.slice(0, 300);
++  if (op.op === "add_crosstab") return { name: op.name, kind: "crosstab", dataset, variables: [...op.rows, ...op.columns], rows: op.rows, columns: op.columns, measure: "pct_col", options: { layout: "separate", significance: true, requested } } as AnalysisDefinition;
++  if (op.op === "add_test") return { name: op.name, kind: "test", dataset, variables: [op.outcome, op.groupBy], options: { test: "auto", requested } } as AnalysisDefinition;
++  if (op.op === "add_descriptive") return { name: op.name, kind: "descriptive", dataset, variables: op.variables, options: { requested } } as AnalysisDefinition;
++  return null;
++}
++
++/* ------------------------------------------------------------ undo records */
++
++export type UndoRecord =
++  | { kind: "created_analysis"; id: string }
++  | { kind: "removed_analysis"; id: string; chartIds: string[] }
++  | { kind: "chart_changed"; reportId: string; blockId: string; before: ChartSpec; after: ChartSpec };
++
++const spec = (x: unknown): ChartSpec | null => {
++  const o = x as Record<string, unknown> | null;
++  if (!o || typeof o !== "object" || typeof o.type !== "string") return null;
++  if (o.type !== "table" && !CHART_CATALOG.some((c) => c.type === o.type)) return null;
++  return { ...(o as object), type: o.type as ChartType, options: o.options && typeof o.options === "object" ? o.options : {} } as ChartSpec;
++};
++
++/** Undo records come back from the browser: rebuilt and checked, never trusted. */
++export function parseUndo(raw: unknown): UndoRecord[] {
++  const out: UndoRecord[] = [];
++  for (const r of (Array.isArray(raw) ? raw.slice(0, 40) : []) as Record<string, unknown>[]) {
++    if (r?.kind === "created_analysis" && idOk(r.id)) out.push({ kind: "created_analysis", id: r.id });
++    else if (r?.kind === "removed_analysis" && idOk(r.id)) out.push({ kind: "removed_analysis", id: r.id, chartIds: (Array.isArray(r.chartIds) ? r.chartIds : []).filter(idOk).slice(0, 50) });
++    else if (r?.kind === "chart_changed" && idOk(r.reportId) && nm(r.blockId, 80)) {
++      const before = spec(r.before), after = spec(r.after);
++      if (before && after) out.push({ kind: "chart_changed", reportId: r.reportId, blockId: nm(r.blockId, 80), before, after });
++    }
++  }
++  return out;
++}
+diff --git a/packages/analytics/src/index.ts b/packages/analytics/src/index.ts
+index ecc0539..c58c6ec 100644
+--- a/packages/analytics/src/index.ts
++++ b/packages/analytics/src/index.ts
+@@ -28,4 +28,5 @@ export * from "./blockRefs.js";
+ export * from "./questionChart.js";
+ export * from "./planCheck.js";
+ export * from "./reportBuilder.js";
++export * from "./analyticsIntent.js";
+ export * from "./storyHtml.js";
+diff --git a/packages/analytics/src/planCheck.test.ts b/packages/analytics/src/planCheck.test.ts
+index 76bbc90..1ff3535 100644
+--- a/packages/analytics/src/planCheck.test.ts
++++ b/packages/analytics/src/planCheck.test.ts
+@@ -92,3 +92,9 @@ test("reviewAgainstSaved: a planned analysis the researcher has since edited is
+   assert.deepEqual(r.toCreate, [], "the plan item c1 already has its analysis");
+   assert.equal(r.existingFor.get("c1"), "s1");
+ });
++
++test("a significance test of a variable against itself is an error, not a result", () => {
++  const issues = validateAnalysis(D({ kind: "test", variables: ["SAT", "SAT"] }), vars);
++  assert.ok(issues.some((i) => i.code === "same_variable" && i.severity === "error"));
++  assert.deepEqual(validateAnalysis(D({ kind: "test", variables: ["SAT", "GENDER"] }), vars), []);
++});
+diff --git a/packages/analytics/src/planCheck.ts b/packages/analytics/src/planCheck.ts
+index dabcc63..59bba5f 100644
+--- a/packages/analytics/src/planCheck.ts
++++ b/packages/analytics/src/planCheck.ts
+@@ -58,6 +58,7 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
+     if (bad.length && !dead.length) out.push({ code: "wrong_type", severity: "error", variables: bad, message: `A mean needs a numeric or scale variable; ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not.` });
+   }
+   if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) < 2) out.push({ code: "needs_groups", severity: "error", message: "A significance test compares an outcome across a grouping or a second variable — one variable is not enough." });
++  if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) >= 2 && new Set(def.variables).size < 2) out.push({ code: "same_variable", severity: "error", variables: [...new Set(def.variables)], message: `${def.variables![0]} is tested against itself.` });
+   return out;
+ }
+ 
+@@ -70,13 +71,13 @@ const canon = (o: unknown): string => JSON.stringify(o, (_k, v) => (v && typeof
+ export function analysisSignature(def: AnalysisDefinition): string {
+   const o = { ...(def.options ?? {}) } as Record<string, unknown>;
+   /* presentation and bookkeeping — they change how the table looks or where it came from, not a number in it */
+-  for (const k of ["planned", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
++  for (const k of ["planned", "requested", "hypotheses", "formatting", "title", "subtitle", "layout", "significance", "decimals", "sigLevel", "alpha"]) delete o[k];
+   if (def.kind === "crosstab") return `crosstab:${sorted(def.rows)}>${sorted(def.columns)}:${def.measure ?? "pct_col"}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
+   return `${def.kind}:${(def.variables ?? []).join("|")}:${canon(o)}:${canon(def.filter ?? null)}:${canon(def.dataset ?? null)}`;
+ }
+ 
+ /** the chi-square a crosstab already prints for its one row × one column pair — a separate test for the same pair repeats it */
+-const crosstabCarriesChiSquare = (x: AnalysisDefinition, t: AnalysisDefinition): boolean =>
++export const crosstabCarriesChiSquare = (x: AnalysisDefinition, t: AnalysisDefinition): boolean =>
+   x.kind === "crosstab" && t.kind === "test" && (t.options?.test === "chi_square" || t.options?.test === "auto")
+   && (x.rows?.length === 1 && x.columns?.length === 1) && (t.variables?.length === 2)
+   && ((x.rows![0] === t.variables[0] && x.columns![0] === t.variables[1]) || (x.rows![0] === t.variables[1] && x.columns![0] === t.variables[0]));
+diff --git a/packages/analytics/src/reportBuilder.ts b/packages/analytics/src/reportBuilder.ts
+index 39404a2..d89c2f7 100644
+--- a/packages/analytics/src/reportBuilder.ts
++++ b/packages/analytics/src/reportBuilder.ts
+@@ -86,7 +86,7 @@ export function testLine(r: AnalysisResult): string | undefined {
+ }
+ 
+ const STOP = new Set(["what", "which", "does", "have", "with", "that", "this", "from", "about", "their", "they", "them", "your", "how", "why", "who", "when", "are", "the", "and", "for", "our", "do", "is", "of", "to", "in", "on", "by", "a", "an", "we", "us", "more", "most", "between", "among", "across", "than", "like", "would", "should", "can", "will", "any", "all", "per", "each", "over", "into", "differ", "differs", "difference", "differences", "vary", "varies"]);
+-const tokens = (s: string): string[] => [...new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
++export const tokens = (s: string): string[] => [...new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))];
+ 
+ /** the words an analysis is about: its name, and the labels of the variables it reads */
+ function aboutWords(item: BuilderItem, byName: Map<string, VariableMeta>): { words: Set<string>; names: string[] } {
+@@ -96,12 +96,15 @@ function aboutWords(item: BuilderItem, byName: Map<string, VariableMeta>): { wor
+   return { words: new Set(tokens(text)), names };
+ }
+ 
++/** two words are the same word for matching: equal, or long enough to share their first five letters ("satisfied" / "satisfaction") */
++export const wordsMatch = (a: string, b: string): boolean => a === b || (a.length > 4 && b.length > 4 && a.slice(0, 5) === b.slice(0, 5));
++
+ /** does this key question speak to this analysis? Named variable, or enough shared words. */
+ function answers(question: string, about: ReturnType<typeof aboutWords>): boolean {
+   if (about.names.some((n) => mentionsVariable(question, n))) return true;
+   const q = tokens(question);
+   if (!q.length) return false;
+-  const shared = q.filter((w) => about.words.has(w) || [...about.words].some((a) => a.length > 4 && w.length > 4 && (a.startsWith(w.slice(0, 5)) || w.startsWith(a.slice(0, 5)))));
++  const shared = q.filter((w) => about.words.has(w) || [...about.words].some((a) => wordsMatch(a, w)));
+   return shared.length >= Math.max(1, Math.ceil(q.length / 2));
+ }
+ 
+diff --git a/scripts/analytics-ask-test.mjs b/scripts/analytics-ask-test.mjs
+new file mode 100644
+index 0000000..74c8f3c
+--- /dev/null
++++ b/scripts/analytics-ask-test.mjs
+@@ -0,0 +1,520 @@
++/**
++ * INTELLIGENT MODE FOR ANALYTICS — the "Ask" tab (Data Analytics audit, Phase 5),
++ * through the real UI against the in-process fake backend. The fake runs the REAL
++ * reading engine (proposeFromText / parseAskOps / parseUndo) and the REAL apply
++ * and undo code (lib/analyticsAskApply.ts) over an in-memory database, so what is
++ * checked here is what the route does — except for the HTTP/auth shell around it.
++ *
++ *  1. a request becomes a PROPOSAL; nothing is saved until it is applied, and
++ *     the screen says "Proposed — not applied"
++ *  2. apply → "Done", the analyses exist (with the request recorded), and
++ *     Undo takes exactly those back
++ *  3. what repeats a saved analysis is Blocked with the reason, never saved twice
++ *  4. "remove redundant analyses": repeats and tests a cross-tab carries; an
++ *     analysis a report uses stays
++ *  5. "best chart for each question": a pie on a multiple-choice question becomes
++ *     horizontal bars with the reason; the person can swap for another valid chart;
++ *     undo restores the original
++ *  6. what is not understood / ambiguous is said, and nothing is invented
++ *  7. management summary / animated report → the report builder's review,
++ *     pre-filled; nothing is created from the Ask tab itself
++ *  8. history survives a reload
++ *
++ * Needs `pnpm dev:studio` (3000).   node scripts/analytics-ask-test.mjs
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { navLabels } from "./lib/nav.mjs";
++import assert from "node:assert/strict";
++import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages, draftReport, regenerateScene, storyHtml, gateInterpretation, proposeFromText, parseAskOps, parseUndo, surveyKnownNames } from "../packages/analytics/dist/index.js";
++import { applyOps, undoRecords } from "../apps/studio/lib/analyticsAskApply.ts";
++import { memoryDb } from "./lib/memdb.mjs";
++import { buildPptx, buildXlsx, isEmbeddableImage } from "../packages/analytics/dist/export/index.js";
++import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";
++import { variableMetadata } from "../packages/analytics/dist/dataset.js";
++
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const SURVEY = "11111111-1111-4111-8111-111111111111";
++
++/* ------------------------------------------------------------ fake backend */
++const rows = synthRows(400);
++const store = { analyses: [], charts: [], segments: [], themes: [], reports: [], shares: [], analysisVersions: [], reportVersions: [], reportTemplates: [], exports: 0, audit: [] };
++const uid = () => crypto.randomUUID();
++const now = () => new Date().toISOString();
++const compute = (definition) => {
++  const ds = buildDataset(def, rows, { spec: definition.dataset ?? { environment: "LIVE", dataset: "all" }, weighting: definition.weighting ?? null });
++  const result = runAnalysis(definition, ds);
++  const advice = adviseChart(definition, result, variableMetadata(def));
++  return { ...result, recommendations: advice.alternatives, advice };
++};
++const reportResults = (definition) => {
++  const out = {};
++  for (const id of reportAnalysisIds(definition)) { const a = store.analyses.find((x) => x.id === id && !x.deleted_at); if (!a) continue; try { if (store.failIds?.has(id)) throw new Error("boom"); out[id] = compute({ ...a.definition, id, name: a.name }); } catch { out[id] = { ...failedResult(a.name, a.definition.kind), recommendations: [] }; } }
++  return out;
++};
++const json = (route, body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
++
++async function fakeApi(route) {
++  const req = route.request();
++  const url = new URL(req.url());
++  const m = req.method();
++  const body = m === "POST" || m === "PUT" || m === "PATCH" ? JSON.parse(req.postData() || "{}") : {};
++  const path = url.pathname.replace(`/api/surveys/${SURVEY}/analytics`, "").replace(/^\//, "").split("/").filter(Boolean);
++  const [head, itemId, action] = path;
++  const coll = (k) => store[k];
++  /* §36 — report templates, and laying one over a report */
++  if (head === "report-templates") {
++    if (m === "GET") return json(route, { templates: [...BUILT_IN_REPORT_TEMPLATES.map((t) => ({ ...t, kind: "report" })), ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates], available: true });
++    if (m === "POST") {
++      const src = store.reports.find((r) => r.id === body.fromReportId);
++      // §42 — a dashboard's shape is its widgets and scenery, not blocks
++      if (src?.kind === "dashboard") {
++        const t = { id: uid(), builtIn: false, ...dashboardAsTemplate(body.name, src.definition, body.description) };
++        store.reportTemplates.push(t);
++        return json(route, { template: t }, 201);
++      }
++      const blocks = (src?.definition?.blocks ?? []).map((b) => {
++        if (b.type === "panel_grid") return { ...b, panels: b.panels.map((pnl) => ({ ...pnl, analysisId: "" })) };
++        const { analysisId, analysisIds, ...rest } = b; return { ...rest, placeholder: b.title ?? b.type };
++      });
++      const t = { id: uid(), name: body.name, description: body.description, builtIn: false, kind: "report", blocks };
++      store.reportTemplates.push(t);
++      return json(route, { template: t }, 201);
++    }
++    if (m === "DELETE") { store.reportTemplates = store.reportTemplates.filter((t) => t.id !== itemId); return json(route, { ok: true }); }
++  }
++  if (head === "reports" && action === "apply-template" && m === "POST") {
++    const r = store.reports.find((x) => x.id === itemId);
++    const t = [...BUILT_IN_REPORT_TEMPLATES, ...BUILT_IN_DASHBOARD_TEMPLATES, ...store.reportTemplates].find((x) => x.id === body.templateId);
++    if (!r || !t) return json(route, { error: "Unknown template." }, 404);
++    // §42 — the two kinds share a gallery, so a mismatch is refused rather
++    // than left to produce a definition nothing can render
++    const wantKind = r.kind === "dashboard" ? "dashboard" : "report";
++    const gotKind = templateKind(t);
++    if (wantKind !== gotKind) return json(route, { error: `That is a ${gotKind} template, and this is a ${wantKind}. Pick a ${wantKind} template.` }, 409);
++    r.definition = wantKind === "dashboard" ? applyDashboardTemplate(t, r.definition) : applyTemplate(t, r.definition);
++    store.audit.push("analytics.report_modified");
++    return json(route, { definition: r.definition, appliedTemplate: t.name });
++  }
++  /* the report builder — the same engine calls the real route makes */
++  if (head === "report-builder") {
++    const vars = variableMetadata(def).filter((v) => !v.hidden);
++    if (itemId === "draft") {
++      store.drafts = (store.drafts ?? 0) + 1;
++      const b = body.brief ?? {};
++      const brief = { objective: String(b.objective ?? ""), audience: b.audience ?? "client", tone: b.tone ?? "plain", keyQuestions: b.keyQuestions ?? [], ...(b.analysisIds?.length ? { analysisIds: b.analysisIds } : {}), ...(b.includeTests === false ? { includeTests: false } : {}), ...(b.includeCrosstabs === false ? { includeCrosstabs: false } : {}), ...(b.maxItems ? { maxItems: b.maxItems } : {}) };
++      if (!brief.objective && !brief.keyQuestions.length) return json(route, { error: "State the objective or at least one key question — the report is built around what you want to learn." }, 400);
++      const live = store.analyses.filter((a) => !a.deleted_at && (!brief.analysisIds || brief.analysisIds.includes(a.id)));
++      if (!live.length) return json(route, { error: "This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report." }, 409);
++      const items = live.map((a) => { try { if (store.failIds?.has(a.id)) throw new Error("boom"); return { id: a.id, name: a.name, definition: { ...a.definition, id: a.id, name: a.name }, result: compute({ ...a.definition, id: a.id, name: a.name }) }; } catch { return { id: a.id, name: a.name, definition: a.definition, result: failedResult(a.name, a.definition.kind) }; } });
++      let model = { status: "not_asked", detail: "Interpretation was not requested." }, interpretation = null;
++      if (body.interpretation) {
++        if (!store.fakeModel) model = { status: "no_model", detail: "No AI model is configured for this workspace, so no interpretation was written. Findings are unaffected." };
++        else { const g = gateInterpretation(items, store.fakeModel); const kept = g.implications.length + g.recommendations.length; interpretation = kept ? g : null; model = { status: kept ? "gated" : "nothing", detail: `${kept} of ${g.offered} model sentences passed the number check${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `“${r.text.slice(0, 60)}” (${r.reason})`).join(" | ")}` : ""}.` }; }
++      }
++      const draft = draftReport(brief, items, vars, { story: body.story === true, interpretation });
++      return json(route, { ...draft, model, truncated: false, analysesRead: items.length });
++    }
++    if (itemId === "scene") {
++      const r = store.reports.find((x) => x.id === body.reportId); const story = r?.definition?.story;
++      if (!story) return json(route, { error: "This report has no story." }, 404);
++      const items = store.analyses.filter((a) => !a.deleted_at).map((a) => ({ id: a.id, name: a.name, definition: { ...a.definition, id: a.id, name: a.name }, result: compute({ ...a.definition, id: a.id, name: a.name }) }));
++      const out = regenerateScene(story, body.sceneId, items, vars);
++      return "error" in out ? json(route, { error: out.error }, 409) : json(route, { scene: out.scene });
++    }
++    if (itemId === "story") {
++      const r = store.reports.find((x) => x.id === body.reportId); const story = r?.definition?.story;
++      if (!story?.scenes?.length) return json(route, { error: "This report has no story to export. Build one with the report builder first." }, 404);
++      const results = reportResults({ story }); const chk = checkSnapshot({ story }, results);
++      if (!chk.ok) return json(route, { error: `The story cannot be exported yet: ${chk.problems.join(" ")}`, code: "story_blank" }, 409);
++      store.lastStoryExport = { narration: body.narration === true };
++      return route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", headers: { "content-disposition": 'attachment; filename="story.html"', "x-rescript-export-notes": encodeURIComponent(JSON.stringify([body.narration ? "No speech provider is configured, so the story was exported without narration." : "Exported without narration.", `${story.scenes.filter((s) => !s.hidden).length} scenes, from the latest computed results.`])), "access-control-expose-headers": "x-rescript-export-notes, content-disposition" }, body: storyHtml(story, { results }) });
++    }
++  }
++  /* Intelligent Mode — the real reading engine and the real apply/undo code over the fake store */
++  if (head === "intelligent" && m === "POST") {
++    const dataset = { environment: "LIVE", dataset: "all" };
++    const vars = variableMetadata(def);
++    const db = memoryDb({ analytics_analyses: store.analyses, analytics_analysis_versions: store.analysisVersions, analytics_charts: store.charts, analytics_reports: store.reports });
++    const contextFor = async (needResults) => {
++      const analyses = store.analyses.filter((a) => !a.deleted_at).map((a) => ({ id: a.id, name: a.name, definition: { ...a.definition, id: a.id, name: a.name } }));
++      const reports = store.reports.filter((r) => !r.deleted_at && r.kind === "report").map((r) => ({ id: r.id, name: r.name, definition: r.definition }));
++      const results = {};
++      if (needResults) for (const a of analyses) results[a.id] = compute(a.definition);
++      return { variables: vars, known: surveyKnownNames(def, vars), analyses, reports, results, dataset };
++    };
++    if (itemId === "propose") {
++      store.proposes = (store.proposes ?? 0) + 1;
++      const request = String(body.request ?? "").trim();
++      if (!request) return json(route, { error: "Say what you want done, for example: “cross-tabs of satisfaction by age and gender”." }, 400);
++      return json(route, { ...proposeFromText(request, await contextFor(true)), model: { status: "not_asked", detail: "" } });
++    }
++    if (itemId === "apply") {
++      const { ops, rejected } = parseAskOps(body.ops);
++      if (!ops.length) return json(route, { error: rejected[0] ?? "There is nothing to apply." }, 400);
++      store.lastApplyOps = ops;
++      const applied = await applyOps(db, SURVEY, "1.0", "u1", ops, dataset, String(body.request ?? ""), contextFor);
++      for (const a of applied) if (a.status === "done") store.audit.push("analytics.intelligent_applied");
++      return json(route, { applied, rejected });
++    }
++    if (itemId === "undo") {
++      const records = parseUndo(body.records);
++      if (!records.length) return json(route, { error: "There is nothing to undo." }, 400);
++      return json(route, { undone: await undoRecords(db, SURVEY, "u1", records) });
++    }
++  }
++  if (head === "variables") return json(route, { variables: variableMetadata(def).filter((v) => !v.hidden), counts: { LIVE: rows.length, TEST: 0 }, surveyVersion: "1.0", revision: 3 });
++  if (head === "home") return json(route, { analyses: store.analyses.filter((a) => !a.deleted_at), charts: store.charts, reports: store.reports.filter((r) => !r.deleted_at), shares: store.shares.filter((s) => !s.revoked_at) });
++  if (head === "run") { try { if (store.failRunNames?.has(body.definition?.name)) throw new Error("boom"); return json(route, { result: compute(body.definition) }); } catch (e) { return json(route, { error: "The analysis could not be computed. Check that its variables exist in this survey and have answers, then try again. (ref abc123)" }, 500); } }
++  if (head === "export") {
++    store.exports++;
++    let report, results;
++    if (body.reportId) { const r = store.reports.find((x) => x.id === body.reportId); report = r.definition; results = body.version ? store.reportVersions.find((v) => v.report_id === r.id && v.version === body.version).snapshot : reportResults(r.definition); }
++    else { const a = body.analysisId ? store.analyses.find((x) => x.id === body.analysisId) : { id: "adhoc", name: body.definition.name, definition: body.definition }; const res = compute({ ...a.definition, name: a.name }); results = { [a.id]: res }; report = { title: a.name, mode: "live", blocks: [{ id: "c", type: "chart", analysisId: a.id, chart: body.chart ?? { type: res.recommendedCharts[0], options: {} } }, ...res.tables.map((t, i) => ({ id: `t${i}`, type: "table", analysisId: a.id, tableId: t.id }))] }; }
++    /*
++     * §43 — the same validation the real route does, so the test exercises the
++     * path a customer's deck actually takes. AX_DEBUG_IMG prints what arrived
++     * and which blocks the export is building from: the first version of this
++     * check passed while exporting an UNSAVED report that contained no map at
++     * all, and that is what showed it.
++     */
++    const images = {};
++    for (const [blockId, uri] of Object.entries(body.images ?? {}).slice(0, 40)) {
++      const okImg = isEmbeddableImage(uri);
++      if (process.env.AX_DEBUG_IMG) console.log("  [img]", blockId, typeof uri === "string" ? `${uri.slice(0, 32)}… len=${uri.length}` : typeof uri, "accepted:", okImg);
++      if (typeof blockId === "string" && blockId.length <= 64 && okImg) images[blockId] = uri;
++    }
++    if (process.env.AX_DEBUG_IMG) console.log("  [img] blocks being exported:", (report.blocks ?? []).map((b) => `${b.id}:${b.type}`).join(", "));
++    const chk = checkSnapshot(report, results);
++    const withData = reportAnalysisIds(report).filter((id) => results[id] && !results[id].error && (results[id].base?.n ?? 0) > 0);
++    if (reportAnalysisIds(report).length && !withData.length) return json(route, { error: `Nothing to export. ${chk.problems.join(" ")}` }, 409);
++    if (store.breakExport) return json(route, { error: "The export could not be built. Nothing was downloaded. Try again, or export a single analysis; if it keeps failing quote reference abc123 to support." }, 500);
++    const buf = body.format === "xlsx" ? await buildXlsx({ report, results, theme: DEFAULT_THEME, settings: body.settings }) : await buildPptx({ report, results, theme: DEFAULT_THEME, settings: body.settings, images });
++    store.lastExport = { format: body.format ?? "pptx", bytes: buf.length, images: Object.keys(images).length, mapNote: buf.toString("latin1").includes("Shown as ranked bars"), hasMedia: /ppt\/media\/image/.test(buf.toString("latin1")) };
++    if (process.env.AX_SHOTS && Object.keys(images).length) (await import("node:fs")).writeFileSync(`${process.env.AX_SHOTS}/map-deck.pptx`, buf);
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { ...(chk.problems.length ? { "x-rescript-export-notes": encodeURIComponent(JSON.stringify(chk.problems)) } : {}), "access-control-expose-headers": "x-rescript-export-notes", "content-disposition": `attachment; filename="x.${body.format ?? "pptx"}"` }, body: buf });
++  }
++  if (head === "reports" && itemId && action === "publish") {
++    const r = store.reports.find((x) => x.id === itemId); const version = (r.published_version ?? 0) + 1;
++    const snapshot = reportResults(r.definition);
++    const chk = checkSnapshot(r.definition, snapshot);
++    if (!chk.ok && body.force !== true) return json(route, { error: `Not published. ${chk.problems.join(" ")}`, problems: chk.problems, canForce: true }, 409);
++    store.reportVersions.push({ id: uid(), report_id: r.id, version, definition: r.definition, theme: DEFAULT_THEME, snapshot, dataset: { responses: chk.responses }, published_at: now(), note: body.note ?? null });
++    r.published_version = version; store.audit.push("analytics.report_published");
++    return json(route, { version, publishedAt: now() });
++  }
++  if (head === "reports" && itemId && action === "results") {
++    const r = store.reports.find((x) => x.id === itemId); const v = url.searchParams.get("version");
++    if (v) { const rv = store.reportVersions.find((x) => x.report_id === r.id && x.version === Number(v)); return json(route, { mode: "snapshot", version: rv.version, definition: rv.definition, theme: rv.theme, results: rv.snapshot, publishedAt: rv.published_at }); }
++    return json(route, { mode: "live", definition: r.definition, theme: DEFAULT_THEME, results: reportResults(r.definition), computedAt: now() });
++  }
++  if (action === "versions") return json(route, { versions: (head === "analyses" ? store.analysisVersions.filter((v) => v.analysis_id === itemId) : store.reportVersions.filter((v) => v.report_id === itemId)).sort((a, b) => b.version - a.version) });
++  if (action === "access") return json(route, { events: [] });
++  /* the rail's verbs (route: POST analyses/reorder, POST analyses/<id>/duplicate; PUT accepts position) */
++  if (head === "analyses" && itemId === "reorder" && m === "POST") { let pos = 0; for (const id of body.ids) { const a = store.analyses.find((x) => x.id === id); if (a) a.position = pos++; } return json(route, { ok: true, ordered: pos }); }
++  if (head === "analyses" && action === "duplicate" && m === "POST") {
++    const src = store.analyses.find((x) => x.id === itemId); if (!src) return json(route, { error: "Unknown item." }, 404);
++    const name = body.name?.trim() || `${src.name} (copy)`;
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind: src.kind, definition: { ...src.definition, name }, version: 1, position: null };
++    store.analyses.push(row); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: `Duplicated from “${src.name}”`, created_at: now() }); store.audit.push("analytics.analysis_created");
++    return json(route, { item: row }, 201);
++  }
++  if (!store[head]) return json(route, { error: "Unknown analytics endpoint." }, 404);
++  if (m === "GET" && !itemId) {
++    const kind = url.searchParams.get("kind");
++    const items = coll(head).filter((x) => !x.deleted_at && (!kind || x.kind === kind));
++    // analyses: arranged first in their order, then newest first — the route's ORDER BY
++    if (head === "analyses") items.sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity) || (a.updated_at < b.updated_at ? 1 : -1));
++    return json(route, { items });
++  }
++  if (m === "GET") return json(route, { item: coll(head).find((x) => x.id === itemId) });
++  if (m === "POST") {
++    const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now() };
++    if (head === "analyses") { Object.assign(row, { name: body.name, kind: body.definition.kind, definition: { ...body.definition, name: body.name }, version: 1 }); store.analysisVersions.push({ analysis_id: row.id, version: 1, definition: row.definition, summary: "Created", created_at: now() }); store.audit.push("analytics.analysis_created"); }
++    if (head === "charts") { Object.assign(row, { analysis_id: body.analysisId, name: body.name, spec: body.spec, theme_id: body.themeId ?? null, style_version: 1 }); store.audit.push("analytics.chart_created"); }
++    if (head === "segments") Object.assign(row, { kind: body.kind ?? "segment", name: body.name, description: body.description, color: body.color, condition: body.condition });
++    if (head === "themes") Object.assign(row, { name: body.name, theme: body.theme, survey_id: body.scope === "survey" ? SURVEY : null, customer_id: "c" });
++    if (head === "reports") Object.assign(row, { kind: body.kind ?? "report", name: body.name, mode: body.mode ?? "live", theme_id: null, published_version: null, definition: body.definition ?? (body.kind === "dashboard" ? { title: body.name, widgets: [], crossFilter: true } : { title: body.name, mode: "live", blocks: [{ id: "cover", type: "cover", title: body.name }] }) });
++    if (head === "shares") { const r = store.reports.find((x) => x.id === body.reportId); if (!r.published_version) return json(route, { error: "Publish the report before sharing it — a share link always points at a published version." }, 409); Object.assign(row, { report_id: body.reportId, token: uid().replace(/-/g, "") + "tok", access: body.access ?? "link", permission: body.permission ?? "viewer", report_version: body.pinVersion ? r.published_version : null, has_password: !!body.password, password: body.password ?? null, expires_at: body.expiresAt ?? null, revoked_at: null, allowed_emails: body.emails ?? [], view_count: 0, label: body.label ?? null }); store.audit.push("analytics.report_shared"); }
++    coll(head).push(row);
++    return json(route, { item: row }, 201);
++  }
++  if (m === "PUT") {
++    const row = coll(head).find((x) => x.id === itemId);
++    if (head === "analyses" && body.definition) { const strip = (d) => { const { formatting: _f, ...o } = d.options ?? {}; return JSON.stringify({ ...d, name: 0, options: o }); }; const changed = strip(row.definition) !== strip(body.definition); row.definition = body.definition; if (changed) { row.version++; store.analysisVersions.push({ analysis_id: row.id, version: row.version, definition: body.definition, created_at: now() }); } }
++    if (head === "analyses" && (body.position === null || typeof body.position === "number")) row.position = body.position;
++    if (head === "charts" && body.spec) { row.spec = body.spec; row.style_version++; }
++    for (const k of ["name", "definition", "mode", "condition", "theme", "description", "color"]) if (body[k] !== undefined && !(head === "analyses" && k === "definition")) row[k] = body[k];
++    if (body.themeId !== undefined) row.theme_id = body.themeId;
++    row.updated_at = now();
++    return json(route, { item: row });
++  }
++  if (m === "PATCH") { const row = coll(head).find((x) => x.id === itemId); if (body.revoke) { row.revoked_at = now(); store.audit.push("analytics.share_revoked"); } if (body.reshare) { row.revoked_at = null; row.token = uid().replace(/-/g, "") + "tok"; } for (const k of ["access", "permission"]) if (body[k]) row[k] = body[k]; if (body.expiresAt !== undefined) row.expires_at = body.expiresAt; return json(route, { item: row }); }
++  if (m === "DELETE") { const row = coll(head).find((x) => x.id === itemId); if (head === "shares") row.revoked_at = now(); else row.deleted_at = now(); return json(route, { ok: true }); }
++  return json(route, { error: "unhandled" }, 500);
++}
++
++/** The public door, mirroring rescript_resolve_share: revoked / expired / password / snapshot only. */
++async function fakeShare(route) {
++  const req = route.request(); const url = new URL(req.url());
++  const token = url.pathname.split("/").pop();
++  const s = store.shares.find((x) => x.token === token);
++  if (!s) return json(route, { error: "This link is not valid." }, 404);
++  const r = store.reports.find((x) => x.id === s.report_id);
++  if (s.revoked_at) return json(route, { error: "This shared report has been revoked by its owner.", status: "revoked" }, 410);
++  if (s.expires_at && new Date(s.expires_at) < new Date()) return json(route, { error: "This shared link has expired.", status: "expired" }, 410);
++  const pw = req.headers()["x-share-password"];
++  if (s.password && pw !== s.password) return json(route, { error: pw ? "That password is not correct." : "This report is password protected.", status: "password", reportName: r.name }, 401);
++  const v = store.reportVersions.filter((x) => x.report_id === r.id).find((x) => x.version === (s.report_version ?? r.published_version));
++  if (!v) return json(route, { error: "This report is not available.", status: "unpublished" }, 404);
++  if (req.method() === "POST") {
++    if (s.permission !== "download") return json(route, { error: "Downloads are not enabled for this shared report.", status: "no_download" }, 403);
++    const body = JSON.parse(req.postData() || "{}");
++    const buf = body.format === "xlsx" ? await buildXlsx({ report: v.definition, results: v.snapshot, theme: v.theme }) : await buildPptx({ report: v.definition, results: v.snapshot, theme: v.theme });
++    store.lastShareDownload = { format: body.format, bytes: buf.length };
++    return route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "content-disposition": `attachment; filename="r.${body.format}"` }, body: buf });
++  }
++  s.view_count++;
++  return json(route, { report: { name: r.name, title: v.definition.title, subtitle: v.definition.subtitle, blocks: v.definition.blocks, story: v.definition.story ?? null, widgets: v.definition.widgets ?? null, hero: v.definition.hero ?? null, bands: v.definition.bands ?? null, viewerSegments: v.definition.viewerSegments ?? [], branding: v.definition.branding ?? {} }, theme: v.theme, results: v.snapshot, version: v.version, publishedAt: v.published_at, mode: "snapshot", dataset: v.dataset, permission: s.permission });
++}
++
++/* ------------------------------------------------------------ browser */
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ viewport: { width: 1600, height: 1100 } });
++await ctx.addCookies([{ name: "rescript_session", value: "fake", url: STUDIO }]);
++const page = await ctx.newPage();
++page.on("pageerror", (e) => console.error("PAGE ERROR:", e.message));
++/*
++ * One dialog handler for the whole run. `promptAnswer` lets a test decide what
++ * a prompt() should return — Playwright allows only ONE handler, so a
++ * `page.once` alongside this one throws "already handled" rather than winning.
++ */
++let promptAnswer = "";
++let confirmAnswer = true; const dialogs = [];
++page.on("dialog", (d) => { dialogs.push(`${d.type()}: ${d.message()}`); if (d.type() === "confirm" && !confirmAnswer) return d.dismiss(); return d.accept(d.type() === "prompt" ? promptAnswer : undefined); });
++const user = { userId: "u1", userCode: "U-0001", name: "Ana Lyst", email: "ana@example.com", platformRole: "user", isPlatformAdmin: false, sessionId: "s1", unread: 0, policies: { heartbeatSeconds: 600 } };
++await page.route("**/api/auth/me", (r) => json(r, user));
++await page.route("**/api/auth/heartbeat**", (r) => json(r, { ok: true }));
++await page.route("**/api/surveys", (r) => json(r, { surveys: [{ id: SURVEY, code: "SYN", title: "Synthetic Study 2026", status: "live", myRole: "owner", roleSource: "owner", updated_at: now(), version: "1.0" }] }));
++await page.route(`**/api/surveys/${SURVEY}/analytics/**`, fakeApi);
++await page.route(`**/api/surveys/${SURVEY}/analytics`, fakeApi);
++await page.route("**/api/share/**", fakeShare);
++
++const text = (sel) => page.$eval(sel, (e) => e.textContent.replace(/\s+/g, " ").trim());
++/* AX_SHOTS=<dir> writes a screenshot at each named point — for visual review, not assertions */
++const shot = async (name) => { if (process.env.AX_SHOTS) await page.screenshot({ path: `${process.env.AX_SHOTS}/${name}.png`, fullPage: false }); };
++const count = (sel) => page.$$eval(sel, (es) => es.length);
++
++
++const mkAnalysis = (name, { env = "LIVE", kind = "descriptive", variables = ["SAT"], extra = {} } = {}) => {
++  const id = uid(); const definition = { name, kind, dataset: { environment: env, dataset: "all" }, variables, ...extra };
++  const row = { id, survey_id: SURVEY, created_at: now(), updated_at: now(), name, kind, definition, version: 1, position: null };
++  store.analyses.push(row); store.analysisVersions.push({ analysis_id: id, version: 1, definition, summary: "", created_at: now() });
++  return row;
++};
++const mkReport = (name, definition) => {
++  const row = { id: uid(), survey_id: SURVEY, created_at: now(), updated_at: now(), kind: "report", name, mode: "live", theme_id: null, published_version: null, definition };
++  store.reports.push(row); return row;
++};
++const openReports = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-reports"]'); };
++const openReport = async (name) => { await openReports(); await page.click(`[data-testid="ax-report-card"]:has-text("${name}")`); await page.waitForSelector('[data-testid="ax-report-builder"]'); };
++const exportNow = async () => { await page.click('[data-testid="ax-report-export"]'); await page.waitForSelector('[data-testid="ax-export-dialog"]'); };
++
++/* ------------------------------------------------------------------ 1 */
++
++/* ------------------------------------------------------------------ seed */
++const sat = mkAnalysis("Overall satisfaction", { variables: ["SAT"] });
++const consider = mkAnalysis("Brands considered", { variables: ["CONSIDER"] });
++const region = mkAnalysis("Region", { variables: ["REGION"] });
++const R = mkReport("Quarterly report", { title: "Quarterly report", mode: "live", blocks: [
++  { id: "b-brands", type: "chart", title: "Brands considered", analysisId: consider.id, chart: { type: "pie", options: {} } },
++  { id: "b-sat", type: "chart", title: "Overall satisfaction", analysisId: sat.id, chart: { type: "bar_vertical", options: {} } },
++] });
++const openAsk = async () => { await page.goto(`${STUDIO}/analytics`, { waitUntil: "networkidle" }); await page.waitForSelector('[data-testid="ax-workspace"]'); await page.click('[data-testid="ax-tab-ask"]'); await page.waitForSelector('[data-testid="ax-ask"]'); };
++const ask = async (t) => { await page.fill('[data-testid="ax-ask-input"]', t); await page.click('[data-testid="ax-ask-propose"]'); await page.waitForSelector('[data-testid="ax-ask-review"]'); await page.waitForFunction((x) => !document.querySelector('[data-testid="ax-ask-propose"]').textContent.includes("Reading"), null); };
++const items = () => page.$$eval('[data-testid="ax-ask-item"]', (es) => es.map((e) => ({ text: e.textContent.replace(/\s+/g, " ").trim(), status: e.getAttribute("data-status"), op: e.getAttribute("data-op") })));
++const live = () => store.analyses.filter((a) => !a.deleted_at);
++
++/* ------------------------------------------------------------------ 1 */
++console.log("\n§1 A REQUEST BECOMES A PROPOSAL — nothing is saved yet");
++await openAsk();
++const before = live().length;
++await ask("Create cross-tabs of satisfaction by age and gender");
++let it = await items();
++assert.equal(it.length, 2, JSON.stringify(it));
++assert.ok(it.every((i) => i.status === "proposed" && i.op === "add_crosstab" && /Proposed — not applied/.test(i.text)));
++assert.ok(it.some((i) => /Cross-tab Overall satisfaction by Age/.test(i.text)) && it.some((i) => /by Gender/.test(i.text)), it.map((i) => i.text).join(" | "));
++assert.ok(it.every((i) => /with column percentages and significance letters/.test(i.text)), "each item says why and what it does");
++assert.equal(live().length, before, "proposing wrote nothing");
++assert.equal(store.lastApplyOps, undefined);
++ok("two cross-tabs are proposed with their reasons, labelled 'not applied', and nothing is saved");
++
++/* ------------------------------------------------------------------ 2 */
++console.log("\n§2 APPLY → DONE → UNDO");
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="done"]').length === 2);
++assert.equal(live().length, before + 2);
++const made = live().slice(before);
++assert.ok(made.every((a) => a.kind === "crosstab" && a.definition.options.requested === "Create cross-tabs of satisfaction by age and gender" && a.definition.rows[0] === "SAT"), "saved as real crosstabs, with the request that made them");
++assert.equal(store.analysisVersions.filter((v) => made.some((a) => a.id === v.analysis_id)).length, 2, "each has its first version");
++assert.match(await text('[data-testid="ax-ask-msg"]'), /2 applied/);
++ok("applying saves exactly the two analyses and the screen says Done");
++await page.click('[data-testid="ax-ask-undo"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="proposed"]').length === 2);
++assert.equal(live().length, before, "undo took back exactly what was added");
++assert.ok(made.every((a) => a.deleted_at));
++assert.equal(await count('[data-testid="ax-ask-undo"]'), 0, "an undone batch cannot be undone again");
++ok("Undo removes them again and the items return to 'Proposed'");
++
++/* ------------------------------------------------------------------ 3 */
++console.log("\n§3 A REPEAT IS BLOCKED, NOT SAVED TWICE");
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="done"]').length === 2);
++await ask("Create cross-tabs of satisfaction by gender");
++it = await items();
++assert.equal(it.length, 1);
++assert.match(it[0].text, /Cannot be applied: You already have “Overall satisfaction by Gender”/);
++assert.equal(await page.$eval('[data-testid="ax-ask-check"]', (c) => c.disabled), true);
++assert.equal(await page.$eval('[data-testid="ax-ask-check"]', (c) => c.checked), false, "a blocked item is not shown ticked");
++assert.equal(await page.$eval('[data-testid="ax-ask-apply"]', (b) => b.disabled), true, "nothing to apply");
++ok("a cross-tab you already have is shown as blocked with the reason and cannot be applied");
++const catchAll = live().length;
++// the workspace shows what was applied without a reload
++await page.click('[data-testid="ax-tab-analysis"]');
++await page.waitForSelector('[data-testid="ax-rail"]');
++await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="ax-rail-item"]')].some((e) => /Overall satisfaction by Age/.test(e.textContent)));
++ok("the Analysis rail lists what was applied, with no reload");
++await page.click('[data-testid="ax-tab-ask"]');
++
++/* ------------------------------------------------------------------ 3b */
++console.log("\n§3b A PROPOSAL THAT WENT STALE — the server's answer wins");
++await ask("Create a cross-tab of satisfaction by region");
++assert.equal((await items()).length, 1);
++const tabs0 = live().length;
++// meanwhile, somebody else saves exactly that analysis
++mkAnalysis("Satisfaction by region (colleague)", { kind: "crosstab", variables: [], extra: { rows: ["SAT"], columns: ["REGION"], measure: "pct_col" } });
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="blocked"]').length === 1);
++assert.match((await items())[0].text, /Blocked.*already have “Satisfaction by region \(colleague\)”/);
++assert.equal(live().length, tabs0 + 1, "only the colleague's analysis exists — nothing was saved twice");
++assert.match(await text('[data-testid="ax-ask-msg"]'), /0 applied, 1 not applied/);
++assert.equal(await count('[data-testid="ax-ask-undo"]'), 0, "nothing was done, so there is nothing to undo");
++ok("applying a proposal that went stale shows Blocked with the server's reason — not Done — and saves nothing");
++store.analyses.pop();
++
++/* ------------------------------------------------------------------ 4 */
++console.log("\n§4 REMOVE REDUNDANT ANALYSES");
++const rep1 = mkAnalysis("Satisfaction again", { variables: ["SAT"] });             // repeats Overall satisfaction (which the report uses)
++const chi = mkAnalysis("Satisfaction gap by gender", { kind: "test", variables: ["SAT", "GENDER"], extra: { options: { test: "auto" } } });   // the cross-tab above already reports it
++await ask("Remove redundant analyses");
++it = await items();
++assert.equal(it.length, 2, JSON.stringify(it));
++assert.ok(it.every((i) => i.op === "remove_analysis" && i.status === "proposed"));
++assert.ok(it.some((i) => /Remove “Satisfaction again”/.test(i.text) && /Kept: “Overall satisfaction”/.test(i.text)));
++assert.ok(it.some((i) => /Remove “Satisfaction gap by gender”/.test(i.text) && /already reports this chi-square test/.test(i.text)));
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="done"]').length === 2);
++assert.ok(rep1.deleted_at && chi.deleted_at, "both removed");
++assert.ok(!sat.deleted_at, "the one the report uses, and that the repeat duplicates, is kept");
++ok("repeats and a test a cross-tab already carries are removed; the researcher's own analysis is kept");
++await page.click('[data-testid="ax-ask-undo"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="proposed"]').length === 2);
++assert.ok(!rep1.deleted_at && !chi.deleted_at, "undo restores them");
++ok("Undo restores what was removed");
++// the one a report uses cannot be removed even when it is the repeat
++store.reports[0].definition.blocks.push({ id: "b-dup", type: "chart", title: "Dup", analysisId: rep1.id, chart: { type: "bar_vertical", options: {} } });
++await ask("remove duplicate analyses");
++it = await items();
++assert.ok(it.some((i) => /Cannot be applied: It is used by “Quarterly report”/.test(i.text)), it.map((i) => i.text).join(" | "));
++store.reports[0].definition.blocks.pop(); rep1.deleted_at = now(); chi.deleted_at = now();
++ok("an analysis a report uses is blocked from removal, with the report named");
++
++/* ------------------------------------------------------------------ 5 */
++console.log("\n§5 BEST CHART FOR EACH QUESTION");
++await ask("Choose the best chart for each question");
++it = await items();
++assert.equal(it.length, 1, `only the misfit is proposed: ${JSON.stringify(it)}`);
++assert.match(it[0].text, /show “Brands considered” as bar horizontal \(now pie\)/);
++assert.match(it[0].text, /implies the answers add up to 100%, but people could choose several/);
++const alts = await page.$$eval('[data-testid="ax-ask-alt"] option', (os) => os.map((o) => o.value).filter(Boolean));
++assert.ok(alts.length >= 1 && !alts.includes("pie") && !alts.includes("bar_horizontal"), alts.join(","));
++ok("a pie on a multiple-choice question becomes horizontal bars, with the reason; the satisfaction chart that already suits is left alone");
++await page.selectOption('[data-testid="ax-ask-alt"]', alts[0]);
++assert.match((await items())[0].text, new RegExp(`as ${alts[0].replace(/_/g, " ")}`));
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="done"]').length === 1);
++const blockType = () => store.reports[0].definition.blocks.find((b) => b.id === "b-brands").chart.type;
++assert.equal(blockType(), alts[0], "the swapped chart is the one saved");
++assert.equal(store.reports[0].definition.blocks.find((b) => b.id === "b-sat").chart.type, "bar_vertical", "the other chart is untouched");
++ok("the person's swap for another valid chart is what is applied");
++await page.click('[data-testid="ax-ask-undo"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="proposed"]').length === 1);
++assert.equal(blockType(), "pie");
++ok("Undo puts the original chart back");
++await ask("Choose the best chart for each question");
++await page.click('[data-testid="ax-ask-apply"]');
++await page.waitForFunction(() => document.querySelectorAll('[data-testid="ax-ask-item"][data-status="done"]').length === 1);
++assert.equal(blockType(), "bar_horizontal");
++await ask("Choose the best chart for each question");
++assert.match(await text('[data-testid="ax-ask-note"]'), /Every chart in your reports already suits its question/);
++assert.equal((await items()).length, 0);
++ok("asked again, everything already suits — it says so instead of proposing churn");
++
++/* ------------------------------------------------------------------ 6 */
++console.log("\n§6 WHAT IS NOT UNDERSTOOD IS SAID");
++await ask("Create a cross-tab of loyalty by gender");
++assert.equal((await items()).length, 0);
++assert.match(await text('[data-testid="ax-ask-unread"]'), /could not find a question on the left of “by”/);
++await ask("Remove redundant analyses and then do my taxes");
++assert.match(await text('[data-testid="ax-ask-unread"]'), /do my taxes.*I do not know how to do that here/);
++await ask("brands by gender");
++assert.match(await text('[data-testid="ax-ask-unread"]'), /could mean.*Brands aware of.*Brands considered|could mean.*Brands considered.*Brands aware of/);
++assert.equal((await items()).length, 0);
++const nBefore = live().length;
++ok("an unknown question, an unsupported ask and an ambiguous name are each reported — nothing is guessed or saved");
++assert.equal(live().length, nBefore);
++
++/* ------------------------------------------------------------------ 7 */
++console.log("\n§7 REPORTS GO THROUGH THE BUILDER'S REVIEW");
++const reportsBefore = store.reports.length;
++await ask("Prepare a management summary");
++it = await items();
++assert.equal(it.length, 1); assert.equal(it[0].op, "build_report");
++assert.equal(await count('[data-testid="ax-ask-check"]'), 0, "a report has no tick-box: it is reviewed, not applied");
++await page.click('[data-testid="ax-ask-builder"]');
++await page.waitForSelector('[data-testid="ax-builder"]');
++assert.equal(await page.$eval('[data-testid="ax-builder-audience"]', (s) => s.value), "executive");
++assert.match(await page.$eval('[data-testid="ax-builder-objective"]', (t) => t.value), /management summary/i);
++assert.equal(await page.$eval('[data-testid="ax-builder-story"]', (c) => c.checked), false, "a management summary is not animated unless asked");
++assert.equal(store.reports.length, reportsBefore, "opening the builder creates nothing");
++await page.click('[data-testid="ax-builder-draft"]');
++await page.waitForSelector('[data-testid="ax-builder-review"]');
++assert.ok((await count('[data-testid="ax-builder-included"]')) >= 1);
++await page.click('[data-testid="ax-builder-create"]');
++await page.waitForFunction((n) => true, null);
++await page.waitForSelector('[data-testid="ax-ask-msg"]');
++assert.equal(store.reports.length, reportsBefore + 1);
++assert.match(await text('[data-testid="ax-ask-msg"]'), /Report created/);
++ok("a management summary opens the report builder pre-filled for an executive audience; the review comes before creation");
++await ask("Make an animated video report of the key findings");
++assert.match(await text('[data-testid="ax-ask-note"]'), /Video files \(MP4\) cannot be generated here/);
++await page.click('[data-testid="ax-ask-builder"]');
++await page.waitForSelector('[data-testid="ax-builder"]');
++assert.equal(await page.$eval('[data-testid="ax-builder-story"]', (c) => c.checked), true);
++await page.click('button:has-text("Cancel")');
++ok("an animated report asks for the story, and says plainly that video files are not produced");
++
++/* ------------------------------------------------------------------ 8 */
++console.log("\n§8 HISTORY");
++await openAsk();
++await page.waitForSelector('[data-testid="ax-ask-history"]');
++await page.click('[data-testid="ax-ask-history"] summary');
++const hist = await page.$$eval('[data-testid="ax-ask-history-item"]', (es) => es.map((e) => e.textContent.replace(/\s+/g, " ")));
++assert.ok(hist.some((h) => /Choose the best chart for each question.*1 applied/.test(h)), hist.join(" | "));
++assert.ok(hist.some((h) => /Remove redundant analyses.*2 applied/.test(h)));
++ok("what was applied is listed after a reload, with how many items landed");
++assert.ok(store.audit.filter((a) => a === "analytics.intelligent_applied").length >= 5);
++
++console.log(`\n${passed} checks passed`);
++await browser.close();
+diff --git a/scripts/lib/memdb.mjs b/scripts/lib/memdb.mjs
+new file mode 100644
+index 0000000..d98bb16
+--- /dev/null
++++ b/scripts/lib/memdb.mjs
+@@ -0,0 +1,30 @@
++/**
++ * A tiny in-memory stand-in for the Supabase client — the chain the analytics
++ * apply/undo code uses, with real filter semantics — over arrays the caller
++ * owns (so a fake backend and the code under test see the same rows).
++ */
++export function memoryDb(tables, { idPrefix = "00000000-0000-4000-8000-" } = {}) {
++  let n = 0;
++  class Q {
++    constructor(table) { this.table = table; this.mode = "select"; this.filters = []; }
++    select() { return this; }
++    insert(row) { this.mode = "insert"; this.payload = row; return this; }
++    update(p) { this.mode = "update"; this.payload = p; return this; }
++    eq(c, v) { this.filters.push((r) => r[c] === v); return this; }
++    is(c, v) { this.filters.push((r) => (r[c] ?? null) === v); return this; }
++    in(c, vs) { this.filters.push((r) => vs.includes(r[c])); return this; }
++    single() { this.one = true; return this; }
++    maybeSingle() { this.maybe = true; return this; }
++    run() {
++      const t = (tables[this.table] ??= []);
++      let rows;
++      if (this.mode === "insert") { const row = { id: `${idPrefix}${String(++n).padStart(12, "0")}`, deleted_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...this.payload }; t.push(row); rows = [row]; }
++      else { rows = t.filter((r) => this.filters.every((f) => f(r))); if (this.mode === "update") for (const r of rows) Object.assign(r, this.payload, { updated_at: new Date().toISOString() }); }
++      if (this.one) return rows.length ? { data: { ...rows[0] }, error: null } : { data: null, error: { message: "no rows" } };
++      if (this.maybe) return { data: rows[0] ? { ...rows[0] } : null, error: null };
++      return { data: rows.map((r) => ({ ...r })), error: null };
++    }
++    then(ok, no) { return Promise.resolve(this.run()).then(ok, no); }
++  }
++  return { from: (t) => new Q(t) };
++}
+-- 
+2.43.0
+

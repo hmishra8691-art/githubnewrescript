@@ -1,0 +1,2342 @@
+---
+ apps/studio/app/api/copilot/turn/route.ts     |  85 +++-
+ apps/studio/app/design-system.css             |  23 ++
+ .../intelligent/IntelligentView.tsx           |  18 +-
+ .../intelligent/copilot/CopilotCard.tsx       |  71 +++-
+ .../intelligent/copilot/useCopilot.ts         |  58 ++-
+ apps/studio/lib/copilot/changePlan.test.ts    |  55 +++
+ apps/studio/lib/copilot/changePlan.ts         | 123 ++++++
+ docs/PHASE2-NL-2026-10-08.md                  |  50 +++
+ packages/engine/src/nlIntent.ts               | 333 +++++++++++++--
+ packages/engine/src/nlPhase2.test.ts          | 245 +++++++++++
+ packages/engine/src/nlSemantics.test.ts       | 211 ++++++++++
+ packages/engine/src/nlSemantics.ts            | 391 ++++++++++++++++++
+ scripts/phase1-reliability-test.mjs           |   5 +-
+ scripts/phase2-nl-test.mjs                    | 345 ++++++++++++++++
+ 14 files changed, 1967 insertions(+), 46 deletions(-)
+ create mode 100644 apps/studio/lib/copilot/changePlan.test.ts
+ create mode 100644 apps/studio/lib/copilot/changePlan.ts
+ create mode 100644 docs/PHASE2-NL-2026-10-08.md
+ create mode 100644 packages/engine/src/nlPhase2.test.ts
+ create mode 100644 packages/engine/src/nlSemantics.test.ts
+ create mode 100644 packages/engine/src/nlSemantics.ts
+ create mode 100644 scripts/phase2-nl-test.mjs
+
+diff --git a/apps/studio/app/api/copilot/turn/route.ts b/apps/studio/app/api/copilot/turn/route.ts
+index c5243ae..d11bae9 100644
+--- a/apps/studio/app/api/copilot/turn/route.ts
++++ b/apps/studio/app/api/copilot/turn/route.ts
+@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
+ import { createHash } from "node:crypto";
+ import { SurveyDefinition } from "@rescript/schema";
+ import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
+-import { describeFailure, failureFromError, failureFromReplyError } from "@/lib/copilot/failure";
++import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
++import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
+ import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
+ import { applySurveyActions, diffSurveys, reviewSurvey } from "@rescript/engine";
+ import { ResearchIndex } from "@rescript/import/research";
+@@ -51,7 +52,7 @@ const TTL = 15 * 60_000;
+ 
+ export async function POST(req: NextRequest) {
+   const authed = await requireUser(req);
+-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown };
++  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown };
+   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
+   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
+   let user: AuthedUser | null = null;
+@@ -128,13 +129,86 @@ export async function POST(req: NextRequest) {
+   /* 3: the model — or the cache, for exactly the same request */
+   const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
+   const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
+-  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request]
++  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
+   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
+   const fake = fakes[0] ?? null;
+   let raw: unknown;
+   let cached = false;
++  /*
++   * THE CHANGE PLAN (Phase 2). A generation — a questionnaire from a brief,
++   * a restructuring — is planned before it is built: one small call for the
++   * plan, shown to the researcher; then, once approved, one call per item.
++   * `stage: "execute"` is the second half; a plan-first request that the
++   * model cannot plan (or a scripted reply that is not a plan) falls through
++   * to the single-reply turn as before.
++   */
++  const stage = body.stage === "execute" ? "execute" : body.stage === "plan" || (body.planFirst !== false && mode === "generate" && !(fake && (fake as { kind?: string }).kind !== "plan")) ? "plan" : null;
++  let planFailures: { id: string; failure: TurnFailure }[] = [];
++  let executedPlan: ChangePlan | null = null;
++  if (stage === "plan") {
++    const planPrompt = prompt + planStagePrompt();
++    try {
++      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: 2000, operation: "copilot_plan" },
++        () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, 2000, { timeoutMs: 90_000, schema: CHANGE_PLAN_SCHEMA, continuations: 1 }));
++      if (!m.ok) {
++        const r = refusalResponse(m);
++        const body = await r.json().catch(() => ({})) as Record<string, unknown>;
++        return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
++      }
++      charge += m.event?.customerCharge ?? 0;
++      const plan = coerceChangePlan(fake ?? m.value);
++      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, cached: false }, usage: { charge } });
++      // nothing plan-shaped came back: the single-reply turn below, as before (and the scripted reply, if any, is that turn's)
++    } catch (e) {
++      console.warn("[rescript:copilot] plan failed", JSON.stringify({ error: (e as Error).message }));
++      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
++      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: planPrompt.length, cached: false }, usage: { charge } }, { status: 502 });
++    }
++  }
++  if (stage === "execute") {
++    const plan = coerceChangePlan(body.plan);
++    if (!plan) return NextResponse.json({ error: "send the approved change plan (plan)" }, { status: 400 });
++    const wanted = Array.isArray(body.items) ? new Set(body.items.map(String)) : null;
++    const approved = plan.items.filter((it) => !wanted || wanted.has(it.id));
++    if (!approved.length) return NextResponse.json({ error: "no plan item was approved" }, { status: 400 });
++    executedPlan = { ...plan, items: approved };
++    const built: { item: typeof approved[number]; raw: unknown }[] = [];
++    const done: string[] = [];
++    const itemTokens = mode === "generate" ? 4000 : 3000;
++    for (let i = 0; i < approved.length; i++) {
++      const item = approved[i];
++      const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
++      try {
++        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: itemTokens, operation: `copilot_${mode}_item` },
++          () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, itemTokens, { timeoutMs: 120_000, schema: COPILOT_REPLY_SCHEMA, continuations: 1 }));
++        if (!m.ok) {
++          const r = refusalResponse(m);
++          const body = await r.json().catch(() => ({})) as Record<string, unknown>;
++          if (!built.length) return NextResponse.json({ ...body, failure: describeFailure("wallet", String(body.error ?? "")) }, { status: r.status });
++          planFailures.push({ id: item.id, failure: describeFailure("wallet", String(body.error ?? "")) });
++          break;
++        }
++        charge += m.event?.customerCharge ?? 0;
++        const itemRaw = fakes[i] ?? m.value;
++        built.push({ item, raw: itemRaw });
++        const o = (itemRaw && typeof itemRaw === "object" ? itemRaw : {}) as { actions?: { op?: string; code?: string; text?: string; title?: string }[] };
++        const codes = (o.actions ?? []).map((a) => a?.code ?? a?.title ?? "").filter(Boolean).slice(0, 12);
++        done.push(`${item.title}${codes.length ? ` (${codes.join(", ")})` : ""}`);
++      } catch (e) {
++        console.warn("[rescript:copilot] plan item failed", JSON.stringify({ item: item.id, error: (e as Error).message }));
++        const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
++        planFailures.push({ id: item.id, failure });
++      }
++    }
++    if (!built.length) {
++      const failure = planFailures[0]?.failure ?? describeFailure("unusable");
++      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
++    }
++    raw = mergeItemReplies(built);
++  }
+   const hit = CACHE.get(key);
+-  if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
++  if (stage === "execute") { /* built above */ }
++  else if (hit && Date.now() - hit.at < TTL && !fake) { raw = hit.value; cached = true; }
+   else {
+     try {
+       /*
+@@ -182,7 +256,7 @@ export async function POST(req: NextRequest) {
+   let repair: { refused: string[]; fixed: boolean } | undefined;
+   // the failed actions, each "what it was: why" — the first entries of errors, in order
+   const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
+-  if (applied && refused.length && !cached && (aiProviderName() !== "fake" || fakes.length > 1)) {
++  if (applied && refused.length && !cached && !executedPlan && (aiProviderName() !== "fake" || fakes.length > 1)) {
+     const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+     try {
+       const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens, operation: `copilot_${mode}_repair` },
+@@ -213,6 +287,7 @@ export async function POST(req: NextRequest) {
+   }
+   return NextResponse.json({
+     ok: true, reply,
++    ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}) } : {}),
+     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
+     ...(deterministic ? { review: deterministic } : {}),
+     passages,
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 2a259e2..2d28e59 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1941,3 +1941,26 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .rd-x:hover { color: var(--c-error); }
+ .rd-editor.compact .settings-grid { grid-template-columns: 1fr; }
+ .rd-editor.compact .ta { font-size: 13px; }
++
++/* ---- Phase 2: the change plan, the engine's fallback, plan-first ---- */
++.cp-change-plan { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
++.cp-plan-items { list-style: none; padding-left: 0; gap: 4px; }
++.cp-plan-items li { border: 1px solid var(--c-border); border-radius: var(--r-md); padding: 6px 8px; background: var(--c-surface); }
++.cp-plan-items li.off { opacity: 0.55; }
++.cp-plan-row { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
++.cp-plan-row input { margin-top: 3px; }
++.cp-plan-n { font-family: var(--ff-mono); font-size: var(--fs-caption); color: var(--c-text-3); min-width: 16px; padding-top: 2px; }
++.cp-plan-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
++.cp-plan-body b { font-weight: 600; }
++.cp-plan-kind { margin-left: 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
++.cp-plan-kind.k-remove { color: var(--c-error); border-color: var(--c-error); }
++.cp-plan-why { font-size: var(--fs-caption); color: var(--c-text-2); }
++.cp-plan-detail { font-size: var(--fs-caption); }
++.cp-plan-assumptions { margin: 0; font-size: var(--fs-caption); }
++.cp-plan-built { margin-top: 6px; }
++.cp-plan-built li[data-failed="1"] { color: var(--c-text-2); }
++.cp-fallback { flex-direction: column; align-items: stretch; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--c-warning-bd); }
++.cp-fallback .iqi-dim { margin: 0; }
++.iq-toggle { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-caption); color: var(--c-text-2); cursor: pointer; white-space: nowrap; }
++.iq-toggle.on { color: var(--c-text); }
++.iq-toggle input { margin: 0; }
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+index c7f7631..c403e25 100644
+--- a/apps/studio/components/intelligent/IntelligentView.tsx
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -252,13 +252,27 @@ export function IntelligentView() {
+     let modelHadNothing = false;
+     const pre = parseIntent(t);
+     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
++    /*
++     * NO MODEL, BUT SOMETHING THE ENGINE CAN DO (Phase 2). The Studio knows
++     * there is no model, and the engine handed the sentence on with what it
++     * could do by itself — a standard item for "add a question to measure
++     * purchase intent", the objective for "create a research design for …".
++     * That is offered as a choice, not a dead end.
++     */
++    if (!readOnlyExact && copilot.available === false && interp.kind === "model" && interp.fallback && !deferred) {
++      const fb = interp.fallback;
++      copilot.local(t, { kind: "clarify", category: interp.category ?? "survey_editing", understood: fb.understood, question: `No language model is configured on this Studio, so the copilot cannot write this. ${fb.question}`, choices: fb.choices, detected: interp.detected }, heard);
++      setBusy(false); inputRef.current?.focus(); return;
++    }
+     if (!readOnlyExact && copilot.available !== false) {
+       // the model's turn carries what the engine read; a failed turn says its cause on the card (Phase 1). "empty" — the model
+       // had nothing usable — goes on to the grammar: a reading it has replaces the failed turn; none, and the failed turn stands.
+-      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected });
++      const outcome = await copilot.ask(t, heard, undefined, deferred ? undefined : { category: interp.category, reason: interp.reason, detected: interp.detected, ...(interp.fallback ? { fallback: interp.fallback } : {}) });
+       if (outcome === "handled") { setBusy(false); inputRef.current?.focus(); return; }
+       if (outcome === "unavailable" && !deferred) { setBusy(false); inputRef.current?.focus(); return; }
+       modelHadNothing = outcome === "empty";
++      // the model had nothing, and the engine knows what it can do instead: the failed card offers it — the grammar's guess at a sentence the engine declined to read is not better
++      if (modelHadNothing && interp.kind === "model" && interp.fallback) { setBusy(false); inputRef.current?.focus(); return; }
+     }
+     const selectedLabel = primary?.startsWith("question:") ? (s.def.questions.find((q) => q.id === primary.slice(9))?.code ?? null) : null;
+     let intent: Intent = parseIntent(t);
+@@ -706,6 +720,7 @@ export function IntelligentView() {
+           <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
+           <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
+           <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted && h.key); if (last?.key) void copilot.restore(last.key).then((r) => { if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } }); }} disabled={!copilot.history.some((h) => !h.reverted && h.key)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
++          <label className={`iq-toggle${copilot.planFirst ? " on" : ""}`} data-testid="iq-plan-first" title="Plan first: a questionnaire generated from a brief, or a restructuring, is planned before it is built — the plan is shown for approval, then each approved item is built with its own model call, so nothing is cut off. Off: one reply with everything, as before."><input type="checkbox" checked={copilot.planFirst} onChange={(e) => copilot.setPlanFirst(e.target.checked)} /> Plan first</label>
+           <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "The Studio's engine reads every request first — edits, logic, options, dependencies, impact — with no model call. No language model is configured, so what the engine hands on (rewording, generation, translation text) is not available." : "The Studio's engine reads every request first and does everything it can deterministically, with no model call; the copilot (the configured model) is asked only for what it hands on."}>
+             {copilot.available === false ? "engine only" : copilot.available ? "engine + copilot" : aiAvailable ? "engine + model" : "engine"}
+           </span>
+@@ -759,6 +774,7 @@ export function IntelligentView() {
+                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
+                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
+                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
++                    onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
+                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
+                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
+                     refused={open ? copilot.state!.errors : []}
+diff --git a/apps/studio/components/intelligent/copilot/CopilotCard.tsx b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+index 1baa742..0b328ec 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotCard.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+@@ -20,7 +20,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
+  *
+  * Every question code in the copilot's words is a link to the question.
+  */
+-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
++export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
+   entry: CopilotEntry;
+   def: SurveyDefinition;
+   onSelect(questionId: string): void;
+@@ -34,6 +34,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+   onAsk?(text: string): void;
+   /** preview the engine's suggested fix as a proposal */
+   onPreviewFix?(actions: SurveyAction[], label: string): void;
++  /** build the ticked items of this turn's change plan (Phase 2) */
++  onExecutePlan?(entryId: string, items: string[]): void;
++  /** set the change plan aside */
++  onCancelPlan?(entryId: string): void;
+   counts: { label: string; value: number }[] | null;
+   canApply: boolean;
+   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
+@@ -63,7 +67,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+       )}
+       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
+         <div className="iq-card-head">
+-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? "THINKING" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
++          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? (entry.changePlan?.approved ? "BUILDING THE PLAN" : "THINKING") : entry.status === "plan" ? "CHANGE PLAN" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
+           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
+           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
+@@ -89,6 +93,23 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
+             )}
+           </div>
+         )}
++        {entry.status === "failed" && entry.handoff?.fallback && (
++          /* what the engine can do by itself when the model is not there (Phase 2): executable choices */
++          <div className="cp-clarify cp-fallback" data-testid="cp-fallback">
++            <span className="iq-label">Without a model</span>
++            <p className="iqi-dim">{entry.handoff.fallback.question}</p>
++            {entry.handoff.fallback.choices.map((c, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAsk?.(c.text)} data-testid="cp-fallback-choice"><span className="iq-example-text">{c.label}</span><span className="iq-example-about">{c.text}</span></button>)}
++          </div>
++        )}
++        {entry.status === "plan" && entry.changePlan && <PlanCard entry={entry} def={def} onSelect={onSelect} onExecute={onExecutePlan} onCancel={onCancelPlan} onAnswer={onAnswer} />}
++        {entry.status !== "plan" && entry.changePlan?.approved && (
++          <div className="cp-plan-built" data-testid="cp-plan-built">
++            <span className="iq-label">Built from the change plan</span>
++            <ol className="cp-plan">
++              {entry.changePlan.items.map((it) => { const failed = entry.changePlan!.failures?.find((f) => f.id === it.id); return <li key={it.id} data-testid="cp-plan-built-item" data-failed={failed ? "1" : ""}><b>{it.title}</b>{it.objects.length ? <span className="iqi-dim"> · {it.objects.join(", ")}</span> : null}{failed ? <span className="iq-error"> — not built: {failed.failure.message}</span> : null}</li>; })}
++            </ol>
++          </div>
++        )}
+         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
+         {entry.appliedNote && <p className="cp-applied-note" data-testid="cp-applied-note"><Icon name="check" size={12} /> {entry.appliedNote}</p>}
+         {save?.state === "failed" && <SaveFailed save={save} onRetry={onRetrySave} />}
+@@ -245,3 +266,49 @@ export function SaveFailed({ save, onRetry }: { save: Extract<SaveView, { state:
+     </p>
+   );
+ }
++
++
++/**
++ * THE CHANGE PLAN, read before anything is built (Phase 2): every item with
++ * what it touches and why, ticked by default; the model's questions and
++ * assumptions beside it; Build the ticked items, or set the plan aside.
++ */
++function PlanCard({ entry, def, onSelect, onExecute, onCancel, onAnswer }: { entry: CopilotEntry; def: SurveyDefinition; onSelect(id: string): void; onExecute?(entryId: string, items: string[]): void; onCancel?(entryId: string): void; onAnswer(text: string): void }) {
++  const plan = entry.changePlan!;
++  const [ticked, setTicked] = React.useState<string[]>(() => plan.items.map((i) => i.id));
++  const toggle = (id: string) => setTicked((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
++  const KIND_WORD: Record<string, string> = { create: "add", modify: "change", remove: "remove", logic: "logic", design: "design", analysis: "analysis", other: "" };
++  return (
++    <div className="cp-change-plan" data-testid="cp-change-plan" data-items={plan.items.length}>
++      <p className="cp-reply"><Linked text={plan.summary} def={def} onSelect={onSelect} /></p>
++      <ol className="cp-plan cp-plan-items">
++        {plan.items.map((it, i) => (
++          <li key={it.id} className={ticked.includes(it.id) ? "" : "off"} data-testid="cp-plan-item" data-kind={it.kind} data-on={ticked.includes(it.id) ? "1" : "0"}>
++            <label className="cp-plan-row">
++              <input type="checkbox" checked={ticked.includes(it.id)} onChange={() => toggle(it.id)} data-testid="cp-plan-tick" aria-label={`Build: ${it.title}`} />
++              <span className="cp-plan-n">{i + 1}</span>
++              <span className="cp-plan-body">
++                <b>{it.title}</b>{KIND_WORD[it.kind] ? <span className={`chip cp-plan-kind k-${it.kind}`}>{KIND_WORD[it.kind]}</span> : null}
++                {it.objects.length > 0 && <span className="iqi-dim"> · <Linked text={it.objects.join(", ")} def={def} onSelect={onSelect} /></span>}
++                {it.reason && <span className="cp-plan-why"><Linked text={it.reason} def={def} onSelect={onSelect} /></span>}
++                {it.detail && <span className="cp-plan-detail iqi-dim">{it.detail}</span>}
++              </span>
++            </label>
++          </li>
++        ))}
++      </ol>
++      {plan.questions.length > 0 && (
++        <div className="cp-clarify" data-testid="cp-plan-questions">
++          <span className="iq-label">Before building, the copilot would ask</span>
++          {plan.questions.map((q, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAnswer(q)}><span className="iq-example-text">{q}</span></button>)}
++        </div>
++      )}
++      {plan.assumptions.length > 0 && <p className="iqi-dim cp-plan-assumptions" data-testid="cp-plan-assumptions"><span className="iq-label">Assumed</span> {plan.assumptions.join(" · ")}</p>}
++      <div className="cp-actions">
++        <button type="button" className="iq-btn primary" disabled={!ticked.length} onClick={() => onExecute?.(entry.id, ticked)} data-testid="cp-plan-build" title={ticked.length ? `Build ${ticked.length} of ${plan.items.length} items — one model call each, then one proposal to review` : "Tick at least one item"}>Build {ticked.length === plan.items.length ? "the plan" : `${ticked.length} of ${plan.items.length}`}</button>
++        <button type="button" className="iq-btn" onClick={() => onCancel?.(entry.id)} data-testid="cp-plan-cancel">Set aside</button>
++        <span className="iqi-dim">Nothing is written until the built proposal is applied.</span>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index efbb34c..9a383d1 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -13,6 +13,7 @@ import {
+ import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
+ import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
+ import { describeFailure, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
++import type { ChangePlan } from "@/lib/copilot/changePlan";
+ import type { HeardTranscript } from "../../../lib/intelligent/voice";
+ import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
+ 
+@@ -45,8 +46,10 @@ export interface CopilotEntry {
+   kind: "copilot";
+   text: string;
+   heard?: HeardTranscript;
+-  status: "thinking" | "ready" | "failed" | "empty";
++  status: "thinking" | "ready" | "failed" | "empty" | "plan";
+   reply?: CopilotReply;
++  /** the change plan the model proposed before building (Phase 2): read, ticked and approved here; `approved` once it was built */
++  changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
+   error?: string;
+   message?: string;
+   /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
+@@ -77,6 +80,8 @@ export interface EngineHandoff {
+   category: string | null;
+   reason: string;
+   detected: { what: string; value: string }[];
++  /** what the engine can do without a model — a question with executable choices (Phase 2) */
++  fallback?: { understood: string; question: string; choices: { label: string; text: string }[] };
+ }
+ export interface EngineTurn {
+   kind: Interpretation["kind"];
+@@ -401,9 +406,16 @@ export function useCopilot(opts: {
+   /** what travels with a turn: the verdicts and the strongest findings, never the results */
+   const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
+ 
+-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+-    const id = uid("copilot");
+-    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
++  /*
++   * PLAN FIRST (Phase 2). A generation is planned before it is built: the
++   * route returns a change plan, the card shows it, and only the approved
++   * items are built — one call each. Off, the single-reply turn runs as
++   * before. The preference is the researcher's, kept in this browser.
++   */
++  const [planFirst, setPlanFirstState] = React.useState<boolean>(() => { try { return window.localStorage.getItem("rescript.copilot.planFirst") !== "off"; } catch { return true; } });
++  const setPlanFirst = React.useCallback((v: boolean) => { setPlanFirstState(v); try { window.localStorage.setItem("rescript.copilot.planFirst", v ? "on" : "off"); } catch { /* a private window */ } }, []);
++
++  const run = React.useCallback(async (id: string, text: string, mode: "review" | "generate" | undefined, extra: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
+     setBusy(true);
+     try {
+       const proposal = session.proposal;
+@@ -411,7 +423,7 @@ export function useCopilot(opts: {
+       const fake = fakeRef.current.shift();
+       const r = await fetch("/api/copilot/turn", {
+         method: "POST", headers: { "content-type": "application/json" },
+-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}) }),
++        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...extra }),
+       });
+       if (themeImage) setThemeImage(null);
+       /* every model turn is in the history with the call it made and what it cost — a failed one too */
+@@ -441,6 +453,12 @@ export function useCopilot(opts: {
+       const d = await r.json().catch(() => null) as Record<string, unknown> | null;
+       if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
+       setAvailable(true);
++      if (d.stage === "plan" && d.plan) {
++        // the change plan: read and approved before anything is built
++        const plan = d.plan as ChangePlan;
++        opts.patch(id, { status: "plan", changePlan: plan, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
++        return "handled";
++      }
+       const reply = d.reply as CopilotReply | null;
+       const review = d.review as SurveyReview | undefined;
+       if (!reply) {
+@@ -457,6 +475,10 @@ export function useCopilot(opts: {
+         return "empty";
+       }
+       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
++      if (d.stage === "executed" && d.plan) {
++        const built = d.plan as ChangePlan;
++        patch.changePlan = { ...built, approved: built.items.map((i) => i.id), ...(Array.isArray(d.planFailures) ? { failures: d.planFailures as { id: string; failure: TurnFailure }[] } : {}) };
++      }
+       const intent: OpIntent = { mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
+       const failed = reply.rejected.map((x) => ({ description: "an action the model wrote", reason: x.reason ?? "not in a shape the Studio accepts" }));
+       if (reply.actions.length) patch.opKey = recordProposal(text, reply.actions, { source: "model", intent, apiCalls: [call(d)], warnings: failed.map((f) => `Dropped: ${f.reason}`) }, session.openOp);
+@@ -481,7 +503,30 @@ export function useCopilot(opts: {
+     } finally {
+       setBusy(false);
+     }
+-  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal]);
++  }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst]);
++
++  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
++    const id = uid("copilot");
++    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
++    return run(id, text, mode, {});
++  }, [opts, run]);
++
++  /** the approved items of a change plan, built one call each into one proposal on the same card */
++  const executePlan = React.useCallback(async (entryId: string, items: string[]): Promise<void> => {
++    const entry = copilotTurns.find((t) => t.id === entryId);
++    if (!entry?.changePlan || entry.status !== "plan" || !items.length) return;
++    const mode = (entry.context?.mode === "generate" ? "generate" : undefined) as "generate" | undefined;
++    opts.patch(entryId, { status: "thinking", changePlan: { ...entry.changePlan, approved: items } });
++    await run(entryId, entry.text, mode, { stage: "execute", plan: entry.changePlan, items });
++  }, [copilotTurns, opts, run]);
++
++  /** a change plan the researcher does not want: the card says so, nothing was built or charged beyond the plan */
++  const cancelPlan = React.useCallback((entryId: string) => {
++    const entry = copilotTurns.find((t) => t.id === entryId);
++    if (!entry || entry.status !== "plan") return;
++    opts.patch(entryId, { status: "empty", message: "Plan set aside — nothing was built." });
++    if (entry.opKey) updateOp(entry.opKey, { status: "cancelled" });
++  }, [copilotTurns, opts, updateOp]);
+ 
+   /*
+    * THE ENGINE'S OWN ANSWER. A sentence the engine interpreted
+@@ -715,6 +760,7 @@ export function useCopilot(opts: {
+     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
+     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
+     ask, local, working, runReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
++    planFirst, setPlanFirst, executePlan, cancelPlan,
+     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+     quotaCounts, quotaCountsAt, refreshQuotaCounts,
+     analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
+diff --git a/apps/studio/lib/copilot/changePlan.test.ts b/apps/studio/lib/copilot/changePlan.test.ts
+new file mode 100644
+index 0000000..f92c458
+--- /dev/null
++++ b/apps/studio/lib/copilot/changePlan.test.ts
+@@ -0,0 +1,55 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, CHANGE_PLAN_SCHEMA } from "./changePlan.ts";
++
++/* Phase 2: the change plan is read strictly, prompted for precisely, and its items' replies merge into one proposal. */
++test("a plan is read with stable ids, bounded sizes and a default summary; nothing plan-shaped is null", () => {
++  const plan = coerceChangePlan({ kind: "plan", items: [
++    { title: "Record the research design", kind: "design", objects: [], reason: "the hypothesis names the constructs" },
++    { id: "p1", title: "Add a screener block", kind: "create", objects: ["Screener"], reason: "the population is adults 18+" },
++    { id: "p1", title: "Add a purchase-intent block", kind: "create", objects: ["Intent"], reason: "H1", detail: "three 5-point items" },
++    { title: "", kind: "create", reason: "no title" },
++    { title: "Plan the analysis", kind: "nonsense", reason: "H1, H2" },
++  ], questions: ["Which brands?"], assumptions: ["online panel"] });
++  assert.ok(plan);
++  assert.deepEqual(plan!.items.map((i) => i.id), ["p1", "p2", "p3", "p5"], "a missing id is made, a repeated one replaced");
++  assert.equal(plan!.items[3].kind, "other", "an unknown kind is 'other'");
++  assert.equal(plan!.items[2].detail, "three 5-point items");
++  assert.equal(plan!.summary, "4 changes");
++  assert.deepEqual(plan!.questions, ["Which brands?"]);
++  assert.equal(coerceChangePlan({ kind: "proposal", actions: [] }), null);
++  assert.equal(coerceChangePlan({ kind: "plan", items: [] }), null);
++  assert.equal(coerceChangePlan("plan"), null);
++  assert.ok(CHANGE_PLAN_SCHEMA.schema.required.includes("items"));
++});
++
++test("the prompts: the plan stage forbids actions; an item's execution names the item, the plan and what was built already", () => {
++  assert.match(planStagePrompt(), /NO ACTIONS/);
++  assert.match(planStagePrompt(), /"kind":"plan"/);
++  const plan = coerceChangePlan({ kind: "plan", summary: "A brand-switching questionnaire", items: [{ id: "a", title: "Record the design", kind: "design", reason: "r1" }, { id: "b", title: "Add the screener", kind: "create", objects: ["Screener"], reason: "r2", detail: "age and gender" }] })!;
++  const p = executeItemPrompt(plan, plan.items[1], 1, plan.items, ["Record the design"]);
++  assert.match(p, /BUILD ITEM 2 ONLY: "Add the screener" — age and gender \(r2\)/);
++  assert.match(p, /1\. Record the design\n2\. Add the screener \[Screener\]/);
++  assert.match(p, /ALREADY BUILT .*: Record the design/);
++  assert.match(p, /ACTIONS FOR THIS ITEM ONLY/);
++  assert.doesNotMatch(executeItemPrompt(plan, plan.items[0], 0, plan.items, []), /ALREADY BUILT/);
++});
++
++test("the items' replies merge in plan order into one proposal, with the plan carried as its blocks", () => {
++  const plan = coerceChangePlan({ kind: "plan", items: [{ id: "a", title: "Design", kind: "design", reason: "why a" }, { id: "b", title: "Screener", kind: "create", reason: "why b" }] })!;
++  const merged = mergeItemReplies([
++    { item: plan.items[0], raw: { kind: "proposal", reply: "Recorded the objective.", actions: [{ op: "set_research", objective: "x" }], assumptions: ["one"], understanding: { hypotheses: ["H1"] } } },
++    { item: plan.items[1], raw: { kind: "proposal", reply: "Two screener questions.", actions: [{ op: "create_question", type: "numeric", text: "Age?" }, { op: "create_question", type: "single_select", text: "Gender?", options: ["Male", "Female"] }], memory: "m" } },
++  ]);
++  assert.equal(merged.kind, "proposal");
++  assert.equal((merged.actions as unknown[]).length, 3);
++  assert.equal((merged.actions as { op: string }[])[0].op, "set_research");
++  assert.equal(merged.reply, "Design: Recorded the objective. Screener: Two screener questions.");
++  assert.deepEqual(merged.plan, [{ block: "Design", purpose: "why a" }, { block: "Screener", purpose: "why b" }]);
++  assert.deepEqual(merged.assumptions, ["one"]);
++  assert.deepEqual(merged.understanding, { hypotheses: ["H1"] });
++  assert.equal(merged.memory, "m");
++  const empty = mergeItemReplies([{ item: plan.items[0], raw: null }]);
++  assert.equal(empty.reply, "Built 1 item of the plan.");
++  assert.deepEqual(empty.actions, []);
++});
+diff --git a/apps/studio/lib/copilot/changePlan.ts b/apps/studio/lib/copilot/changePlan.ts
+new file mode 100644
+index 0000000..5542d38
+--- /dev/null
++++ b/apps/studio/lib/copilot/changePlan.ts
+@@ -0,0 +1,123 @@
++/**
++ * THE CHANGE PLAN (Research Engine audit, Phase 2) — a plan the researcher
++ * reads BEFORE the model writes a single action.
++ *
++ * A whole questionnaire from a brief, a restructuring, a redesign: the model
++ * used to answer with every action in one reply — long, truncation-prone,
++ * and approved only as a finished diff. Now such a request is two stages:
++ *
++ *   plan     one small, schema-bound call: "Modify Q5 wording · Remove Q12 ·
++ *            Add a purchase-intent block · Update the screener logic", each
++ *            item with the objects it touches and why. Shown as a card; the
++ *            researcher unticks what they do not want and approves.
++ *   execute  one schema-bound call PER ITEM, each asked for that item's
++ *            actions only (a budget each, so nothing is cut off), gathered
++ *            into one proposal that goes through the same gate, review and
++ *            Apply as any other.
++ *
++ * This module is the pure part: the plan's shape and schema, its reading from
++ * the model's reply, and the prompts for both stages. The route runs it; the
++ * copilot hook and the card show it.
++ */
++
++export type ChangeKind = "create" | "modify" | "remove" | "logic" | "design" | "analysis" | "other";
++export interface ChangePlanItem {
++  id: string;
++  /** "Add a purchase-intent block", imperative, short */
++  title: string;
++  kind: ChangeKind;
++  /** the questions, blocks or design parts it touches — codes where they exist, else names */
++  objects: string[];
++  /** why — in the researcher's terms (the objective, the hypothesis, the problem it fixes) */
++  reason: string;
++  /** what exactly will be done, when the title is not enough */
++  detail?: string;
++}
++export interface ChangePlan {
++  summary: string;
++  items: ChangePlanItem[];
++  /** what the model would ask before building, when the request is under-specified */
++  questions: string[];
++  /** what it assumed instead of asking */
++  assumptions: string[];
++}
++
++const KINDS = new Set<ChangeKind>(["create", "modify", "remove", "logic", "design", "analysis", "other"]);
++export const CHANGE_PLAN_SCHEMA = {
++  name: "change_plan",
++  schema: {
++    type: "object",
++    properties: {
++      kind: { type: "string", enum: ["plan"] },
++      summary: { type: "string" },
++      items: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, kind: { type: "string", enum: [...KINDS] }, objects: { type: "array", items: { type: "string" } }, reason: { type: "string" }, detail: { type: "string" } }, required: ["title", "kind", "reason"], additionalProperties: true } },
++      questions: { type: "array", items: { type: "string" } },
++      assumptions: { type: "array", items: { type: "string" } },
++    },
++    required: ["kind", "summary", "items"],
++    additionalProperties: true,
++  },
++};
++
++const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
++const strs = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.map((x) => str(x, len)).filter((x): x is string => !!x).slice(0, max) : []);
++
++/** The gate on a plan reply: null when it carries no item. Ids are made stable (p1, p2 …) when the model gave none or repeated them. */
++export function coerceChangePlan(raw: unknown): ChangePlan | null {
++  if (!raw || typeof raw !== "object") return null;
++  const o = raw as Record<string, unknown>;
++  if (!Array.isArray(o.items)) return null;
++  const seen = new Set<string>();
++  const items: ChangePlanItem[] = o.items.map((it, i) => {
++    const x = (it ?? {}) as Record<string, unknown>;
++    const title = str(x.title, 160);
++    if (!title) return null;
++    let id = str(x.id, 24) ?? `p${i + 1}`;
++    if (seen.has(id)) id = `p${i + 1}`;
++    seen.add(id);
++    const kind = KINDS.has(x.kind as ChangeKind) ? (x.kind as ChangeKind) : "other";
++    return { id, title, kind, objects: strs(x.objects, 20, 60), reason: str(x.reason, 400) ?? "", ...(str(x.detail, 800) ? { detail: str(x.detail, 800) } : {}) };
++  }).filter((x): x is ChangePlanItem => !!x).slice(0, 30);
++  if (!items.length) return null;
++  return { summary: str(o.summary, 600) ?? `${items.length} change${items.length === 1 ? "" : "s"}`, items, questions: strs(o.questions, 5, 300), assumptions: strs(o.assumptions, 10, 300) };
++}
++
++/** The instruction appended to the normal prompt for the plan stage. */
++export function planStagePrompt(): string {
++  return `
++
++THIS TURN: THE CHANGE PLAN ONLY — NO ACTIONS. Before anything is built, the researcher reads a plan and approves it item by item. Reply with ONLY this JSON object:
++{"kind":"plan","summary":"<one sentence: what will change and why>","items":[{"id":"p1","title":"<imperative, short: Add a purchase-intent block>","kind":"create|modify|remove|logic|design|analysis|other","objects":["Q5","Screener"],"reason":"<why, in research terms>","detail":"<what exactly, when the title is not enough>"}],"questions":["<what you would ask before building, if anything>"],"assumptions":["<what you assumed instead of asking>"]}
++Rules: one item per coherent change (a block of questions is one item; a logic rule is one item; the research design — objective, hypotheses, constructs — is one item; the analysis plan is one item). Order the items as they should be built: design first, then structure, then questions, then logic, then analysis. Name objects by their codes where they exist in the OUTLINE. 3 to 15 items. Do not write questions or options here — only what will be done.`;
++}
++
++/** The instruction appended to the normal prompt for one item of an approved plan. */
++export function executeItemPrompt(plan: ChangePlan, item: ChangePlanItem, index: number, approved: ChangePlanItem[], done: string[]): string {
++  const list = approved.map((p, i) => `${i + 1}. ${p.title}${p.objects.length ? ` [${p.objects.join(", ")}]` : ""}`).join("\n");
++  return `
++
++THIS TURN: EXECUTE ONE ITEM OF THE APPROVED CHANGE PLAN. The researcher approved this plan (${plan.summary}):
++${list}
++${done.length ? `\nALREADY BUILT in earlier turns of this plan (do not repeat; new questions may reference these by the codes given): ${done.join("; ")}\n` : ""}
++BUILD ITEM ${index + 1} ONLY: "${item.title}"${item.detail ? ` — ${item.detail}` : ""} (${item.reason}). Reply in the usual JSON shape with "kind":"proposal" and the ACTIONS FOR THIS ITEM ONLY — complete questions with their options, codes and analysis tags where they apply. No "plan" field, no actions for other items, no commentary about the other items. "reply": one sentence saying what this item adds.`;
++}
++
++/** The replies of the executed items, as one reply for the gate: actions in plan order, the sentences joined, the plan carried as blocks. */
++export function mergeItemReplies(items: { item: ChangePlanItem; raw: unknown }[]): Record<string, unknown> {
++  const actions: unknown[] = [];
++  const replies: string[] = [];
++  const assumptions: unknown[] = [];
++  const sources: unknown[] = [];
++  let understanding: unknown;
++  let memory: unknown;
++  for (const { item, raw } of items) {
++    const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
++    if (Array.isArray(o.actions)) actions.push(...o.actions);
++    if (typeof o.reply === "string" && o.reply.trim()) replies.push(`${item.title}: ${o.reply.trim()}`);
++    if (Array.isArray(o.assumptions)) assumptions.push(...o.assumptions);
++    if (Array.isArray(o.sources)) sources.push(...o.sources);
++    if (!understanding && o.understanding) understanding = o.understanding;
++    if (typeof o.memory === "string") memory = o.memory;
++  }
++  return { kind: "proposal", reply: replies.join(" ") || `Built ${items.length} item${items.length === 1 ? "" : "s"} of the plan.`, actions, assumptions, sources, ...(understanding ? { understanding } : {}), ...(memory ? { memory } : {}), plan: items.map(({ item }) => ({ block: item.title, purpose: item.reason })) };
++}
+diff --git a/docs/PHASE2-NL-2026-10-08.md b/docs/PHASE2-NL-2026-10-08.md
+new file mode 100644
+index 0000000..cbd9231
+--- /dev/null
++++ b/docs/PHASE2-NL-2026-10-08.md
+@@ -0,0 +1,50 @@
++# Research Engine — Phase 2: Natural-language intelligence (08-10-2026)
++
++**Source:** the Research Engine audit (`RESEARCH-ENGINE-AUDIT-2026-10-08.md`, section K, Phase 2), on top of Phase 1. The outcome it set: *the ten example sentences each produce a plan, a question, or a proposal — never a dead end.* Every change below has a regression test and the tests were mutation-checked. Nothing existing was removed; the grammar, the recognisers and the model path behave as before for every sentence they already read.
++
++## The ten sentences, before and after
++
++| Sentence (audit §F) | Before | Now |
++|---|---|---|
++| Change the screener so that respondents under 25 are excluded. | → model, then "not understood" | **Engine:** `add_skip` to a screened end on Q1 (AGE), condition `Q1 < 25`, with the population shown as resolved |
++| Create a research design for understanding why customers are switching from Brand A to Brand B. | → model | → model, **and without one** the engine offers "Record the objective" as the first step (a `set_research`) |
++| Add a question to measure purchase intent. | → model (fails internally) | → model, **and without one** the engine offers the standard items (5-point and 0–10 likelihood to purchase, the brand taken from the objective) as executable sentences |
++| Change this question to a 5-point scale. | → model | **Engine:** `update_question.scale` on the selected question, the current options named as replaced |
++| Create a cross-tab between age and brand preference. | → model | **Engine:** `add_crosstab` BRAND_PREF by AGE — the demographic in the banner, numeric AGE banded when it runs |
++| Create a report showing the key findings. | → model | → model (Phase 5's generator); the failure card says why when there is none |
++| Review the entire survey and identify problems with the logic. | → model | unchanged (the review runs the engine's own checks when a model answers) |
++| Make the questionnaire shorter without losing the important research objectives. | → model | → model with the **change plan** shown first (Phase 3 adds the relevance scoring the engine needs to do it alone) |
++| Based on this hypothesis, create the questionnaire and connect all questions to the research framework. | → model, one 8 000-token reply | → **change plan** first; each approved item built with its own call |
++| Make this survey more suitable for first-time smartphone buyers and remove unnecessary questions. | → model | → model with the change plan first (the audience model is Phase 3) |
++
++And the audit's shorter probes: *Screen out respondents under 25* (engine), *Change Q7 to a 5-point scale* (engine), *Add a crosstab of AGE by BRAND_PREF* (engine), *Create the most important crosstabs for this research* (engine: the framework's hypothesis-linked, priority-1 tables as `add_crosstab`s), *Show me the most important crosstabs* (answer), *Which questions are not connected to any hypothesis?* (answer from the design, with the roles that explain the expected ones).
++
++## What was built
++
++**Semantic object resolution (`packages/engine/src/nlSemantics.ts`)** — four deterministic resolvers over the survey, each saying how it resolved:
++
++- `resolvePopulation`: *respondents under 25*, *people aged 18 to 24*, *anyone over 65*, *those 18+*, *under-25s*, *women*, *male respondents*, *those who switched*, *people who have not switched brands*, *Brand A users*, *those who prefer Brand B*, *those in the North*, and compounds (*under 18 and anyone over 65* → either). An age phrase finds the age question (numeric, or banded single-select); on bands, whole bands inside the range are selected and a band that straddles the bound is refused with the exact fix. The sentence's own comparator is kept on numeric ages (`< 25`, `> 65`, `>= 18 AND <= 65`). Two questions that fit are returned with the alternative so the recogniser asks.
++- `resolveConcept`: a code or variable first, then a construct of that name and the questions that measure it, a question tagged with it, then the wording — ranked by how many of the phrase's words (as everyday families: *purchase/buy*, *intent/likely*, *age/old*…) it carries; equal candidates are `ambiguous`.
++- `resolveRole`: *the screener* (screening role, a terminating question, a block titled like one, else the first page), *demographics* (segmentation role, open text excluded), *this question*, *the whole survey*, a block by title.
++- `parseScale`: *5-point*, *seven point likert*, *1 to 10*, *0–10 where 0 = not at all, 10 = extremely*, *agree–disagree*, *satisfaction*, *likelihood*, *importance*, *quality*, *frequency*, *NPS*, *yes/no* → points, start and anchors (full label sets at 5 and 7 points).
++
++The concept-word families moved here from the `measures` recogniser, which now imports them, so "which questions measure X" and "cross-tab X by Y" read a concept the same way.
++
++**Recognisers (`nlIntent.ts`)** — `screenerEdit`, `scaleChange`, `crosstabs`, `keyCrosstabs`, `unconnected`, `objective`; the sentences are listed above. Each lands on the existing actions through the existing gate (`act` applies them to a copy first), says what it understood, refuses with the fix when the type cannot take it (a multi-select has no scale → the single-select conversion is offered with its actions), says "already so" when the rule or scale is there, and asks with one executable choice per candidate when a phrase fits several questions.
++
++**What the engine can do without a model** — a `model` interpretation now carries `fallback` (a question and executable choices) for "add a question to measure *X*" (a small library of standard items: purchase intent, satisfaction, NPS, awareness, importance, loyalty, trust, usage frequency, price perception) and "create a research design for *Y*" (record the objective). The Studio uses it in three places: on a failed model turn (the "Without a model" block under the failure), when the Studio already knows there is no model (an engine question, no call made), and after an unusable reply (the failed card with the choices stands instead of the grammar's guess at a sentence the engine declined to read).
++
++**The change plan (`apps/studio/lib/copilot/changePlan.ts`, the turn route, `useCopilot`, `CopilotCard`)** — a generation is planned before it is built. The route's plan stage asks for a schema-bound plan (`kind: "plan"`, items with title, kind, objects, reason, detail; the model's questions and assumptions), no actions. The card shows it as *CHANGE PLAN*: items ticked by default, Build or Set aside. Building sends the approved items back (`stage: "execute"`); each is built with its own schema-bound call that names the item, the whole plan and what earlier items produced; the replies merge into one proposal that goes through the same gate, review and Apply. An item that fails (cut off, refused) is reported on the built card and the rest still land. "Plan first" is a toggle in the Intelligent header (on by default, kept per browser); off, the single-reply turn runs as before. The sandbox's scripted replies keep working: a reply that is not plan-shaped falls through to the direct turn, so every existing suite passes unchanged.
++
++## Tests
++
++| Suite | What it checks | Result |
++|---|---|---|
++| `packages/engine/src/nlSemantics.test.ts` | ten age phrasings, bands (inside / straddle / none / two age questions), gender, yes/no with negation, option labels (longest wins; the verb picks the question), compounds; concept tiers and ambiguity; the four roles; scale kinds, points, starts, anchors | 7 tests |
++| `packages/engine/src/nlPhase2.test.ts` | the screener in six phrasings applied, twins refused, two age questions asked and each choice read; scale on the selection / by code / by description / numeric / text / multi-select / already so; crosstab banner rule, "X by Y", twice, ambiguity, none, same variable; key crosstabs planned then already so, listed when asked which; unconnected questions with roles; the objective and the two fallbacks executed through the engine | 7 tests (engine 1732 pass) |
++| `apps/studio/lib/copilot/changePlan.test.ts` | plan coercion (ids, kinds, bounds, null), the two prompts, the merge | 3 tests (studio 280 pass) |
++| `scripts/phase2-nl-test.mjs` (browser, sandbox) | the five engine sentences as cards, applied; the ambiguity choice; the fallback after an unusable answer and with no model known (no call made); the change plan shown, 3 of 4 ticked and built, the built card, applied; set aside; plan first off and persisted | 13 checks |
++
++Mutation checks: engine semantics and recognisers 36 mutations, all caught after three tests were strengthened and two redundant guards removed (the concept tiers simplified; an unreachable deferral check dropped); Studio surfaces 13 mutations through the browser suite, all caught after one check was strengthened (plan first off with a plan-shaped answer).
++
++Regression: the full corpus (130 suites) passes except the 10 known baseline failures (4 need Postgres, 6 unchanged from the previous runs). Two suites were adjusted for behaviour Phase 2 changed on purpose: `phase1-reliability-test.mjs` used the screener sentence as its example of a model hand-off, which the engine now reads itself (it uses a rewording now); `analysis-framework-test.mjs` exposed a compound sentence (“add a crosstab of X by Y and test …”) that the new crosstab recogniser swallowed — it now leaves a sentence with a second instruction to the model, with a unit test. `pnpm -r test` is green across 17 packages; both typechecks and the auth-guard audit are clean.
+diff --git a/packages/engine/src/nlIntent.ts b/packages/engine/src/nlIntent.ts
+index 8f232c8..dc02ef0 100644
+--- a/packages/engine/src/nlIntent.ts
++++ b/packages/engine/src/nlIntent.ts
+@@ -15,6 +15,8 @@ import { listBlocks, listPages } from "./blocks.js";
+ import { getQuestionByCodeOrVar } from "./state.js";
+ import { stripHtmlText } from "./html.js";
+ import { ruleLabel } from "./logicProposal.js";
++import { conceptWords, parseScale, resolveConcept, resolvePopulation, scaleLabels, wordFamily, type ConceptMatch, type ScaleDescription } from "./nlSemantics.js";
++import { inferRole } from "./analysisFramework.js";
+ 
+ /**
+  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
+@@ -92,7 +94,9 @@ export type Interpretation =
+   | { kind: "answer"; category: IntentCategory; understood: string; answer: string; sections: AnswerSection[]; detected: Detected[] }
+   | { kind: "clarify"; category: IntentCategory; understood: string; question: string; choices: { label: string; text: string }[]; detected: Detected[] }
+   | { kind: "refused"; category: IntentCategory; understood: string; reason: string; detected: Detected[]; suggestion?: { text: string; actions?: SurveyAction[] }; /** nothing to do: the survey already is as asked */ noop?: boolean }
+-  | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[] };
++  | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
++      /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
++      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
+ 
+ export interface InterpretContext {
+   /** the selected question: "this question", "it", "these options" */
+@@ -742,31 +746,8 @@ const untranslated: Recogniser = (r) => {
+ 
+ /* ---------------------------------------------------------- queries: research */
+ 
+-/**
+- * Concept words for "which questions measure X": a researcher's construct
+- * name is rarely the wording of the question ("purchase intent" is asked as
+- * "how likely are you to buy …"), so each word brings its everyday family.
+- * Kept small and obvious — anything subtler is the model's.
+- */
+-const CONCEPTS: string[][] = [
+-  ["purchase", "buy", "bought", "buying", "order", "shop", "shopp"],
+-  ["intent", "intention", "intend", "likely", "likelihood", "plan", "consider", "probability"],
+-  ["satisfaction", "satisfied", "satisfi", "happy", "pleased", "content"],
+-  ["awareness", "aware", "heard", "familiar", "recognise", "recognize", "know"],
+-  ["loyalty", "loyal", "recommend", "again", "repeat", "nps"],
+-  ["usage", "use", "used", "using", "consume"],
+-  ["price", "cost", "expensive", "cheap", "afford", "pay", "spend", "value"],
+-  ["age", "old", "year", "born"],
+-  ["gender", "sex", "male", "female"],
+-  ["income", "earn", "salary", "household"],
+-  ["trust", "trustworthy", "reliable", "rely"],
+-  ["preference", "prefer", "favourite", "favorite", "best"],
+-];
+-const family = (w: string): Set<string> => {
+-  const s = stemWord(w);
+-  const g = CONCEPTS.find((xs) => xs.some((x) => stemWord(x) === s));
+-  return new Set([s, ...(g ?? []).map(stemWord)]);
+-};
++/** concept word families — shared with the semantic resolvers (nlSemantics), so "which questions measure X" and "cross-tab X by Y" read a concept the same way */
++const family = wordFamily;
+ const QUERY_STOP = new Set(["measure", "measur", "capture", "captur", "asses", "assess", "track", "cover", "relat", "relate", "deal", "concept", "thing", "topic", "our", "my", "their", "study", "survey"]);
+ 
+ const measures: Recogniser = (r) => {
+@@ -2000,6 +1981,296 @@ const questions: Recogniser = (r) => {
+   return null;
+ };
+ 
++/* ============================================================ Phase 2: the brief's sentences, read by the engine */
++
++/*
++ * RESEARCH ENGINE AUDIT, PHASE 2 — the descriptive sentences the audit found
++ * ending in "NOT UNDERSTOOD" although the engine owns every operation they
++ * need. Each resolves its objects semantically (nlSemantics) and lands on the
++ * same actions the model would emit, through the same gate: a screener
++ * exclusion is `add_skip` to a screened end on the question the population
++ * reads; a scale change is `update_question.scale`; a crosstab is
++ * `add_crosstab` on the two variables the concepts name; the key crosstabs
++ * are the framework's own priorities; the unconnected questions are read off
++ * the design. When a phrase fits several questions the researcher is asked,
++ * with one choice per candidate.
++ */
++
++const POPULATION_SHAPE = new RegExp(String.raw`^(?:(?:all|any|every|the)\s+)?(?:respondents?|people|persons?|participants?|anyone|anybody|everyone|everybody|someone|those|users?|customers?|consumers?|buyers?|shoppers?|individuals?|adults?|subjects?|panel(?:l?ists)?|members?|women|woman|females?|men|man|males?|ladies|gentlemen|under|over|above|below)\b|^\d{1,3}\s*(?:\+|-|–|to|and)|^(?:under|over)-?\d`, "i");
++
++/* ---------------------------------------------------------- the screener */
++
++const screenerEdit: Recogniser = (r) => {
++  const t = r.text;
++  const SCREEN_OUT = String.raw`(?:screened?\s*out|excluded|disqualified|terminated|rejected|not\s+(?:be\s+)?(?:allowed|eligible|included|admitted|qualified)|(?:be\s+)?(?:removed|dropped|turned\s+away|kept\s+out|filtered\s+out)|ineligible)`;
++  let m: RegExpExecArray | null;
++  let phrase: string | null = null;
++  let only = false;
++  // "change the screener so that respondents under 25 are excluded"
++  if ((m = new RegExp(String.raw`^(?:change|update|modify|edit|adjust|set|fix|tighten|revise|amend)\s+(?:the\s+)?(?:screener|screening(?:\s+(?:logic|questions?|section|criteria|rules?))?|qualification(?:\s+criteria)?|eligibility(?:\s+criteria|\s+rules?)?)\s*,?\s*(?:so\s+that|so|such\s+that|to\s+ensure(?:\s+that)?|to\s+make\s+sure(?:\s+that)?|to\s+guarantee(?:\s+that)?|to)\s+(.+?)\s+(?:are|is|get|gets|will\s+be|would\s+be|should\s+be|must\s+be|can'?t\s+(?:take\s+part|participate|continue|proceed)|cannot\s+(?:take\s+part|participate|continue|proceed))(?:\s+${SCREEN_OUT})?$`, "i").exec(t))) {
++    phrase = m[1];
++    if (!new RegExp(String.raw`${SCREEN_OUT}$|can'?t|cannot`, "i").test(t)) return null;
++  }
++  // "screen out respondents under 25", "exclude anyone over 65 from the survey", "do not allow people under 18"
++  else if ((m = new RegExp(String.raw`^(?:screen\s*out|disqualify|terminate|reject|exclude|filter\s+out|keep\s+out|turn\s+away|do\s+not\s+(?:allow|admit|include|accept)|don'?t\s+(?:allow|admit|include|accept))\s+(.+?)(?:\s+(?:from|in)\s+(?:the\s+)?(?:survey|study|sample|research|interview|questionnaire))?$`, "i").exec(t))) {
++    phrase = m[1];
++    if (!/^(?:screen\s*out|disqualify|terminate)/i.test(t) && !POPULATION_SHAPE.test(phrase)) return null;
++  }
++  // "only allow people aged 18 to 65", "restrict the survey to women", "make sure only car owners can take part"
++  else if ((m = new RegExp(String.raw`^(?:only\s+)?(?:allow|include|accept|admit|qualify|let\s+(?:in|through))\s+(?:only\s+)?(.+?)(?:\s+(?:in|into|to|through)\s+(?:the\s+)?(?:survey|study|sample|research|interview))?$`, "i").exec(t)) && /\bonly\b/i.test(t)) { phrase = m[1]; only = true; }
++  else if ((m = /^(?:restrict|limit)\s+(?:the\s+)?(?:survey|study|sample|respondents?|participation|eligibility)\s+to\s+(.+)$/i.exec(t))) { phrase = m[1]; only = true; }
++  else if ((m = /^(?:make\s+sure|ensure)\s+(?:that\s+)?only\s+(.+?)\s+(?:can\s+|may\s+|are\s+able\s+to\s+|are\s+allowed\s+to\s+)?(?:take\s+part|participate|continue|proceed|qualify|complete\s+the\s+survey|take\s+the\s+survey|answer|enter|respond)$/i.exec(t))) { phrase = m[1]; only = true; }
++  if (!phrase) return null;
++  const ref = unquote(phrase).replace(/^(?:all|any|every)\s+/i, "");
++  const pop = resolvePopulation(r.def, ref);
++  if (!pop) return null;
++  const understood = only ? `Allow only ${ref} into the survey — screen out everyone else.` : `Screen out ${ref}.`;
++  if (!pop.ok) return refused("logic", understood, pop.reason, [det("population", ref)]);
++  const p = pop.population;
++  if (p.alternatives?.length) {
++    return { kind: "clarify", category: "logic", understood, question: `“${ref}” could be read on ${[p.question, ...p.alternatives].map((q) => `${code(q)} (${plain(q.text, 40)})`).join(" or ")} — which question should the screener read?`,
++      choices: [p.question, ...p.alternatives].map((q) => { const again = resolvePopulation({ ...r.def, questions: r.def.questions.filter((x) => x.id === q.id || ![p.question, ...p.alternatives!].some((a) => a.id === x.id)) }, ref); const e = again?.ok ? again.population.expression : null; return e ? { label: `${code(q)} — ${plain(q.text, 50)}`, text: `Screen out when ${only ? `NOT (${e})` : e}` } : null; }).filter((x): x is { label: string; text: string } => !!x), detected: [det("population", ref)] };
++  }
++  const expression = only ? `NOT (${p.expression})` : p.expression;
++  const c = readCondition(r, expression);
++  if (!c.ok) return badCondition(r, "logic", understood, expression, c);
++  const condWords = conditionWords(r.def, c.condition);
++  // the screener already does this: a terminating rule on that question with the same condition
++  const canon = formatCondition(r.def, c.condition);
++  const twin = (p.question.skipLogic ?? []).find((s) => (s.target.kind === "terminate" || s.target.kind === "end" && s.target.status === "screened") && formatCondition(r.def, s.when) === canon);
++  if (twin) return alreadySo("logic", understood, `${code(p.question)} already screens out when ${condWords} — nothing to add.`, [det("population", `${ref} → ${p.words}`)]);
++  const out = planSkip(r, { cond: expression, status: "screened", from: code(p.question) });
++  const detected: Detected[] = [det("population", `${ref} → ${p.words}`), ...out.detected.filter((d) => d.what !== "condition")];
++  if (out.kind === "actions") return { ...out, understood: `${understood} ${code(p.question)} (${p.question.variableName}) is where the survey learns it, so the rule lives there: screen out when ${condWords}.`, detected };
++  return { ...out, understood, detected } as Interpretation;
++};
++
++/* ---------------------------------------------------------- a scale */
++
++const SCALE_TYPES = new Set(["single_select", "dropdown", "rating", "matrix_single", "slider"]);
++const scaleChange: Recogniser = (r) => {
++  const t = r.text;
++  let m: RegExpExecArray | null;
++  let ref: string | null = null;
++  let words: string | null = null;
++  if ((m = /^(?:change|convert|turn|switch|update|set|move|put)\s+(?:question\s+)?(.+?)\s+(?:to|into|onto|so\s+(?:that\s+)?it\s+uses|to\s+use|on)\s+(?:an?\s+)?(.+)$/i.exec(t)) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
++  else if ((m = /^make\s+(?:question\s+)?(.+?)\s+(?:an?\s+)?(.+)$/i.exec(t)) && /\b(?:scale|point|likert|nps)\b/i.test(m[2]) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
++  else if ((m = /^(?:use|apply|give)\s+(?:an?\s+)?(.+?)\s+(?:on|for|at|in|to)\s+(?:question\s+)?(.+)$/i.exec(t)) && parseScale(m[1])) { ref = m[2]; words = m[1]; }
++  else if ((m = /^(?:change|set|update|replace)\s+(?:the\s+)?(?:scale|options|answer\s+options|response\s+options|answers)\s+(?:of|for|on)\s+(.+?)\s+(?:to|with)\s+(?:an?\s+)?(.+)$/i.exec(t)) && parseScale(m[2])) { ref = m[1]; words = m[2]; }
++  if (!ref || !words) return null;
++  const scale = parseScale(words)!;
++  const understood = `Change ${unquote(ref)} to a ${scale.name}.`;
++  const direct = resolveQuestionRef(r.def, ref, r.ctx);
++  let target: Question;
++  if (direct.ok) target = direct.question;
++  else if (direct.ambiguous || CODE_SHAPE.test(unquote(ref))) return unresolved(r, "question_modification", understood, ref, direct);
++  else {
++    // "the satisfaction question": by what it measures
++    const c = conceptOrAsk(r, unquote(ref).replace(/^(?:the|this|that)\s+/i, ""), "question_modification", understood);
++    if (!c.ok) return c.out && c.out.kind === "clarify" ? c.out : null;
++    target = c.v;
++  }
++  const labels = scaleLabels(scale);
++  const spec = { points: scale.points, ...(scale.start !== undefined ? { start: scale.start } : {}), ...(scale.labels ? { labels: scale.labels } : {}), ...(scale.low ? { low: scale.low } : {}), ...(scale.high ? { high: scale.high } : {}) };
++  const detected: Detected[] = [...qDetected([target]), det("scale", `${scale.name}: ${labels.join(" · ")}`)];
++  const have = (target.options ?? []).map((o) => o.label);
++  if (SCALE_TYPES.has(target.type) && have.length === labels.length && have.every((l, i) => l.trim().toLowerCase() === labels[i].toLowerCase())) {
++    return alreadySo("question_modification", understood, `${code(target)} already is a ${scale.name} (${labels.join(" · ")}).`, detected);
++  }
++  if (target.type === "multi_select") {
++    const fix = suggest(r, `Change ${code(target)} to a single-select ${scale.name}`);
++    return refused("question_modification", understood, `${code(target)} is a multi-select — each option is a separate answer, so it has no scale. Make it single-select first.`, detected, fix.actions ? fix : { text: fix.text, actions: [{ op: "update_question", target: code(target), type: "single_select", scale: spec }] });
++  }
++  if (/^(?:open_text|text|numeric|date|file|email)$/.test(target.type) || /single-select|single select/i.test(words)) {
++    const a: SurveyAction = { op: "update_question", target: code(target), type: "single_select", scale: spec };
++    return act(r, "question_modification", `Change ${code(target)} from ${kindOf(target)} to a single-select ${scale.name} (${labels.join(" · ")}); answers already collected as ${kindOf(target)} are reported before the change is applied.`, [a], [...detected, det("new type", "single select")]);
++  }
++  if (!SCALE_TYPES.has(target.type)) return refused("question_modification", understood, `${code(target)} is a ${kindOf(target)} question, which has no scale to change — say “change ${code(target)} to a single-select ${scale.name}” to convert it.`, detected, suggest(r, `Change ${code(target)} to a single-select ${scale.name}`));
++  const what = target.type === "matrix_single" ? "columns" : "options";
++  return act(r, "question_modification", `Change ${code(target)}'s ${what} to a ${scale.name}: ${labels.join(" · ")}${have.length ? ` — this replaces its ${have.length} current ${what}${(target.options ?? []).some((o) => o.flags?.length) ? " (flags such as exclusive or Other are not carried over)" : ""}` : ""}.`, [{ op: "update_question", target: code(target), scale: spec }], detected);
++};
++
++/* ---------------------------------------------------------- crosstabs */
++
++const DEMO_ROLE = (def: SurveyDefinition, q: Question) => inferRole(def, q) === "segmentation" || inferRole(def, q) === "screening";
++function conceptOrAsk(r: Run, phrase: string, category: IntentCategory, understood: string, other?: string): Got<ConceptMatch["question"]> {
++  const c = resolveConcept(r.def, phrase, r.ctx);
++  if (c.ok) return { ok: true, v: c.question };
++  if (c.ambiguous) {
++    return { ok: false, out: { kind: "clarify", category, understood, question: c.reason.replace(/\.$/, "") + " — which one?", choices: c.candidates.map((x) => ({ label: `${code(x.question)} — ${plain(x.question.text, 50)} (${x.why})`, text: substitute(r.text, phrase, x.question.variableName) })), detected: [det("concept", phrase), ...(other ? [det("concept", other)] : [])] } };
++  }
++  return { ok: false, out: refused(category, understood, `${c.reason} Name the variable (“${code(r.def.questions[0] ?? { code: "Q1" } as Question)}”, “AGE”) or add the question first.`, [det("concept", phrase)]) };
++}
++
++const crosstabs: Recogniser = (r) => {
++  const t = r.text;
++  let m: RegExpExecArray | null;
++  let a: string, b: string;
++  let byForm = false;
++  if ((m = /^(?:create|add|make|build|plan|set\s+up|run|produce|generate|prepare|i\s+(?:want|need)|we\s+(?:want|need))\s+(?:an?\s+|the\s+)?(?:new\s+)?cross[-\s]?tab(?:ulation|ulations|s)?\s+(?:between|of|for|with|showing|comparing|on)\s+(.+?)\s+(?:and|by|vs\.?|versus|against|×|x|with)\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = /\s+by\s+/i.test(t.slice(m.index)); }
++  else if ((m = /^cross[-\s]?tab(?:ulate)?\s+(.+?)\s+(?:by|and|against|with|vs\.?|versus|×)\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = /\s+by\s+/i.test(t); }
++  else if ((m = /^(?:analy[sz]e|compare|break\s+(?:down|out)|cut|split|tabulate)\s+(.+?)\s+by\s+(.+)$/i.exec(t))) { a = m[1]; b = m[2]; byForm = true; }
++  else return null;
++  a = unquote(a).replace(/\s+(?:question|variable|answers?|results?|responses?)$/i, ""); b = unquote(b).replace(/\s+(?:question|variable|answers?|results?|responses?|groups?)$/i, "");
++  // "… by country and test intent across age groups": a second instruction, or several variables a side — the model's, not a guess here
++  if (/\b(?:and|then|plus|also)\b|,|;/i.test(a) || /\b(?:and|then|plus|also)\b|,|;/i.test(b)) return null;
++  const understood = `Plan a crosstab of ${a} by ${b}.`;
++  const first = conceptOrAsk(r, a, "analysis", understood, b);
++  if (!first.ok) return first.out;
++  const second = conceptOrAsk(r, b, "analysis", understood, a);
++  if (!second.ok) return second.out;
++  if (first.v.id === second.v.id) return refused("analysis", understood, `“${a}” and “${b}” both resolve to ${code(first.v)} — a crosstab needs two different variables.`, qDetected([first.v]));
++  // the banner (columns) is the demographic when exactly one side is one and the sentence did not say "X by Y"
++  let rows = first.v, cols = second.v;
++  const demoA = DEMO_ROLE(r.def, first.v), demoB = DEMO_ROLE(r.def, second.v);
++  let note = "";
++  if (!byForm && demoA && !demoB) { rows = second.v; cols = first.v; note = ` — ${cols.variableName} goes in the banner as the demographic`; }
++  else if (!byForm && demoB && !demoA) note = ` — ${cols.variableName} goes in the banner as the demographic`;
++  const numeric = [rows, cols].filter((q) => q.type === "numeric");
++  const saved = !!r.def.research?.analysisPlan;
++  const action: SurveyAction = { op: "add_crosstab", rows: [rows.variableName], columns: [cols.variableName], priority: 1, reason: `asked for in Intelligent mode: ${a} by ${b}` } as SurveyAction;
++  return act(r, "analysis", `Plan a crosstab of ${rows.variableName} (${code(rows)}, “${plain(rows.text, 40)}”) by ${cols.variableName} (${code(cols)}, “${plain(cols.text, 40)}”)${note}.${numeric.length ? ` ${numeric.map((q) => q.variableName).join(" and ")} ${numeric.length === 1 ? "is" : "are"} numeric and ${numeric.length === 1 ? "is" : "are"} banded when the table runs.` : ""}${saved ? "" : " This starts the survey's analysis plan;"} it runs from the Analysis tab, or with the plan on the fieldwork milestones.`, [action], [det("rows", `${rows.variableName} (${code(rows)})`), det("columns", `${cols.variableName} (${code(cols)})`)]);
++};
++
++const KEY_WORDS = String.raw`(?:most\s+important|most\s+relevant|most\s+useful|most\s+valuable|key|essential|main|priority|recommended|core|top|best|standard)`;
++const keyCrosstabs: Recogniser = (r) => {
++  const t = r.text;
++  const def = r.def;
++  const asksFor = new RegExp(String.raw`^(?:create|add|plan|build|make|propose|set\s+up|generate|prepare|produce|run)\s+(?:me\s+)?(?:the\s+|some\s+|all\s+(?:of\s+)?the\s+)?(?:\d+\s+)?${KEY_WORDS}\s+(?:cross[-\s]?tab(?:ulation)?s?|tables|banners?|cuts)(?:\s+(?:for|of)\s+(?:this|the|my|our)\s+(?:research|study|survey|project|analysis|objectives?|design|data))?$`, "i");
++  const asksWhich = new RegExp(String.raw`^(?:show\s+me|give\s+me|list|tell\s+me|what\s+are|which\s+are)\s+(?:the\s+)?(?:\d+\s+)?${KEY_WORDS}\s+(?:cross[-\s]?tab(?:ulation)?s?|tables|banners?|cuts)(?:\s+(?:for|of)\s+(?:this|the|my|our)\s+(?:research|study|survey|project|analysis|objectives?|design|data))?$`, "i");
++  if (!asksFor.test(t) && !asksWhich.test(t)) return null;
++  const built = buildAnalysisFramework(def, { now: "" });
++  const top = prioritizeCrosstabs(def, 8, built);
++  const saved = def.research?.analysisPlan;
++  const same = (x: { rows: string[]; columns: string[] }, y: { rows: string[]; columns: string[] }) => x.rows.join("|") === y.rows.join("|") && x.columns.join("|") === y.columns.join("|");
++  const items = top.map((x) => ({ label: `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`, key: objectKey("analysis", x.id), detail: `${withHypotheses(x.reason, x.hypotheses)} — priority ${x.priority}${saved?.crosstabs.some((y) => same(x, y)) ? " (already planned)" : ""}`.replace(/^ — /, "") }));
++  const understood = asksWhich.test(t) ? "List the crosstabs that matter most for this research." : "Plan the crosstabs that matter most for this research.";
++  if (!top.length) return refused("analysis", understood, "The design gives nothing to cross-tabulate yet: no question is in an analytic role (dependent, independent) with a demographic to cut it by. Tag the outcome and the demographics in the Analysis tab, or record a hypothesis, and ask again.", []);
++  if (asksWhich.test(t)) return { kind: "answer", category: "analysis", understood, answer: `${plural(top.length, "crosstab")}, hypothesis-linked and priority-1 first: ${top.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`).join("; ")}. Say “create the most important crosstabs” to plan them.`, sections: [{ title: "Crosstabs, in order", items }], detected: [] };
++  const fresh = top.filter((x) => !saved?.crosstabs.some((y) => same(x, y)));
++  if (!fresh.length) return alreadySo("analysis", understood, `The ${plural(top.length, "crosstab")} that matter most are already in the saved plan: ${top.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`).join("; ")}.`, []);
++  const actions: SurveyAction[] = fresh.map((x) => ({ op: "add_crosstab", rows: x.rows, columns: x.columns, measure: x.measure, priority: x.priority, hypotheses: x.hypotheses, reason: x.reason ?? "from the analysis framework" } as SurveyAction));
++  return act(r, "analysis", `Plan the ${plural(fresh.length, "crosstab")} the framework ranks highest${saved ? ` (${top.length - fresh.length} already planned)` : ""}: ${fresh.map((x) => `${x.rows.join(" + ")} by ${x.columns.join(" + ")}${x.hypotheses.length ? ` (${x.hypotheses.join(", ")})` : ""}`).join("; ")}. Hypothesis-linked tables come first, then priority; they run from the Analysis tab.`, actions, fresh.map((x) => det("crosstab", `${x.rows.join(" + ")} by ${x.columns.join(" + ")}`)));
++};
++
++/* ---------------------------------------------------------- unconnected questions */
++
++const unconnected: Recogniser = (r) => {
++  const t = r.text;
++  const asks = /^(?:which|what|list(?:\s+the)?|show(?:\s+me)?(?:\s+the)?|find(?:\s+the)?|are\s+there(?:\s+any)?|identify(?:\s+the)?|tell\s+me\s+which)\s+(?:of\s+the\s+)?questions?\s+(?:that\s+)?(?:(?:are|is|aren'?t|are\s+not|isn'?t|have\s+not\s+been|haven'?t\s+been|remain)\s+(?:not\s+|still\s+)?(?:connected|linked|tied|mapped|related|attached|assigned|associated|hooked|wired)\s+(?:to|with)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|research\s+(?:framework|design|objectives?|questions?)|constructs?|analysis(?:\s+plan)?|framework|objectives?)|(?:have|has|do\s+not\s+have|don'?t\s+have|without|lack)\s+(?:no\s+|a\s+|any\s+)?hypothes[ie]s|(?:do|does)\s+not\s+(?:serve|support|test|measure)|(?:don'?t|doesn'?t)\s+(?:serve|support|test|measure)\s+(?:any\s+|an?\s+|the\s+)?(?:hypothes[ie]s|objectives?|research\s+objectives?|constructs?)|(?:are|is)\s+(?:orphan(?:ed)?|unconnected|unlinked|unmapped|unassigned|not\s+(?:in|part\s+of)\s+the\s+(?:framework|design|plan)))$/i.test(t)
++    || /^(?:which|what|list|show(?:\s+me)?|find)\s+(?:the\s+)?(?:orphan(?:ed)?|unconnected|unlinked|unmapped|unassigned)\s+questions?$/i.test(t);
++  if (!asks) return null;
++  const def = r.def;
++  const research = def.research;
++  const understood = "Find the questions not connected to any hypothesis, construct or planned analysis.";
++  const order = placedOrder(def);
++  const qs = def.questions.filter((q) => !["html", "custom_component", "media_timeline"].includes(q.type) && order.includes(q.id)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
++  const plan = research?.analysisPlan;
++  const inPlan = new Set<string>([...(plan?.crosstabs ?? []).flatMap((x) => [...x.rows, ...x.columns]), ...(plan?.tests ?? []).flatMap((x) => [x.outcome, x.groupBy, x.moderator, ...x.variables].filter((v): v is string => !!v)), ...(plan?.derived ?? []).flatMap((d) => d.from)]);
++  const inConstruct = new Map<string, string>();
++  for (const c of research?.constructs ?? []) for (const id of c.questionIds) inConstruct.set(id, c.name);
++  const why = (q: Question): string[] => {
++    const out: string[] = [];
++    if (q.analysis?.hypotheses?.length) out.push(`hypotheses ${q.analysis.hypotheses.join(", ")}`);
++    if (inConstruct.has(q.id)) out.push(`construct “${inConstruct.get(q.id)}”`);
++    if (inPlan.has(q.variableName)) out.push("in the analysis plan");
++    return out;
++  };
++  const connected = qs.filter((q) => why(q).length);
++  const loose = qs.filter((q) => !why(q).length);
++  const roleWord = (q: Question) => { const role = inferRole(def, q); return q.type === "open_text" ? "open text — coded or quoted, not tested" : role === "segmentation" ? "a demographic — a cut of the results, not a measure of a hypothesis" : role === "screening" ? "a screener — selects the sample, measures nothing" : `${role}, ${kindOf(q)}`; };
++  const sections: AnswerSection[] = [];
++  if (loose.length) sections.push({ title: "Not connected to any hypothesis, construct or planned analysis", items: loose.map((q) => ({ label: code(q), key: objectKey("question", q.id), detail: `${plain(q.text, 60)} — ${roleWord(q)}` })) });
++  const coverage = hypothesisCoverage(def).filter((h) => h.status === "unlinked" || h.status === "unmeasured");
++  if (coverage.length) sections.push({ title: "Hypotheses no question measures", items: coverage.map((h) => ({ label: h.label, detail: `${plain(h.text, 70)} — ${h.status === "unlinked" ? "no construct or question is linked to it" : `construct ${h.constructs.filter((c) => !c.measured).map((c) => `“${c.name}”`).join(", ")} has no question`}` })) });
++  if (connected.length) sections.push({ title: "Connected", items: connected.map((q) => ({ label: code(q), key: objectKey("question", q.id), detail: why(q).join("; ") })) });
++  const noDesign = !research || (!research.hypotheses.length && !research.constructs.length && !plan);
++  const answer = noDesign
++    ? `This survey has no research design yet — no hypotheses, constructs or analysis plan — so none of its ${plural(qs.length, "question")} is connected to one. Record the hypotheses in the Research design (Survey Settings, or the Analysis tab) and tag what each question measures.`
++    : loose.length ? `${loose.length} of ${plural(qs.length, "question")} ${loose.length === 1 ? "is" : "are"} not connected to any hypothesis, construct or planned analysis: ${loose.map(code).join(", ")}. ${loose.filter((q) => inferRole(def, q) === "segmentation" || inferRole(def, q) === "screening").length ? "Demographics and screeners are expected here — they cut or select, they do not test. " : ""}The rest can be tagged with the hypothesis they serve (“tag Q8 with H1”) or removed if they serve nothing.`
++    : `Every one of the ${plural(qs.length, "question")} is connected to a hypothesis, a construct or the analysis plan.`;
++  return { kind: "answer", category: "research_design", understood, answer, sections, detected: [] };
++};
++
++/* ---------------------------------------------------------- the research objective */
++
++const objective: Recogniser = (r) => {
++  const m = /^(?:set|change|update|record|define|make)\s+(?:the\s+)?(?:research\s+|study\s+)?(?:objective|goal|aim|purpose)\s*(?:to|as|:|=|—|-)\s*(.+)$/i.exec(r.text) ?? /^(?:the\s+)?(?:research\s+)?objective\s*(?::|is)\s*(.+)$/i.exec(r.text);
++  if (!m) return null;
++  const text = cap(unquote(m[1]));
++  const had = r.def.research?.objective;
++  if (had && had.trim() === text) return alreadySo("research_design", `Set the research objective to “${plain(text, 60)}”.`, "That is already the research objective.", [det("objective", plain(text, 60))]);
++  return act(r, "research_design", `Set the research objective to “${plain(text, 80)}”${had ? ` (replacing “${plain(had, 50)}”)` : ""}.`, [{ op: "set_research", objective: text }], [det("objective", plain(text, 60))]);
++};
++
++/* ---------------------------------------------------------- what the engine can do when no model answers */
++
++/**
++ * The standard items a researcher means by "a question to measure X" —
++ * written as sentences this layer reads, so that with no model (or an
++ * unusable answer) the request still ends in a proposal, not a dead end.
++ */
++const MEASURES: { re: RegExp; name: string; items: (subject: string) => { label: string; text: string }[] }[] = [
++  { re: /purchase\s+intent|intent(?:ion)?\s+to\s+(?:buy|purchase)|buying\s+intent|likelihood\s+(?:to|of)\s+(?:buy|purchas)/i, name: "purchase intent", items: (s) => [
++    { label: "5-point likelihood to purchase", text: `Add a required single-select question "How likely are you to purchase ${s} in the next 3 months?" with options Very unlikely, Unlikely, Neither likely nor unlikely, Likely, Very likely` },
++    { label: "0–10 likelihood to purchase", text: `Add a required single-select question "On a scale of 0 to 10, how likely are you to purchase ${s} in the next 3 months?" with options 0 – Not at all likely, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 – Extremely likely` },
++  ] },
++  { re: /satisfaction|how\s+satisfied/i, name: "satisfaction", items: (s) => [
++    { label: "5-point satisfaction", text: `Add a required single-select question "Overall, how satisfied are you with ${s}?" with options Very dissatisfied, Dissatisfied, Neither satisfied nor dissatisfied, Satisfied, Very satisfied` },
++    { label: "7-point satisfaction", text: `Add a required single-select question "Overall, how satisfied are you with ${s}?" with options Very dissatisfied, Dissatisfied, Somewhat dissatisfied, Neither satisfied nor dissatisfied, Somewhat satisfied, Satisfied, Very satisfied` },
++  ] },
++  { re: /recommend|nps|net\s+promoter|advocacy/i, name: "likelihood to recommend", items: (s) => [
++    { label: "NPS (0–10)", text: `Add a required single-select question "How likely are you to recommend ${s} to a friend or colleague?" with options 0 – Not at all likely, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 – Extremely likely` },
++  ] },
++  { re: /awareness|aware\s+of|heard\s+of|familiarity/i, name: "awareness", items: (s) => [
++    { label: "Aided awareness (yes/no)", text: `Add a required single-select question "Before today, had you heard of ${s}?" with options Yes, No, Not sure` },
++    { label: "Familiarity (4-point)", text: `Add a required single-select question "How familiar are you with ${s}?" with options Never heard of it, Heard of it but know little, Know it somewhat, Know it very well` },
++  ] },
++  { re: /importance|how\s+important/i, name: "importance", items: (s) => [
++    { label: "5-point importance", text: `Add a required single-select question "How important is ${s} to you?" with options Not at all important, Slightly important, Moderately important, Very important, Extremely important` },
++  ] },
++  { re: /loyalty|repurchase|buy\s+again|continue\s+(?:using|buying)/i, name: "loyalty", items: (s) => [
++    { label: "Repurchase intent (5-point)", text: `Add a required single-select question "How likely are you to choose ${s} again next time?" with options Very unlikely, Unlikely, Neither likely nor unlikely, Likely, Very likely` },
++  ] },
++  { re: /trust/i, name: "trust", items: (s) => [
++    { label: "5-point agreement", text: `Add a required single-select question "I trust ${s}" with options Strongly disagree, Disagree, Neither agree nor disagree, Agree, Strongly agree` },
++  ] },
++  { re: /usage\s+frequency|how\s+often|frequency\s+of\s+(?:use|purchase)/i, name: "usage frequency", items: (s) => [
++    { label: "Frequency (6-point)", text: `Add a required single-select question "How often do you use ${s}?" with options Daily, Several times a week, About once a week, A few times a month, Less often, Never` },
++  ] },
++  { re: /price\s+(?:perception|sensitivity)|value\s+for\s+money|affordab/i, name: "price perception", items: (s) => [
++    { label: "Value for money (5-point agreement)", text: `Add a required single-select question "${s} offers good value for money" with options Strongly disagree, Disagree, Neither agree nor disagree, Agree, Strongly agree` },
++  ] },
++];
++
++/** "add a question to measure purchase intent [for Brand A]" → the standard items, as executable sentences; null when the concept is not one of them */
++function measureFallback(def: SurveyDefinition, text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
++  const m = /^(?:add|create|insert|include|write|new)\s+(?:an?\s+|another\s+|one\s+more\s+)?(?:new\s+)?(?:\w+\s+)?question\s+(?:to\s+|that\s+|which\s+)?(?:measures?|measuring|captures?|capturing|assess(?:es|ing)?|asks?\s+about|asking\s+about|about|on|for|covering|tracking)\s+(.+)$/i.exec(text);
++  if (!m) return null;
++  const phrase = unquote(m[1]).replace(/[.!?]+$/, "");
++  const measure = MEASURES.find((x) => x.re.test(phrase));
++  if (!measure) return null;
++  const subj = /\b(?:for|of|with|towards?|in|about)\s+(.+)$/i.exec(phrase.replace(measure.re, "").trim())?.[1]?.trim();
++  const brand = /\b(Brand\s+[A-Z]\b|[A-Z][\w&]+(?:\s+[A-Z][\w&]+)*)(?=\s*$)/.exec(def.research?.objective ?? "")?.[1];
++  const subject = subj ? subj.replace(/^(?:the|our|your)\s+/i, (x) => x) : brand ?? "the brand";
++  return { understood: `Add a question measuring ${measure.name}${subj ? ` (${subj})` : ""}.`, question: `The language model writes the wording for this; without one, a standard ${measure.name} item can be added as it is — which?`, choices: measure.items(subject) };
++}
++
++/** "create a research design for <objective>" → the objective recorded, as a first step the engine takes itself */
++function designFallback(text: string): NonNullable<Extract<Interpretation, { kind: "model" }>["fallback"]> | null {
++  const m = /^(?:create|build|make|write|draft|design|prepare|develop|propose|set\s+up)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:new\s+)?(?:research\s+(?:design|framework|plan|proposal)|study\s+design)\s+(?:for|to|on|about|that|which)\s+(.+)$/i.exec(text);
++  if (!m) return null;
++  const objective = cap(unquote(m[1]).replace(/^(?:understand(?:ing)?|explore|exploring|find(?:ing)?\s+out|learn(?:ing)?|investigat(?:e|ing)|study(?:ing)?)\s+/i, "").replace(/[.!?]+$/, ""));
++  return { understood: `Create a research design for “${plain(objective, 60)}”.`, question: "The language model drafts the design — hypotheses, population, constructs. Without one, the engine can record the objective now and you can add the hypotheses by hand (“add hypothesis: …”) or in the Research design editor:", choices: [{ label: "Record the objective", text: `Set the research objective to "${objective}"` }] };
++}
++
++/** the model's turn, with what the engine could do instead */
++function withFallback(r: Run, out: Interpretation): Interpretation {
++  if (out.kind !== "model") return out;
++  const fb = measureFallback(r.def, r.text) ?? designFallback(r.text);
++  return fb ? { ...out, fallback: fb } : out;
++}
++
+ /* ---------------------------------------------------------- everything else: the model */
+ 
+ const CATEGORY_WORDS: [RegExp, IntentCategory][] = [
+@@ -2059,9 +2330,10 @@ function fallback(r: Run): Interpretation {
+  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
+  */
+ const RECOGNISERS: Recogniser[] = [
+-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, analysisQuery, measures,
++  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, unconnected, keyCrosstabs, analysisQuery, measures,
+   deferred, longBrief,
+-  surveySettings, languages, research, variables, pageBreaks,
++  surveySettings, languages, objective, research, variables, pageBreaks,
++  screenerEdit, scaleChange, crosstabs,
+   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
+ ];
+ 
+@@ -2069,9 +2341,9 @@ function interpret(r: Run): Interpretation {
+   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
+   for (const rec of RECOGNISERS) {
+     const out = rec(r);
+-    if (out) return out;
++    if (out) return withFallback(r, out);
+   }
+-  return fallback(r);
++  return withFallback(r, fallback(r));
+ }
+ 
+ /**
+@@ -2086,6 +2358,7 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
+     const parts = splitCommands(clean);
+     return parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
+   } catch (e) {
++    if (process.env.RESCRIPT_NL_DEBUG) console.error((e as Error).stack);
+     return { kind: "model", category: null, reason: `the interpreter could not read this (${(e as Error).message}) — the language model takes it`, detected: [] };
+   }
+ }
+diff --git a/packages/engine/src/nlPhase2.test.ts b/packages/engine/src/nlPhase2.test.ts
+new file mode 100644
+index 0000000..07d6173
+--- /dev/null
++++ b/packages/engine/src/nlPhase2.test.ts
+@@ -0,0 +1,245 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { interpretRequest, type Interpretation } from "./nlIntent.js";
++import { applySurveyActions } from "./surveyActions.js";
++
++/*
++ * RESEARCH ENGINE AUDIT, PHASE 2 — the audit's sentences (section F) read by
++ * the engine against its brand-switching fixture. Each descriptive edit ends
++ * in actions that apply, an answer, a clarifying choice or a precise refusal;
++ * what still needs the model carries what the engine can do without one.
++ */
++const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
++function survey(): SurveyDefinition {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "SW", title: "Brand switching" },
++    research: { objective: "Understand why customers switch from Brand A to Brand B", hypotheses: ["Price perception drives switching", "Service satisfaction reduces switching"], constructs: [{ name: "Price perception", role: "independent", questionIds: ["q6"] }], analysis: [], assumptions: [], sources: [] },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++      { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "What is your gender?", options: opts("Male", "Female", "Prefer not to say") },
++      { id: "q3", code: "Q3", variableName: "BRAND_PREF", type: "single_select", text: "Which brand do you prefer?", options: opts("Brand A", "Brand B", "Brand C"), analysis: { role: "dependent", hypotheses: ["H1"] } },
++      { id: "q4", code: "Q4", variableName: "SWITCHED", type: "single_select", text: "Have you switched brands in the last 12 months?", options: opts("Yes", "No"), analysis: { role: "dependent", hypotheses: ["H1", "H2"] } },
++      { id: "q5", code: "Q5", variableName: "REASONS", type: "multi_select", text: "Why did you switch?", options: opts("Price", "Quality", "Availability") },
++      { id: "q6", code: "Q6", variableName: "PRICE_PERC", type: "single_select", text: "Brand B offers better value for money", options: opts("Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree") },
++      { id: "q7", code: "Q7", variableName: "SAT", type: "single_select", text: "Overall, how satisfied are you with your current brand?", options: opts("1", "2", "3", "4", "5", "6", "7"), analysis: { role: "independent", hypotheses: ["H2"] } },
++      { id: "q8", code: "Q8", variableName: "PETS", type: "single_select", text: "Do you have pets?", options: opts("Yes", "No") },
++      { id: "q9", code: "Q9", variableName: "REGION", type: "single_select", text: "Which region do you live in?", options: opts("North", "South") },
++      { id: "q10", code: "Q10", variableName: "COMMENTS", type: "open_text", text: "Anything else?" },
++    ],
++    flow: [
++      { type: "block", id: "b1", title: "Screener", children: [{ type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] }] },
++      { type: "block", id: "b2", title: "Brands", children: [{ type: "page", id: "p2", title: "Brands", questionIds: ["q3", "q4", "q5", "q6", "q7"] }] },
++      { type: "block", id: "b3", title: "About you", children: [{ type: "page", id: "p3", title: "About you", questionIds: ["q8", "q9", "q10"] }] },
++      { type: "end", id: "e", status: "complete" },
++    ],
++  });
++}
++const actionsOf = (r: Interpretation) => { assert.equal(r.kind, "actions", JSON.stringify(r)); return (r as Extract<Interpretation, { kind: "actions" }>); };
++const applied = (def: SurveyDefinition, r: Interpretation) => { const a = actionsOf(r); const out = applySurveyActions(def, a.actions); assert.ok(out.valid && out.results.every((x) => x.ok), JSON.stringify(out.errors.concat(out.results.filter((x) => !x.ok).map((x) => x.error ?? "")))); return out.def; };
++
++test("the screener: a population phrase becomes a screened terminate on the question that learns it", () => {
++  const def = survey();
++  for (const t of ["Change the screener so that respondents under 25 are excluded.", "Screen out respondents under 25", "Exclude anyone younger than 25 from the survey", "Do not allow people under 25"]) {
++    const r = interpretRequest(def, t);
++    const a = actionsOf(r);
++    assert.deepEqual(a.actions, [{ op: "add_skip", from: "Q1", when: "Q1 < 25", to: "screened" }], t);
++    assert.match(a.understood, /Q1 \(AGE\) is where the survey learns it/);
++    assert.match(a.understood, /screen out when Q1 < 25/);
++    assert.ok(a.detected.some((d) => d.what === "population" && /→ Q1 \(AGE\) under 25/.test(d.value)), JSON.stringify(a.detected));
++    const after = applied(def, r);
++    const q1 = after.questions.find((q) => q.id === "q1")!;
++    assert.equal(q1.skipLogic?.length, 1);
++    assert.equal(q1.skipLogic![0].target.kind, "terminate");
++  }
++  const only = actionsOf(interpretRequest(def, "Only allow women into the survey"));
++  assert.deepEqual(only.actions, [{ op: "add_skip", from: "Q2", when: "NOT (Q2 = 2)", to: "screened" }]);
++  assert.match(only.understood, /Allow only women .* screen out everyone else/);
++  const restrict = actionsOf(interpretRequest(def, "Restrict the survey to people aged 18 to 65"));
++  assert.deepEqual(restrict.actions, [{ op: "add_skip", from: "Q1", when: "NOT (Q1 >= 18 AND Q1 <= 65)", to: "screened" }]);
++  const either = actionsOf(interpretRequest(def, "Screen out respondents under 18 and anyone over 65"));
++  assert.deepEqual(either.actions, [{ op: "add_skip", from: "Q1", when: "Q1 < 18 OR Q1 > 65", to: "screened" }]);
++  // the second time, the rule is there already: planSkip says so rather than adding a twin
++  const twice = interpretRequest(applied(def, interpretRequest(def, "Screen out respondents under 25")), "Change the screener so that respondents under 25 are excluded");
++  assert.equal(twice.kind, "refused");
++  assert.ok((twice as { noop?: boolean }).noop, "the rule is there already: nothing to add");
++  assert.match((twice as { reason: string }).reason, /Q1 already screens out when Q1 < 25/);
++});
++
++test("the screener: what cannot be resolved is said, what fits two questions is asked, what is not a population is left alone", () => {
++  const none = survey();
++  none.questions = none.questions.filter((q) => q.id !== "q1");
++  (none.flow[0] as unknown as { children: { questionIds: string[] }[] }).children[0].questionIds = ["q2"];
++  const r = interpretRequest(none, "Screen out respondents under 25");
++  assert.equal(r.kind, "refused");
++  assert.match((r as Extract<Interpretation, { kind: "refused" }>).reason, /no question that asks it/);
++  const raw = JSON.parse(JSON.stringify(survey()));
++  raw.questions.push({ id: "q11", code: "Q11", variableName: "CHILD_AGE", type: "numeric", text: "How old is your eldest child?" });
++  raw.flow[2].children[0].questionIds.push("q11");
++  const two = SurveyDefinition.parse(raw);
++  const ask = interpretRequest(two, "Screen out respondents under 25");
++  assert.equal(ask.kind, "clarify", JSON.stringify(ask));
++  const c = ask as Extract<Interpretation, { kind: "clarify" }>;
++  assert.match(c.question, /Q1 .* or Q11 .* which question should the screener read/);
++  assert.equal(c.choices.length, 2);
++  assert.deepEqual(c.choices.map((x) => x.text), ["Screen out when Q1 < 25", "Screen out when Q11 < 25"]);
++  // each choice is a sentence the engine then reads to the same action
++  const picked = actionsOf(interpretRequest(two, c.choices[1].text));
++  assert.deepEqual(picked.actions, [{ op: "add_skip", from: "Q11", when: "Q11 < 25", to: "screened" }]);
++  assert.equal(interpretRequest(survey(), "remove the price question").kind, "actions", "a question named by its words is still a question, not a population");
++  assert.equal((interpretRequest(survey(), "remove the price question") as { actions: { op: string }[] }).actions[0].op, "delete_question");
++  assert.equal(interpretRequest(survey(), "Screen out Q8").kind, "model");
++  // "exclude the price question" names a question (an option label is inside the words), not the people who chose Price
++  const excl = interpretRequest(survey(), "Exclude the price question");
++  assert.ok(excl.kind !== "actions" || !excl.actions.some((a) => a.op === "add_skip"), JSON.stringify(excl));
++});
++
++test("a scale: this question / Q7 / a described question → update_question.scale; the type decides what happens", () => {
++  const def = survey();
++  const sel = actionsOf(interpretRequest(def, "Change this question to a 5-point scale.", { selectedId: "q7" }));
++  assert.deepEqual(sel.actions, [{ op: "update_question", target: "Q7", scale: { points: 5 } }]);
++  assert.match(sel.understood, /replaces its 7 current options/);
++  const after = applied(def, sel);
++  assert.deepEqual(after.questions.find((q) => q.id === "q7")!.options!.map((o) => o.label), ["1", "2", "3", "4", "5"]);
++  const agree = actionsOf(interpretRequest(def, "Make Q6 a 7-point agree-disagree scale"));
++  assert.equal((agree.actions[0] as { scale: { labels: string[] } }).scale.labels.length, 7);
++  assert.match(agree.understood, /Strongly disagree · Disagree · Somewhat disagree/);
++  const described = actionsOf(interpretRequest(def, "Change the satisfaction question to a 5-point satisfaction scale"));
++  assert.equal((described.actions[0] as { target: string }).target, "Q7");
++  assert.deepEqual((described.actions[0] as { scale: { labels: string[] } }).scale.labels, ["Very dissatisfied", "Dissatisfied", "Neither satisfied nor dissatisfied", "Satisfied", "Very satisfied"]);
++  const numeric = actionsOf(interpretRequest(def, "Change Q1 to a 1-10 scale"));
++  assert.deepEqual(numeric.actions, [{ op: "update_question", target: "Q1", type: "single_select", scale: { points: 10, start: 1 } }]);
++  assert.match(numeric.understood, /from numeric to a single-select/);
++  applied(def, numeric);
++  const multi = interpretRequest(def, "Change Q5 to a 5-point scale");
++  assert.equal(multi.kind, "refused");
++  const m = multi as Extract<Interpretation, { kind: "refused" }>;
++  assert.match(m.reason, /multi-select — each option is a separate answer/);
++  assert.ok(m.suggestion?.actions?.length, "the fix is offered with its actions");
++  assert.equal((m.suggestion!.actions![0] as { type?: string }).type, "single_select");
++  const already = interpretRequest(def, "Change Q7 to a 7-point scale");
++  assert.equal(already.kind, "refused");
++  assert.ok((already as { noop?: boolean }).noop, "already a 7-point scale: nothing to change");
++  assert.equal(interpretRequest(def, "Change Q7 to a dropdown").kind, "actions", "a type change is still the type-change recogniser's");
++  assert.equal((interpretRequest(def, "Change Q7 to a dropdown") as { actions: { type?: string }[] }).actions[0].type, "dropdown");
++  const text = interpretRequest(def, "Change Q10 to a 5-point scale");
++  assert.equal(text.kind, "actions", "open text becomes a single-select scale, said as a type change");
++  assert.match((text as { understood: string }).understood, /from open text to a single-select 5-point scale/);
++});
++
++test("crosstabs: two concepts → add_crosstab, the demographic in the banner; 'X by Y' keeps the order; ambiguity asks", () => {
++  const def = survey();
++  const between = actionsOf(interpretRequest(def, "Create a cross-tab between age and brand preference."));
++  assert.deepEqual(between.actions.map((a) => ({ ...a, reason: undefined })), [{ op: "add_crosstab", rows: ["BRAND_PREF"], columns: ["AGE"], priority: 1, reason: undefined }]);
++  assert.match(between.understood, /AGE goes in the banner as the demographic/);
++  assert.match(between.understood, /AGE is numeric and is banded/);
++  const after = applied(def, between);
++  assert.equal(after.research!.analysisPlan!.crosstabs.length, 1);
++  const by = actionsOf(interpretRequest(def, "Add a crosstab of AGE by BRAND_PREF"));
++  assert.deepEqual([(by.actions[0] as { rows: string[] }).rows, (by.actions[0] as { columns: string[] }).columns], [["AGE"], ["BRAND_PREF"]], "said 'X by Y': X stays the rows");
++  const sat = actionsOf(interpretRequest(def, "Cross-tab satisfaction by region"));
++  assert.deepEqual([(sat.actions[0] as { rows: string[] }).rows, (sat.actions[0] as { columns: string[] }).columns], [["SAT"], ["REGION"]]);
++  const brk = actionsOf(interpretRequest(def, "Break down brand switching by gender"));
++  assert.deepEqual([(brk.actions[0] as { rows: string[] }).rows, (brk.actions[0] as { columns: string[] }).columns], [["SWITCHED"], ["GENDER"]]);
++  const sw = interpretRequest(def, "Break down switching by gender");
++  assert.equal(sw.kind, "clarify", "“switching” fits Q4 and Q5 equally: ask");
++  assert.deepEqual((sw as Extract<Interpretation, { kind: "clarify" }>).choices.map((x) => x.text), ["Break down SWITCHED by gender", "Break down REASONS by gender"]);
++  const twice = interpretRequest(after, "Create a cross-tab between age and brand preference.");
++  assert.equal(twice.kind, "refused");
++  assert.match((twice as { reason: string }).reason, /already planned/);
++  const amb = interpretRequest(def, "Create a crosstab of brand by region");
++  assert.equal(amb.kind, "clarify", JSON.stringify(amb));
++  const c = amb as Extract<Interpretation, { kind: "clarify" }>;
++  assert.ok(c.choices.length >= 2);
++  assert.ok(c.choices.every((x) => /^Create a crosstab of \w+ by region$/.test(x.text)), c.choices.map((x) => x.text).join(" | "));
++  const picked = actionsOf(interpretRequest(def, c.choices[0].text));
++  assert.equal(picked.actions[0].op, "add_crosstab");
++  const none = interpretRequest(def, "Create a crosstab of shoe size by region");
++  assert.equal(none.kind, "refused");
++  assert.match((none as { reason: string }).reason, /No question measures “shoe size”/);
++  const compound = interpretRequest(def, "Add a crosstab of brand preference by region and test satisfaction across age groups");
++  assert.equal(compound.kind, "model", "a second instruction after 'and' is not swallowed into the second concept");
++  const same = interpretRequest(def, "Create a crosstab of age by AGE");
++  assert.equal(same.kind, "refused");
++  assert.match((same as { reason: string }).reason, /two different variables/);
++});
++
++test("the most important crosstabs: planned from the framework (hypothesis-linked first), or listed when asked which", () => {
++  const def = survey();
++  const r = actionsOf(interpretRequest(def, "Create the most important crosstabs for this research"));
++  assert.ok(r.actions.length >= 2);
++  assert.ok(r.actions.every((a) => a.op === "add_crosstab"));
++  const first = r.actions[0] as { rows: string[]; hypotheses: string[] };
++  assert.ok(first.hypotheses.length >= 1, "hypothesis-linked first");
++  assert.match(r.understood, /Hypothesis-linked tables come first/);
++  const after = applied(def, r);
++  assert.equal(after.research!.analysisPlan!.crosstabs.length, r.actions.length);
++  const again = interpretRequest(after, "Create the most important crosstabs for this research");
++  assert.equal(again.kind, "refused");
++  assert.ok((again as { noop?: boolean }).noop, "already planned: nothing to add");
++  const which = interpretRequest(def, "Show me the most important crosstabs");
++  assert.equal(which.kind, "answer");
++  assert.match((which as { answer: string }).answer, /hypothesis-linked and priority-1 first/);
++  assert.ok((which as { sections: { items: unknown[] }[] }).sections[0].items.length >= 2);
++  const bare = survey();
++  bare.research = undefined;
++  bare.questions.forEach((q) => { delete (q as { analysis?: unknown }).analysis; });
++  const nothing = interpretRequest(bare, "Create the most important crosstabs");
++  // with no roles the framework still profiles the sample; with nothing at all it refuses with the next step
++  assert.ok(nothing.kind === "actions" || (nothing.kind === "refused" && /Tag the outcome/.test(nothing.reason)), JSON.stringify(nothing));
++});
++
++test("which questions are not connected: read off the design, with the roles that explain the expected ones", () => {
++  const def = survey();
++  const r = interpretRequest(def, "Which questions are not connected to any hypothesis?");
++  assert.equal(r.kind, "answer", JSON.stringify(r));
++  const a = r as Extract<Interpretation, { kind: "answer" }>;
++  assert.match(a.answer, /6 of 10 questions are not connected .*: Q1, Q2, Q5, Q8, Q9, Q10/);
++  assert.match(a.answer, /Demographics and screeners are expected here/);
++  const loose = a.sections.find((s) => /Not connected/.test(s.title))!;
++  assert.deepEqual(loose.items.map((i) => i.label), ["Q1", "Q2", "Q5", "Q8", "Q9", "Q10"]);
++  assert.match(loose.items.find((i) => i.label === "Q10")!.detail ?? "", /open text/);
++  assert.match(loose.items.find((i) => i.label === "Q9")!.detail ?? "", /a demographic/);
++  const connected = a.sections.find((s) => s.title === "Connected")!;
++  assert.match(connected.items.find((i) => i.label === "Q6")!.detail ?? "", /construct “Price perception”/);
++  assert.match(connected.items.find((i) => i.label === "Q4")!.detail ?? "", /hypotheses H1, H2/);
++  for (const t of ["which questions have no hypothesis", "list the orphan questions", "Which questions don't serve any research objective?", "show me the questions that are not linked to the research framework"]) assert.equal(interpretRequest(def, t).kind, "answer", t);
++  const bare = survey();
++  bare.research = undefined;
++  const none = interpretRequest(bare, "Which questions are not connected to any hypothesis?");
++  assert.match((none as { answer: string }).answer, /no research design yet/);
++});
++
++test("the objective: set by sentence; and what the engine offers when the model is not there", () => {
++  const def = survey();
++  const obj = actionsOf(interpretRequest(def, "Set the research objective to understand churn"));
++  assert.deepEqual(obj.actions, [{ op: "set_research", objective: "Understand churn" }]);
++  assert.equal(applied(def, obj).research!.objective, "Understand churn");
++  const same = interpretRequest(def, `Set the research objective to "${def.research!.objective}"`);
++  assert.equal(same.kind, "refused");
++  assert.ok((same as { noop?: boolean }).noop, "the objective already is that: nothing to change");
++  const design = interpretRequest(def, "Create a research design for understanding why customers are switching from Brand A to Brand B.");
++  assert.equal(design.kind, "model");
++  const d = design as Extract<Interpretation, { kind: "model" }>;
++  assert.equal(d.category, "research_design");
++  assert.ok(d.fallback, "the engine says what it can do without a model");
++  assert.equal(d.fallback!.choices[0].text, 'Set the research objective to "Why customers are switching from Brand A to Brand B"');
++  const step = actionsOf(interpretRequest(def, d.fallback!.choices[0].text));
++  assert.equal((step.actions[0] as { objective: string }).objective, "Why customers are switching from Brand A to Brand B");
++  const intent = interpretRequest(def, "Add a question to measure purchase intent.");
++  assert.equal(intent.kind, "model");
++  const i = intent as Extract<Interpretation, { kind: "model" }>;
++  assert.equal(i.category, "question_creation");
++  assert.ok(i.fallback && i.fallback.choices.length === 2, JSON.stringify(i.fallback));
++  assert.match(i.fallback!.choices[0].text, /How likely are you to purchase Brand B in the next 3 months\?/, "the brand from the objective");
++  const made = actionsOf(interpretRequest(def, i.fallback!.choices[0].text));
++  assert.equal(made.actions[0].op, "create_question");
++  assert.equal((made.actions[0] as { options: unknown[] }).options.length, 5);
++  const after = applied(def, made);
++  assert.equal(after.questions.length, 11);
++  const delivery = interpretRequest(def, "Add a question to measure satisfaction with the delivery");
++  assert.match((delivery as Extract<Interpretation, { kind: "model" }>).fallback!.choices[0].text, /how satisfied are you with the delivery\?/);
++  const unknown = interpretRequest(def, "Add a question to measure shoe size");
++  assert.equal((unknown as Extract<Interpretation, { kind: "model" }>).fallback, undefined, "an unknown measure has no standard item");
++  assert.equal((interpretRequest(def, "why is Q8 not showing") as Extract<Interpretation, { kind: "model" }>).fallback, undefined, "the grammar's sentences are not given fallbacks");
++});
+diff --git a/packages/engine/src/nlSemantics.test.ts b/packages/engine/src/nlSemantics.test.ts
+new file mode 100644
+index 0000000..f190d7f
+--- /dev/null
++++ b/packages/engine/src/nlSemantics.test.ts
+@@ -0,0 +1,211 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { parseScale, resolveConcept, resolvePopulation, resolveRole, scaleLabels } from "./nlSemantics.js";
++import { conditionFromText } from "./naturalCondition.js";
++
++/*
++ * SEMANTIC RESOLUTION (Research Engine audit, Phase 2) against the audit's
++ * brand-switching fixture: a population phrase becomes a question and a
++ * condition the logic language accepts; a concept becomes the variable that
++ * measures it; a structural role becomes the questions in it; a scale
++ * description becomes points and anchors.
++ */
++const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
++function survey(over: Record<string, unknown> = {}): SurveyDefinition {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "SW", title: "Brand switching" },
++    research: { objective: "Why customers switch from Brand A to Brand B", hypotheses: ["Price perception drives switching"], constructs: [{ name: "Price perception", role: "independent", questionIds: ["q6"] }], analysis: [], assumptions: [], sources: [] },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++      { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "What is your gender?", options: opts("Male", "Female", "Prefer not to say") },
++      { id: "q3", code: "Q3", variableName: "BRAND_PREF", type: "single_select", text: "Which brand do you prefer?", options: opts("Brand A", "Brand B", "Brand C") },
++      { id: "q4", code: "Q4", variableName: "SWITCHED", type: "single_select", text: "Have you switched brands in the last 12 months?", options: opts("Yes", "No") },
++      { id: "q5", code: "Q5", variableName: "REASONS", type: "multi_select", text: "Why did you switch?", options: opts("Price", "Quality", "Availability") },
++      { id: "q6", code: "Q6", variableName: "PRICE_PERC", type: "single_select", text: "Brand B offers better value for money", options: opts("Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree") },
++      { id: "q7", code: "Q7", variableName: "SAT", type: "single_select", text: "Overall, how satisfied are you with your current brand?", options: opts("1", "2", "3", "4", "5", "6", "7") },
++      { id: "q8", code: "Q8", variableName: "PETS", type: "single_select", text: "Do you have pets?", options: opts("Yes", "No") },
++      { id: "q9", code: "Q9", variableName: "REGION", type: "single_select", text: "Which region do you live in?", options: opts("North", "South") },
++      { id: "q10", code: "Q10", variableName: "COMMENTS", type: "open_text", text: "Anything else?" },
++    ],
++    flow: [
++      { type: "block", id: "b1", title: "Screener", children: [{ type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] }] },
++      { type: "block", id: "b2", title: "Brands", children: [{ type: "page", id: "p2", title: "Brands", questionIds: ["q3", "q4", "q5", "q6", "q7"] }] },
++      { type: "block", id: "b3", title: "About you", children: [{ type: "page", id: "p3", title: "About you", questionIds: ["q8", "q9", "q10"] }] },
++      { type: "end", id: "e", status: "complete" },
++    ],
++    ...over,
++  });
++}
++const expr = (def: SurveyDefinition, e: string) => { const c = conditionFromText(def, e); assert.ok(!c.errors.length && c.condition, `${e}: ${JSON.stringify(c)}`); };
++
++test("population: ages on a numeric age question, in the phrasings a researcher uses", () => {
++  const def = survey();
++  const cases: [string, string][] = [
++    ["respondents under 25", "Q1 < 25"], ["people aged 18 to 24", "Q1 >= 18 AND Q1 <= 24"], ["anyone over 65", "Q1 > 65"],
++    ["those 18+", "Q1 >= 18"], ["adults aged 18–65", "Q1 >= 18 AND Q1 <= 65"], ["under-25s", "Q1 < 25"], ["under 25", "Q1 < 25"],
++    ["respondents who are younger than 18", "Q1 < 18"], ["people at least 21 years old", "Q1 >= 21"], ["customers between 25 and 34", "Q1 >= 25 AND Q1 <= 34"],
++    ["people at most 30", "Q1 <= 30"],
++  ];
++  for (const [phrase, expression] of cases) {
++    const r = resolvePopulation(def, phrase);
++    assert.ok(r && r.ok, `${phrase}: ${JSON.stringify(r)}`);
++    assert.equal(r.population.expression, expression, phrase);
++    assert.equal(r.population.question.code, "Q1");
++    assert.equal(r.population.via, "age");
++    expr(def, r.population.expression);
++  }
++  assert.equal(resolvePopulation(def, "make the survey shorter"), null, "not a population");
++  const either = resolvePopulation(def, "respondents under 25 and women");
++  assert.ok(either?.ok && either.population.expression === "Q1 < 25 OR Q2 = 2", JSON.stringify(either));
++  assert.match(either!.ok ? either!.population.words : "", /under 25, or .*Female/);
++  expr(def, either!.ok ? either!.population.expression : "");
++  assert.equal(resolvePopulation(def, "respondents under 25 and the moon"), null, "a part that is not a population is not one");
++  assert.equal(resolvePopulation(def, "Q3"), null);
++  const empty = resolvePopulation(def, "people aged 40 to 30");
++  assert.ok(empty && !empty.ok && /empty range/.test(empty.reason));
++});
++
++test("population: age bands on a single-select — whole bands inside the range, a straddling band refused with the fix", () => {
++  const def = survey({ questions: [
++    { id: "q1", code: "Q1", variableName: "AGE", type: "single_select", text: "Which age group are you in?", options: opts("Under 18", "18-24", "25-34", "35-44", "45-54", "55-64", "65+") },
++    { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "What is your gender?", options: opts("Male", "Female") },
++  ], flow: [{ type: "page", id: "p1", title: "p", questionIds: ["q1", "q2"] }, { type: "end", id: "e", status: "complete" }] });
++  const under25 = resolvePopulation(def, "respondents under 25");
++  assert.ok(under25?.ok);
++  assert.equal(under25.population.expression, "Q1 in [1, 2]");
++  assert.match(under25.population.words, /“Under 18”, “18-24”/);
++  expr(def, under25.population.expression);
++  const over65 = resolvePopulation(def, "people over 64");
++  assert.ok(over65?.ok);
++  assert.equal(over65.population.expression, "Q1 = 7");
++  const straddle = resolvePopulation(def, "people under 30");
++  assert.ok(straddle && !straddle.ok);
++  assert.match(straddle.reason, /“25-34” straddles under 30/);
++  assert.match(straddle.reason, /screen on “Under 18”, “18-24”/);
++});
++
++test("population: no age question says so; two age questions offer the alternative", () => {
++  const none = survey({ questions: [{ id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "Gender?", options: opts("Male", "Female") }], flow: [{ type: "page", id: "p1", title: "p", questionIds: ["q2"] }, { type: "end", id: "e", status: "complete" }] });
++  const r = resolvePopulation(none, "respondents under 25");
++  assert.ok(r && !r.ok && /no question that asks it/.test(r.reason));
++  const raw = JSON.parse(JSON.stringify(survey()));
++  raw.questions.push({ id: "q11", code: "Q11", variableName: "CHILD_AGE", type: "numeric", text: "How old is your eldest child?" });
++  raw.flow[2].children[0].questionIds.push("q11");
++  const two = SurveyDefinition.parse(raw);
++  const r2 = resolvePopulation(two, "under 25");
++  assert.ok(r2?.ok);
++  assert.equal(r2.population.question.code, "Q1", "the first age question in the flow");
++  assert.deepEqual(r2.population.alternatives?.map((q) => q.code), ["Q11"]);
++});
++
++test("population: gender, a yes/no verb phrase, and an option label carried by the phrase", () => {
++  const def = survey();
++  const women = resolvePopulation(def, "women");
++  assert.ok(women?.ok && women.population.expression === "Q2 = 2" && women.population.via === "gender", JSON.stringify(women));
++  const men = resolvePopulation(def, "male respondents");
++  assert.ok(men?.ok && men.population.expression === "Q2 = 1");
++  const who = resolvePopulation(def, "respondents who are female");
++  assert.ok(who?.ok && who.population.expression === "Q2 = 2");
++  const switched = resolvePopulation(def, "those who switched");
++  assert.ok(switched?.ok && switched.population.expression === "Q4 = 1" && switched.population.via === "yes_no", JSON.stringify(switched));
++  const notSwitched = resolvePopulation(def, "people who have not switched brands");
++  assert.ok(notSwitched?.ok && notSwitched.population.expression === "Q4 = 2");
++  const brandA = resolvePopulation(def, "Brand A users");
++  assert.ok(brandA?.ok && brandA.population.expression === "Q3 = 1" && brandA.population.via === "option", JSON.stringify(brandA));
++  const prefer = resolvePopulation(def, "those who prefer Brand B");
++  assert.ok(prefer?.ok && prefer.population.expression === "Q3 = 2");
++  const price = resolvePopulation(def, "people who switched because of price");
++  // "switched … price": the yes/no reading needs every word; "price" is an option of Q5, so the option reading wins
++  assert.ok(price?.ok && price.population.expression === "Q5 = 1", JSON.stringify(price));
++  for (const r of [women, men, who, switched, notSwitched, brandA, prefer, price]) expr(def, r!.ok ? r!.population.expression : "");
++});
++
++test("concept: code and variable first, then the research design, then wording — ambiguity is said", () => {
++  const def = survey();
++  const byVar = resolveConcept(def, "BRAND_PREF");
++  assert.ok(byVar.ok && byVar.question.code === "Q3" && byVar.via === "variable");
++  const byCode = resolveConcept(def, "q7");
++  assert.ok(byCode.ok && byCode.question.code === "Q7");
++  const pref = resolveConcept(def, "brand preference");
++  assert.ok(pref.ok && pref.question.code === "Q3" && pref.via === "wording", JSON.stringify(pref));
++  const age = resolveConcept(def, "age");
++  assert.ok(age.ok && age.question.code === "Q1", JSON.stringify(age));
++  const priceP = resolveConcept(def, "price perception");
++  assert.ok(priceP.ok && priceP.question.code === "Q6" && priceP.via === "construct", JSON.stringify(priceP));
++  const sat = resolveConcept(def, "satisfaction");
++  assert.ok(sat.ok && sat.question.code === "Q7");
++  const sel = resolveConcept(def, "this question", { selectedId: "q4" });
++  assert.ok(sel.ok && sel.question.code === "Q4" && sel.via === "selection");
++  const none = resolveConcept(def, "shoe size");
++  assert.ok(!none.ok && !none.ambiguous && /No question measures/.test(none.reason));
++  // "brand": four questions carry the word and none carries more → ask
++  const brand = resolveConcept(def, "brand");
++  assert.ok(!brand.ok && brand.ambiguous, JSON.stringify(brand));
++  assert.deepEqual(brand.candidates.map((c) => c.question.code).sort(), ["Q3", "Q4", "Q6", "Q7"]);
++  const north = resolvePopulation(def, "those in the North");
++  assert.ok(north?.ok && north.population.expression === "Q9 = 1", JSON.stringify(north));
++  // two labels carried by the phrase: the longest is the one meant
++  const raw = JSON.parse(JSON.stringify(def));
++  raw.questions.push({ id: "q11", code: "Q11", variableName: "LINE", type: "single_select", text: "Which product line do you buy?", options: opts("Brand A", "Brand A Premium") });
++  raw.flow[1].children[0].questionIds.push("q11");
++  const lines = SurveyDefinition.parse(raw);
++  const premium = resolvePopulation(lines, "Brand A Premium buyers");
++  assert.ok(premium?.ok && premium.population.expression === "Q11 = 2", JSON.stringify(premium));
++  const plainA = resolvePopulation(lines, "Brand A buyers");
++  // both carry "Brand A"; the one whose wording shares the phrase's verb (buy) comes first, the other is offered
++  assert.ok(plainA?.ok && plainA.population.expression === "Q11 = 1" && plainA.population.alternatives?.[0]?.code === "Q3", JSON.stringify(plainA));
++  void north;
++  assert.ok(north?.ok && north.population.expression === "Q9 = 1", JSON.stringify(north));
++});
++
++test("roles: the screener, the demographics, the selection, the whole survey, a block", () => {
++  const def = survey();
++  const scr = resolveRole(def, "the screener");
++  assert.ok(scr && scr.role === "screener");
++  assert.deepEqual(scr.questions.map((q) => q.code), ["Q1", "Q2"], scr.via);
++  assert.match(scr.via, /block named like a screener/);
++  const demo = resolveRole(def, "demographics");
++  assert.ok(demo && demo.role === "demographics");
++  assert.deepEqual(demo.questions.map((q) => q.code), ["Q1", "Q2", "Q8", "Q9"], `${demo.via} — the About-you block counts, its open text does not`);
++  const sel = resolveRole(def, "this question", { selectedId: "q6" });
++  assert.ok(sel && sel.questions[0].code === "Q6");
++  const all = resolveRole(def, "the whole survey");
++  assert.ok(all && all.questions.length === 10);
++  const block = resolveRole(def, "the Brands section");
++  assert.ok(block && block.questions.map((q) => q.code).join(",") === "Q3,Q4,Q5,Q6,Q7", JSON.stringify(block?.questions.map((q) => q.code)));
++  assert.equal(resolveRole(def, "Q3"), null);
++  // no screening role and no screener block: the first page stands in, and says so
++  const plainDef = survey({ flow: [{ type: "page", id: "p1", title: "p", questionIds: ["q3", "q4"] }, { type: "page", id: "p2", title: "p2", questionIds: ["q1", "q2"] }, { type: "end", id: "e", status: "complete" }] });
++  const stand = resolveRole(plainDef, "the screening questions");
++  assert.ok(stand && stand.questions.map((q) => q.code).join(",") === "Q3,Q4" && /first page stands in/.test(stand.via));
++});
++
++test("scales: points, anchors and kinds from the researcher's words", () => {
++  const five = parseScale("a 5-point scale");
++  assert.ok(five && five.points === 5 && five.kind === "numeric" && !five.labels);
++  assert.deepEqual(scaleLabels(five!), ["1", "2", "3", "4", "5"]);
++  const agree = parseScale("5-point agree-disagree scale");
++  assert.ok(agree && agree.kind === "agreement" && agree.points === 5);
++  assert.deepEqual(agree!.labels, ["Strongly disagree", "Disagree", "Neither agree nor disagree", "Agree", "Strongly agree"]);
++  const likert7 = parseScale("a seven point likert scale");
++  assert.ok(likert7 && likert7.points === 7 && likert7.labels?.length === 7 && likert7.kind === "agreement");
++  const likert = parseScale("likert scale");
++  assert.ok(likert && likert.points === 5, "a Likert scale is 5 points unless told otherwise");
++  const ten = parseScale("a scale of 1 to 10");
++  assert.ok(ten && ten.points === 10 && ten.start === 1);
++  const zeroTen = parseScale("0-10 scale where 0 = not at all, 10 = extremely");
++  assert.ok(zeroTen && zeroTen.points === 11 && zeroTen.start === 0 && zeroTen.low === "not at all" && zeroTen.high === "extremely", JSON.stringify(zeroTen));
++  assert.deepEqual(scaleLabels(zeroTen!).slice(0, 2), ["not at all", "1"]);
++  const nps = parseScale("an NPS scale");
++  assert.ok(nps && nps.points === 11 && nps.start === 0 && nps.kind === "nps");
++  const yn = parseScale("yes/no");
++  assert.deepEqual(yn?.labels, ["Yes", "No"]);
++  const sat = parseScale("a 7-point satisfaction scale");
++  assert.equal(sat?.labels?.[3], "Neither satisfied nor dissatisfied");
++  const imp = parseScale("4-point importance scale");
++  assert.ok(imp && imp.points === 4 && !imp.labels && imp.low === "Not at all important" && imp.high === "Extremely important");
++  assert.equal(parseScale("a dropdown"), null);
++  assert.equal(parseScale("a 1-point scale"), null);
++  assert.equal(parseScale("a 20-point scale"), null);
++});
+diff --git a/packages/engine/src/nlSemantics.ts b/packages/engine/src/nlSemantics.ts
+new file mode 100644
+index 0000000..5628ab8
+--- /dev/null
++++ b/packages/engine/src/nlSemantics.ts
+@@ -0,0 +1,391 @@
++import type { Option, Question, SurveyDefinition } from "@rescript/schema";
++import { inferRole } from "./analysisFramework.js";
++import { listBlocks, listPages } from "./blocks.js";
++import { stripHtmlText } from "./html.js";
++import { contentWords, placedOrder, resolveQuestionRef, stemWord, type TargetContext } from "./nlTargets.js";
++
++/**
++ * SEMANTIC OBJECT RESOLUTION (Research Engine audit, Phase 2).
++ *
++ * `nlTargets` resolves a question by code, variable, selection or the words
++ * of its label. A researcher's sentence names things by what they MEAN:
++ *
++ *   a population   "respondents under 25", "women", "Brand A users",
++ *                  "those who switched"           → a question + a condition
++ *   a concept      "brand preference", "age"      → the variable that measures it
++ *   a role         "the screener", "demographics" → the questions in that role
++ *   a scale        "a 5-point scale", "agree–disagree", "1 to 10" → points + anchors
++ *
++ * Each resolver here is deterministic and reads only the survey (wording,
++ * variable names, constructs, analysis tags, roles, option labels). None of
++ * them decides an edit; the recognisers in `nlIntent.ts` do, through the same
++ * action gate as the model. Every resolver says HOW it resolved (`via`) so the
++ * review card can show it, and returns candidates when several things fit so
++ * the researcher is asked instead of guessed at.
++ */
++
++/* ------------------------------------------------------------ words */
++
++/**
++ * Everyday families of the words a researcher uses for a concept — the
++ * question that measures "purchase intent" asks "how likely are you to
++ * buy". Shared with the `measures` recogniser in nlIntent.
++ */
++export const CONCEPT_FAMILIES: string[][] = [
++  ["purchase", "buy", "bought", "buying", "order", "shop", "shopp"],
++  ["intent", "intention", "intend", "likely", "likelihood", "plan", "consider", "probability"],
++  ["satisfaction", "satisfied", "satisfi", "happy", "pleased", "content"],
++  ["awareness", "aware", "heard", "familiar", "recognise", "recognize", "know"],
++  ["loyalty", "loyal", "recommend", "again", "repeat", "nps"],
++  ["usage", "use", "used", "using", "consume"],
++  ["price", "cost", "expensive", "cheap", "afford", "pay", "spend", "value"],
++  ["age", "old", "year", "born"],
++  ["gender", "sex", "male", "female"],
++  ["income", "earn", "salary", "household"],
++  ["trust", "trustworthy", "reliable", "rely"],
++  ["preference", "prefer", "favourite", "favorite", "best"],
++  ["brand", "make", "label"],
++  ["switch", "switched", "switching", "change", "moved", "left"],
++  ["region", "area", "where", "live", "location", "state", "country"],
++  ["education", "school", "degree", "qualification"],
++  ["frequency", "often", "how often", "times"],
++];
++export const wordFamily = (w: string): Set<string> => {
++  const s = stemWord(w);
++  const g = CONCEPT_FAMILIES.find((xs) => xs.some((x) => stemWord(x) === s));
++  return new Set([s, ...(g ?? []).map(stemWord)]);
++};
++const CONCEPT_STOP = new Set(["measure", "measur", "capture", "captur", "asses", "assess", "track", "cover", "relat", "relate", "deal", "concept", "thing", "topic", "our", "my", "their", "study", "survey", "respondent", "respondents", "variable", "respond", "level", "overall", "people", "customer"]);
++
++/** the words of a phrase that carry meaning, each with its family */
++export function conceptWords(phrase: string): { words: string[]; families: Set<string>[] } {
++  const words = contentWords(phrase).filter((w) => !CONCEPT_STOP.has(w));
++  return { words, families: words.map(wordFamily) };
++}
++const plain = (s: string | undefined, n = 80): string => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
++const NOT_DATA = new Set(["html", "custom_component", "media_timeline"]);
++/** a question's wording for matching: its text, its variable name (split), and its grid rows (what a grid measures) */
++export const wordingOf = (q: Question): string => `${q.text} ${q.variableName} ${(q.rows ?? []).map((x) => x.label).join(" ")}`;
++const asked = (def: SurveyDefinition): Question[] => { const order = placedOrder(def); return def.questions.filter((q) => !NOT_DATA.has(q.type) && order.includes(q.id)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)); };
++
++/* ------------------------------------------------------------ concepts */
++
++export type ConceptVia = "code" | "variable" | "selection" | "construct" | "tag" | "wording";
++export interface ConceptMatch { question: Question; via: ConceptVia; /** how many of the phrase's words it carries (wording tier) */ hits: number; why: string }
++export type ConceptResult =
++  | { ok: true; question: Question; via: ConceptVia; why: string; /** others that fit less well */ alternatives: ConceptMatch[] }
++  | { ok: false; reason: string; candidates: ConceptMatch[]; ambiguous: boolean };
++
++/**
++ * The variable a concept names. By code or variable name first ("AGE",
++ * "Q7"), then the research design (a construct of that name and the
++ * questions that measure it, a question tagged with it), then the wording —
++ * all of the phrase's words (as families) before some of them. Several
++ * questions fitting equally well at the best tier is `ambiguous`: the
++ * recogniser asks which.
++ */
++export function resolveConcept(def: SurveyDefinition, phrase: string, ctx: TargetContext = {}): ConceptResult {
++  const p = phrase.trim().replace(/^(?:the|a|an)\s+/i, "").replace(/\s+(?:question|variable|item|measure)$/i, "").trim();
++  const direct = resolveQuestionRef(def, p, ctx);
++  if (direct.ok && (direct.via === "code" || direct.via === "variable" || direct.via === "selection" || direct.via === "id")) {
++    return { ok: true, question: direct.question, via: direct.via === "id" ? "code" : direct.via, why: direct.via === "selection" ? "the selected question" : `named by its ${direct.via}`, alternatives: [] };
++  }
++  const { words, families } = conceptWords(p);
++  if (!words.length) return { ok: false, reason: `“${phrase}” names nothing the survey measures.`, candidates: [], ambiguous: false };
++  const score = (text: string) => { const have = new Set(contentWords(text)); return families.filter((f) => [...f].some((x) => have.has(x))).length; };
++  const qs = asked(def);
++  const byId = new Map(qs.map((q) => [q.id, q]));
++  // tier 0: the research design; tier 1: the wording, ranked by how many of the words it carries
++  const tiers: ConceptMatch[][] = [[], []];
++  // tier 0: the research design — a construct whose name carries every word, and the questions that measure it; a question tagged with the construct
++  for (const c of def.research?.constructs ?? []) {
++    if (score(`${c.name} ${c.definition ?? ""}`) < families.length) continue;
++    for (const id of c.questionIds) { const q = byId.get(id); if (q) tiers[0].push({ question: q, via: "construct", hits: families.length, why: `measures the construct “${c.name}”` }); }
++  }
++  for (const q of qs) if (q.analysis?.construct && score(q.analysis.construct) >= families.length && !tiers[0].some((m) => m.question.id === q.id)) tiers[0].push({ question: q, via: "tag", hits: families.length, why: `tagged as measuring “${q.analysis.construct}”` });
++  for (const q of qs) {
++    if (tiers[0].some((m) => m.question.id === q.id)) continue;
++    const s = score(wordingOf(q));
++    if (!s) continue;
++    const have = new Set(contentWords(wordingOf(q)));
++    const carried = [...new Set(families.flatMap((f) => [...f].filter((x) => have.has(x))))];
++    tiers[1].push({ question: q, via: "wording", hits: s, why: `its wording mentions ${carried.join(", ")}` });
++  }
++  const best = tiers.find((t) => t.length);
++  if (!best) return { ok: false, reason: `No question measures “${p}” — no construct, analysis tag, variable name or wording matches it.`, candidates: [], ambiguous: false };
++  // the question carrying the most of the words wins outright only when it carries more than the next one
++  const top = Math.max(...best.map((m) => m.hits));
++  const winners = best.filter((m) => m.hits === top);
++  const rest = [...best.filter((m) => m.hits !== top), ...tiers.filter((t) => t !== best).flat()];
++  if (winners.length === 1) return { ok: true, question: winners[0].question, via: winners[0].via, why: winners[0].why, alternatives: rest };
++  return { ok: false, reason: `“${p}” could be ${winners.map((m) => `${m.question.code} (${plain(m.question.text, 50)})`).join(" or ")}.`, candidates: winners, ambiguous: true };
++}
++
++/* ------------------------------------------------------------ populations */
++
++export interface PopulationResult {
++  /** the question the condition reads */
++  question: Question;
++  /** the expression, in the logic language, that is true for the population */
++  expression: string;
++  /** the population in words, as resolved: "Q1 (AGE) under 25" */
++  words: string;
++  via: "age" | "gender" | "option" | "yes_no";
++  /** the question was one of several that fit — the others, for a clarifying choice */
++  alternatives?: Question[];
++}
++export type PopulationOutcome = { ok: true; population: PopulationResult } | { ok: false; reason: string; alternatives?: PopulationResult[] } | null;
++
++const PEOPLE = String.raw`(?:respondents?|people|persons?|participants?|anyone|anybody|everyone|everybody|someone|those|users?|customers?|consumers?|buyers?|shoppers?|individuals?|adults?|subjects?|panel(?:l?ists)?|members?|all|any)`;
++const NUM = String.raw`(\d{1,3})`;
++const numberWord = (s: string): number | null => { const n = Number(s); return Number.isFinite(n) ? n : null; };
++
++/** an option label read as an age band: "18-24" → [18,24], "Under 18" → [0,17], "65+" / "65 or older" → [65, 200] */
++function ageBand(label: string): [number, number] | null {
++  const t = label.toLowerCase().replace(/years?(?:\s+old)?|yrs?|y\.o\./g, " ").replace(/\s+/g, " ").trim();
++  let m: RegExpExecArray | null;
++  if ((m = /^(\d{1,3})\s*(?:-|–|—|to|through)\s*(\d{1,3})$/.exec(t))) return [Number(m[1]), Number(m[2])];
++  if ((m = /^(?:under|below|less than|younger than)\s*(\d{1,3})$/.exec(t))) return [0, Number(m[1]) - 1];
++  if ((m = /^(?:up to|at most)\s*(\d{1,3})$/.exec(t))) return [0, Number(m[1])];
++  if ((m = /^(\d{1,3})\s*(?:\+|or (?:more|older|over|above)|and (?:over|above|older)|plus)$/.exec(t))) return [Number(m[1]), 200];
++  if ((m = /^(?:over|above|older than|more than)\s*(\d{1,3})$/.exec(t))) return [Number(m[1]) + 1, 200];
++  return null;
++}
++
++/** the age question: numeric, or banded single-select, whose wording or variable says age */
++function ageQuestion(def: SurveyDefinition): Question[] {
++  const fam = wordFamily("age");
++  return asked(def).filter((q) => {
++    const words = new Set(contentWords(wordingOf(q)));
++    const named = /^(?:AGE|Q?AGE\d*|AGE_?\w*|S?\d*_?AGE)$/i.test(q.variableName) || [...fam].some((x) => words.has(x)) || /\bhow old\b/i.test(stripHtmlText(q.text));
++    if (!named) return false;
++    if (q.type === "numeric") return true;
++    return q.type === "single_select" && (q.options ?? []).some((o) => ageBand(o.label));
++  });
++}
++
++interface AgeBounds { lo: number | null; hi: number | null; /** the sentence said "over N" / "under N": the bound itself is outside */ loOpen?: boolean; hiOpen?: boolean }
++function ageExpression(q: Question, b: AgeBounds): { expression: string; words: string } | string {
++  const code = String(q.code);
++  // inclusive integer bounds for the bands and the words; the numeric expression keeps the sentence's own comparator
++  const lo = b.lo == null ? null : b.loOpen ? b.lo + 1 : b.lo;
++  const hi = b.hi == null ? null : b.hiOpen ? b.hi - 1 : b.hi;
++  const span = lo != null && hi != null ? `${lo} to ${hi}` : lo != null ? `${lo} and over` : `under ${(hi ?? 0) + 1}`;
++  if (q.type === "numeric") {
++    const parts = [b.lo != null ? `${code} ${b.loOpen ? ">" : ">="} ${b.lo}` : "", b.hi != null ? `${code} ${b.hiOpen ? "<" : "<="} ${b.hi}` : ""].filter(Boolean);
++    return { expression: parts.join(" AND "), words: `${code} (${q.variableName}) ${span}` };
++  }
++  // banded: every option whose band lies inside the asked range
++  const inside = (q.options ?? []).filter((o) => { const b = ageBand(o.label); return !!b && (lo == null || b[0] >= lo) && (hi == null || b[1] <= hi); });
++  if (!inside.length) return `${code}'s age bands (${(q.options ?? []).map((o) => o.label).join(", ")}) do not cut at ${span} — no band lies inside it.`;
++  // a band straddling the bound cannot be used: say so rather than include or exclude it silently
++  const straddle = (q.options ?? []).filter((o) => { const b = ageBand(o.label); return !!b && !inside.includes(o) && ((lo != null && b[0] < lo && b[1] >= lo) || (hi != null && b[1] > hi && b[0] <= hi)); });
++  if (straddle.length) return `${code}'s band “${straddle[0].label}” straddles ${span}, so the bands cannot express it exactly — screen on “${inside.map((o) => o.label).join("”, “")}” or change the bands.`;
++  return { expression: inside.length === 1 ? `${code} = ${inside[0].code}` : `${code} in [${inside.map((o) => o.code).join(", ")}]`, words: `${code} (${q.variableName}) ${inside.map((o) => `“${o.label}”`).join(", ")}` };
++}
++
++/** the normalised form of a label or phrase for whole-word containment: lower case, one space, no punctuation */
++const norm = (s: string) => stripHtmlText(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
++/** the option whose label the phrase carries whole ("brand a users" carries "Brand A"); the longest such label wins */
++function optionCarried(q: Question, phrase: string): Option | null {
++  const p = ` ${norm(phrase)} `;
++  const hits = ((q.options ?? []) as Option[]).map((o) => ({ o, l: norm(o.label) })).filter((x) => x.l.length >= 2 && p.includes(` ${x.l} `));
++  if (!hits.length) return null;
++  hits.sort((a, b) => b.l.length - a.l.length);
++  return hits[0].o;
++}
++
++/**
++ * A population phrase → the question and the condition that selects it.
++ * Returns null when the phrase is not one (the caller then reads it as a
++ * condition in the logic language, or hands the sentence on).
++ */
++export function resolvePopulation(def: SurveyDefinition, phrase: string): PopulationOutcome {
++  const one = resolveOnePopulation(def, phrase);
++  if (one) return one;
++  // "respondents under 25 and women", "men or anyone over 65": each part a population, the whole is either of them
++  const parts = phrase.trim().replace(/[.!?]+$/, "").split(/\s*(?:,|\band\b|\bor\b|\/)\s*/i).map((x) => x.trim()).filter(Boolean);
++  if (parts.length < 2) return null;
++  const each = parts.map((x) => resolveOnePopulation(def, x));
++  if (each.some((x) => !x)) return null;
++  const bad = each.find((x) => x && !x.ok);
++  if (bad && !bad.ok) return bad;
++  const pops = each.map((x) => (x as { ok: true; population: PopulationResult }).population);
++  const expression = pops.map((p) => (/\s(?:AND|OR)\s/.test(p.expression) ? `(${p.expression})` : p.expression)).join(" OR ");
++  return { ok: true, population: { question: pops[0].question, expression, words: pops.map((p) => p.words).join(", or "), via: pops[0].via, ...(pops.some((p) => p.alternatives?.length) ? { alternatives: pops.flatMap((p) => p.alternatives ?? []) } : {}) } };
++}
++
++function resolveOnePopulation(def: SurveyDefinition, phrase: string): PopulationOutcome {
++  const t = phrase.trim().replace(/[.!?]+$/, "").replace(/\s+/g, " ");
++  const low = t.toLowerCase();
++  let m: RegExpExecArray | null;
++  const AGEWORD = String.raw`(?:(?:who|that|which)\s+(?:are|is)\s+|aged?\s+|of\s+age\s+|whose\s+age\s+is\s+)?`;
++  const YEARS = String.raw`(?:\s*(?:years?(?:\s+old)?|yrs?|y\.?o\.?|and\s+over|or\s+over|or\s+older|and\s+above|or\s+above|plus|\+))*`;
++  const PEOPLE_OPT = String.raw`(?:${PEOPLE}\s+)?`;
++  // ages: "respondents under 25", "people aged 18 to 24", "anyone over 65", "those 18+", "under-25s", "adults aged 18–65"
++  const ageForms: [RegExp, (g: string[]) => AgeBounds][] = [
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}(?:under|below|younger\s+than|less\s+than)\s+${NUM}${YEARS}$`, "i"), (g) => ({ lo: null, hi: numberWord(g[1]), hiOpen: true })],
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}(?:over|above|older\s+than|more\s+than)\s+${NUM}${YEARS}$`, "i"), (g) => ({ lo: numberWord(g[1]), hi: null, loOpen: true })],
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}(?:at\s+least|minimum|from)\s+${NUM}${YEARS}$`, "i"), (g) => ({ lo: numberWord(g[1]), hi: null })],
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}(?:at\s+most|up\s+to|maximum)\s+${NUM}${YEARS}$`, "i"), (g) => ({ lo: null, hi: numberWord(g[1]) })],
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}(?:between\s+)?${NUM}\s*(?:-|–|—|to|and|through)\s*${NUM}${YEARS}$`, "i"), (g) => ({ lo: numberWord(g[1]), hi: numberWord(g[2]) })],
++    [new RegExp(String.raw`^${PEOPLE_OPT}${AGEWORD}${NUM}\s*(?:\+|or\s+(?:more|older|over|above)|and\s+(?:over|above|older)|plus)$`, "i"), (g) => ({ lo: numberWord(g[1]), hi: null })],
++    [new RegExp(String.raw`^(?:under|below)[-\s]?${NUM}s$`, "i"), (g) => ({ lo: null, hi: numberWord(g[1]), hiOpen: true })],
++    [new RegExp(String.raw`^(?:over|above)[-\s]?${NUM}s$`, "i"), (g) => ({ lo: numberWord(g[1]), hi: null, loOpen: true })],
++  ];
++  for (const [re, read] of ageForms) {
++    if (!(m = re.exec(t))) continue;
++    const b = read([...m]);
++    if (b.lo == null && b.hi == null) return null;
++    const loI = b.lo == null ? null : b.loOpen ? b.lo + 1 : b.lo;
++    const hiI = b.hi == null ? null : b.hiOpen ? b.hi - 1 : b.hi;
++    if (loI != null && hiI != null && loI > hiI) return { ok: false, reason: `“${t}” is an empty range — ${loI} is more than ${hiI}.` };
++    const qs = ageQuestion(def);
++    if (!qs.length) return { ok: false, reason: `“${t}” is an age, and this survey has no question that asks it (a numeric age, or age bands) — add one first, or name the question: “screen out when Q1 < 25”.` };
++    const results: PopulationResult[] = [];
++    const problems: string[] = [];
++    for (const q of qs) { const e = ageExpression(q, b); if (typeof e === "string") problems.push(e); else results.push({ question: q, expression: e.expression, words: e.words, via: "age" }); }
++    if (!results.length) return { ok: false, reason: problems[0] };
++    if (results.length > 1) return { ok: true, population: { ...results[0], alternatives: results.slice(1).map((x) => x.question) } };
++    return { ok: true, population: results[0] };
++  }
++  // gender: "women", "female respondents", "men", "males", "respondents who are female"
++  if ((m = new RegExp(String.raw`^(?:(?:all|any|the)\s+)?(?:${PEOPLE}\s+)?(?:(?:who|that)\s+(?:are|identify\s+as)\s+)?(?:(women|woman|females?|ladies|girls)|(men|man|males?|gentlemen|boys|guys))(?:\s+(?:respondents?|only|participants?|customers?|users?))?$`, "i").exec(t))) {
++    const female = !!m[1];
++    const genderQs = asked(def).filter((q) => q.type === "single_select" && (/^(?:GENDER|SEX|Q?GEN\d*)$/i.test(q.variableName) || /\b(?:gender|sex)\b/i.test(stripHtmlText(q.text))));
++    if (!genderQs.length) return { ok: false, reason: `“${t}” names a gender, and this survey has no gender question — add one, or name the question and option.` };
++    const results: PopulationResult[] = [];
++    for (const q of genderQs) {
++      const opt = (q.options ?? []).find((o) => (female ? /^(?:female|woman|women|f)$/i : /^(?:male|man|men|m)$/i).test(o.label.trim()));
++      if (opt) results.push({ question: q, expression: `${q.code} = ${opt.code}`, words: `${q.code} (${q.variableName}) = “${opt.label}”`, via: "gender" });
++    }
++    if (!results.length) return { ok: false, reason: `${genderQs[0].code} has no option for ${female ? "female" : "male"} (its options are ${(genderQs[0].options ?? []).map((o) => `“${o.label}”`).join(", ")}).` };
++    return { ok: true, population: { ...results[0], ...(results.length > 1 ? { alternatives: results.slice(1).map((x) => x.question) } : {}) } };
++  }
++  // "those who switched", "people who have switched brands", "respondents who said yes to Q5": a yes/no question whose wording carries the verb
++  if ((m = new RegExp(String.raw`^(?:${PEOPLE}\s+)?(?:who|that|which)\s+(?:have\s+|has\s+|had\s+|did\s+|do\s+|does\s+)?(.+)$`, "i").exec(t)) && !/\b(?:said|answered|chose|selected|picked|ticked|responded)\b/i.test(m[1])) {
++    const { words } = conceptWords(m[1].replace(/\b(?:not|never|n't)\b/g, ""));
++    const negated = /\b(?:not|never|n't)\b/i.test(m[1]);
++    if (words.length) {
++      const fams = words.map(wordFamily);
++      const yesNo = asked(def).filter((q) => q.type === "single_select" && (q.options ?? []).some((o) => /^yes$/i.test(o.label.trim())) && (q.options ?? []).some((o) => /^no$/i.test(o.label.trim())));
++      const scored = yesNo.map((q) => { const have = new Set(contentWords(wordingOf(q))); return { q, s: fams.filter((f) => [...f].some((x) => have.has(x))).length }; }).filter((x) => x.s === fams.length);
++      if (scored.length) {
++        const mk = (q: Question): PopulationResult => { const yes = (q.options ?? []).find((o) => /^yes$/i.test(o.label.trim()))!; const no = (q.options ?? []).find((o) => /^no$/i.test(o.label.trim()))!; const o = negated ? no : yes; return { question: q, expression: `${q.code} = ${o.code}`, words: `${q.code} (${q.variableName}) = “${o.label}”`, via: "yes_no" }; };
++        return { ok: true, population: { ...mk(scored[0].q), ...(scored.length > 1 ? { alternatives: scored.slice(1).map((x) => x.q) } : {}) } };
++      }
++    }
++  }
++  // "Brand A users", "iPhone owners", "those who prefer Brand A", "people who chose Brand B", "those in the North": an option label carried whole by the phrase
++  {
++    const core = low.replace(new RegExp(String.raw`^(?:${PEOPLE}\s+)?(?:(?:who|that|which)\s+)?`, "i"), "").trim();
++    if (core) {
++      const hits: { q: Question; o: Option }[] = [];
++      for (const q of asked(def)) {
++        if (!["single_select", "multi_select", "dropdown"].includes(q.type)) continue;
++        const o = optionCarried(q, core);
++        if (o) hits.push({ q, o });
++      }
++      if (hits.length) {
++        const longest = Math.max(...hits.map((h) => norm(h.o.label).length));
++        const best = hits.filter((h) => norm(h.o.label).length === longest);
++        // among questions carrying the same label, the one whose wording shares the phrase's verb ("prefer" → "Which brand do you prefer?")
++        const verb = /\b(prefer|use|own|drink|buy|bought|like|choose|chose|switch|shop|visit|watch|drive)\w*/i.exec(core)?.[1];
++        const shares = (q: Question) => !!verb && [...wordFamily(verb)].some((x) => new Set(contentWords(wordingOf(q))).has(x));
++        const ranked = [...best.filter((h) => shares(h.q)), ...best.filter((h) => !shares(h.q))];
++        const mk = (h: { q: Question; o: Option }): PopulationResult => ({ question: h.q, expression: `${h.q.code} = ${h.o.code}`, words: `${h.q.code} (${h.q.variableName}) = “${h.o.label}”`, via: "option" });
++        return { ok: true, population: { ...mk(ranked[0]), ...(ranked.length > 1 ? { alternatives: ranked.slice(1).map((h) => h.q) } : {}) } };
++      }
++    }
++  }
++  return null;
++}
++
++/* ------------------------------------------------------------ structural roles */
++
++export type StructuralRole = "screener" | "demographics" | "selection" | "all";
++export interface RoleResult { role: StructuralRole; label: string; questions: Question[]; via: string }
++
++/** "the screener", "the demographics section", "this question", "the whole survey" → the questions meant */
++export function resolveRole(def: SurveyDefinition, phrase: string, ctx: TargetContext = {}): RoleResult | null {
++  const t = phrase.trim().toLowerCase().replace(/[.!?]+$/, "");
++  const qs = asked(def);
++  if (/^(?:the\s+)?(?:screener|screening|screen[-\s]?out|qualif(?:ication|ier|ying))(?:\s+(?:questions?|section|block|part|page|criteria|logic))?$/.test(t) || /^(?:the\s+)?(?:screening|screener)\s+(?:questions?|section|block)$/.test(t)) {
++    const blocks = listBlocks(def.flow as unknown[]);
++    const inScreenerBlock = new Set(blocks.filter((b) => /\b(?:screen|qualif|eligib)/i.test(b.title ?? "")).flatMap((b) => b.pages.flatMap((p) => p.node.questionIds)));
++    const terminates = (q: Question) => (q.skipLogic ?? []).some((s) => s.target.kind === "terminate" || s.target.status === "screened");
++    const byRole = qs.filter((q) => q.analysis?.role === "screening" || inferRole(def, q) === "screening" || terminates(q) || inScreenerBlock.has(q.id));
++    if (byRole.length) return { role: "screener", label: "the screener", questions: byRole, via: byRole.some((q) => q.analysis?.role === "screening") ? "questions in the screening role" : byRole.some((q) => inScreenerBlock.has(q.id)) ? "the block named like a screener, and any question that terminates" : "questions that terminate" };
++    const first = listPages(def.flow as unknown[])[0];
++    const firstQs = first ? first.node.questionIds.map((id) => qs.find((q) => q.id === id)).filter((q): q is Question => !!q) : [];
++    if (firstQs.length) return { role: "screener", label: "the screener", questions: firstQs, via: "no question has the screening role — the first page stands in" };
++    return null;
++  }
++  if (/^(?:the\s+)?(?:demographics?|demographic\s+(?:questions?|section|block|profile)|profil(?:e|ing)(?:\s+(?:questions?|section|block))?|classification(?:\s+(?:questions?|section))?|about[-\s]you(?:\s+section)?|background(?:\s+(?:questions?|section))?)$/.test(t)) {
++    const byRole = qs.filter((q) => inferRole(def, q) === "segmentation" && q.type !== "open_text" && q.type !== "text");
++    if (!byRole.length) return null;
++    return { role: "demographics", label: "the demographics", questions: byRole, via: byRole.some((q) => q.analysis?.role === "segmentation") ? "questions in the segmentation role" : "questions whose variable, wording or block says age, gender, region, income, education…" };
++  }
++  if (/^(?:this|that|the\s+selected|the\s+current|selected|current)(?:\s+(?:question|one|item))?$/.test(t)) {
++    const sel = resolveQuestionRef(def, phrase, ctx);
++    return sel.ok ? { role: "selection", label: sel.question.code ? `${sel.question.code}` : "this question", questions: [sel.question], via: "the selected question" } : null;
++  }
++  if (/^(?:the\s+)?(?:whole|entire|full|complete)?\s*(?:survey|questionnaire|study|instrument)$/.test(t) || /^(?:all|every)\s+(?:the\s+)?questions?$/.test(t)) {
++    return { role: "all", label: "the whole survey", questions: qs, via: "every question in the flow" };
++  }
++  // a block by its title ("the brand section")
++  const block = listBlocks(def.flow as unknown[]).find((b) => b.title && new RegExp(String.raw`^(?:the\s+)?${b.title.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\s+(?:block|section|questions?))?$`).test(t));
++  if (block) {
++    const ids = new Set(block.pages.flatMap((p) => p.node.questionIds));
++    return { role: "all", label: `block “${block.title}”`, questions: qs.filter((q) => ids.has(q.id)), via: `the block titled “${block.title}”` };
++  }
++  return null;
++}
++
++/* ------------------------------------------------------------ scales */
++
++export type ScaleKind = "agreement" | "satisfaction" | "likelihood" | "importance" | "quality" | "frequency" | "numeric" | "yes_no" | "nps";
++export interface ScaleDescription { kind: ScaleKind; points: number; start?: number; labels?: string[]; low?: string; high?: string; /** "5-point agreement scale" */ name: string }
++
++const ANCHORS: Record<Exclude<ScaleKind, "numeric" | "yes_no" | "nps">, { 5: string[]; 7: string[]; low: string; high: string }> = {
++  agreement: { 5: ["Strongly disagree", "Disagree", "Neither agree nor disagree", "Agree", "Strongly agree"], 7: ["Strongly disagree", "Disagree", "Somewhat disagree", "Neither agree nor disagree", "Somewhat agree", "Agree", "Strongly agree"], low: "Strongly disagree", high: "Strongly agree" },
++  satisfaction: { 5: ["Very dissatisfied", "Dissatisfied", "Neither satisfied nor dissatisfied", "Satisfied", "Very satisfied"], 7: ["Very dissatisfied", "Dissatisfied", "Somewhat dissatisfied", "Neither satisfied nor dissatisfied", "Somewhat satisfied", "Satisfied", "Very satisfied"], low: "Very dissatisfied", high: "Very satisfied" },
++  likelihood: { 5: ["Very unlikely", "Unlikely", "Neither likely nor unlikely", "Likely", "Very likely"], 7: ["Very unlikely", "Unlikely", "Somewhat unlikely", "Neither likely nor unlikely", "Somewhat likely", "Likely", "Very likely"], low: "Very unlikely", high: "Very likely" },
++  importance: { 5: ["Not at all important", "Slightly important", "Moderately important", "Very important", "Extremely important"], 7: ["Not at all important", "Low importance", "Slightly important", "Neutral", "Moderately important", "Very important", "Extremely important"], low: "Not at all important", high: "Extremely important" },
++  quality: { 5: ["Very poor", "Poor", "Fair", "Good", "Excellent"], 7: ["Very poor", "Poor", "Below average", "Average", "Above average", "Good", "Excellent"], low: "Very poor", high: "Excellent" },
++  frequency: { 5: ["Never", "Rarely", "Sometimes", "Often", "Always"], 7: ["Never", "Very rarely", "Rarely", "Sometimes", "Often", "Very often", "Always"], low: "Never", high: "Always" },
++};
++const WORD_NUMBERS: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11 };
++
++/** "a 5-point scale", "7 point agree-disagree scale", "scale of 1 to 10", "likert", "yes/no", "0–10 likelihood to recommend" → points and anchors, or null */
++export function parseScale(phrase: string): ScaleDescription | null {
++  const t = phrase.trim().toLowerCase().replace(/[.!?]+$/, "").replace(/^(?:an?|the)\s+/, "");
++  if (!/\b(?:scale|likert|point|pt|points|yes\s*\/\s*no|yes[-\s]or[-\s]no|nps|net\s+promoter)\b/.test(t) && !/^\d+\s*(?:-|–|to)\s*\d+$/.test(t)) return null;
++  const kind: ScaleKind | null = /\bagree|likert|agreement\b/.test(t) ? "agreement" : /satisf/.test(t) ? "satisfaction" : /likel|intent|probab/.test(t) ? "likelihood" : /import/.test(t) ? "importance" : /quality|excellent|poor\b/.test(t) ? "quality" : /frequen|often/.test(t) ? "frequency" : /\bnps\b|net\s+promoter|recommend/.test(t) ? "nps" : /yes\s*\/\s*no|yes[-\s]or[-\s]no|yes\s*-\s*no/.test(t) ? "yes_no" : null;
++  if (kind === "yes_no") return { kind, points: 2, labels: ["Yes", "No"], name: "yes/no" };
++  let points: number | null = null;
++  let start: number | undefined;
++  let m: RegExpExecArray | null;
++  if ((m = /(\d+|two|three|four|five|six|seven|eight|nine|ten|eleven)[\s-]*(?:point|pt|points)\b/.exec(t))) points = WORD_NUMBERS[m[1]] ?? Number(m[1]);
++  else if ((m = /(?:from|of)?\s*(\d+)\s*(?:-|–|—|to|through)\s*(\d+)/.exec(t))) { start = Number(m[1]); points = Number(m[2]) - Number(m[1]) + 1; }
++  if (kind === "nps") return { kind, points: 11, start: 0, low: "Not at all likely", high: "Extremely likely", name: "0–10 likelihood to recommend (NPS)" };
++  if (!points) { if (kind === "agreement" || kind === "satisfaction" || kind === "likelihood" || kind === "importance" || kind === "quality" || kind === "frequency") points = 5; else return null; }
++  if (points < 2 || points > 11) return null;
++  if (kind) {
++    const a = ANCHORS[kind];
++    const labels = points === 5 ? a[5] : points === 7 ? a[7] : undefined;
++    return { kind, points, ...(start !== undefined ? { start } : {}), ...(labels ? { labels } : { low: a.low, high: a.high }), name: `${points}-point ${kind} scale` };
++  }
++  // numeric, with the anchors the sentence may carry: "1 = not at all, 10 = extremely"
++  const anchors = /(?:where\s+|with\s+|,\s*)?(?:(\d+)\s*(?:=|is|means|being)\s*["“]?([^,"”]+?)["”]?)\s*(?:,|and|to|;)\s*(?:(\d+)\s*(?:=|is|means|being)\s*["“]?([^,"”]+?)["”]?)\s*$/.exec(t);
++  const low = anchors ? anchors[2].trim() : undefined;
++  const high = anchors ? anchors[4].trim() : undefined;
++  const lh = low && high ? (Number(anchors![1]) <= Number(anchors![3]) ? { low, high } : { low: high, high: low }) : {};
++  return { kind: "numeric", points, ...(start !== undefined ? { start } : {}), ...lh, name: `${start !== undefined ? `${start}–${start + points - 1}` : `${points}-point`} scale` };
++}
++
++/** the options a scale description produces, the way `update_question.scale` builds them — for "already so" checks and previews */
++export function scaleLabels(s: ScaleDescription): string[] {
++  const start = s.start ?? (s.points === 11 ? 0 : 1);
++  return Array.from({ length: s.points }, (_, i) => s.labels?.[i] ?? (i === 0 && s.low ? s.low : i === s.points - 1 && s.high ? s.high : String(start + i)));
++}
+diff --git a/scripts/phase1-reliability-test.mjs b/scripts/phase1-reliability-test.mjs
+index 431acf4..f3b1d66 100644
+--- a/scripts/phase1-reliability-test.mjs
++++ b/scripts/phase1-reliability-test.mjs
+@@ -76,7 +76,8 @@ ok("fixture loaded");
+ /* ============================================================ 1. honest failures */
+ await intelligent();
+ {
+-  const t = await say("Change the screener so that respondents under 25 are excluded.");
++  // (Phase 2 reads the screener sentence itself; a rewording is still the model's)
++  const t = await say("Rewrite the age question so it is friendlier.");
+   assert.equal(await t.getAttribute("data-status"), "failed");
+   const f = await t.$('[data-testid="cp-failure"]');
+   assert.ok(f, "the failure block is shown");
+@@ -87,7 +88,7 @@ await intelligent();
+   assert.match(text, /WHAT TO DO/i, "and what to do next");
+   const handoff = await t.$('[data-testid="cp-handoff"]');
+   assert.ok(handoff, "what the engine read is shown");
+-  assert.match(await handoff.evaluate((e) => e.innerText), /does not parse that phrasing/, "…including why it handed the sentence on");
++  assert.match(await handoff.evaluate((e) => e.innerText), /rewording a question is writing/, "…including why it handed the sentence on");
+   assert.doesNotMatch(await viewText(), /I did not understand that/, "the grammar's message is gone");
+   ok("an unusable model reply: the cause, the next step, what the engine read — not “not understood”");
+ }
+diff --git a/scripts/phase2-nl-test.mjs b/scripts/phase2-nl-test.mjs
+new file mode 100644
+index 0000000..1239705
+--- /dev/null
++++ b/scripts/phase2-nl-test.mjs
+@@ -0,0 +1,345 @@
++/**
++ * RESEARCH ENGINE — PHASE 2 (NATURAL-LANGUAGE INTELLIGENCE), the Studio.
++ *
++ *   1. The audit's descriptive sentences are read by the engine, in the
++ *      sandbox with no usable model: the screener exclusion, the scale
++ *      change, the crosstab, the key crosstabs, the unconnected questions —
++ *      each a proposal or an answer on an engine card, never "not understood".
++ *   2. An ambiguity is a choice: two age questions → two sentences to pick.
++ *   3. What needs the model but has no model: the engine's standard items
++ *      are offered as executable choices — after the fake provider's unusable
++ *      answer, and once the Studio knows there is no model at all.
++ *   4. The change plan: a generation is planned first, the plan is shown,
++ *      ticked and approved; the approved items are built one call each into
++ *      one proposal; the built card lists them; setting a plan aside builds
++ *      nothing. "Plan first" off: the single reply as before.
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import assert from "node:assert/strict";
++import { openTab, switchMode } from "./lib/nav.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (...ls) => ls.map((l, i) => ({ code: i + 1, label: l }));
++const q = (id, code, variableName, type, text, extra = {}) => ({ id, code, variableName, type, text, ...extra });
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "Brand switching", version: "1.0" },
++  research: { objective: "Understand why customers switch from Brand A to Brand B", hypotheses: ["Price perception drives switching", "Service satisfaction reduces switching"], constructs: [{ name: "Price perception", role: "independent", questionIds: ["q6"] }], analysis: [], assumptions: [], sources: [] },
++  questions: [
++    q("q1", "Q1", "AGE", "numeric", "How old are you?"),
++    q("q2", "Q2", "GENDER", "single_select", "What is your gender?", { options: opts("Male", "Female", "Prefer not to say") }),
++    q("q3", "Q3", "BRAND_PREF", "single_select", "Which brand do you prefer?", { options: opts("Brand A", "Brand B", "Brand C"), analysis: { role: "dependent", hypotheses: ["H1"] } }),
++    q("q4", "Q4", "SWITCHED", "single_select", "Have you switched brands in the last 12 months?", { options: opts("Yes", "No"), analysis: { role: "dependent", hypotheses: ["H1", "H2"] } }),
++    q("q5", "Q5", "REASONS", "multi_select", "Why did you switch?", { options: opts("Price", "Quality", "Availability") }),
++    q("q6", "Q6", "PRICE_PERC", "single_select", "Brand B offers better value for money", { options: opts("Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree") }),
++    q("q7", "Q7", "SAT", "single_select", "Overall, how satisfied are you with your current brand?", { options: opts("1", "2", "3", "4", "5", "6", "7"), analysis: { role: "independent", hypotheses: ["H2"] } }),
++    q("q8", "Q8", "PETS", "single_select", "Do you have pets?", { options: opts("Yes", "No") }),
++    q("q9", "Q9", "REGION", "single_select", "Which region do you live in?", { options: opts("North", "South") }),
++  ],
++  flow: [
++    { type: "block", id: "b1", title: "Screener", children: [{ type: "page", id: "p1", title: "Screener", questionIds: ["q1", "q2"] }] },
++    { type: "block", id: "b2", title: "Brands", children: [{ type: "page", id: "p2", title: "Brands", questionIds: ["q3", "q4", "q5", "q6", "q7"] }] },
++    { type: "block", id: "b3", title: "About you", children: [{ type: "page", id: "p3", title: "About you", questionIds: ["q8", "q9"] }] },
++    { type: "end", id: "e1", status: "complete" },
++  ],
++};
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
++page.on("dialog", (d) => d.accept());
++const errors = [];
++page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402)/.test(m.text())) errors.push(m.text()); });
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(600);
++};
++const readDef = async () => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await intelligent();
++  return JSON.parse(json);
++};
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++const fakeNext = (reply) => page.evaluate((r) => window.__rescriptCopilotFake(r), reply);
++const turns = () => page.$$('[data-testid="cp-turn"]');
++const settled = async (n) => {
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 45000 });
++  await page.waitForTimeout(300);
++  return (await turns()).at(-1);
++};
++const say = async (text, reply) => {
++  if (reply) await fakeNext(reply);
++  const n = (await turns()).length;
++  await page.fill('[data-testid="iq-input"]', text);
++  await page.keyboard.press("Enter");
++  const last = await settled(n);
++  if (await last.$('[data-testid="cp-engine"]')) await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  return last;
++};
++const textOf = async (h) => (await h.evaluate((e) => e.innerText)).replace(/\s+/g, " ");
++const cancel = async () => { if (await page.$('[data-testid="cp-panel-cancel"]')) { await page.click('[data-testid="cp-panel-cancel"]'); await page.waitForTimeout(200); } };
++const apply = async () => {
++  // a change that removes or rewrites existing content is confirmed in the Changes panel first, like any proposal
++  if (await page.$('[data-testid="cp-confirm"]')) await page.check('[data-testid="cp-confirm"]');
++  await page.click('[data-testid="cp-apply"]');
++  await page.waitForTimeout(500);
++};
++const engineProposal = async (t, what) => {
++  assert.ok(await t.$('[data-testid="cp-engine"]'), `${what}: read by the engine — ${(await textOf(t)).slice(0, 200)}`);
++  assert.equal(await t.getAttribute("data-kind"), "proposal", what);
++  assert.equal(await t.getAttribute("data-proposal"), "open", what);
++};
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++await intelligent();
++ok("fixture loaded: the audit's brand-switching survey");
++
++/* ============================================================ 1. the sentences, read by the engine */
++{
++  const t = await say("Change the screener so that respondents under 25 are excluded.");
++  await engineProposal(t, "screener exclusion");
++  const text = await textOf(t);
++  assert.match(text, /Q1 \(AGE\) is where the survey learns it/);
++  assert.match(text, /screen out when Q1 < 25/);
++  assert.match(text, /respondents under 25 → Q1 \(AGE\) under 25/, "the population, as resolved");
++  await apply();
++  const def = await readDef();
++  const q1 = def.questions.find((x) => x.id === "q1");
++  assert.equal(q1.skipLogic.length, 1);
++  assert.equal(q1.skipLogic[0].target.kind, "terminate");
++  ok("“Change the screener so that respondents under 25 are excluded” → a screened terminate on Q1, applied");
++}
++{
++  await page.click('[data-testid="cp-structure-pane"] [data-qid="q7"], [data-testid="cp-structure-pane"] [data-id="q7"]').catch(() => {});
++  const t = await say("Change Q7 to a 5-point satisfaction scale");
++  await engineProposal(t, "scale change");
++  assert.match(await textOf(t), /Very dissatisfied · Dissatisfied · Neither satisfied nor dissatisfied · Satisfied · Very satisfied/);
++  assert.match(await textOf(t), /replaces its 7 current options/);
++  await apply();
++  const def = await readDef();
++  assert.deepEqual(def.questions.find((x) => x.id === "q7").options.map((o) => o.label), ["Very dissatisfied", "Dissatisfied", "Neither satisfied nor dissatisfied", "Satisfied", "Very satisfied"]);
++  ok("“Change Q7 to a 5-point satisfaction scale” → the options replaced with the anchors, applied");
++  const multi = await say("Change Q5 to a 5-point scale");
++  assert.ok(await multi.$('[data-testid="cp-engine"]'));
++  assert.match(await textOf(multi), /multi-select — each option is a separate answer/);
++  assert.ok(await multi.$('[data-testid="cp-engine-fix"]'), "the fix is offered");
++  ok("a multi-select has no scale: refused precisely, with the single-select conversion one click away");
++}
++{
++  const t = await say("Create a cross-tab between age and brand preference.");
++  await engineProposal(t, "crosstab");
++  assert.match(await textOf(t), /BRAND_PREF \(Q3.*by AGE \(Q1/);
++  assert.match(await textOf(t), /AGE goes in the banner as the demographic/);
++  await apply();
++  const def = await readDef();
++  assert.equal(def.research.analysisPlan.crosstabs.length, 1);
++  assert.deepEqual([def.research.analysisPlan.crosstabs[0].rows, def.research.analysisPlan.crosstabs[0].columns], [["BRAND_PREF"], ["AGE"]]);
++  ok("“Create a cross-tab between age and brand preference” → add_crosstab, the demographic in the banner, applied to the plan");
++  const key = await say("Create the most important crosstabs for this research");
++  await engineProposal(key, "key crosstabs");
++  assert.match(await textOf(key), /Hypothesis-linked tables come first/);
++  await apply();
++  const after = await readDef();
++  assert.ok(after.research.analysisPlan.crosstabs.length >= 3, `planned: ${after.research.analysisPlan.crosstabs.length}`);
++  ok("“Create the most important crosstabs for this research” → the framework's priorities planned");
++}
++{
++  // on the fixture as it was: the crosstabs just planned connect the demographics, which is right, but not what this asks
++  await loadDef(FIXTURE);
++  await intelligent();
++  const t = await say("Which questions are not connected to any hypothesis?");
++  assert.ok(await t.$('[data-testid="cp-engine"]'));
++  assert.equal(await t.getAttribute("data-kind"), "answer");
++  const text = await textOf(t);
++  assert.match(text, /not connected to any hypothesis, construct or planned analysis/);
++  assert.match(text, /Q5/);
++  assert.match(text, /Q8/);
++  assert.match(text, /Demographics and screeners are expected here/);
++  assert.ok((await t.$$('[data-testid="cp-engine-ref"]')).length >= 3, "each question a link");
++  ok("“Which questions are not connected to any hypothesis?” → answered from the design, with navigable references");
++}
++
++/* ============================================================ 2. an ambiguity is a choice */
++{
++  const raw = JSON.parse(JSON.stringify(FIXTURE));
++  raw.questions.push(q("q10", "Q10", "CHILD_AGE", "numeric", "How old is your eldest child?"));
++  raw.flow[2].children[0].questionIds.push("q10");
++  await loadDef(raw);
++  await intelligent();
++  const t = await say("Screen out respondents under 25");
++  assert.ok(await t.$('[data-testid="cp-engine"]'));
++  assert.equal(await t.getAttribute("data-kind"), "clarify");
++  const choices = await t.$$('[data-testid="cp-engine-choice"]');
++  assert.equal(choices.length, 2);
++  assert.match(await textOf(t), /which question should the screener read/);
++  const n = (await turns()).length;
++  await choices[0].click();
++  const picked = await settled(n);
++  await engineProposal(picked, "the picked choice");
++  assert.match(await textOf(picked), /Q1 < 25/);
++  await cancel();
++  ok("two age questions: the engine asks which, each choice a sentence it then reads to the rule");
++}
++
++/* ============================================================ 3. no model: what the engine can do instead */
++{
++  await loadDef(FIXTURE);
++  await intelligent();
++  // the fake provider answers with nothing usable: the failed turn carries the engine's standard items
++  const t = await say("Add a question to measure purchase intent.");
++  assert.equal(await t.getAttribute("data-status"), "failed");
++  assert.equal(await t.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "unusable");
++  const fb = await t.$('[data-testid="cp-fallback"]');
++  assert.ok(fb, "what the engine can do without a model is offered on the failed turn");
++  const fbChoices = await t.$$('[data-testid="cp-fallback-choice"]');
++  assert.equal(fbChoices.length, 2);
++  assert.match(await textOf(fb), /How likely are you to purchase Brand B in the next 3 months\?/i);
++  const n = (await turns()).length;
++  await fbChoices[0].click();
++  const made = await settled(n);
++  await engineProposal(made, "the standard item");
++  await apply();
++  const def = await readDef();
++  const intent = def.questions.find((x) => /likely are you to purchase/.test(x.text));
++  assert.ok(intent, "the question exists");
++  assert.equal(intent.options.length, 5);
++  assert.equal(intent.required, true);
++  ok("“Add a question to measure purchase intent” with an unusable model answer: the engine's standard 5-point item is one click away, and applies");
++  // the Studio learns there is no model at all: the next such sentence is an engine question with the choices, no model call
++  await page.route("**/api/copilot/turn", (route) => route.fulfill({ status: 501, contentType: "application/json", body: JSON.stringify({ error: "No language model is configured on this Studio (AI_API_URL).", code: "ai_unconfigured", failure: { code: "not_configured", title: "NO LANGUAGE MODEL CONFIGURED", message: "This Studio has no language model configured, so only the engine's own reading is available.", next: ["Set AI_API_URL, AI_API_KEY and AI_MODEL on the server (see .env.example)."] } }) }));
++  const first = await say("Make the questionnaire feel warmer.");
++  assert.equal(await first.$eval('[data-testid="cp-failure"]', (e) => e.getAttribute("data-code")), "not_configured");
++  await page.unroute("**/api/copilot/turn");
++  let calls = 0;
++  await page.route("**/api/copilot/turn", (route) => { calls++; return route.continue(); });
++  const design = await say("Create a research design for understanding why customers are switching from Brand A to Brand B.");
++  assert.ok(await design.$('[data-testid="cp-engine"]'), "an engine card, no model call");
++  assert.equal(await design.getAttribute("data-kind"), "clarify");
++  assert.equal(calls, 0, "the model was not asked");
++  assert.match(await textOf(design), /No language model is configured on this Studio/);
++  const rec = await design.$('[data-testid="cp-engine-choice"]');
++  assert.match(await textOf(rec), /Record the objective/i);
++  const n2 = (await turns()).length;
++  await rec.click();
++  const obj = await settled(n2);
++  await engineProposal(obj, "the objective");
++  assert.match(await textOf(obj), /Set the research objective to “Why customers are switching from Brand A to Brand B”/);
++  await cancel();
++  await page.unroute("**/api/copilot/turn");
++  ok("with no model known: “Create a research design for …” is the engine's question with the step it can take, nothing sent to the model");
++}
++
++/* ============================================================ 4. the change plan */
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++const EMPTY = { meta: { id: "sandbox", code: "S", title: "Skincare study", version: "1.0" }, questions: [], flow: [{ type: "end", id: "e_ok", status: "complete" }] };
++await loadDef(EMPTY);
++await intelligent();
++const PLAN = { kind: "plan", summary: "A four-block questionnaire that tests exposure → purchase intention, with the design recorded and the analysis planned.", items: [
++  { id: "d", title: "Record the research design", kind: "design", objects: [], reason: "the hypothesis names exposure (IV) and purchase intention (DV)" },
++  { id: "s", title: "Add the screener", kind: "create", objects: ["Screener"], reason: "the population is 18–35 buyers", detail: "age and a recent-purchase check, both terminating" },
++  { id: "e", title: "Add the exposure block", kind: "create", objects: ["Exposure"], reason: "measures the independent variable" },
++  { id: "a", title: "Plan the analysis", kind: "analysis", objects: [], reason: "PI by exposure, the regression" },
++], questions: ["Which platforms matter most to you?"], assumptions: ["Online panel, 10 minutes"] };
++const ITEM_D = { kind: "proposal", reply: "Recorded the objective and the hypothesis.", actions: [{ op: "set_research", objective: "Test whether social media exposure increases premium skincare purchase intention", hypotheses: ["More exposure → higher purchase intention"], population: "18–35" }] };
++const ITEM_S = { kind: "proposal", reply: "Two screener questions, both terminating.", actions: [
++  { op: "create_block", title: "Screener" },
++  { op: "create_question", ref: "AGE", type: "numeric", text: "How old are you?", required: true },
++  { op: "create_question", ref: "BUY", type: "yes_no", text: "Have you bought a skincare product in the last 6 months?", required: true },
++  { op: "add_skip", from: "AGE", when: "AGE < 18 OR AGE > 35", to: "screen_out" },
++] };
++const ITEM_E = { kind: "proposal", reply: "The exposure grid.", actions: [
++  { op: "create_block", title: "Exposure" },
++  { op: "create_question", ref: "EXPOSE", type: "matrix", text: "How often do you see skincare content from each of these?", rows: ["Influencers", "Brands", "Friends"], scale: { points: 5, low: "Never", high: "Very often" } },
++] };
++{
++  assert.equal(await page.$eval('[data-testid="iq-plan-first"] input', (e) => e.checked), true, "plan first is on by default");
++  const t = await say("My hypothesis is that social media exposure increases the likelihood of purchasing premium skincare among 18–35s. Create a survey that tests it.", PLAN);
++  assert.equal(await t.getAttribute("data-status"), "plan");
++  assert.equal(await t.getAttribute("data-mode"), "generate");
++  assert.match(await textOf(t), /CHANGE PLAN/);
++  const items = await t.$$('[data-testid="cp-plan-item"]');
++  assert.equal(items.length, 4);
++  assert.deepEqual(await t.$$eval('[data-testid="cp-plan-item"] b', (bs) => bs.map((b) => b.textContent)), ["Record the research design", "Add the screener", "Add the exposure block", "Plan the analysis"]);
++  assert.match(await textOf(t), /age and a recent-purchase check, both terminating/, "the item's detail");
++  assert.match(await textOf(t), /Which platforms matter most to you\?/, "the copilot's question before building");
++  assert.match(await textOf(t), /Online panel, 10 minutes/, "its assumption");
++  assert.equal(await page.$('[data-testid="cp-apply"]'), null, "nothing to apply yet — no action has been written");
++  assert.equal((await readDef()).questions.length, 0, "nothing was built");
++  // (reading the JSON remounts the view: the plan card is still there, its state with it)
++  const t2 = (await turns()).at(-1);
++  assert.equal(await t2.getAttribute("data-status"), "plan", "the plan survives a tab change");
++  // untick the analysis item, build the other three — one scripted reply per item
++  await (await t2.$$('[data-testid="cp-plan-tick"]'))[3].click();
++  assert.match(await t2.$eval('[data-testid="cp-plan-build"]', (b) => b.textContent), /Build 3 of 4/);
++  await fakeNext([ITEM_D, ITEM_S, ITEM_E]);
++  const n = (await turns()).length;
++  await t2.$eval('[data-testid="cp-plan-build"]', (b) => b.click());
++  await page.waitForFunction(() => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); const l = t[t.length - 1]; return l && l.getAttribute("data-status") !== "thinking" && l.getAttribute("data-status") !== "plan"; }, null, { timeout: 45000 });
++  await page.waitForTimeout(300);
++  const built = (await turns()).at(-1);
++  assert.equal((await turns()).length, n, "the same card becomes the proposal");
++  assert.equal(await built.getAttribute("data-status"), "ready");
++  assert.equal(await built.getAttribute("data-kind"), "proposal");
++  assert.equal(await built.getAttribute("data-proposal"), "open");
++  assert.ok(await built.$('[data-testid="cp-plan-built"]'), "the card says what it was built from");
++  assert.deepEqual(await built.$$eval('[data-testid="cp-plan-built-item"] b', (bs) => bs.map((b) => b.textContent)), ["Record the research design", "Add the screener", "Add the exposure block"]);
++  assert.match(await textOf(built), /Record the research design: Recorded the objective and the hypothesis\. Add the screener: Two screener questions/);
++  await apply();
++  const def = await readDef();
++  assert.equal(def.questions.length, 3, `built: ${def.questions.map((x) => x.code).join(",")}`);
++  assert.equal(def.research.objective, "Test whether social media exposure increases premium skincare purchase intention");
++  assert.ok(!def.research.analysisPlan, "the unticked item was not built");
++  assert.equal(def.questions.find((x) => x.variableName === "AGE").skipLogic.length, 1);
++  ok("plan first: the plan is shown with items, detail, questions and assumptions; 3 of 4 ticked and built one call each into one proposal; applied");
++}
++{
++  const t = await say("Create a new survey from scratch about brand loyalty, with a loyalty block and a demographics block.", { kind: "plan", summary: "Two blocks.", items: [{ id: "l", title: "Add the loyalty block", kind: "create", reason: "H2" }, { id: "g", title: "Add demographics", kind: "create", reason: "cuts" }] });
++  assert.equal(await t.getAttribute("data-status"), "plan");
++  await t.$eval('[data-testid="cp-plan-cancel"]', (b) => b.click());
++  await page.waitForTimeout(300);
++  assert.equal(await t.getAttribute("data-status"), "empty");
++  assert.match(await textOf(t), /Plan set aside — nothing was built/);
++  assert.equal((await readDef()).questions.length, 3);
++  ok("a plan set aside builds nothing");
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++}
++{
++  // plan first off: the single reply, as before
++  await page.click('[data-testid="iq-plan-first"] input');
++  assert.equal(await page.$eval('[data-testid="iq-plan-first"] input', (e) => e.checked), false);
++  const DIRECT = { kind: "proposal", reply: "One block.", plan: [{ block: "Trust", questions: 1 }], actions: [{ op: "create_block", title: "Trust" }, { op: "create_question", ref: "TRUST", type: "rating", text: "How much do you trust skincare recommendations from influencers?", scale: { points: 5, low: "Not at all", high: "Completely" } }] };
++  const t = await say("My hypothesis is that trust mediates the effect. Create a new survey section that tests it.", DIRECT);
++  assert.equal(await t.getAttribute("data-status"), "ready");
++  assert.equal(await t.getAttribute("data-kind"), "proposal");
++  assert.equal(await t.$('[data-testid="cp-change-plan"]'), null);
++  await cancel();
++  // …and a plan-shaped answer is then not a plan: with plan first off, the route never asks for one, so it is an answer with nothing in it
++  const notPlanned = await say("Create a new survey from scratch about loyalty.", { kind: "plan", summary: "x", items: [{ id: "a", title: "Add a block", kind: "create", reason: "r" }] });
++  assert.equal(await notPlanned.getAttribute("data-status"), "failed", "no plan stage when plan first is off");
++  assert.equal(await notPlanned.$('[data-testid="cp-change-plan"]'), null);
++  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
++  await page.reload({ waitUntil: "networkidle" });
++  await page.waitForSelector(".menubar");
++  await intelligent();
++  assert.equal(await page.$eval('[data-testid="iq-plan-first"] input', (e) => e.checked), false, "the preference is kept");
++  await page.click('[data-testid="iq-plan-first"] input');
++  ok("plan first off: the single-reply generation as before; the preference survives a reload");
++}
++
++assert.deepEqual(errors, [], `no console errors:\n${errors.join("\n")}`);
++await browser.close();
++console.log(`\n${passed} checks passed`);
+-- 
+2.43.0
+

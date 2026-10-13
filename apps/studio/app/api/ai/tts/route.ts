@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { synthesizeSpeech, collectUsage } from "@rescript/ai";
 import { requireAiCaller } from "@/lib/aiGate";
 import { billingProjectFor, refusalResponse, usageToSpec, meterProvider, meterModel } from "@/lib/metering";
+import { aiAllowed, aiRefusal } from "@/lib/aiPolicy";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,9 @@ export async function POST(req: NextRequest) {
   // METERED: text-to-speech is priced per character sent; the project named in the body pays
   const billing = await billingProjectFor(gate.user, body?.surveyId);
   if ("response" in billing) return billing.response;
+  /* the project's AI switch (audit A-2) — this reserves by hand, so it asks itself */
+  const allowed = await aiAllowed(billing.ctx.surveyId, "tts_preview");
+  if (!allowed.allowed) return refusalResponse(aiRefusal(allowed));
   const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
   const hold = await billing.meter.reserve(billing.ctx, { eventType: "TEXT_TO_SPEECH_CHARACTER", provider: meterProvider(providerName, "tts"), service: "tts", model: meterModel(providerName, (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", "tts"), quantity: Math.min(2000, text.length), metadata: { operation: "tts_preview", language } });
   if (!hold.ok) return refusalResponse(hold);

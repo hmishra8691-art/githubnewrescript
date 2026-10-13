@@ -1,0 +1,39 @@
+Dashboard (brief §1): the summary band shows Projects and Live only; the
+project cards keep name/id, questions, live/test/completed responses and
+status and no longer show spend; the balance filter, the spend sorts and
+the large wallet panel are gone. Usage tracking and billing are untouched —
+the meters are still read and written exactly as before, they are simply
+not drawn on the list.
+
+Project Overview (§2): a project now opens on `/studio/<id>` as an overview
+— information, configuration states, utilization in dollars, navigation to
+every module, recent activity — and `?tab=` / `?mode=` / `?split=` deep
+links keep opening the Studio directly, so every existing link, refresh and
+bookmark still works. `GET /api/surveys/{id}/overview` reads the saved
+definition, the deployments, the live quota counters, the reports, runs
+and sample sources, the project configuration, the meter and the audit
+log; `lib/projectOverview.ts` turns them into Configured / Incomplete /
+Not set up / Needs attention per module from saved data only (no state is
+inferred from the lifecycle status or hard-coded). `/sandbox/overview`
+renders the same component for the browser suites.
+
+Wallet (§3): `GET /api/billing/wallet`; `WalletMenu` is a compact
+two-decimal pill in the top-right account area of the Dashboard, Analytics
+and Studio headers, with the precise balance in its title and a menu for
+Add funds (the page's own dialog where there is one, else /billing),
+Usage & billing and Transaction history; it re-reads after a request. The
+Studio's menubar gains `Project spend: $x.xx` beside Mode from the same
+meter view the usage panel uses — the project's spend, distinct from the
+wallet — and an "← Overview" link in the top bar.
+
+Activity (§8): status changes and version restores are now audited as
+`survey.status_changed` / `version.restored`, so they appear in Recent
+activity with the other events; nothing is invented.
+
+Tests: lib/projectOverview.test.ts (mutation-checked 5/5),
+scripts/dashboard-overview-test.mjs (5 checks; UI mutations 5/5 caught),
+scripts/project-meter-test.mjs rewritten for the new layout; dashboard,
+menubar, collaboration, delete-survey and analytics suites re-run.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

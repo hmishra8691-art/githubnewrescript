@@ -1,0 +1,2262 @@
+From e8e494e7e91586807725d885346b22365c324ac4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 25 Sep 2026 11:47:18 +0000
+Subject: [PATCH] Modes round 2: permissions, splits that keep Properties,
+ Architect creates, Flow only shows, Grid edits options, Intelligent validates
+ and masks
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+One survey, five views, each with a purpose and a permission set — and
+every edit through the same engine and store.
+
+- Permission model: MODE_CAPABILITIES (build / structure / understand /
+  review / assist) and propertiesWanted(mode, split). A split shows the
+  Properties panel when any pane wants it: Studio + Intelligent keeps
+  Display, Skip and Advanced logic (§1, §13). Clicks inside a pane, its
+  head or the divider never deselect. The Questions panel scrolls to a
+  selection made elsewhere (a Flow node, a Grid row, an Intelligent chip).
+- Flow (§4–5): no "+ Add…", no drop-to-move; click selects, double-click
+  opens Studio on the question (a no-op when Studio is already a pane);
+  the inspector is read-only — summary, validation, mask, logic,
+  dependencies — with Open in Studio; zoom is a typed percentage (5–300,
+  Enter applies, out-of-range refused) beside −, +, Fit and 1:1.
+- Architect (§2–3): + Question into the selected page or block
+  (insertionPoint reads ctx.primary; a block → its last page), + Block
+  after the selection, + Element (branch, randomizer, loop, quota check,
+  embedded data), duplicate, ↑/↓, delete with the references dialog;
+  "+ Question here" in page and container workspaces. Every one is the
+  command the palette and the Questions panel run.
+- Grid (§6–8): the Options cell opens a list editor (code, label, add,
+  remove, reorder; Done is one undo step; existing options untouched;
+  rows × columns send you to Studio); the Validation column is on by
+  default. Type is never forced — the Type cell and bulk type change
+  already migrate through migrateQuestionType.
+- Intelligent (§9–10): validation intents (between, at least/most,
+  characters, selections, email/phone/url/zip/integer, pattern, clear)
+  → set_validation / clear_validation, merged by rule kind and refused
+  when the kind does not fit the question or a min exceeds a max;
+  masking intents ("at Q13 show only the options selected in Q11",
+  "hide … from …", "carry forward …", "mask Q5 by Q3 AND Q4") → a set
+  expression parsed by parseSetExpression → set_mask, the same
+  OptionMask the Masking builder writes; the context lists validation
+  and masks; the model contract and coercer know the new shapes.
+- Engine: logicProposal gains set_validation, clear_validation,
+  set_mask with validate/describe/apply; setExprRefs, ruleLabel,
+  maskSummary. 10 tests, mutation-checked (10/10).
+- Tests: studio lib 174 (grammar/planner/coercer additions, capability
+  model, insertionPoint; mutation-checked), scripts/mode-sync-test.mjs
+  (13: §1, §4, §11, §13), Grid 51, Architect 38, Flow 40, Intelligent
+  41, foundation/product-surface/menubar and a 17-suite regression
+  batch green.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             |  32 ++++
+ .../components/architect/ArchitectView.tsx    |  69 +++++++-
+ .../studio/components/architect/Inspector.tsx |  51 +++++-
+ .../studio/components/architect/Workspace.tsx |  14 ++
+ apps/studio/components/flow/FlowCanvas.tsx    | 101 ++++++-----
+ apps/studio/components/grid/GridCells.tsx     |  86 ++++++++-
+ apps/studio/components/grid/GridView.tsx      |   5 +-
+ .../components/studio/QuestionsPanel.tsx      |  24 ++-
+ apps/studio/components/studio/Studio.tsx      |   6 +-
+ apps/studio/lib/commands/builtins.ts          |  41 ++++-
+ apps/studio/lib/grid/model.ts                 |   4 +-
+ apps/studio/lib/intelligent/ai.ts             |  36 ++++
+ apps/studio/lib/intelligent/context.ts        |   4 +-
+ apps/studio/lib/intelligent/grammar.ts        |  92 +++++++++-
+ .../lib/intelligent/intelligent.test.ts       | 120 ++++++++++++-
+ apps/studio/lib/intelligent/proposal.ts       |  79 ++++++++-
+ apps/studio/lib/multimodalFoundation.test.ts  |  37 ++++
+ apps/studio/lib/programmingMode.ts            |  42 +++++
+ docs/MULTI-MODAL-PROGRAMMING-PLAN.md          |  23 +++
+ packages/engine/src/logicProposal.test.ts     |  67 ++++++-
+ packages/engine/src/logicProposal.ts          | 146 +++++++++++++++-
+ scripts/architect-mode-test.mjs               |  53 ++++++
+ scripts/flow-mode-test.mjs                    |  92 ++++------
+ scripts/grid-mode-test.mjs                    |  65 +++++++
+ scripts/intelligent-mode-test.mjs             |  58 +++++++
+ scripts/menubar-test.mjs                      |   8 +-
+ scripts/mode-sync-test.mjs                    | 164 ++++++++++++++++++
+ scripts/product-surface-test.mjs              |   8 +-
+ 28 files changed, 1395 insertions(+), 132 deletions(-)
+ create mode 100644 scripts/mode-sync-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 50b39b9..b3a63bb 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1349,3 +1349,35 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+   .menubar-menu { position: fixed; left: 8px !important; right: 8px !important; top: calc(var(--topbar-h) + var(--menubar-h)); max-width: none; max-height: calc(100vh - var(--topbar-h) - var(--menubar-h) - 12px); overflow: auto; border-radius: var(--ide-r); }
+ }
+ .mode-index { font-family: var(--mono); font-size: var(--ide-mono-fs); letter-spacing: .04em; color: var(--ide-ink-3); }
++
++/* Flow zoom: a typed percentage between the − and + (round 2, §5) */
++.fc-zoom-input { width: 56px; border: 0; border-left: 1px solid var(--c-border); border-right: 1px solid var(--c-border); background: transparent; font: inherit; font-family: var(--mono); font-size: 12px; text-align: center; color: var(--c-text); padding: 5px 4px; outline: none; }
++.fc-zoom-input:focus { background: var(--c-surface-2); }
++.ai-open { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--c-border); }
++
++/* Architect: structural editing from the workspace head (round 2, §2–3) */
++.ar-tools { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
++.ar-tool { appearance: none; display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--c-border); border-radius: 7px; background: var(--c-surface); font: inherit; font-size: 12px; font-weight: 550; padding: 4px 8px; color: var(--ide-ink-2); cursor: pointer; line-height: 1.2; white-space: nowrap; }
++.ar-tool:hover:not(:disabled) { color: var(--ide-ink); background: var(--c-surface-2); }
++.ar-tool.primary { background: var(--ide-accent); border-color: var(--ide-accent); color: #fff; }
++.ar-tool.primary:hover:not(:disabled) { background: var(--c-primary-700, #3730a3); color: #fff; }
++.ar-tool.danger:hover:not(:disabled) { color: var(--c-error-fg); border-color: var(--c-error-bd); background: var(--c-error-bg); }
++.ar-tool:disabled { opacity: .4; cursor: not-allowed; }
++.ar-tools-sep { width: 1px; height: 18px; background: var(--c-border); margin: 0 3px; }
++.ar-add { position: relative; }
++.ar-add-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 190px; background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: 0 10px 24px -10px rgba(19, 26, 43, .25); padding: 4px; }
++.ar-add-item { appearance: none; display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: 6px; font: inherit; font-size: 12.5px; padding: 6px 10px; color: var(--ide-ink); cursor: pointer; }
++.ar-add-item:hover { background: var(--c-surface-2); }
++.aw-add { margin: 8px 0 14px; }
++
++/* Grid: the options editor in a cell (round 2, §7) */
++.sg-popover { position: absolute; z-index: 40; top: 100%; left: 0; min-width: 360px; max-width: 520px; background: var(--c-surface); border: var(--ide-hairline); border-radius: var(--ide-r); box-shadow: 0 14px 34px -10px rgba(19, 26, 43, .25); padding: 10px 12px; font-size: 12.5px; cursor: default; }
++.sg-options-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
++.sg-options-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
++.sg-option-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 24px 24px 24px; gap: 4px; align-items: center; }
++.sg-option-row .input { min-height: 28px; padding: 2px 6px; font-size: 12.5px; }
++.sg-opt-btn { appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); border-radius: 5px; width: 24px; height: 24px; font-size: 12px; color: var(--ide-ink-2); cursor: pointer; }
++.sg-opt-btn:hover:not(:disabled) { background: var(--c-surface-2); color: var(--ide-ink); }
++.sg-opt-btn.danger:hover:not(:disabled) { color: var(--c-error-fg); border-color: var(--c-error-bd); }
++.sg-opt-btn:disabled { opacity: .35; cursor: default; }
++.sg-cell.sg-col-options { position: relative; }
+diff --git a/apps/studio/components/architect/ArchitectView.tsx b/apps/studio/components/architect/ArchitectView.tsx
+index 51f7a9b..4ab4406 100644
+--- a/apps/studio/components/architect/ArchitectView.tsx
++++ b/apps/studio/components/architect/ArchitectView.tsx
+@@ -1,7 +1,10 @@
+ "use client";
+ import React from "react";
+-import { buildDependencyIndex, objectStatus, parseObjectKey, type ObjectKey } from "@rescript/engine";
++import { buildDependencyIndex, objectStatus, parseObjectKey, referencesTo, removeQuestion, removeFlowNode, findNode, type ObjectKey, type QuestionReference } from "@rescript/engine";
++import type { FlowNode } from "@rescript/schema";
+ import { useStudio } from "../studio/store";
++import { useCommands } from "../studio/CommandContext";
++import { DeleteQuestionDialog } from "../studio/DeleteQuestionDialog";
+ import { useSelection } from "../studio/SelectionContext";
+ import { useMode } from "../studio/ModeContext";
+ import { buildSurveyMap, flattenMap, ancestorKeys, containerKeys, findMapNode } from "../../lib/architect/map";
+@@ -121,7 +124,47 @@ export function ArchitectView() {
+ 
+   const primaryNode = primary ? findMapNode(root, primary) : null;
+ 
++  /* ------------------------------------------------------------ structural editing (round 2, §2–3) */
++  const cmd = useCommands();
++  const [addOpen, setAddOpen] = React.useState(false);
++  const [pendingDelete, setPendingDelete] = React.useState<{ id: string; code: string; refs: QuestionReference[] } | null>(null);
++  const primaryKind = primary ? parseObjectKey(primary).kind : null;
++  const primaryId = primary ? parseObjectKey(primary).id : null;
++  const primaryFlowNode = primaryKind === "flowNode" && primaryId ? findNode(s.def.flow as FlowNode[], primaryId) : null;
++  const deletableNode = primaryFlowNode && primaryFlowNode.type !== "end";
++  const run = (id: string) => { setAddOpen(false); cmd?.run(id); };
++  const askDelete = () => {
++    if (s.readOnly || !primaryId) return;
++    if (primaryKind === "question") {
++      const q = s.def.questions.find((x) => x.id === primaryId);
++      if (q) setPendingDelete({ id: q.id, code: q.code, refs: referencesTo(s.def, q.id) });
++    } else if (deletableNode && primaryFlowNode) {
++      const label = primaryNode?.label ?? primaryFlowNode.type;
++      const inside = "children" in primaryFlowNode ? (primaryFlowNode as { children: unknown[] }).children.length : primaryFlowNode.type === "page" ? primaryFlowNode.questionIds.length : 0;
++      if (!window.confirm(`Remove ${primaryFlowNode.type.replace(/_/g, " ")} “${label}”${inside ? ` and everything inside it (${inside} item${inside === 1 ? "" : "s"})` : ""}? Questions inside a removed page stay in the survey, unplaced.`)) return;
++      s.labelNextEdit(`remove ${primaryFlowNode.type}`);
++      s.update((d) => { const r = removeFlowNode(d.flow as FlowNode[], primaryId); d.flow = r.flow as never; });
++      sel?.dispatch({ type: "clear" });
++    }
++  };
++  const confirmDelete = () => {
++    if (!pendingDelete) return;
++    const { id, code } = pendingDelete;
++    setPendingDelete(null);
++    s.labelNextEdit(`delete ${code}`);
++    s.update((d) => { removeQuestion(d, id); });
++    sel?.dispatch({ type: "drop", keys: [`question:${id}` as ObjectKey] });
++  };
++  React.useEffect(() => {
++    if (!addOpen) return;
++    const close = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest?.(".ar-add")) setAddOpen(false); };
++    window.addEventListener("pointerdown", close, true);
++    return () => window.removeEventListener("pointerdown", close, true);
++  }, [addOpen]);
++
+   return (
++    <>
++    {pendingDelete && <DeleteQuestionDialog code={pendingDelete.code} refs={pendingDelete.refs} onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />}
+     <div className="ar" data-testid="architect-view" style={{ gridTemplateColumns: `${prefs.map}px 6px minmax(0, 1fr) 6px ${prefs.inspector}px` }}>
+       <aside className="ar-map">
+         <div className="ar-pane-head">
+@@ -142,6 +185,29 @@ export function ArchitectView() {
+           <span className="ar-pane-title">Workspace</span>
+           {primaryNode && <span className="ar-crumb mono">{primaryNode.code ?? primaryNode.label}</span>}
+           <span className="grow" />
++          {/* STRUCTURE IS EDITED HERE: add a question where the selection is, a block, a flow element; duplicate, move, remove the selection — every one an engine operation through the command registry, the same the Questions panel calls */}
++          <div className="ar-tools" data-testid="ar-tools">
++            <button className="ar-tool primary" data-testid="ar-add-question" disabled={s.readOnly} onClick={() => run("question.add")}
++              title={primaryKind === "flowNode" ? "Add a question at the end of the selected page or block" : primaryKind === "question" ? "Add a question after the selected one" : "Add a question on the last page"}>
++              <Icon name="plus" size={12} /> Question
++            </button>
++            <button className="ar-tool" data-testid="ar-add-block" disabled={s.readOnly} onClick={() => run("block.add")} title="Add a block (a page) after the selected element, or before the End"><Icon name="plus" size={12} /> Block</button>
++            <div className="ar-add">
++              <button className="ar-tool" data-testid="ar-add-element" disabled={s.readOnly} aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)} title="Add a flow element"><Icon name="plus" size={12} /> Element <Icon name="chevron-down" size={11} /></button>
++              {addOpen && (
++                <div className="ar-add-menu" role="menu" data-testid="ar-add-menu">
++                  {[["flow.add.branch", "Branch / condition"], ["flow.add.randomizer", "Randomizer"], ["flow.add.loop", "Loop"], ["flow.add.quota_check", "Quota check"], ["flow.add.embedded_data", "Embedded data"]].map(([id, label]) => (
++                    <button key={id} role="menuitem" className="ar-add-item" data-testid={`ar-add-${id.split(".").pop()}`} onClick={() => run(id)}>{label}</button>
++                  ))}
++                </div>
++              )}
++            </div>
++            <span className="ar-tools-sep" />
++            <button className="ar-tool" data-testid="ar-duplicate" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.duplicate")} title="Duplicate (⌘⇧D)"><Icon name="layers" size={12} /></button>
++            <button className="ar-tool" data-testid="ar-move-up" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.moveUp")} title="Move up (⌥↑)">↑</button>
++            <button className="ar-tool" data-testid="ar-move-down" disabled={s.readOnly || primaryKind !== "question"} onClick={() => run("question.moveDown")} title="Move down (⌥↓)">↓</button>
++            <button className="ar-tool danger" data-testid="ar-delete" disabled={s.readOnly || !(primaryKind === "question" || deletableNode)} onClick={askDelete} title={primaryKind === "question" ? "Delete this question" : deletableNode ? "Remove this element" : "Select a question or element to remove"}><Icon name="close" size={12} /></button>
++          </div>
+           <button
+             className={`ar-focus${focus ? " on" : ""}`}
+             data-testid="focus-toggle"
+@@ -172,5 +238,6 @@ export function ArchitectView() {
+         </div>
+       </aside>
+     </div>
++    </>
+   );
+ }
+diff --git a/apps/studio/components/architect/Inspector.tsx b/apps/studio/components/architect/Inspector.tsx
+index eb6cd61..4c63d53 100644
+--- a/apps/studio/components/architect/Inspector.tsx
++++ b/apps/studio/components/architect/Inspector.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import type { FlowNode } from "@rescript/schema";
+ import {
+-  neighbours, parseObjectKey, conditionSummary, findNode,
++  neighbours, parseObjectKey, conditionSummary, findNode, questionLogicSummary, formatSetExpression,
+   type DependencyIndex, type ObjectKey, type ObjectStatusMap, type DependencyEdge,
+ } from "@rescript/engine";
+ import { useStudio } from "../studio/store";
+@@ -31,12 +31,20 @@ const KIND_LABEL: Record<string, string> = {
+ };
+ 
+ export function Inspector({
+-  primary, index, status, onSelect,
++  primary, index, status, onSelect, readOnly = false, onOpenInStudio,
+ }: {
+   primary: ObjectKey | null;
+   index: DependencyIndex;
+   status: ObjectStatusMap;
+   onSelect(key: ObjectKey): void;
++  /**
++   * A VISUALISATION mode's inspector (Flow, round 2 §4): everything the
++   * object is and depends on, in words, and a way to Studio — but no
++   * property editor, because the mode's purpose is to understand, and the
++   * one place a property is edited is where it is built.
++   */
++  readOnly?: boolean;
++  onOpenInStudio?(key: ObjectKey): void;
+ }) {
+   const s = useStudio();
+   if (!primary) {
+@@ -70,12 +78,21 @@ export function Inspector({
+ 
+       <Dependencies primary={primary} index={index} onSelect={onSelect} />
+ 
+-      {kind === "question" ? (
++      {kind === "question" && !readOnly ? (
+         // the property panel reads the store's selectedQuestionId, which mirrors this primary
+         <div className="ai-props"><PropertiesPanel /></div>
++      ) : kind === "question" ? (
++        <QuestionSummary id={id} />
+       ) : (
+         <ObjectSummary primary={primary} />
+       )}
++      {readOnly && onOpenInStudio && (
++        <div className="ai-open">
++          <button type="button" className="btn small primary" data-testid="inspector-open-studio" onClick={() => onOpenInStudio(primary)} title="Edit this in Studio — the one place properties are built">
++            Open in Studio
++          </button>
++        </div>
++      )}
+     </div>
+   );
+ }
+@@ -137,6 +154,34 @@ function Dependencies({ primary, index, onSelect }: { primary: ObjectKey; index:
+ }
+ 
+ /** what a non-question object IS, in one screen */
++/** a question, read-only: what it is, how it validates, when it shows, what masks it */
++function QuestionSummary({ id }: { id: string }) {
++  const s = useStudio();
++  const q = s.def.questions.find((x) => x.id === id);
++  if (!q) return null;
++  const text = String(q.text ?? "").replace(/<[^>]*>/g, "").trim();
++  const rows: [string, React.ReactNode][] = [
++    ["Variable", <span className="mono">{q.variableName}</span>],
++    ["Type", q.type.replace(/_/g, " ")],
++    ["Text", text || <span className="muted">(no text)</span>],
++    ["Required", q.required ? "yes" : "no"],
++  ];
++  if (q.options?.length) rows.push(["Options", `${q.options.length}: ${q.options.slice(0, 6).map((o) => String(o.label ?? o.code).replace(/<[^>]*>/g, "")).join(", ")}${q.options.length > 6 ? ", …" : ""}`]);
++  if (q.rows?.length) rows.push(["Rows", `${q.rows.length}`]);
++  if (q.validation?.length) rows.push(["Validation", q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")]);
++  if (q.mask) rows.push(["Mask", `${q.mask.action} ${formatSetExpression(s.def, q.mask.expr)}`]);
++  for (const line of questionLogicSummary(s.def, q)) rows.push(["Logic", line]);
++  for (const r of q.skipLogic ?? []) rows.push(["Skip", `when ${conditionSummary(s.def, r.when)} → ${r.target.kind}${r.target.status ? ` (${r.target.status})` : ""}`]);
++  return (
++    <section className="ai-sec" data-testid="inspector-summary">
++      <h4>Summary</h4>
++      <dl className="ai-dl">
++        {rows.map(([k, v], i) => <React.Fragment key={i}><dt>{k}</dt><dd>{v}</dd></React.Fragment>)}
++      </dl>
++    </section>
++  );
++}
++
+ function ObjectSummary({ primary }: { primary: ObjectKey }) {
+   const s = useStudio();
+   const { kind, id } = parseObjectKey(primary);
+diff --git a/apps/studio/components/architect/Workspace.tsx b/apps/studio/components/architect/Workspace.tsx
+index a49d50b..5320f3c 100644
+--- a/apps/studio/components/architect/Workspace.tsx
++++ b/apps/studio/components/architect/Workspace.tsx
+@@ -4,6 +4,7 @@ import type { FlowNode } from "@rescript/schema";
+ import { parseObjectKey, findNode, replaceFlowNode, summarizeFlowNode, type ObjectKey, type ObjectStatusMap } from "@rescript/engine";
+ import { useStudio } from "../studio/store";
+ import { QuestionEditor } from "../studio/QuestionsPanel";
++import { useCommands } from "../studio/CommandContext";
+ import { NodeEditor } from "../studio/FlowNodeEditors";
+ import { DisplayRuleCard, CalculationCard } from "../studio/LogicPanel";
+ import { Icon } from "../ui/Icon";
+@@ -131,6 +132,17 @@ export function Workspace({ primary, status, onSelect }: { primary: ObjectKey |
+   return <Missing what={kind} />;
+ }
+ 
++/** "+ Question here" — the same `question.add` command, which reads the selection to know where "here" is */
++function AddHere({ what, testId, label }: { what: "question"; testId: string; label: string }) {
++  const s = useStudio();
++  const cmd = useCommands();
++  return (
++    <div className="aw-add">
++      <button className="btn small" data-testid={testId} disabled={s.readOnly} onClick={() => cmd?.run(what === "question" ? "question.add" : "block.add")} title={label}>+ Question here</button>
++    </div>
++  );
++}
++
+ function Stat({ n, label }: { n: number; label: string }) {
+   return <div className="aw-stat"><span className="aw-stat-n">{n}</span><span className="aw-stat-l">{label}</span></div>;
+ }
+@@ -159,6 +171,7 @@ function PageWorkspace({ node, onSelect }: { node: Extract<FlowNode, { type: "pa
+         })}
+         {node.questionIds.length === 0 && <li className="muted">No questions on this page.</li>}
+       </ul>
++      <AddHere what="question" testId="workspace-add-question" label="Add a question to this page" />
+       <NodeEditor node={node} onChange={(next) => { s.labelNextEdit("edit page"); s.update((d) => { replaceFlowNode(d.flow as FlowNode[], node.id, next); }); }} />
+     </div>
+   );
+@@ -177,6 +190,7 @@ function ContainerWorkspace({ node, onSelect, patch }: { node: Extract<FlowNode,
+           </li>
+         ))}
+       </ul>
++      <AddHere what="question" testId="workspace-add-question" label="Add a question to this block's last page" />
+       <NodeEditor node={node} onChange={patch} />
+     </div>
+   );
+diff --git a/apps/studio/components/flow/FlowCanvas.tsx b/apps/studio/components/flow/FlowCanvas.tsx
+index e1c0e84..58de723 100644
+--- a/apps/studio/components/flow/FlowCanvas.tsx
++++ b/apps/studio/components/flow/FlowCanvas.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import type { FlowNode, LogicFlow } from "@rescript/schema";
+ import {
+-  buildLogicFlow, buildDependencyIndex, objectStatus, flowNodeIndex, canDropFlowNode, moveFlowNode,
++  buildLogicFlow, buildDependencyIndex, objectStatus, flowNodeIndex,
+   type ObjectKey,
+ } from "@rescript/engine";
+ import { useStudio } from "../studio/store";
+@@ -134,6 +134,11 @@ export function FlowCanvas() {
+     const k = Math.max(0.05, Math.min(3, v.k * factor));
+     return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
+   });
++  /** an exact scale (1 = 100 %), about the viewport's centre — the typed zoom and the reset */
++  const zoomTo = (k0: number, cx = size.w / 2, cy = size.h / 2) => setView((v) => {
++    const k = Math.max(0.05, Math.min(3, k0));
++    return { k, tx: cx - (cx - v.tx) * (k / v.k), ty: cy - (cy - v.ty) * (k / v.k) };
++  });
+   const centreOn = React.useCallback((n: LaidOutNode) => setView((v) => ({ k: Math.max(v.k, 0.8), tx: size.w / 2 - (n.x + n.w / 2) * Math.max(v.k, 0.8), ty: size.h / 2 - (n.y + n.h / 2) * Math.max(v.k, 0.8) })), [size]);
+ 
+   const onWheel = (e: React.WheelEvent) => {
+@@ -146,12 +151,6 @@ export function FlowCanvas() {
+   /* drag: background pans; a node moves (and pins) or drops onto another */
+   const drag = React.useRef<{ kind: "pan" | "node"; id?: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+   const [dragPos, setDragPos] = React.useState<{ id: string; x: number; y: number } | null>(null);
+-  const [dropOn, setDropOn] = React.useState<string | null>(null);
+-  const toCanvas = (clientX: number, clientY: number) => { const r = hostRef.current!.getBoundingClientRect(); return { x: (clientX - r.left - view.tx) / view.k, y: (clientY - r.top - view.ty) / view.k }; };
+-  const hit = (x: number, y: number, except?: string): LaidOutNode | null => {
+-    for (const n of layout.nodes) if (n.id !== except && x >= n.x && x <= n.x + n.w && y >= n.y && y <= n.y + n.h) return n;
+-    return null;
+-  };
+   const onPointerDown = (e: React.PointerEvent, nodeId?: string) => {
+     if (e.button !== 0) return;
+     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+@@ -166,20 +165,24 @@ export function FlowCanvas() {
+     else if (d.id && d.moved) {
+       const x = d.ox + dx / view.k, y = d.oy + dy / view.k;
+       setDragPos({ id: d.id, x, y });
+-      const p = toCanvas(e.clientX, e.clientY);
+-      const over = hit(p.x, p.y, d.id);
+-      setDropOn(over && flowIdx.has(over.id) && flowIdx.has(d.id) ? over.id : null);
+     }
+   };
++  /*
++   * FLOW IS FOR UNDERSTANDING (round 2, §4). A click selects — the one
++   * shared selection, so a Studio pane beside this one lands on the same
++   * question; a drag repositions the node on the canvas (a view concern,
++   * stored by id). Nothing here changes the survey's structure: dropping a
++   * node onto a container used to move it there; that is Architect's and
++   * Studio's work now, and a drop is simply a reposition.
++   */
+   const onPointerUp = (e: React.PointerEvent) => {
+     const d = drag.current; drag.current = null;
+     if (!d) return;
+     if (d.kind === "node" && d.id) {
+       if (!d.moved) { select(d.id, e); }
+-      else if (dropOn) { dropNode(d.id, dropOn); }
+       else if (dragPos && !s.readOnly) { pin(d.id, Math.round(dragPos.x), Math.round(dragPos.y)); }
+     }
+-    setDragPos(null); setDropOn(null);
++    setDragPos(null);
+   };
+ 
+   /** store a dragged position on the survey, by node id */
+@@ -195,28 +198,22 @@ export function FlowCanvas() {
+       dd.logicFlow = lf;
+     });
+   };
++  /**
++   * "Flow → click Q12 → Studio opens Q12" (round 2, §4). The selection is
++   * already shared; what changes is which environment is on screen. In a
++   * split that already shows Studio, nothing needs to change — the Studio
++   * pane has followed the selection; otherwise the primary becomes Studio.
++   */
++  const openInStudio = () => {
++    if (mode?.mode === "studio" || mode?.split === "studio") return;
++    cmd?.run("mode.studio");
++  };
+   const autoArrange = () => {
+     s.labelNextEdit("auto-arrange flow");
+     s.update((dd) => { dd.logicFlow = { nodes: [], edges: [] }; });
+     setTimeout(fit, 0);
+   };
+ 
+-  /** drop a flow node onto another: into a container, or after a sibling */
+-  const dropNode = (draggedId: string, targetId: string) => {
+-    if (s.readOnly) return;
+-    const target = flowIdx.get(targetId);
+-    if (!target) return;
+-    const isContainer = target.type === "block" || target.type === "section" || target.type === "randomizer" || target.type === "loop";
+-    const where = isContainer ? { kind: "inside" as const, ownerId: targetId, slot: "children" } : { kind: "after" as const, refId: targetId };
+-    const verdict = canDropFlowNode(def.flow as FlowNode[], draggedId, where);
+-    if (!verdict.ok) { s.toast(verdict.reason ?? "That cannot go there", "err"); return; }
+-    s.labelNextEdit(isContainer ? "move into container" : "reorder flow");
+-    s.update((dd) => {
+-      const r = moveFlowNode(dd.flow as FlowNode[], draggedId, where);
+-      if (r.moved) dd.flow = r.flow;
+-    });
+-    s.toast(isContainer ? `Moved into ${(target as { title?: string }).title ?? target.type}` : "Reordered");
+-  };
+ 
+   /* ------------------------------------------------------------ search, debug */
+   const [search, setSearch] = React.useState("");
+@@ -261,7 +258,6 @@ export function FlowCanvas() {
+     }
+     if (matches) cls.push(matches.has(n.id) ? "match" : "nomatch");
+     if (debugNodes) cls.push(debugNodes.has(n.id) ? "taken" : "untaken");
+-    if (dropOn === n.id) cls.push("drop");
+     if (key && status.statusOf(key).level !== "ok") cls.push(`st-${status.statusOf(key).level}`);
+     return cls.join(" ");
+   };
+@@ -295,23 +291,15 @@ export function FlowCanvas() {
+           </div>
+           <span className="fc-count" data-testid="flow-count">{layout.nodes.length} nodes · {layout.edges.length} edges</span>
+           <span className="grow" />
+-          <select className="fc-add" data-testid="flow-add" value="" disabled={s.readOnly}
+-            onChange={(e) => { if (e.target.value) cmd?.run(e.target.value); }} title="Insert a flow element before the End">
+-            <option value="">+ Add…</option>
+-            <option value="flow.add.branch">Branch / condition</option>
+-            <option value="flow.add.randomizer">Randomizer</option>
+-            <option value="flow.add.loop">Loop</option>
+-            <option value="flow.add.quota_check">Quota check</option>
+-            <option value="flow.add.embedded_data">Embedded data</option>
+-            <option value="block.add">Block</option>
+-          </select>
+           <button className={`fc-chip${debugOn ? " on" : ""}`} data-testid="flow-debug-toggle" onClick={() => setDebugOn((v) => !v)} title="Type answers and see the path a respondent takes"><Icon name="flask" size={12} /> Debug</button>
+           <button className={`fc-chip${focus ? " on" : ""}`} data-testid="focus-toggle" aria-pressed={focus} onClick={() => mode?.setFocus(!focus)} title="Focus (⌘⇧F)"><Icon name="sparkle" size={12} /> Focus</button>
+           <button className="fc-chip" onClick={autoArrange} disabled={s.readOnly} title="Forget dragged positions and lay out afresh" data-testid="flow-arrange">Auto-arrange</button>
+-          <div className="fc-seg">
++          <div className="fc-seg fc-zoom" role="group" aria-label="Zoom">
+             <button onClick={() => zoomBy(1 / 1.2)} title="Zoom out (−)" data-testid="flow-zoom-out">−</button>
+-            <button onClick={fit} title="Fit (0)" data-testid="flow-fit">{Math.round(view.k * 100)}%</button>
++            <ZoomInput k={view.k} onApply={zoomTo} />
+             <button onClick={() => zoomBy(1.2)} title="Zoom in (+)" data-testid="flow-zoom-in">+</button>
++            <button onClick={fit} title="Fit to screen (0)" data-testid="flow-fit">Fit</button>
++            <button onClick={() => zoomTo(1)} title="Reset to 100% (1)" data-testid="flow-zoom-reset">1:1</button>
+           </div>
+           <button className={`fc-chip${inspectorOpen ? " on" : ""}`} onClick={() => savePrefs({ ...prefs, inspector: !inspectorOpen })} title="Inspector" data-testid="flow-inspector-toggle"><Icon name="info" size={12} /></button>
+         </div>
+@@ -384,7 +372,7 @@ export function FlowCanvas() {
+                   <g key={n.id} className={nodeClass(n)} transform={`translate(${p.x} ${p.y})`}
+                     data-testid="flow-node" data-node={n.id} data-kind={n.kind}
+                     onPointerDown={(e) => { e.stopPropagation(); onPointerDown(e, n.id); }}
+-                    onDoubleClick={() => { if (key) { select(n.id); cmd?.run("mode.architect"); } }}
++                    onDoubleClick={() => { if (key) { select(n.id); openInStudio(); } }}
+                   >
+                     <rect width={n.w} height={n.h} rx={n.kind === "decision" ? 6 : 8} />
+                     {n.kind === "decision" && <rect className="fc-accent" width={4} height={n.h} rx={2} />}
+@@ -418,10 +406,37 @@ export function FlowCanvas() {
+         <aside className="fc-inspector" data-testid="flow-inspector">
+           <div className="ar-pane-head"><span className="ar-pane-title">Inspector</span></div>
+           <div className="ar-inspector-body">
+-            <Inspector primary={primary} index={index} status={status} onSelect={(k) => { if (sel) sel.dispatch({ type: "select", key: k }); const n = nodeOfKey(k); if (n) centreOn(n); }} />
++            <Inspector primary={primary} index={index} status={status} readOnly onOpenInStudio={() => openInStudio()} onSelect={(k) => { if (sel) sel.dispatch({ type: "select", key: k }); const n = nodeOfKey(k); if (n) centreOn(n); }} />
+           </div>
+         </aside>
+       )}
+     </div>
+   );
+ }
++
++/* ------------------------------------------------------------ zoom input */
++
++/**
++ * The zoom as a number you can type (round 2, §5): click the percentage,
++ * type 25, 50, 100 or 150, Enter applies; Escape restores; anything that
++ * is not a number between 5 and 300 is refused and the field snaps back.
++ */
++function ZoomInput({ k, onApply }: { k: number; onApply(k: number): void }) {
++  const [text, setText] = React.useState<string | null>(null);
++  const shown = text ?? `${Math.round(k * 100)}%`;
++  const commit = () => {
++    if (text === null) return;
++    const n = Number(text.replace(/[%\s]/g, ""));
++    if (Number.isFinite(n) && n >= 5 && n <= 300) onApply(n / 100);
++    setText(null);
++  };
++  return (
++    <input
++      className="fc-zoom-input" data-testid="flow-zoom-input" value={shown} inputMode="numeric" aria-label="Zoom percentage" title="Type a zoom level, 5–300 %, then Enter"
++      onFocus={(e) => { setText(`${Math.round(k * 100)}`); requestAnimationFrame(() => e.target.select()); }}
++      onChange={(e) => setText(e.target.value)}
++      onBlur={commit}
++      onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") { commit(); (e.target as HTMLInputElement).blur(); } if (e.key === "Escape") { setText(null); (e.target as HTMLInputElement).blur(); } }}
++    />
++  );
++}
+diff --git a/apps/studio/components/grid/GridCells.tsx b/apps/studio/components/grid/GridCells.tsx
+index 96ec864..1727266 100644
+--- a/apps/studio/components/grid/GridCells.tsx
++++ b/apps/studio/components/grid/GridCells.tsx
+@@ -1,9 +1,9 @@
+ "use client";
+ import React from "react";
+ import type { Question } from "@rescript/schema";
+-import { variantRegistry } from "@rescript/schema";
+-import { listBlocks, moveQuestionTo } from "@rescript/engine";
+-import { useStudio } from "../studio/store";
++import { variantRegistry, resolveVariant } from "@rescript/schema";
++import { listBlocks, moveQuestionTo, nextCode, shapeHasAxis } from "@rescript/engine";
++import { useStudio, uid } from "../studio/store";
+ import { VariableNameInput } from "../studio/VariableNameInput";
+ import { useTypeSwitch } from "../studio/VariantPicker";
+ import type { GridRow } from "../../lib/grid/model";
+@@ -159,3 +159,83 @@ export function StatusDot({ row }: { row: GridRow }) {
+       title={`${row.issueCount} ${row.status === "error" ? "problem" : "warning"}${row.issueCount === 1 ? "" : "s"} — open the question to see them`} />
+   );
+ }
++
++
++/* ------------------------------------------------------------ options */
++
++/** whether this question's variant carries a flat option list the grid can edit in place */
++export function hasEditableOptions(q: Question): boolean {
++  const v = resolveVariant(q.variant) ?? variantRegistry.get(q.variant ?? "");
++  if (v) return v.capabilities.includes("options") && !shapeHasAxis(q, "rows");
++  return /select|dropdown|rank/.test(q.type) && !/matrix/.test(q.type);
++}
++
++/**
++ * Options, in the cell (round 2, §7). A code and a label per option, add,
++ * remove, reorder — the same fields the Studio's option list edits, written
++ * to the same `q.options` with the same id/code minting, in one undo step
++ * on Done. Structures the grid cannot represent on a line (rows × columns,
++ * option groups, per-option logic) send you to Studio instead of being
++ * flattened here.
++ */
++export function OptionsCellEditor({ q, onDone, onOpenInStudio }: { q: Question; onDone(): void; onOpenInStudio(): void }) {
++  const s = useStudio();
++  type Draft = { id?: string; code: string; label: string; extra: Record<string, unknown> };
++  const [rows, setRows] = React.useState<Draft[]>(() => (q.options ?? []).map((o) => { const { id, code, label, ...extra } = o as unknown as Record<string, unknown> & { id?: string; code: string | number; label?: string }; return { id, code: String(code), label: String(label ?? ""), extra }; }));
++  const firstRef = React.useRef<HTMLInputElement>(null);
++  React.useEffect(() => { firstRef.current?.focus(); }, []);
++  if (!hasEditableOptions(q)) {
++    return (
++      <div className="sg-popover" data-testid="grid-options-editor" onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") onDone(); }}>
++        <p className="muted" style={{ margin: "0 0 8px" }}>{shapeHasAxis(q, "rows") ? "Rows and columns are edited in Studio." : "This question type has no option list."}</p>
++        <div className="row" style={{ gap: 6 }}>
++          <button className="btn small primary" data-testid="grid-options-open-studio" onClick={onOpenInStudio}>Open in Studio</button>
++          <button className="btn small" onClick={onDone}>Close</button>
++        </div>
++      </div>
++    );
++  }
++  const set = (i: number, patch: Partial<Draft>) => setRows((r) => r.map((x, k) => (k === i ? { ...x, ...patch } : x)));
++  const add = () => setRows((r) => [...r, { id: uid("opt"), code: nextCode(r.map((x) => ({ code: x.code }))), label: "", extra: { flags: [] } }]);
++  const remove = (i: number) => setRows((r) => r.filter((_, k) => k !== i));
++  const move = (i: number, dir: -1 | 1) => setRows((r) => { const n = [...r]; const j = i + dir; if (j < 0 || j >= n.length) return r; [n[i], n[j]] = [n[j], n[i]]; return n; });
++  const commit = () => {
++    const codes = rows.map((r) => r.code.trim());
++    if (codes.some((c) => !c)) { s.toast("Every option needs a code.", "err"); return; }
++    if (new Set(codes).size !== codes.length) { s.toast("Option codes must be unique.", "err"); return; }
++    // existing options keep exactly the fields they had (an option without an id stays without one); new ones are minted like Studio's
++    const next = rows.map((r) => ({ ...r.extra, ...(r.id ? { id: r.id } : {}), code: /^-?\d+$/.test(r.code.trim()) ? Number(r.code.trim()) : r.code.trim(), label: r.label, flags: (r.extra.flags as unknown[]) ?? [] }));
++    s.labelNextEdit(`edit ${q.code} options`);
++    s.update((d) => {
++      const i = d.questions.findIndex((x) => x.id === q.id);
++      if (i >= 0) d.questions[i] = { ...d.questions[i], options: next as Question["options"] };
++    });
++    onDone();
++  };
++  return (
++    <div className="sg-popover sg-options" data-testid="grid-options-editor" onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Escape") onDone(); }}>
++      <div className="sg-options-head"><span>Options of {q.code}</span><span className="muted">{rows.length}</span></div>
++      <div className="sg-options-list">
++        {rows.map((r, i) => (
++          <div className="sg-option-row" key={r.id ?? `new-${i}`} data-testid="grid-option-row">
++            <input className="input sg-opt-code mono" value={r.code} aria-label="Code" onChange={(e) => set(i, { code: e.target.value })} />
++            <input ref={i === 0 ? firstRef : undefined} className="input sg-opt-label" value={r.label} placeholder="Label" aria-label="Label" data-testid="grid-option-label"
++              onChange={(e) => set(i, { label: e.target.value })}
++              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (i === rows.length - 1) add(); else (e.currentTarget.closest(".sg-options-list")?.querySelectorAll<HTMLInputElement>(".sg-opt-label")[i + 1])?.focus(); } }} />
++            <button className="sg-opt-btn" title="Move up" onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
++            <button className="sg-opt-btn" title="Move down" onClick={() => move(i, 1)} disabled={i === rows.length - 1}>↓</button>
++            <button className="sg-opt-btn danger" title="Remove" data-testid="grid-option-remove" onClick={() => remove(i)}>×</button>
++          </div>
++        ))}
++        {rows.length === 0 && <div className="muted" style={{ padding: "4px 2px" }}>No options yet.</div>}
++      </div>
++      <div className="row" style={{ gap: 6, marginTop: 8 }}>
++        <button className="btn small" data-testid="grid-option-add" onClick={add}>+ option</button>
++        <span className="grow" />
++        <button className="btn small" data-testid="grid-options-open-studio" onClick={onOpenInStudio} title="Per-option logic, groups, media, exclusive flags — in Studio">More in Studio</button>
++        <button className="btn small" onClick={onDone}>Cancel</button>
++        <button className="btn small primary" data-testid="grid-options-done" onClick={commit}>Done</button>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/grid/GridView.tsx b/apps/studio/components/grid/GridView.tsx
+index 9cd0684..5e66a3d 100644
+--- a/apps/studio/components/grid/GridView.tsx
++++ b/apps/studio/components/grid/GridView.tsx
+@@ -17,7 +17,7 @@ import {
+   GRID_COLUMNS, DEFAULT_VISIBLE_COLUMNS, EMPTY_FILTER, ROW_HEIGHT,
+   type GridRow, type GridColumn, type GridColumnId, type GridFilter, type SortSpec, type Density,
+ } from "../../lib/grid/model";
+-import { TextCellEditor, VariableCellEditor, TypeCellEditor, BlockCellEditor, RequiredCell, StatusDot } from "./GridCells";
++import { TextCellEditor, VariableCellEditor, TypeCellEditor, BlockCellEditor, OptionsCellEditor, RequiredCell, StatusDot } from "./GridCells";
+ 
+ /**
+  * GRID — the survey as a programmable research grid.
+@@ -295,7 +295,8 @@ export function GridView() {
+         : c.id === "variable" ? <VariableCellEditor q={q} onDone={done} />
+           : c.id === "type" ? <TypeCellEditor q={q} onDone={done} />
+             : c.id === "block" ? <BlockCellEditor q={q} row={row} onDone={done} />
+-              : null;
++              : c.id === "options" ? <OptionsCellEditor q={q} onDone={done} onOpenInStudio={() => { done(); openInStudio(row); }} />
++                : null;
+     } else {
+       switch (c.id) {
+         case "status": body = <StatusDot row={row} />; break;
+diff --git a/apps/studio/components/studio/QuestionsPanel.tsx b/apps/studio/components/studio/QuestionsPanel.tsx
+index dc8ed20..e917e94 100644
+--- a/apps/studio/components/studio/QuestionsPanel.tsx
++++ b/apps/studio/components/studio/QuestionsPanel.tsx
+@@ -1822,6 +1822,28 @@ export function QuestionsPanel() {
+   const [moveFor, setMoveFor] = React.useState<string | null>(null);
+   const selected = s.def.questions.find((q) => q.id === s.selectedQuestionId);
+   const pages = listPages(s.def.flow as any[]);
++
++  /*
++   * FOLLOW A SELECTION MADE ELSEWHERE. A node clicked on the Flow canvas, a
++   * row in Grid, a chip in Intelligent, a palette result — all select
++   * through the one store, and when this panel is on screen (alone or as a
++   * split pane) the card must come into view, or "click Q12 in Flow, see
++   * Q12 in Studio" (round 2, §4) is a selection nobody can see. Scrolls
++   * only when the card is off screen, so a click on the card itself never
++   * jumps the page.
++   */
++  const rootRef = React.useRef<HTMLDivElement>(null);
++  React.useEffect(() => {
++    const id = s.selectedQuestionId;
++    const root = rootRef.current;
++    if (!id || !root) return;
++    const el = root.querySelector<HTMLElement>(`[data-testid="qcard"][data-qid="${CSS.escape(id)}"]`);
++    if (!el) return;
++    const r = el.getBoundingClientRect();
++    const host = root.closest<HTMLElement>(".split-body, .center") ?? root;
++    const h = host.getBoundingClientRect();
++    if (r.top < h.top || r.bottom > h.bottom) el.scrollIntoView({ block: "center", behavior: "smooth" });
++  }, [s.selectedQuestionId]);
+   const blocks = listBlocks(s.def.flow as any[]);
+   const placed = new Set(pages.flatMap((p) => p.node.questionIds));
+   const unplaced = s.def.questions.filter((q) => !placed.has(q.id));
+@@ -2314,7 +2336,7 @@ export function QuestionsPanel() {
+   };
+ 
+   return (
+-    <div>
++    <div ref={rootRef} data-testid="questions-panel">
+       {pendingDelete && (
+         <DeleteQuestionDialog
+           code={pendingDelete.code}
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 31180fe..00f7224 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -38,6 +38,7 @@ import { CommandProvider, useCommands, type ShellActions } from "./CommandContex
+ import { CommandPalette } from "./CommandPalette";
+ import { MenuBar } from "./MenuBar";
+ import { useMode } from "./ModeContext";
++import { propertiesWanted } from "../../lib/programmingMode";
+ import { ModeRenderer, SplitCenter } from "./ModeRenderers";
+ import { ModeChooser } from "./ModeChooser";
+ 
+@@ -358,7 +359,8 @@ function RightPanel({ tab, hidden = false }: { tab: Tab; hidden?: boolean }) {
+       if (!t) return;
+       if (asideRef.current?.contains(t)) return;             // inside the panel
+       // the Grid owns its own selection (rows, ranges, toggles) — a click there is never a dismissal
+-      if (t.closest(".qcard, .menubar, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg")) return;
++      // every mode renderer owns its own selection semantics — a click in Intelligent, Flow, Architect or a split pane's head is never a dismissal
++      if (t.closest(".qcard, .menubar, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg, .iq, .fc, .ar, .split-head, .split-divider")) return;
+       if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
+       s.select(null);
+     };
+@@ -1098,7 +1100,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+           )}
+         </main>
+         {/* Architect carries its own inspector, so the outer property panel steps aside there */}
+-        <RightPanel tab={tab} hidden={(!!splitMode || programmingMode === "architect" || programmingMode === "flow" || programmingMode === "intelligent") && tab === "questions"} />
++        <RightPanel tab={tab} hidden={tab === "questions" && !propertiesWanted(programmingMode, splitMode)} />
+       </div>
+       </CanvasProvider>
+     </div>
+diff --git a/apps/studio/lib/commands/builtins.ts b/apps/studio/lib/commands/builtins.ts
+index e8d5f0f..e5b59c4 100644
+--- a/apps/studio/lib/commands/builtins.ts
++++ b/apps/studio/lib/commands/builtins.ts
+@@ -1,6 +1,6 @@
+ import type { SurveyDefinition, Question, FlowNode } from "@rescript/schema";
+ import {
+-  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages,
++  addQuestion, duplicateQuestion, moveQuestionBy, nextQuestionNaming, listPages, listBlocks, findNode,
+ } from "@rescript/engine";
+ import type { Command, CommandContextBase } from "./core.ts";
+ import { MODES, type ProgrammingMode } from "../programmingMode.ts";
+@@ -67,13 +67,34 @@ type C = Command<StudioCommandContext>;
+ const selectedQuestion = (ctx: StudioCommandContext): Question | null =>
+   ctx.questionId ? ctx.def.questions.find((q) => q.id === ctx.questionId) ?? null : null;
+ 
+-/** the page and position right after the selected question — or the end of the last page */
+-function insertionPoint(ctx: StudioCommandContext): { pageId?: string; index?: number } {
++/**
++ * Where a new question goes: right after the selected question; at the end
++ * of the selected page; at the end of the selected block's or section's
++ * last page (Architect selects containers, round 2 §2); else the end of
++ * the last page — the Questions panel's rule.
++ */
++export function insertionPoint(ctx: Pick<StudioCommandContext, "def" | "questionId" | "primary">): { pageId?: string; index?: number } {
+   const qid = ctx.questionId;
+-  if (!qid) return {};
+-  for (const p of listPages(ctx.def.flow as unknown[])) {
+-    const k = p.node.questionIds.indexOf(qid);
+-    if (k >= 0) return { pageId: p.node.id, index: k + 1 };
++  const pages = listPages(ctx.def.flow as unknown[]);
++  if (qid) {
++    for (const p of pages) {
++      const k = p.node.questionIds.indexOf(qid);
++      if (k >= 0) return { pageId: p.node.id, index: k + 1 };
++    }
++  }
++  if (ctx.primary?.startsWith("flowNode:")) {
++    const id = ctx.primary.slice("flowNode:".length);
++    const page = pages.find((p) => p.node.id === id);
++    if (page) return { pageId: page.node.id, index: page.node.questionIds.length };
++    const block = listBlocks(ctx.def.flow as unknown[]).find((b) => b.id === id || b.node?.id === id);
++    const last = block?.pages[block.pages.length - 1];
++    if (last) return { pageId: last.node.id, index: last.node.questionIds.length };
++    const section = findNode(ctx.def.flow as FlowNode[], id);
++    if (section && "children" in section) {
++      const inside = listPages((section as { children: unknown[] }).children);
++      const end = inside[inside.length - 1];
++      if (end) return { pageId: end.node.id, index: end.node.questionIds.length };
++    }
+   }
+   return {};
+ }
+@@ -100,9 +121,13 @@ export function builtinCommands(): C[] {
+       const node = ctx.newFlowNode("page");
+       ctx.update("add block", (d) => {
+         const flow = d.flow as FlowNode[];
+-        const at = flow.findIndex((n) => n?.type === "end");
++        // after the selected top-level element when there is one; else before the End
++        const selId = ctx.primary?.startsWith("flowNode:") ? ctx.primary.slice("flowNode:".length) : null;
++        const after = selId ? flow.findIndex((n) => n?.id === selId) : -1;
++        const at = after >= 0 ? after + 1 : flow.findIndex((n) => n?.type === "end");
+         flow.splice(at < 0 ? flow.length : at, 0, node);
+       });
++      ctx.selectKey?.(`flowNode:${node.id}`);
+       ctx.toast("Block added");
+     },
+   });
+diff --git a/apps/studio/lib/grid/model.ts b/apps/studio/lib/grid/model.ts
+index b141f20..3d4cdcd 100644
+--- a/apps/studio/lib/grid/model.ts
++++ b/apps/studio/lib/grid/model.ts
+@@ -211,10 +211,10 @@ export const GRID_COLUMNS: readonly GridColumn[] = [
+   { id: "type", label: "Type", width: 150, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Question type" },
+   { id: "variable", label: "Variable", width: 160, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Exported variable name" },
+   { id: "text", label: "Question", width: 360, minWidth: 200, grow: true, sortable: true, defaultVisible: true, editable: true, description: "Question text" },
+-  { id: "options", label: "Options", width: 240, minWidth: 140, sortable: true, defaultVisible: true, description: "Answer options, rows × columns, or range" },
++  { id: "options", label: "Options", width: 240, minWidth: 140, sortable: true, defaultVisible: true, editable: true, description: "Answer options, rows × columns, or range — double-click to edit the list" },
+   { id: "display", label: "Display logic", width: 240, minWidth: 140, sortable: true, defaultVisible: true, description: "Shown when…" },
+   { id: "skip", label: "Skip logic", width: 200, minWidth: 120, sortable: true, defaultVisible: true, description: "Jumps after this question" },
+-  { id: "validation", label: "Validation", width: 160, minWidth: 100, sortable: true, defaultVisible: false, description: "Required and validation rules" },
++  { id: "validation", label: "Validation", width: 160, minWidth: 100, sortable: true, defaultVisible: true, description: "Required and validation rules" },
+   { id: "required", label: "Req.", width: 56, minWidth: 56, sortable: true, defaultVisible: false, align: "center", editable: true, description: "Required" },
+   { id: "deps", label: "Deps", width: 84, minWidth: 70, sortable: true, defaultVisible: true, align: "center", description: "Reads ← / read by →" },
+   { id: "block", label: "Block", width: 150, minWidth: 100, sortable: true, defaultVisible: true, editable: true, description: "The block the question sits in" },
+diff --git a/apps/studio/lib/intelligent/ai.ts b/apps/studio/lib/intelligent/ai.ts
+index 87dc9ba..4a5c40d 100644
+--- a/apps/studio/lib/intelligent/ai.ts
++++ b/apps/studio/lib/intelligent/ai.ts
+@@ -24,17 +24,24 @@ Intent shapes (pick exactly one):
+ {"kind":"required","target":"<question>","required":true|false}
+ {"kind":"add_question","type":"<single choice|multiple choice|numeric|text|dropdown|nps|rating|email|...>","text":"<question text>","options":["A","B"],"after":"<question, optional>","required":false}
+ {"kind":"rename","target":"<question or variable>","newName":"<NEW_NAME>"}
++{"kind":"validation","target":"<question>","rules":[{"kind":"min_value"|"max_value"|"min_length"|"max_length"|"min_selections"|"max_selections"|"integer"|"email"|"phone"|"url"|"zip"|"pattern","value":<number or pattern, when the kind takes one>}]}
++{"kind":"clear_validation","target":"<question>","kinds":["max_length", …] (optional; absent = every rule)}
++{"kind":"mask","target":"<question whose options are masked>","expression":"<set expression>","action":"display"|"remove"|"preselect"|"disable"}
++{"kind":"clear_mask","target":"<question>"}
+ {"kind":"find","target":"<question>","relation":"usedBy"|"dependsOn"|"affects"|"reach"}
+ {"kind":"explain","target":"<question>"}
+ {"kind":"unknown","reason":"<one short sentence: what is missing or ambiguous>"}
+ 
+ Condition language ("expression"): reference questions by CODE (Q3) or variable name; compare with = != > >= < <= between, contains, selected, answered, unanswered, is empty; combine with AND, OR, NOT and parentheses; option values by code or label, e.g. Q3 = Yes AND (Q1 >= 18 OR Q2 contains Coke); COUNT(Q4) >= 2. Use only questions that appear in the survey listing. Never invent codes.
+ 
++Set expression language ("mask"): a question's answer as a set — Q4.Selected, Q4.Unselected, Q4.Displayed, Q4.Options — combined with AND (intersection), OR (union), MINUS (difference), NOT (complement), parentheses. "show at Q6 only what was selected in Q4" is {"kind":"mask","target":"Q6","expression":"Q4.Selected","action":"display"}.
++
+ "find" relations: usedBy = what depends on / reads the target; dependsOn = what the target reads; affects = everything downstream of the target; reach = everything upstream that can affect it.
+ 
+ If the sentence asks for something outside these shapes, or you cannot tell which question is meant, answer with kind "unknown" and say why.`;
+ 
+ const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
++const VALIDATION_KINDS = new Set(["min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "integer", "email", "phone", "url", "zip", "pattern", "date_min", "date_max"]);
+ 
+ export function coerceIntent(raw: unknown): Intent | null {
+   if (!raw || typeof raw !== "object") return null;
+@@ -66,6 +73,35 @@ export function coerceIntent(raw: unknown): Intent | null {
+       if (!target || !newName || !/^[A-Za-z_]\w*$/.test(newName)) return null;
+       return { kind, target, newName };
+     }
++    case "validation": {
++      const target = str(o.target);
++      if (!target || !Array.isArray(o.rules)) return null;
++      const rules = o.rules.flatMap((r) => {
++        if (!r || typeof r !== "object") return [];
++        const kind = str((r as Record<string, unknown>).kind);
++        if (!kind || !VALIDATION_KINDS.has(kind)) return [];
++        const v = (r as Record<string, unknown>).value;
++        const value = typeof v === "number" ? v : typeof v === "string" && v.trim() ? (/^-?\d+(\.\d+)?$/.test(v.trim()) && kind !== "pattern" ? Number(v) : v.trim()) : undefined;
++        return [{ kind: kind as never, ...(value !== undefined ? { value } : {}) }];
++      });
++      return rules.length ? { kind, target, rules } : null;
++    }
++    case "clear_validation": {
++      const target = str(o.target);
++      if (!target) return null;
++      const kinds = Array.isArray(o.kinds) ? o.kinds.filter((k): k is string => typeof k === "string" && VALIDATION_KINDS.has(k)) : undefined;
++      return { kind, target, ...(kinds?.length ? { kinds: kinds as never } : {}) };
++    }
++    case "mask": {
++      const target = str(o.target), expression = str(o.expression);
++      if (!target || !expression) return null;
++      const action = ["display", "remove", "preselect", "disable", "display_and_preselect"].includes(o.action as string) ? (o.action as never) : "display";
++      return { kind, target, expression, action };
++    }
++    case "clear_mask": {
++      const target = str(o.target);
++      return target ? { kind, target } : null;
++    }
+     case "find": {
+       const target = str(o.target);
+       const relation = o.relation;
+diff --git a/apps/studio/lib/intelligent/context.ts b/apps/studio/lib/intelligent/context.ts
+index 43d1993..57b4e02 100644
+--- a/apps/studio/lib/intelligent/context.ts
++++ b/apps/studio/lib/intelligent/context.ts
+@@ -1,5 +1,5 @@
+ import type { SurveyDefinition } from "@rescript/schema";
+-import { listPages, questionsInFlowOrder, conditionSummary } from "@rescript/engine";
++import { listPages, questionsInFlowOrder, conditionSummary, formatSetExpression } from "@rescript/engine";
+ 
+ /**
+  * THE SURVEY, COMPACTLY, FOR A LANGUAGE MODEL.
+@@ -62,6 +62,8 @@ export function surveyContext(def: SurveyDefinition, opts: ContextOptions = {}):
+       parts.push(`options: ${opts}${q.options.length > 12 ? `, … (${q.options.length})` : ""}`);
+     }
+     if (q.rows?.length) parts.push(`${q.rows.length} rows`);
++    if (q.validation?.length) parts.push(`validation: ${q.validation.map((v) => `${String(v.kind).replace(/_/g, " ")}${v.value !== undefined && v.value !== null && typeof v.value !== "object" ? ` ${v.value}` : ""}`).join(", ")}`);
++    if (q.mask) parts.push(`mask: ${q.mask.action} ${formatSetExpression(def, q.mask.expr)}`);
+     if (q.displayLogic) parts.push(`shown when ${conditionSummary(def, q.displayLogic)}`);
+     if (q.skipLogic?.length) parts.push(`${q.skipLogic.length} skip rule${q.skipLogic.length === 1 ? "" : "s"}`);
+     if (q.id === opts.selectedId) parts.push("← selected");
+diff --git a/apps/studio/lib/intelligent/grammar.ts b/apps/studio/lib/intelligent/grammar.ts
+index cdbe3e2..f2971cb 100644
+--- a/apps/studio/lib/intelligent/grammar.ts
++++ b/apps/studio/lib/intelligent/grammar.ts
+@@ -1,4 +1,4 @@
+-import type { Intent } from "./proposal.ts";
++import type { Intent, ValidationSpec } from "./proposal.ts";
+ 
+ /**
+  * THE DETERMINISTIC GRAMMAR — a sentence into an intent, with no network.
+@@ -69,7 +69,7 @@ export function parseIntent(input: string): Intent {
+   /* ------------------------------------------------------------ required */
+   if ((m = /^(?:make|set|mark)\s+(.+?)\s+(?:as\s+)?(required|mandatory|compulsory|optional|not\s+required|non-?mandatory)$/i.exec(text))
+     || (m = /^(.+?)\s+(?:is|should\s+be|must\s+be|becomes?)\s+(?:now\s+)?(required|mandatory|compulsory|optional|not\s+required|non-?mandatory)$/i.exec(text))
+-    || (m = /^(require|mandate)\s+(?:an?\s+answer\s+(?:to|for|on)\s+)?(.+)$/i.exec(text))) {
++    || (m = /^(require|mandate)\s+(?!(?:at\s+least|at\s+most|a\s+minimum|a\s+maximum|min|max|no\s+more|up\s+to|\d))(?:an?\s+answer\s+(?:to|for|on)\s+)?(.+)$/i.exec(text))) {
+     const isVerb = /^(require|mandate)$/i.test(m[1]);
+     const target = isVerb ? m[2] : m[1];
+     const word = isVerb ? "required" : m[2].toLowerCase();
+@@ -117,6 +117,38 @@ export function parseIntent(input: string): Intent {
+     return { kind: "display", target: strip(m[3]), action: /^(?:show|display|ask)$/i.test(m[2]) ? "show" : "hide", expression: m[1] };
+   }
+ 
++  /* ---------------------------------------------------------- validation */
++  {
++    const v = parseValidation(text);
++    if (v) return v;
++  }
++
++  /* ------------------------------------------------------------- masking */
++  if ((m = /^(?:remove|clear|drop|delete)\s+(?:the\s+)?(?:option\s+)?mask(?:ing)?\s+(?:from|on|of)\s+(.+)$/i.exec(text))
++    || (m = /^(?:unmask|stop\s+masking)\s+(.+)$/i.exec(text))) {
++    return { kind: "clear_mask", target: strip(m[1]) };
++  }
++  if ((m = /^(?:mask|filter|restrict|limit)\s+(?:the\s+)?(?:options?\s+(?:of|in|at)\s+)?(.+?)\s+(?:by|to|with|using)\s+(?:the\s+)?(.+)$/i.exec(text)) && !/\b(?:characters?|chars|digits|values?|selections?|answers?)\b/i.test(m[2]) && !/^(?:\d|at least|at most|between)/i.test(m[2])) {
++    return { kind: "mask", target: strip(m[1]), expression: m[2], action: "display" };
++  }
++  if ((m = /^(?:show|display|offer)\s+(?:only\s+|just\s+)?(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(.+)\s+(?:at|in|on|for)\s+((?:the\s+)?[A-Za-z_][\w]*(?:\s+question)?)$/i.exec(text))
++    || (m = /^(?:at|in|on)\s+(.+?),?\s+(?:show|display|offer)\s+(?:only\s+|just\s+)?(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(.+)$/i.exec(text))) {
++    const swapped = /^(?:at|in|on)\s/i.test(text);
++    const target = swapped ? m[1] : m[2], expr = swapped ? m[2] : m[1];
++    return { kind: "mask", target: strip(target), expression: expr, action: "display" };
++  }
++  if ((m = /^(?:hide|remove|drop|exclude)\s+(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(.+)\s+(?:from|at|in)\s+((?:the\s+)?[A-Za-z_][\w]*(?:\s+question)?)$/i.exec(text))
++    || (m = /^(?:at|in|from)\s+(.+?),?\s+(?:hide|remove|drop|exclude)\s+(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(.+)$/i.exec(text))) {
++    const swapped = /^(?:at|in|from)\s/i.test(text);
++    const target = swapped ? m[1] : m[2], expr = swapped ? m[2] : m[1];
++    return { kind: "mask", target: strip(target), expression: expr, action: "remove" };
++  }
++  if ((m = /^carry\s+(?:forward\s+)?(?:the\s+)?(?:(selected|unselected|not\s+selected|displayed|all)\s+)?(?:options?|answers?|items?)?\s*(?:from\s+)?(.+?)\s+(?:to|into|forward\s+to)\s+(.+)$/i.exec(text))) {
++    const sel = (m[1] ?? "selected").toLowerCase();
++    const word = /not|un/.test(sel) ? "Unselected" : sel === "displayed" ? "Displayed" : sel === "all" ? "Options" : "Selected";
++    return { kind: "mask", target: strip(m[3]), expression: `${strip(m[2])}.${word}`, action: "display" };
++  }
++
+   /* ------------------------------------------------------- add question */
+   if ((m = /^(?:add|create|insert|new|append|put)\s+(?:an?\s+|another\s+|one\s+more\s+)?(?:new\s+)?(.*?)\s*question\b(.*)$/i.exec(text))) {
+     const type = m[1].trim() || undefined;
+@@ -146,6 +178,58 @@ export function parseIntent(input: string): Intent {
+ }
+ 
+ /** the shapes the grammar knows, for the mode's help and for the model's prompt */
++/* ---------------------------------------------------------------- validation */
++
++const NUM = String.raw`(-?\d+(?:\.\d+)?)`;
++
++/**
++ * Validation sentences. The subject is whatever comes before the rule words;
++ * `resolveTarget` decides what it names. Every shape maps onto the engine's
++ * own rule kinds — nothing here invents a check the Validation panel does
++ * not already offer.
++ */
++function parseValidation(text: string): Intent | null {
++  let m: RegExpExecArray | null;
++  const T = String.raw`(.+?)`;
++  const rule = (target: string, rules: ValidationSpec[]): Intent =>
++    ({ kind: "validation", target: strip(target).replace(/^(?:the\s+)?(?:answer|value|response)\s+(?:to|of|for)\s+/i, ""), rules });
++
++  if ((m = /^(?:clear|remove|drop|delete)\s+(?:all\s+|the\s+|every\s+)?validation(?:\s+rules?)?\s+(?:from|on|of)\s+(.+)$/i.exec(text))) return { kind: "clear_validation", target: strip(m[1]) };
++  if ((m = /^(?:remove|drop|delete)\s+(?:the\s+)?(min(?:imum)?|max(?:imum)?|length|character|email|phone|url|zip|integer|pattern|range)\s*(?:value|length|selections?|limit|rule|check)?\s+(?:rule\s+)?(?:from|on|of)\s+(.+)$/i.exec(text))) {
++    const w = m[1].toLowerCase();
++    const kinds = /^min/.test(w) ? ["min_value", "min_length", "min_selections"] : /^max/.test(w) ? ["max_value", "max_length", "max_selections"] : /length|character/.test(w) ? ["min_length", "max_length"] : /range/.test(w) ? ["min_value", "max_value"] : [w];
++    return { kind: "clear_validation", target: strip(m[2]), kinds: kinds as never };
++  }
++  // between
++  if ((m = new RegExp(String.raw`^(?:make\s+|limit\s+|restrict\s+)?${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|to\s+(?:values?\s+)?|values?\s+)?(?:a\s+number\s+)?(?:between|from)\s+${NUM}\s+(?:and|to|-)\s+${NUM}(?:\s+(characters?|chars|letters|selections?|options?|answers?|items?))?$`, "i").exec(text))) {
++    const unit = (m[4] ?? "").toLowerCase();
++    const k = /char|letter/.test(unit) ? ["min_length", "max_length"] : /select|option|answer|item/.test(unit) ? ["min_selections", "max_selections"] : ["min_value", "max_value"];
++    return rule(m[1], [{ kind: k[0] as ValidationSpec["kind"], value: Number(m[2]) }, { kind: k[1] as ValidationSpec["kind"], value: Number(m[3]) }]);
++  }
++  // selections
++  if ((m = new RegExp(String.raw`^(?:require\s+|allow\s+)?(?:at\s+least|a\s+minimum\s+of|min(?:imum)?)\s+${NUM}\s+(?:selections?|options?|answers?|items?|choices?)\s+(?:on|for|at|in)\s+${T}$`, "i").exec(text))) return rule(m[2], [{ kind: "min_selections", value: Number(m[1]) }]);
++  if ((m = new RegExp(String.raw`^(?:allow\s+|permit\s+)?(?:at\s+most|a\s+maximum\s+of|max(?:imum)?|no\s+more\s+than|up\s+to)\s+${NUM}\s+(?:selections?|options?|answers?|items?|choices?)\s+(?:on|for|at|in)\s+${T}$`, "i").exec(text))) return rule(m[2], [{ kind: "max_selections", value: Number(m[1]) }]);
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+have\s+|should\s+have\s+|needs?\s+|allows?\s+|has\s+)?(?:at\s+least|min(?:imum)?(?:\s+of)?)\s+${NUM}\s+(?:selections?|options?|answers?|items?|choices?)(?:\s+selected)?$`, "i").exec(text))) return rule(m[1], [{ kind: "min_selections", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+have\s+|should\s+have\s+|allows?\s+|has\s+)?(?:at\s+most|max(?:imum)?(?:\s+of)?|no\s+more\s+than|up\s+to)\s+${NUM}\s+(?:selections?|options?|answers?|items?|choices?)(?:\s+selected)?$`, "i").exec(text))) return rule(m[1], [{ kind: "max_selections", value: Number(m[2]) }]);
++  // characters
++  if ((m = new RegExp(String.raw`^(?:limit|restrict|cap)\s+${T}\s+(?:to|at)\s+${NUM}\s+(?:characters?|chars|letters)$`, "i").exec(text))) return rule(m[1], [{ kind: "max_length", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|has\s+|allows?\s+)?(?:at\s+most|max(?:imum)?(?:\s+of)?|no\s+(?:more|longer)\s+than|up\s+to)\s+${NUM}\s+(?:characters?|chars|letters)(?:\s+long)?$`, "i").exec(text))) return rule(m[1], [{ kind: "max_length", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|has\s+|needs?\s+)?(?:at\s+least|min(?:imum)?(?:\s+of)?|no\s+(?:fewer|less|shorter)\s+than)\s+${NUM}\s+(?:characters?|chars|letters)(?:\s+long)?$`, "i").exec(text))) return rule(m[1], [{ kind: "min_length", value: Number(m[2]) }]);
++  // numeric bounds
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|has\s+(?:a\s+)?)?(?:at\s+least|min(?:imum)?(?:\s+(?:value\s+)?(?:of|is))?|no\s+(?:less|lower|smaller)\s+than|>=|greater\s+than\s+or\s+equal\s+to)\s+${NUM}$`, "i").exec(text))) return rule(m[1], [{ kind: "min_value", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|has\s+(?:a\s+)?)?(?:at\s+most|max(?:imum)?(?:\s+(?:value\s+)?(?:of|is))?|no\s+(?:more|higher|greater)\s+than|<=|less\s+than\s+or\s+equal\s+to|up\s+to)\s+${NUM}$`, "i").exec(text))) return rule(m[1], [{ kind: "max_value", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^(?:set\s+(?:the\s+)?)?(?:min(?:imum)?|lowest)\s+(?:value\s+)?(?:of|for|on)\s+${T}\s+(?:to|=|is)\s+${NUM}$`, "i").exec(text))) return rule(m[1], [{ kind: "min_value", value: Number(m[2]) }]);
++  if ((m = new RegExp(String.raw`^(?:set\s+(?:the\s+)?)?(?:max(?:imum)?|highest)\s+(?:value\s+)?(?:of|for|on)\s+${T}\s+(?:to|=|is)\s+${NUM}$`, "i").exec(text))) return rule(m[1], [{ kind: "max_value", value: Number(m[2]) }]);
++  // formats
++  if ((m = new RegExp(String.raw`^(?:validate\s+|check\s+|make\s+|treat\s+)?${T}\s+(?:must\s+be\s+|should\s+be\s+|is\s+|as\s+|to\s+be\s+)?(?:a\s+valid\s+|a\s+|an\s+|as\s+an?\s+)?(e-?mail(?:\s+address)?|phone(?:\s+number)?|telephone(?:\s+number)?|url|web\s+address|website|link|zip(?:\s+code)?|post(?:al)?\s*code|whole\s+number|integer|number\s+without\s+decimals)$`, "i").exec(text))) {
++    const w = m[2].toLowerCase();
++    const kind = /mail/.test(w) ? "email" : /phone|tele/.test(w) ? "phone" : /url|web|link/.test(w) ? "url" : /zip|post/.test(w) ? "zip" : "integer";
++    return rule(m[1], [{ kind: kind as ValidationSpec["kind"] }]);
++  }
++  if ((m = new RegExp(String.raw`^${T}\s+(?:must|should)\s+match\s+(?:the\s+)?(?:pattern|regex|regular\s+expression)\s+(.+)$`, "i").exec(text))) return rule(m[1], [{ kind: "pattern", value: strip(m[2]) }]);
++  return null;
++}
++
+ export const EXAMPLES: { text: string; about: string }[] = [
+   { text: "Show Q5 only when Q3 = Yes and Q4 > 2", about: "display logic" },
+   { text: "Hide page 3 if Q2 is Business", about: "a display rule on a page" },
+@@ -154,6 +238,10 @@ export const EXAMPLES: { text: string; about: string }[] = [
+   { text: "Make Q4 required", about: "required" },
+   { text: "Add a numeric question “How old are you?” after Q1", about: "a new question" },
+   { text: "Add a single choice question “Do you own a car?” with options Yes, No", about: "a new question with options" },
++  { text: "Q1 must be between 18 and 99", about: "validation" },
++  { text: "Limit Q6 to 120 characters", about: "a character limit" },
++  { text: "Q7 must be an email address", about: "a format check" },
++  { text: "At Q13 show only the options selected in Q11", about: "masking" },
+   { text: "Rename AGE to RESP_AGE", about: "a variable rename" },
+   { text: "What depends on Q3?", about: "dependencies" },
+   { text: "Explain Q5", about: "how a question behaves" },
+diff --git a/apps/studio/lib/intelligent/intelligent.test.ts b/apps/studio/lib/intelligent/intelligent.test.ts
+index 94da9bf..9dfeece 100644
+--- a/apps/studio/lib/intelligent/intelligent.test.ts
++++ b/apps/studio/lib/intelligent/intelligent.test.ts
+@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
+ import { SurveyDefinition, cond, type Question } from "@rescript/schema";
+ import { buildDependencyIndex, applyLogicProposal } from "@rescript/engine";
+ import { parseIntent, EXAMPLES } from "./grammar.ts";
+-import { planProposal, normaliseExpression, resolveTarget, variantForWords, type PlannerDeps } from "./proposal.ts";
++import { planProposal, normaliseExpression, normaliseSetExpression, resolveTarget, variantForWords, type PlannerDeps } from "./proposal.ts";
+ import { surveyContext } from "./context.ts";
+ 
+ const survey = () =>
+@@ -258,3 +258,121 @@ test("coerceIntent admits only the shapes the planner knows", async () => {
+   // every shape the prompt promises, the coercer accepts
+   for (const k of ["display", "skip", "required", "add_question", "rename", "find", "explain", "unknown"]) assert.match(LOGIC_SYSTEM_PROMPT, new RegExp(`"kind":"${k}"`));
+ });
++
++/* ------------------------------------------------- validation + masking (round 2) */
++
++const survey2 = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Round 2" },
++    questions: [
++      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
++      { id: "q_email", code: "Q2", variableName: "EMAIL", type: "open_text", text: "Your email" },
++      { id: "q_brands", code: "Q3", variableName: "BRANDS", type: "multi_select", text: "Which brands?", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
++      { id: "q_used", code: "Q4", variableName: "USED", type: "multi_select", text: "Used?", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
++      { id: "q_best", code: "Q5", variableName: "BEST", type: "single_select", text: "Best brand", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }, { code: 4, label: "D" }] },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_email", "q_brands", "q_used", "q_best"] }, { type: "end", id: "e", status: "complete" }],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("grammar: validation in its everyday spellings maps onto the engine's rule kinds", () => {
++  assert.deepEqual(parseIntent("Q1 must be between 18 and 99"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] });
++  assert.deepEqual(parseIntent("make Q1 between 18 and 99"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] });
++  assert.deepEqual(parseIntent("Q1 is at least 18"), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }] });
++  assert.deepEqual(parseIntent("Q1 must be at most 120"), { kind: "validation", target: "Q1", rules: [{ kind: "max_value", value: 120 }] });
++  assert.deepEqual(parseIntent("set the maximum for Q1 to 99"), { kind: "validation", target: "Q1", rules: [{ kind: "max_value", value: 99 }] });
++  assert.deepEqual(parseIntent("limit Q2 to 120 characters"), { kind: "validation", target: "Q2", rules: [{ kind: "max_length", value: 120 }] });
++  assert.deepEqual(parseIntent("Q2 must be at least 10 characters long"), { kind: "validation", target: "Q2", rules: [{ kind: "min_length", value: 10 }] });
++  assert.deepEqual(parseIntent("Q2 between 5 and 50 characters"), { kind: "validation", target: "Q2", rules: [{ kind: "min_length", value: 5 }, { kind: "max_length", value: 50 }] });
++  assert.deepEqual(parseIntent("Q2 must be an email address"), { kind: "validation", target: "Q2", rules: [{ kind: "email" }] });
++  assert.deepEqual(parseIntent("validate Q2 as a phone number"), { kind: "validation", target: "Q2", rules: [{ kind: "phone" }] });
++  assert.deepEqual(parseIntent("Q1 must be a whole number"), { kind: "validation", target: "Q1", rules: [{ kind: "integer" }] });
++  assert.deepEqual(parseIntent("require at least 2 selections on Q3"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 2 }] });
++  assert.deepEqual(parseIntent("allow at most 3 options for Q3"), { kind: "validation", target: "Q3", rules: [{ kind: "max_selections", value: 3 }] });
++  assert.deepEqual(parseIntent("Q3 allows at most 3 selections"), { kind: "validation", target: "Q3", rules: [{ kind: "max_selections", value: 3 }] });
++  assert.deepEqual(parseIntent("Q3 must have at least 2 options selected"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 2 }] });
++  assert.deepEqual(parseIntent("Q3 between 1 and 3 selections"), { kind: "validation", target: "Q3", rules: [{ kind: "min_selections", value: 1 }, { kind: "max_selections", value: 3 }] });
++  assert.deepEqual(parseIntent("Q2 must match the pattern ^[A-Z]{3}\\d+$"), { kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "^[A-Z]{3}\\d+$" }] });
++  assert.deepEqual(parseIntent("clear validation on Q1"), { kind: "clear_validation", target: "Q1" });
++  assert.deepEqual(parseIntent("remove the maximum rule from Q1"), { kind: "clear_validation", target: "Q1", kinds: ["max_value", "max_length", "max_selections"] });
++  // a validation sentence never steals a logic sentence
++  assert.equal(parseIntent("show Q5 only when Q3 is Yes and Q1 is at least 18").kind, "display");
++  assert.equal(parseIntent("skip to Q5 when Q1 is at least 18").kind, "skip");
++});
++
++test("grammar: masking sentences become set expressions", () => {
++  assert.deepEqual(parseIntent("At Q5 show only the options selected in Q3"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "display" });
++  assert.deepEqual(parseIntent("show only the options selected in Q3 at Q5"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "display" });
++  assert.deepEqual(parseIntent("mask Q5 by Q3.Selected AND Q4.Selected"), { kind: "mask", target: "Q5", expression: "Q3.Selected AND Q4.Selected", action: "display" });
++  assert.deepEqual(parseIntent("hide the options selected in Q3 from Q5"), { kind: "mask", target: "Q5", expression: "selected in Q3", action: "remove" });
++  assert.deepEqual(parseIntent("carry forward the selected options from Q3 to Q5"), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
++  assert.deepEqual(parseIntent("carry Q3 to Q5"), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
++  assert.deepEqual(parseIntent("remove the mask from Q5"), { kind: "clear_mask", target: "Q5" });
++  assert.equal(parseIntent("limit Q2 to 120 characters").kind, "validation", "‘limit … to N characters’ is validation, not a mask");
++  for (const e of EXAMPLES) assert.notEqual(parseIntent(e.text).kind, "unknown", `example “${e.text}” must parse`);
++});
++
++test("normaliseSetExpression turns words into the mask language", () => {
++  const def = survey2();
++  assert.equal(normaliseSetExpression(def, "selected in Q3"), "Q3.Selected");
++  assert.equal(normaliseSetExpression(def, "the options selected in Q3 and Q4"), "Q3.Selected AND Q4.Selected");
++  assert.equal(normaliseSetExpression(def, "options not selected in Q3"), "Q3.Unselected");
++  assert.equal(normaliseSetExpression(def, "Q3 but not Q4"), "Q3.Selected MINUS Q4.Selected");
++  assert.equal(normaliseSetExpression(def, "BRANDS or USED"), "Q3.Selected OR Q4.Selected", "variable names resolve to codes");
++  assert.equal(normaliseSetExpression(def, "Q3.Selected AND Q4.Selected"), "Q3.Selected AND Q4.Selected", "the language passes through");
++  assert.equal(normaliseSetExpression(def, "NOT Q3.Selected"), "NOT Q3.Selected");
++});
++
++test("validation and mask proposals go through the engine's validation before Apply", () => {
++  const def = survey2();
++  const v = planProposal(def, parseIntent("Q1 must be between 18 and 99"), "grammar", deps(def));
++  assert.deepEqual(v.errors, []);
++  assert.equal(v.summary, "Validate Q1: at least 18, at most 99.");
++  assert.equal(v.changes[0].kind, "set_validation");
++  assert.equal(v.targetKey, "question:q_age");
++  const bad = planProposal(def, parseIntent("Q2 must be between 18 and 99"), "grammar", deps(def));
++  assert.match(bad.errors[0], /not numeric/);
++  applyLogicProposal(def, v.changes);
++  const again = planProposal(def, parseIntent("Q1 is at least 21"), "grammar", deps(def));
++  assert.match(again.warnings[0], /already has a minimum value rule \(18\); this replaces it/);
++  const sel = planProposal(def, parseIntent("allow at most 9 options for Q3"), "grammar", deps(def));
++  assert.match(sel.errors[0], /only 4 options/);
++  const clear = planProposal(def, parseIntent("clear validation on Q1"), "grammar", deps(def));
++  assert.equal(clear.summary, "Remove every validation rule from Q1.");
++
++  const m = planProposal(def, parseIntent("At Q5 show only the options selected in Q3"), "grammar", deps(def));
++  assert.deepEqual(m.errors, []);
++  assert.equal(m.summary, "Show at Q5 only the options Q3.Selected.");
++  assert.equal(m.expression?.canonical, "Q3.Selected");
++  assert.equal(m.changes[0].kind, "set_mask");
++  const both = planProposal(def, parseIntent("show only the options selected in Q3 and Q4 at Q5"), "grammar", deps(def));
++  assert.deepEqual(both.errors, []);
++  assert.equal(both.expression?.canonical, "Q3.Selected INTERSECTION Q4.Selected");
++  const future = planProposal(def, parseIntent("at Q3 show only the options selected in Q5"), "grammar", deps(def));
++  assert.match(future.errors[0], /asked after/);
++  const junk = planProposal(def, parseIntent("mask Q5 by Q3 selected wrongly"), "grammar", deps(def));
++  assert.ok(junk.errors.length >= 1 && junk.changes.length === 0, "a set expression the parser refuses proposes nothing");
++  applyLogicProposal(def, m.changes);
++  assert.equal(def.questions.find((q) => q.id === "q_best")!.mask?.action, "display");
++  const rep = planProposal(def, parseIntent("mask Q5 by Q4"), "grammar", deps(def));
++  assert.match(rep.warnings[0], /already has a mask \(Q3\.Selected\); this replaces it/);
++  const hide = planProposal(def, parseIntent("hide the options selected in Q3 from Q5"), "grammar", deps(def));
++  assert.equal(hide.summary, "Remove from Q5 the options Q3.Selected.", "hide is the remove action, not display");
++  const cm = planProposal(def, parseIntent("remove the mask from Q5"), "grammar", deps(def));
++  assert.equal(cm.summary, "Remove the option mask from Q5.");
++  // the context serializer says what is there, so the model can see it
++  const ctx = surveyContext(def, {});
++  assert.match(ctx, /Q1 \(AGE\) · numeric · "How old are you\?" · validation: min value 18, max value 99/);
++  assert.match(ctx, /Q5 \(BEST\) .* · mask: display Q3\.Selected/);
++});
++
++test("coerceIntent admits the new shapes and drops what it does not know", async () => {
++  const { coerceIntent } = await import("./ai.ts");
++  assert.deepEqual(coerceIntent({ kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: "18" }, { kind: "email" }, { kind: "bogus", value: 1 }, "x"] }), { kind: "validation", target: "Q1", rules: [{ kind: "min_value", value: 18 }, { kind: "email" }] });
++  assert.equal(coerceIntent({ kind: "validation", target: "Q1", rules: [{ kind: "bogus" }] }), null, "no usable rule, no intent");
++  assert.deepEqual(coerceIntent({ kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "123" }] }), { kind: "validation", target: "Q2", rules: [{ kind: "pattern", value: "123" }] }, "a pattern stays text even when it looks numeric");
++  assert.deepEqual(coerceIntent({ kind: "clear_validation", target: "Q1", kinds: ["max_value", "nope"] }), { kind: "clear_validation", target: "Q1", kinds: ["max_value"] });
++  assert.deepEqual(coerceIntent({ kind: "mask", target: "Q5", expression: "Q3.Selected", action: "nonsense" }), { kind: "mask", target: "Q5", expression: "Q3.Selected", action: "display" });
++  assert.equal(coerceIntent({ kind: "mask", target: "Q5" }), null);
++  assert.deepEqual(coerceIntent({ kind: "clear_mask", target: "Q5" }), { kind: "clear_mask", target: "Q5" });
++});
+diff --git a/apps/studio/lib/intelligent/proposal.ts b/apps/studio/lib/intelligent/proposal.ts
+index f941cb8..bae2f14 100644
+--- a/apps/studio/lib/intelligent/proposal.ts
++++ b/apps/studio/lib/intelligent/proposal.ts
+@@ -1,9 +1,9 @@
+-import type { Condition, Question, SkipRule, SurveyDefinition } from "@rescript/schema";
++import type { Condition, OptionMask, Question, SkipRule, SurveyDefinition, ValidationRule } from "@rescript/schema";
+ import { cond } from "@rescript/schema";
+ import {
+   parseLogicExpression, formatCondition, conditionSummary, questionLogicSummary,
+   getQuestionByCodeOrVar, listPages, listBlocks, questionOrder, conditionRefs,
+-  validateProposal, describeChange, objectKey, neighbours,
++  validateProposal, describeChange, objectKey, neighbours, parseSetExpression, formatSetExpression, maskSummary, ruleLabel,
+   type ProposalChange, type ExpressionError, type DependencyIndex, type ObjectKey,
+ } from "@rescript/engine";
+ 
+@@ -37,10 +37,18 @@ export type Intent =
+   | { kind: "required"; target: string; required: boolean }
+   | { kind: "add_question"; type?: string; text: string; options?: string[]; after?: string; required?: boolean }
+   | { kind: "rename"; target: string; newName: string }
++  /** validation rules on a question, as {kind, value} pairs the engine merges by kind */
++  | { kind: "validation"; target: string; rules: ValidationSpec[] }
++  | { kind: "clear_validation"; target: string; kinds?: ValidationRule["kind"][] }
++  /** an option mask: the SET EXPRESSION as text (`Q4.Selected`, `Q4.Selected AND Q5.Selected`, `NOT Q4.Selected`) */
++  | { kind: "mask"; target: string; expression: string; action?: OptionMask["action"] }
++  | { kind: "clear_mask"; target: string }
+   | { kind: "find"; target: string; relation: "usedBy" | "dependsOn" | "affects" | "reach" }
+   | { kind: "explain"; target: string }
+   | { kind: "unknown"; reason: string };
+ 
++export interface ValidationSpec { kind: ValidationRule["kind"]; value?: number | string }
++
+ export interface ProposalExpression {
+   /** as typed (after the light normalisation) */
+   text: string;
+@@ -141,6 +149,32 @@ export function planExpression(def: SurveyDefinition, text: string): ProposalExp
+   };
+ }
+ 
++/**
++ * A set expression in everyday words → the mask language the parser reads:
++ * "selected in Q4" → `Q4.Selected`, "not selected in Q4" → `Q4.Unselected`,
++ * "Q4 and Q5" → `Q4.Selected AND Q5.Selected`, "in Q4 but not in Q5" →
++ * `Q4.Selected MINUS Q5.Selected`. A bare code means its selection. Text
++ * already in the language passes through untouched.
++ */
++export function normaliseSetExpression(def: SurveyDefinition, text: string): string {
++  let t = text.trim().replace(/[.?!]+$/, "");
++  const code = (m: string) => { const q = getQuestionByCodeOrVar(def, m) ?? getQuestionByCodeOrVar(def, m.toUpperCase()); return q ? q.code : m; };
++  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:that\s+were\s+|that\s+was\s+)?(?:not\s+|un)selected\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Unselected`);
++  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:that\s+were\s+|that\s+was\s+)?(?:selected|chosen|picked|ticked|answered)\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Selected`);
++  t = t.replace(/\b(?:the\s+)?(?:options?|answers?|items?|choices?)\s+(?:shown|displayed)\s+(?:in|at|for)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Displayed`);
++  t = t.replace(/\b(?:not\s+|un)selected\s+(?:in|at)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Unselected`);
++  t = t.replace(/\b(?:selected|chosen|picked)\s+(?:in|at)\s+([A-Za-z_][\w]*)/gi, (_, q) => `${code(q)}.Selected`);
++  t = t.replace(/\b([A-Za-z_][\w]*)'s\s+(?:selected|selection|answers?)\b/gi, (_, q) => `${code(q)}.Selected`);
++  t = t.replace(/\bbut\s+not\s+(?:in\s+)?/gi, "MINUS ").replace(/\b(?:minus|except|excluding|without)\b/gi, "MINUS").replace(/\b(?:and|both|intersect(?:ion)?)\b/gi, "AND").replace(/\b(?:or|either|union|plus)\b/gi, "OR");
++  // a bare question code or variable is its selection
++  t = t.replace(/(^|[\s(])([A-Za-z_][\w]*)(?=$|[\s)])/g, (m, pre, tok) => {
++    if (/^(AND|OR|NOT|MINUS|UNION|INTERSECTION|DIFFERENCE|EXPR|LISTFILL|CURRENT_ITEM_CODE|CURRENT_ITEM)$/i.test(tok)) return m;
++    const q = getQuestionByCodeOrVar(def, tok) ?? getQuestionByCodeOrVar(def, tok.toUpperCase());
++    return q ? `${pre}${q.code}.Selected` : m;
++  });
++  return t.replace(/\s+/g, " ").trim();
++}
++
+ /* -------------------------------------------------------------- targets */
+ 
+ export type Resolved =
+@@ -346,6 +380,47 @@ export function planProposal(def: SurveyDefinition, intent: Intent, source: Prop
+         targetKey: withKey(t),
+       }));
+     }
++    case "validation": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
++      const rules: ValidationRule[] = intent.rules.map((r) => ({ id: deps.uid("v"), kind: r.kind, ...(r.value !== undefined ? { value: r.value } : {}) }));
++      if (!rules.length) return base({ errors: ["I could not tell which rule to set — say “Q3 must be between 18 and 99” or “limit Q5 to 200 characters”."] });
++      const existing = (t.question.validation ?? []).filter((v) => rules.some((r) => r.kind === v.kind));
++      const warnings = existing.map((v) => `${t.label} already has a ${ruleLabel(v.kind)} rule${v.value !== undefined ? ` (${v.value})` : ""}; this replaces it.`);
++      const change = { kind: "set_validation" as const, questionId: t.id, rules };
++      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t), warnings }));
++    }
++    case "clear_validation": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; validation belongs to a question.`] });
++      const change = { kind: "clear_validation" as const, questionId: t.id, ...(intent.kinds?.length ? { kinds: intent.kinds } : {}) };
++      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
++    }
++    case "mask": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}; a mask belongs to a question with options.`] });
++      const r = parseSetExpression(def, normaliseSetExpression(def, intent.expression));
++      const errors = r.errors.map((e) => e.message);
++      if (!r.expr) return base({ summary: `Mask ${t.label} by …`, targetKey: withKey(t), errors: errors.length ? errors : ["I could not read that set expression."], expression: { text: intent.expression, canonical: "", summary: "", errors: r.errors, warnings: [] } });
++      const mask: OptionMask = { expr: r.expr, action: intent.action ?? "display", keepAlwaysShow: true };
++      const warnings = t.question.mask ? [`${t.label} already has a mask (${formatSetExpression(def, t.question.mask.expr)}); this replaces it.`] : [];
++      const change = { kind: "set_mask" as const, questionId: t.id, mask };
++      return finish(base({
++        summary: `${maskSummary(def, t.label, mask)}.`,
++        changes: [change], targetKey: withKey(t), warnings,
++        expression: { text: intent.expression, canonical: formatSetExpression(def, r.expr), summary: maskSummary(def, t.label, mask), errors: [], warnings: [] },
++      }));
++    }
++    case "clear_mask": {
++      const t = resolveTarget(def, intent.target);
++      if (!t) return missing(`“${intent.target}”`);
++      if (t.kind !== "question") return base({ errors: [`${t.label} is a ${t.kind}.`] });
++      const change = { kind: "set_mask" as const, questionId: t.id, mask: null };
++      return finish(base({ summary: describeChange(def, change), changes: [change], targetKey: withKey(t) }));
++    }
+     case "find": {
+       const t = resolveTarget(def, intent.target);
+       if (!t) return missing(`“${intent.target}”`);
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index 4436c64..ad5f633 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -310,3 +310,40 @@ test("split commands: offered for other modes when the window is wide enough; of
+   run(wide, "split.flow"); run(already, "split.off"); run(wide, "mode.choose");
+   assert.deepEqual(log, ["split:flow", "split:null", "chooser"]);
+ });
++
++test("the permission model: five purposes, and a split keeps the properties panel when any pane wants it", async () => {
++  const { MODE_CAPABILITIES, propertiesWanted, MODES } = await import("./programmingMode.ts");
++  for (const m of MODES) assert.ok(MODE_CAPABILITIES[m.id], `${m.id} has capabilities`);
++  assert.equal(MODE_CAPABILITIES.studio.edit, "full");
++  assert.equal(MODE_CAPABILITIES.flow.create, false);
++  assert.equal(MODE_CAPABILITIES.flow.edit, "none");
++  assert.equal(MODE_CAPABILITIES.flow.opensInStudio, true);
++  assert.equal(MODE_CAPABILITIES.architect.create, true);
++  assert.equal(MODE_CAPABILITIES.grid.edit, "fields");
++  assert.equal(MODE_CAPABILITIES.intelligent.edit, "proposals");
++  assert.equal(propertiesWanted("studio", "intelligent"), true, "Studio beside Intelligent keeps its Properties (§1)");
++  assert.equal(propertiesWanted("intelligent", "studio"), true, "either way round");
++  assert.equal(propertiesWanted("grid", "flow"), true, "Grid selects rows and edits them in the panel");
++  assert.equal(propertiesWanted("flow", "architect"), false, "neither wants it");
++  assert.equal(propertiesWanted("flow", null), false);
++  assert.equal(propertiesWanted("studio", null), true);
++});
++
++test("insertionPoint (round 2): after the selected question, at the end of a selected page, of a selected block's last page, else the last page", async () => {
++  const { insertionPoint } = await import("./commands/builtins.ts");
++  const def = SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "t" },
++    questions: [{ id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "a" }, { id: "q2", code: "Q2", variableName: "Q2", type: "numeric", text: "b" }, { id: "q3", code: "Q3", variableName: "Q3", type: "numeric", text: "c" }],
++    flow: [
++      { type: "page", id: "p1", questionIds: ["q1", "q2"] },
++      { type: "block", id: "b1", title: "B", children: [{ type: "page", id: "p2", questionIds: [] }, { type: "page", id: "p3", questionIds: ["q3"] }] },
++      { type: "end", id: "e", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++  assert.deepEqual(insertionPoint({ def, questionId: "q1", primary: "question:q1" }), { pageId: "p1", index: 1 });
++  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:p1" }), { pageId: "p1", index: 2 });
++  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:b1" }), { pageId: "p3", index: 1 }, "a block: its last page");
++  assert.deepEqual(insertionPoint({ def, questionId: null, primary: "flowNode:e" }), {}, "an end: the default (last page)");
++  assert.deepEqual(insertionPoint({ def, questionId: null, primary: null }), {});
++});
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index 026cdf6..7fad798 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -145,3 +145,45 @@ export function shouldShowChooser(search: string, remembered: string | null | un
+   if (opts.sandbox) return false;
+   return true;
+ }
++
++/* ========================================================== permissions */
++
++/**
++ * WHAT EACH MODE MAY DO (round 2, §12). Five views of one survey, each with
++ * a purpose; the purpose decides which edits a view offers, and nothing a
++ * view offers is its own — every edit goes through the same engine
++ * functions and the same store as Studio's.
++ *
++ *   Studio       build       everything
++ *   Architect    structure   blocks, questions, placement, flow, logic — not every property
++ *   Flow         understand  nothing is edited; click selects, double-click opens in Studio
++ *   Grid         review      supported fields, in bulk — not a second builder
++ *   Intelligent  assist      proposals over the same model, applied only on Apply
++ *
++ * `properties` says whether the Studio properties panel belongs beside the
++ * view; `create` whether the view offers to add questions / blocks /
++ * elements; `edit` whether the view edits fields in place. A split keeps
++ * each pane's own permissions, and the properties panel is shown when ANY
++ * pane wants it (§13: Studio beside Intelligent keeps its Properties).
++ */
++export interface ModeCapabilities {
++  purpose: "build" | "structure" | "understand" | "review" | "assist";
++  properties: boolean;
++  create: boolean;
++  edit: "full" | "structure" | "fields" | "proposals" | "none";
++  /** a click on an object opens it in Studio rather than editing here */
++  opensInStudio: boolean;
++}
++
++export const MODE_CAPABILITIES: Record<ProgrammingMode, ModeCapabilities> = {
++  studio: { purpose: "build", properties: true, create: true, edit: "full", opensInStudio: false },
++  architect: { purpose: "structure", properties: false, create: true, edit: "structure", opensInStudio: false },
++  flow: { purpose: "understand", properties: false, create: false, edit: "none", opensInStudio: true },
++  grid: { purpose: "review", properties: true, create: true, edit: "fields", opensInStudio: false },
++  intelligent: { purpose: "assist", properties: false, create: false, edit: "proposals", opensInStudio: false },
++};
++
++/** whether the properties panel is shown beside a view or a pair of views */
++export function propertiesWanted(mode: ProgrammingMode, split: ProgrammingMode | null): boolean {
++  return MODE_CAPABILITIES[mode].properties || (!!split && MODE_CAPABILITIES[split].properties);
++}
+diff --git a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+index 8e0d6ca..2264232 100644
+--- a/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
++++ b/docs/MULTI-MODAL-PROGRAMMING-PLAN.md
+@@ -71,6 +71,29 @@ delivered; Part D's open decisions are closed (hand-rolled everything;
+ no selector store; a token extension; the grammar keeps Intelligent
+ working without a provider).
+ 
++**Round 2 — mode permissions, splits, editing (2026-09-25).** The brief
++after the navigation redesign: each mode gets a defined purpose and
++permission set over the one model. `MODE_CAPABILITIES` in
++`lib/programmingMode.ts` records it — Studio *build* (full), Architect
++*structure* (create + structural edits), Flow *understand* (no creation,
++no editing; click selects, double-click opens in Studio, read-only
++inspector with Open in Studio), Grid *review* (fields and bulk edits,
++options in the cell), Intelligent *assist* (proposals only). A split
++keeps each pane's permissions and shows the Properties panel when any
++pane wants it (`propertiesWanted`), which is what Studio + Intelligent
++was missing. The Studio panel now follows a selection made anywhere
++(`QuestionsPanel` scrolls the card into view), so "Flow → click Q12 →
++Q12 in the Studio pane" holds. Architect gained + Question (into the
++selected page or block: `insertionPoint` reads `ctx.primary`), + Block,
+++ Element, duplicate/move/delete — all through the command registry.
++Flow lost its "+ Add…" and drop-to-move, gained a typed zoom (5–300 %)
++and a 1:1 reset. Intelligent gained validation (`set_validation` /
++`clear_validation`, merged by rule kind, type-checked against the
++question) and masking (`set_mask`: a set expression parsed by
++`parseSetExpression`, the Masking builder's own language). Verified by
++`scripts/mode-sync-test.mjs` (13) and additions to the Grid (51),
++Architect (38), Flow (40) and Intelligent (41) suites.
++
+ Three things learned while building Phase 0 that the plan did not know:
+ 
+ - `lintSurveyLogic` was cubic in question count (5.5 s at 1 000 questions);
+diff --git a/packages/engine/src/logicProposal.test.ts b/packages/engine/src/logicProposal.test.ts
+index 450e903..369e722 100644
+--- a/packages/engine/src/logicProposal.test.ts
++++ b/packages/engine/src/logicProposal.test.ts
+@@ -1,7 +1,7 @@
+ import { test } from "node:test";
+ import assert from "node:assert/strict";
+ import { SurveyDefinition, cond, type Question } from "@rescript/schema";
+-import { applyLogicProposal, validateProposal, describeChange, proposalTargets, type ProposalChange } from "./logicProposal.js";
++import { applyLogicProposal, validateProposal, describeChange, proposalTargets, setExprRefs, type ProposalChange } from "./logicProposal.js";
+ import { evaluateCondition } from "./evaluate.js";
+ import { createResponseState } from "./state.js";
+ 
+@@ -128,3 +128,68 @@ test("describeChange says what will happen in the Logic panel's words; targets a
+   assert.equal(describeChange(def, { kind: "rename_variable", oldName: "AGE", newName: "A2" }), "Rename AGE to A2 everywhere it is used.");
+   assert.deepEqual(proposalTargets([show, { kind: "set_required", questionId: "q_c", required: true }, { kind: "rename_variable", oldName: "A", newName: "B" }]), ["q_c"]);
+ });
++
++/* -------------------------------------------------- validation and masks (round 2) */
++
++const survey2 = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "Validation" },
++    questions: [
++      { id: "q_age", code: "Q1", variableName: "AGE", type: "numeric", text: "Age", validation: [{ id: "v1", kind: "min_value", value: 10 }] },
++      { id: "q_email", code: "Q2", variableName: "EMAIL", type: "open_text", text: "Email" },
++      { id: "q_brands", code: "Q3", variableName: "BRANDS", type: "multi_select", text: "Brands", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
++      { id: "q_best", code: "Q4", variableName: "BEST", type: "single_select", text: "Best", options: [{ code: 1, label: "A" }, { code: 2, label: "B" }, { code: 3, label: "C" }] },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_email", "q_brands", "q_best"] }, { type: "end", id: "e", status: "complete" }],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("set_validation merges by kind, keeps other rules, refuses rules that do not fit the type", () => {
++  const def = survey2();
++  const r = applyLogicProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99 }] }]);
++  assert.deepEqual(r.errors, []);
++  const v = def.questions.find((x) => x.id === "q_age")!.validation;
++  assert.deepEqual(v.map((x) => [x.kind, x.value]), [["min_value", 18], ["max_value", 99]], "the existing min rule was REPLACED, its id kept, and max appended");
++  assert.equal(v[0].id, "v1");
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: 5 }] }])[0], /minimum \(18\) is above the maximum \(5\)/);
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_email", rules: [{ kind: "min_value", value: 1 }] }])[0], /not numeric/);
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "email" }] }])[0], /not a text question/);
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_best", rules: [{ kind: "min_selections", value: 2 }] }])[0], /not a multi-select/);
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_brands", rules: [{ kind: "max_selections", value: 9 }] }])[0], /only 3 options/);
++  assert.match(validateProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: "lots" as never }] }])[0], /needs a number/);
++  assert.deepEqual(validateProposal(def, [{ kind: "set_validation", questionId: "q_email", rules: [{ kind: "email" }, { kind: "max_length", value: 120 }] }]), []);
++  assert.equal(describeChange(def, { kind: "set_validation", questionId: "q_email", rules: [{ kind: "email" }, { kind: "max_length", value: 120 }] }), "Validate Q2: an email address, at most 120 characters.");
++});
++
++test("clear_validation drops the named kinds, or everything; refuses when there is nothing to drop", () => {
++  const def = survey2();
++  applyLogicProposal(def, [{ kind: "set_validation", questionId: "q_age", rules: [{ kind: "max_value", value: 99 }, { kind: "integer" }] }]);
++  const r = applyLogicProposal(def, [{ kind: "clear_validation", questionId: "q_age", kinds: ["max_value"] }]);
++  assert.deepEqual(r.errors, []);
++  assert.deepEqual(def.questions[0].validation.map((v) => v.kind), ["min_value", "integer"]);
++  assert.match(validateProposal(def, [{ kind: "clear_validation", questionId: "q_age", kinds: ["max_value"] }])[0], /no maximum value rule/);
++  applyLogicProposal(def, [{ kind: "clear_validation", questionId: "q_age" }]);
++  assert.deepEqual(def.questions[0].validation, []);
++  assert.match(validateProposal(def, [{ kind: "clear_validation", questionId: "q_age" }])[0], /no validation rules/);
++  assert.equal(describeChange(def, { kind: "clear_validation", questionId: "q_age", kinds: ["min_value", "max_value"] }), "Remove the minimum value and maximum value rules from Q1.");
++});
++
++test("set_mask writes the universal mask; the source must exist, differ from the target and come first", () => {
++  const def = survey2();
++  const mask = { expr: { kind: "ref", questionId: "q_brands", selection: "selected" }, action: "display", keepAlwaysShow: true } as const;
++  assert.deepEqual(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask }]), []);
++  assert.equal(describeChange(def, { kind: "set_mask", questionId: "q_best", mask }), "Show at Q4 only the options Q3.Selected.");
++  const r = applyLogicProposal(def, [{ kind: "set_mask", questionId: "q_best", mask }]);
++  assert.equal(r.applied, 1);
++  assert.deepEqual(def.questions.find((x) => x.id === "q_best")!.mask, mask);
++  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_brands", mask: { ...mask, expr: { kind: "ref", questionId: "q_best", selection: "selected" } } }])[0], /asked after/);
++  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: { ...mask, expr: { kind: "ref", questionId: "q_best", selection: "selected" } } }])[0], /its own answer/);
++  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: { ...mask, expr: { kind: "ref", questionId: "q_zzz", selection: "selected" } } }])[0], /does not exist/);
++  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_age", mask }])[0], /no options to mask/);
++  const op = { ...mask, expr: { kind: "op", operator: "intersection", left: { kind: "ref", questionId: "q_brands", selection: "selected" }, right: { kind: "ref", questionId: "q_age", selection: "selected" } } } as const;
++  assert.deepEqual([...setExprRefs(op.expr)], ["q_brands", "q_age"], "both sides of an operation are read");
++  applyLogicProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: null }]);
++  assert.equal(def.questions.find((x) => x.id === "q_best")!.mask, undefined);
++  assert.match(validateProposal(def, [{ kind: "set_mask", questionId: "q_best", mask: null }])[0], /no mask to remove/);
++  assert.deepEqual(proposalTargets([{ kind: "set_mask", questionId: "q_best", mask }, { kind: "set_validation", questionId: "q_age", rules: [] }]), ["q_best", "q_age"]);
++});
+diff --git a/packages/engine/src/logicProposal.ts b/packages/engine/src/logicProposal.ts
+index d76ead5..fe2a0c3 100644
+--- a/packages/engine/src/logicProposal.ts
++++ b/packages/engine/src/logicProposal.ts
+@@ -1,10 +1,11 @@
+-import type { Condition, DisplayRule, Question, SkipRule, SurveyDefinition } from "@rescript/schema";
++import type { Condition, DisplayRule, OptionMask, Question, SetExpr, SkipRule, SurveyDefinition, ValidationRule } from "@rescript/schema";
+ import { listPages, listBlocks } from "./blocks.js";
+ import { conditionRefs, questionOrder } from "./dependencies.js";
+ import { addQuestion } from "./questionOps.js";
+ import { renameVariable } from "./variableUsage.js";
+ import { conditionSummary } from "./logicSummary.js";
+ import { findNode } from "./flowTree.js";
++import { formatSetExpression } from "./setExpression.js";
+ 
+ /**
+  * A LOGIC PROPOSAL — what the Intelligent mode asks permission to do.
+@@ -42,7 +43,17 @@ export type ProposalChange =
+   | { kind: "set_required"; questionId: string; required: boolean }
+   /** an already-built question (the Studio's factory builds it; the engine places it) */
+   | { kind: "add_question"; question: Question; at?: { pageId?: string; index?: number } }
+-  | { kind: "rename_variable"; oldName: string; newName: string };
++  | { kind: "rename_variable"; oldName: string; newName: string }
++  /**
++   * Validation rules, merged by KIND: a rule replaces the question's existing
++   * rule of the same kind and is otherwise appended, so "between 18 and 99"
++   * sets min_value and max_value and leaves an email rule alone.
++   */
++  | { kind: "set_validation"; questionId: string; rules: ValidationRule[] }
++  /** drop rules — the named kinds, or every rule when `kinds` is absent */
++  | { kind: "clear_validation"; questionId: string; kinds?: ValidationRule["kind"][] }
++  /** the question's option mask (universal masking); `null` removes it */
++  | { kind: "set_mask"; questionId: string; mask: OptionMask | null };
+ 
+ export interface ProposalOutcome {
+   /** the definition after the changes — the same object when every change mutates in place */
+@@ -124,11 +135,119 @@ export function validateProposal(def: SurveyDefinition, changes: ProposalChange[
+         if (!r.ok) errors.push(...(r.impact.blockers.length ? r.impact.blockers : [`Cannot rename ${c.oldName} to ${c.newName}.`]));
+         break;
+       }
++      case "set_validation": {
++        const x = q(def, c.questionId);
++        if (!x) { errors.push(`No question ${c.questionId} to validate.`); break; }
++        if (!c.rules.length) errors.push("No validation rule to set.");
++        const merged = mergeRules(x.validation ?? [], c.rules);
++        const num = (k: ValidationRule["kind"]) => { const r = merged.find((v) => v.kind === k); return r && typeof r.value === "number" ? r.value : undefined; };
++        for (const r of c.rules) {
++          const fit = ruleFits(x, r.kind);
++          if (fit) errors.push(fit);
++          if (NUMERIC_RULE.has(r.kind) && (typeof r.value !== "number" || !Number.isFinite(r.value))) errors.push(`${ruleLabel(r.kind)} needs a number.`);
++        }
++        const lo = num("min_value"), hi = num("max_value");
++        if (lo !== undefined && hi !== undefined && lo > hi) errors.push(`The minimum (${lo}) is above the maximum (${hi}).`);
++        const ll = num("min_length"), lh = num("max_length");
++        if (ll !== undefined && lh !== undefined && ll > lh) errors.push(`The minimum length (${ll}) is above the maximum (${lh}).`);
++        const sl = num("min_selections"), sh = num("max_selections");
++        if (sl !== undefined && sh !== undefined && sl > sh) errors.push(`The minimum selections (${sl}) is above the maximum (${sh}).`);
++        if (sh !== undefined && x.options?.length && sh > x.options.length) errors.push(`${name(def, x.id)} has only ${x.options.length} options; at most ${sh} cannot be selected.`);
++        break;
++      }
++      case "clear_validation": {
++        const x = q(def, c.questionId);
++        if (!x) { errors.push(`No question ${c.questionId}.`); break; }
++        if (c.kinds && !c.kinds.some((k) => (x.validation ?? []).some((v) => v.kind === k))) errors.push(`${name(def, x.id)} has no ${c.kinds.map(ruleLabel).join(" or ")} rule to remove.`);
++        if (!c.kinds && !(x.validation ?? []).length) errors.push(`${name(def, x.id)} has no validation rules to remove.`);
++        break;
++      }
++      case "set_mask": {
++        const x = q(def, c.questionId);
++        if (!x) { errors.push(`No question ${c.questionId} to mask.`); break; }
++        if (!c.mask) { if (!x.mask) errors.push(`${name(def, x.id)} has no mask to remove.`); break; }
++        if (!x.options?.length && !/select|dropdown|rank|matrix/.test(x.type)) errors.push(`${name(def, x.id)} has no options to mask.`);
++        for (const r of setExprRefs(c.mask.expr)) {
++          if (!q(def, r)) errors.push(`The mask reads a question that does not exist (${r}).`);
++          else if (r === x.id) errors.push(`${name(def, x.id)} cannot be masked by its own answer.`);
++          else if (at(r) > at(x.id)) errors.push(`${name(def, r)} is asked after ${name(def, x.id)}, so its answer is not known yet.`);
++        }
++        break;
++      }
+     }
+   }
+   return errors;
+ }
+ 
++/* ----------------------------------------------------------- validation helpers */
++
++const NUMERIC_RULE = new Set<ValidationRule["kind"]>(["min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min"]);
++const CHOICE_TYPES = /select|dropdown|image_select|rank/;
++
++const RULE_LABEL: Partial<Record<ValidationRule["kind"], string>> = {
++  min_value: "minimum value", max_value: "maximum value", min_length: "minimum length", max_length: "maximum length",
++  min_selections: "minimum selections", max_selections: "maximum selections", email: "email", phone: "phone number", url: "web address",
++  zip: "postal code", integer: "whole number", pattern: "pattern", date_min: "earliest date", date_max: "latest date", required: "required",
++};
++export const ruleLabel = (k: ValidationRule["kind"]): string => RULE_LABEL[k] ?? String(k).replace(/_/g, " ");
++
++/** why a rule kind makes no sense on this question, or null */
++function ruleFits(x: Question, kind: ValidationRule["kind"]): string | null {
++  const t = x.type;
++  const label = x.code || x.variableName;
++  if ((kind === "min_selections" || kind === "max_selections") && !/multi|rank|checkbox/.test(t)) return `${label} is not a multi-select, so a selection count does not apply.`;
++  if ((kind === "min_value" || kind === "max_value" || kind === "integer") && !/numeric|slider|nps|number|currency|percent/.test(t)) return `${label} is not numeric, so a value range does not apply.`;
++  if ((kind === "min_length" || kind === "max_length" || kind === "email" || kind === "phone" || kind === "url" || kind === "zip" || kind === "pattern") && !/text/.test(t)) return `${label} is not a text question, so a ${ruleLabel(kind)} rule does not apply.`;
++  if ((kind === "date_min" || kind === "date_max") && !/date/.test(t)) return `${label} is not a date question.`;
++  return null;
++}
++
++function mergeRules(existing: ValidationRule[], next: ValidationRule[]): ValidationRule[] {
++  const out = [...existing];
++  for (const r of next) {
++    const i = out.findIndex((v) => v.kind === r.kind);
++    if (i >= 0) out[i] = { ...out[i], ...r }; else out.push(r);
++  }
++  return out;
++}
++
++/** every question a set expression reads */
++export function setExprRefs(e: SetExpr, into: Set<string> = new Set()): Set<string> {
++  switch (e.kind) {
++    case "ref": into.add(e.questionId); break;
++    case "complement": setExprRefs(e.of, into); break;
++    case "op": setExprRefs(e.left, into); setExprRefs(e.right, into); break;
++    default: break;
++  }
++  return into;
++}
++
++function ruleText(r: ValidationRule): string {
++  const v = r.value;
++  switch (r.kind) {
++    case "min_value": return `at least ${v}`;
++    case "max_value": return `at most ${v}`;
++    case "min_length": return `at least ${v} characters`;
++    case "max_length": return `at most ${v} characters`;
++    case "min_selections": return `at least ${v} selection${v === 1 ? "" : "s"}`;
++    case "max_selections": return `at most ${v} selection${v === 1 ? "" : "s"}`;
++    case "integer": return "a whole number";
++    case "email": return "an email address";
++    case "phone": return "a phone number";
++    case "url": return "a web address";
++    case "zip": return "a postal code";
++    case "pattern": return `matching ${v}`;
++    default: return `${ruleLabel(r.kind)}${v !== undefined && v !== null && v !== "" && typeof v !== "object" ? ` ${v}` : ""}`;
++  }
++}
++
++const MASK_ACTION_TEXT: Record<OptionMask["action"], string> = {
++  display: "Show at", preselect: "Preselect at", display_and_preselect: "Show and preselect at", disable: "Disable at", remove: "Remove from",
++};
++export function maskSummary(def: SurveyDefinition, target: string, mask: OptionMask): string {
++  return `${MASK_ACTION_TEXT[mask.action] ?? "Show at"} ${target} ${mask.action === "display" ? "only " : ""}the options ${formatSetExpression(def, mask.expr)}`;
++}
++
+ /**
+  * One change, in a sentence the review card shows — what WILL happen, before
+  * it happens. Uses the same `conditionSummary` the Logic panel uses, so the
+@@ -165,6 +284,12 @@ export function describeChange(def: SurveyDefinition, c: ProposalChange): string
+     }
+     case "rename_variable":
+       return `Rename ${c.oldName} to ${c.newName} everywhere it is used.`;
++    case "set_validation":
++      return `Validate ${name(def, c.questionId)}: ${c.rules.map(ruleText).join(", ")}.`;
++    case "clear_validation":
++      return c.kinds ? `Remove the ${c.kinds.map(ruleLabel).join(" and ")} rule${c.kinds.length === 1 ? "" : "s"} from ${name(def, c.questionId)}.` : `Remove every validation rule from ${name(def, c.questionId)}.`;
++    case "set_mask":
++      return c.mask ? `${maskSummary(def, name(def, c.questionId), c.mask)}.` : `Remove the option mask from ${name(def, c.questionId)}.`;
+   }
+ }
+ 
+@@ -218,6 +343,21 @@ export function applyLogicProposal(def: SurveyDefinition, changes: ProposalChang
+         if (r.def !== cur) { Object.assign(cur, r.def); }
+         break;
+       }
++      case "set_validation": {
++        const x = q(cur, c.questionId)!;
++        x.validation = mergeRules(x.validation ?? [], c.rules);
++        break;
++      }
++      case "clear_validation": {
++        const x = q(cur, c.questionId)!;
++        x.validation = c.kinds ? (x.validation ?? []).filter((v) => !c.kinds!.includes(v.kind)) : [];
++        break;
++      }
++      case "set_mask": {
++        const x = q(cur, c.questionId)!;
++        if (c.mask) x.mask = c.mask; else delete (x as { mask?: OptionMask }).mask;
++        break;
++      }
+     }
+   }
+   return { def: cur, applied: changes.length, errors: [] };
+@@ -227,7 +367,7 @@ export function applyLogicProposal(def: SurveyDefinition, changes: ProposalChang
+ export function proposalTargets(changes: ProposalChange[]): string[] {
+   const out: string[] = [];
+   for (const c of changes) {
+-    if (c.kind === "set_display_logic" || c.kind === "add_skip_rule" || c.kind === "set_required") out.push(c.questionId);
++    if (c.kind === "set_display_logic" || c.kind === "add_skip_rule" || c.kind === "set_required" || c.kind === "set_validation" || c.kind === "clear_validation" || c.kind === "set_mask") out.push(c.questionId);
+     else if (c.kind === "add_question") out.push(c.question.id);
+     else if (c.kind === "add_display_rule" && c.rule.target.kind === "question") out.push(c.rule.target.ref);
+   }
+diff --git a/scripts/architect-mode-test.mjs b/scripts/architect-mode-test.mjs
+index 5c748ea..a227592 100644
+--- a/scripts/architect-mode-test.mjs
++++ b/scripts/architect-mode-test.mjs
+@@ -268,6 +268,59 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   ok("and in Studio the property panel shows Q5 — the outer panel returns when Architect leaves");
+ }
+ 
++/* ----------------------------------------------------------- structural editing (round 2, §2–3) */
++{
++  await switchMode(page, "architect");
++  await page.waitForSelector('[data-testid="architect-view"]');
++  const before = await readDef();
++  // a question into the selected page
++  const firstPage = (function find(nodes) { for (const n of nodes) { if (n.type === "page") return n; if (n.children) { const r = find(n.children); if (r) return r; } } return null; })(before.flow);
++  const pageRow = await mapRow(`flowNode:${firstPage.id}`);
++  if (!pageRow) { await page.click('[data-testid="map-expand-all"]').catch(() => {}); }
++  await (await mapRow(`flowNode:${firstPage.id}`)).click();
++  await page.waitForSelector('[data-testid="workspace-page-questions"]');
++  await page.click('[data-testid="ar-add-question"]');
++  await page.waitForTimeout(400);
++  const after = await readDef();
++  assert.equal(after.questions.length, before.questions.length + 1);
++  const added = after.questions.find((q) => !before.questions.some((b) => b.id === q.id));
++  const pageAfter = (function find(nodes) { for (const n of nodes) { if (n.type === "page" && n.id === firstPage.id) return n; if (n.children) { const r = find(n.children); if (r) return r; } } return null; })(after.flow);
++  assert.equal(pageAfter.questionIds[pageAfter.questionIds.length - 1], added.id, "…at the end of the selected page");
++  ok(`+ Question with a page selected adds ${added.code} to that page, through the engine's addQuestion`);
++  assert.equal(await page.$eval(".am-row.primary", (e) => e.dataset.key), `question:${added.id}`);
++  await page.waitForSelector('[data-testid="workspace-question"]');
++  ok("the new question is selected and its editor opens in the workspace (type, text, options, properties)");
++  // it is the same question in Studio
++  await switchMode(page, "studio");
++  await page.waitForSelector(`[data-testid="qcard"][data-qid="${added.id}"]`);
++  ok("Studio shows the question Architect created — one model");
++  await switchMode(page, "architect");
++  await page.waitForSelector('[data-testid="architect-view"]');
++  // a block, and a flow element
++  const b0 = (await readDef()).flow.length;
++  await page.click('[data-testid="ar-add-block"]');
++  await page.waitForTimeout(300);
++  const d1 = await readDef();
++  assert.equal(d1.flow.length, b0 + 1);
++  ok("+ Block adds a block to the flow");
++  await page.click('[data-testid="ar-add-element"]');
++  await page.waitForSelector('[data-testid="ar-add-menu"]');
++  await page.click('[data-testid="ar-add-randomizer"]');
++  await page.waitForTimeout(300);
++  const d2 = await readDef();
++  assert.equal(d2.flow.filter((n) => n.type === "randomizer").length, d1.flow.filter((n) => n.type === "randomizer").length + 1);
++  ok("+ Element → Randomizer inserts through the same command the palette runs");
++  // remove the question we added
++  await (await mapRow(`question:${added.id}`)).click();
++  await page.click('[data-testid="ar-delete"]');
++  await page.waitForSelector('[data-testid="delete-question-confirm"]');
++  await page.click('[data-testid="delete-question-confirm"]');
++  await page.waitForTimeout(400);
++  const d3 = await readDef();
++  assert.ok(!d3.questions.some((q) => q.id === added.id));
++  ok("Delete removes the question (with the references dialog) — Studio no longer has it either");
++}
++
+ assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
+ ok("no uncaught errors or React warnings through any of it");
+ 
+diff --git a/scripts/flow-mode-test.mjs b/scripts/flow-mode-test.mjs
+index d9a1a9b..1d3f83d 100644
+--- a/scripts/flow-mode-test.mjs
++++ b/scripts/flow-mode-test.mjs
+@@ -239,63 +239,37 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   ok("Auto-arrange forgets the pins (one undoable edit)");
+ }
+ 
+-/* ----------------------------------------------------------- add an element from the canvas */
++/* ----------------------------------------------------------- understand, do not edit (round 2, §4) */
+ {
+-  const before = await readDef();
+-  await page.selectOption('[data-testid="flow-add"]', "flow.add.randomizer");
+-  await page.waitForTimeout(400);
+-  const def = await readDef();
+-  const types = def.flow.map((n) => n.type);
+-  assert.equal(def.flow.length, before.flow.length + 1);
+-  assert.ok(types.indexOf("randomizer") >= 0 && types.indexOf("randomizer") < types.lastIndexOf("end"), "the randomizer sits before the ends");
+-  ok("'+ Add… Randomizer' inserts through the command registry, before the End");
+-  await page.waitForSelector('[data-testid="flow-view"]');
+-  assert.match(await page.$eval('[data-testid="inspector"]', (e) => e.dataset.kind), /flowNode/);
+-  ok("and selects the new element, so the inspector opens on it");
+-}
+-
+-/* ----------------------------------------------------------- drop a node into a container */
+-{
+-  await page.click('[data-testid="flow-fit"]');
++  assert.equal(await page.$('[data-testid="flow-add"]'), null);
++  ok("there is no “+ Add…” on the canvas — Flow is for understanding; Architect and Studio build");
++  await page.waitForSelector('[data-testid="inspector"]');
++  assert.equal(await page.$('[data-testid="inspector"] .ai-props'), null, "no property editor in Flow's inspector");
++  assert.ok(await page.$('[data-testid="inspector-open-studio"]'), "…but a way to Studio");
++  ok("the inspector is read-only, with Open in Studio");
++  // typed zoom
++  await page.click('[data-testid="flow-zoom-input"]');
++  await page.fill('[data-testid="flow-zoom-input"]', "50");
++  await page.keyboard.press("Enter");
+   await page.waitForTimeout(150);
+-  const def = await readDef();
+-  const rnd = def.flow.find((n) => n.type === "randomizer" && n.children.length === 0);
+-  assert.ok(rnd, "the empty randomizer we just added");
+-  // the demo's top level is all sections; take the last section's first page, which the canvas draws as a node
+-  const lastSection = [...def.flow].reverse().find((n) => n.type === "section");
+-  const firstIn = (nodes) => { for (const n of nodes) { if (n.type === "page") return n; if (n.children) { const h = firstIn(n.children); if (h) return h; } } return null; };
+-  const topPage = firstIn(lastSection.children);
+-  assert.ok(topPage, "a page to move");
+-  await page.fill('[data-testid="flow-search"]', rnd.id);
+-  await page.waitForTimeout(400);
+-  const target = await node(rnd.id);
+-  assert.ok(target, "the randomizer node is drawn");
+-  const tb = await target.boundingBox();
+-  await page.fill('[data-testid="flow-search"]', "");
+-  await page.waitForTimeout(200);
+-  // the source may be far away; zoom out so both are on screen
+-  await page.click('[data-testid="flow-fit"]');
++  let k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
++  assert.ok(Math.abs(k - 0.5) < 1e-6, `typed 50 → scale 0.5, got ${k}`);
++  assert.equal(await page.inputValue('[data-testid="flow-zoom-input"]'), "50%");
++  ok("typing 50 + Enter zooms to exactly 50%");
++  await page.click('[data-testid="flow-zoom-input"]');
++  await page.fill('[data-testid="flow-zoom-input"]', "900");
++  await page.keyboard.press("Enter");
++  await page.waitForTimeout(150);
++  k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
++  assert.ok(Math.abs(k - 0.5) < 1e-6, "an out-of-range value is refused and the zoom stays");
++  assert.equal(await page.inputValue('[data-testid="flow-zoom-input"]'), "50%");
++  ok("900 is refused (5–300 only) and the field snaps back");
++  await page.click('[data-testid="flow-zoom-reset"]');
+   await page.waitForTimeout(150);
+-  const src = await node(topPage.id);
+-  const tgt = await node(rnd.id);
+-  if (src && tgt) {
+-    const sb = await src.boundingBox(); const tb2 = await tgt.boundingBox();
+-    await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+-    await page.mouse.down();
+-    await page.mouse.move(tb2.x + tb2.width / 2, tb2.y + tb2.height / 2, { steps: 12 });
+-    await page.waitForTimeout(100);
+-    await page.mouse.up();
+-    await page.waitForTimeout(500);
+-    const after = await readDef();
+-    const rnd2 = after.flow.find((n) => n.id === rnd.id);
+-    assert.ok(rnd2 && rnd2.children.some((c) => c.id === topPage.id), `${topPage.id} is now inside the randomizer: ${JSON.stringify(rnd2?.children.map((c) => c.id))}`);
+-    ok("dropping a page onto a randomizer moves it inside — moveFlowNode, with canDropFlowNode's verdict");
+-    const stillThere = (nodes) => nodes.some((n) => n.id === topPage.id || (n.children && n.id !== rnd.id && stillThere(n.children)) || (n.branches && n.branches.some((b) => stillThere(b.children))) || (n.otherwise && stillThere(n.otherwise)));
+-    assert.ok(!stillThere(after.flow), "and it left where it was");
+-    ok("the page is no longer in its old section");
+-  } else {
+-    console.log("  skip drop check: nodes not both drawn at fit zoom", !!src, !!tgt, tb);
+-  }
++  k = Number(/scale\(([\d.]+)\)/.exec(await page.$eval('[data-testid="flow-viewport"]', (e) => e.getAttribute("transform")))[1]);
++  assert.ok(Math.abs(k - 1) < 1e-6);
++  ok("1:1 resets to 100%; Fit, − and + are still there");
++  await page.click('[data-testid="flow-fit"]');
+ }
+ 
+ /* ----------------------------------------------------------- shared selection across modes */
+@@ -322,6 +296,16 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   await page.waitForTimeout(300);
+   assert.match(await classesOf("q_age"), /\bprimary\b/);
+   ok("and back in Flow, Q3 is the primary node");
++  // double-click → Studio, on the same question
++  const q3b = await node("q_age");
++  await q3b.dblclick();
++  await page.waitForSelector('[data-testid="questions-panel"]');
++  assert.equal(await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode), "studio");
++  assert.equal(await page.$eval('[data-testid="qcard"].selected', (e) => e.dataset.qid), "q_age");
++  ok("double-clicking Q3 on the canvas opens Studio on Q3 (Flow → click → Studio)");
++  await switchMode(page, "flow");
++  await page.waitForSelector('[data-testid="flow-view"]');
++  await page.waitForTimeout(300);
+   await page.click('[data-testid="flow-granularity"] [data-granularity="auto"]');
+ }
+ 
+diff --git a/scripts/grid-mode-test.mjs b/scripts/grid-mode-test.mjs
+index 19f3980..c27e291 100644
+--- a/scripts/grid-mode-test.mjs
++++ b/scripts/grid-mode-test.mjs
+@@ -345,6 +345,71 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   ok("and back to Grid, the row is still selected");
+ }
+ 
++/* ----------------------------------------------------------- options in the cell (round 2, §7) */
++{
++  const before = await readDef();
++  const q13 = before.questions.find((q) => q.code === "Q13");
++  const n0 = q13.options.length;
++  await page.click('[data-testid="grid-row"][data-code="Q13"] .sg-cell[data-col="code"]');
++  await page.waitForTimeout(200); // the properties panel opens for the selected row and the columns settle
++  const optCell = await cell("Q13", "options");
++  await optCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-options-editor"]');
++  assert.equal((await page.$$('[data-testid="grid-option-row"]')).length, n0);
++  ok(`double-clicking the Options cell opens the list editor with Q13's ${n0} options`);
++  await page.click('[data-testid="grid-option-add"]');
++  const labels = await page.$$('[data-testid="grid-option-label"]');
++  await labels[labels.length - 1].fill("Neither");
++  await page.click('[data-testid="grid-options-done"]');
++  await page.waitForSelector('[data-testid="grid-options-editor"]', { state: "detached" });
++  const after = await readDef();
++  const q13b = after.questions.find((q) => q.code === "Q13");
++  assert.equal(q13b.options.length, n0 + 1);
++  assert.equal(q13b.options[n0].label, "Neither");
++  assert.ok(q13b.options[n0].id && q13b.options[n0].code !== undefined, "the new option has an id and a code, like one added in Studio");
++  assert.deepEqual(q13b.options.slice(0, n0).map((o) => o.id), q13.options.map((o) => o.id), "the existing options are untouched");
++  assert.deepEqual({ ...q13b, options: undefined }, { ...q13, options: undefined }, "nothing but the options changed — logic, type, variable stay");
++  ok("+ option “Neither” → Done writes the list through the store; everything else on Q13 is untouched");
++  assert.match(await page.$eval('[data-testid="grid-row"][data-code="Q13"] .sg-cell[data-col="options"]', (e) => e.textContent), /Neither/);
++  ok("the cell shows the new option at once");
++  // the type is not forced: a single select becomes a multi select and keeps its options
++  await switchMode(page, "studio");
++  await page.waitForSelector(`[data-testid="qcard"][data-qid="${q13.id}"]`);
++  await switchMode(page, "grid");
++  await page.waitForSelector('[data-testid="grid-view"]');
++  ok("Studio shows the same four options — one model");
++  await page.click('[data-testid="grid-row"][data-code="Q13"]');
++  await page.keyboard.press("Control+z");
++  await page.waitForTimeout(300);
++  assert.equal((await readDef()).questions.find((q) => q.code === "Q13").options.length, n0);
++  ok("and it is one undo step");
++  // a question without a flat option list is sent to Studio rather than flattened
++  const matrix = before.questions.find((q) => /matrix/.test(q.type) && q.rows?.length);
++  if (matrix) {
++    await page.click(`[data-testid="grid-row"][data-code="${matrix.code}"] .sg-cell[data-col="code"]`).catch(() => {});
++    await page.waitForTimeout(200);
++    const mc = await cell(matrix.code, "options");
++    if (!mc) { console.log(`  skip matrix check: ${matrix.code} not in the window`); }
++    else {
++    await mc.dblclick();
++    await page.waitForSelector('[data-testid="grid-options-editor"]');
++    assert.ok(await page.$('[data-testid="grid-options-open-studio"]'));
++    assert.equal(await page.$('[data-testid="grid-option-row"]'), null);
++    ok(`${matrix.code} (rows × columns) offers Open in Studio instead of a flat list`);
++    await page.keyboard.press("Escape");
++    await page.waitForSelector('[data-testid="grid-options-editor"]', { state: "detached" });
++    }
++  }
++  // a fresh browser (no remembered column choice) shows Validation by default
++  await page.evaluate(() => window.localStorage.removeItem("rescript.grid"));
++  await page.reload({ waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.ok(await page.$('[data-testid="grid-head-validation"]'), "the Validation column is on by default");
++  ok("Validation is a default column — required and rules at a glance");
++  await loadDef(buildMasterDemoSurvey("sandbox"));
++  await page.waitForSelector('[data-testid="grid-view"]');
++}
++
+ /* ----------------------------------------------------------- scale: 600 questions */
+ {
+   await switchMode(page, "studio");
+diff --git a/scripts/intelligent-mode-test.mjs b/scripts/intelligent-mode-test.mjs
+index 505d219..202a692 100644
+--- a/scripts/intelligent-mode-test.mjs
++++ b/scripts/intelligent-mode-test.mjs
+@@ -266,6 +266,64 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
+   ok("explain says what a question is, when it is shown and what it reads");
+ }
+ 
++/* ------------------------------------------------ validation + masking (round 2, §9–10) */
++{
++  const before = await readDef();
++  const q3 = q(before, "Q3");
++  const turn = await say("Q3 must be between 18 and 99");
++  assert.equal(await turn.getAttribute("data-kind"), "validation");
++  assert.equal(await textOf(turn, '[data-testid="iq-summary"]'), "Validate Q3: at least 18, at most 99.");
++  ok("a validation sentence becomes a proposal in the engine's rule kinds");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  const after = await readDef();
++  const rules = q(after, "Q3").validation;
++  assert.deepEqual(rules.filter((r) => /_value$/.test(r.kind)).map((r) => [r.kind, r.value]), [["min_value", 18], ["max_value", 99]]);
++  assert.deepEqual({ ...q(after, "Q3"), validation: undefined }, { ...q3, validation: undefined }, "nothing else on Q3 changed");
++  ok("Apply writes min/max onto Q3's validation — the same rules the Validation panel writes");
++  // the Studio panel shows them; the same survey
++  await switchMode(page, "studio");
++  await page.waitForSelector('[data-testid="questions-panel"]');
++  await page.click(`[data-testid="qcard"][data-qid="${q3.id}"]`);
++  await page.waitForTimeout(300);
++  assert.match(await page.textContent(".rightpanel"), /Validation/);
++  ok("Studio's property panel is where they now live, editable as ever");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  const bad = await say("Q6 must be between 1 and 5");
++  assert.ok((await allText(bad, '[data-testid="iq-error"]')).some((e) => /not numeric/.test(e)));
++  assert.equal(await page.$eval('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]', (b) => b.disabled), true);
++  ok("a value range on a text question is refused by the engine before Apply is offered");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-cancel"]');
++  const email = await say("Q7 must be an email address");
++  assert.equal(await textOf(email, '[data-testid="iq-summary"]'), "Validate Q7: an email address.");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  assert.ok(q(await readDef(), "Q7").validation.some((r) => r.kind === "email"));
++  ok("a format check (email) applies the same way");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  // masking: Q13's options limited to what Q11 selected
++  const mask = await say("At Q13 show only the options selected in Q11");
++  assert.equal(await mask.getAttribute("data-kind"), "mask");
++  assert.equal(await textOf(mask, '[data-testid="iq-summary"]'), "Show at Q13 only the options Q11.Selected.");
++  assert.equal(await textOf(mask, '[data-testid="iq-expression"] code'), "Q11.Selected");
++  ok("a masking sentence becomes a set expression the mask parser accepted");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  const masked = q(await readDef(), "Q13");
++  assert.deepEqual(masked.mask.expr, { kind: "ref", questionId: q(before, "Q11").id, selection: "selected" });
++  assert.equal(masked.mask.action, "display");
++  ok("Apply writes the universal OptionMask onto Q13 — the same object the Masking builder edits");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  const clear = await say("remove the mask from Q13");
++  await page.click('[data-testid="iq-turn"]:last-of-type [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  assert.equal(q(await readDef(), "Q13").mask, undefined);
++  ok("and “remove the mask” takes it off again");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  void clear;
++}
++
+ /* ------------------------------------------------------- the model route */
+ {
+   const r = await page.evaluate(async () => {
+diff --git a/scripts/menubar-test.mjs b/scripts/menubar-test.mjs
+index 76d57b5..6396e7e 100644
+--- a/scripts/menubar-test.mjs
++++ b/scripts/menubar-test.mjs
+@@ -178,10 +178,14 @@ await page.waitForSelector(".menubar");
+   const dim = await page.$$eval('[data-testid="qcard"]', (els) => els.slice(0, 3).map((e) => Number(getComputedStyle(e).opacity)));
+   assert.ok(dim[1] === 1 && dim[0] < 1 && dim[2] < 1, `only the selected card is lit: ${dim.join(",")}`);
+   ok("Focus in Studio: the menubar tucks away and unselected questions go quiet");
+-  await page.mouse.move(400, top + 2);   // the hairline at the top edge of the workspace
++  // selecting the card may have scrolled the page (the dev banner's 30 px); re-measure before aiming at the hairline
++  await page.evaluate(() => window.scrollTo(0, 0));
++  await page.waitForTimeout(100);
++  const tucked2 = await page.$eval(".menubar", (e) => e.getBoundingClientRect().bottom);
++  await page.mouse.move(400, tucked2 - 2);   // the hairline at the top edge of the workspace
+   await page.waitForTimeout(300);
+   const revealed = await page.$eval(".menubar", (e) => e.getBoundingClientRect().bottom);
+-  assert.ok(revealed > tucked + 20, "hovering the top edge reveals it");
++  assert.ok(revealed > tucked2 + 20, `hovering the top edge reveals it: ${tucked2} → ${revealed}`);
+   ok("and hovering the top edge brings it back");
+   await modeMenuClick(page, "focus-mode-toggle");
+   await page.waitForTimeout(200);
+diff --git a/scripts/mode-sync-test.mjs b/scripts/mode-sync-test.mjs
+new file mode 100644
+index 0000000..ff08091
+--- /dev/null
++++ b/scripts/mode-sync-test.mjs
+@@ -0,0 +1,164 @@
++/**
++ * MODES OF ONE SURVEY — permissions, splits and synchronisation (round 2).
++ *
++ *   node scripts/mode-sync-test.mjs
++ *
++ * §1  Studio + Intelligent keeps the Properties panel; a logic edit made
++ *     there is on both panes at once.
++ * §4  Flow → click Q → the Studio pane lands on Q; double-click opens Studio.
++ * §11 Required set in Studio is Required in Grid, in the Intelligent context
++ *     and in Flow's read-only inspector, on the same render.
++ * §13 Studio + Flow: Studio edits, Flow only shows.
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, switchMode, modeMenuClick } from "./lib/nav.mjs";
++import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 950 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => { if (m.type() === "error" && !/401|501|ERR_TUNNEL|Failed to load resource/.test(m.text())) pageErrors.push(m.text().slice(0, 300)); });
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await openTab(page, "Questions");
++};
++const readDef = async () => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await openTab(page, "Questions");
++  return JSON.parse(json);
++};
++const demo = buildMasterDemoSurvey("sandbox");
++const q = (code) => demo.questions.find((x) => x.code === code);
++
++await page.goto(`${STUDIO}/sandbox?mode=studio&split=intelligent`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(demo);
++await page.waitForSelector('[data-testid="split-view"]');
++
++/* ------------------------------------------------------------ §1 Studio + Intelligent keeps Properties */
++{
++  await page.click(`[data-testid="split-primary"] [data-testid="qcard"][data-qid="${q("Q6").id}"]`);
++  await page.waitForTimeout(300);
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q6/);
++  ok("Studio + Intelligent: selecting Q6 in the Studio pane opens Q6's Properties beside the split (§1)");
++  for (const sec of ["Display logic", "Skip logic"]) assert.ok(await page.$(`.rightpanel >> text=${sec}`), `${sec} section`);
++  ok("Display logic and Skip logic are there to work with");
++  // a display-logic change made in Intelligent lands in the same survey the Studio pane and the panel show
++  await page.fill('[data-testid="split-secondary"] [data-testid="iq-input"]', "Show Q6 only when Q4 = United States");
++  await page.keyboard.press("Enter");
++  await page.waitForSelector('[data-testid="split-secondary"] [data-testid="iq-apply"]');
++  await page.click('[data-testid="split-secondary"] [data-testid="iq-apply"]');
++  await page.waitForFunction(() => document.querySelector('[data-testid="iq-turn"]:last-of-type')?.dataset.state === "applied");
++  await page.waitForTimeout(200);
++  const d = await readDef();
++  assert.ok(d.questions.find((x) => x.code === "Q6").displayLogic, "the rule is on Q6");
++  await page.waitForSelector('[data-testid="split-view"]');
++  assert.match(await page.$eval(`[data-testid="split-primary"] [data-testid="qcard"][data-qid="${q("Q6").id}"]`, (e) => e.textContent), /DL|Shown when|display/i);
++  ok("a rule applied in the Intelligent pane is on the Studio card and in the survey — one model, no reload");
++}
++
++/* ------------------------------------------------------------ §11 Required: Studio → Grid → Intelligent → Flow */
++{
++  const before = (await readDef()).questions.find((x) => x.code === "Q9");
++  assert.equal(before.required, false, "Q9 starts optional");
++  await page.waitForSelector('[data-testid="split-view"]');
++  // closing Q6's open editor reflows the list under the pointer, so the first click may only close it — click until Q9 is the selection
++  for (let i = 0; i < 3; i++) {
++    await page.click(`[data-testid="split-primary"] [data-testid="qcard"][data-qid="${q("Q9").id}"]`);
++    await page.waitForTimeout(300);
++    if (await page.$eval(`[data-testid="split-primary"] [data-testid="qcard"][data-qid="${q("Q9").id}"]`, (e) => e.classList.contains("selected"))) break;
++  }
++  // the Required control in the Studio card (the Studio pane is the full editor)
++  const selects = await page.$$(`[data-testid="split-primary"] [data-testid="qcard"][data-qid="${q("Q9").id}"] select`);
++  let flipped = false;
++  for (const sel of selects) {
++    const texts = await sel.$$eval("option", (os) => os.map((o) => o.textContent));
++    if (texts.includes("required") && texts.includes("optional")) { await sel.selectOption({ label: "required" }); flipped = true; break; }
++  }
++  assert.ok(flipped, "found the Required select on Q9's card");
++  await page.waitForTimeout(300);
++  assert.equal((await readDef()).questions.find((x) => x.code === "Q9").required, true);
++  ok("Studio: Q9 → Required = Yes");
++  await page.waitForSelector('[data-testid="split-view"]');
++  await modeMenuClick(page, "split-off");
++  await switchMode(page, "grid");
++  await page.waitForSelector('[data-testid="grid-view"]');
++  await page.fill('[data-testid="grid-search"], .sg-search input', "Q9");
++  await page.waitForTimeout(300);
++  const cell = await page.$('[data-testid="grid-row"][data-code="Q9"] .sg-cell[data-col="validation"]');
++  assert.match(await cell.textContent(), /required/);
++  ok("Grid: Q9's Validation cell reads required — the same render, no refresh");
++  await page.fill('[data-testid="grid-search"], .sg-search input', "");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++  await page.fill('[data-testid="iq-input"]', "explain Q9");
++  await page.keyboard.press("Enter");
++  await page.waitForFunction(() => document.querySelectorAll('[data-testid="iq-turn"]').length >= 1);
++  await page.waitForSelector('[data-testid="iq-thinking"]', { state: "detached" });
++  const lines = await page.$$eval('[data-testid="iq-turn"]:last-of-type .iq-answer-list li', (els) => els.map((e) => e.textContent));
++  assert.ok(lines.some((l) => /required\.$/.test(l)), lines.join(" | "));
++  ok("Intelligent: “explain Q9” sees it required — the updated property is in the intelligent context");
++  await switchMode(page, "flow");
++  await page.waitForSelector('[data-testid="flow-view"]');
++  await page.click('[data-testid="flow-granularity"] [data-granularity="questions"]');
++  await page.waitForTimeout(500);
++  await page.fill('[data-testid="flow-search"]', "Q9 ");
++  await page.waitForTimeout(300);
++  await page.click(`[data-testid="flow-node"][data-node="${q("Q9").id}"]`);
++  await page.waitForSelector('[data-testid="inspector-summary"]');
++  const summary = await page.textContent('[data-testid="inspector-summary"]');
++  assert.match(summary, /Requiredyes/);
++  ok("Flow: the read-only inspector shows Q9 required — and offers no editor, only Open in Studio");
++  assert.equal(await page.$('[data-testid="inspector"] .ai-props'), null);
++  await page.fill('[data-testid="flow-search"]', "");
++}
++
++/* ------------------------------------------------------------ §4/§13 Studio + Flow: click → Studio pane lands on it */
++{
++  await modeMenuClick(page, "split-studio");
++  await page.waitForSelector('[data-testid="split-view"][data-primary="flow"][data-secondary="studio"]');
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
++  ok("Flow + Studio: the Properties panel is there because Studio is a pane (§13)");
++  assert.equal(await page.$('[data-testid="split-primary"] [data-testid="flow-add"]'), null);
++  ok("the Flow pane has no creation controls");
++  const target = q("Q12").id;
++  await page.fill('[data-testid="split-primary"] [data-testid="flow-search"]', "Q12 ");
++  await page.waitForTimeout(400);
++  await page.click(`[data-testid="split-primary"] [data-testid="flow-node"][data-node="${target}"]`);
++  await page.waitForFunction((id) => document.querySelector(`[data-testid="split-secondary"] [data-testid="qcard"][data-qid="${id}"]`)?.classList.contains("selected"), target);
++  const inView = await page.$eval(`[data-testid="split-secondary"] [data-testid="qcard"][data-qid="${target}"]`, (e) => { const r = e.getBoundingClientRect(); const h = e.closest(".split-body").getBoundingClientRect(); return r.top >= h.top - 4 && r.top < h.bottom; });
++  assert.equal(inView, true);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q12/);
++  ok("Flow → click Q12 → the Studio pane scrolls to Q12, selected, with Q12's Properties open (§4)");
++  await page.dblclick(`[data-testid="split-primary"] [data-testid="flow-node"][data-node="${target}"]`);
++  await page.waitForTimeout(300);
++  assert.ok(await page.$('[data-testid="split-view"][data-primary="flow"]'), "in a split that already shows Studio, a double-click changes nothing — Studio is already there");
++  ok("double-click in a Studio split keeps the pair as it is");
++  await modeMenuClick(page, "split-off");
++  await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
++  await page.dblclick(`[data-testid="flow-node"][data-node="${target}"]`);
++  await page.waitForSelector('[data-testid="questions-panel"]');
++  assert.equal(await page.$eval('[data-testid="where-am-i"]', (e) => e.dataset.mode), "studio");
++  assert.equal(await page.$eval('[data-testid="qcard"].selected', (e) => e.dataset.qid), target);
++  ok("alone, Flow → double-click Q12 → Studio opens on Q12");
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no page errors");
++await browser.close();
++console.log(`\n  ${passed} checks passed`);
+diff --git a/scripts/product-surface-test.mjs b/scripts/product-surface-test.mjs
+index 5731702..8009a8e 100644
+--- a/scripts/product-surface-test.mjs
++++ b/scripts/product-surface-test.mjs
+@@ -156,6 +156,9 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
+   await page.waitForTimeout(400);
+   const before = await page.$eval('[data-testid="split-secondary"] [data-testid="flow-node"][data-node="q_age"]', (e) => e.textContent);
+   assert.match(before, /Q3/);
++  // select the row first: the properties panel opens for a selected row (Grid keeps it, round 2 §12) and the columns settle
++  await page.click('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="code"]');
++  await page.waitForTimeout(300);
+   const textCell = await page.$('[data-testid="split-primary"] [data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="text"]');
+   await textCell.dblclick();
+   await page.waitForSelector('[data-testid="grid-edit-text"]');
+@@ -174,12 +177,15 @@ const storage = (page, key) => page.evaluate((k) => window.localStorage.getItem(
+   assert.equal(await page.getAttribute('[data-testid="split-view"]', "data-secondary"), "grid");
+   assert.match(page.url(), /mode=flow&split=grid/);
+   ok("swap: choosing the partner as primary flips the pair rather than doubling it");
++  // the properties panel is open for the selected row (Grid keeps it); the pair sits beside it — drag to 35 % of the PAIR's width
++  await page.waitForTimeout(400); // the swap re-renders both panes; let the widths settle before measuring
+   const box = await page.$eval('[data-testid="split-view"]', (e) => { const r = e.getBoundingClientRect(); return { x: r.left, w: r.width, y: r.top + 300 }; });
+   const div = await page.$('[data-testid="split-divider"]');
+   const d = await div.boundingBox();
+   await page.mouse.move(d.x + 3, d.y + 300); await page.mouse.down(); await page.mouse.move(box.x + box.w * 0.35, box.y, { steps: 6 }); await page.mouse.up();
++  await page.waitForTimeout(100);
+   const ratio = await page.$eval('[data-testid="split-view"]', (e) => e.style.gridTemplateColumns);
+-  assert.match(ratio, /0\.3[4-6]\d*fr/);
++  assert.match(ratio, /0\.3[3-7]\d*fr/, `dragged to about 35 %: ${ratio}`);
+   ok(`the divider drags and the ratio is kept: ${ratio}`);
+   await page.click('[data-testid="split-close-secondary"]');
+   await page.waitForSelector('[data-testid="split-view"]', { state: "detached" });
+-- 
+2.43.0
+

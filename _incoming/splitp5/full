@@ -1,0 +1,45 @@
+Research Engine Phase 5: chart choice by purpose and audience, the storytelling deck, Word documents, output by sentence, the narrative gate
+
+The Research Engine audit's Phase 5 (automated reporting), on top of
+Phases 1–4. "Create the client-ready research proposal" and "create the
+final findings presentation" produce the right file. Nothing existing was
+removed: the report blocks, templates, PowerPoint and Excel exports and
+the Reports panel are as they were; the new documents reuse their drawing.
+
+Analytics: chartPurpose.ts (the purpose read from the analysis — comparison,
+composition, distribution, trend, relationship, ranking, KPI, significance,
+profile — and the audience adjust the shape-based chart scores, never past
+what the data can draw); deck.ts (the story in a fixed order: summary, key
+findings with the chart for the audience and the so-what, who differs,
+statistical highlights, beyond the plan, implications, recommendations,
+method, caveats — every sentence from the run); export/deck.ts (one builder
+per slide type on a type ramp, palette and grid; flat native charts; the
+dimensional treatment on covers, dividers and callouts); export/docx.ts
+(the research proposal from the design; the findings report from a run);
+narrative.ts (the model's headline, summary, implications and
+recommendations gated sentence by sentence against the run's numbers,
+hypotheses and verdicts). Two wordings fixed: a one-test "not supported"
+verdict read "is significant"; a test planned by sentence listed its
+outcome twice.
+
+Engine: the `output` interpretation kind — the proposal, the findings
+report or the deck from the sentence's noun, the audience from its words
+("for the board", "for the analysts"), the client from "for Acme"; an
+executive summary in words, a report to draft in the workspace or an edit
+in the same sentence stay the model's.
+
+Studio: POST /api/copilot/output (project.read for the proposal,
+analytics.export for the findings outputs; the sandbox against the fake
+provider sends its own definition, rows and a scripted narrative); the
+narrative call metered as copilot_narrative; the card holds the file with
+its size, what it holds and what the gate kept; the Findings tab's
+Documents buttons are sentences the engine reads.
+
+Tests: analytics 253 (phase5.test 6), engine 1749 (the Phase 5 block of
+nlPhase4.test), studio 284, scripts/phase5-reporting-test.mjs (6 checks);
+full browser corpus green apart from the 10 known baseline failures.
+Mutations: analytics 30/30, engine 6/6, Studio 10/10 caught. See
+docs/PHASE5-REPORTING-2026-10-09.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

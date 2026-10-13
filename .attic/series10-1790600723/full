@@ -1,0 +1,40 @@
+Intelligent mode: advanced UX, CSS and JavaScript through a controlled UX action layer
+
+The copilot can now change how a survey looks and behaves - scoped CSS,
+states, responsive rules, animations, behaviours and, on request,
+JavaScript - as structured, validated operations, previewed on the real
+components and applied as one undoable AI change.
+
+- schema: SurveyDefinition.ux { styles, animations, behaviors } with
+  targets by stable id (question, option code, block, page, button,
+  progress, navigation, component) - carried by preview, test, publish,
+  export and duplicate; absent, the runtime renders exactly as before.
+- engine ux.ts: one target grammar for actions and scripts; selectors
+  scoped under [data-rs-ux="<survey id>"]; one CSS gate for every value;
+  scoped CSS text (html/body/:root, @import, sibling escapes refused,
+  keyframes namespaced); compiled stylesheet with reduced-motion guard and
+  device-preview parity; script validation (rs api only, no loops, no
+  page/network/storage); item validation; reviewUx (dead targets,
+  conflicts, duplicate animations, theme overrides, phone traps, global
+  branding CSS); diffUx; runtime triggers (fire / hold / release).
+- engine uxActions.ts: create/update/remove style, animation, behaviour;
+  attach_behavior_to_*; create_responsive_rule. surveyActions: uxOnly
+  refuses structural actions; structureUnchanged proves only ux changed.
+- renderer UxLayer: compiled CSS, answered marks, stagger, page
+  transitions, declarative behaviours, scripts in a sandboxed frame
+  (opaque origin, no-network CSP, gated and rate-limited rs commands,
+  re-validated before running).
+- runtime: the shell names survey, block and page; nav buttons carry
+  data-rs-button; the layer mounts only when the survey has UX.
+- studio: UX guide sent on UX turns; look-only detection; outline lists
+  existing UX by id and each named question's layout and styling;
+  Changes panel "Look and behaviour" (items in words, the structure
+  proof, a live preview on the real renderer - after/before/phone - and
+  the generated code); UX tab (items, UX review, removal); applied note.
+
+Tests: engine ux.test.ts (8), studio copilot.test.ts (+2), both mutation
+checked; browser scripts/ux-copilot-test.mjs (13). Docs:
+docs/INTELLIGENT-UX.md.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

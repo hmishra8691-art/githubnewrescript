@@ -1,0 +1,2093 @@
+From 789276bf39fe394905e273ecc987476879850181 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 24 Sep 2026 18:34:13 +0000
+Subject: [PATCH 1/2] Grid mode: the survey as a programmable research grid
+ (Phase 1)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The second environment over the same survey. One row per question, one
+column per thing a programmer scans for — where it sits, what it asks, what
+it offers, what gates it, where it jumps, whether it is healthy, what it
+reads and what reads it — and hundreds of them on screen at once.
+
+It holds no survey data. Rows are derived from the store's definition on
+every change (lib/grid/model.ts, pure, 12 tests), edits go through the same
+engine functions and the same `update` as the Questions panel, and its
+selection IS the Studio's selection: select a row and that question's
+properties open on the right; switch back to Studio and you land on it.
+
+  · Windowed by hand: `visibleRange` says which rows to mount for the
+    scroll position, and only those exist. 600 questions cost the same as
+    30 — 32 rows in the DOM, 413 ms to first paint, ~28 ms per long scroll
+    step, 17 keystrokes in a cell in 273 ms. Status and dependency counts,
+    the expensive layer, follow a deferred definition so typing never waits
+    on them.
+  · Sticky header, frozen status + ID columns, three densities, a column
+    chooser (remembered per browser), sort by any header (ID sorts in flow
+    order, not Q1 Q10 Q2), search across code / variable / text / options /
+    logic, filters by type, block, "with logic", "issues".
+  · Inline edit: text (plain only — markup and pipes open the Studio
+    editor), variable (VariableNameInput: the same renameImpact →
+    applyRename, the same refusals — a name a script depends on is refused
+    with the engine's reason), type (useTypeSwitch, extracted from
+    VariantSwitcher: the same migrateQuestionType and the same
+    confirmation), required, block.
+  · Multi-select with shift-range and ⌘-toggle via the shared selection;
+    a bulk bar for required / optional / type (with a combined confirmation
+    when any migration changes the answer shape) / move to block /
+    duplicate / delete (referencesToMany preview, the same dialog).
+    One ⌘Z takes a bulk edit back.
+  · Keyboard: ↑↓←→ PgUp PgDn Home End Tab, Enter edits or opens, Space
+    toggles, ⇧↓ extends, Delete deletes. Hover actions per row dispatch
+    through the command registry with a context override.
+
+Two things found and fixed on the way:
+  · RightPanel's click-outside deselect fired on every grid click between
+    pointerdown and click, wiping the anchor a shift-range needs. The grid
+    owns its selection, so it is exempt.
+  · The toolbar wrapped when the property panel opened, moving every row
+    down a line under the cursor mid double-click. It no longer wraps.
+
+Tests: lib/grid/model.test.ts (12), scripts/grid-mode-test.mjs (45,
+including the 600-question budgets and a clean console). Mutation-checked:
+windowing off, decoration off, range→select — each caught. Sweep green:
+multimodal-foundation (updated: Grid is now built), context-right-panel,
+properties-accordion, canvas (38), blocks, block-actions, save-integrity,
+logic-builder, flow-dnd, variants-g5. Studio lib: 127.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/design-system.css             | 123 +++++
+ apps/studio/components/grid/GridCells.tsx     | 161 ++++++
+ apps/studio/components/grid/GridView.tsx      | 500 ++++++++++++++++++
+ .../components/studio/CommandContext.tsx      |  17 +-
+ apps/studio/components/studio/Studio.tsx      |  15 +-
+ .../components/studio/VariableNameInput.tsx   |  18 +-
+ .../components/studio/VariantPicker.tsx       |  31 +-
+ apps/studio/lib/grid/model.test.ts            | 164 ++++++
+ apps/studio/lib/grid/model.ts                 | 313 +++++++++++
+ apps/studio/lib/multimodalFoundation.test.ts  |  17 +-
+ apps/studio/lib/programmingMode.ts            |   2 +-
+ apps/studio/package.json                      |   2 +-
+ scripts/grid-mode-test.mjs                    | 402 ++++++++++++++
+ scripts/multimodal-foundation-test.mjs        |  20 +-
+ 14 files changed, 1749 insertions(+), 36 deletions(-)
+ create mode 100644 apps/studio/components/grid/GridCells.tsx
+ create mode 100644 apps/studio/components/grid/GridView.tsx
+ create mode 100644 apps/studio/lib/grid/model.test.ts
+ create mode 100644 apps/studio/lib/grid/model.ts
+ create mode 100644 scripts/grid-mode-test.mjs
+
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index b65e469..c0e3115 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -745,3 +745,126 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .palette-item-group { font-size: 11.5px; color: var(--c-text-4); }
+ .palette-item.active .palette-item-group { color: var(--c-primary-600); }
+ .palette-empty { padding: 22px 12px; text-align: center; color: var(--c-text-3); font-size: 13.5px; }
++
++/* ======================================================================
++   GRID MODE — the survey as a programmable research grid (Phase 1)
++   Dense, mono-identified, instrument-like. The centre column hands the
++   grid its whole area and the grid owns the scrolling, so the header and
++   the two frozen columns can stick.
++   ====================================================================== */
++.center:has(> .sg) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
++.sg { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--c-bg); font-size: 13px; }
++.sg-normal { --sg-fs: 13px; }
++.sg-compact { --sg-fs: 12px; }
++.sg-comfortable { --sg-fs: 13.5px; }
++
++/* toolbar */
++/* one line, always: the toolbar wrapping when the property panel opens
++   moved every row down by a line — under the cursor, mid double-click */
++.sg-toolbar {
++  display: flex; align-items: center; gap: 8px; padding: 10px 14px; min-height: 54px;
++  border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
++}
++.sg-toolbar::-webkit-scrollbar { display: none; }
++.sg-toolbar > * { flex: none; }
++.sg-search {
++  display: flex; align-items: center; gap: 8px; min-width: 160px; flex: 0 1 380px !important;
++  border: 1px solid var(--c-border); border-radius: 8px; padding: 0 10px; background: var(--c-bg); color: var(--c-text-3);
++}
++.sg-search:focus-within { border-color: var(--c-primary-600); box-shadow: var(--sh-focus); }
++.sg-search-input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13px; padding: 7px 0; color: var(--c-text); }
++.sg-clear { border: 0; background: transparent; color: var(--c-text-3); cursor: pointer; display: inline-flex; padding: 2px; }
++.sg-chip {
++  appearance: none; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2);
++  font: inherit; font-size: 12.5px; font-weight: 500; padding: 5px 10px; border-radius: 999px; cursor: pointer;
++  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
++}
++.sg-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
++.sg-chip.on { background: var(--c-primary-50); border-color: var(--c-primary-100); color: var(--c-primary-700); }
++.sg-select {
++  appearance: auto; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2);
++  font: inherit; font-size: 12.5px; padding: 4px 8px; border-radius: 8px; max-width: 200px;
++}
++.sg-count { font-family: var(--mono); font-size: 11.5px; color: var(--c-text-3); padding: 0 6px; white-space: nowrap; }
++.sg-density { display: inline-flex; border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
++.sg-density button { appearance: none; border: 0; background: transparent; font: inherit; font-family: var(--mono); font-size: 11px; padding: 5px 9px; color: var(--c-text-3); cursor: pointer; }
++.sg-density button + button { border-left: 1px solid var(--c-border); }
++.sg-density button.on { background: var(--c-surface-2); color: var(--c-text); }
++.sg-menu { position: relative; }
++.sg-menu-pop {
++  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 220px; max-height: 360px; overflow-y: auto;
++  background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--sh-3); padding: 6px;
++}
++.sg-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; }
++.sg-menu-item:hover { background: var(--c-surface-2); }
++.sg-menu-item .muted { margin-left: auto; font-family: var(--mono); font-size: 11px; }
++
++/* bulk bar */
++.sg-bulk {
++  display: flex; align-items: center; gap: 8px; padding: 8px 14px; flex: none;
++  background: var(--c-primary-50); border-bottom: 1px solid var(--c-primary-100); color: var(--c-primary-700); font-size: 13px;
++}
++.sg-bulk-sep { width: 1px; height: 18px; background: var(--c-primary-100); }
++.sg-bulk-list { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.5; }
++
++/* the table */
++.sg-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; background: var(--c-surface); }
++.sg-table { outline: none; position: relative; }
++.sg-table:focus-visible .sg-cell.active { box-shadow: inset 0 0 0 2px var(--c-primary-600); }
++.sg-head {
++  position: sticky; top: 0; z-index: 3; display: flex; align-items: stretch;
++  background: var(--c-surface-2); border-bottom: 1px solid var(--c-border-strong);
++  font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-3);
++}
++.sg-cell.sg-h { display: flex; align-items: center; cursor: pointer; user-select: none; }
++.sg-cell.sg-h:hover { color: var(--c-text); }
++.sg-cell.sg-h.sorted { color: var(--c-primary-700); }
++.sg-sort { margin-left: 4px; font-size: 9px; }
++.sg-head .sg-cell.frozen { background: var(--c-surface-2); z-index: 4; }
++.sg-row {
++  display: flex; align-items: stretch; border-bottom: 1px solid var(--c-border);
++  font-size: var(--sg-fs); color: var(--c-text); background: var(--c-surface); box-sizing: border-box;
++}
++.sg-row:hover { background: var(--c-bg); }
++.sg-row.selected { background: var(--c-primary-50); }
++.sg-row.selected .sg-cell.frozen { background: var(--c-primary-50); }
++.sg-row.active .sg-cell.frozen::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--c-primary-600); }
++.sg-row.unplaced { color: var(--c-text-3); }
++.sg-cell {
++  display: flex; align-items: center; padding: 0 10px; box-sizing: border-box; min-width: 0;
++  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; position: relative; border-right: 1px solid transparent;
++}
++.sg-cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
++.sg-cell.frozen { background: var(--c-surface); z-index: 2; }
++.sg-row:hover .sg-cell.frozen { background: var(--c-bg); }
++.sg-cell.sg-col-code { border-right: 1px solid var(--c-border); box-shadow: 4px 0 8px -6px rgba(19, 26, 43, .18); }
++.sg-cell.editable { cursor: text; }
++.sg-cell.active { background: rgba(79, 70, 229, .06); }
++.sg-code { font-weight: 600; font-size: 12px; color: var(--c-text-2); }
++.sg-type { color: var(--c-text-2); }
++.sg-opts { color: var(--c-text-2); }
++.sg-logic { color: var(--c-text-2); font-size: calc(var(--sg-fs) - .5px); }
++.sg-kw { font-family: var(--mono); font-size: 10px; color: var(--c-primary-600); font-weight: 600; letter-spacing: .06em; margin-right: 2px; }
++.sg-rich { color: var(--c-text-4); margin-left: 6px; font-size: 11px; }
++.sg-deps { display: inline-flex; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--c-text-3); }
++.sg-unplaced { color: var(--c-warning); font-style: italic; }
++.sg-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--c-border-strong); opacity: .35; }
++.sg-dot.warning { background: var(--c-warning); opacity: 1; }
++.sg-dot.error { background: var(--c-error); opacity: 1; box-shadow: 0 0 0 3px rgba(220, 38, 38, .12); }
++.sg-check { width: 15px; height: 15px; accent-color: var(--c-primary-600); cursor: pointer; }
++.sg-edit, .sg-edit-wrap .input { height: calc(100% - 6px); min-height: 0; padding: 0 8px; font-size: var(--sg-fs); width: 100%; border-radius: 6px; }
++.sg-edit-wrap { display: flex; align-items: center; width: 100%; height: 100%; }
++.sg-empty { padding: 48px 24px; text-align: center; color: var(--c-text-3); }
++
++/* hover actions: pinned to the right edge of the viewport, not the row's end */
++.sg-actions {
++  position: sticky; right: 8px; margin-left: auto; align-self: center; display: inline-flex; gap: 2px; z-index: 5;
++  background: var(--c-surface); border: 1px solid var(--c-border); border-radius: 8px; padding: 2px; box-shadow: var(--sh-2);
++}
++.sg-actions button {
++  appearance: none; border: 0; background: transparent; color: var(--c-text-2); font: inherit; font-size: 12.5px;
++  min-width: 26px; height: 24px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
++}
++.sg-actions button:hover:not(:disabled) { background: var(--c-surface-2); color: var(--c-text); }
++.sg-actions button.danger:hover:not(:disabled) { background: var(--c-error-bg); color: var(--c-error-fg); }
++.sg-actions button:disabled { opacity: .4; cursor: default; }
+diff --git a/apps/studio/components/grid/GridCells.tsx b/apps/studio/components/grid/GridCells.tsx
+new file mode 100644
+index 0000000..96ec864
+--- /dev/null
++++ b/apps/studio/components/grid/GridCells.tsx
+@@ -0,0 +1,161 @@
++"use client";
++import React from "react";
++import type { Question } from "@rescript/schema";
++import { variantRegistry } from "@rescript/schema";
++import { listBlocks, moveQuestionTo } from "@rescript/engine";
++import { useStudio } from "../studio/store";
++import { VariableNameInput } from "../studio/VariableNameInput";
++import { useTypeSwitch } from "../studio/VariantPicker";
++import type { GridRow } from "../../lib/grid/model";
++
++/**
++ * THE CELL EDITORS.
++ *
++ * Each one edits through the path the Studio already has for that field, so
++ * a change made in a cell is indistinguishable from the same change made in
++ * the question editor:
++ *
++ *   text      → the question's `text`, plain only (markup and pipes send you
++ *               to the Studio editor rather than being flattened here)
++ *   variable  → VariableNameInput: renameImpact → applyRename, with the
++ *               same refusal messages and the same "N references updated"
++ *   type      → useTypeSwitch: migrateQuestionType, with the same
++ *               confirmation dialog when the response model changes
++ *   required  → a checkbox, one-click, undoable
++ *   block     → moveQuestionTo the end of the chosen block's last page
++ *
++ * Every editor holds a local draft and commits on blur or Enter. A rename
++ * per keystroke would rewrite the survey once per character, and a
++ * recomputed grid per character would make typing feel like wading.
++ */
++
++export function TextCellEditor({ q, onDone }: { q: Question; onDone(): void }) {
++  const s = useStudio();
++  const [draft, setDraft] = React.useState(String(q.text ?? ""));
++  const commit = () => {
++    const to = draft;
++    if (to !== q.text) {
++      s.labelNextEdit(`edit ${q.code} text`);
++      s.update((d) => {
++        const i = d.questions.findIndex((x) => x.id === q.id);
++        if (i >= 0) d.questions[i] = { ...d.questions[i], text: to };
++      });
++    }
++    onDone();
++  };
++  return (
++    <input
++      className="input sg-edit"
++      data-testid="grid-edit-text"
++      autoFocus
++      value={draft}
++      onFocus={(e) => e.target.select()}
++      onChange={(e) => setDraft(e.target.value)}
++      onBlur={commit}
++      onKeyDown={(e) => {
++        if (e.key === "Enter") { e.preventDefault(); commit(); }
++        if (e.key === "Escape") { e.preventDefault(); onDone(); }
++        e.stopPropagation(); // the grid's own arrow keys must not fire while typing
++      }}
++    />
++  );
++}
++
++export function VariableCellEditor({ q, onDone }: { q: Question; onDone(): void }) {
++  return (
++    <span onKeyDown={(e) => e.stopPropagation()} className="sg-edit-wrap">
++      <VariableNameInput name={q.variableName} testId="grid-edit-variable" autoFocus onDone={onDone} inputClassName="sg-edit" />
++    </span>
++  );
++}
++
++export function TypeCellEditor({ q, onDone }: { q: Question; onDone(): void }) {
++  const { current, typesWithPresets, switchTo, dialog } = useTypeSwitch(q);
++  return (
++    <span onKeyDown={(e) => { if (e.key === "Escape") onDone(); e.stopPropagation(); }} className="sg-edit-wrap">
++      {dialog}
++      <select
++        className="select sg-edit"
++        data-testid="grid-edit-type"
++        autoFocus
++        value={current?.id ?? ""}
++        onBlur={() => { if (!dialog) onDone(); }}
++        onChange={(e) => {
++          const to = variantRegistry.get(e.target.value);
++          if (to) switchTo(to);
++          onDone();
++        }}
++      >
++        {!current && <option value="">({q.type})</option>}
++        {typesWithPresets.map(({ type, presets }) => (
++          presets.length === 0
++            ? <option key={type.id} value={type.id}>{type.name}</option>
++            : (
++              <optgroup key={type.id} label={type.name}>
++                <option value={type.id}>{type.name}</option>
++                {presets.map((pr) => <option key={pr.id} value={pr.id}>↳ {pr.name}</option>)}
++              </optgroup>
++            )
++        ))}
++      </select>
++    </span>
++  );
++}
++
++export function BlockCellEditor({ q, row, onDone }: { q: Question; row: GridRow; onDone(): void }) {
++  const s = useStudio();
++  const blocks = listBlocks(s.def.flow as unknown[]);
++  return (
++    <select
++      className="select sg-edit"
++      data-testid="grid-edit-block"
++      autoFocus
++      value={row.blockId ?? ""}
++      onBlur={onDone}
++      onKeyDown={(e) => { if (e.key === "Escape") onDone(); e.stopPropagation(); }}
++      onChange={(e) => {
++        const b = blocks.find((x) => x.id === e.target.value);
++        if (b && b.id !== row.blockId) {
++          const last = b.pages[b.pages.length - 1].node;
++          s.labelNextEdit(`move ${q.code} to ${b.title ?? "block"}`);
++          s.update((d) => { moveQuestionTo(d, q.id, last.id, last.questionIds.length); });
++        }
++        onDone();
++      }}
++    >
++      {!row.blockId && <option value="">— not on a page —</option>}
++      {blocks.map((b, i) => <option key={b.id} value={b.id}>{b.title ?? `Block ${i + 1}`}</option>)}
++    </select>
++  );
++}
++
++export function RequiredCell({ q, disabled }: { q: Question; disabled: boolean }) {
++  const s = useStudio();
++  return (
++    <input
++      type="checkbox"
++      className="sg-check"
++      data-testid="grid-required"
++      checked={!!q.required}
++      disabled={disabled}
++      onClick={(e) => e.stopPropagation()}
++      onChange={(e) => {
++        const to = e.target.checked;
++        s.labelNextEdit(`${q.code} ${to ? "required" : "optional"}`);
++        s.update((d) => {
++          const i = d.questions.findIndex((x) => x.id === q.id);
++          if (i >= 0) d.questions[i] = { ...d.questions[i], required: to };
++        });
++      }}
++    />
++  );
++}
++
++/** the status dot: nothing, or a coloured dot with the count in its title */
++export function StatusDot({ row }: { row: GridRow }) {
++  if (row.status === "ok") return <span className="sg-dot ok" aria-label="No problems" />;
++  return (
++    <span className={`sg-dot ${row.status}`} data-testid="grid-status"
++      title={`${row.issueCount} ${row.status === "error" ? "problem" : "warning"}${row.issueCount === 1 ? "" : "s"} — open the question to see them`} />
++  );
++}
+diff --git a/apps/studio/components/grid/GridView.tsx b/apps/studio/components/grid/GridView.tsx
+new file mode 100644
+index 0000000..9cd0684
+--- /dev/null
++++ b/apps/studio/components/grid/GridView.tsx
+@@ -0,0 +1,500 @@
++"use client";
++import React from "react";
++import type { Question } from "@rescript/schema";
++import { variantRegistry } from "@rescript/schema";
++import {
++  buildDependencyIndex, objectStatus, listBlocks, referencesToMany, pruneReferencesToMany,
++  duplicateQuestion, moveQuestionTo, migrateQuestionType, type ObjectKey, type QuestionReference, type TypeMigration,
++} from "@rescript/engine";
++import { useStudio, uid } from "../studio/store";
++import { useSelection } from "../studio/SelectionContext";
++import { useCommands } from "../studio/CommandContext";
++import { useMode } from "../studio/ModeContext";
++import { DeleteQuestionDialog } from "../studio/DeleteQuestionDialog";
++import { Icon } from "../ui/Icon";
++import {
++  buildGridRows, decorateGridRows, applyGridQuery, typesIn, visibleRange,
++  GRID_COLUMNS, DEFAULT_VISIBLE_COLUMNS, EMPTY_FILTER, ROW_HEIGHT,
++  type GridRow, type GridColumn, type GridColumnId, type GridFilter, type SortSpec, type Density,
++} from "../../lib/grid/model";
++import { TextCellEditor, VariableCellEditor, TypeCellEditor, BlockCellEditor, RequiredCell, StatusDot } from "./GridCells";
++
++/**
++ * GRID — the survey as a programmable research grid.
++ *
++ * One row per question, one column per thing a programmer scans for, and
++ * hundreds of them on screen at once. This is the second environment over
++ * the same survey: it holds no survey data of its own (rows are derived from
++ * the store's definition on every change), it edits through the same engine
++ * functions and the same `update` as the Questions panel (so every cell edit
++ * is undoable, autosaved and refused in read-only exactly like a click
++ * there), and its selection IS the Studio's selection, so selecting a row
++ * here opens that question's properties on the right and switching back to
++ * Studio lands on it.
++ *
++ * Scale is the point. Rows are windowed by hand — `visibleRange` says which
++ * of the N rows to mount for the current scroll position, and only those
++ * exist in the DOM — so 600 questions cost the same as 30. Status and
++ * dependency counts, the expensive part of a row, are computed against a
++ * DEFERRED copy of the definition, so a keystroke in a cell repaints the
++ * cheap columns immediately and the dots catch up a frame later.
++ */
++
++const STORAGE_KEY = "rescript.grid";
++
++interface Prefs { columns: GridColumnId[]; density: Density }
++
++function loadPrefs(): Prefs {
++  try {
++    const raw = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
++    if (raw) {
++      const p = JSON.parse(raw) as Partial<Prefs>;
++      const known = new Set(GRID_COLUMNS.map((c) => c.id));
++      return {
++        columns: Array.isArray(p.columns) && p.columns.every((c) => known.has(c)) ? p.columns : DEFAULT_VISIBLE_COLUMNS,
++        density: p.density && ROW_HEIGHT[p.density] ? p.density : "normal",
++      };
++    }
++  } catch { /* storage unavailable */ }
++  return { columns: DEFAULT_VISIBLE_COLUMNS, density: "normal" };
++}
++
++const EDITABLE: Record<string, boolean> = { text: true, variable: true, type: true, block: true, required: true };
++
++export function GridView() {
++  const s = useStudio();
++  const sel = useSelection();
++  const cmd = useCommands();
++  const mode = useMode();
++  const readOnly = s.readOnly;
++
++  /* ------------------------------------------------------------ rows */
++  const rows = React.useMemo(() => buildGridRows(s.def), [s.def]);
++  // the expensive layer follows a deferred definition — typing never waits on it
++  const deferredDef = React.useDeferredValue(s.def);
++  const decoration = React.useMemo(() => ({ status: objectStatus(deferredDef), index: buildDependencyIndex(deferredDef) }), [deferredDef]);
++  const decorated = React.useMemo(() => decorateGridRows(rows, decoration.status, decoration.index), [rows, decoration]);
++
++  /* ------------------------------------------------------------ prefs, query */
++  const [prefs, setPrefs] = React.useState<Prefs>(loadPrefs);
++  const savePrefs = (p: Prefs) => { setPrefs(p); try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch { /* fine */ } };
++  const [filter, setFilter] = React.useState<GridFilter>(EMPTY_FILTER);
++  const [search, setSearch] = React.useState("");
++  React.useEffect(() => { const t = setTimeout(() => setFilter((f) => ({ ...f, search })), 120); return () => clearTimeout(t); }, [search]);
++  const [sort, setSort] = React.useState<SortSpec | null>(null);
++  const shown = React.useMemo(() => applyGridQuery(decorated, filter, sort), [decorated, filter, sort]);
++  const columns = React.useMemo(() => GRID_COLUMNS.filter((c) => prefs.columns.includes(c.id)), [prefs.columns]);
++  const rowHeight = ROW_HEIGHT[prefs.density];
++  const byId = React.useMemo(() => new Map(s.def.questions.map((q) => [q.id, q])), [s.def]);
++  const blocks = React.useMemo(() => listBlocks(s.def.flow as unknown[]), [s.def]);
++  const types = React.useMemo(() => typesIn(decorated), [decorated]);
++
++  /* ------------------------------------------------------------ scroll + window */
++  const scrollRef = React.useRef<HTMLDivElement>(null);
++  const [scrollTop, setScrollTop] = React.useState(0);
++  const [viewport, setViewport] = React.useState(600);
++  React.useEffect(() => {
++    const el = scrollRef.current;
++    if (!el) return;
++    const ro = new ResizeObserver(() => setViewport(el.clientHeight));
++    ro.observe(el);
++    setViewport(el.clientHeight);
++    return () => ro.disconnect();
++  }, []);
++  const onScroll = (e: React.UIEvent<HTMLDivElement>) => setScrollTop((e.target as HTMLDivElement).scrollTop);
++  const headerH = 34;
++  const win = visibleRange(scrollTop, Math.max(0, viewport - headerH), rowHeight, shown.length);
++
++  /* ------------------------------------------------------------ active cell + editing */
++  const [active, setActive] = React.useState<{ row: number; col: number }>({ row: 0, col: 1 });
++  const [editing, setEditing] = React.useState<{ id: string; col: GridColumnId } | null>(null);
++  const [hover, setHover] = React.useState<string | null>(null);
++  const gridRef = React.useRef<HTMLDivElement>(null);
++
++  React.useEffect(() => {
++    // keep the active row inside the list when the query shrinks it
++    setActive((a) => ({ row: Math.min(a.row, Math.max(0, shown.length - 1)), col: Math.min(a.col, columns.length - 1) }));
++  }, [shown.length, columns.length]);
++
++  const scrollRowIntoView = React.useCallback((i: number) => {
++    const el = scrollRef.current;
++    if (!el) return;
++    const top = i * rowHeight;
++    const bottom = top + rowHeight;
++    const viewTop = el.scrollTop;
++    const viewBottom = viewTop + el.clientHeight - headerH;
++    if (top < viewTop) el.scrollTop = top;
++    else if (bottom > viewBottom) el.scrollTop = bottom - (el.clientHeight - headerH);
++  }, [rowHeight]);
++
++  /* ------------------------------------------------------------ selection */
++  const orderKeys = React.useMemo(() => shown.map((r) => r.key), [shown]);
++  const selectRow = (row: GridRow, e?: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean }) => {
++    if (!sel) { s.select(row.id); return; }
++    if (e?.shiftKey) sel.dispatch({ type: "range", key: row.key, order: orderKeys });
++    else if (e?.metaKey || e?.ctrlKey) sel.dispatch({ type: "toggle", key: row.key });
++    else sel.dispatch({ type: "select", key: row.key });
++  };
++  const selectedKeys = sel?.keys ?? (s.selectedQuestionId ? [`question:${s.selectedQuestionId}` as ObjectKey] : []);
++  const selectedIds = React.useMemo(() => selectedKeys.filter((k) => k.startsWith("question:")).map((k) => k.slice(9)), [selectedKeys]);
++  const isSelected = (row: GridRow) => sel ? sel.isSelected(row.key) : s.selectedQuestionId === row.id;
++
++  /* ------------------------------------------------------------ actions */
++  const openInStudio = (row: GridRow) => {
++    selectRow(row);
++    mode?.setMode("studio");
++  };
++  const startEdit = (row: GridRow, col: GridColumn) => {
++    if (readOnly || !col.editable || col.id === "required") return;
++    if (col.id === "text" && !row.plainText) { openInStudio(row); return; }
++    setEditing({ id: row.id, col: col.id });
++  };
++  const rowCtx = (row: GridRow) => ({ questionId: row.id, primary: row.key });
++
++  const [pendingDelete, setPendingDelete] = React.useState<{ ids: string[]; code: string; refs: QuestionReference[] } | null>(null);
++  const askDelete = (ids: string[]) => {
++    if (!ids.length || readOnly) return;
++    const code = ids.length === 1 ? (byId.get(ids[0])?.code ?? "this question") : `${ids.length} questions`;
++    setPendingDelete({ ids, code, refs: referencesToMany(s.def, ids) });
++  };
++  const confirmDelete = () => {
++    if (!pendingDelete) return;
++    const { ids, code } = pendingDelete;
++    setPendingDelete(null);
++    s.labelNextEdit(`delete ${code}`);
++    s.update((d) => {
++      pruneReferencesToMany(d, ids);
++      const gone = new Set(ids);
++      d.questions = d.questions.filter((q) => !gone.has(q.id));
++      for (const b of listBlocks(d.flow as unknown[])) for (const p of b.pages) p.node.questionIds = p.node.questionIds.filter((x) => !gone.has(x));
++    });
++    sel?.dispatch({ type: "drop", keys: ids.map((id) => `question:${id}` as ObjectKey) });
++  };
++
++  /* bulk */
++  const [bulkType, setBulkType] = React.useState<{ to: string; migrations: { q: Question; m: TypeMigration }[] } | null>(null);
++  const bulkSetRequired = (to: boolean) => {
++    const ids = new Set(selectedIds);
++    s.labelNextEdit(`${to ? "require" : "make optional"} ${ids.size} questions`);
++    s.update((d) => { d.questions = d.questions.map((q) => ids.has(q.id) ? { ...q, required: to } : q); });
++  };
++  const bulkMove = (blockId: string) => {
++    const b = blocks.find((x) => x.id === blockId);
++    if (!b) return;
++    const last = b.pages[b.pages.length - 1].node;
++    const ordered = shown.filter((r) => selectedIds.includes(r.id)).map((r) => r.id);
++    s.labelNextEdit(`move ${ordered.length} questions to ${b.title ?? "block"}`);
++    s.update((d) => {
++      for (const id of ordered) {
++        const page = listBlocks(d.flow as unknown[]).find((x) => x.id === blockId)!.pages.slice(-1)[0].node;
++        moveQuestionTo(d, id, last.id, page.questionIds.length);
++      }
++    });
++  };
++  const bulkDuplicate = () => {
++    const ordered = shown.filter((r) => selectedIds.includes(r.id)).map((r) => r.id);
++    s.labelNextEdit(`duplicate ${ordered.length} questions`);
++    s.update((d) => { for (const id of ordered) duplicateQuestion(d, id, uid); });
++  };
++  const bulkChangeType = (variantId: string) => {
++    const to = variantRegistry.get(variantId);
++    if (!to) return;
++    const migrations = selectedIds.map((id) => byId.get(id)).filter((q): q is Question => !!q).map((q) => ({ q, m: migrateQuestionType(q, to) }));
++    const risky = migrations.some(({ m }) => !m.safe || m.changes.length > 0);
++    if (risky) { setBulkType({ to: variantId, migrations }); return; }
++    applyBulkType(migrations, to.name);
++  };
++  const applyBulkType = (migrations: { q: Question; m: TypeMigration }[], name: string) => {
++    s.labelNextEdit(`change ${migrations.length} questions to ${name}`);
++    s.update((d) => {
++      for (const { q, m } of migrations) {
++        const i = d.questions.findIndex((x) => x.id === q.id);
++        if (i >= 0) d.questions[i] = m.q;
++      }
++    });
++    setBulkType(null);
++    s.toast(`${migrations.length} question${migrations.length === 1 ? "" : "s"} changed to ${name}`);
++  };
++
++  /* ------------------------------------------------------------ keyboard */
++  const onKeyDown = (e: React.KeyboardEvent) => {
++    if (editing) return;
++    const row = shown[active.row];
++    const col = columns[active.col];
++    const move = (dr: number, dc: number) => {
++      e.preventDefault();
++      const nr = Math.max(0, Math.min(shown.length - 1, active.row + dr));
++      const nc = Math.max(0, Math.min(columns.length - 1, active.col + dc));
++      setActive({ row: nr, col: nc });
++      if (dr) {
++        scrollRowIntoView(nr);
++        const target = shown[nr];
++        if (target) {
++          if (e.shiftKey && sel) sel.dispatch({ type: "range", key: target.key, order: orderKeys });
++          else selectRow(target);
++        }
++      }
++    };
++    switch (e.key) {
++      case "ArrowDown": move(1, 0); break;
++      case "ArrowUp": move(-1, 0); break;
++      case "ArrowRight": move(0, 1); break;
++      case "ArrowLeft": move(0, -1); break;
++      case "PageDown": move(Math.floor((viewport - headerH) / rowHeight), 0); break;
++      case "PageUp": move(-Math.floor((viewport - headerH) / rowHeight), 0); break;
++      case "Home": if (e.metaKey || e.ctrlKey) move(-shown.length, 0); else move(0, -columns.length); break;
++      case "End": if (e.metaKey || e.ctrlKey) move(shown.length, 0); else move(0, columns.length); break;
++      case "Tab": move(0, e.shiftKey ? -1 : 1); break;
++      case "Enter":
++        if (row && col) { e.preventDefault(); if (col.editable && col.id !== "required") startEdit(row, col); else openInStudio(row); }
++        break;
++      case " ":
++        if (row && sel) { e.preventDefault(); sel.dispatch({ type: "toggle", key: row.key }); }
++        break;
++      case "Escape":
++        if (sel && sel.keys.length) { e.preventDefault(); sel.dispatch({ type: "clear" }); }
++        break;
++      case "Delete":
++      case "Backspace":
++        if (selectedIds.length) { e.preventDefault(); askDelete(selectedIds); }
++        break;
++      default: break;
++    }
++  };
++
++  /* ------------------------------------------------------------ layout helpers */
++  const frozenLeft = React.useMemo(() => {
++    const out: Partial<Record<GridColumnId, number>> = {};
++    let x = 0;
++    for (const c of columns) { if (c.frozen) { out[c.id] = x; x += c.width; } }
++    return out;
++  }, [columns]);
++  const cellStyle = (c: GridColumn): React.CSSProperties => ({
++    width: c.grow ? undefined : c.width,
++    minWidth: c.minWidth,
++    flex: c.grow ? "1 1 360px" : `0 0 ${c.width}px`,
++    textAlign: c.align,
++    ...(c.frozen ? { position: "sticky", left: frozenLeft[c.id] } : {}),
++  });
++  const totalMin = columns.reduce((n, c) => n + c.width, 0);
++
++  const cycleSort = (col: GridColumn) => {
++    if (!col.sortable) return;
++    setSort((cur) => !cur || cur.column !== col.id ? { column: col.id, dir: "asc" } : cur.dir === "asc" ? { column: col.id, dir: "desc" } : null);
++  };
++
++  /* ------------------------------------------------------------ cells */
++  const renderCell = (row: GridRow, c: GridColumn, ri: number, ci: number) => {
++    const q = byId.get(row.id);
++    const isEditing = editing?.id === row.id && editing.col === c.id;
++    const isActive = active.row === ri && active.col === ci;
++    let body: React.ReactNode;
++    if (isEditing && q) {
++      const done = () => { setEditing(null); gridRef.current?.focus(); };
++      body = c.id === "text" ? <TextCellEditor q={q} onDone={done} />
++        : c.id === "variable" ? <VariableCellEditor q={q} onDone={done} />
++          : c.id === "type" ? <TypeCellEditor q={q} onDone={done} />
++            : c.id === "block" ? <BlockCellEditor q={q} row={row} onDone={done} />
++              : null;
++    } else {
++      switch (c.id) {
++        case "status": body = <StatusDot row={row} />; break;
++        case "code": body = <span className="mono sg-code">{row.code}</span>; break;
++        case "type": body = <span className="sg-type" title={row.familyLabel}>{row.typeLabel}</span>; break;
++        case "variable": body = <span className="mono">{row.variableName}</span>; break;
++        case "text": body = <span className={row.text ? "" : "muted"} title={row.plainText ? undefined : "Rich text — press Enter to open in the Studio editor"}>{row.text || "—"}{!row.plainText && <span className="sg-rich" aria-hidden="true">¶</span>}</span>; break;
++        case "options": body = <span className={row.options ? "sg-opts" : "muted"}>{row.options || "—"}</span>; break;
++        case "display": body = row.display ? <span className="sg-logic" title={row.display}><span className="sg-kw">IF</span> {row.display}</span> : <span className="muted">—</span>; break;
++        case "skip": body = row.skip ? <span className="sg-logic" title={row.skip}>{row.skip}</span> : <span className="muted">—</span>; break;
++        case "validation": body = <span className={row.validation ? "" : "muted"}>{row.validation || "—"}</span>; break;
++        case "required": body = q ? <RequiredCell q={q} disabled={readOnly} /> : null; break;
++        case "deps": body = (row.dependsOn || row.usedBy)
++          ? <span className="sg-deps" title={`reads ${row.dependsOn} · read by ${row.usedBy}`}><span>←{row.dependsOn}</span><span>→{row.usedBy}</span></span>
++          : <span className="muted">—</span>; break;
++        case "block": body = <span className={row.unplaced ? "sg-unplaced" : ""} title={row.unplaced ? "On no page — respondents never see this" : undefined}>{row.unplaced ? "unplaced" : row.blockTitle}</span>; break;
++      }
++    }
++    return (
++      <div
++        key={c.id}
++        className={`sg-cell sg-col-${c.id}${c.frozen ? " frozen" : ""}${isActive ? " active" : ""}${c.editable && !readOnly ? " editable" : ""}`}
++        style={cellStyle(c)}
++        data-col={c.id}
++        onDoubleClick={() => startEdit(row, c)}
++        onClick={() => setActive({ row: ri, col: ci })}
++      >
++        {body}
++      </div>
++    );
++  };
++
++  const bulk = selectedIds.length >= 2;
++  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
++
++  return (
++    <div className={`sg sg-${prefs.density}`} data-testid="grid-view">
++      {/* ------------------------------------------------------------ toolbar */}
++      <div className="sg-toolbar">
++        <div className="sg-search">
++          <Icon name="search" size={14} />
++          <input className="sg-search-input" data-testid="grid-search" placeholder="Search code, variable, text, options, logic…"
++            value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
++          {search && <button className="sg-clear" onClick={() => setSearch("")} aria-label="Clear search"><Icon name="close" size={12} /></button>}
++        </div>
++        <Menu label={filter.types ? `Type · ${filter.types.length}` : "Type"} testId="grid-filter-type" active={!!filter.types}>
++          {types.map((t) => (
++            <label key={t.type} className="sg-menu-item">
++              <input type="checkbox" checked={!filter.types || filter.types.includes(t.type)}
++                onChange={(e) => setFilter((f) => {
++                  const cur = new Set(f.types ?? types.map((x) => x.type));
++                  if (e.target.checked) cur.add(t.type); else cur.delete(t.type);
++                  const all = cur.size === types.length;
++                  return { ...f, types: all ? null : [...cur] };
++                })} />
++              <span>{t.label}</span><span className="muted">{t.count}</span>
++            </label>
++          ))}
++        </Menu>
++        <select className="sg-select" data-testid="grid-filter-block" value={filter.block ?? ""} onChange={(e) => setFilter((f) => ({ ...f, block: e.target.value || null }))}>
++          <option value="">All blocks</option>
++          {blocks.map((b, i) => <option key={b.id} value={b.id}>{b.title ?? `Block ${i + 1}`}</option>)}
++        </select>
++        <button className={`sg-chip${filter.withLogic ? " on" : ""}`} data-testid="grid-filter-logic" onClick={() => setFilter((f) => ({ ...f, withLogic: !f.withLogic }))}>With logic</button>
++        <button className={`sg-chip${filter.withIssues ? " on" : ""}`} data-testid="grid-filter-issues" onClick={() => setFilter((f) => ({ ...f, withIssues: !f.withIssues }))}>Issues</button>
++        <span className="sg-count" data-testid="grid-count">{shown.length === rows.length ? `${rows.length} questions` : `${shown.length} of ${rows.length}`}</span>
++        <span className="grow" />
++        <Menu label="Columns" testId="grid-columns">
++          {GRID_COLUMNS.map((c) => (
++            <label key={c.id} className="sg-menu-item" title={c.description}>
++              <input type="checkbox" checked={prefs.columns.includes(c.id)} disabled={c.frozen}
++                onChange={(e) => savePrefs({ ...prefs, columns: e.target.checked ? GRID_COLUMNS.filter((x) => x.id === c.id || prefs.columns.includes(x.id)).map((x) => x.id) : prefs.columns.filter((x) => x !== c.id) })} />
++              <span>{c.label || "Status"}</span>
++            </label>
++          ))}
++        </Menu>
++        <div className="sg-density" role="radiogroup" aria-label="Density" data-testid="grid-density">
++          {(["compact", "normal", "comfortable"] as Density[]).map((d) => (
++            <button key={d} role="radio" aria-checked={prefs.density === d} className={prefs.density === d ? "on" : ""} data-density={d}
++              onClick={() => savePrefs({ ...prefs, density: d })} title={d}>{d[0].toUpperCase()}</button>
++          ))}
++        </div>
++        <kbd className="palette-kbd" title="Command palette">{mac ? "⌘K" : "Ctrl+K"}</kbd>
++      </div>
++
++      {/* ------------------------------------------------------------ bulk bar */}
++      {bulk && (
++        <div className="sg-bulk" data-testid="grid-bulk">
++          <strong>{selectedIds.length} selected</strong>
++          <span className="sg-bulk-sep" />
++          <button className="btn small" disabled={readOnly} data-testid="grid-bulk-required-on" onClick={() => bulkSetRequired(true)}>Required</button>
++          <button className="btn small" disabled={readOnly} data-testid="grid-bulk-required-off" onClick={() => bulkSetRequired(false)}>Optional</button>
++          <select className="sg-select" disabled={readOnly} data-testid="grid-bulk-type" value="" onChange={(e) => { if (e.target.value) bulkChangeType(e.target.value); }}>
++            <option value="">Change type…</option>
++            {[...variantRegistry.all()].filter((v) => !v.presetOf).map((v) => <option key={v.id} value={v.id}>{v.familyLabel} — {v.name}</option>)}
++          </select>
++          <select className="sg-select" disabled={readOnly} data-testid="grid-bulk-move" value="" onChange={(e) => { if (e.target.value) bulkMove(e.target.value); }}>
++            <option value="">Move to block…</option>
++            {blocks.map((b, i) => <option key={b.id} value={b.id}>{b.title ?? `Block ${i + 1}`}</option>)}
++          </select>
++          <button className="btn small" disabled={readOnly} data-testid="grid-bulk-duplicate" onClick={bulkDuplicate}>Duplicate</button>
++          <button className="btn small danger" disabled={readOnly} data-testid="grid-bulk-delete" onClick={() => askDelete(selectedIds)}>Delete</button>
++          <span className="grow" />
++          <button className="btn small" onClick={() => sel?.dispatch({ type: "clear" })}>Clear</button>
++        </div>
++      )}
++
++      {/* ------------------------------------------------------------ the grid */}
++      <div className="sg-scroll" ref={scrollRef} onScroll={onScroll}>
++        <div ref={gridRef} className="sg-table" role="grid" tabIndex={0} onKeyDown={onKeyDown} style={{ minWidth: totalMin }}
++          aria-rowcount={shown.length} aria-colcount={columns.length} data-testid="grid-table">
++          <div className="sg-head" role="row" style={{ height: headerH }}>
++            {columns.map((c) => (
++              <div key={c.id} role="columnheader" className={`sg-cell sg-h${c.frozen ? " frozen" : ""}${sort?.column === c.id ? " sorted" : ""}`}
++                style={cellStyle(c)} title={c.description} onClick={() => cycleSort(c)} data-testid={`grid-head-${c.id}`}>
++                {c.label}{sort?.column === c.id && <span className="sg-sort">{sort.dir === "asc" ? "▲" : "▼"}</span>}
++              </div>
++            ))}
++          </div>
++          <div className="sg-body" style={{ height: win.totalHeight, position: "relative" }}>
++            {shown.length === 0 && (
++              <div className="sg-empty">{rows.length === 0 ? "No questions yet — press ⌘⇧A or use the palette to add one." : "Nothing matches these filters."}</div>
++            )}
++            {shown.slice(win.start, win.end).map((row, k) => {
++              const ri = win.start + k;
++              const selected = isSelected(row);
++              const isHover = hover === row.id;
++              return (
++                <div
++                  key={row.id}
++                  role="row"
++                  aria-selected={selected}
++                  data-testid="grid-row"
++                  data-qid={row.id}
++                  data-code={row.code}
++                  className={`sg-row${selected ? " selected" : ""}${active.row === ri ? " active" : ""}${row.unplaced ? " unplaced" : ""}`}
++                  style={{ position: "absolute", top: ri * rowHeight, height: rowHeight, left: 0, right: 0 }}
++                  onMouseEnter={() => setHover(row.id)}
++                  onMouseLeave={() => setHover((h) => (h === row.id ? null : h))}
++                  onClick={(e) => { selectRow(row, e); }}
++                >
++                  {columns.map((c, ci) => renderCell(row, c, ri, ci))}
++                  {(isHover || (hover === null && active.row === ri && !editing)) && (
++                    <div className="sg-actions" data-testid="grid-row-actions" onClick={(e) => e.stopPropagation()}>
++                      <button title="Open in Studio" onClick={() => openInStudio(row)} data-testid="grid-action-open"><Icon name="questions" size={13} /></button>
++                      <button title="Move up" disabled={readOnly} onClick={() => cmd?.run("question.moveUp", rowCtx(row))}>↑</button>
++                      <button title="Move down" disabled={readOnly} onClick={() => cmd?.run("question.moveDown", rowCtx(row))}>↓</button>
++                      <button title="Duplicate" disabled={readOnly} onClick={() => cmd?.run("question.duplicate", rowCtx(row))} data-testid="grid-action-duplicate">⧉</button>
++                      <button title="Delete" disabled={readOnly} className="danger" onClick={() => askDelete([row.id])} data-testid="grid-action-delete">×</button>
++                    </div>
++                  )}
++                </div>
++              );
++            })}
++          </div>
++        </div>
++      </div>
++
++      {pendingDelete && (
++        <DeleteQuestionDialog code={pendingDelete.code} refs={pendingDelete.refs}
++          onCancel={() => setPendingDelete(null)} onConfirm={confirmDelete} />
++      )}
++      {bulkType && (
++        <div className="modal-back" onClick={() => setBulkType(null)}>
++          <div className="modal" onClick={(e) => e.stopPropagation()} data-testid="grid-bulk-type-dialog">
++            <h3>Change {bulkType.migrations.length} questions to {variantRegistry.get(bulkType.to)?.name}?</h3>
++            <p className="muted">Some of these change the shape of the answer, or drop settings the new type cannot read:</p>
++            <ul className="sg-bulk-list">
++              {bulkType.migrations.filter(({ m }) => !m.safe || m.changes.length).slice(0, 12).map(({ q, m }) => (
++                <li key={q.id}><strong className="mono">{q.code}</strong> {m.from.label} → {m.to.label}{!m.safe ? " — answer shape changes" : ""}{m.changes.length ? ` — ${m.changes.length} setting${m.changes.length === 1 ? "" : "s"} removed` : ""}</li>
++              ))}
++            </ul>
++            <div className="row" style={{ gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
++              <button className="btn" onClick={() => setBulkType(null)}>Cancel</button>
++              <button className="btn primary" data-testid="grid-bulk-type-confirm" onClick={() => applyBulkType(bulkType.migrations, variantRegistry.get(bulkType.to)?.name ?? "")}>Change all</button>
++            </div>
++          </div>
++        </div>
++      )}
++    </div>
++  );
++}
++
++/** a small click-to-open menu; closes on outside click or Escape */
++function Menu({ label, children, testId, active }: { label: string; children: React.ReactNode; testId?: string; active?: boolean }) {
++  const [open, setOpen] = React.useState(false);
++  const ref = React.useRef<HTMLDivElement>(null);
++  React.useEffect(() => {
++    if (!open) return;
++    const onDown = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
++    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
++    document.addEventListener("pointerdown", onDown, true);
++    document.addEventListener("keydown", onKey, true);
++    return () => { document.removeEventListener("pointerdown", onDown, true); document.removeEventListener("keydown", onKey, true); };
++  }, [open]);
++  return (
++    <div className="sg-menu" ref={ref}>
++      <button className={`sg-chip${active ? " on" : ""}${open ? " open" : ""}`} data-testid={testId} onClick={() => setOpen((o) => !o)}>{label} <Icon name="chevron-down" size={12} /></button>
++      {open && <div className="sg-menu-pop" data-testid={testId ? `${testId}-menu` : undefined}>{children}</div>}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/CommandContext.tsx b/apps/studio/components/studio/CommandContext.tsx
+index 68f803a..a8ce9f3 100644
+--- a/apps/studio/components/studio/CommandContext.tsx
++++ b/apps/studio/components/studio/CommandContext.tsx
+@@ -41,8 +41,13 @@ interface CommandApi {
+   commands: Command<StudioCommandContext>[];
+   /** the object-finding commands (questions, calcs, rules) — searched, never listed whole */
+   finders: Command<StudioCommandContext>[];
+-  run(id: string): void;
+-  runCommand(cmd: Command<StudioCommandContext>): void;
++  /**
++   * `override` lets a renderer act on an object that is not the current
++   * selection — a hover action on a grid row runs "duplicate" for THAT row
++   * without first changing what is selected.
++   */
++  run(id: string, override?: Partial<StudioCommandContext>): void;
++  runCommand(cmd: Command<StudioCommandContext>, override?: Partial<StudioCommandContext>): void;
+   paletteOpen: boolean;
+   openPalette(): void;
+   closePalette(): void;
+@@ -119,15 +124,15 @@ export function CommandProvider({
+   const contextRef = React.useRef(context);
+   contextRef.current = context;
+ 
+-  const runCommand = React.useCallback((cmd: Command<StudioCommandContext>) => {
+-    const ctx = contextRef.current;
++  const runCommand = React.useCallback((cmd: Command<StudioCommandContext>, override?: Partial<StudioCommandContext>) => {
++    const ctx = override ? { ...contextRef.current, ...override } : contextRef.current;
+     if (cmd.when && !cmd.when(ctx)) return;
+     if (cmd.edits && ctx.readOnly) { ctx.toast("This project is read-only right now.", "err"); return; }
+     void cmd.run(ctx);
+   }, []);
+-  const run = React.useCallback((id: string) => {
++  const run = React.useCallback((id: string, override?: Partial<StudioCommandContext>) => {
+     const cmd = registry.find((c) => c.id === id) ?? finders.find((c) => c.id === id);
+-    if (cmd) runCommand(cmd);
++    if (cmd) runCommand(cmd, override);
+   }, [registry, finders, runCommand]);
+ 
+   // the one keyboard handler
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index d57b96c..182f390 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -38,6 +38,8 @@ import { SelectionProvider } from "./SelectionContext";
+ import { CommandProvider, useCommands, type ShellActions } from "./CommandContext";
+ import { CommandPalette } from "./CommandPalette";
+ import { ModeSelector } from "./ModeSelector";
++import { useMode } from "./ModeContext";
++import { GridView } from "../grid/GridView";
+ 
+ type Tab =
+   | "questions" | "flow" | "logic" | "variables" | "calculations"
+@@ -355,7 +357,8 @@ function RightPanel({ tab }: { tab: Tab }) {
+       const t = e.target as HTMLElement | null;
+       if (!t) return;
+       if (asideRef.current?.contains(t)) return;             // inside the panel
+-      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card")) return;
++      // the Grid owns its own selection (rows, ranges, toggles) — a click there is never a dismissal
++      if (t.closest(".qcard, .leftnav, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg")) return;
+       if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
+       s.select(null);
+     };
+@@ -865,6 +868,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+    * in the palette is the same function as the button.
+    */
+   const navTabs = React.useMemo(() => NAV.map((n) => ({ key: n.key, label: n.label, group: n.group })), []);
++  const programmingMode = useMode()?.mode ?? "studio";
+   const setTabGuarded = React.useCallback((t: string) => {
+     if (t === tab || s.canLeaveTab()) setTab(t as Tab);
+   }, [tab, s]);
+@@ -1037,7 +1041,14 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+               }}
+             />
+           )}
+-          {tab === "questions" && <QuestionsPanel />}
++          {/*
++            * THE MODE RENDERERS. Each programming mode is another way of
++            * looking at the same survey; here is where the centre column
++            * chooses which. Studio is the Questions panel as it has always
++            * been. Grid shows the same questions as rows. Both read and
++            * write the same store, so switching is a re-render, not a load.
++            */}
++          {tab === "questions" && (programmingMode === "grid" ? <GridView /> : <QuestionsPanel />)}
+           {tab === "settings" && (
+             /*
+              * Sept 21 follow-up ("Priority UI Fix: Survey Flow & Survey
+diff --git a/apps/studio/components/studio/VariableNameInput.tsx b/apps/studio/components/studio/VariableNameInput.tsx
+index 2c5d78f..f98b53d 100644
+--- a/apps/studio/components/studio/VariableNameInput.tsx
++++ b/apps/studio/components/studio/VariableNameInput.tsx
+@@ -29,11 +29,19 @@ export function VariableNameInput({
+   testId,
+   style,
+   placeholder,
++  autoFocus,
++  onDone,
++  inputClassName,
+ }: {
+   name: string;
+   testId?: string;
+   style?: React.CSSProperties;
+   placeholder?: string;
++  /** focus and select on mount — for a cell editor that appears on Enter */
++  autoFocus?: boolean;
++  /** called after a commit or an Escape, so a host can leave edit mode */
++  onDone?(): void;
++  inputClassName?: string;
+ }) {
+   const s = useStudio();
+   const [draft, setDraft] = React.useState(name);
+@@ -70,7 +78,7 @@ export function VariableNameInput({
+   const commit = (value: string) => {
+     setFocused(false);
+     const to = value.trim();
+-    if (!to || to === name) { setDraft(name); setError(null); return; }
++    if (!to || to === name) { setDraft(name); setError(null); onDone?.(); return; }
+ 
+     let verdict;
+     try {
+@@ -90,16 +98,18 @@ export function VariableNameInput({
+       for (const k of Object.keys(d)) delete (d as any)[k];
+       Object.assign(d, next);
+     });
++    onDone?.();
+   };
+ 
+   return (
+     <span style={{ display: "inline-flex", flexDirection: "column", gap: 2, ...style }}>
+       <input
+-        className={`input mono${error ? " err" : ""}`}
++        className={`input mono${error ? " err" : ""}${inputClassName ? ` ${inputClassName}` : ""}`}
+         data-testid={testId}
+         value={draft}
+         placeholder={placeholder}
+-        onFocus={() => setFocused(true)}
++        autoFocus={autoFocus}
++        onFocus={(e) => { setFocused(true); if (autoFocus) e.target.select(); }}
+         onChange={(e) => {
+           setDraft(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"));
+           setError(null);
+@@ -107,7 +117,7 @@ export function VariableNameInput({
+         onBlur={(e) => commit(e.target.value)}
+         onKeyDown={(e) => {
+           if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
+-          if (e.key === "Escape") { setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); }
++          if (e.key === "Escape") { setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); onDone?.(); }
+         }}
+       />
+       {error && (
+diff --git a/apps/studio/components/studio/VariantPicker.tsx b/apps/studio/components/studio/VariantPicker.tsx
+index b983084..5fbf406 100644
+--- a/apps/studio/components/studio/VariantPicker.tsx
++++ b/apps/studio/components/studio/VariantPicker.tsx
+@@ -259,7 +259,12 @@ export function VariantPickerModal({ onPick, onMode, onClose }: {
+ 
+ /* --------------------------------------------------- switcher (existing q) */
+ 
+-export function VariantSwitcher({ q }: { q: Question }) {
++/**
++ * The type-change machinery without the two selects, so a compact control
++ * (a grid cell, a bulk bar) changes a question's type through exactly the
++ * same migration and the same confirmation as the editor's switcher.
++ */
++export function useTypeSwitch(q: Question) {
+   const s = useStudio();
+   // a question saved against a retired duplicate resolves to its survivor, so
+   // the switcher shows where that type lives now rather than a blank
+@@ -325,16 +330,24 @@ export function VariantSwitcher({ q }: { q: Question }) {
+     setPending({ migration, to });
+   };
+ 
++  const dialog = pending ? (
++    <TypeChangeDialog
++      migration={pending.migration}
++      toName={pending.to.name}
++      onCancel={() => setPending(null)}
++      onConfirm={() => { apply(pending.migration, pending.to); setPending(null); }}
++    />
++  ) : null;
++
++  return { current, family, families, typesWithPresets, switchTo, dialog };
++}
++
++export function VariantSwitcher({ q }: { q: Question }) {
++  const { current, family, families, typesWithPresets, switchTo, dialog } = useTypeSwitch(q);
++
+   return (
+     <>
+-      {pending && (
+-        <TypeChangeDialog
+-          migration={pending.migration}
+-          toName={pending.to.name}
+-          onCancel={() => setPending(null)}
+-          onConfirm={() => { apply(pending.migration, pending.to); setPending(null); }}
+-        />
+-      )}
++      {dialog}
+       <label className="f" style={{ width: 150, marginBottom: 0 }}><span>Family</span>
+         <select className="select" data-testid="family-switcher" value={family}
+           onChange={(e) => {
+diff --git a/apps/studio/lib/grid/model.test.ts b/apps/studio/lib/grid/model.test.ts
+new file mode 100644
+index 0000000..0f5e174
+--- /dev/null
++++ b/apps/studio/lib/grid/model.test.ts
+@@ -0,0 +1,164 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, cond } from "@rescript/schema";
++import { buildDependencyIndex, objectStatus } from "@rescript/engine";
++import {
++  buildGridRows, decorateGridRows, applyGridQuery, typesIn, visibleRange, EMPTY_FILTER, GRID_COLUMNS, ROW_HEIGHT,
++} from "./model.ts";
++
++/**
++ * THE GRID MODEL: rows are derived, never stored, and say the truth about
++ * the survey they came from.
++ */
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "T" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?", settings: { minValue: 18, maxValue: 99 }, required: true,
++        skipLogic: [{ id: "sk", when: cond.rule("q1", "lt", 18), target: { kind: "terminate", status: "screened" } }] },
++      { id: "q2", code: "Q2", variableName: "BRANDS", type: "multi_select", text: "<p>Which <b>brands</b>?</p>",
++        options: [{ code: "A", label: "Apple" }, { code: "B", label: "Bosch" }, { code: "C", label: "Candy" }] },
++      { id: "q3", code: "Q3", variableName: "WHY", type: "text", text: "Why {{Q2}}?", displayLogic: cond.rule("q2", "selected", "A") },
++      { id: "q4", code: "Q4", variableName: "GRID", type: "matrix_single", text: "Rate",
++        rows: [{ code: "r1", label: "R1" }, { code: "r2", label: "R2" }], options: [{ code: "1", label: "Bad" }, { code: "2", label: "Good" }, { code: "3", label: "Great" }] },
++      { id: "q9", code: "Q9", variableName: "LOST", type: "text", text: "On no page" },
++    ],
++    flow: [
++      { type: "page", id: "p1", title: "Screener", questionIds: ["q1"] },
++      { type: "block", id: "b2", title: "Brands", children: [
++        { type: "page", id: "p2", questionIds: ["q2", "q3"] },
++        { type: "page", id: "p3", questionIds: ["q4"] },
++      ] },
++      { type: "end", id: "e", status: "complete" },
++    ],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("one row per question, in flow order, with placement", () => {
++  const rows = buildGridRows(survey());
++  assert.deepEqual(rows.map((r) => r.code), ["Q1", "Q2", "Q3", "Q4", "Q9"]);
++  assert.equal(rows[0].blockTitle, "Screener");
++  assert.equal(rows[1].blockTitle, "Brands");
++  assert.equal(rows[3].pageId, "p3");
++  assert.equal(rows[3].indexInPage, 0);
++  assert.equal(rows[4].unplaced, true, "a question on no page is flagged, not hidden");
++  assert.equal(rows[4].blockTitle, "—");
++});
++
++test("text is stripped of markup, and only plain text is marked cell-editable", () => {
++  const rows = buildGridRows(survey());
++  assert.equal(rows[1].text, "Which brands?");
++  assert.equal(rows[1].plainText, false, "markup means edit in the Studio, not in a cell");
++  assert.equal(rows[2].plainText, false, "a pipe token is structure too");
++  assert.equal(rows[0].plainText, true);
++});
++
++test("options summarise as a list, a grid, or a range", () => {
++  const rows = buildGridRows(survey());
++  assert.equal(rows[1].options, "Apple · Bosch · Candy");
++  assert.equal(rows[1].optionCount, 3);
++  assert.equal(rows[3].options, "2 rows × 3 columns");
++  assert.equal(rows[0].options, "18–99");
++});
++
++test("display, skip and validation columns read as sentences", () => {
++  const rows = buildGridRows(survey());
++  assert.match(rows[2].display, /Q2/, rows[2].display);
++  assert.equal(rows[1].display, "");
++  assert.match(rows[0].skip, /→ end \(screened\) when/);
++  assert.match(rows[0].validation, /required/);
++});
++
++test("decoration adds status and dependency counts, and keeps row identity when nothing changed", () => {
++  const def = survey();
++  const rows = buildGridRows(def);
++  const decorated = decorateGridRows(rows, objectStatus(def), buildDependencyIndex(def));
++  const q3 = decorated.find((r) => r.code === "Q3")!;
++  assert.ok(q3.dependsOn >= 1, "Q3 reads Q2 (display logic and a pipe)");
++  const q2 = decorated.find((r) => r.code === "Q2")!;
++  assert.ok(q2.usedBy >= 1, "Q2 is read by Q3");
++  const again = decorateGridRows(decorated, objectStatus(def), buildDependencyIndex(def));
++  for (let i = 0; i < again.length; i++) assert.equal(again[i], decorated[i], "unchanged rows keep identity so React skips them");
++});
++
++test("a lint problem shows on its row", () => {
++  const def = survey();
++  def.questions[2] = { ...def.questions[2], displayLogic: cond.rule("q_missing", "eq", 1) } as never;
++  const rows = decorateGridRows(buildGridRows(def), objectStatus(def), buildDependencyIndex(def));
++  const q3 = rows.find((r) => r.code === "Q3")!;
++  assert.notEqual(q3.status, "ok");
++  assert.ok(q3.issueCount >= 1);
++  assert.equal(rows.find((r) => r.code === "Q1")!.status, "ok");
++});
++
++test("search matches code, variable, text, type, options and logic", () => {
++  const rows = buildGridRows(survey());
++  const find = (s: string) => applyGridQuery(rows, { ...EMPTY_FILTER, search: s }, null).map((r) => r.code);
++  assert.deepEqual(find("bosch"), ["Q2"]);
++  assert.deepEqual(find("WHY"), ["Q3"], "variable name");
++  assert.deepEqual(find("age"), ["Q1", "Q9"], "case-insensitive, and 'page' contains it — search is a substring, not a word");
++  assert.deepEqual(find("brands"), ["Q2", "Q3", "Q4"], "matches the text of Q2 and the block title of Q2–Q4");
++  assert.deepEqual(find("numeric"), ["Q1"], "type label");
++  assert.deepEqual(find("zzz"), []);
++});
++
++test("filters: with logic, with issues, by type, by block", () => {
++  const def = survey();
++  def.questions[2] = { ...def.questions[2], displayLogic: cond.rule("q_missing", "eq", 1) } as never;
++  const rows = decorateGridRows(buildGridRows(def), objectStatus(def), buildDependencyIndex(def));
++  const codes = (f: Partial<typeof EMPTY_FILTER>) => applyGridQuery(rows, { ...EMPTY_FILTER, ...f }, null).map((r) => r.code);
++  assert.deepEqual(codes({ withLogic: true }), ["Q1", "Q3"]);
++  assert.deepEqual(codes({ withIssues: true }), ["Q3", "Q9"], "Q9 sits on no page, which the lint rightly flags");
++  assert.deepEqual(codes({ types: ["text"] }), ["Q3", "Q9"]);
++  assert.deepEqual(codes({ block: "b2" }), ["Q2", "Q3", "Q4"]);
++});
++
++test("sort by ID is flow order, not alphabetical; sort is stable; desc reverses", () => {
++  const def = survey();
++  // give the survey a Q10 so alphabetical would put it before Q2
++  def.questions.push({ id: "q10", code: "Q10", variableName: "TEN", type: "text", text: "Ten" } as never);
++  (def.flow[0] as { questionIds: string[] }).questionIds.push("q10");
++  const rows = buildGridRows(def);
++  assert.deepEqual(rows.map((r) => r.code).slice(0, 2), ["Q1", "Q10"], "flow order after normalisation");
++  const asc = applyGridQuery(rows, EMPTY_FILTER, { column: "code", dir: "asc" }).map((r) => r.code);
++  assert.deepEqual(asc, rows.map((r) => r.code));
++  const desc = applyGridQuery(rows, EMPTY_FILTER, { column: "code", dir: "desc" }).map((r) => r.code);
++  assert.deepEqual(desc, [...asc].reverse());
++  const byType = applyGridQuery(rows, EMPTY_FILTER, { column: "type", dir: "asc" }).map((r) => r.code);
++  // three text questions tie on type; they keep flow order among themselves
++  const texts = byType.filter((c) => ["Q3", "Q9", "Q10"].includes(c));
++  assert.deepEqual(texts, ["Q10", "Q3", "Q9"]);
++});
++
++test("typesIn counts the types present, most common first", () => {
++  const t = typesIn(buildGridRows(survey()));
++  assert.equal(t[0].type, "text");
++  assert.equal(t[0].count, 2);
++  assert.equal(t.length, 4);
++});
++
++test("columns: two frozen, one grows, ids unique, defaults sensible", () => {
++  const ids = GRID_COLUMNS.map((c) => c.id);
++  assert.equal(new Set(ids).size, ids.length);
++  assert.deepEqual(GRID_COLUMNS.filter((c) => c.frozen).map((c) => c.id), ["status", "code"]);
++  assert.deepEqual(GRID_COLUMNS.filter((c) => c.grow).map((c) => c.id), ["text"]);
++  assert.ok(GRID_COLUMNS.filter((c) => c.defaultVisible).length >= 8);
++});
++
++test("visibleRange windows correctly at the edges and in the middle", () => {
++  const h = ROW_HEIGHT.normal;
++  const top = visibleRange(0, 720, h, 600, 8);
++  assert.equal(top.start, 0);
++  assert.equal(top.end, Math.ceil(720 / h) + 1 + 8);
++  assert.equal(top.totalHeight, 600 * h);
++  const mid = visibleRange(300 * h, 720, h, 600, 8);
++  assert.equal(mid.start, 292);
++  assert.equal(mid.offsetTop, 292 * h);
++  assert.ok(mid.end - mid.start < 50, "only a screenful plus overscan is rendered");
++  const bottom = visibleRange(10_000 * h, 720, h, 600, 8);
++  assert.equal(bottom.end, 600, "never past the last row");
++  assert.ok(bottom.start <= 600);
++  const empty = visibleRange(0, 720, h, 0);
++  assert.equal(empty.end, 0);
++});
+diff --git a/apps/studio/lib/grid/model.ts b/apps/studio/lib/grid/model.ts
+new file mode 100644
+index 0000000..b141f20
+--- /dev/null
++++ b/apps/studio/lib/grid/model.ts
+@@ -0,0 +1,313 @@
++import type { Question, SurveyDefinition } from "@rescript/schema";
++import { resolveVariant, variantRegistry, variantForLegacyType } from "@rescript/schema";
++import {
++  listBlocks, conditionSummary, stripHtmlText, objectKey, questionsInFlowOrder,
++  type ObjectKey, type ObjectStatusMap, type DependencyIndex, type StatusLevel,
++} from "@rescript/engine";
++
++/**
++ * THE GRID MODEL — one survey as rows, derived and pure.
++ *
++ * The Grid environment shows hundreds of questions at once, one row each,
++ * with the columns a programmer scans for: where it sits, what it asks, what
++ * it offers, what gates it, what it jumps to, whether it is healthy, what it
++ * depends on. None of that is stored; all of it is DERIVED from the same
++ * definition every other environment edits, here, in functions with no
++ * React in them so they are tested directly and cheap to memoise.
++ *
++ * Two layers, because they cost differently. `buildGridRows` is the cheap
++ * layer — a linear pass over the questions — and runs on every edit.
++ * `decorateGridRows` adds status and dependency counts from the engine's
++ * `objectStatus` and `buildDependencyIndex`, which cost ~100 ms at 600
++ * questions; the view computes those against a deferred definition so a
++ * keystroke in a cell never waits on them.
++ */
++
++export interface GridRow {
++  key: ObjectKey;
++  id: string;
++  code: string;
++  variableName: string;
++  type: string;
++  /** the variant's display name — "Radio buttons", "Slider" — or the raw type */
++  typeLabel: string;
++  familyLabel: string;
++  /** question text, tags stripped, trimmed */
++  text: string;
++  /** true when the stored text is plain enough to edit in a cell (no markup) */
++  plainText: boolean;
++  required: boolean;
++  blockId: string | null;
++  blockTitle: string;
++  blockIndex: number;
++  pageId: string | null;
++  indexInPage: number;
++  /** absolute position in flow order; unplaced questions sort last */
++  flowIndex: number;
++  unplaced: boolean;
++  /** "Apple · Bosch · Candy" / "5 rows × 5 columns" / "0–100" */
++  options: string;
++  optionCount: number;
++  display: string;
++  skip: string;
++  validation: string;
++  /* the deferred layer — absent until decorated */
++  status: StatusLevel;
++  issueCount: number;
++  dependsOn: number;
++  usedBy: number;
++}
++
++/* ------------------------------------------------------------ cheap layer */
++
++/** the few entities a stripped label can still carry */
++const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", "#39": "'" };
++export function decodeEntities(s: string): string {
++  return s.replace(/&(#?\w+);/g, (m, name: string) => ENTITIES[name] ?? (name.startsWith("#") ? String.fromCharCode(Number(name.slice(1))) || m : m));
++}
++
++/** the variant a question resolves to — by id, or by its legacy type when saved without one */
++function variantOf(q: Question) {
++  return resolveVariant(q.variant ?? undefined)
++    ?? (variantForLegacyType(q.type) ? variantRegistry.get(variantForLegacyType(q.type)!) : undefined);
++}
++
++function optionsText(q: Question): { text: string; count: number } {
++  const opts = q.options ?? [];
++  const rows = q.rows ?? [];
++  const cols = q.columns ?? [];
++  const label = (o: { label?: string; code?: unknown }) => decodeEntities(stripHtmlText(o.label ?? "")) || String(o.code ?? "");
++  if (rows.length && (cols.length || opts.length)) {
++    return { text: `${rows.length} row${rows.length === 1 ? "" : "s"} × ${(cols.length || opts.length)} column${(cols.length || opts.length) === 1 ? "" : "s"}`, count: rows.length * (cols.length || opts.length) };
++  }
++  if (opts.length) {
++    const shown = opts.slice(0, 6).map(label);
++    return { text: shown.join(" · ") + (opts.length > 6 ? ` · +${opts.length - 6}` : ""), count: opts.length };
++  }
++  if (rows.length) {
++    return { text: rows.slice(0, 6).map(label).join(" · ") + (rows.length > 6 ? ` · +${rows.length - 6}` : ""), count: rows.length };
++  }
++  const st = (q.settings ?? {}) as Record<string, unknown>;
++  const lo = st.minValue ?? st.min;
++  const hi = st.maxValue ?? st.max;
++  if (typeof lo === "number" || typeof hi === "number") return { text: `${lo ?? "…"}–${hi ?? "…"}`, count: 0 };
++  if (q.type === "nps") return { text: "0–10", count: 11 };
++  return { text: "", count: 0 };
++}
++
++function skipText(def: SurveyDefinition, q: Question): string {
++  const rules = q.skipLogic ?? [];
++  if (!rules.length) return "";
++  const byId = new Map(def.questions.map((x) => [x.id, x.code]));
++  return rules.map((r) => {
++    const t = r.target;
++    const where = t.kind === "question" ? (byId.get(t.ref ?? "") ?? t.ref)
++      : t.kind === "terminate" ? `end (${t.status ?? "terminated"})`
++        : t.kind === "end" ? "end"
++          : t.kind === "url" ? "url"
++            : `${t.kind} ${t.ref ?? ""}`.trim();
++    return `→ ${where} when ${conditionSummary(def, r.when)}`;
++  }).join("; ");
++}
++
++function validationText(q: Question): string {
++  const rules = q.validation ?? [];
++  const parts: string[] = [];
++  if (q.required) parts.push("required");
++  for (const v of rules) {
++    const kind = String(v.kind).replace(/_/g, " ");
++    parts.push(v.value !== undefined && v.value !== null && v.value !== "" && typeof v.value !== "object" ? `${kind} ${v.value}` : kind);
++  }
++  return parts.join(", ");
++}
++
++export function buildGridRows(def: SurveyDefinition): GridRow[] {
++  const placement = new Map<string, { blockId: string; blockTitle: string; blockIndex: number; pageId: string; indexInPage: number }>();
++  listBlocks(def.flow as unknown[]).forEach((b, bi) => {
++    for (const p of b.pages) {
++      p.node.questionIds.forEach((qid, i) => {
++        if (!placement.has(qid)) placement.set(qid, { blockId: b.id, blockTitle: b.title ?? `Block ${bi + 1}`, blockIndex: bi, pageId: p.node.id, indexInPage: i });
++      });
++    }
++  });
++
++  // flow order, whatever order the array happens to be in; unplaced questions come last
++  return questionsInFlowOrder(def).map((q, i) => {
++    const v = variantOf(q);
++    const place = placement.get(q.id);
++    const text = decodeEntities(stripHtmlText(q.text ?? "")).trim();
++    const raw = String(q.text ?? "");
++    const opts = optionsText(q);
++    return {
++      key: objectKey("question", q.id),
++      id: q.id,
++      code: q.code,
++      variableName: q.variableName,
++      type: q.type,
++      typeLabel: v?.name ?? q.type,
++      familyLabel: v?.familyLabel ?? q.type,
++      text,
++      plainText: !/<[a-z][\s\S]*>/i.test(raw) && !raw.includes("{{"),
++      required: !!q.required,
++      blockId: place?.blockId ?? null,
++      blockTitle: place?.blockTitle ?? "—",
++      blockIndex: place?.blockIndex ?? Number.MAX_SAFE_INTEGER,
++      pageId: place?.pageId ?? null,
++      indexInPage: place?.indexInPage ?? -1,
++      flowIndex: i,
++      unplaced: !place,
++      options: opts.text,
++      optionCount: opts.count,
++      display: q.displayLogic ? conditionSummary(def, q.displayLogic) : "",
++      skip: skipText(def, q),
++      validation: validationText(q),
++      status: "ok",
++      issueCount: 0,
++      dependsOn: 0,
++      usedBy: 0,
++    };
++  });
++}
++
++/* ------------------------------------------------------------ deferred layer */
++
++export function decorateGridRows(rows: GridRow[], status: ObjectStatusMap, index: DependencyIndex): GridRow[] {
++  return rows.map((r) => {
++    const st = status.statusOf(r.key);
++    const dependsOn = new Set(index.dependsOn(r.key).map((e) => e.to)).size;
++    const usedBy = new Set(index.usedBy(r.key).map((e) => e.from)).size;
++    if (st.level === r.status && st.issues.length === r.issueCount && dependsOn === r.dependsOn && usedBy === r.usedBy) return r;
++    return { ...r, status: st.level, issueCount: st.issues.length, dependsOn, usedBy };
++  });
++}
++
++/* ------------------------------------------------------------ columns */
++
++export type GridColumnId =
++  | "status" | "code" | "type" | "variable" | "text" | "options" | "display" | "skip"
++  | "validation" | "required" | "deps" | "block";
++
++export interface GridColumn {
++  id: GridColumnId;
++  label: string;
++  /** px; the text column stretches */
++  width: number;
++  minWidth: number;
++  /** sticks to the left edge while scrolling horizontally */
++  frozen?: boolean;
++  /** the text column grows to fill */
++  grow?: boolean;
++  sortable: boolean;
++  defaultVisible: boolean;
++  align?: "left" | "center" | "right";
++  /** inline-editable in the grid */
++  editable?: boolean;
++  description: string;
++}
++
++export const GRID_COLUMNS: readonly GridColumn[] = [
++  { id: "status", label: "", width: 34, minWidth: 34, frozen: true, sortable: true, defaultVisible: true, align: "center", description: "Health: a problem, a warning, or nothing to report" },
++  { id: "code", label: "ID", width: 92, minWidth: 70, frozen: true, sortable: true, defaultVisible: true, description: "Question code" },
++  { id: "type", label: "Type", width: 150, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Question type" },
++  { id: "variable", label: "Variable", width: 160, minWidth: 110, sortable: true, defaultVisible: true, editable: true, description: "Exported variable name" },
++  { id: "text", label: "Question", width: 360, minWidth: 200, grow: true, sortable: true, defaultVisible: true, editable: true, description: "Question text" },
++  { id: "options", label: "Options", width: 240, minWidth: 140, sortable: true, defaultVisible: true, description: "Answer options, rows × columns, or range" },
++  { id: "display", label: "Display logic", width: 240, minWidth: 140, sortable: true, defaultVisible: true, description: "Shown when…" },
++  { id: "skip", label: "Skip logic", width: 200, minWidth: 120, sortable: true, defaultVisible: true, description: "Jumps after this question" },
++  { id: "validation", label: "Validation", width: 160, minWidth: 100, sortable: true, defaultVisible: false, description: "Required and validation rules" },
++  { id: "required", label: "Req.", width: 56, minWidth: 56, sortable: true, defaultVisible: false, align: "center", editable: true, description: "Required" },
++  { id: "deps", label: "Deps", width: 84, minWidth: 70, sortable: true, defaultVisible: true, align: "center", description: "Reads ← / read by →" },
++  { id: "block", label: "Block", width: 150, minWidth: 100, sortable: true, defaultVisible: true, editable: true, description: "The block the question sits in" },
++];
++
++export const DEFAULT_VISIBLE_COLUMNS: GridColumnId[] = GRID_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.id);
++
++/* ------------------------------------------------------------ query */
++
++export interface SortSpec { column: GridColumnId; dir: "asc" | "desc" }
++
++export interface GridFilter {
++  search: string;
++  /** null = any */
++  types: string[] | null;
++  withLogic: boolean;
++  withIssues: boolean;
++  /** block id, or null = any */
++  block: string | null;
++}
++
++export const EMPTY_FILTER: GridFilter = { search: "", types: null, withLogic: false, withIssues: false, block: null };
++
++const STATUS_RANK: Record<StatusLevel, number> = { error: 0, warning: 1, ok: 2 };
++
++function sortValue(r: GridRow, col: GridColumnId): string | number {
++  switch (col) {
++    case "status": return STATUS_RANK[r.status];
++    case "code": return r.flowIndex;               // "sort by ID" is flow order, not alphabetical Q1, Q10, Q2
++    case "type": return r.typeLabel.toLowerCase();
++    case "variable": return r.variableName.toLowerCase();
++    case "text": return r.text.toLowerCase();
++    case "options": return r.optionCount;
++    case "display": return r.display ? 0 : 1;      // gated first
++    case "skip": return r.skip ? 0 : 1;
++    case "validation": return r.validation.toLowerCase();
++    case "required": return r.required ? 0 : 1;
++    case "deps": return -(r.dependsOn + r.usedBy);
++    case "block": return r.blockIndex * 10000 + r.indexInPage;
++  }
++}
++
++export function applyGridQuery(rows: GridRow[], filter: GridFilter, sort: SortSpec | null): GridRow[] {
++  const q = filter.search.trim().toLowerCase();
++  let out = rows.filter((r) => {
++    if (filter.types && !filter.types.includes(r.type)) return false;
++    if (filter.withLogic && !r.display && !r.skip) return false;
++    if (filter.withIssues && r.status === "ok") return false;
++    if (filter.block && r.blockId !== filter.block) return false;
++    if (q) {
++      const hay = `${r.code} ${r.variableName} ${r.text} ${r.typeLabel} ${r.options} ${r.display} ${r.skip} ${r.blockTitle}`.toLowerCase();
++      if (!hay.includes(q)) return false;
++    }
++    return true;
++  });
++  if (sort) {
++    const dir = sort.dir === "asc" ? 1 : -1;
++    out = [...out].sort((a, b) => {
++      const va = sortValue(a, sort.column);
++      const vb = sortValue(b, sort.column);
++      if (va < vb) return -dir;
++      if (va > vb) return dir;
++      return a.flowIndex - b.flowIndex;             // stable: flow order breaks ties
++    });
++  }
++  return out;
++}
++
++/** the distinct question types present, for the type filter */
++export function typesIn(rows: GridRow[]): { type: string; label: string; count: number }[] {
++  const m = new Map<string, { type: string; label: string; count: number }>();
++  for (const r of rows) {
++    const cur = m.get(r.type) ?? { type: r.type, label: r.familyLabel, count: 0 };
++    cur.count++;
++    m.set(r.type, cur);
++  }
++  return [...m.values()].sort((a, b) => b.count - a.count);
++}
++
++/* ------------------------------------------------------------ windowing */
++
++export type Density = "compact" | "normal" | "comfortable";
++export const ROW_HEIGHT: Record<Density, number> = { compact: 28, normal: 36, comfortable: 46 };
++
++/**
++ * Which rows to render for a scroll position — the whole of the windowing
++ * arithmetic, kept pure so it is tested. `overscan` rows above and below
++ * keep fast scrolling from showing blank rows before the next paint.
++ */
++export function visibleRange(scrollTop: number, viewportHeight: number, rowHeight: number, total: number, overscan = 8): { start: number; end: number; offsetTop: number; totalHeight: number } {
++  const first = Math.min(Math.floor(Math.max(0, scrollTop) / rowHeight), Math.max(0, total - 1));
++  const count = Math.ceil(viewportHeight / rowHeight) + 1;
++  const start = Math.max(0, first - overscan);
++  const end = Math.min(total, first + count + overscan);
++  return { start, end, offsetTop: start * rowHeight, totalHeight: total * rowHeight };
++}
+diff --git a/apps/studio/lib/multimodalFoundation.test.ts b/apps/studio/lib/multimodalFoundation.test.ts
+index cebb049..5f9cbde 100644
+--- a/apps/studio/lib/multimodalFoundation.test.ts
++++ b/apps/studio/lib/multimodalFoundation.test.ts
+@@ -25,11 +25,14 @@ import { builtinCommands, navigationCommands, findCommands, type StudioCommandCo
+ test("the URL wins over memory, memory over the default, and an unavailable mode falls back", () => {
+   assert.equal(resolveInitialMode("", null), DEFAULT_MODE);
+   assert.equal(resolveInitialMode("?mode=studio", "studio"), "studio");
+-  // Grid is declared but has no renderer yet: never open on an empty screen
+-  const grid = MODES.find((m) => m.id === "grid")!;
+-  assert.equal(grid.available, false, "this test assumes Grid is not yet built; update it when it is");
+-  assert.equal(resolveInitialMode("?mode=grid", null), DEFAULT_MODE);
+-  assert.equal(resolveInitialMode("?tab=logic", "grid"), DEFAULT_MODE);
++  // Architect is declared but has no renderer yet: never open on an empty screen
++  const architect = MODES.find((m) => m.id === "architect")!;
++  assert.equal(architect.available, false, "this test assumes Architect is not yet built; update it when it is");
++  assert.equal(resolveInitialMode("?mode=architect", null), DEFAULT_MODE);
++  assert.equal(resolveInitialMode("?tab=logic", "architect"), DEFAULT_MODE);
++  // Grid IS available: the URL and memory both work for it
++  assert.equal(resolveInitialMode("?mode=grid", null), "grid");
++  assert.equal(resolveInitialMode("", "grid"), "grid");
+   assert.equal(resolveInitialMode("?mode=nonsense", "alsononsense"), DEFAULT_MODE);
+   assert.equal(isProgrammingMode("flow"), true);
+   assert.equal(isProgrammingMode("Flow"), false);
+@@ -234,7 +237,9 @@ test("edits are hidden in read-only; navigation and mode commands are not", () =
+ test("mode commands offer only available modes other than the current one", () => {
+   const ctx = fakeCtx();
+   const ids = applicable(builtinCommands(), ctx).map((c) => c.id).filter((i) => i.startsWith("mode."));
+-  assert.deepEqual(ids, [], "only Studio is available and we are in Studio → nothing to switch to");
++  assert.deepEqual(ids, ["mode.grid"], "in Studio, Grid is the one other available mode");
++  const inGrid = fakeCtx({ mode: "grid" });
++  assert.deepEqual(applicable(builtinCommands(), inGrid).map((c) => c.id).filter((i) => i.startsWith("mode.")), ["mode.studio"]);
+ });
+ 
+ test("navigation commands skip the current tab; find commands locate questions by code, variable and text", () => {
+diff --git a/apps/studio/lib/programmingMode.ts b/apps/studio/lib/programmingMode.ts
+index c6ffde5..6947ba3 100644
+--- a/apps/studio/lib/programmingMode.ts
++++ b/apps/studio/lib/programmingMode.ts
+@@ -31,7 +31,7 @@ export interface ModeInfo {
+ 
+ export const MODES: readonly ModeInfo[] = [
+   { id: "studio", label: "Studio", tagline: "Build visually", audience: "For researchers who want an intuitive modern builder.", available: true, index: 1 },
+-  { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: false, index: 2 },
++  { id: "grid", label: "Grid", tagline: "Program at scale", audience: "For high-speed questionnaire programming.", available: true, index: 2 },
+   { id: "architect", label: "Architect", tagline: "Control every detail", audience: "For advanced survey programmers.", available: false, index: 3 },
+   { id: "flow", label: "Flow", tagline: "See the survey's behavior", audience: "For complex routing and logic.", available: false, index: 4 },
+   { id: "intelligent", label: "Intelligent", tagline: "Describe what you want", audience: "For users who want assistance while programming.", available: false, index: 5 },
+diff --git a/apps/studio/package.json b/apps/studio/package.json
+index f189b91..2fa6811 100644
+--- a/apps/studio/package.json
++++ b/apps/studio/package.json
+@@ -7,7 +7,7 @@
+     "build": "pnpm --filter @rescript/studio^... build && next build",
+     "start": "next start -p 3000",
+     "typecheck": "tsc --noEmit",
+-    "test": "node --experimental-strip-types --no-warnings --test lib/*.test.ts"
++    "test": "node --experimental-strip-types --no-warnings --test \"lib/**/*.test.ts\""
+   },
+   "dependencies": {
+     "@rescript/access": "workspace:*",
+diff --git a/scripts/grid-mode-test.mjs b/scripts/grid-mode-test.mjs
+new file mode 100644
+index 0000000..631479e
+--- /dev/null
++++ b/scripts/grid-mode-test.mjs
+@@ -0,0 +1,402 @@
++/**
++ * GRID MODE — the survey as a programmable research grid (Phase 1).
++ *
++ * Runs against the sandbox with the Master Demo (160 questions) for the
++ * behaviour checks and the 600-question scale fixture for the performance
++ * checks. Every edit made in the grid is read back from the definition, so
++ * what is asserted is what the survey became, not what the grid displayed.
++ *
++ *   node scripts/grid-mode-test.mjs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { buildMasterDemoSurvey, buildScaleSurvey } from "../packages/templates/dist/index.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
++const mod = process.platform === "darwin" ? "Meta" : "Control";
++
++const browser = await chromium.launch();
++const page = await browser.newPage({ viewport: { width: 1700, height: 950 } });
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("console", (m) => {
++  if (m.type() !== "error") return;
++  const t = m.text();
++  if (/401|ERR_TUNNEL|Failed to load resource/.test(t)) return;
++  pageErrors.push(t.slice(0, 400));
++});
++
++const goTab = async (name) => { await page.click(`.leftnav >> text=${name}`); await page.waitForTimeout(150); };
++const loadDef = async (def) => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => {
++    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v);
++    el.dispatchEvent(new Event("input", { bubbles: true }));
++  }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++  await goTab("Questions");
++};
++const readDef = async () => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  await goTab("Questions");
++  await page.waitForSelector('[data-testid="grid-view"]');
++  return JSON.parse(json);
++};
++const rowCodes = () => page.$$eval('[data-testid="grid-row"]', (els) => els.map((e) => e.dataset.code));
++const count = () => page.$eval('[data-testid="grid-count"]', (e) => e.textContent);
++const rowByCode = (code) => page.$(`[data-testid="grid-row"][data-code="${code}"]`);
++const cell = (code, col) => page.$(`[data-testid="grid-row"][data-code="${code}"] .sg-cell[data-col="${col}"]`);
++
++await page.goto(`${STUDIO}/sandbox`, { waitUntil: "networkidle" });
++await page.waitForSelector(".block-badge");
++await loadDef(buildMasterDemoSurvey("sandbox"));
++
++/* ----------------------------------------------------------- switch */
++{
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  ok("clicking Grid in the selector renders the grid — no reload, same tab");
++  assert.match(page.url(), /mode=grid/);
++  ok("the URL now says ?mode=grid");
++  assert.equal(await page.$eval('[data-testid="mode-grid"]', (e) => e.classList.contains("active")), true);
++  assert.equal(await count(), "160 questions");
++  ok("all 160 Master Demo questions are counted");
++  const mounted = (await page.$$('[data-testid="grid-row"]')).length;
++  assert.ok(mounted < 60 && mounted > 15, `windowed: ${mounted} rows mounted of 160`);
++  ok(`only a screenful is in the DOM (${mounted} of 160)`);
++  const codes = await rowCodes();
++  assert.equal(codes[0], "INFO1");
++  assert.deepEqual(codes.slice(1, 4), ["Q1", "Q2", "Q3"]);
++  ok("rows are in flow order");
++  // type labels are readable names, not raw types
++  const types = await page.$$eval('.sg-cell[data-col="type"]', (els) => els.slice(0, 12).map((e) => e.textContent));
++  assert.ok(types.every((t) => !/_/.test(t)), `raw types leaked: ${types.join(", ")}`);
++  ok("type column shows variant names, not raw type ids");
++  // the deferred layer: dependency counts arrive from the engine's index
++  await page.waitForFunction(() => {
++    const c = document.querySelector('[data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="deps"]');
++    return c && c.textContent !== "—";
++  }, null, { timeout: 5000 });
++  const deps = await page.$eval('[data-testid="grid-row"][data-code="Q3"] .sg-cell[data-col="deps"]', (e) => e.textContent);
++  assert.match(deps, /→[1-9]/, `AGE is read by calculations and logic: ${deps}`);
++  ok(`the Deps column shows what reads Q3 (${deps}) — from the dependency index`);
++  // and a lint problem shows as a dot: Q9 (PHONE) is fine; find any row with a status dot or none — Master Demo passes lint
++  const dots = await page.$$eval('[data-testid="grid-status"]', (els) => els.length);
++  assert.equal(dots, 0, "the Master Demo has no lint problems, so no row carries a dot");
++  ok("no status dots on a clean survey");
++}
++
++/* ----------------------------------------------------------- windowing */
++{
++  await page.$eval(".sg-scroll", (el) => { el.scrollTop = 36 * 120; });
++  await page.waitForTimeout(150);
++  const codes = await rowCodes();
++  assert.ok(!codes.includes("Q1"), "the first rows are unmounted after scrolling far down");
++  assert.ok(codes.length > 15);
++  ok("scrolling swaps the mounted window");
++  await page.$eval(".sg-scroll", (el) => { el.scrollTop = 0; });
++  await page.waitForTimeout(150);
++  assert.equal((await rowCodes())[0], "INFO1");
++  ok("scrolling back remounts the top");
++  // header and frozen columns stick
++  const sticky = await page.$eval(".sg-head", (e) => getComputedStyle(e).position);
++  assert.equal(sticky, "sticky");
++  const frozen = await page.$eval('.sg-row .sg-cell[data-col="code"]', (e) => getComputedStyle(e).position);
++  assert.equal(frozen, "sticky");
++  ok("the header and the ID column are sticky");
++}
++
++/* ----------------------------------------------------------- selection → properties */
++{
++  const q3 = await rowByCode("Q3");
++  await q3.click();
++  await page.waitForTimeout(200);
++  assert.equal(await page.$eval(".rightpanel", (e) => e.classList.contains("rp-hidden")), false);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q3/);
++  ok("selecting a row opens that question's properties on the right — the shared selection");
++  // shift-click selects a range
++  const q6 = await rowByCode("Q6");
++  await q6.click({ modifiers: ["Shift"] });
++  await page.waitForTimeout(200);
++  const selected = await page.$$eval('[data-testid="grid-row"][aria-selected="true"]', (els) => els.map((e) => e.dataset.code));
++  assert.deepEqual(selected, ["Q3", "Q4", "Q5", "Q6"]);
++  ok("shift-click selects the range");
++  assert.ok(await page.$('[data-testid="grid-bulk"]'), "the bulk bar appears");
++  assert.match(await page.$eval('[data-testid="grid-bulk"] strong', (e) => e.textContent), /4 selected/);
++  ok("the bulk bar counts the selection");
++  const q8 = await rowByCode("Q8");
++  await q8.click({ modifiers: [mod] });
++  await page.waitForTimeout(150);
++  assert.match(await page.$eval('[data-testid="grid-bulk"] strong', (e) => e.textContent), /5 selected/);
++  ok(`${mod}-click adds one more`);
++  await page.click('[data-testid="grid-bulk"] >> text=Clear');
++  await page.waitForTimeout(150);
++  assert.equal(await page.$('[data-testid="grid-bulk"]'), null);
++  ok("Clear empties the selection");
++}
++
++/* ----------------------------------------------------------- inline edits */
++{
++  // text
++  const textCell = await cell("Q3", "text");
++  await textCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-text"]');
++  await page.fill('[data-testid="grid-edit-text"]', "How old are you, in years?");
++  await page.keyboard.press("Enter");
++  await page.waitForTimeout(250);
++  let def = await readDef();
++  assert.equal(def.questions.find((q) => q.code === "Q3").text, "How old are you, in years?");
++  ok("double-click → type → Enter edits the question text through the store");
++
++  // a rename the engine must REFUSE: AGE is mentioned by a custom script, which cannot be rewritten
++  const varCell0 = await cell("Q3", "variable");
++  await varCell0.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-variable"]');
++  await page.fill('[data-testid="grid-edit-variable"]', "AGE_YEARS");
++  await page.keyboard.press("Enter");
++  await page.waitForTimeout(300);
++  assert.match(await page.$eval('[data-testid="grid-edit-variable-error"]', (e) => e.textContent), /script/i);
++  await page.keyboard.press("Escape");
++  await page.waitForTimeout(150);
++  def = await readDef();
++  assert.equal(def.questions.find((q) => q.code === "Q3").variableName, "AGE", "a refused rename changes nothing");
++  ok("a rename a script depends on is refused in the cell with the engine's own reason — same rule as the editor");
++
++  // a rename that is safe: CITY is read by nothing
++  const varCell = await cell("Q6", "variable");
++  await varCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-variable"]');
++  await page.fill('[data-testid="grid-edit-variable"]', "CITY_NAME");
++  await page.keyboard.press("Enter");
++  await page.waitForTimeout(300);
++  def = await readDef();
++  assert.equal(def.questions.find((q) => q.code === "Q6").variableName, "CITY_NAME");
++  ok("renaming a variable in a cell goes through renameImpact/applyRename");
++
++  // a colliding rename keeps the field and says why
++  const varCell2 = await cell("Q7", "variable");
++  await varCell2.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-variable"]');
++  await page.fill('[data-testid="grid-edit-variable"]', "CITY_NAME");   // already taken by Q6
++  await page.keyboard.press("Enter");
++  await page.waitForTimeout(250);
++  assert.ok(await page.$('[data-testid="grid-edit-variable-error"]'), "an error is shown for a taken name");
++  await page.keyboard.press("Escape");
++  await page.waitForTimeout(150);
++  def = await readDef();
++  assert.equal(def.questions.find((q) => q.code === "Q7").variableName, "EMAIL", "the refused rename changed nothing");
++  ok("a colliding rename is refused in the cell, as in the editor, and nothing changes");
++
++  // required
++  await page.click('[data-testid="grid-columns"]');
++  await page.click('[data-testid="grid-columns-menu"] >> text=Req.');
++  await page.keyboard.press("Escape");
++  await page.waitForTimeout(150);
++  const reqCell = await cell("Q6", "required");
++  const before = (await readDef()).questions.find((q) => q.code === "Q6").required;
++  const box = await (await cell("Q6", "required")).$('[data-testid="grid-required"]');
++  await box.click();
++  await page.waitForTimeout(250);
++  def = await readDef();
++  assert.equal(!!def.questions.find((q) => q.code === "Q6").required, !before);
++  ok("the Required checkbox toggles the field");
++  assert.ok(reqCell);
++
++  // type, through the same migration + confirmation
++  const typeCell = await cell("Q6", "type");
++  await typeCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-type"]');
++  const options = await page.$$eval('[data-testid="grid-edit-type"] option', (els) => els.map((o) => o.value));
++  const target = options.find((v) => /text\.multi_line|textarea|multi_line/.test(v)) ?? options.find((v) => v && v !== "text.single_line");
++  await page.selectOption('[data-testid="grid-edit-type"]', target);
++  await page.waitForTimeout(300);
++  // a same-model change applies silently; a model change asks — accept either path
++  const dialog = await page.$('[data-testid="type-change-confirm"], .modal button:has-text("Change type")');
++  if (dialog) { await dialog.click(); await page.waitForTimeout(250); }
++  def = await readDef();
++  assert.equal(def.questions.find((q) => q.code === "Q6").variant, target);
++  ok(`the type cell changes the type via migrateQuestionType (→ ${target})`);
++}
++
++/* ----------------------------------------------------------- search, filter, sort */
++{
++  await page.fill('[data-testid="grid-search"]', "devices");
++  await page.waitForTimeout(300);
++  const codes = await rowCodes();
++  assert.ok(codes.includes("Q11"), `Q11 asks about devices: ${codes.join(",")}`);
++  assert.ok(codes.length < 160);
++  assert.match(await count(), /of 160/);
++  ok("search narrows the rows and the count says 'N of 160'");
++  await page.fill('[data-testid="grid-search"]', "");
++  await page.waitForTimeout(300);
++  await page.click('[data-testid="grid-filter-logic"]');
++  await page.waitForTimeout(200);
++  const logicRows = await page.$$eval('[data-testid="grid-row"]', (els) => els.map((e) => ({ code: e.dataset.code, d: e.querySelector('[data-col="display"]')?.textContent, s: e.querySelector('[data-col="skip"]')?.textContent })));
++  assert.ok(logicRows.length > 0 && logicRows.every((r) => r.d !== "—" || r.s !== "—"), JSON.stringify(logicRows.slice(0, 3)));
++  ok("'With logic' keeps only rows with display or skip logic");
++  await page.click('[data-testid="grid-filter-logic"]');
++  await page.click('[data-testid="grid-head-type"]');
++  await page.waitForTimeout(200);
++  const typesSorted = await page.$$eval('.sg-cell[data-col="type"]', (els) => els.map((e) => e.textContent.toLowerCase()));
++  const sorted = [...typesSorted].sort();
++  assert.deepEqual(typesSorted, sorted, "type column ascending");
++  ok("clicking a header sorts ascending");
++  await page.click('[data-testid="grid-head-type"]');
++  await page.waitForTimeout(200);
++  const desc = await page.$$eval('.sg-cell[data-col="type"]', (els) => els.map((e) => e.textContent.toLowerCase()));
++  assert.deepEqual(desc, [...desc].sort().reverse());
++  ok("again sorts descending");
++  await page.click('[data-testid="grid-head-type"]');
++  await page.waitForTimeout(200);
++  assert.equal((await rowCodes())[0], "INFO1");
++  ok("a third click returns to flow order");
++}
++
++/* ----------------------------------------------------------- keyboard + hover actions */
++{
++  await page.click('[data-testid="grid-row"][data-code="Q1"]');
++  await page.focus('[data-testid="grid-table"]');
++  await page.keyboard.press("ArrowDown");
++  await page.keyboard.press("ArrowDown");
++  await page.waitForTimeout(150);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q3/);
++  ok("↓ moves the selection row by row (the property panel follows)");
++  await page.keyboard.press("Shift+ArrowDown");
++  await page.waitForTimeout(150);
++  assert.equal((await page.$$('[data-testid="grid-row"][aria-selected="true"]')).length, 2);
++  ok("⇧↓ extends the selection");
++  await page.keyboard.press("Escape");
++  await page.waitForTimeout(100);
++
++  // hover actions: duplicate a row
++  const before = (await readDef()).questions.length;
++  const q2 = await rowByCode("Q2");
++  await q2.hover();
++  await page.waitForSelector('[data-testid="grid-row"][data-code="Q2"] [data-testid="grid-action-duplicate"]');
++  await page.click('[data-testid="grid-row"][data-code="Q2"] [data-testid="grid-action-duplicate"]');
++  await page.waitForTimeout(300);
++  const def = await readDef();
++  assert.equal(def.questions.length, before + 1);
++  assert.ok(def.questions.some((q) => q.code === "Q2_COPY"));
++  ok("the row's hover ⧉ duplicates that row (through the command registry, with a unique name)");
++  assert.ok(await rowByCode("Q2_COPY"), "the copy appears as a row immediately");
++  ok("the new row appears without any reload — one store, one render");
++}
++
++/* ----------------------------------------------------------- bulk + delete */
++{
++  const before = await readDef();
++  await page.click('[data-testid="grid-row"][data-code="Q2_COPY"]');
++  await page.keyboard.press("Delete");
++  await page.waitForSelector('[data-testid="delete-question-dialog"]');
++  ok("Delete on a selected row opens the same delete dialog as the Studio");
++  await page.click('[data-testid="delete-question-confirm"]');
++  await page.waitForTimeout(300);
++  const after = await readDef();
++  assert.equal(after.questions.length, before.questions.length - 1);
++  assert.ok(!after.questions.some((q) => q.code === "Q2_COPY"));
++  ok("confirming removes it and prunes references");
++
++  // bulk required on three rows
++  await page.click('[data-testid="grid-row"][data-code="Q4"]');
++  await page.click('[data-testid="grid-row"][data-code="Q6"]', { modifiers: ["Shift"] });
++  await page.waitForSelector('[data-testid="grid-bulk"]');
++  await page.click('[data-testid="grid-bulk-required-on"]');
++  await page.waitForTimeout(300);
++  const d2 = await readDef();
++  for (const c of ["Q4", "Q5", "Q6"]) assert.equal(d2.questions.find((q) => q.code === c).required, true, `${c} required`);
++  ok("bulk 'Required' sets all selected rows in one undoable edit");
++  await page.click('[data-testid="grid-bulk-required-off"]');
++  await page.waitForTimeout(300);
++  const d3 = await readDef();
++  for (const c of ["Q4", "Q5", "Q6"]) assert.equal(!!d3.questions.find((q) => q.code === c).required, false);
++  ok("bulk 'Optional' reverses it");
++  // undo takes the bulk edit back as one step
++  await page.click("main.center", { position: { x: 5, y: 5 } }).catch(() => {});
++  await page.keyboard.press(`${mod}+z`);
++  await page.waitForTimeout(300);
++  const d4 = await readDef();
++  assert.equal(d4.questions.find((q) => q.code === "Q4").required, true, "one undo restored the bulk Required");
++  ok("one ⌘Z undoes the whole bulk edit — it went through the store");
++}
++
++/* ----------------------------------------------------------- switching back keeps the survey and the selection */
++{
++  await page.click('[data-testid="grid-row"][data-code="Q5"]');
++  await page.waitForTimeout(150);
++  await page.click('[data-testid="mode-studio"]');
++  await page.waitForSelector(".block-badge");
++  assert.equal(await page.$('[data-testid="grid-view"]'), null);
++  assert.match(await page.$eval(".rightpanel h2", (e) => e.textContent), /Q5/);
++  ok("switching to Studio keeps the selected question — the selection is shared");
++  assert.doesNotMatch(page.url(), /mode=/);
++  ok("the URL drops ?mode= for the default");
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-view"]');
++  assert.equal((await page.$$('[data-testid="grid-row"][aria-selected="true"]')).length, 1);
++  ok("and back to Grid, the row is still selected");
++}
++
++/* ----------------------------------------------------------- scale: 600 questions */
++{
++  await page.click('[data-testid="mode-studio"]');
++  await page.waitForSelector(".block-badge");
++  await loadDef(buildScaleSurvey(600));
++  const t0 = Date.now();
++  await page.click('[data-testid="mode-grid"]');
++  await page.waitForSelector('[data-testid="grid-row"]');
++  const switchMs = Date.now() - t0;
++  assert.ok(switchMs < 3000, `Grid took ${switchMs}ms to appear at 600 questions`);
++  ok(`Grid renders 600 questions in ${switchMs}ms`);
++  assert.equal(await count(), "600 questions");
++  const mounted = (await page.$$('[data-testid="grid-row"]')).length;
++  assert.ok(mounted < 60, `${mounted} rows mounted for 600`);
++  ok(`still only ${mounted} rows in the DOM at 600 questions`);
++  // scroll cost
++  const scrollMs = await page.evaluate(async () => {
++    const el = document.querySelector(".sg-scroll");
++    const t = performance.now();
++    for (let i = 1; i <= 20; i++) { el.scrollTop = i * 900; await new Promise((r) => requestAnimationFrame(r)); }
++    return performance.now() - t;
++  });
++  assert.ok(scrollMs < 2500, `20 scroll steps took ${scrollMs.toFixed(0)}ms`);
++  ok(`20 long scroll steps rendered in ${scrollMs.toFixed(0)}ms (~${(scrollMs / 20).toFixed(0)}ms each)`);
++  // typing in a cell stays responsive: the status/deps layer is deferred
++  await page.$eval(".sg-scroll", (el) => { el.scrollTop = 0; });
++  await page.waitForTimeout(200);
++  const first = await page.$eval('[data-testid="grid-row"]', (e) => e.dataset.code);
++  const textCell = await cell(first, "text");
++  await textCell.dblclick();
++  await page.waitForSelector('[data-testid="grid-edit-text"]');
++  const typeMs = await page.evaluate(async () => {
++    const input = document.querySelector('[data-testid="grid-edit-text"]');
++    const t = performance.now();
++    for (const ch of "responsive typing") {
++      input.value += ch;
++      input.dispatchEvent(new Event("input", { bubbles: true }));
++      await new Promise((r) => requestAnimationFrame(r));
++    }
++    return performance.now() - t;
++  });
++  await page.keyboard.press("Escape");
++  assert.ok(typeMs < 1500, `17 keystrokes took ${typeMs.toFixed(0)}ms`);
++  ok(`17 keystrokes in a cell took ${typeMs.toFixed(0)}ms at 600 questions`);
++  // search narrows quickly
++  const t1 = Date.now();
++  await page.fill('[data-testid="grid-search"]', "Block 40");
++  await page.waitForFunction(() => /of 600/.test(document.querySelector('[data-testid="grid-count"]')?.textContent ?? ""));
++  ok(`search over 600 rows narrowed in ${Date.now() - t1}ms`);
++}
++
++assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
++ok("no uncaught errors or React warnings through any of it");
++
++await browser.close();
++console.log(`\nALL GRID MODE CHECKS PASSED (${passed})`);
+diff --git a/scripts/multimodal-foundation-test.mjs b/scripts/multimodal-foundation-test.mjs
+index 4691e8d..7059c8b 100644
+--- a/scripts/multimodal-foundation-test.mjs
++++ b/scripts/multimodal-foundation-test.mjs
+@@ -60,10 +60,13 @@ await page.waitForSelector(".block-badge");
+   ok("the mode selector shows all five environments in order");
+   assert.ok(modes[0].active && modes[0].available === "1" && !modes[0].disabled, JSON.stringify(modes[0]));
+   ok("Studio is the active, available mode");
+-  for (const m of modes.slice(1)) assert.ok(!m.active && m.available === "0" && m.disabled, JSON.stringify(m));
+-  ok("the four unbuilt modes are visible, disabled and marked coming-soon");
+-  const title = await page.getAttribute('[data-testid="mode-grid"]', "title");
+-  assert.match(title, /Program at scale/);
++  const built = modes.filter((m) => m.available === "1").map((m) => m.id);
++  const unbuilt = modes.filter((m) => m.available === "0");
++  assert.deepEqual(built, ["studio", "grid"], "the modes with a renderer so far");
++  for (const m of unbuilt) assert.ok(!m.active && m.disabled, JSON.stringify(m));
++  ok(`the ${unbuilt.length} unbuilt modes are visible, disabled and marked coming-soon`);
++  const title = await page.getAttribute('[data-testid="mode-architect"]', "title");
++  assert.match(title, /Control every detail/);
+   ok("a disabled mode still tells you what it will be");
+ }
+ 
+@@ -257,14 +260,17 @@ await page.waitForSelector(".block-badge");
+ 
+ /* ----------------------------------------------------------- ?mode= */
+ {
+-  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.goto(`${STUDIO}/sandbox?mode=architect`, { waitUntil: "networkidle" });
+   await page.waitForSelector('[data-testid="mode-selector"]');
+   const active = await page.$eval('[data-testid="mode-selector"] .mode-option.active', (e) => e.dataset.mode);
+   assert.equal(active, "studio");
+-  ok("?mode=grid falls back to Studio while Grid has no renderer — never an empty screen");
++  ok("?mode=architect falls back to Studio while Architect has no renderer — never an empty screen");
+   const url = page.url();
+-  assert.ok(url.includes("mode=grid") || !url.includes("mode="), "the url is left alone until a real switch happens");
++  assert.ok(url.includes("mode=architect") || !url.includes("mode="), "the url is left alone until a real switch happens");
+   ok("the URL is not rewritten by the fallback");
++  await page.goto(`${STUDIO}/sandbox?mode=grid`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="grid-view"]');
++  ok("?mode=grid opens straight into Grid");
+ }
+ 
+ assert.deepEqual(pageErrors, [], `page errors: ${pageErrors.join("\n")}`);
+-- 
+2.43.0
+
+

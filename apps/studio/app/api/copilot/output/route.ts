@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { aiConfigured, aiProviderName, completeJson } from "@rescript/ai";
+import { aiConfigured, aiModelName, aiProviderName, completeJson } from "@rescript/ai";
+import { aiAllowed } from "@/lib/aiPolicy";
+import { keepReply, recordAiRefused, recordAiText, replyFromCache, replyKey } from "@/lib/aiText";
 import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
-import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
+import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, claimsBrief, claimsFromRun, claimsHash, promptVersion, redactPrompt, redactRunForModel, hash64, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
 import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/analytics/export";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
@@ -109,27 +111,52 @@ export async function POST(req: NextRequest) {
   if (previous) run.since = compareRuns(run, previous);
   const results: Record<string, AnalysisResult> = Object.fromEntries(run.items.map((it) => [it.definition.options?.planned ? String(it.definition.options.planned) : it.definition.name, it.result]));
 
-  /* the narrative: the model, from the brief only, through the gate */
+  /*
+   * THE NARRATIVE: the model, from the claims only, through the gate (audit A-1).
+   * What is sent is redacted first (A-7: no group below the minimum, no
+   * open-text words, no email or phone), the project's AI switch is asked
+   * before the cache is read (A-2), the reply is kept under its claims and
+   * prompt version (A-6), and the same redacted view is what the checker reads,
+   * so a claim that was withheld cannot be cited. What stands is recorded.
+   */
   let narrative: NarrativeSections | undefined;
   let gate = "none";
   if (body.narrative !== false && aiConfigured()) {
     const fake = fakeProvider && body.fake && typeof body.fake === "object" ? body.fake : null;
+    const red = redactRunForModel(run);
+    const claims = claimsFromRun(red.run);
+    const pv = promptVersion(NARRATIVE_INSTRUCTIONS);
+    const model = aiModelName("large");
     let raw: unknown = fake;
-    if (!raw) {
-      const billing = await billingProjectFor(user, surveyId);
-      if (!("response" in billing)) {
-        const brief = briefText(run, { maxFindings: 25 });
-        const prompt = `${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}`;
-        const nb = outputBudget("narrative");
-        const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: nb.expectedTokens, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, nb.maxTokens, { timeoutMs: nb.timeoutMs, continuations: nb.continuations })).catch(() => null);
-        raw = m && m.ok ? m.value : null;
-      }
+    let aiOff: string | null = null;
+    let cached = false;
+    let failure: string | null = null;
+    let charge = 0;
+    /* the project's AI switch comes first, whatever supplies the reply */
+    const allowed = await aiAllowed(surveyId, "copilot_narrative");
+    if (!allowed.allowed) { raw = null; aiOff = allowed.message ?? "AI is off for this project."; void recordAiRefused({ userId: user?.userId ?? null, surveyId }, "copilot_narrative", allowed.reason ?? "project_internal"); }
+    else if (!raw) {
+        const brief = briefText(red.run, { maxFindings: 25 });
+        const prompt = redactPrompt(`${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}\n\nCLAIMS (cite these ids):\n${claimsBrief(claims)}`).text;
+        const key = replyKey({ op: "narrative", pv, model, audience: output.audience, claims: claimsHash(claims), brief: hash64(brief) });
+        const hit = await replyFromCache<unknown>(db ?? undefined, surveyId, key);
+        if (hit) { raw = hit; cached = true; }
+        else {
+          const billing = await billingProjectFor(user, surveyId);
+          if (!("response" in billing)) {
+            const nb = outputBudget("narrative");
+            const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: nb.expectedTokens, operation: "copilot_narrative" }, () => completeJson("You write research findings for clients. Answer with JSON only.", prompt, nb.maxTokens, { timeoutMs: nb.timeoutMs, continuations: nb.continuations })).catch((e: unknown) => { failure = e instanceof Error ? e.message : "the model call failed"; return null; });
+            if (m && !m.ok) { if (m.reason === "ai_off") aiOff = m.message; else failure = m.message; }
+            if (m && m.ok) { raw = m.value; charge = m.event?.customerCharge ?? 0; await keepReply(db ?? undefined, surveyId, key, raw); }
+          }
+        }
     }
-    const g = raw && typeof raw === "object" ? gateNarrative(run, raw as Record<string, unknown>) : null;
+    const g = raw && typeof raw === "object" ? gateNarrative(red.run, raw as Record<string, unknown>, { claims }) : null;
     if (g && g.offered) {
       narrative = g.accepted;
-      gate = `${g.kept} of ${g.offered} sentences kept${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `${r.section}: ${r.reason}`).join(" | ")}` : ""}`;
-    } else gate = "the model gave nothing - the engine's words stand";
+      gate = `${g.kept} of ${g.offered} sentences kept${g.replaced ? `; ${g.replaced} replaced by the engine's wording` : ""}${g.rejected.length ? `; dropped: ${g.rejected.map((r) => `${r.section}: ${r.reason}`).join(" | ")}` : ""}${red.withheld.length ? `; ${red.withheld.length} small-group finding${red.withheld.length === 1 ? "" : "s"} not sent to the model` : ""}`;
+      if (!fake) void recordAiText({ userId: user?.userId ?? null, surveyId }, { operation: "copilot_narrative", model, promptVersion: pv, claimsHash: claimsHash(claims), claims: [...new Set(g.sentences.flatMap((x) => x.claims))], offered: g.offered, kept: g.kept, replaced: g.replaced, rejected: g.rejected.map((r) => ({ reason: r.reason })), withheld: red.withheld, cached, charge });
+    } else gate = aiOff ? `${aiOff} The engine's words stand.` : failure ? `the model could not be used (${failure}) - the engine's words stand` : "the model gave nothing - the engine's words stand";
   } else if (body.narrative === false) gate = "not asked";
   else gate = "no model configured - the engine's words stand";
 

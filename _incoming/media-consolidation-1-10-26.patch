@@ -1,0 +1,2272 @@
+From b90d52d9f01a0ec656f182154311119ff21086fd Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Sun, 4 Oct 2026 14:11:45 +0000
+Subject: [PATCH] Media consolidation: Insert media for the question text,
+ option image pop-up (1-10-26 review)
+
+- Option Image URL: Choose / Upload open a Customize image pop-up (width,
+  height, scale, fit, alignment, proportions, padding, spacing, alt text,
+  live preview); nothing reaches the option until Apply. Customize reopens
+  it. Stored as option.imageDisplay and applied at every option-image site.
+- The separate "Media shown under the question text" field is retired.
+  Insert media in the question text now has sources (library, upload, URL,
+  Google Drive + save to library), Above / Below / at the cursor, several
+  items each with their own settings, YouTube / Vimeo / Drive players and a
+  live preview. Old questions keep their media and can move it into the
+  text. Position and several items are offered only in the question text.
+- Fix: an edited picture was read back as kind "img", so the dialog had no
+  preview, no alt field and showed player controls; the preview now
+  follows every change.
+- Clearing the source of an edited item and pressing Apply removes it.
+- Piped image URLs: a {{ImageURL}} source can be inserted; option and
+  question media URLs are no longer HTML-escaped (& survived as &amp;);
+  a picture whose piped source is empty is dropped.
+- POST /api/surveys/[id]/media/import saves a Drive file into the library
+  (node-only helpers in @rescript/media/server).
+- MediaDisplay gains padding and spacing.
+
+Tests: engine mediaConsolidation (7), media importRemote (4), browser
+media-consolidation (14 checks); mutation-checked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ .../api/surveys/[id]/media/import/route.ts    |  51 +++
+ apps/studio/app/globals.css                   |  26 ++
+ .../studio/components/canvas/ElementPanel.tsx |  11 +-
+ .../studio/ImageCustomizeDialog.tsx           |  87 +++++
+ .../studio/MediaDisplayControls.tsx           |  23 +-
+ .../components/studio/MediaInsertDialog.tsx   | 298 +++++++++++---
+ .../components/studio/MediaUrlInput.tsx       |  45 ++-
+ .../components/studio/QuestionsPanel.tsx      |  38 +-
+ .../components/studio/RichTextEditor.tsx      |  68 +++-
+ apps/studio/lib/assets.ts                     |  22 ++
+ docs/MEDIA-CONSOLIDATION-2026-10-04.md        |  66 ++++
+ packages/engine/src/carryforward.ts           |   7 +-
+ packages/engine/src/index.ts                  |   1 +
+ packages/engine/src/legacyMedia.ts            |  34 ++
+ .../engine/src/mediaConsolidation.test.ts     | 116 ++++++
+ packages/engine/src/mediaDisplay.ts           |  76 +++-
+ packages/media/src/importRemote.test.ts       |  88 +++++
+ packages/media/src/importRemote.ts            | 115 ++++++
+ packages/media/src/server.ts                  |   1 +
+ packages/renderer/src/QuestionRenderer.tsx    |  12 +-
+ packages/renderer/src/variants/card.tsx       |   2 +-
+ packages/renderer/src/variants/carousel.tsx   |   2 +-
+ packages/renderer/src/variants/comparison.tsx |   2 +-
+ packages/renderer/src/variants/ranking.tsx    |   2 +-
+ .../renderer/src/variants/singleSelect.tsx    |  12 +-
+ packages/renderer/styles/variants/media.css   |   2 +
+ packages/schema/src/mediaDisplay.ts           |   4 +
+ packages/schema/src/question.ts               |   6 +
+ scripts/media-consolidation-test.mjs          | 364 ++++++++++++++++++
+ 29 files changed, 1482 insertions(+), 99 deletions(-)
+ create mode 100644 apps/studio/app/api/surveys/[id]/media/import/route.ts
+ create mode 100644 apps/studio/components/studio/ImageCustomizeDialog.tsx
+ create mode 100644 docs/MEDIA-CONSOLIDATION-2026-10-04.md
+ create mode 100644 packages/engine/src/legacyMedia.ts
+ create mode 100644 packages/engine/src/mediaConsolidation.test.ts
+ create mode 100644 packages/media/src/importRemote.test.ts
+ create mode 100644 packages/media/src/importRemote.ts
+ create mode 100644 scripts/media-consolidation-test.mjs
+
+diff --git a/apps/studio/app/api/surveys/[id]/media/import/route.ts b/apps/studio/app/api/surveys/[id]/media/import/route.ts
+new file mode 100644
+index 0000000..9d7c853
+--- /dev/null
++++ b/apps/studio/app/api/surveys/[id]/media/import/route.ts
+@@ -0,0 +1,51 @@
++import { NextRequest, NextResponse } from "next/server";
++import { isFailure, requireEditRight } from "@/lib/guard";
++import { mediaDbOrResponse } from "@/lib/mediaRoute";
++import { MediaError, stageLogger } from "@rescript/media";
++import { fetchDriveFile, storeAssetBytes } from "@rescript/media/server";
++
++export const dynamic = "force-dynamic";
++export const runtime = "nodejs";
++
++/**
++ * SAVE A GOOGLE DRIVE FILE INTO THIS SURVEY'S ASSET LIBRARY (1-10-26 review).
++ *
++ * Insert media → Google Drive URL → "Save to asset library". The browser
++ * cannot read a Drive file itself (no CORS), so this route downloads the
++ * file Drive serves for a link shared "Anyone with the link" and stores it
++ * through the same ticket → upload → confirm path every library upload
++ * takes (`storeAssetBytes`). Only a Drive file link is fetched — never an
++ * arbitrary URL — and only a picture, video or audio file within the
++ * library's size for its kind is kept.
++ *
++ * `survey.edit`: adding to the library is editing the survey.
++ */
++export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
++  const gate = await requireEditRight(req, params.id, "survey.edit");
++  if (isFailure(gate)) return gate.response;
++
++  let body: Record<string, unknown>;
++  try { body = await req.json(); } catch { return NextResponse.json({ error: "expected a JSON body" }, { status: 400 }); }
++  const url = String(body.url ?? "").trim();
++  if (!url) return NextResponse.json({ error: "url required" }, { status: 400 });
++
++  const handle = mediaDbOrResponse();
++  if ("response" in handle) return handle.response;
++  const log = stageLogger(`survey:${params.id}`);
++  try {
++    const file = await fetchDriveFile(url);
++    const out = await storeAssetBytes(handle.db, {
++      customerId: gate.survey.customer_id ?? gate.user.customerId!,
++      surveyId: params.id,
++      createdBy: gate.user.userId,
++      file,
++      displayName: typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : null,
++      altText: typeof body.altText === "string" && body.altText.trim() ? body.altText.trim() : null,
++    });
++    log("storage_confirmed", { mediaId: out.asset.id, kind: "survey_asset", bytes: file.bytes.byteLength, source: "google_drive", duplicate: out.duplicate });
++    return NextResponse.json({ ok: true, asset: out.asset, duplicate: out.duplicate });
++  } catch (e) {
++    if (e instanceof MediaError) return NextResponse.json({ error: e.message }, { status: e.status });
++    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
++  }
++}
+diff --git a/apps/studio/app/globals.css b/apps/studio/app/globals.css
+index d0cc5fa..087a6ac 100644
+--- a/apps/studio/app/globals.css
++++ b/apps/studio/app/globals.css
+@@ -2505,3 +2505,29 @@ p.qs-help { margin: -2px 0 10px; }
+ .ax-export-tile:disabled { opacity: .5; cursor: not-allowed; }
+ .ax-export-k { font-weight: 650; font-size: 14.5px; color: var(--c-text); }
+ .ax-export-d { font-size: 12.5px; color: var(--c-text-3); line-height: 1.4; }
++
++/* ---------- Insert media (1-10-26): several items, position, live preview ---------- */
++.mins-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
++.mins-item { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--border); border-radius: 8px; padding: 1px; }
++.mins-item.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
++.mins-preview { display: flex; flex-direction: column; gap: 6px; }
++.mins-preview-media { width: 100%; }
++.mins-preview-media video, .mins-preview-media audio { max-width: 100%; }
++.mins-preview-media .rs-embed-frame iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #0b1120; border-radius: 6px; }
++.mins-preview-text { font-weight: 600; color: var(--subtle); background: var(--panel2); border-radius: 6px; padding: 4px 8px; font-size: 13px; }
++/* a player in the editor is a labelled box until the respondent's page makes it a player */
++.rte-surface [data-rs-media="embed"] {
++  display: block; box-sizing: border-box; min-height: 64px; padding: 18px 12px; border: 2px dashed var(--accent); border-radius: 8px;
++  background: var(--panel2); color: var(--accent); font-weight: 600; font-size: 13px; text-align: center; cursor: pointer; max-width: 100%;
++}
++/* a piped picture has no URL until a respondent arrives — show where it goes */
++.rte-surface img[src*="{{"], .rte-surface img[src*="%7B%7B"] {
++  min-width: 120px; min-height: 48px; outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--panel2);
++}
++/* ---------- the option image pop-up (1-10-26) ---------- */
++.imgc-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 16px; margin-top: 8px; }
++.imgc-frame { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: #fff; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
++.imgc-frame img { max-width: 100%; }
++.imgc-label { font-size: 14px; color: #0f172a; }
++.imgc-piped { box-sizing: border-box; min-height: 60px; border: 2px dashed var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font: 12px ui-monospace, monospace; color: var(--accent); background: var(--panel2); }
++@media (max-width: 760px) { .imgc-body { grid-template-columns: 1fr; } }
+diff --git a/apps/studio/components/canvas/ElementPanel.tsx b/apps/studio/components/canvas/ElementPanel.tsx
+index b7883ce..dacd7c8 100644
+--- a/apps/studio/components/canvas/ElementPanel.tsx
++++ b/apps/studio/components/canvas/ElementPanel.tsx
+@@ -9,6 +9,7 @@ import { OptionLogicEditor } from "../studio/OptionLogicEditor";
+ import { OptionalCondition } from "../studio/ConditionBuilder";
+ import { RandomizeAxes } from "../studio/RandomizeAxes";
+ import { InlineRichText } from "../studio/RichTextEditor";
++import { MediaUrlInput } from "../studio/MediaUrlInput";
+ import { Icon } from "../ui/Icon";
+ import { selectionLabel, type SelectedEntity } from "./selection";
+ import type { AuthoringAnnotations } from "./authoringView";
+@@ -134,9 +135,13 @@ function OptionProps({ q, code, ann, patch, onSelect }: {
+         * a question that has no picture in it anywhere.
+         */}
+       {drawsOptionImages(resolveVariant(q.variant)?.renderer, q.type) && (
+-        <label className="f"><span>Image</span>
+-          <input className="input" placeholder="https://…" value={o.imageUrl ?? ""}
+-            onChange={(e) => patch(code, { imageUrl: e.target.value || undefined })} /></label>
++        /* the same field as the Questions panel's: Choose / Upload open the image pop-up first */
++        <MediaUrlInput label="Image" placeholder="https://… — or choose / upload" testId="lc-option-image" questionId={q.id} accept={["image"]}
++          value={o.imageUrl} onChange={(v) => patch(code, { imageUrl: v })}
++          customize={{
++            display: o.imageDisplay, alt: o.imageAlt, label: o.label,
++            onApply: (imageUrl, imageDisplay, imageAlt) => patch(code, { imageUrl, imageDisplay, imageAlt }),
++          }} />
+       )}
+ 
+       <h3 className="sec">Behaviour</h3>
+diff --git a/apps/studio/components/studio/ImageCustomizeDialog.tsx b/apps/studio/components/studio/ImageCustomizeDialog.tsx
+new file mode 100644
+index 0000000..44bdeb2
+--- /dev/null
++++ b/apps/studio/components/studio/ImageCustomizeDialog.tsx
+@@ -0,0 +1,87 @@
++"use client";
++import React from "react";
++import type { MediaDisplay } from "@rescript/schema";
++import { mediaDisplayStyle, resolveMediaUrl } from "@rescript/engine";
++import { MediaDisplayControls } from "./MediaDisplayControls";
++
++/**
++ * THE IMAGE POP-UP FOR AN ANSWER OPTION (1-10-26 review, Oweas 1–2, Prince).
++ *
++ * Choosing or uploading a picture for an option used to drop it straight
++ * into the row. Now the pick opens this first: width and height in px, scale,
++ * fit, alignment, proportions, padding and spacing, alt text, and a live
++ * preview of the picture in an option-sized frame — and nothing reaches the
++ * row until Apply. Cancel leaves the row exactly as it was.
++ *
++ * It edits the option's `imageDisplay` (a `MediaDisplay`, the same object
++ * the renderer sizes every picture with), so what the preview shows is what
++ * the respondent gets. It is deliberately smaller than Insert media: an
++ * option has one picture in one place, so there is no position and no
++ * several-items list here.
++ */
++export function ImageCustomizeDialog({ open, url, display, alt, label, onApply, onCancel }: {
++  open: boolean;
++  url: string;
++  display: MediaDisplay | undefined;
++  alt: string | undefined;
++  /** the option's label, shown in the preview frame */
++  label?: string;
++  onApply(display: MediaDisplay | undefined, alt: string | undefined): void;
++  onCancel(): void;
++}) {
++  const [d, setD] = React.useState<MediaDisplay | undefined>(display);
++  const [a, setA] = React.useState(alt ?? "");
++  React.useEffect(() => {
++    if (!open) return;
++    setD(display); setA(alt ?? "");
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [open, url]);
++  React.useEffect(() => {
++    if (!open) return;
++    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
++    document.addEventListener("keydown", onKey);
++    return () => document.removeEventListener("keydown", onKey);
++  }, [open, onCancel]);
++  if (!open) return null;
++  const media = resolveMediaUrl(url);
++  const piped = /\{\{[^}]+\}\}/.test(url);
++  return (
++    <div className="modal-back" onClick={onCancel} data-testid="image-customize">
++      <div className="modal" role="dialog" aria-modal="true" aria-label="Customize image" style={{ width: 720 }} onClick={(e) => e.stopPropagation()}>
++        <div className="row" style={{ alignItems: "center", gap: 8 }}>
++          <h2 style={{ fontSize: 15, margin: 0 }}>Customize image</h2>
++          <span className="muted mono" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 420 }} title={url}>{url.startsWith("data:") ? "inline image" : url}</span>
++          <span className="grow" />
++          <button type="button" className="btn small" onClick={onCancel}>close</button>
++        </div>
++        <div className="imgc-body">
++          <div className="imgc-controls">
++            <label className="f"><span>Alt text <span className="muted">(what a screen reader says — blank uses the option label)</span></span>
++              <input className="input" data-testid="image-customize-alt" value={a} placeholder={label ? label.replace(/<[^>]*>/g, "") : "e.g. Acme logo"} onChange={(e) => setA(e.target.value)} /></label>
++            <h3 className="sec" style={{ marginTop: 6 }}>Size &amp; layout</h3>
++            <MediaDisplayControls kind="image" value={d} onChange={setD} compact />
++          </div>
++          <div className="imgc-preview-col">
++            <h3 className="sec" style={{ marginTop: 0 }}>Preview</h3>
++            <div className="imgc-frame" data-testid="image-customize-preview">
++              {piped
++                ? <div className="imgc-piped" style={mediaDisplayStyle(d) as React.CSSProperties}>{url}</div>
++                : media.kind === "image" && media.url
++                  // eslint-disable-next-line @next/next/no-img-element
++                  ? <img src={media.url} alt="" style={mediaDisplayStyle(d) as React.CSSProperties} />
++                  : <div className="muted" style={{ fontSize: 12.5 }}>{media.reason ?? "Not an image URL."}</div>}
++              {label && <div className="imgc-label" dangerouslySetInnerHTML={{ __html: label.replace(/<(?!\/?(b|i|u|em|strong|br)\b)[^>]*>/gi, "") }} />}
++            </div>
++            <p className="muted" style={{ fontSize: 12 }}>The option&apos;s own layout (card, list row, icon…) frames the picture; these settings size and place it inside that frame.</p>
++          </div>
++        </div>
++        <div className="row" style={{ marginTop: 10, gap: 8 }}>
++          <span className="grow" />
++          <button type="button" className="btn" onClick={onCancel} data-testid="image-customize-cancel">Cancel</button>
++          <button type="button" className="btn primary" data-testid="image-customize-apply"
++            onClick={() => onApply(d && Object.keys(d).length ? d : undefined, a.trim() || undefined)}>Apply</button>
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/MediaDisplayControls.tsx b/apps/studio/components/studio/MediaDisplayControls.tsx
+index 7edee72..207c443 100644
+--- a/apps/studio/components/studio/MediaDisplayControls.tsx
++++ b/apps/studio/components/studio/MediaDisplayControls.tsx
+@@ -17,7 +17,7 @@ import { mediaDisplayCss, resolveMediaUrl } from "@rescript/engine";
+  * `kind` decides which controls make sense: an image has no autoplay, an
+  * audio clip has no fit.
+  */
+-export type DisplayKind = "image" | "video" | "audio";
++export type DisplayKind = "image" | "video" | "audio" | "embed";
+ 
+ const FITS: { value: NonNullable<MediaDisplay["fit"]>; label: string; hint: string }[] = [
+   { value: "contain", label: "Contain", hint: "whole picture visible, letterboxed if the box has another shape" },
+@@ -42,13 +42,16 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
+     }
+     onChange(Object.keys(next).length ? next : undefined);
+   };
+-  const len = (k: "width" | "height" | "maxWidth" | "maxHeight", label: string, placeholder: string) => (
++  const len = (k: "width" | "height" | "maxWidth" | "maxHeight" | "padding" | "spacing", label: string, placeholder: string) => (
+     <label className="f" key={k}><span>{label}</span>
+       <input className="input mono" style={{ width: compact ? 84 : 100 }} data-testid={`mdisp-${k}`} placeholder={placeholder}
+         value={d[k] === undefined ? "" : String(d[k])}
+         onChange={(e) => patch({ [k]: e.target.value.trim() || undefined } as Partial<MediaDisplay>)} /></label>
+   );
+-  const isAv = kind !== "image";
++  const isAv = kind === "video" || kind === "audio";
++  /* "Scale" is the width as a share of the space available — a shortcut for a
++     percentage width that a programmer can drag rather than type */
++  const pct = typeof d.width === "string" && /^\d+(\.\d+)?%$/.test(d.width.trim()) ? Number(d.width.trim().slice(0, -1)) : null;
+   return (
+     <div className="mdisp" data-testid="media-display-controls">
+       <div className="mdisp-row">
+@@ -58,7 +61,17 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
+         {len("maxHeight", "Max height", "none")}
+       </div>
+       <div className="mdisp-row">
+-        {kind !== "audio" && (
++        <label className="f"><span>Scale <span className="muted">(% of the width available)</span></span>
++          <span className="row" style={{ gap: 6, alignItems: "center" }}>
++            <input type="range" min={5} max={100} step={5} data-testid="mdisp-scale" value={pct ?? 100}
++              onChange={(e) => patch({ width: Number(e.target.value) >= 100 && pct == null ? d.width : `${e.target.value}%`, height: undefined })} />
++            <span className="muted mono" style={{ fontSize: 12, minWidth: 34 }}>{pct != null ? `${pct}%` : "auto"}</span>
++          </span></label>
++        {len("padding", "Padding", "0")}
++        {len("spacing", "Spacing above / below", "0")}
++      </div>
++      <div className="mdisp-row">
++        {kind !== "audio" && kind !== "embed" && (
+           <label className="f"><span>Fit</span>
+             <select className="select" data-testid="mdisp-fit" value={d.fit ?? ""} title={FITS.find((f) => f.value === d.fit)?.hint}
+               onChange={(e) => patch({ fit: (e.target.value || undefined) as MediaDisplay["fit"] })}>
+@@ -74,7 +87,7 @@ export function MediaDisplayControls({ value, onChange, kind, compact }: {
+             ))}
+           </div></label>
+         <label className="f qs-check-field"><span>Keep proportions</span>
+-          <span className="qs-check-inline"><input type="checkbox" checked={d.keepRatio !== false} onChange={(e) => patch({ keepRatio: e.target.checked ? undefined : false })} /><span className="muted">{d.keepRatio !== false ? "on" : "off"}</span></span></label>
++          <span className="qs-check-inline"><input type="checkbox" data-testid="mdisp-keepRatio" checked={d.keepRatio !== false} onChange={(e) => patch({ keepRatio: e.target.checked ? undefined : false })} /><span className="muted">{d.keepRatio !== false ? "on" : "off"}</span></span></label>
+         <label className="f qs-check-field"><span>Shrink on small screens</span>
+           <span className="qs-check-inline"><input type="checkbox" data-testid="mdisp-responsive" checked={d.responsive !== false} onChange={(e) => patch({ responsive: e.target.checked ? undefined : false })} /><span className="muted">{d.responsive !== false ? "on" : "off"}</span></span></label>
+       </div>
+diff --git a/apps/studio/components/studio/MediaInsertDialog.tsx b/apps/studio/components/studio/MediaInsertDialog.tsx
+index 651065f..8e22dfd 100644
+--- a/apps/studio/components/studio/MediaInsertDialog.tsx
++++ b/apps/studio/components/studio/MediaInsertDialog.tsx
+@@ -1,22 +1,43 @@
+ "use client";
+ import React from "react";
+ import type { MediaDisplay } from "@rescript/schema";
+-import { mediaHtml, mediaDisplayFromCss, resolveMediaUrl, type InsertableMediaKind } from "@rescript/engine";
++import { mediaHtml, mediaDisplayFromCss, resolveMediaUrl, expandMediaEmbeds, sanitizeHtml, type InsertableMediaKind } from "@rescript/engine";
+ import { AssetPicker } from "./AssetPicker";
+-import { MediaDisplayControls, MediaDisplayPreview } from "./MediaDisplayControls";
+-import { useStudio } from "./store";
+-import type { AssetSummary } from "@/lib/assets";
++import { MediaDisplayControls } from "./MediaDisplayControls";
++import { useStudio, uid } from "./store";
++import { ASSET_ACCEPT, importDriveAsset, uploadAsset, type AssetSummary, type UploadProgress } from "@/lib/assets";
+ 
+ /**
+- * INSERT (OR EDIT) A PICTURE, VIDEO OR AUDIO CLIP IN RICH TEXT.
++ * INSERT (OR EDIT) PICTURES, VIDEOS, AUDIO AND PLAYERS IN RICH TEXT.
+  *
+  * Opened from the editor's "Insert media" button, and again when an
+  * already-inserted picture is clicked: the dialog reads the element's URL,
+  * alt text and `style` back into the controls (`mediaDisplayFromCss`), so
+  * "make the logo smaller" is a number changed, not HTML edited. It produces
+  * the markup through the engine's `mediaHtml` — the same object the
+- * renderer sizes a question's stimulus with — so the picture in the option
+- * label looks the same in the builder, the preview and the live survey.
++ * renderer sizes a question's stimulus with — so the picture looks the same
++ * in the builder, the preview and the live survey.
++ *
++ * ONE PLACE FOR A QUESTION'S MEDIA (1-10-26 review). The separate "Media shown
++ * under the question text" field is gone; everything it did is here, for the
++ * question text (`placement`):
++ *
++ *   Source      asset library · upload new · URL · Google Drive URL (and a
++ *               Drive file can be saved into the library, to reuse it)
++ *   Kind        image · video · audio · player (YouTube, Vimeo, Drive)
++ *   Alt text    what a screen reader says
++ *   Size        width, height, scale, fit, alignment, proportions, padding,
++ *               spacing, shrink on small screens — per item
++ *   Position    above the question text · below it · at the cursor
++ *   Several     add, reorder, remove, each with its own settings
++ *   Preview     the items as the respondent sees them, live
++ *
++ * In an answer option's label (no `placement`) the dialog stays what it was:
++ * one picture or clip, its size, at the cursor — the position and
++ * several-item controls belong to the question text only.
++ *
++ * Editing an item and clearing its Source is a valid action: Apply removes
++ * that item from the text.
+  */
+ export interface MediaInsertValue {
+   kind: InsertableMediaKind;
+@@ -26,25 +47,56 @@ export interface MediaInsertValue {
+   mimeType?: string;
+ }
+ 
+-export function MediaInsertDialog({ open, initial, onClose, onInsert }: {
++export type MediaPosition = "above" | "below" | "cursor" | "keep";
++
++export interface MediaApply {
++  /** where the HTML goes; "keep" = in place of the edited element */
++  position: MediaPosition;
++  /** the edited element's source was cleared: take it out */
++  remove: boolean;
++  items: MediaInsertValue[];
++}
++
++type Item = MediaInsertValue & { id: string };
++type Source = "library" | "upload" | "url" | "drive";
++
++const PIPED = /\{\{[^}]+\}\}/;
++const isPiped = (u: string) => PIPED.test(u);
++
++export function MediaInsertDialog({ open, initial, onClose, onInsert, placement }: {
+   open: boolean;
+   /** what an existing element carried, when editing */
+   initial?: Partial<MediaInsertValue> | null;
+   onClose(): void;
+-  onInsert(html: string, value: MediaInsertValue): void;
++  onInsert(html: string, value: MediaInsertValue, apply: MediaApply): void;
++  /** the question text: offer position, several items and players */
++  placement?: boolean;
+ }) {
+   const s = useStudio();
+-  const [kind, setKind] = React.useState<InsertableMediaKind>(initial?.kind ?? "image");
+-  const [url, setUrl] = React.useState(initial?.url ?? "");
+-  const [alt, setAlt] = React.useState(initial?.alt ?? "");
+-  const [display, setDisplay] = React.useState<MediaDisplay | undefined>(initial?.display ?? { maxWidth: "100%" });
+-  const [mime, setMime] = React.useState<string | undefined>(initial?.mimeType);
++  const editing = !!initial?.url;
++  const fresh = (): Item => ({ id: uid("media"), kind: "image", url: "", alt: "", display: { maxWidth: "100%" } });
++  const firstItem = (): Item => initial
++    ? { id: uid("media"), kind: initial.kind ?? "image", url: initial.url ?? "", alt: initial.alt ?? "", display: initial.display ?? (initial.kind ? undefined : { maxWidth: "100%" }), mimeType: initial.mimeType }
++    : fresh();
++  const sourceOf = (u: string): Source => (u && resolveMediaUrl(u).provider === "google_drive" ? "drive" : "url");
++  /* initialised from `initial` on mount too, so the first paint already shows the element being edited */
++  const [items, setItems] = React.useState<Item[]>(() => [firstItem()]);
++  const [active, setActive] = React.useState(0);
++  const [position, setPosition] = React.useState<MediaPosition>(editing ? "keep" : placement ? "above" : "cursor");
++  const [source, setSource] = React.useState<Source>(() => sourceOf(initial?.url ?? ""));
+   const [picking, setPicking] = React.useState(false);
++  const [progress, setProgress] = React.useState<UploadProgress | null>(null);
++  const [busy, setBusy] = React.useState<string | null>(null);
++  const [error, setError] = React.useState<string | null>(null);
++  const fileRef = React.useRef<HTMLInputElement | null>(null);
+ 
+   React.useEffect(() => {
+     if (!open) return;
+-    setKind(initial?.kind ?? "image"); setUrl(initial?.url ?? ""); setAlt(initial?.alt ?? "");
+-    setDisplay(initial?.display ?? (initial?.kind ? undefined : { maxWidth: "100%" })); setMime(initial?.mimeType);
++    const first = firstItem();
++    setItems([first]); setActive(0);
++    setPosition(editing ? "keep" : placement ? "above" : "cursor");
++    setSource(sourceOf(first.url));
++    setError(null); setBusy(null); setProgress(null);
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [open]);
+   React.useEffect(() => {
+@@ -55,74 +107,218 @@ export function MediaInsertDialog({ open, initial, onClose, onInsert }: {
+   }, [open, picking, onClose]);
+ 
+   if (!open) return null;
+-  const media = resolveMediaUrl(url);
+-  const urlOk = !!url.trim() && media.kind !== "unsupported" && media.kind !== "embed";
++  const cur = items[Math.min(active, items.length - 1)];
++  const patch = (p: Partial<Item>) => setItems((xs) => xs.map((x, i) => (i === active ? { ...x, ...p } : x)));
++
++  /** what an item's URL is, judged the way the renderer will judge it */
++  const verdict = (it: Item): { ok: boolean; kind: InsertableMediaKind; message?: string } => {
++    const u = it.url.trim();
++    if (!u) return { ok: false, kind: it.kind };
++    if (isPiped(u)) return { ok: true, kind: it.kind === "embed" ? "image" : it.kind, message: "Piped — each respondent sees the media their value points to" };
++    const m = resolveMediaUrl(u);
++    if (m.kind === "unsupported") return { ok: false, kind: it.kind, message: m.reason ?? "Not a media URL." };
++    if (m.kind === "embed") {
++      return placement
++        ? { ok: true, kind: "embed", message: `${PROVIDER[m.provider] ?? m.provider} player${m.note ? ` · ${m.note}` : ""}` }
++        : { ok: false, kind: it.kind, message: "Players (YouTube, Vimeo, Drive) go in the question text, not inside an answer option." };
++    }
++    if (it.kind === "embed") return { ok: true, kind: m.kind === "video" ? (m.mimeType?.startsWith("audio/") ? "audio" : "video") : "image" };
++    return { ok: true, kind: it.kind };
++  };
++  const curV = verdict(cur);
++  const kindOf = (it: Item) => verdict(it).kind;
++
+   const pick = (a: AssetSummary) => {
+-    setUrl(a.url);
+-    setMime(a.mimeType ?? undefined);
+-    if (a.family === "image" || a.family === "video" || a.family === "audio") setKind(a.family);
+-    if (!alt && a.altText) setAlt(a.altText);
++    const kind: InsertableMediaKind = a.family === "video" || a.family === "audio" ? a.family : "image";
++    patch({ url: a.url, mimeType: a.mimeType ?? undefined, kind, ...(cur.alt || !a.altText ? {} : { alt: a.altText }) });
++  };
++  const canUse = !!s.surveyDbId && s.surveyDbId !== "sandbox";
++
++  const upload = async (file: File) => {
++    setError(null);
++    const out = await uploadAsset(s.surveyDbId, file, { onProgress: setProgress, altText: cur.alt || undefined });
++    setProgress(null);
++    if (fileRef.current) fileRef.current.value = "";
++    if (!out.ok) { setError(out.error); return; }
++    pick(out.asset);
++  };
++  const saveDrive = async () => {
++    setError(null); setBusy("Saving to the asset library…");
++    const out = await importDriveAsset(s.surveyDbId, cur.url.trim(), { altText: cur.alt || undefined });
++    setBusy(null);
++    if (!out.ok) { setError(out.error); return; }
++    pick(out.asset);
++    setSource("library");
+   };
+-  const insert = () => {
+-    const value: MediaInsertValue = { kind, url: url.trim(), alt: alt.trim(), display, mimeType: mime };
+-    onInsert(mediaHtml(kind, value.url, display, { alt: value.alt, mimeType: mime }), value);
++
++  const filled = items.filter((it) => it.url.trim());
++  const removing = editing && !cur.url.trim();
++  const allOk = filled.length > 0 && filled.every((it) => verdict(it).ok);
++  const canApply = removing || allOk;
++  const htmlOf = (it: Item) => mediaHtml(kindOf(it), it.url.trim(), it.display, { alt: it.alt.trim(), mimeType: it.mimeType });
++
++  const apply = () => {
++    const values: MediaInsertValue[] = filled.map((it) => ({ kind: kindOf(it), url: it.url.trim(), alt: it.alt.trim(), display: it.display, mimeType: it.mimeType }));
++    const html = removing ? "" : filled.map(htmlOf).join("");
++    onInsert(html, values[0] ?? { kind: cur.kind, url: "", alt: "", display: cur.display }, { position, remove: removing, items: values });
+     onClose();
+   };
+-  const canUse = s.surveyDbId && s.surveyDbId !== "sandbox";
++  const move = (i: number, d: -1 | 1) => {
++    const j = i + d;
++    if (j < 0 || j >= items.length) return;
++    setItems((xs) => { const n = [...xs]; [n[i], n[j]] = [n[j], n[i]]; return n; });
++    setActive(j);
++  };
++
++  /* the preview is the markup the respondent gets, through the renderer's own last step */
++  const previewHtml = expandMediaEmbeds(sanitizeHtml(filled.filter((it) => verdict(it).ok).map((it) => isPiped(it.url) ? pipedPlaceholder(it) : htmlOf(it)).join("")));
++  const textLine = <div className="mins-preview-text" aria-hidden>Question text…</div>;
++  const multi = !!placement && !editing;
++  const title = editing ? "Edit media" : "Insert media";
+ 
+   return (
+     <div className="modal-back" onClick={onClose} data-testid="media-insert">
+-      <div className="modal" role="dialog" aria-modal="true" aria-label="Insert media" style={{ width: 720 }} onClick={(e) => e.stopPropagation()}>
++      <div className="modal mins" role="dialog" aria-modal="true" aria-label={title} style={{ width: 780 }} onClick={(e) => e.stopPropagation()}>
+         <div className="row" style={{ alignItems: "center", gap: 8 }}>
+-          <h2 style={{ fontSize: 15, margin: 0 }}>{initial?.url ? "Edit media" : "Insert media"}</h2>
+-          <div className="row" style={{ gap: 2, marginLeft: 8 }}>
+-            {(["image", "video", "audio"] as const).map((k) => (
+-              <button key={k} type="button" className={`btn small ${kind === k ? "primary" : ""}`} data-testid={`media-insert-kind-${k}`} onClick={() => setKind(k)}>{k}</button>
+-            ))}
+-          </div>
++          <h2 style={{ fontSize: 15, margin: 0 }}>{title}</h2>
+           <span className="grow" />
+           <button type="button" className="btn small" onClick={onClose}>close</button>
+         </div>
+ 
+-        <label className="f" style={{ marginTop: 8 }}><span>Source</span>
++        {multi && (
++          <div className="mins-items" data-testid="media-insert-items">
++            {items.map((it, i) => (
++              <span key={it.id} className={`mins-item ${i === active ? "on" : ""}`} data-testid={`media-insert-item-${i}`}>
++                <button type="button" className="btn small ghost" onClick={() => setActive(i)} title="Edit this item">
++                  Media {i + 1}{it.url.trim() ? ` · ${kindOf(it) === "embed" ? "player" : kindOf(it)}` : ""}
++                </button>
++                {items.length > 1 && (
++                  <>
++                    <button type="button" className="btn small ghost" title="Move earlier" disabled={i === 0} data-testid={`media-insert-item-up-${i}`} onClick={() => move(i, -1)}>↑</button>
++                    <button type="button" className="btn small ghost" title="Move later" disabled={i === items.length - 1} onClick={() => move(i, 1)}>↓</button>
++                    <button type="button" className="btn small ghost danger" title="Remove this item" data-testid={`media-insert-item-remove-${i}`}
++                      onClick={() => { setItems((xs) => xs.filter((_, j) => j !== i)); setActive((a) => Math.max(0, a > i || a === items.length - 1 ? a - 1 : a)); }}>×</button>
++                  </>
++                )}
++              </span>
++            ))}
++            <button type="button" className="btn small" data-testid="media-insert-add" disabled={!cur.url.trim()}
++              title={cur.url.trim() ? "Add another picture, video or clip" : "Give this item a source first"}
++              onClick={() => { setItems((xs) => [...xs, fresh()]); setActive(items.length); setSource("url"); }}>+ Add media</button>
++          </div>
++        )}
++
++        <div className="row" style={{ gap: 2, marginTop: 8, flexWrap: "wrap" }}>
++          <span className="flabel" style={{ margin: "0 6px 0 0" }}>Type</span>
++          {(["image", "video", "audio"] as const).map((k) => (
++            <button key={k} type="button" className={`btn small ${curV.kind === k ? "primary" : ""}`} data-testid={`media-insert-kind-${k}`} onClick={() => patch({ kind: k })}>{k}</button>
++          ))}
++          {placement && <span className={`btn small ${curV.kind === "embed" ? "primary" : ""}`} style={{ pointerEvents: "none", opacity: curV.kind === "embed" ? 1 : 0.55 }} title="YouTube, Vimeo and Google Drive links become a player">player</span>}
++        </div>
++
++        <div className="f" style={{ marginTop: 8 }}><span>Source</span>
++          <div className="row" style={{ gap: 2, marginBottom: 6, flexWrap: "wrap" }} data-testid="media-insert-sources">
++            {([["library", "Asset library"], ["upload", "Upload new"], ["url", "URL"], ["drive", "Google Drive URL"]] as [Source, string][]).map(([k, l]) => (
++              <button key={k} type="button" className={`btn small ${source === k ? "primary" : "ghost"}`} data-testid={`media-insert-source-${k}`}
++                onClick={() => { setSource(k); if (k === "library" && canUse) setPicking(true); if (k === "upload" && canUse) fileRef.current?.click(); }}>{l}</button>
++            ))}
++          </div>
+           <div className="row" style={{ gap: 6 }}>
+-            <input className="input grow" data-testid="media-insert-url" placeholder={`${kind} URL — or choose from the asset library`} value={url} onChange={(e) => setUrl(e.target.value)} />
+-            <button type="button" className="btn small" disabled={!canUse} onClick={() => setPicking(true)} data-testid="media-insert-choose" title={canUse ? "Pick from this survey's assets, or upload" : "Save the survey first"}>Choose asset…</button>
++            <input className="input grow" data-testid="media-insert-url"
++              placeholder={source === "drive" ? "https://drive.google.com/file/d/…/view — shared “Anyone with the link”" : `${curV.kind === "embed" ? "player" : curV.kind} URL — or {{ImageURL}} to pipe one`}
++              value={cur.url} onChange={(e) => patch({ url: e.target.value, mimeType: undefined })} />
++            <button type="button" className="btn small" disabled={!canUse} onClick={() => setPicking(true)} data-testid="media-insert-choose" title={canUse ? "Pick from this survey's assets" : "Save the survey first"}>Choose asset…</button>
++            <button type="button" className="btn small" disabled={!canUse || !!progress} onClick={() => fileRef.current?.click()} data-testid="media-insert-upload" title={canUse ? "Upload a file into the asset library and use it here" : "Save the survey first"}>{progress ? progress.label : "Upload…"}</button>
++            <input ref={fileRef} type="file" accept={ASSET_ACCEPT} style={{ display: "none" }} data-testid="media-insert-file"
++              onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
+           </div>
+-          {url.trim() && !urlOk && <span className="muted" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }}>⚠ {media.kind === "embed" ? "Embedded players (YouTube, Vimeo, Drive) go in the question's media field, not inside text." : media.reason ?? "Not a media URL."}</span>}
+-        </label>
+-        {kind === "image" && (
++          {cur.url.trim() && curV.message && (
++            <span className="muted" data-testid="media-insert-verdict" style={{ fontSize: 12.5, color: curV.ok ? undefined : "var(--danger, #b91c1c)" }}>{curV.ok ? "✓ " : "⚠ "}{curV.message}</span>
++          )}
++          {curV.ok && resolveMediaUrl(cur.url.trim()).provider === "google_drive" && (
++            <span className="row" style={{ gap: 6, marginTop: 4, alignItems: "center" }}>
++              <button type="button" className="btn small" data-testid="media-insert-drive-save" disabled={!canUse || !!busy} onClick={() => void saveDrive()}
++                title={canUse ? "Copy this Drive file into the asset library, so it can be reused without the link" : "Save the survey first"}>{busy ?? "Save to asset library"}</button>
++              <span className="muted" style={{ fontSize: 12 }}>reusable from the library, and shown without Drive’s frame</span>
++            </span>
++          )}
++          {removing && <span className="muted" data-testid="media-insert-removing" style={{ fontSize: 12.5 }}>Source is empty — Apply removes this media from the question.</span>}
++          {error && <span className="muted" data-testid="media-insert-error" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }}>⚠ {error}</span>}
++        </div>
++
++        {curV.kind !== "embed" && curV.kind !== "audio" && (
+           <label className="f"><span>Alt text <span className="muted">(what a screen reader says)</span></span>
+-            <input className="input" data-testid="media-insert-alt" placeholder="e.g. Acme logo" value={alt} onChange={(e) => setAlt(e.target.value)} /></label>
++            <input className="input" data-testid="media-insert-alt" placeholder="e.g. Acme logo" value={cur.alt} onChange={(e) => patch({ alt: e.target.value })} /></label>
++        )}
++        {curV.kind === "embed" && (
++          <label className="f"><span>Title <span className="muted">(what a screen reader says about the player)</span></span>
++            <input className="input" data-testid="media-insert-alt" placeholder="e.g. Brand film" value={cur.alt} onChange={(e) => patch({ alt: e.target.value })} /></label>
+         )}
+ 
+-        <h3 className="sec" style={{ marginTop: 10 }}>Size &amp; layout</h3>
+-        <MediaDisplayControls kind={kind} value={display} onChange={setDisplay} compact />
++        <h3 className="sec" style={{ marginTop: 10 }}>Size &amp; layout{multi && items.length > 1 ? ` — Media ${active + 1}` : ""}</h3>
++        <MediaDisplayControls kind={curV.kind} value={cur.display} onChange={(display) => patch({ display })} compact />
+ 
+-        {urlOk && (
+-          <>
+-            <h3 className="sec">Preview</h3>
+-            <MediaDisplayPreview url={url} display={display} kind={kind} />
+-          </>
++        {placement && (
++          <div className="row" style={{ gap: 14, marginTop: 10, flexWrap: "wrap", alignItems: "center" }} data-testid="media-insert-position">
++            <span className="flabel" style={{ margin: 0 }}>Show media</span>
++            {(editing ? (["keep", "above", "below"] as const) : (["above", "below", "cursor"] as const)).map((p) => (
++              <label key={p} className="row" style={{ gap: 4, fontSize: 13 }}>
++                <input type="radio" name="media-position" data-testid={`media-insert-position-${p}`} checked={position === p} onChange={() => setPosition(p)} />
++                {p === "above" ? "Above question" : p === "below" ? "Below question" : p === "cursor" ? "At the cursor" : "Where it is"}
++              </label>
++            ))}
++          </div>
+         )}
+ 
++        <h3 className="sec">Preview</h3>
++        <div className="mdisp-preview mins-preview" data-testid="media-display-preview">
++          {placement && (position === "below") && textLine}
++          {previewHtml
++            ? <div className="mins-preview-media" data-testid="media-insert-preview-media" dangerouslySetInnerHTML={{ __html: previewHtml }} />
++            : <div className="muted" style={{ fontSize: 12.5 }}>{removing ? "Nothing — this media will be removed." : "Nothing to preview yet."}</div>}
++          {placement && (position === "above" || position === "keep") && textLine}
++        </div>
++
+         <div className="row" style={{ marginTop: 10, gap: 8 }}>
+           <span className="grow" />
+           <button type="button" className="btn" onClick={onClose}>Cancel</button>
+-          <button type="button" className="btn primary" disabled={!urlOk} onClick={insert} data-testid="media-insert-ok">{initial?.url ? "Apply" : "Insert"}</button>
++          <button type="button" className="btn primary" disabled={!canApply} onClick={apply} data-testid="media-insert-ok">
++            {editing ? "Apply" : filled.length > 1 ? `Insert ${filled.length} items` : "Insert"}
++          </button>
+         </div>
+       </div>
+       <AssetPicker open={picking} onClose={() => setPicking(false)} onPick={pick}
+-        accept={kind === "image" ? ["image"] : kind === "video" ? ["video"] : ["audio"]} title={`Choose ${kind === "image" ? "an image" : `a ${kind} file`}`} />
++        accept={curV.kind === "video" ? ["video"] : curV.kind === "audio" ? ["audio"] : curV.kind === "image" ? ["image"] : ["image", "video", "audio"]}
++        title={`Choose ${curV.kind === "image" ? "an image" : curV.kind === "embed" ? "media" : `a ${curV.kind} file`}`} />
+     </div>
+   );
+ }
+ 
++const PROVIDER: Record<string, string> = { youtube: "YouTube", vimeo: "Vimeo", google_drive: "Google Drive" };
++
++/** a piped picture has no URL until a respondent arrives: the preview shows where it will go, at its size */
++function pipedPlaceholder(it: Item): string {
++  const label = it.url.trim().replace(/[<>&"]/g, "");
++  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="100%" height="100%" fill="#eef2ff" stroke="#6366f1" stroke-dasharray="6 4"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="14" fill="#4338ca">${label}</text></svg>`;
++  return mediaHtml("image", `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`, it.display, { alt: it.alt });
++}
++
+ /** Read an inserted element back into dialog values — what the editor passes as `initial` on click. */
+ export function mediaValueFromElement(el: HTMLElement): Partial<MediaInsertValue> | null {
+   const tag = el.tagName.toLowerCase();
++  if (el.getAttribute("data-rs-media") === "embed") {
++    const display = mediaDisplayFromCss(el.getAttribute("style"));
++    return {
++      kind: "embed",
++      url: el.getAttribute("data-rs-src") ?? "",
++      alt: (el.textContent ?? "").replace(/^\s*▶\s*/, "").trim(),
++      display: Object.keys(display).length ? display : undefined,
++    };
++  }
+   if (tag !== "img" && tag !== "video" && tag !== "audio") return null;
+-  const kind = tag as InsertableMediaKind;
++  /* the tag is `img`; the kind is `image` — reading the tag as the kind left
++     an edited picture with no preview, no alt field and player controls */
++  const kind: InsertableMediaKind = tag === "img" ? "image" : (tag as "video" | "audio");
+   const display = mediaDisplayFromCss(el.getAttribute("style"));
+   if (kind !== "image") {
+     display.controls = el.hasAttribute("controls") ? undefined : false;
+@@ -137,7 +333,7 @@ export function mediaValueFromElement(el: HTMLElement): Partial<MediaInsertValue
+     kind,
+     url: el.getAttribute("src") ?? source?.getAttribute("src") ?? "",
+     alt: el.getAttribute("alt") ?? "",
+-    display: Object.keys(display).length ? display : undefined,
++    display: Object.keys(display).filter((k) => (display as Record<string, unknown>)[k] !== undefined).length ? display : undefined,
+     mimeType: source?.getAttribute("type") ?? undefined,
+   };
+ }
+diff --git a/apps/studio/components/studio/MediaUrlInput.tsx b/apps/studio/components/studio/MediaUrlInput.tsx
+index bb01efc..44e76ef 100644
+--- a/apps/studio/components/studio/MediaUrlInput.tsx
++++ b/apps/studio/components/studio/MediaUrlInput.tsx
+@@ -2,7 +2,9 @@
+ import React from "react";
+ import { resolveMediaUrl } from "@rescript/engine";
+ import { ASSET_ACCEPT, uploadAsset, type AssetSummary, type UploadProgress } from "@/lib/assets";
++import type { MediaDisplay } from "@rescript/schema";
+ import { AssetPicker } from "./AssetPicker";
++import { ImageCustomizeDialog } from "./ImageCustomizeDialog";
+ import { useStudio } from "./store";
+ 
+ /**
+@@ -16,7 +18,7 @@ import { useStudio } from "./store";
+  * into that library. Upload and Choose are the same library — a file
+  * uploaded here appears in the Assets tab and in every other Choose.
+  */
+-export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId, accept }: {
++export function MediaUrlInput({ value, onChange, placeholder, compact, testId, label, questionId, accept, customize }: {
+   value: string | undefined;
+   onChange(next: string | undefined, asset?: AssetSummary): void;
+   placeholder?: string;
+@@ -31,6 +33,19 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+   questionId?: string;
+   /** what this slot takes, for the picker's filter and the file dialog */
+   accept?: AssetSummary["family"][];
++  /**
++   * An answer option's picture (1-10-26 review): Choose and Upload open the
++   * image pop-up FIRST, and the picture reaches the option only on Apply,
++   * with its size, alignment and spacing. A "Customize" button reopens it.
++   * Typing or pasting a URL still sets it directly.
++   */
++  customize?: {
++    display: MediaDisplay | undefined;
++    alt: string | undefined;
++    /** the option label, for the preview frame */
++    label?: string;
++    onApply(url: string, display: MediaDisplay | undefined, alt: string | undefined): void;
++  };
+ }) {
+   const media = React.useMemo(() => resolveMediaUrl(value), [value]);
+   const studio = useStudioOptional();
+@@ -38,6 +53,12 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+   const [progress, setProgress] = React.useState<UploadProgress | null>(null);
+   const [uploadError, setUploadError] = React.useState<string | null>(null);
+   const [picking, setPicking] = React.useState(false);
++  /* a picked or uploaded picture waiting for the pop-up's Apply */
++  const [pending, setPending] = React.useState<{ url: string; alt?: string; fresh: boolean } | null>(null);
++  const take = (url: string, asset?: AssetSummary) => {
++    if (customize) setPending({ url, alt: asset?.altText ?? undefined, fresh: url !== value });
++    else onChange(url, asset);
++  };
+   const canUpload = !!studio && studio.surveyDbId !== "sandbox";
+   const tid = testId ?? "media-url";
+   void questionId;
+@@ -49,7 +70,7 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+     setProgress(null);
+     if (fileRef.current) fileRef.current.value = "";
+     if (!out.ok) { setUploadError(out.error); return; }
+-    onChange(out.asset.url, out.asset);
++    take(out.asset.url, out.asset);
+   };
+ 
+   const verdict = !value?.trim()
+@@ -99,6 +120,16 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+             onClick={() => fileRef.current?.click()} title="Upload a file into the asset library and use it here">
+             {progress ? progress.label : "Upload"}
+           </button>
++          {customize && value?.trim() && (
++            <button type="button" className="btn ghost small" data-testid={`${tid}-customize`} onClick={() => setPending({ url: value, fresh: false })}
++              title="Size, alignment, spacing and alt text for this picture">Customize</button>
++          )}
++        </span>
++      )}
++      {!canUpload && customize && value?.trim() && (
++        <span className={compact ? "media-url-actions" : ""}>
++          <button type="button" className="btn ghost small" data-testid={`${tid}-customize`} onClick={() => setPending({ url: value, fresh: false })}
++            title="Size, alignment, spacing and alt text for this picture">Customize</button>
+         </span>
+       )}
+     </div>
+@@ -124,7 +155,15 @@ export function MediaUrlInput({ value, onChange, placeholder, compact, testId, l
+       )}
+       {canUpload && (
+         <AssetPicker open={picking} onClose={() => setPicking(false)} accept={accept}
+-          onPick={(a) => onChange(a.url, a)} />
++          onPick={(a) => take(a.url, a)} />
++      )}
++      {customize && pending && (
++        /* mounted per pick, so it opens on exactly this picture's values — no reset effect racing the first paint */
++        <ImageCustomizeDialog key={pending.url} open url={pending.url} label={customize.label}
++          /* a newly picked picture starts from the option's current settings, with the asset's alt text if it has one */
++          display={customize.display} alt={pending.fresh ? (pending.alt ?? customize.alt) : customize.alt}
++          onCancel={() => setPending(null)}
++          onApply={(display, alt) => { const url = pending.url; setPending(null); customize.onApply(url, display, alt); }} />
+       )}
+     </div>
+   );
+diff --git a/apps/studio/components/studio/QuestionsPanel.tsx b/apps/studio/components/studio/QuestionsPanel.tsx
+index 1b7f875..d9d8554 100644
+--- a/apps/studio/components/studio/QuestionsPanel.tsx
++++ b/apps/studio/components/studio/QuestionsPanel.tsx
+@@ -85,6 +85,8 @@ import {
+   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
+   PIPE_TOKEN_RE,
+   resolveMediaUrl,
++  questionMediaList,
++  legacyQuestionMediaHtml,
+   effectiveScale,
+   PHONE_FORMATS,
+   POSTAL_FORMATS,
+@@ -432,7 +434,11 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
+           {showImage && (
+             <div className="opt-meta" style={{ width: 200, maxWidth: 200 }}>
+               <MediaUrlInput compact placeholder="image URL" testId={`option-image-${i}`} questionId={questionId} accept={["image"]}
+-                value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })} />
++                value={o.imageUrl} onChange={(v) => set(i, { imageUrl: v })}
++                customize={{
++                  display: o.imageDisplay, alt: o.imageAlt, label: o.label,
++                  onApply: (imageUrl, imageDisplay, imageAlt) => set(i, { imageUrl, imageDisplay, imageAlt }),
++                }} />
+             </div>
+           )}
+           {metaFields.map((mf) => {
+@@ -1068,7 +1074,7 @@ export function QuestionEditor({ q }: { q: Question }) {
+       </div>
+ 
+       <label className="f"><span>Question text — rich text, HTML and piping ({"{{Q1}}"}) supported</span></label>
+-      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id}
++      <RichTextEditor value={q.text} autoFocusId={`qtext_${q.id}`} questionId={q.id} mediaPlacement
+         onChange={(html) => patch({ text: html })}
+         placeholder="e.g. Earlier you selected {{Q1}}. Why did you choose {{Q1.first}}?" />
+       <div className="row" style={{ alignItems: "flex-start" }}>
+@@ -1084,10 +1090,30 @@ export function QuestionEditor({ q }: { q: Question }) {
+             <option value="0">optional</option><option value="1">required</option>
+           </select></label>
+       </div>
+-      {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && (
+-        <>
++      {/*
++        * ONE PLACE FOR MEDIA (1-10-26 review). The separate "Media shown under
++        * the question text" field is retired: pictures, video, audio and
++        * players go in through the question text's Insert media, with their
++        * own size, alignment and position. A question that already has media
++        * here keeps it — drawn exactly as before — and this card offers to
++        * move it into the text; the old editor stays until it is moved.
++        */}
++      {!MEDIA_OWNING.has(variantDef?.renderer ?? `base:${q.type}`) && questionMediaList(q).length > 0 && (
++        <div className="card" data-testid="legacy-media" style={{ padding: 10, margin: "8px 0", borderStyle: "dashed" }}>
++          <div className="row" style={{ alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
++            <span style={{ fontSize: 13 }}>
++              This question has media under its text from the older media field. Media now goes in through
++              <b> Insert media</b> (🖼) in the question text, where each item has its own size, alignment and position.
++            </span>
++            <button type="button" className="btn small primary" data-testid="legacy-media-move"
++              onClick={() => {
++                const html = legacyQuestionMediaHtml(q);
++                /* one edit, so one undo puts it back */
++                patch({ text: `${q.text ?? ""}${html}`, settings: { ...q.settings, mediaUrl: undefined, mediaItems: undefined, mediaLayout: undefined, mediaDisplay: undefined } });
++              }}>Move into the question text</button>
++          </div>
+           <MediaListEditor q={q} patchSettings={patchSettings}
+-            label="Media — shown under the question text (image, video, YouTube or Google Drive URL)" />
++            label="Media — shown under the question text (older field)" />
+           {q.settings.mediaUrl && resolveMediaUrl(q.settings.mediaUrl).kind !== "embed" && (
+             <details className="qs-details" data-testid="question-media-display" open={!!q.settings.mediaDisplay}>
+               <summary>Size, fit &amp; playback</summary>
+@@ -1097,7 +1123,7 @@ export function QuestionEditor({ q }: { q: Question }) {
+                 onChange={(mediaDisplay) => patchSettings({ mediaDisplay })} />
+             </details>
+           )}
+-        </>
++        </div>
+       )}
+       {(q.options.length > 0 || q.type === "open_text" || q.type === "long_text" || q.type === "numeric") && (
+         <AttentionCheckEditor q={q} patch={patch} />
+diff --git a/apps/studio/components/studio/RichTextEditor.tsx b/apps/studio/components/studio/RichTextEditor.tsx
+index 5d435a0..6c57634 100644
+--- a/apps/studio/components/studio/RichTextEditor.tsx
++++ b/apps/studio/components/studio/RichTextEditor.tsx
+@@ -2,7 +2,7 @@
+ import React from "react";
+ import { sanitizeHtml, stripHtmlText } from "@rescript/engine";
+ import { InsertPipingButton, tokensToChips, chipsToTokens } from "./PipingPicker";
+-import { MediaInsertDialog, mediaValueFromElement, type MediaInsertValue } from "./MediaInsertDialog";
++import { MediaInsertDialog, mediaValueFromElement, type MediaApply, type MediaInsertValue } from "./MediaInsertDialog";
+ import { useStudio } from "./store";
+ 
+ /**
+@@ -133,7 +133,7 @@ export function RteToolbar({ exec, onLink, onMedia, insertPipe, questionId, mode
+ }
+ 
+ /** The editing behaviours both surfaces share: sync, commit, exec, link, media. */
+-function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html") {
++function useRichSurface(value: string, onChange: (html: string) => void, mode: "visual" | "html", placement = false) {
+   const s = useStudio();
+   const surface = React.useRef<HTMLDivElement>(null);
+   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+@@ -188,31 +188,70 @@ function useRichSurface(value: string, onChange: (html: string) => void, mode: "
+   /** a click on a picture or player inside the surface reopens the dialog on it */
+   const onSurfaceClick = (e: React.MouseEvent) => {
+     const t = e.target as HTMLElement;
+-    const el = t.closest?.("img, video, audio") as HTMLElement | null;
++    const el = t.closest?.('img, video, audio, [data-rs-media="embed"]') as HTMLElement | null;
+     if (!el || !surface.current?.contains(el)) return;
+     e.preventDefault();
+     setMedia({ initial: mediaValueFromElement(el), target: el });
+   };
+   const openMedia = () => setMedia({ initial: null, target: null });
+-  const applyMedia = (html: string) => {
+-    if (media?.target && surface.current?.contains(media.target)) {
+-      media.target.outerHTML = html;
+-      if (surface.current) commit(surface.current.innerHTML, true);
+-    } else {
+-      insertHtml(`${html}&nbsp;`);
++  /*
++   * WHERE THE MEDIA GOES. In place of the clicked element (edit), out of the
++   * text (its source was cleared), at the start or end of the question text
++   * ("Above / Below question" — what used to take the HTML tab), or at the
++   * cursor (an option label, or the programmer's choice).
++   */
++  const applyMedia = (html: string, _value: MediaInsertValue, apply?: MediaApply) => {
++    const root = surface.current;
++    const target = media?.target && root?.contains(media.target) ? media.target : null;
++    const position = apply?.position ?? (target ? "keep" : "cursor");
++    if (target && root) {
++      if (apply?.remove || position === "above" || position === "below") removeMediaElement(target, root);
++      else target.outerHTML = html;
++      if (!apply?.remove && (position === "above" || position === "below")) placeMedia(root, html, position);
++      commit(root.innerHTML, true);
++      return;
++    }
++    if (root && (position === "above" || position === "below")) {
++      placeMedia(root, html, position);
++      commit(root.innerHTML, true);
++      return;
+     }
++    insertHtml(`${html}&nbsp;`);
+   };
+   const mediaDialog = (
+-    <MediaInsertDialog open={!!media} initial={media?.initial ?? null} onClose={() => setMedia(null)} onInsert={applyMedia} />
++    media && <MediaInsertDialog open initial={media.initial} onClose={() => setMedia(null)} onInsert={applyMedia} placement={placement} />
+   );
+ 
+   return { surface, commit, exec, insertHtml, onStyle, addLink, onSurfaceClick, openMedia, mediaDialog, codeFor, mediaOpen: !!media };
+ }
+ 
++/** media placed above or below the question text sits on its own line */
++function placeMedia(root: HTMLElement, html: string, position: "above" | "below") {
++  if (!html) return;
++  root.insertAdjacentHTML(position === "above" ? "afterbegin" : "beforeend", `<div>${html}</div>`);
++}
++
++/** take one picture or player out, and the line it stood on if that is now empty */
++function removeMediaElement(el: HTMLElement, root: HTMLElement) {
++  const parent = el.parentElement;
++  /* the &nbsp; the cursor insert put after it goes with it */
++  const next = el.nextSibling;
++  if (next && next.nodeType === Node.TEXT_NODE && /^\u00a0$/.test(next.textContent ?? "")) next.remove();
++  el.remove();
++  if (parent && parent !== root && /^(DIV|P|SPAN)$/.test(parent.tagName)
++    && !(parent.textContent ?? "").replace(/\u00a0/g, " ").trim()
++    && !parent.querySelector('img, video, audio, [data-rs-media]')) parent.remove();
++}
++
+ /* ================================================================ block editor */
+ 
+-export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId }: {
++export function RichTextEditor({ value, onChange, placeholder, autoFocusId, questionId, mediaPlacement }: {
+   value: string;
++  /**
++   * The QUESTION TEXT editor: Insert media offers Above / Below question,
++   * several items and players (1-10-26 review). Off for every other editor.
++   */
++  mediaPlacement?: boolean;
+   onChange(html: string): void;
+   placeholder?: string;
+   /** id used for programmatic focus (new-question flow) */
+@@ -222,7 +261,7 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
+ }) {
+   const [mode, setMode] = React.useState<"visual" | "html">("visual");
+   const [htmlDraft, setHtmlDraft] = React.useState(value);
+-  const r = useRichSurface(value, onChange, mode);
++  const r = useRichSurface(value, onChange, mode, !!mediaPlacement);
+   const { surface, commit, exec, codeFor } = r;
+ 
+   /** Insert a piping token at the caret, as a chip. */
+@@ -249,7 +288,10 @@ export function RichTextEditor({ value, onChange, placeholder, autoFocusId, ques
+ 
+   return (
+     <div className="rte">
+-      <RteToolbar exec={exec} onLink={r.addLink} onMedia={r.openMedia} insertPipe={insertPipe} questionId={questionId} mode={mode} setMode={switchMode} onStyle={r.onStyle} />
++      <RteToolbar exec={exec} onLink={r.addLink}
++        /* the dialog edits the visual surface — from the HTML tab, come back to it first */
++        onMedia={() => { if (mode === "html") switchMode("visual"); r.openMedia(); }}
++        insertPipe={insertPipe} questionId={questionId} mode={mode} setMode={switchMode} onStyle={r.onStyle} />
+ 
+       <div
+         ref={surface}
+diff --git a/apps/studio/lib/assets.ts b/apps/studio/lib/assets.ts
+index f263307..5177215 100644
+--- a/apps/studio/lib/assets.ts
++++ b/apps/studio/lib/assets.ts
+@@ -216,3 +216,25 @@ export { formatBytes } from "./mediaFormat.ts";
+ 
+ export const FAMILY_LABEL: Record<AssetSummary["family"], string> = { image: "Image", video: "Video", audio: "Audio", document: "Document" };
+ export const FAMILY_ICON: Record<AssetSummary["family"], string> = { image: "🖼", video: "🎬", audio: "🎧", document: "📄" };
++
++/**
++ * SAVE A GOOGLE DRIVE FILE INTO THE ASSET LIBRARY (1-10-26 review).
++ *
++ * A Drive link plays in Drive's own viewer and has to be pasted again every
++ * time it is used. The server copies the file (it must be shared "Anyone
++ * with the link") into this survey's library, where it is an ordinary asset:
++ * chosen from the library, reused anywhere, served without Drive's frame.
++ */
++export async function importDriveAsset(surveyDbId: string, url: string, opts: { altText?: string; displayName?: string } = {}): Promise<UploadOutcome | UploadFailure> {
++  try {
++    const r = await fetch(`/api/surveys/${surveyDbId}/media/import`, {
++      method: "POST", headers: { "content-type": "application/json" },
++      body: JSON.stringify({ url, altText: opts.altText, displayName: opts.displayName }),
++    });
++    const j = await r.json().catch(() => ({}));
++    if (!r.ok || !j.asset) return { ok: false, error: j.error ?? `The file could not be saved (${r.status}).` };
++    return { ok: true, asset: j.asset as AssetSummary, duplicate: !!j.duplicate };
++  } catch (e) {
++    return { ok: false, error: (e as Error).message || "The file could not be saved." };
++  }
++}
+diff --git a/docs/MEDIA-CONSOLIDATION-2026-10-04.md b/docs/MEDIA-CONSOLIDATION-2026-10-04.md
+new file mode 100644
+index 0000000..44b223a
+--- /dev/null
++++ b/docs/MEDIA-CONSOLIDATION-2026-10-04.md
+@@ -0,0 +1,66 @@
++# Media consolidation — 1-10-26 review
++
++The review file `1_10_26.xlsx` (sheets "Oweas" and "Prince") asked for one place to manage a question's media, an image pop-up for answer-option pictures, a preview that keeps up with edits, removal through the dialog, matching alignment in the preview, and piped image URLs that work. Every row is covered below.
++
++## What changed, row by row
++
++| Row | Ask | Done |
++|---|---|---|
++| Oweas 1, Prince 1 | Choosing an option image opens a customization pop-up first; the image is added only after Apply | Choose / Upload on an option's Image URL open **Customize image**. It has width/height (px), scale, fit, alignment, keep proportions, shrink on small screens, padding, spacing, alt text and a live preview in an option-sized frame. Nothing is written to the option until Apply. Cancel leaves the option as it was. **Customize** reopens it for a picture that is already set. Typing or pasting a URL still sets it directly. |
++| Oweas 2, Prince 2 | The same pop-up across every question type with option images | It is part of the option image field itself, so it appears on every type whose renderer draws option pictures: image, icon, list, card, product, carousel, multi-carousel, compare, flip and swipe cards, drag-rank, image ranking. The Live View element panel uses the same field. The settings are stored as `option.imageDisplay` and applied at every option-picture site in the renderer. The type, sub-type and every other setting are untouched. |
++| Oweas 3, Prince 3 | Remove "Media shown under the question text" and consolidate into Insert media | The separate field is gone from new questions. Insert media (🖼 in the question text) now has: **sources** (asset library, upload new, URL, Google Drive URL, plus **Save to asset library** for a Drive file); **types** (image, video, audio, and a player for YouTube, Vimeo or Drive); alt text; size and layout per item; **Show media: Above question / Below question / At the cursor**; **several items**, which can be added, reordered and removed, each with its own settings; and a live preview of what the respondent sees. The HTML view still works. |
++| Prince 4 | Position and several items only for the question text, not an option's image | Position and the several-items list appear only in the question-text editor. An option label's Insert media and an option's Image URL pop-up show only image settings. |
++| Oweas 4, Prince 5 | The media preview does not update after editing an inserted item | **Root cause:** an edited picture was read back with the kind `img` (the tag name) instead of `image`. The dialog then had no preview branch, no alt field, showed player controls, and dropped the alt text on Apply. It now reads back as `image`, and the preview redraws on every change to size, alignment, fit, proportions, padding or spacing. |
++| Prince 6 | Clearing the Source URL in Edit Media and pressing Apply should remove the media | When editing, an empty Source keeps Apply enabled and shows "Apply removes this media from the question". Apply then removes the element, along with the line it stood on if that line is now empty. Backspace/Delete and the HTML view still work. |
++| Prince 7 | Alignment set in the builder is not the same in Preview | The current build places left / center / right the same in the editor, Live View and the respondent preview, including several items with different alignments. A browser test now measures all three. The edit bug above was what lost alignment and alt text on edited items. |
++| Prince 8 | A URL parameter piped into an image URL shows as text | Insert media now accepts a piped source (`{{ImageURL}}`). It is stored as `<img src="{{ImageURL}}">`, shown in the editor and preview as a placeholder, and drawn as the picture for the respondent. If the respondent has no value, nothing is drawn instead of a broken image. **Second bug fixed:** piped option-image and question-media URLs came back HTML-escaped, so `?a=1&b=2` became `?a=1&amp;b=2`, breaking signed and CDN URLs. They are now unescaped. `{{ImageURL\|image}}` in text still works. |
++
++## Existing questions
++
++A question that already has `settings.mediaUrl` / `mediaItems` keeps it, and the renderer draws it exactly as before. The question pane shows a dashed card with the old editor and a **Move into the question text** button. The button turns every item into question-text markup, keeping the question's size and alignment and the side-by-side layout, and clears the old settings. It is one edit, so one undo puts it back. Media-owning types (video rating, timeline, watch time, audio recording) keep their own media field, unchanged.
++
++## Players in text
++
++Rich text never stores an `<iframe>`, because the sanitiser removes every one. A YouTube / Vimeo / Drive player is stored as a placeholder:
++
++```html
++<div data-rs-media="embed" data-rs-src="…">▶ title</div>
++```
++
++At display time the renderer runs `expandMediaEmbeds` after `sanitizeHtml`. This turns the placeholder into the same sandboxed, allow-listed player the question media used, at the size and alignment set. A placeholder for any other host is removed, not framed.
++
++## Google Drive → asset library
++
++The new route is `POST /api/surveys/[id]/media/import` (`survey.edit`, first statement `requireEditRight`). It works as follows:
++
++- It downloads only a Drive file link, using `fetchDriveFile`.
++- It refuses a page in place of the file (the file is not shared "Anyone with the link").
++- It refuses a declared size over the limit before reading the body.
++- It stores the file through the same ticket → PUT → confirm path as a browser upload (`storeAssetBytes`), and deduplicates by SHA-256.
++- The helper is node-only. It is exported from `@rescript/media/server`, not from the browser barrel.
++
++## Tests
++
++- `packages/engine/src/mediaConsolidation.test.ts` (7 tests) covers:
++  - padding/spacing round trip
++  - `Option.imageDisplay`
++  - embed placeholder → player, and only for allow-listed hosts
++  - empty piped source dropped
++  - `&` preserved in piped option and question media
++  - piped `src` escaping and the `javascript:` refusal
++  - legacy media → text
++- `packages/media/src/importRemote.test.ts` (4 tests) covers:
++  - Drive link shapes
++  - download, HTML page refusal, size refusal before read, UTF-8 filename
++  - stored and confirmed as a survey asset, then deduplicated
++  - type and size limits
++- `scripts/media-consolidation-test.mjs` (14 browser checks) covers every row above. The saved survey is mocked through `/sandbox?dbid=` so that Choose, Upload and the Drive save run.
++- Mutation-checked:
++  - engine 15/15
++  - media 9/9
++  - Studio/renderer 15/16, plus the option-image render site. The one survivor sets the dialog's initial position in `useState`, which the open effect sets again; it is an equivalent mutant.
++
++## Not done
++
++- **Hotspot / heatmap / annotation stimulus images:** a plain `settings.imageUrl` box without Choose or Upload. They keep their own fixed sizing, because their click regions are measured on the drawn image.
++- **Drive videos:** saving one only works for files Drive serves without its virus-scan page, so in practice up to about 100 MB. Larger files should be downloaded and uploaded.
+diff --git a/packages/engine/src/carryforward.ts b/packages/engine/src/carryforward.ts
+index 97900da..9190046 100644
+--- a/packages/engine/src/carryforward.ts
++++ b/packages/engine/src/carryforward.ts
+@@ -20,6 +20,7 @@ import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
+ import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
+ import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
+ import { sanitizeHtml, stripHtmlText } from "./html.js";
++import { unescapeHtml } from "./mediaDisplay.js";
+ 
+ /**
+  * A LABEL IS RENDERED AS HTML EVERYWHERE — every variant hands option, row
+@@ -1426,7 +1427,8 @@ function runOptions(
+   options = options.map((o) => {
+     let next = o;
+     if (o.label.includes("{{")) next = { ...next, label: resolvePiping(o.label, ctx) };
+-    if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: resolvePiping(o.imageUrl, ctx) };
++    /* a URL, not HTML: the piped value comes back escaped for HTML, and `&amp;` in a src is a broken query string */
++    if (o.imageUrl?.includes("{{")) next = { ...next, imageUrl: unescapeHtml(resolvePiping(o.imageUrl, ctx)) };
+     if (next.label.includes("<")) next = { ...next, label: safeLabel(next.label) };
+     return next;
+   });
+@@ -1549,7 +1551,8 @@ export function resolveQuestionMedia(
+   q: Question,
+   ctx: EvalContext,
+ ): { imageUrl?: string; mediaUrl?: string; mediaItems?: NonNullable<Question["settings"]["mediaItems"]> } {
+-  const pipe = (u?: string) => (u && u.includes("{{") ? resolvePiping(u, ctx) : u);
++  /* unescaped: these are URLs handed to `src`, which React escapes itself */
++  const pipe = (u?: string) => (u && u.includes("{{") ? unescapeHtml(resolvePiping(u, ctx)) : u);
+   const items = q.settings.mediaItems;
+   const piped = items?.some((m) => m.url.includes("{{")) ? items.map((m) => ({ ...m, url: pipe(m.url) ?? "" })) : items;
+   return { imageUrl: pipe(q.settings.imageUrl), mediaUrl: pipe(q.settings.mediaUrl), ...(items ? { mediaItems: piped } : {}) };
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index 5c86618..2a49747 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -13,6 +13,7 @@ export * from "./setExpression.js";
+ export * from "./autoPunch.js";
+ export * from "./media.js";
+ export * from "./mediaDisplay.js";
++export * from "./legacyMedia.js";
+ export * from "./optionsPaste.js";
+ export * from "./dependencies.js";
+ export * from "./dependencyIndex.js";
+diff --git a/packages/engine/src/legacyMedia.ts b/packages/engine/src/legacyMedia.ts
+new file mode 100644
+index 0000000..7cd63ac
+--- /dev/null
++++ b/packages/engine/src/legacyMedia.ts
+@@ -0,0 +1,34 @@
++import type { Question } from "@rescript/schema";
++import { questionMediaList } from "./carryforward.js";
++import { mediaHtml, type InsertableMediaKind } from "./mediaDisplay.js";
++import { resolveMediaUrl } from "./media.js";
++
++/**
++ * THE OLD "MEDIA SHOWN UNDER THE QUESTION TEXT", AS QUESTION-TEXT MARKUP.
++ *
++ * The 1-10-26 review folded that separate field into Insert media. Questions
++ * written before it still carry `settings.mediaUrl` / `mediaItems` (and the
++ * renderer still draws them, unchanged); the Studio offers to move them into
++ * the text, where each item gets its own size and alignment. This is the
++ * markup that move produces: every item, in order, with the question's one
++ * `mediaDisplay` applied to each, a YouTube / Vimeo / Drive link as a player,
++ * and "side by side" kept as a wrapping row. A piped URL (`{{ImageURL}}`)
++ * stays piped.
++ */
++export function legacyQuestionMediaHtml(q: Pick<Question, "settings">): string {
++  const items = questionMediaList(q);
++  if (!items.length) return "";
++  const html = items.map((m) => {
++    const url = m.url.trim();
++    const r = resolveMediaUrl(url);
++    const kind: InsertableMediaKind = /\{\{[^}]+\}\}/.test(url)
++      ? "image"
++      : r.kind === "embed" ? "embed"
++      : r.kind === "video" ? (r.mimeType?.startsWith("audio/") ? "audio" : "video")
++      : "image";
++    return mediaHtml(kind, url, q.settings.mediaDisplay, { alt: m.alt ?? m.title ?? "", mimeType: kind === "audio" || kind === "video" ? r.mimeType : undefined });
++  }).join("");
++  return q.settings.mediaLayout === "horizontal" && items.length > 1
++    ? `<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">${html}</div>`
++    : `<div>${html}</div>`;
++}
+diff --git a/packages/engine/src/mediaConsolidation.test.ts b/packages/engine/src/mediaConsolidation.test.ts
+new file mode 100644
+index 0000000..2b4b6f6
+--- /dev/null
++++ b/packages/engine/src/mediaConsolidation.test.ts
+@@ -0,0 +1,116 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition, Option } from "@rescript/schema";
++import {
++  createResponseState, effectiveQuestion, resolveQuestionMedia, sanitizeHtml,
++  mediaDisplayCss, mediaDisplayFromCss, mediaHtml, expandMediaEmbeds, unescapeHtml, legacyQuestionMediaHtml,
++  type EvalContext,
++} from "./index.js";
++
++/*
++ * MEDIA, CONSOLIDATED (1-10-26 review): one Insert-media dialog for the
++ * question text, an image pop-up for an option's picture, players in text,
++ * and piped image URLs that survive an "&".
++ */
++
++const ctxOf = (def: SurveyDefinition): EvalContext => ({ def, state: createResponseState(def, { seed: 1 }), loop: null });
++function survey(questions: unknown[]) {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "media", version: "1.0" },
++    embeddedData: [{ name: "ImageURL", source: "url" }],
++    questions,
++    flow: [{ type: "page", id: "p1", questionIds: (questions as { id: string }[]).map((q) => q.id) }, { type: "end", id: "e", status: "complete" }],
++  });
++}
++
++test("padding and spacing are part of a picture's display, and read back from its style", () => {
++  const css = mediaDisplayCss({ width: 100, padding: 8, spacing: "12px", align: "right" });
++  assert.match(css, /width: 100px/);
++  assert.match(css, /padding: 8px/);
++  assert.match(css, /margin-top: 12px; margin-bottom: 12px/);
++  assert.match(css, /margin-left: auto; margin-right: 0/);
++  assert.deepEqual(mediaDisplayFromCss(css), { width: "100px", padding: "8px", spacing: "12px", align: "right" });
++  /* one-sided margin is somebody's custom CSS, not "spacing" — it survives as written */
++  const one = mediaDisplayFromCss("max-width: 100%; margin-top: 4px");
++  assert.equal(one.spacing, undefined);
++  assert.equal(one.css, "margin-top: 4px");
++  assert.equal(mediaDisplayFromCss("margin-top: 3px; margin-bottom: 9px").css, "margin-top: 3px; margin-bottom: 9px");
++});
++
++test("an option carries its own picture settings; an option without them is unchanged", () => {
++  const o = Option.parse({ code: 1, label: "A", imageUrl: "/a.png", imageDisplay: { width: "100", align: "center", padding: "4" } });
++  assert.deepEqual(o.imageDisplay, { width: "100", align: "center", padding: "4" });
++  assert.equal(Option.parse({ code: 1, label: "A" }).imageDisplay, undefined);
++});
++
++test("a player in text is stored as a placeholder and becomes the player only for a YouTube / Vimeo / Drive URL", () => {
++  const slot = mediaHtml("embed", "https://www.youtube.com/watch?v=dQw4w9WgXcQ", { width: 480, align: "center" }, { alt: "Brand film" });
++  assert.ok(!/<iframe/i.test(slot), "no frame in the stored HTML");
++  assert.match(slot, /data-rs-media="embed"/);
++  const stored = sanitizeHtml(slot);
++  assert.equal(stored, slot, "the sanitiser keeps the placeholder as it is");
++  const shown = expandMediaEmbeds(stored);
++  assert.match(shown, /<iframe src="https:\/\/www\.youtube-nocookie\.com\/embed\/dQw4w9WgXcQ[^"]*" title="Brand film"/);
++  assert.match(shown, /class="rs-embed-frame rs-embed-inline"[^>]*style="width: 480px;[^"]*margin-left: auto; margin-right: auto"/);
++  assert.match(shown, /sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"/);
++  /* Drive and Vimeo too */
++  assert.match(expandMediaEmbeds(mediaHtml("embed", "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOp/view", {})), /<iframe src="https:\/\/drive\.google\.com\/file\/d\/1AbCdEfGhIjKlMnOp\/preview"/);
++  assert.match(expandMediaEmbeds(mediaHtml("embed", "https://vimeo.com/76979871", {})), /<iframe src="https:\/\/player\.vimeo\.com\/video\/76979871/);
++  /* anything else is removed, not framed */
++  assert.equal(expandMediaEmbeds(mediaHtml("embed", "https://evil.example/page", {})), "");
++  assert.equal(expandMediaEmbeds('<div data-rs-media="embed" data-rs-src="javascript:alert(1)">x</div>'), "");
++  /* a hand-written iframe never survives the sanitiser in the first place */
++  assert.ok(!/<iframe/i.test(expandMediaEmbeds(sanitizeHtml('<iframe src="https://evil.example"></iframe>'))));
++  /* text around it is untouched */
++  assert.equal(expandMediaEmbeds("<p>Hello <b>there</b></p>"), "<p>Hello <b>there</b></p>");
++});
++
++test("a picture whose piped source came out empty is dropped, not drawn broken", () => {
++  assert.equal(expandMediaEmbeds('<p>A</p><img src="" alt="x" style="width: 10px"><p>B</p>'), "<p>A</p><p>B</p>");
++  assert.equal(expandMediaEmbeds('<video src="" controls></video>'), "");
++  assert.equal(expandMediaEmbeds('<img src="/a.png" alt="">'), '<img src="/a.png" alt="">', "a real one stays");
++});
++
++test("Prince 9: a URL parameter piped into an image URL keeps its & — in an option picture and the question's media", () => {
++  const def = survey([
++    { id: "q1", code: "Q1", variableName: "Q1", type: "image_select", text: "Pick",
++      options: [{ code: 1, label: "A", imageUrl: "{{ImageURL}}" }, { code: 2, label: "B", imageUrl: "/b.png" }] },
++    { id: "q2", code: "Q2", variableName: "Q2", type: "html", text: "Look", settings: { mediaUrl: "{{ImageURL}}" } },
++  ]);
++  const ctx = ctxOf(def);
++  ctx.state.embedded.ImageURL = "https://cdn.example/p.jpg?w=400&sig=a\"b";
++  const opts = effectiveQuestion(def.questions[0], ctx).options;
++  assert.equal(opts[0].imageUrl, 'https://cdn.example/p.jpg?w=400&sig=a"b', "a URL, not HTML: no &amp;");
++  assert.equal(opts[1].imageUrl, "/b.png");
++  assert.equal(resolveQuestionMedia(def.questions[1], ctx).mediaUrl, 'https://cdn.example/p.jpg?w=400&sig=a"b');
++  assert.equal(unescapeHtml("a&amp;b&lt;c&gt;&quot;&#39;"), "a&b<c>\"'");
++});
++
++test("a piped picture in the question text: the value lands in the src, escaped for HTML", async () => {
++  const { resolvePiping } = await import("./index.js");
++  const def = survey([{ id: "q1", code: "Q1", variableName: "Q1", type: "html", text: '<img src="{{ImageURL}}" alt="">' }]);
++  const ctx = ctxOf(def);
++  ctx.state.embedded.ImageURL = "/p.png?a=1&b=2";
++  const html = expandMediaEmbeds(sanitizeHtml(resolvePiping(def.questions[0].text, ctx)));
++  assert.equal(html, '<img src="/p.png?a=1&amp;b=2" alt="">', "an attribute: & escaped once, read back by the browser as &");
++  ctx.state.embedded.ImageURL = "javascript:alert(1)";
++  assert.ok(!/javascript:/i.test(sanitizeHtml(resolvePiping(def.questions[0].text, ctx))), "a script URL never reaches the src");
++  ctx.state.embedded.ImageURL = "";
++  assert.equal(expandMediaEmbeds(sanitizeHtml(resolvePiping(def.questions[0].text, ctx))), "", "no value → no picture");
++});
++
++test("the old under-the-text media moves into the text: every item, its size and alignment, side by side kept", () => {
++  const one = legacyQuestionMediaHtml({ settings: { mediaUrl: "/a.png", mediaDisplay: { width: 90, align: "right" } } } as never);
++  assert.match(one, /^<div><img src="\/a\.png" alt="" style="width: 90px;[^"]*margin-left: auto; margin-right: 0" data-rs-media="image"><\/div>$/);
++  const many = legacyQuestionMediaHtml({ settings: {
++    mediaLayout: "horizontal",
++    mediaItems: [{ id: "1", url: "/a.png", alt: "Pack A" }, { id: "2", url: "" }, { id: "3", url: "https://youtu.be/dQw4w9WgXcQ" }, { id: "4", url: "{{ImageURL}}" }, { id: "5", url: "/clip.mp4" }],
++  } } as never);
++  assert.match(many, /^<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start">/);
++  assert.match(many, /<img src="\/a\.png" alt="Pack A"/);
++  assert.match(many, /data-rs-src="https:\/\/youtu\.be\/dQw4w9WgXcQ" data-rs-media="embed"/, "a YouTube link becomes a player");
++  assert.match(many, /<img src="\{\{ImageURL\}\}"/, "a piped URL stays piped");
++  assert.match(many, /<video src="\/clip\.mp4"/);
++  assert.equal((many.match(/data-rs-media=/g) ?? []).length, 4, "the empty slot is not carried");
++  assert.equal(legacyQuestionMediaHtml({ settings: {} } as never), "");
++});
+diff --git a/packages/engine/src/mediaDisplay.ts b/packages/engine/src/mediaDisplay.ts
+index 92d5775..c45936f 100644
+--- a/packages/engine/src/mediaDisplay.ts
++++ b/packages/engine/src/mediaDisplay.ts
+@@ -1,5 +1,6 @@
+ import type { MediaDisplay } from "@rescript/schema";
+ import { escapeHtml, sanitizeCss } from "./html.js";
++import { isAllowedEmbed, resolveMediaUrl } from "./media.js";
+ 
+ /**
+  * ONE COMPUTATION FROM "HOW SHOULD THIS LOOK" TO CSS.
+@@ -37,6 +38,9 @@ export function mediaDisplayDeclarations(d: MediaDisplay | null | undefined): Re
+   else if (d.responsive !== false) out["max-width"] = "100%";
+   if (mh) out["max-height"] = mh;
+   if (d.fit) out["object-fit"] = d.fit;
++  const pad = len(d.padding), gap = len(d.spacing);
++  if (pad) out.padding = pad;
++  if (gap) { out["margin-top"] = gap; out["margin-bottom"] = gap; }
+   if (d.align) {
+     out.display = "block";
+     out["margin-left"] = d.align === "left" ? "0" : "auto";
+@@ -79,6 +83,7 @@ export function mediaDisplayFromCss(style: string | null | undefined): MediaDisp
+   const extra: string[] = [];
+   let sawMaxWidth = false;
+   let sawAlign = false;
++  let mt: string | undefined, mb: string | undefined;
+   for (const decl of (style ?? "").split(";")) {
+     const i = decl.indexOf(":");
+     if (i <= 0) continue;
+@@ -91,18 +96,28 @@ export function mediaDisplayFromCss(style: string | null | undefined): MediaDisp
+       case "max-height": d.maxHeight = val; break;
+       case "object-fit": d.fit = val as MediaDisplay["fit"]; break;
+       case "display": if (val === "block") sawAlign = true; else extra.push(`${prop}: ${val}`); break;
++      case "padding": d.padding = val; break;
++      case "margin-top": mt = val; break;
++      case "margin-bottom": mb = val; break;
+       case "margin-left": if (val === "0") d.align = "left"; break;
+       case "margin-right": if (val === "0") d.align = "right"; break;
+       default: extra.push(`${prop}: ${val}`);
+     }
+   }
++  /* "spacing" is the same space above and below; one-sided margins stay custom CSS */
++  if (mt !== undefined && mt === mb) d.spacing = mt;
++  else {
++    if (mt !== undefined) extra.push(`margin-top: ${mt}`);
++    if (mb !== undefined) extra.push(`margin-bottom: ${mb}`);
++  }
+   if (sawAlign && !d.align) d.align = "center";
+   if (!sawMaxWidth) d.responsive = false;
+   if (extra.length) d.css = extra.join("; ");
+   return d;
+ }
+ 
+-export type InsertableMediaKind = "image" | "video" | "audio";
++/** what the Insert-media dialog can put into rich text; `embed` is a YouTube / Vimeo / Google Drive player */
++export type InsertableMediaKind = "image" | "video" | "audio" | "embed";
+ 
+ /**
+  * THE MARKUP A PICTURE OR PLAYER INSERTED INTO RICH TEXT CARRIES.
+@@ -119,6 +134,20 @@ export function mediaHtml(kind: InsertableMediaKind, url: string, d: MediaDispla
+   const style = mediaDisplayCss(kind === "audio" ? { ...(d ?? {}), fit: undefined, height: undefined, maxHeight: undefined } : d);
+   const styleAttr = style ? ` style="${escapeHtml(style)}"` : "";
+   const media = ` data-rs-media="${kind}"`;
++  if (kind === "embed") {
++    /*
++     * A PLAYER IN TEXT, WITHOUT AN IFRAME IN THE STORED HTML.
++     *
++     * Rich text never keeps an <iframe> (the sanitiser removes every one), so
++     * a YouTube, Vimeo or Drive player is stored as a placeholder naming its
++     * URL, and the renderer turns it into the player at display time — only
++     * for a URL the engine recognises as one of those players
++     * (`expandMediaEmbeds`). In the editor it is a labelled box that can be
++     * clicked to edit, like a picture.
++     */
++    const label = opts.alt?.trim() || "Embedded video";
++    return `<div class="rs-embed-slot" contenteditable="false" data-rs-src="${escapeHtml(safeUrl)}"${styleAttr}${media}>▶ ${escapeHtml(label)}</div>`;
++  }
+   if (kind === "image") {
+     return `<img src="${escapeHtml(safeUrl)}" alt="${escapeHtml(opts.alt ?? "")}"${styleAttr}${media}>`;
+   }
+@@ -133,3 +162,48 @@ export function mediaHtml(kind: InsertableMediaKind, url: string, d: MediaDispla
+   const source = opts.mimeType ? `<source src="${escapeHtml(safeUrl)}" type="${escapeHtml(opts.mimeType)}">` : "";
+   return `<${kind} src="${escapeHtml(safeUrl)}"${flags} preload="metadata"${styleAttr}${media}>${source}</${kind}>`;
+ }
++
++const EMBED_SLOT = /<div\b(?=[^>]*\bdata-rs-media\s*=\s*["']embed["'])[^>]*>[\s\S]*?<\/div>/gi;
++const EMPTY_SRC_MEDIA = /<(img|video|audio)\b(?=[^>]*\bsrc\s*=\s*(""|''))[^>]*>(?:\s*<\/\1>)?/gi;
++
++function attr(tag: string, name: string): string | null {
++  const m = new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i").exec(tag);
++  return m ? (m[2] ?? m[3] ?? "") : null;
++}
++
++/** `&amp;` → `&` — for a value that was escaped for HTML and is about to be used as a URL. */
++export function unescapeHtml(s: string): string {
++  return s.replace(/&(amp|lt|gt|quot|#39|#x27);/g, (_m, e: string) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", "#x27": "'" } as Record<string, string>)[e]);
++}
++
++/**
++ * RICH TEXT AS THE RESPONDENT SEES IT — after piping and sanitising.
++ *
++ *   - an embed placeholder (`mediaHtml("embed", …)`) becomes the player, with
++ *     its size and alignment, when its URL is a YouTube / Vimeo / Google Drive
++ *     player URL; anything else is removed rather than framed
++ *   - a picture or player whose source piped to nothing (`src="{{ImageURL}}"`
++ *     for a respondent who arrived without the parameter) is removed, instead
++ *     of showing a broken-image icon
++ *
++ * Runs AFTER `sanitizeHtml`: the only frame that can appear is the one built
++ * here, from a URL `resolveMediaUrl` accepted.
++ */
++export function expandMediaEmbeds(html: string): string {
++  if (!html || !html.includes("data-rs-media") && !/src\s*=\s*(""|'')/.test(html)) return html;
++  return html
++    .replace(EMBED_SLOT, (slot) => {
++      const open = slot.slice(0, slot.indexOf(">") + 1);
++      const raw = unescapeHtml(attr(open, "data-rs-src") ?? "").trim();
++      if (!raw) return "";
++      const m = resolveMediaUrl(raw);
++      if (m.kind !== "embed" || !m.url || !isAllowedEmbed(m.url)) return "";
++      const style = attr(open, "style");
++      const label = slot.slice(open.length).replace(/<[^>]*>/g, "").replace(/^\s*▶\s*/, "").trim();
++      return `<div class="rs-embed-frame rs-embed-inline" data-rs-media="embed"${style ? ` style="${escapeHtml(unescapeHtml(style))}"` : ""}>` +
++        `<iframe src="${escapeHtml(m.url)}" title="${escapeHtml(label || `${m.provider ?? "embedded"} media`)}" ` +
++        `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen ` +
++        `referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-same-origin allow-presentation allow-popups" loading="lazy"></iframe></div>`;
++    })
++    .replace(EMPTY_SRC_MEDIA, "");
++}
+diff --git a/packages/media/src/importRemote.test.ts b/packages/media/src/importRemote.test.ts
+new file mode 100644
+index 0000000..0e2f4c2
+--- /dev/null
++++ b/packages/media/src/importRemote.test.ts
+@@ -0,0 +1,88 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { stub } from "./store.test.js";
++import { driveFileId, fetchDriveFile, storeAssetBytes } from "./importRemote.js";
++import { resetBucketCache } from "./store.js";
++
++/**
++ * SAVING A GOOGLE DRIVE FILE INTO THE ASSET LIBRARY (1-10-26 review).
++ */
++
++const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 5, 6]);
++const res = (body: Uint8Array | string, headers: Record<string, string>, status = 200) => ({
++  ok: status >= 200 && status < 300, status,
++  headers: { get: (n: string) => headers[n.toLowerCase()] ?? null },
++  arrayBuffer: async () => (typeof body === "string" ? new TextEncoder().encode(body) : body).buffer as ArrayBuffer,
++});
++
++test("every Drive link shape gives its file id; anything else gives none", () => {
++  const id = "1AbCdEfGhIjKlMnOpQrStUv";
++  assert.equal(driveFileId(`https://drive.google.com/file/d/${id}/view?usp=sharing`), id);
++  assert.equal(driveFileId(`https://drive.google.com/open?id=${id}`), id);
++  assert.equal(driveFileId(`https://drive.google.com/uc?export=download&id=${id}`), id);
++  assert.equal(driveFileId(`https://docs.google.com/file/d/${id}/edit`), id);
++  assert.equal(driveFileId(`https://evil.example/file/d/${id}/view`), null, "not Drive");
++  assert.equal(driveFileId("https://drive.google.com/drive/folders"), null, "no id");
++  assert.equal(driveFileId("not a url"), null);
++});
++
++test("the file Drive serves comes back with its type and name; a page in its place is refused", async () => {
++  let asked = "";
++  const file = await fetchDriveFile("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view", {
++    fetchImpl: async (u) => { asked = u; return res(PNG, { "content-type": "image/png", "content-disposition": "attachment; filename=\"pack.png\"; filename*=UTF-8''pack%20shot.png" }); },
++  });
++  assert.match(asked, /^https:\/\/drive\.google\.com\/uc\?export=download&id=1AbCdEfGhIjKlMnOpQrStUv$/);
++  assert.equal(file.mimeType, "image/png");
++  assert.equal(file.fileName, "pack shot.png", "the UTF-8 name wins");
++  assert.equal(file.bytes.byteLength, PNG.byteLength);
++  await assert.rejects(
++    () => fetchDriveFile("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view", { fetchImpl: async () => res("<html>Sign in</html>", { "content-type": "text/html; charset=utf-8" }) }),
++    /Anyone with the link/,
++  );
++  await assert.rejects(
++    () => fetchDriveFile("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view", { maxBytes: 5, fetchImpl: async () => res(PNG, { "content-type": "image/png", "content-length": "10" }) }),
++    /larger than the library takes/,
++  );
++  /* a declared size over the limit is refused before a byte is read */
++  await assert.rejects(
++    () => fetchDriveFile("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view", { maxBytes: 5, fetchImpl: async () => ({
++      ...res(PNG, { "content-type": "video/mp4", "content-length": String(900 * 1048576) }),
++      arrayBuffer: async () => { throw new Error("read a 900 MB body"); },
++    }) }),
++    /900 MB — larger than the library takes/,
++  );
++  await assert.rejects(() => fetchDriveFile("https://example.com/x.png"), /not a Google Drive file link/);
++});
++
++test("the bytes become an ordinary library asset — stored, confirmed, findable; the same bytes again are the same asset", async () => {
++  resetBucketCache();
++  const s = stub();
++  const puts: string[] = [];
++  const put = async (url: string, headers: Record<string, string>, body: Uint8Array) => {
++    const m = /^https:\/\/storage\.test\/([^/]+)\/([^?]+)/.exec(url)!;
++    s.objects.add(`${m[1]}/${decodeURIComponent(m[2])}`);
++    puts.push(`${headers["content-type"]} ${body.byteLength}`);
++    return { etag: "e1" };
++  };
++  const file = { bytes: PNG, mimeType: "image/png", fileName: "pack.png" };
++  const out = await storeAssetBytes(s.db, { customerId: "c1", surveyId: "s1", file, altText: "Pack", put });
++  assert.equal(out.duplicate, false);
++  assert.equal(out.asset.family, "image");
++  assert.match(out.asset.url, /^\/api\/media\/.+\/pack\.png$/);
++  assert.deepEqual(puts, ["image/png 10"], "one PUT of the whole file, typed");
++  const row = [...s.rows.values()].find((r) => r.id === out.asset.id)!;
++  assert.equal(row.status, "stored");
++  assert.equal(row.kind, "survey_asset");
++  assert.equal(row.question_id, null, "a library asset belongs to the survey, not a question");
++  const again = await storeAssetBytes(s.db, { customerId: "c1", surveyId: "s1", file, put });
++  assert.equal(again.duplicate, true);
++  assert.equal(again.asset.id, out.asset.id);
++  assert.equal(puts.length, 1, "nothing uploaded the second time");
++});
++
++test("only pictures, video and audio — and within the library's size for the kind", async () => {
++  const s = stub();
++  await assert.rejects(() => storeAssetBytes(s.db, { customerId: "c1", surveyId: "s1", file: { bytes: PNG, mimeType: "application/pdf", fileName: "a.pdf" }, put: async () => ({}) }), /pictures, video and audio/);
++  const big = { bytes: { byteLength: 30 * 1024 * 1024 } as unknown as Uint8Array, mimeType: "image/png", fileName: "x.png" };
++  await assert.rejects(() => storeAssetBytes(s.db, { customerId: "c1", surveyId: "s1", file: big, put: async () => ({}) }), /up to 25 MB/);
++});
+diff --git a/packages/media/src/importRemote.ts b/packages/media/src/importRemote.ts
+new file mode 100644
+index 0000000..bbabc23
+--- /dev/null
++++ b/packages/media/src/importRemote.ts
+@@ -0,0 +1,115 @@
++import { createHash } from "node:crypto";
++import { assetFor, beginUpload, confirmUpload, findDuplicateAsset, MediaError, type AssetSummary, type MediaDb } from "./store.js";
++import { ASSET_MAX_BYTES, assetFamilyFor, assetWithinLimit } from "./plan.js";
++
++/**
++ * A GOOGLE DRIVE FILE, COPIED INTO THE ASSET LIBRARY (1-10-26 review).
++ *
++ * "For Google Drive URLs, provide an option to save the used Google Drive
++ * media as an asset in the Asset Library, so it can be reused later without
++ * having to enter the URL again."
++ *
++ * The browser cannot read a Drive file (Drive sends no CORS headers), so the
++ * server does: it downloads the file Drive serves for a link shared "Anyone
++ * with the link", checks it is a picture, video or audio file the library
++ * takes and within the library's size for that kind, and stores it through
++ * the same ticket → upload → confirm path a browser upload uses. The result
++ * is an ordinary library asset — deduplicated by hash like any other.
++ */
++
++/** The file id in any of Drive's link shapes, or null. */
++export function driveFileId(url: string): string | null {
++  let u: URL;
++  try { u = new URL(url.trim()); } catch { return null; }
++  if (!/^(drive|docs)\.google\.com$/i.test(u.hostname)) return null;
++  const m = /\/(?:file\/d|d)\/([A-Za-z0-9_-]{10,})/.exec(u.pathname);
++  const id = m?.[1] ?? u.searchParams.get("id");
++  return id && /^[A-Za-z0-9_-]{10,}$/.test(id) ? id : null;
++}
++
++export interface RemoteFile { bytes: Uint8Array; mimeType: string; fileName: string | null }
++
++type FetchLike = (url: string, init?: { redirect?: "follow"; headers?: Record<string, string>; method?: string; body?: Uint8Array }) => Promise<{
++  ok: boolean; status: number;
++  headers: { get(name: string): string | null };
++  arrayBuffer(): Promise<ArrayBuffer>;
++}>;
++
++/** Download a Drive file the way "Anyone with the link" allows, refusing a page instead of a file. */
++export async function fetchDriveFile(url: string, opts: { fetchImpl?: FetchLike; maxBytes?: number } = {}): Promise<RemoteFile> {
++  const id = driveFileId(url);
++  if (!id) throw new MediaError("That is not a Google Drive file link — use the file's “Share → Copy link”.", 400);
++  const f = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
++  const max = opts.maxBytes ?? Math.max(...Object.values(ASSET_MAX_BYTES));
++  const r = await f(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`, { redirect: "follow" });
++  if (!r.ok) throw new MediaError(`Google Drive answered ${r.status} — is the file shared “Anyone with the link”?`, 502);
++  const type = (r.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
++  if (!type || type === "text/html") {
++    throw new MediaError("Google Drive sent a page, not the file: share it as “Anyone with the link”, or (for a large video) download it and upload it instead.", 422);
++  }
++  const declared = Number(r.headers.get("content-length"));
++  if (declared && declared > max) throw new MediaError(`The file is ${Math.round(declared / 1048576)} MB — larger than the library takes.`, 413);
++  const bytes = new Uint8Array(await r.arrayBuffer());
++  if (bytes.byteLength > max) throw new MediaError(`The file is ${Math.round(bytes.byteLength / 1048576)} MB — larger than the library takes.`, 413);
++  const cd = r.headers.get("content-disposition") ?? "";
++  const star = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(cd)?.[1];
++  const plain = /filename\s*=\s*"?([^";]+)"?/i.exec(cd)?.[1];
++  let fileName: string | null = null;
++  try { fileName = star ? decodeURIComponent(star) : plain ?? null; } catch { fileName = plain ?? null; }
++  return { bytes, mimeType: type, fileName };
++}
++
++export type PutFn = (url: string, headers: Record<string, string>, body: Uint8Array) => Promise<{ etag?: string | null }>;
++
++const defaultPut: PutFn = async (url, headers, body) => {
++  const r = await fetch(url, { method: "PUT", headers, body: body as unknown as BodyInit });
++  if (!r.ok) throw new MediaError(`storage refused the file (${r.status})`, 502);
++  return { etag: r.headers.get("etag") };
++};
++
++/**
++ * Store bytes the SERVER holds as a library asset of this survey. The same
++ * row, ticket and confirmation as a browser upload — only the PUT is ours.
++ */
++export async function storeAssetBytes(db: MediaDb, args: {
++  customerId: string; surveyId: string; createdBy?: string | null;
++  file: RemoteFile; displayName?: string | null; altText?: string | null;
++  put?: PutFn;
++}): Promise<{ asset: AssetSummary; duplicate: boolean }> {
++  const { file } = args;
++  const family = assetFamilyFor(file.mimeType);
++  if (family !== "image" && family !== "video" && family !== "audio") {
++    throw new MediaError(`That file is ${file.mimeType} — Insert media takes pictures, video and audio.`, 415);
++  }
++  const size = assetWithinLimit(file.mimeType, file.bytes.byteLength);
++  if (!size.ok) throw new MediaError(size.message!, 413);
++  const sha256 = createHash("sha256").update(file.bytes).digest("hex");
++  const scope = { surveyId: args.surveyId, customerId: args.customerId };
++  const dup = await findDuplicateAsset(db, { ...scope, sha256, bytes: file.bytes.byteLength });
++  if (dup) return { asset: dup, duplicate: true };
++
++  const ext = file.mimeType.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || "bin";
++  const ticket = await beginUpload(db, {
++    kind: "survey_asset", customerId: args.customerId, surveyId: args.surveyId, questionId: null,
++    fileName: file.fileName ?? `drive-file.${ext}`, mimeType: file.mimeType, bytes: file.bytes.byteLength,
++    sha256, displayName: args.displayName ?? null, altText: args.altText ?? null, createdBy: args.createdBy ?? null,
++  });
++  const put = args.put ?? defaultPut;
++  const parts: { partNumber: number; etag: string }[] = [];
++  if (!ticket.alreadyStored) {
++    if (ticket.kind === "multipart") {
++      for (const p of ticket.parts) {
++        const out = await put(p.url, {}, file.bytes.subarray(p.start, p.end));
++        parts.push({ partNumber: p.partNumber, etag: String(out.etag ?? "").replace(/"/g, "") });
++      }
++    } else if (ticket.uploadUrl) {
++      await put(ticket.uploadUrl, { "content-type": file.mimeType, ...ticket.uploadHeaders }, file.bytes);
++    } else {
++      throw new MediaError("storage gave no place to put the file", 502);
++    }
++  }
++  await confirmUpload(db, ticket.mediaId, { bytes: file.bytes.byteLength }, parts);
++  const asset = await assetFor(db, ticket.mediaId, scope);
++  if (!asset) throw new MediaError("the file was stored but cannot be found in the library", 500);
++  return { asset, duplicate: false };
++}
+diff --git a/packages/media/src/server.ts b/packages/media/src/server.ts
+index aabf19c..0b9915a 100644
+--- a/packages/media/src/server.ts
++++ b/packages/media/src/server.ts
+@@ -92,3 +92,4 @@ export function buildMediaStores(supabaseStorage: SupabaseStorageLike, env: Node
+ }
+ 
+ export { r2MissingSettings };
++export * from "./importRemote.js";
+diff --git a/packages/renderer/src/QuestionRenderer.tsx b/packages/renderer/src/QuestionRenderer.tsx
+index d5b1f7e..04d100b 100644
+--- a/packages/renderer/src/QuestionRenderer.tsx
++++ b/packages/renderer/src/QuestionRenderer.tsx
+@@ -18,6 +18,7 @@ import {
+   type LoopContext,
+   stripHtmlText,
+   sanitizeHtml,
++  expandMediaEmbeds,
+   selectedOtherCodes,
+   uiText,
+   effectiveScale,
+@@ -1160,7 +1161,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
+           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
+             {o.imageUrl ? (
+               // eslint-disable-next-line @next/next/no-img-element
+-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
++              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+             ) : (
+               <div style={{ height: 110, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--rs-border)" }}>🖼</div>
+             )}
+@@ -1657,7 +1658,7 @@ export function ChoiceCards(p: QRProps & { multi: boolean }) {
+             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(o); } }}>
+             {o.imageUrl && (
+               // eslint-disable-next-line @next/next/no-img-element
+-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
++              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+             )}
+             <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+             {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+@@ -2087,7 +2088,7 @@ export function CarouselSelect(p: QRProps) {
+           onClick={() => p.onChange(selected ? null : o.code)}>
+           {o.imageUrl && (
+             // eslint-disable-next-line @next/next/no-img-element
+-            <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
++            <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
+           )}
+           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+@@ -2178,7 +2179,7 @@ export function CompareImages(p: QRProps) {
+             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
+             {o.imageUrl ? (
+               // eslint-disable-next-line @next/next/no-img-element
+-              <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
++              <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
+             ) : (
+               <div className="rs-compare-noimg">🖼</div>
+             )}
+@@ -2367,7 +2368,8 @@ export function QuestionRenderer(props: QRProps) {
+    * otherwise. Piped values are already escaped by resolvePiping; a text
+    * with no markup is returned untouched.
+    */
+-  const safe = (html: string) => (html.includes("<") ? sanitizeHtml(html) : html);
++  /* sanitised, then players placed and pictures that piped to nothing dropped (`expandMediaEmbeds`) */
++  const safe = (html: string) => (html.includes("<") ? expandMediaEmbeds(sanitizeHtml(html)) : html);
+   const text = safe(resolvePiping(p.q.text, ctx));
+   const instruction = p.q.instruction ? safe(resolvePiping(p.q.instruction, ctx)) : null;
+ 
+diff --git a/packages/renderer/src/variants/card.tsx b/packages/renderer/src/variants/card.tsx
+index 396d9d7..71ae41c 100644
+--- a/packages/renderer/src/variants/card.tsx
++++ b/packages/renderer/src/variants/card.tsx
+@@ -59,7 +59,7 @@ export function FlipCards(p: QRProps) {
+                 {badge && <span className="rs-badge rs-flip-badge">{badge}</span>}
+                 {o.imageUrl ? (
+                   // eslint-disable-next-line @next/next/no-img-element
+-                  <SafeImage className="rs-flip-img" src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
++                  <SafeImage className="rs-flip-img" src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
+                 ) : (
+                   <div className="rs-flip-icon" aria-hidden>{icon || "◻"}</div>
+                 )}
+diff --git a/packages/renderer/src/variants/carousel.tsx b/packages/renderer/src/variants/carousel.tsx
+index 96aa6d9..22dc516 100644
+--- a/packages/renderer/src/variants/carousel.tsx
++++ b/packages/renderer/src/variants/carousel.tsx
+@@ -207,7 +207,7 @@ export function CompareCarousel(p: QRProps) {
+                 data-code={String(o.code)} {...anchor("option", String(o.code))} data-side={k === 0 ? "a" : "b"}>
+                 {o.imageUrl ? (
+                   // eslint-disable-next-line @next/next/no-img-element
+-                  <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
++                  <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
+                 ) : (
+                   <div className="rs-comparecar-noimg" aria-hidden>🖼</div>
+                 )}
+diff --git a/packages/renderer/src/variants/comparison.tsx b/packages/renderer/src/variants/comparison.tsx
+index ac4b776..4189da7 100644
+--- a/packages/renderer/src/variants/comparison.tsx
++++ b/packages/renderer/src/variants/comparison.tsx
+@@ -82,7 +82,7 @@ export function AttributeCompare(p: QRProps) {
+                   <th key={String(o.code)} scope="col" className={sel ? "chosen" : ""} data-code={String(o.code)} {...anchor("option", String(o.code))}>
+                     {o.imageUrl && (
+                       // eslint-disable-next-line @next/next/no-img-element
+-                      <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
++                      <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
+                     )}
+                     <span className="rs-attr-item" dangerouslySetInnerHTML={{ __html: o.label }} />
+                     {metaText(o, "badge") && <span className="rs-badge">{metaText(o, "badge")}</span>}
+diff --git a/packages/renderer/src/variants/ranking.tsx b/packages/renderer/src/variants/ranking.tsx
+index 6ec89bc..130a3e0 100644
+--- a/packages/renderer/src/variants/ranking.tsx
++++ b/packages/renderer/src/variants/ranking.tsx
+@@ -120,7 +120,7 @@ export function Tournament(p: QRProps) {
+         onClick={() => record(c)}>
+         {o?.imageUrl && (
+           // eslint-disable-next-line @next/next/no-img-element
+-          <SafeImage src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
++          <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} draggable={false} />
+         )}
+         <span className="rs-tour-side-label" dangerouslySetInnerHTML={{ __html: o?.label ?? String(c) }} />
+         <span className="rs-tour-pick">Prefer this</span>
+diff --git a/packages/renderer/src/variants/singleSelect.tsx b/packages/renderer/src/variants/singleSelect.tsx
+index ba15462..efb8f3d 100644
+--- a/packages/renderer/src/variants/singleSelect.tsx
++++ b/packages/renderer/src/variants/singleSelect.tsx
+@@ -57,7 +57,7 @@ export function IconSelect(p: QRProps) {
+             <div className={`rs-iconopt-icon ${!o.imageUrl && [...(icon || "")].length > 2 ? "text" : ""}`}>
+               {o.imageUrl
+                 // eslint-disable-next-line @next/next/no-img-element
+-                ? <SafeImage src={o.imageUrl} alt="" />
++                ? <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
+                 : <span aria-hidden>{icon || "◻"}</span>}
+             </div>
+             <div className="rs-iconopt-label" dangerouslySetInnerHTML={{ __html: o.label }} />
+@@ -92,7 +92,7 @@ export function ListSelect(p: QRProps) {
+             <span className={`rs-listrow-mark ${multi ? "box" : "dot"}`} aria-hidden>{sel ? (multi ? "✓" : "●") : ""}</span>
+             {o.imageUrl && (
+               // eslint-disable-next-line @next/next/no-img-element
+-              <SafeImage className="rs-listrow-img" src={o.imageUrl} alt="" />
++              <SafeImage className="rs-listrow-img" src={o.imageUrl} display={o.imageDisplay} alt="" />
+             )}
+             <div className="rs-listrow-body">
+               <div className="rs-listrow-title">
+@@ -148,7 +148,7 @@ export function RichCards(p: QRProps) {
+             {badge && o.imageUrl && <span className="rs-badge rs-richcard-badge">{badge}</span>}
+             {o.imageUrl && (
+               // eslint-disable-next-line @next/next/no-img-element
+-              <SafeImage className="rs-richcard-img" src={o.imageUrl} alt="" />
++              <SafeImage className="rs-richcard-img" src={o.imageUrl} display={o.imageDisplay} alt="" />
+             )}
+             <div className="rs-richcard-body">
+               <div className="rs-richcard-title">
+@@ -215,7 +215,7 @@ export function PairwiseChoice(p: QRProps) {
+         onClick={() => pick(o)} onKeyDown={activate(() => pick(o))}>
+         {o.imageUrl && (
+           // eslint-disable-next-line @next/next/no-img-element
+-          <SafeImage src={o.imageUrl} alt="" />
++          <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
+         )}
+         <div className="rs-pair-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+         {desc && <div className="rs-pair-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+@@ -250,7 +250,7 @@ export function MultiCarousel(p: QRProps) {
+         <div className={`rs-cardopt rs-carousel-card ${sel ? "selected" : ""}`} data-code={String(o.code)} {...anchor("option", String(o.code))} onClick={() => pick(o)}>
+           {o.imageUrl && (
+             // eslint-disable-next-line @next/next/no-img-element
+-            <SafeImage src={o.imageUrl} alt="" />
++            <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
+           )}
+           <div className="rs-cardopt-title" dangerouslySetInnerHTML={{ __html: o.label }} />
+           {desc && <div className="rs-cardopt-desc" dangerouslySetInnerHTML={{ __html: desc }} />}
+@@ -331,7 +331,7 @@ export function PairwiseSet(p: QRProps) {
+               onClick={() => pick(rc, o.code)} onKeyDown={activate(() => pick(rc, o.code))}>
+               {o.imageUrl && (
+                 // eslint-disable-next-line @next/next/no-img-element
+-                <SafeImage src={o.imageUrl} alt="" />
++                <SafeImage src={o.imageUrl} display={o.imageDisplay} alt="" />
+               )}
+               <div dangerouslySetInnerHTML={{ __html: o.label }} />
+               {metaText(o, "description") && (
+diff --git a/packages/renderer/styles/variants/media.css b/packages/renderer/styles/variants/media.css
+index c9086df..8d5e860 100644
+--- a/packages/renderer/styles/variants/media.css
++++ b/packages/renderer/styles/variants/media.css
+@@ -105,3 +105,5 @@ audio.rs-embed, audio.rs-audio { display: block; width: 100%; max-width: 480px;
+ .rs-qmedia-item > .rs-embed, .rs-qmedia-item img.rs-embed { max-width: 100%; }
+ @media (max-width: 480px) { .rs-qmedia-horizontal > .rs-qmedia-item { flex-basis: 100%; } }
+ img.rs-piped-image { display: block; max-width: 100%; height: auto; margin: 6px 0; border-radius: calc(var(--rs-radius, 12px) - 4px); }
++/* a YouTube / Vimeo / Drive player placed in question text (Insert media → embed) */
++.rs-embed-inline { max-width: 100%; margin: 6px 0; }
+diff --git a/packages/schema/src/mediaDisplay.ts b/packages/schema/src/mediaDisplay.ts
+index 23675c2..f398fe0 100644
+--- a/packages/schema/src/mediaDisplay.ts
++++ b/packages/schema/src/mediaDisplay.ts
+@@ -30,6 +30,10 @@ export const MediaDisplay = z.object({
+   keepRatio: z.boolean().optional(),
+   /** scale down on narrow screens (max-width: 100%) — default on */
+   responsive: z.boolean().optional(),
++  /** space inside the picture's box, around it (CSS padding) */
++  padding: Length,
++  /** space above and below the picture (vertical margin) */
++  spacing: Length,
+   /* ---- video / audio */
+   autoplay: z.boolean().optional(),
+   controls: z.boolean().optional(),
+diff --git a/packages/schema/src/question.ts b/packages/schema/src/question.ts
+index af62283..6b323ff 100644
+--- a/packages/schema/src/question.ts
++++ b/packages/schema/src/question.ts
+@@ -226,6 +226,12 @@ export const Option = z.object({
+    * picture says something the label does not.
+    */
+   imageAlt: z.string().optional(),
++  /**
++   * How this option's picture is sized, aligned and spaced (1-10-26 review):
++   * set in the image pop-up that opens after Choose / Upload. Absent = the
++   * variant's own stylesheet decides, exactly as before this existed.
++   */
++  imageDisplay: MediaDisplay.optional(),
+   flags: OptionFlags,
+   /** Show this option only when the condition holds. */
+   visibleIf: Condition.optional(),
+diff --git a/scripts/media-consolidation-test.mjs b/scripts/media-consolidation-test.mjs
+new file mode 100644
+index 0000000..2ce8c3c
+--- /dev/null
++++ b/scripts/media-consolidation-test.mjs
+@@ -0,0 +1,364 @@
++/**
++ * MEDIA, CONSOLIDATED (1-10-26 review) — Studio and runtime.
++ *
++ *   Oweas 1-2 / Prince 1-2   an option's Choose / Upload opens an image pop-up
++ *                            (size, scale, alignment, padding, spacing, alt,
++ *                            live preview); nothing reaches the option until
++ *                            Apply; Cancel leaves it; "Customize" reopens it
++ *   Oweas 3 / Prince 3       no separate "media under the question text" field;
++ *                            Insert media has sources (library, upload, URL,
++ *                            Drive + save to library), Above / Below / cursor,
++ *                            several items each with its own settings, players
++ *   Prince 4                 position and several items only in the question
++ *                            text — never in an option label
++ *   Oweas 4 / Prince 5       the dialog's preview follows every change, also
++ *                            when an inserted picture is edited
++ *   Prince 6                 clearing the source and pressing Apply removes it
++ *   Prince 7                 left / center / right land the same in the
++ *                            builder, Live View and the respondent preview
++ *   Prince 8                 a URL parameter piped as an image URL shows the
++ *                            picture (and an "&" in it survives)
++ *   legacy                   a question with the old field keeps its media and
++ *                            can move it into the text
++ *
++ *   node scripts/media-consolidation-test.mjs   (studio on 3000, runtime on 3001)
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, openTabKey } from "./lib/nav.mjs";
++import { openPreview } from "./lib/preview.mjs";
++import assert from "node:assert/strict";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
++const IMG = `${RUNTIME}/test-media/stimulus.png`;
++const DB = "mockdb";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++const opts = (n, l = "Opt") => Array.from({ length: n }, (_, i) => ({ code: i + 1, label: `${l} ${i + 1}` }));
++
++const FIXTURE = {
++  meta: { id: "sandbox", code: "SANDBOX", title: "Media", version: "1.0" },
++  embeddedData: [{ name: "ImageURL", source: "url" }],
++  questions: [
++    { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Hello", options: opts(2) },
++    { id: "q2", code: "Q2", variableName: "Q2", type: "image_select", text: "Pick a pack", options: opts(3, "Pack") },
++    { id: "q3", code: "Q3", variableName: "Q3", type: "single_select", text: "Old media", options: opts(2),
++      settings: { mediaUrl: IMG, mediaDisplay: { width: 90, align: "right" } } },
++  ],
++  flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2", "q3"] }, { type: "end", id: "e", status: "complete" }],
++};
++
++const ASSET = (id, url, family = "image", mimeType = "image/png") => ({
++  id, surveyId: DB, customerId: "c1", name: `${id}.png`, fileName: `${id}.png`, altText: `${id} alt`, mimeType, family,
++  bytes: 1000, width: 400, height: 200, durationSeconds: null, sha256: null, shared: false, fromOtherSurvey: false,
++  createdAt: "2026-10-01T00:00:00Z", url,
++});
++const LIB = [ASSET("pack", `${IMG}?asset=pack`)];
++const imports = [];
++
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ viewport: { width: 1700, height: 1150 } });
++await ctx.addInitScript((seed) => { window.__rescriptSandboxSeed = seed; }, FIXTURE);
++const page = await ctx.newPage();
++const errors = [];
++page.on("pageerror", (e) => errors.push(e.message));
++page.on("dialog", (d) => d.accept());
++
++/* a saved survey without a database: the library, a duplicate-upload hit, the Drive import and autosave */
++let rev = 1;
++await page.route(`**/api/surveys/${DB}/**`, async (route) => {
++  const req = route.request();
++  const path = new URL(req.url()).pathname.replace(`/api/surveys/${DB}`, "");
++  const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
++  if (path === "/media" && req.method() === "GET") return json({ ok: true, assets: LIB });
++  if (path === "/media/lookup") return json({ ok: true, asset: ASSET("uploaded", `${IMG}?asset=uploaded`) });
++  if (path === "/media/import") {
++    imports.push(JSON.parse(req.postData() ?? "{}"));
++    return json({ ok: true, asset: ASSET("fromdrive", `${IMG}?asset=drive`), duplicate: false });
++  }
++  if (path.startsWith("/draft")) return json({ ok: true, revision: ++rev });
++  return route.continue();
++});
++
++const readDef = async () => {
++  const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  const json = await page.$eval("textarea.code", (e) => e.value);
++  if (activeTab) await openTabKey(page, activeTab).catch(() => {});
++  return JSON.parse(json);
++};
++const selectQuestion = async (code) => {
++  await openTab(page, "Questions");
++  await page.waitForSelector(".qcard");
++  for (const c of await page.$$(".qcard")) if ((await c.textContent()).includes(code)) { await c.click(); await page.waitForTimeout(300); return; }
++  throw new Error(`no card for ${code}`);
++};
++const q = (def, id) => def.questions.find((x) => x.id === id);
++const previewStyle = (i = 0) => page.$eval(`[data-testid="media-display-preview"] img >> nth=${i}`, (e) => e.getAttribute("style") ?? "").catch(() => page.$$eval('[data-testid="media-display-preview"] img', (es, i) => es[i]?.getAttribute("style") ?? null, i));
++const imgStyles = (html) => [...html.matchAll(/<img\b[^>]*>/g)].map((m) => /style="([^"]*)"/.exec(m[0])?.[1] ?? "");
++const openInsert = async () => { await page.click('.rte [data-testid="rte-media"] >> nth=0'); await page.waitForSelector('[data-testid="media-insert"]'); };
++const setWidth = async (v) => { await page.fill('[data-testid="media-insert"] [data-testid="mdisp-width"]', String(v)); };
++
++await page.goto(`${STUDIO}/sandbox?dbid=${DB}`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await selectQuestion("Q1");
++ok("seeded survey opened as a saved survey (library available)");
++
++/* ------------------------------------------------ Oweas 3 / Prince 3: the old field is gone */
++assert.equal(await page.$('[data-testid="question-media"]'), null, "no separate media field on a question without old media");
++assert.equal(await page.$('[data-testid="legacy-media"]'), null);
++ok("Oweas 3 — no separate “Media shown under the question text” field");
++
++/* ------------------------------------------------ several items, each with its own settings, below the text */
++await openInsert();
++assert.ok(await page.$('[data-testid="media-insert-position"]'), "position offered in the question text");
++assert.equal(await page.isChecked('[data-testid="media-insert-position-above"]'), true, "Above question is the default");
++assert.ok(await page.$('[data-testid="media-insert-items"]'), "several items offered in the question text");
++for (const s of ["library", "upload", "url", "drive"]) assert.ok(await page.$(`[data-testid="media-insert-source-${s}"]`), `source ${s}`);
++await page.fill('[data-testid="media-insert-url"]', IMG);
++await page.click('[data-testid="media-insert"] [data-testid="mdisp-align-center"]');
++assert.match(await previewStyle(0), /margin-left: auto; margin-right: auto/);
++await page.click('[data-testid="media-insert-add"]');
++await page.fill('[data-testid="media-insert-url"]', `${IMG}?n=2`);
++await setWidth(50);
++await page.click('[data-testid="media-insert"] [data-testid="mdisp-align-left"]');
++await page.click('[data-testid="media-insert-add"]');
++await page.fill('[data-testid="media-insert-url"]', `${IMG}?n=3`);
++await setWidth(80);
++await page.click('[data-testid="media-insert"] [data-testid="mdisp-align-right"]');
++assert.equal((await page.$$('[data-testid="media-display-preview"] img')).length, 3, "the preview shows every item");
++await page.click('[data-testid="media-insert-item-up-2"]');
++assert.match(await previewStyle(1), /width: 80px/, "reordered: the 80px item is second");
++await page.check('[data-testid="media-insert-position-below"]');
++assert.match(await page.textContent('[data-testid="media-insert-ok"]'), /Insert 3 items/);
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(500);
++let text = q(await readDef(), "q1").text;
++assert.match(text, /^Hello<div><img/, `below the text: ${text}`);
++let st = imgStyles(text);
++assert.equal(st.length, 3);
++assert.match(st[0], /margin-left: auto; margin-right: auto/, "item 1 centred");
++assert.match(st[1], /width: 80px.*margin-left: auto; margin-right: 0/, "item 2: 80px, right");
++assert.match(st[2], /width: 50px.*margin-left: 0; margin-right: auto/, "item 3: 50px, left");
++ok("Oweas 3 / Prince 3 — three items, each with its own size and alignment, reordered, below the question");
++
++/* ------------------------------------------------ Oweas 4 / Prince 5: editing an inserted picture — the preview is live */
++await page.click('.rte-surface img >> nth=1');
++await page.waitForSelector('[data-testid="media-insert"]');
++assert.match(await page.textContent('[data-testid="media-insert"] h2'), /Edit media/);
++assert.ok(await page.$('[data-testid="media-insert-alt"]'), "a picture is edited as a picture: alt text offered");
++assert.equal(await page.$('[data-testid="media-insert"] [data-testid="mdisp-controls"]'), null, "no player controls for a picture");
++assert.equal(await page.isChecked('[data-testid="media-insert-position-keep"]'), true, "edit keeps it where it is");
++assert.equal(await page.$('[data-testid="media-insert-items"]'), null, "edit is one item");
++assert.match(await previewStyle(0), /width: 80px/, "the preview opens on the current settings");
++await setWidth(120);
++await page.click('[data-testid="media-insert"] [data-testid="mdisp-align-center"]');
++assert.match(await previewStyle(0), /width: 120px.*margin-left: auto; margin-right: auto/, "and follows the change at once");
++await page.click('[data-testid="media-insert"] [data-testid="mdisp-align-left"]');
++assert.match(await previewStyle(0), /margin-left: 0(px)?; margin-right: auto/);
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(400);
++text = q(await readDef(), "q1").text;
++st = imgStyles(text);
++assert.match(st[1], /width: 120px.*margin-left: 0; margin-right: auto/, `edited in place: ${st[1]}`);
++assert.match(text, /<img[^>]*\?n=3"[^>]*data-rs-media="image"/, "still an image, not an `img` kind");
++ok("Oweas 4 / Prince 5 — an edited picture's preview updates live; Apply writes it in place");
++
++/* ------------------------------------------------ Prince 6: clear the source, Apply removes it */
++await page.click('.rte-surface img >> nth=0');
++await page.waitForSelector('[data-testid="media-insert"]');
++await page.fill('[data-testid="media-insert-url"]', "");
++await page.waitForSelector('[data-testid="media-insert-removing"]');
++assert.equal(await page.isEnabled('[data-testid="media-insert-ok"]'), true, "Apply stays enabled");
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(400);
++text = q(await readDef(), "q1").text;
++assert.equal(imgStyles(text).length, 2, `one fewer: ${text}`);
++assert.ok(!text.includes(`src="${IMG}"`), "the cleared one is gone");
++ok("Prince 6 — clearing the source and pressing Apply removes the media");
++
++/* ------------------------------------------------ above the question; a player; a piped picture */
++await openInsert();
++await page.fill('[data-testid="media-insert-url"]', `${IMG}?top=1`);
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(300);
++await openInsert();
++await page.fill('[data-testid="media-insert-url"]', "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
++assert.match(await page.textContent('[data-testid="media-insert-verdict"]'), /YouTube player/);
++await page.waitForSelector('[data-testid="media-display-preview"] iframe');
++await page.fill('[data-testid="media-insert"] [data-testid="mdisp-width"]', "480");
++await page.check('[data-testid="media-insert-position-below"]');
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(300);
++await openInsert();
++await page.fill('[data-testid="media-insert-url"]', "{{ImageURL}}");
++assert.match(await page.textContent('[data-testid="media-insert-verdict"]'), /Piped/);
++assert.equal(await page.isEnabled('[data-testid="media-insert-ok"]'), true, "a piped source can be inserted");
++assert.ok(await page.$('[data-testid="media-display-preview"] img'), "a placeholder shows where it goes");
++await page.check('[data-testid="media-insert-position-below"]');
++await page.click('[data-testid="media-insert-ok"]');
++await page.waitForTimeout(400);
++text = q(await readDef(), "q1").text;
++assert.match(text, /^<div><img[^>]*\?top=1/, `above the question: ${text.slice(0, 80)}`);
++assert.match(text, /data-rs-media="embed"/);
++assert.match(text, /data-rs-src="https:\/\/www\.youtube\.com\/watch\?v=dQw4w9WgXcQ"/);
++assert.match(text, /<img src="\{\{ImageURL\}\}"/);
++await page.click('.rte-surface [data-rs-media="embed"]');
++await page.waitForSelector('[data-testid="media-insert"]');
++assert.equal(await page.inputValue('[data-testid="media-insert-url"]'), "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "a player reopens for editing");
++await page.click('[data-testid="media-insert"] button:has-text("Cancel")');
++ok("Oweas 3 / Prince 3 — above the question, a YouTube player and a piped picture, from the one dialog");
++
++/* ------------------------------------------------ Drive: save to the asset library */
++await openInsert();
++await page.click('[data-testid="media-insert-source-drive"]');
++await page.fill('[data-testid="media-insert-url"]', "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view?usp=sharing");
++assert.match(await page.textContent('[data-testid="media-insert-verdict"]'), /Google Drive player/);
++await page.click('[data-testid="media-insert-drive-save"]');
++await page.waitForFunction(() => document.querySelector('[data-testid="media-insert-url"]')?.value.includes("asset=drive"));
++assert.equal(imports.at(-1)?.url, "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view?usp=sharing");
++assert.equal(await page.$eval('[data-testid="media-insert-kind-image"]', (e) => e.classList.contains("primary")), true, "now an ordinary picture from the library");
++await page.click('[data-testid="media-insert"] button:has-text("Cancel")');
++ok("Prince 3 — a Google Drive file is saved into the asset library and used from there");
++
++/* ------------------------------------------------ Prince 4: an option label gets none of it */
++await page.click('[data-testid="option-label"] >> nth=0');
++await page.click('[data-testid="option-label-format"] >> nth=0');
++await page.click('.rte-bar-compact [data-testid="rte-media"]');
++await page.waitForSelector('[data-testid="media-insert"]');
++assert.equal(await page.$('[data-testid="media-insert-position"]'), null, "no position in an option");
++assert.equal(await page.$('[data-testid="media-insert-items"]'), null, "no several-items list in an option");
++await page.fill('[data-testid="media-insert-url"]', "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
++assert.equal(await page.isEnabled('[data-testid="media-insert-ok"]'), false, "no player inside an option label");
++await page.click('[data-testid="media-insert"] button:has-text("Cancel")');
++ok("Prince 4 — position and several items only in the question text, not in an option");
++
++/* ------------------------------------------------ Prince 7 + 8: the respondent's view */
++const def = await readDef();
++const measure = (p) => p.$$eval("[data-qid=q1] .rs-qtext img", (es) => es.map((e) => {
++  const r = e.getBoundingClientRect(); const c = e.closest(".rs-qtext").getBoundingClientRect();
++  return { left: Math.round(r.left - c.left), right: Math.round(c.right - r.right), w: Math.round(r.width), src: e.getAttribute("src"), loaded: e.naturalWidth > 0 };
++}));
++const pv = await openPreview(browser, RUNTIME, { definition: def }, { search: `?ImageURL=${encodeURIComponent("/test-media/stimulus.png?a=1&b=2")}`, viewport: { width: 1200, height: 900 } });
++await pv.waitForTimeout(800);
++let m = await measure(pv);
++const piped = m.find((x) => x.src?.startsWith("/test-media/stimulus.png?a=1"));
++assert.ok(piped, `the piped picture is drawn: ${JSON.stringify(m.map((x) => x.src))}`);
++assert.equal(piped.src, "/test-media/stimulus.png?a=1&b=2", "the & survives");
++assert.ok(piped.loaded);
++const lefty = m.find((x) => x.src === `${IMG}?n=2`);
++const edited = m.find((x) => x.src === `${IMG}?n=3`);
++assert.ok(Math.abs(lefty.left) <= 1, `left-aligned sits at the left: ${JSON.stringify(lefty)}`);
++assert.ok(Math.abs(edited.left) <= 1 && edited.w === 120, `the edited item is where and how big it was set: ${JSON.stringify(edited)}`);
++const frame = await pv.$('[data-qid=q1] .rs-qtext iframe');
++assert.ok(frame, "the player is a player");
++assert.match(await frame.getAttribute("src"), /^https:\/\/www\.youtube-nocookie\.com\/embed\/dQw4w9WgXcQ/);
++assert.equal(await pv.$eval('[data-qid=q1] .rs-embed-inline', (e) => Math.round(e.getBoundingClientRect().width)), 480, "at the width set");
++await pv.close();
++const pv2 = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: 1200, height: 900 } });
++await pv2.waitForTimeout(500);
++m = await measure(pv2);
++assert.ok(!m.some((x) => !x.src || x.src.includes("{{")), "no parameter → no broken picture");
++await pv2.close();
++ok("Prince 8 — a URL parameter piped as an image URL shows the picture; without one, nothing broken");
++
++/* the same alignment in the builder's Live View as in the respondent preview */
++const ALIGNED = { ...def, questions: [{ ...q(def, "q1"), text: `<p>T</p>${["left", "center", "right"].map((a) => `<img src="${IMG}?al=${a}" alt="" style="width: 100px; height: auto; max-width: 100%; display: block; margin-left: ${a === "left" ? "0" : "auto"}; margin-right: ${a === "right" ? "0" : "auto"}" data-rs-media="image">`).join("")}` }, ...def.questions.slice(1)] };
++const pv3 = await openPreview(browser, RUNTIME, { definition: ALIGNED }, { viewport: { width: 1200, height: 900 } });
++await pv3.waitForTimeout(500);
++const al = Object.fromEntries((await measure(pv3)).map((x) => [x.src.split("al=")[1], x]));
++assert.ok(al.left.left <= 1 && al.right.right <= 1 && Math.abs(al.center.left - al.center.right) <= 2, `preview: ${JSON.stringify(al)}`);
++await pv3.close();
++/* the builder: the question text editor and Live View put them in the same places */
++await openTab(page, "JSON");
++await page.waitForSelector("textarea.code");
++await page.click('button:has-text("edit")');
++await page.fill("textarea.code", JSON.stringify(ALIGNED, null, 2));
++await page.click('button:has-text("validate & apply")');
++await page.waitForTimeout(400);
++await selectQuestion("Q1");
++const rel = (sel, box) => page.$$eval(sel, (es, box) => es.map((e) => { const r = e.getBoundingClientRect(); const c = e.closest(box).getBoundingClientRect(); return { al: e.getAttribute("src").split("al=")[1], left: Math.round(r.left - c.left), right: Math.round(c.right - r.right) }; }), box);
++const inEditor = Object.fromEntries((await rel(".rte-surface img", ".rte-surface")).map((x) => [x.al, x]));
++const pad = inEditor.left.left;
++assert.ok(Math.abs(inEditor.right.right - pad) <= 2 && Math.abs(inEditor.center.left - inEditor.center.right) <= 2, `builder: ${JSON.stringify(inEditor)}`);
++await page.click("text=Live View");
++await page.waitForSelector(".rs-card[data-qid=q1] .rs-qtext img");
++const live = Object.fromEntries((await rel(".rs-card[data-qid=q1] .rs-qtext img", ".rs-qtext")).map((x) => [x.al, x]));
++assert.ok(live.left.left <= 1 && live.right.right <= 1 && Math.abs(live.center.left - live.center.right) <= 2, `Live View: ${JSON.stringify(live)}`);
++await page.click("text=Standard").catch(() => {});
++ok("Prince 7 — left / center / right land the same in the builder, Live View and the preview, each item its own");
++
++/* ------------------------------------------------ legacy: the old field still works, and moves into the text */
++await selectQuestion("Q3");
++await page.waitForSelector('[data-testid="legacy-media"]');
++assert.ok(await page.$('[data-testid="question-media"]'), "the old editor is still there for old data");
++await page.click('[data-testid="legacy-media-move"]');
++await page.waitForTimeout(400);
++const q3 = q(await readDef(), "q3");
++assert.equal(q3.settings.mediaUrl, undefined);
++assert.equal(q3.settings.mediaDisplay, undefined);
++assert.match(q3.text, /^Old media<div><img src="[^"]+stimulus\.png"[^>]*width: 90px[^>]*margin-left: auto; margin-right: 0/);
++assert.equal(await page.$('[data-testid="legacy-media"]'), null, "the card goes once it is moved");
++ok("legacy — a question with the old field keeps it, and moves it into the text with its size and alignment");
++
++/* ------------------------------------------------ Oweas 1-2 / Prince 1-2: the option image pop-up */
++await selectQuestion("Q2");
++await page.click('[data-testid="option-image-0-choose"]');
++await page.waitForSelector('[data-testid="asset-tile"]');
++await page.click('[data-testid="asset-tile"] >> nth=0');
++await page.click('[data-testid="asset-picker-use"]');
++await page.waitForSelector('[data-testid="image-customize"]');
++assert.equal(await page.inputValue('[data-testid="option-image-0"]'), "", "nothing reaches the option before Apply");
++assert.equal(await page.$('[data-testid="image-customize"] [data-testid="media-insert-position"]'), null, "no position for an option image");
++assert.equal(await page.inputValue('[data-testid="image-customize-alt"]'), "pack alt", "the asset's alt text comes along");
++await page.fill('[data-testid="image-customize"] [data-testid="mdisp-width"]', "100");
++await page.click('[data-testid="image-customize"] [data-testid="mdisp-align-center"]');
++await page.fill('[data-testid="image-customize"] [data-testid="mdisp-padding"]', "4");
++await page.fill('[data-testid="image-customize"] [data-testid="mdisp-spacing"]', "6");
++const pst = await page.$eval('[data-testid="image-customize-preview"] img', (e) => { const c = getComputedStyle(e); return { w: c.width, p: c.paddingTop, mt: c.marginTop, mb: c.marginBottom, ml: c.marginLeft, mr: c.marginRight }; });
++assert.equal(pst.w, "100px"); assert.equal(pst.p, "4px"); assert.equal(pst.mt, "6px"); assert.equal(pst.mb, "6px");
++assert.equal(pst.ml, pst.mr, `the live preview is centred: ${JSON.stringify(pst)}`);
++await page.click('[data-testid="image-customize-apply"]');
++await page.waitForTimeout(300);
++let o = q(await readDef(), "q2").options;
++assert.equal(o[0].imageUrl, `${IMG}?asset=pack`);
++assert.deepEqual(o[0].imageDisplay, { width: "100", align: "center", padding: "4", spacing: "6" });
++assert.equal(o[0].imageAlt, "pack alt");
++ok("Oweas 1 / Prince 1 — Choose opens the pop-up; the picture is added only on Apply, with its settings");
++
++await page.click('[data-testid="option-image-1-choose"]');
++await page.click('[data-testid="asset-tile"] >> nth=0');
++await page.click('[data-testid="asset-picker-use"]');
++await page.waitForSelector('[data-testid="image-customize"]');
++await page.click('[data-testid="image-customize-cancel"]');
++await page.waitForTimeout(200);
++assert.equal(q(await readDef(), "q2").options[1].imageUrl, undefined, "Cancel adds nothing");
++await page.setInputFiles('[data-testid="option-image-2-file"]', { name: "shot.png", mimeType: "image/png", buffer: Buffer.from("89504e470d0a1a0a", "hex") });
++await page.waitForSelector('[data-testid="image-customize"]');
++assert.equal(await page.inputValue('[data-testid="option-image-2"]'), "", "an upload waits for Apply too");
++await page.click('[data-testid="image-customize-apply"]');
++await page.waitForTimeout(300);
++assert.equal(q(await readDef(), "q2").options[2].imageUrl, `${IMG}?asset=uploaded`);
++await page.click('[data-testid="option-image-0-customize"]');
++await page.waitForSelector('[data-testid="image-customize"]');
++assert.equal(await page.inputValue('[data-testid="image-customize"] [data-testid="mdisp-width"]'), "100", "Customize reopens on the saved settings");
++await page.fill('[data-testid="image-customize"] [data-testid="mdisp-width"]', "60");
++await page.click('[data-testid="image-customize-apply"]');
++await page.waitForTimeout(300);
++o = q(await readDef(), "q2").options;
++assert.equal(o[0].imageDisplay.width, "60");
++ok("Prince 1-2 — Cancel adds nothing, Upload waits for Apply, Customize reopens and re-applies");
++
++const pv4 = await openPreview(browser, RUNTIME, { definition: await readDef() }, { viewport: { width: 1200, height: 900 } });
++await pv4.waitForSelector("[data-qid=q2] img");
++const optImg = await pv4.$eval("[data-qid=q2] img", (e) => ({ w: Math.round(e.getBoundingClientRect().width), pad: getComputedStyle(e).paddingTop, style: e.getAttribute("style") }));
++assert.equal(optImg.w, 60, `the respondent sees the width set: ${JSON.stringify(optImg)}`);
++assert.equal(optImg.pad, "4px");
++assert.match(optImg.style, /margin: 6px auto/, "centred, with its spacing");
++await pv4.close();
++ok("Oweas 2 — the option picture's settings reach the respondent");
++
++assert.deepEqual(errors, [], `page errors: ${errors.join(" | ")}`);
++await browser.close();
++console.log(`\n${passed} checks passed`);
+-- 
+2.43.0
+

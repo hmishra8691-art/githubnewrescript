@@ -1,0 +1,1697 @@
+From 058da08c2f583816314b321342762a84577bad2c Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Sun, 11 Oct 2026 04:46:09 +0000
+Subject: [PATCH 1/3] Dashboard, project overview, compact wallet, project
+ spend; activity events
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Dashboard (brief §1): the summary band shows Projects and Live only; the
+project cards keep name/id, questions, live/test/completed responses and
+status and no longer show spend; the balance filter, the spend sorts and
+the large wallet panel are gone. Usage tracking and billing are untouched —
+the meters are still read and written exactly as before, they are simply
+not drawn on the list.
+
+Project Overview (§2): a project now opens on `/studio/<id>` as an overview
+— information, configuration states, utilization in dollars, navigation to
+every module, recent activity — and `?tab=` / `?mode=` / `?split=` deep
+links keep opening the Studio directly, so every existing link, refresh and
+bookmark still works. `GET /api/surveys/{id}/overview` reads the saved
+definition, the deployments, the live quota counters, the reports, runs
+and sample sources, the project configuration, the meter and the audit
+log; `lib/projectOverview.ts` turns them into Configured / Incomplete /
+Not set up / Needs attention per module from saved data only (no state is
+inferred from the lifecycle status or hard-coded). `/sandbox/overview`
+renders the same component for the browser suites.
+
+Wallet (§3): `GET /api/billing/wallet`; `WalletMenu` is a compact
+two-decimal pill in the top-right account area of the Dashboard, Analytics
+and Studio headers, with the precise balance in its title and a menu for
+Add funds (the page's own dialog where there is one, else /billing),
+Usage & billing and Transaction history; it re-reads after a request. The
+Studio's menubar gains `Project spend: $x.xx` beside Mode from the same
+meter view the usage panel uses — the project's spend, distinct from the
+wallet — and an "← Overview" link in the top bar.
+
+Activity (§8): status changes and version restores are now audited as
+`survey.status_changed` / `version.restored`, so they appear in Recent
+activity with the other events; nothing is invented.
+
+Tests: lib/projectOverview.test.ts (mutation-checked 5/5),
+scripts/dashboard-overview-test.mjs (5 checks; UI mutations 5/5 caught),
+scripts/project-meter-test.mjs rewritten for the new layout; dashboard,
+menubar, collaboration, delete-survey and analytics suites re-run.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/billing/wallet/route.ts   |  33 +++
+ .../app/api/surveys/[id]/overview/route.ts    |  78 +++++++
+ apps/studio/app/api/surveys/[id]/route.ts     |   9 +-
+ .../[id]/versions/[versionId]/route.ts        |  10 +-
+ apps/studio/app/billing/page.tsx              |   4 +-
+ apps/studio/app/design-system.css             |  64 +++++-
+ apps/studio/app/page.tsx                      |  70 +------
+ apps/studio/app/sandbox/overview/page.tsx     |  12 ++
+ apps/studio/app/studio/[id]/page.tsx          |  12 +-
+ apps/studio/components/billing/WalletMenu.tsx |  68 ++++++
+ .../components/project/ProjectOverview.tsx    | 172 +++++++++++++++
+ apps/studio/components/studio/MenuBar.tsx     |   5 +-
+ apps/studio/components/studio/Studio.tsx      |  31 ++-
+ apps/studio/components/ui/AppHeader.tsx       |   8 +-
+ apps/studio/content/docs/api.md               |   3 +-
+ apps/studio/lib/metering.ts                   |   2 +-
+ apps/studio/lib/projectOverview.test.ts       |  80 +++++++
+ apps/studio/lib/projectOverview.ts            | 137 ++++++++++++
+ packages/access/src/audit.ts                  |   3 +
+ scripts/auth-guard-audit.mjs                  |   1 +
+ scripts/dashboard-overview-test.mjs           | 196 ++++++++++++++++++
+ scripts/project-meter-test.mjs                | 158 +++++---------
+ 22 files changed, 967 insertions(+), 189 deletions(-)
+ create mode 100644 apps/studio/app/api/billing/wallet/route.ts
+ create mode 100644 apps/studio/app/api/surveys/[id]/overview/route.ts
+ create mode 100644 apps/studio/app/sandbox/overview/page.tsx
+ create mode 100644 apps/studio/components/billing/WalletMenu.tsx
+ create mode 100644 apps/studio/components/project/ProjectOverview.tsx
+ create mode 100644 apps/studio/lib/projectOverview.test.ts
+ create mode 100644 apps/studio/lib/projectOverview.ts
+ create mode 100644 scripts/dashboard-overview-test.mjs
+
+diff --git a/apps/studio/app/api/billing/wallet/route.ts b/apps/studio/app/api/billing/wallet/route.ts
+new file mode 100644
+index 0000000..567d0ad
+--- /dev/null
++++ b/apps/studio/app/api/billing/wallet/route.ts
+@@ -0,0 +1,33 @@
++import { NextRequest, NextResponse } from "next/server";
++import { walletOverview } from "@rescript/billing";
++import { isFailure, requireUser } from "@/lib/guard";
++import { getMeter } from "@/lib/metering";
++import { meterThresholds } from "@/lib/projectMeters";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * THE SIGNED-IN PERSON'S WALLET, AND NOTHING ELSE (dashboard brief §3): the
++ * balance the compact wallet in the header shows, with the level the colour
++ * reads. The same `walletOverview` the usage pages use, so the figure can
++ * never differ from theirs; no project meters, no usage lists — the header
++ * asks on every page and must be cheap. A Studio without the billing tables
++ * answers `billing_unavailable`, and the header shows nothing.
++ */
++export async function GET(req: NextRequest) {
++  const user = await requireUser(req);
++  if (isFailure(user)) return user.response;
++  const meter = getMeter();
++  try {
++    const cfg = await meter.config();
++    const wallets = await meter.store.listWallets({ customerId: user.customerId ?? undefined });
++    const mine = wallets.find((w) => w.userId === user.userId) ?? null;
++    const ledger = mine ? await meter.store.listLedger(mine.id, 500) : [];
++    const wallet = walletOverview(mine, ledger, cfg);
++    return NextResponse.json({ ok: true, wallet, thresholds: meterThresholds(cfg) }, { headers: { "cache-control": "no-store" } });
++  } catch (e) {
++    const msg = (e as Error).message;
++    const unavailable = /relation .* does not exist|function .* does not exist|schema cache/i.test(msg);
++    return NextResponse.json(unavailable ? { ok: false, code: "billing_unavailable" } : { ok: false, code: "billing_error", error: msg }, { headers: { "cache-control": "no-store" } });
++  }
++}
+diff --git a/apps/studio/app/api/surveys/[id]/overview/route.ts b/apps/studio/app/api/surveys/[id]/overview/route.ts
+new file mode 100644
+index 0000000..fce119d
+--- /dev/null
++++ b/apps/studio/app/api/surveys/[id]/overview/route.ts
+@@ -0,0 +1,78 @@
++import { NextRequest, NextResponse } from "next/server";
++import { auditCategory, describeEvent } from "@rescript/access";
++import type { SurveyDefinition } from "@rescript/schema";
++import { isFailure, requireProject } from "@/lib/guard";
++import { supabaseAdmin } from "@/lib/admin";
++import { loadDefinition } from "@/lib/analytics";
++import { loadDashboardStats } from "@/lib/dashboard";
++import { getMeter, SANDBOX_CUSTOMER } from "@/lib/metering";
++import { projectMeterView } from "@/lib/billingView";
++import { moduleStates, overviewSummary, type OverviewFacts } from "@/lib/projectOverview";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * THE PROJECT OVERVIEW in one request (dashboard brief §2): the project's
++ * facts, its counts, the state of every module read from what is saved, its
++ * spend from the same meter the Usage tab reads, and its last activity.
++ * `project.read`; every optional source (quota counters, reports, runs,
++ * sample sources, the meter, the audit log) fails soft, so a database missing
++ * a table still answers with what it has, and says so in `warnings`.
++ */
++export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
++  const ctx = await requireProject(req, params.id, "project.read");
++  if (isFailure(ctx)) return ctx.response;
++  const db = supabaseAdmin();
++  const surveyId = params.id;
++  const warnings: string[] = [];
++  const soft = async <T,>(what: string, p: PromiseLike<T>, fallback: T): Promise<T> => { try { return await p; } catch (e) { warnings.push(`${what}: ${(e as Error).message}`); return fallback; } };
++
++  const loaded = await loadDefinition(db, surveyId);
++  if ("error" in loaded) return NextResponse.json({ error: loaded.error }, { status: loaded.status });
++  const def = loaded.def as SurveyDefinition;
++
++  const [survey, deployments, quotaRows, reports, analyses, latestRun, sampleSources, stats, meterView, activity] = await Promise.all([
++    db.from("surveys").select("id, code, title, status, current_version_id, draft_updated_at, revision, updated_at, created_at, client_name, project_manager, fieldwork_from, fieldwork_to, due_date, locked").eq("id", surveyId).maybeSingle().then((r) => r.data ?? null),
++    soft("deployments", db.from("deployments").select("mode, active, version_id").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { mode: string; active: boolean; version_id: string | null }[]),
++    soft("quota counts", db.from("quota_counts").select("quota_id, cell_id, count, is_test").eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { quota_id: string; cell_id: string; count: number; is_test: boolean | null }[]),
++    soft("reports", db.from("analytics_reports").select("id, kind").eq("survey_id", surveyId).is("deleted_at", null).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; kind: string }[]),
++    soft("analyses", db.from("analytics_analyses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).then((r) => { if (r.error) throw new Error(r.error.message); return r.count ?? 0; }), 0),
++    soft("runs", db.from("analytics_runs").select("computed_at, n, trigger").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(1).maybeSingle().then((r) => { if (r.error) throw new Error(r.error.message); return r.data ? { computedAt: String(r.data.computed_at), n: Number(r.data.n ?? 0), trigger: String(r.data.trigger) } : null; }), null),
++    soft("sample sources", db.from("sample_sources").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).then((r) => { if (r.error) throw new Error(r.error.message); return r.count ?? 0; }), 0),
++    soft("statistics", loadDashboardStats(db, [{ id: surveyId, current_version_id: null }]).then((p) => p.stats[surveyId] ?? null), null),
++    soft("usage", (async () => { const meter = getMeter(); return projectMeterView(meter, { customerId: ctx.survey.customer_id ?? ctx.user.customerId ?? SANDBOX_CUSTOMER, surveyId }, { recent: 0 }); })(), null),
++    soft("activity", db.from("audit_logs").select("id, action, entity, entity_id, user_id, detail, created_at").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(8).then((r) => { if (r.error) throw new Error(r.error.message); return r.data ?? []; }), [] as { id: string; action: string; entity: string | null; entity_id: string | null; user_id: string | null; detail: unknown; created_at: string }[]),
++  ]);
++  if (!survey) return NextResponse.json({ error: "not found" }, { status: 404 });
++
++  const quotaCounts: Record<string, Record<string, number>> = {};
++  for (const r of quotaRows) { if (r.is_test) continue; (quotaCounts[r.quota_id] ??= {})[r.cell_id] = (quotaCounts[r.quota_id]?.[r.cell_id] ?? 0) + Number(r.count ?? 0); }
++  const config = { clientName: survey.client_name as string | null, projectManager: survey.project_manager as string | null, fieldworkFrom: survey.fieldwork_from ? String(survey.fieldwork_from).slice(0, 10) : null, fieldworkTo: survey.fieldwork_to ? String(survey.fieldwork_to).slice(0, 10) : null, dueDate: survey.due_date ? String(survey.due_date).slice(0, 10) : null };
++  const facts: OverviewFacts = { deployments, quotaCounts, reports, analyses, latestRun, config, sampleSources, status: String(survey.status) };
++  const modules = moduleStates(def, facts);
++
++  const userIds = [...new Set(activity.map((r) => r.user_id).filter(Boolean))] as string[];
++  const people = new Map<string, string>();
++  if (userIds.length) { const { data } = await db.from("profiles").select("id, full_name").in("id", userIds); for (const p of data ?? []) people.set(p.id, p.full_name ?? ""); }
++  const events = activity.map((r) => { const row = { id: r.id, action: r.action, entity: r.entity, entityId: r.entity_id, surveyId, userId: r.user_id, actorName: r.user_id ? people.get(r.user_id) ?? null : null, actorUserCode: null, detail: (r.detail as Record<string, unknown> | null) ?? null, createdAt: r.created_at }; return { id: r.id, text: describeEvent(row), category: auditCategory(r.action), at: r.created_at, actorName: row.actorName }; });
++
++  return NextResponse.json({
++    ok: true,
++    project: {
++      id: surveyId, code: String(survey.code), title: String(survey.title), status: String(survey.status), version: loaded.version, revision: loaded.revision,
++      draftSavedAt: survey.draft_updated_at ? String(survey.draft_updated_at) : null, updatedAt: String(survey.updated_at ?? ""), createdAt: String(survey.created_at ?? ""),
++      locked: !!survey.locked, role: ctx.role, roleSource: ctx.roleSource, ...config,
++      languages: def.localization?.languages.length ?? 0, sourceLanguage: def.localization?.sourceLanguage ?? "en",
++    },
++    counts: {
++      questions: def.questions.filter((q) => !["html", "hidden", "calculated", "embedded_data"].includes(q.type)).length,
++      pages: JSON.stringify(def.flow).split("\"type\":\"page\"").length - 1,
++      responses: stats?.responseCount ?? null, live: stats?.liveResponseCount ?? null, test: stats?.testResponseCount ?? null, complete: stats?.completeCount ?? null, lastResponseAt: stats?.lastResponseAt ?? null,
++    },
++    modules, summary: overviewSummary(modules),
++    /* this project's spend — the same figures the Usage tab shows; never the wallet balance */
++    spend: meterView ? { currency: meterView.wallet.currency, used: meterView.project.used, limit: meterView.project.limit, allowance: meterView.project.allowance, mode: meterView.project.mode, level: meterView.project.level, state: meterView.project.state, events: meterView.project.events, walletRemaining: meterView.summary.remaining } : null,
++    activity: events,
++    warnings,
++  }, { headers: { "cache-control": "no-store" } });
++}
+diff --git a/apps/studio/app/api/surveys/[id]/route.ts b/apps/studio/app/api/surveys/[id]/route.ts
+index 98176b0..d1fd237 100644
+--- a/apps/studio/app/api/surveys/[id]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/route.ts
+@@ -68,13 +68,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
+       { status: 400 },
+     );
+   }
+-  await db.from("audit_logs").insert({
+-    customer_id: survey.customer_id,
+-    action: "survey.status",
+-    entity: "survey",
+-    entity_id: params.id,
+-    detail: { from: survey.status, to: status },
+-  });
++  /* in the project's Activity log (dashboard brief §8): it used to be written without the survey or the person, so the log never showed it */
++  await audit({ action: "survey.status_changed", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: survey.customer_id, entity: "survey", entityId: params.id, detail: { from: survey.status, to: status } });
+   return NextResponse.json({ ok: true, status });
+ }
+ 
+diff --git a/apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts b/apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts
+index cce6a10..ed2c80f 100644
+--- a/apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts
+@@ -1,6 +1,6 @@
+ import { NextRequest, NextResponse } from "next/server";
+ import { supabaseAdmin } from "@/lib/admin";
+-import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
++import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
+ import { nextVersion } from "@rescript/engine";
+ import { shouldSnapshotDraft } from "@/lib/draftSnapshot";
+ 
+@@ -35,7 +35,7 @@ export async function POST(
+   const db = supabaseAdmin();
+   const { data, error } = await db
+     .from("survey_versions")
+-    .select("id")
++    .select("id, version")
+     .eq("survey_id", params.id)
+     .eq("id", params.versionId)
+     .single();
+@@ -150,9 +150,7 @@ export async function POST(
+       await db.from("surveys").update({ current_version_id: data.id }).eq("id", params.id);
+     }
+   }
+-  await db.from("audit_logs").insert({
+-    action: "survey.version.restore", entity: "survey_version", entity_id: data.id,
+-    detail: { survey_id: params.id, ...(savedDraftAs ? { draftSavedAsVersion: savedDraftAs } : {}) },
+-  });
++  /* in the project's Activity log (dashboard brief §8): written with the survey and the person, under the event the log already describes */
++  await audit({ action: "version.restored", userId: gate.user.userId, sessionId: gate.user.sessionId, surveyId: params.id, customerId: gate.survey.customer_id, entity: "survey_version", entityId: data.id, detail: { version: data.version, ...(savedDraftAs ? { draftSavedAsVersion: savedDraftAs } : {}) } });
+   return NextResponse.json({ ok: true, revision, savedDraftAs });
+ }
+diff --git a/apps/studio/app/billing/page.tsx b/apps/studio/app/billing/page.tsx
+index 534dad2..947a962 100644
+--- a/apps/studio/app/billing/page.tsx
++++ b/apps/studio/app/billing/page.tsx
+@@ -56,6 +56,8 @@ export default function BillingPage() {
+     } catch { setError({ text: "Could not reach the Studio." }); }
+   }, []);
+   React.useEffect(() => { void reload(); }, [reload]);
++  /* `/billing#add-funds` — the wallet menu's "Add funds" from a page that has no dialog of its own */
++  React.useEffect(() => { try { if (window.location.hash === "#add-funds") setAdding(true); } catch { /* no window */ } }, []);
+   const user = state.kind === "signed_in" ? state.user : null;
+   const cur = data?.wallet?.currency ?? "USD";
+   const w = data?.wallet ?? null;
+@@ -152,7 +154,7 @@ export default function BillingPage() {
+           </div>
+           <TransferCredits currency={cur} myUserCode={user?.userCode ?? ""} />
+ 
+-          <div className="card bl-card" style={{ marginTop: 12 }}>
++          <div className="card bl-card" style={{ marginTop: 12 }} id="transactions">
+             <div className="card-title">Recent usage</div>
+             <UsageTable rows={data.recent} currency={cur} showProject testid="my-usage-rows" />
+           </div>
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 3856e24..8106b33 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -481,7 +481,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .hero h1 { font-size: var(--fs-display); font-weight: 750; letter-spacing: -.025em; margin: 5px 0 6px; background: linear-gradient(90deg, var(--c-text) 0%, var(--c-text) 60%, var(--c-primary) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+ .hero .sub { color: var(--c-text-3); font-size: var(--fs-body-lg); margin: 0; max-width: 900px; }
+ /* the metric band spans the page: six equal tiles rather than four in a corner */
+-.hero-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
++.hero-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 12px; margin-bottom: 20px; }
+ .metric { background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 14px 18px; min-width: 0; box-shadow: var(--sh-1); position: relative; overflow: hidden; }
+ .metric::after { content: ""; position: absolute; inset: auto 0 0 0; height: 3px; background: var(--grad-brand); opacity: .9; }
+ .metric-v { display: block; font-size: 28px; font-weight: 750; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+@@ -556,7 +556,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+   .dash-body { grid-template-columns: minmax(0, 1fr); }
+   .dash-rail { position: static; display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); align-items: start; }
+ }
+-@media (max-width: 1100px) { .hero-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
++@media (max-width: 1100px) { .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 460px; } }
+ .survey-card { border-radius: var(--r-lg); padding: 18px 22px; margin-bottom: 12px; box-shadow: var(--sh-1); transition: border-color var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease); }
+ .survey-card:hover { border-color: var(--c-border-strong); box-shadow: var(--sh-2); }
+ .survey-title { font-size: 18px; font-weight: 650; letter-spacing: -.012em; }
+@@ -566,7 +566,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .stat-label { font-size: 11.5px; letter-spacing: .06em; margin-top: 3px; }
+ .status-pill { font-size: 11.5px; padding: 4px 11px; }
+ .survey-card-foot { font-size: 13.5px; margin-top: 12px; }
+-@media (max-width: 900px) { .hero-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 10px; } .metric { padding: 12px 14px; } .metric-v { font-size: 24px; } .apph-name { display: none; } }
++@media (max-width: 900px) { .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; max-width: none; gap: 10px; } .metric { padding: 12px 14px; } .metric-v { font-size: 24px; } .apph-name { display: none; } }
+ @media (max-width: 620px) { .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+ 
+ /* ---------- auth: see globals.css (module block) ---------- */
+@@ -2029,3 +2029,61 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .docs-article blockquote { border-left: 3px solid var(--c-primary-600); margin: 0 0 12px; padding: 4px 12px; color: var(--c-text-2); }
+ .docs-article a { color: var(--c-primary-600); }
+ @media (max-width: 1000px) { .docs-body { grid-template-columns: 1fr; } .docs-nav { order: 2; } .docs-toc { display: none; } }
++
++
++/* ============================================================ the compact wallet (dashboard brief §3) */
++.wallet-menu { position: relative; }
++.wallet-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--c-border); background: var(--c-surface); color: var(--c-text-2); cursor: pointer; font-variant-numeric: tabular-nums; line-height: 1.4; }
++.wallet-pill:hover { border-color: var(--c-border-strong); color: var(--c-text); }
++.wallet-pill.low { border-color: var(--c-warning-bd); background: var(--c-warning-bg); color: var(--c-warning-fg); }
++.wallet-pill.critical, .wallet-pill.locked { border-color: var(--c-error-bd); background: var(--c-error-bg); color: var(--c-error-fg); }
++.wallet-menu-panel { right: 0; left: auto; min-width: 280px; }
++.wallet-menu-head { padding: 10px 12px 6px; }
++.wallet-menu-balance { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
++
++/* ============================================================ the project's spend beside Mode (dashboard brief §2C) */
++.project-spend { display: inline-flex; align-items: baseline; gap: 6px; margin-left: 6px; }
++.project-spend .menubar-btn-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-3); }
++.project-spend .menubar-btn-detail { font-weight: 600; }
++.project-spend.stopped .menubar-btn-detail { color: var(--c-error-fg); }
++.ctx-overview { margin-right: 4px; white-space: nowrap; }
++
++/* ============================================================ the project overview (dashboard brief §2) */
++.po .po-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 18px 0 16px; }
++.po .po-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
++.po .po-title h1 { margin: 0; font-size: 24px; }
++.po .po-meta { flex-basis: 100%; font-size: 13px; }
++.po .po-actions { display: flex; gap: 8px; margin-left: auto; }
++.po-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
++.po-card { padding: 16px 18px; min-width: 0; }
++.po-card h3 { margin: 0 0 10px; font-size: 14px; letter-spacing: .01em; }
++.po-wide { grid-column: 1 / -1; }
++.po-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; margin: 0; }
++.po-facts div { min-width: 0; }
++.po-facts dt { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-3); }
++.po-facts dd { margin: 2px 0 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
++.po-facts dd .muted { font-size: 12px; font-weight: 400; }
++.po-spend-main { display: flex; align-items: baseline; gap: 10px; }
++.po-spend-v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
++.po-spend-sub { font-size: 13px; margin: 6px 0 10px; }
++.po-modules { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
++.po-module-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) 14px; grid-template-areas: "state label chev" "state detail chev"; align-items: center; gap: 0 10px; padding: 7px 6px; border-radius: var(--r-md); color: inherit; text-decoration: none; }
++.po-module-row:hover { background: var(--c-surface-2, #f4f6f8); }
++.po-module-label { grid-area: label; font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
++.po-module-detail { grid-area: detail; font-size: 12.5px; }
++.po-module-row > svg { grid-area: chev; color: var(--c-text-3); }
++.po-state { grid-area: state; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; text-align: center; border: 1px solid transparent; }
++.po-state.configured { background: var(--c-success-bg, #e8f5ec); color: var(--c-success-fg, #1a7f37); border-color: var(--c-success-bd, #bfe3c8); }
++.po-state.incomplete { background: var(--c-warning-bg); color: var(--c-warning-fg); border-color: var(--c-warning-bd); }
++.po-state.not_configured { background: var(--c-surface-2, #f4f6f8); color: var(--c-text-3); border-color: var(--c-border); }
++.po-state.needs_attention { background: var(--c-error-bg); color: var(--c-error-fg); border-color: var(--c-error-bd); }
++.po-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
++.po-nav-item { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--c-border); border-radius: var(--r-md); color: inherit; text-decoration: none; min-width: 0; }
++.po-nav-item:hover { border-color: var(--c-primary); }
++.po-nav-label { font-weight: 600; font-size: 13.5px; }
++.po-nav-blurb { font-size: 12px; }
++.po-activity { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 4px; font-size: 13px; }
++.po-activity li { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; }
++.po-warnings { font-size: 12px; margin-top: 10px; }
++@media (max-width: 1100px) { .po-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); } .po-modules { grid-template-columns: 1fr; } }
++@media (max-width: 800px) { .po-grid { grid-template-columns: 1fr; } .po-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .po-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+diff --git a/apps/studio/app/page.tsx b/apps/studio/app/page.tsx
+index c149a91..fe9554f 100644
+--- a/apps/studio/app/page.tsx
++++ b/apps/studio/app/page.tsx
+@@ -30,12 +30,8 @@ const SORTS: { key: SortKey; label: string }[] = [
+   { key: "responses_asc", label: "Fewest responses" },
+   { key: "questions_desc", label: "Most questions" },
+   { key: "due", label: "Due soonest" },
+-  /* the spending sorts: "which study is about to stop" is a question about
+-     money, and none of the sorts above can answer it */
+-  { key: "balance_asc", label: "Least left to spend" },
+-  { key: "balance_desc", label: "Most left to spend" },
+-  { key: "used_desc", label: "Most spent" },
+-  { key: "used_asc", label: "Least spent" },
++  /* the spending sorts left with the spend figures (dashboard brief §1): a
++     project's spend is read on its overview and in Usage & Wallet, not here */
+ ];
+ 
+ /** The spending states a researcher filters by, in the words the cards use. */
+@@ -463,7 +459,7 @@ export default function Dashboard() {
+ 
+   return (
+     <div className="dash">
+-      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} />
++      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()} onAddFunds={billingOn ? () => setAddingFunds(true) : undefined} />
+ 
+       <section className="hero" data-testid="dash-hero">
+         <div>
+@@ -473,52 +469,13 @@ export default function Dashboard() {
+         </div>
+       </section>
+ 
+-      {/* the workspace in six numbers, all summed from the statistics the cards
+-          below show per project — a band rather than a corner, so the first
+-          screen answers "how much is going on here" before any scrolling */}
++      {/* the workspace in two numbers (dashboard brief §1): how many projects, how many are live — the rest belongs to each project */}
+       <div className="hero-metrics" aria-label="Workspace summary" data-testid="dash-metrics">
+         <div className="metric"><span className="metric-v">{surveys ? totals.surveys : <span className="sk sk-num" />}</span><span className="metric-l">Projects</span></div>
+         <div className="metric"><span className="metric-v">{surveys ? totals.live : <span className="sk sk-num" />}</span><span className="metric-l">Live</span></div>
+-        <div className="metric"><span className="metric-v">{surveys ? totals.responses.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Live responses</span></div>
+-        <div className="metric"><span className="metric-v">{surveys ? totals.test.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Test responses</span></div>
+-        <div className="metric"><span className="metric-v">{surveys ? totals.completes.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Completes</span></div>
+-        <div className="metric"><span className="metric-v">{surveys ? totals.questions.toLocaleString() : <span className="sk sk-num" />}</span><span className="metric-l">Questions</span></div>
+       </div>
+ 
+-      {/*
+-        * ONE WALLET, ABOVE THE PROJECTS THAT SPEND IT.
+-        *
+-        * The balance belongs here and not on the cards, because there is one
+-        * of it: repeating it on every card would suggest each project had its
+-        * own, which is exactly the model this replaced. The cards below say
+-        * what each study has spent and what it may still take; this says what
+-        * there is.
+-        */}
+-      {billingOn && wallet && (
+-        <div className={`dash-wallet ${wallet.state === "read_only" ? "empty" : ""}`} data-testid="dash-wallet"
+-          data-level={wallet.level} data-state={wallet.state}>
+-          <div className="dw-main">
+-            <div className="dw-label">My wallet</div>
+-            <div className="dw-balance" data-testid="dash-wallet-balance">{fmtMoney(wallet.balance, wallet.currency)}</div>
+-            <div className="dw-sub muted">
+-              {fmtMoney(wallet.totalUsed, wallet.currency)} used of {fmtMoney(wallet.totalAdded, wallet.currency)} added
+-              {wallet.reserved > 0 ? ` · ${fmtMoney(wallet.reserved, wallet.currency)} held by work in progress` : ""}
+-            </div>
+-          </div>
+-          <div className="dw-side">
+-            <span className={`badge ${wallet.state === "suspended" ? "error" : LEVEL_CLASS[wallet.level]}`} data-testid="dash-wallet-level">
+-              {wallet.state === "suspended" ? "Suspended" : wallet.state === "read_only" ? "Empty" : LEVEL_WORD[wallet.level]}
+-            </span>
+-            <button className="btn small primary" data-testid="dash-add-funds" onClick={() => setAddingFunds(true)}>Add funds</button>
+-            <a className="btn small" href="/billing">My usage</a>
+-          </div>
+-          {wallet.state === "read_only" && (
+-            <div className="dw-note" data-testid="dash-wallet-empty">
+-              Your wallet is empty, so every project has stopped running billable work. Adding funds starts them again.
+-            </div>
+-          )}
+-        </div>
+-      )}
++      {/* the wallet is in the header now (dashboard brief §3): one compact balance beside the account controls, its actions behind it */}
+ 
+       <div className="dash-body">
+       <div className="dash-main">
+@@ -538,13 +495,6 @@ export default function Dashboard() {
+           <option value="has">Has responses</option>
+           <option value="none">No responses</option>
+         </select>
+-        {/* offered only where there are wallets to filter by */}
+-        {billingOn && (
+-          <select className="select" aria-label="Filter by wallet balance" data-testid="dash-balance-filter"
+-            value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)}>
+-            {BALANCE_FILTERS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+-          </select>
+-        )}
+       </div>
+ 
+       <div className="dash-filters" data-testid="dash-ownership">
+@@ -587,8 +537,7 @@ export default function Dashboard() {
+         <span className="grow" />
+         {surveys && surveys.length > 0 && (
+           <span className="muted dash-summary">
+-            {totals.surveys} survey{totals.surveys === 1 ? "" : "s"} · {totals.live} live ·{" "}
+-            {totals.responses.toLocaleString()} live responses
++            {totals.surveys} project{totals.surveys === 1 ? "" : "s"} · {totals.live} live
+           </span>
+         )}
+       </div>
+@@ -636,8 +585,9 @@ export default function Dashboard() {
+           onResponses={() => (window.location.href = `/studio/${s.id}?tab=data`)}
+           onStatus={(status) => setStatus(s.id, status)}
+           onDelete={() => { setDeleting(s); setConfirmText(""); setDeleteError(null); }}
+-          meter={billingOn ? meters[s.id] ?? null : undefined}
+-          meterLoading={metersLoading}
++          /* no spend on the list (dashboard brief §1): the figure lives on the project's overview and in Usage & Wallet; the budget control stays in the menu */
++          meter={undefined}
++          meterLoading={false}
+           canBudget={!!budgetable[s.id]}
+           onBudget={() => setBudgeting(s)}
+           onClone={() => setCloning(s)}
+@@ -850,7 +800,7 @@ export default function Dashboard() {
+           currency={wallet?.currency ?? "USD"}
+           balance={wallet?.balance ?? 0}
+           onClose={() => setAddingFunds(false)}
+-          onRequested={() => { void loadMeters(); }}
++          onRequested={() => { void loadMeters(); try { window.dispatchEvent(new Event("rescript:wallet-changed")); } catch { /* no window */ } }}
+         />
+       )}
+       {cloning && (
+diff --git a/apps/studio/app/sandbox/overview/page.tsx b/apps/studio/app/sandbox/overview/page.tsx
+new file mode 100644
+index 0000000..49974e2
+--- /dev/null
++++ b/apps/studio/app/sandbox/overview/page.tsx
+@@ -0,0 +1,12 @@
++import { ProjectOverview } from "@/components/project/ProjectOverview";
++
++export const dynamic = "force-dynamic";
++
++/**
++ * THE PROJECT OVERVIEW IN THE SANDBOX — the same component a real project
++ * opens on, reading `/api/surveys/sandbox/overview`, which the browser suites
++ * answer with a fixture. Nothing here touches the database.
++ */
++export default function SandboxOverviewPage() {
++  return <ProjectOverview surveyDbId="sandbox" />;
++}
+diff --git a/apps/studio/app/studio/[id]/page.tsx b/apps/studio/app/studio/[id]/page.tsx
+index 3b18240..3d832c0 100644
+--- a/apps/studio/app/studio/[id]/page.tsx
++++ b/apps/studio/app/studio/[id]/page.tsx
+@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/admin";
+ import { SurveyDefinition } from "@rescript/schema";
+ import { newSurveyDefinition } from "@/lib/defaults";
+ import { Studio } from "@/components/studio/Studio";
++import { ProjectOverview } from "@/components/project/ProjectOverview";
+ import { ensureElementIds, migrateRetiredVariants } from "@rescript/engine";
+ import { projectPageGate } from "@/lib/guard";
+ import { SESSION_COOKIE_NAME } from "@/lib/authServer";
+@@ -32,7 +33,7 @@ export const dynamic = "force-dynamic";
+  * exists but cannot be parsed reports itself instead of pretending to be a new
+  * survey.
+  */
+-export default async function StudioPage({ params }: { params: { id: string } }) {
++export default async function StudioPage({ params, searchParams }: { params: { id: string }; searchParams?: Record<string, string | string[] | undefined> }) {
+   const gate = await projectPageGate(
+     cookies().get(SESSION_COOKIE_NAME)?.value ?? null,
+     params.id,
+@@ -59,6 +60,15 @@ export default async function StudioPage({ params }: { params: { id: string } })
+     );
+   }
+ 
++  /*
++   * THE PROJECT OPENS ON ITS OVERVIEW (dashboard brief §2): Login → Projects →
++   * Overview → the tool chosen there. A link that names a tool (`?tab=…`,
++   * `?mode=…`) goes straight to it, so every existing deep link and the
++   * tools' own links keep working; the bare project URL is the control panel.
++   */
++  const wantsTool = !!(searchParams && (typeof searchParams.tab === "string" || typeof searchParams.mode === "string" || typeof searchParams.split === "string"));
++  if (!wantsTool) return <ProjectOverview surveyDbId={params.id} />;
++
+   const db = supabaseAdmin();
+ 
+   // draft columns only exist after migration 0003 — ask for them, but survive
+diff --git a/apps/studio/components/billing/WalletMenu.tsx b/apps/studio/components/billing/WalletMenu.tsx
+new file mode 100644
+index 0000000..99eff86
+--- /dev/null
++++ b/apps/studio/components/billing/WalletMenu.tsx
+@@ -0,0 +1,68 @@
++"use client";
++import React from "react";
++import { Icon } from "../ui/Icon";
++import { LEVEL_CLASS, LEVEL_WORD, fmtMoney } from "./shared";
++
++/**
++ * THE COMPACT WALLET (dashboard brief §3): the balance as `$125.50` in the
++ * top-right of every signed-in page, coloured by level, with the wallet's
++ * actions behind it — add funds, usage and billing, the transaction history.
++ * It reads `/api/billing/wallet` (the person's wallet and nothing else), so it
++ * is the same figure the usage pages show and never a project's spend. The
++ * precise balance (six decimals) is kept in the title; the display is two.
++ * Re-reads itself when a `rescript:wallet-changed` event is dispatched (after
++ * a credit request, a transfer) so the figure follows what just happened.
++ */
++export interface WalletBrief { currency: string; balance: number; available: number; reserved: number; level: string; state: string; totalAdded: number; totalUsed: number }
++
++const short = (n: number, currency: string) => new Intl.NumberFormat(undefined, { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
++
++export function WalletMenu({ onAddFunds, inStudio = false }: { onAddFunds?: () => void; inStudio?: boolean }) {
++  const [wallet, setWallet] = React.useState<WalletBrief | null>(null);
++  const [state, setState] = React.useState<"loading" | "ready" | "off">("loading");
++  const [open, setOpen] = React.useState(false);
++  const load = React.useCallback(async () => {
++    try {
++      const r = await fetch("/api/billing/wallet", { cache: "no-store" });
++      const j = await r.json().catch(() => null) as { ok?: boolean; wallet?: WalletBrief } | null;
++      if (!r.ok || !j?.ok || !j.wallet) { setState("off"); return; }
++      setWallet(j.wallet); setState("ready");
++    } catch { setState("off"); }
++  }, []);
++  React.useEffect(() => { void load(); const again = () => void load(); window.addEventListener("rescript:wallet-changed", again); return () => window.removeEventListener("rescript:wallet-changed", again); }, [load]);
++  if (state !== "ready" || !wallet) return null;
++  const level = wallet.state === "suspended" ? "locked" : wallet.level;
++  const word = wallet.state === "suspended" ? "Suspended" : wallet.state === "read_only" ? "Empty" : LEVEL_WORD[level as keyof typeof LEVEL_WORD] ?? level;
++  return (
++    <div className="menu-anchor wallet-menu" data-testid="wallet-menu" data-level={level} data-state={wallet.state}>
++      <button type="button" className={`wallet-pill ${level}`} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
++        title={`My wallet: ${fmtMoney(wallet.balance, wallet.currency)} available${wallet.reserved > 0 ? ` · ${fmtMoney(wallet.reserved, wallet.currency)} held by work in progress` : ""} — ${word}`} data-testid="wallet-pill">
++        <Icon name="chart" size={13} /> <span data-testid="wallet-pill-balance">{short(wallet.balance, wallet.currency)}</span>
++      </button>
++      {open && (
++        <>
++          <div className="menu-scrim" onClick={() => setOpen(false)} />
++          <div className="menu wallet-menu-panel" role="menu" data-testid="wallet-menu-panel">
++            <div className="wallet-menu-head">
++              <div className="muted" style={{ fontSize: 12 }}>My wallet</div>
++              <div className="wallet-menu-balance" data-testid="wallet-menu-balance">{fmtMoney(wallet.balance, wallet.currency)}</div>
++              <div className="muted" style={{ fontSize: 12 }}>
++                <span className={`badge ${LEVEL_CLASS[level as keyof typeof LEVEL_CLASS] ?? ""}`} data-testid="wallet-menu-level">{word}</span>
++                {" "}{fmtMoney(wallet.totalUsed, wallet.currency)} used of {fmtMoney(wallet.totalAdded, wallet.currency)} added
++                {wallet.reserved > 0 ? ` · ${fmtMoney(wallet.reserved, wallet.currency)} held` : ""}
++              </div>
++            </div>
++            <div className="menu-sep" />
++            {onAddFunds
++              ? <button type="button" className="menu-item" role="menuitem" data-testid="wallet-add-funds" onClick={() => { setOpen(false); onAddFunds(); }}><Icon name="plus" size={15} /> Add funds</button>
++              : <a className="menu-item" role="menuitem" href="/billing#add-funds" data-testid="wallet-add-funds"><Icon name="plus" size={15} /> Add funds</a>}
++            <a className="menu-item" role="menuitem" href="/billing" data-testid="wallet-usage"><Icon name="chart" size={15} /> Usage &amp; billing</a>
++            <a className="menu-item" role="menuitem" href="/billing#transactions" data-testid="wallet-transactions"><Icon name="table" size={15} /> Transaction history</a>
++            {inStudio && <div className="menu-sep" />}
++            {inStudio && <span className="menu-note muted" style={{ fontSize: 12, padding: "4px 12px", display: "block" }}>A project's own spend is shown beside Mode and in Usage &amp; Wallet.</span>}
++          </div>
++        </>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/project/ProjectOverview.tsx b/apps/studio/components/project/ProjectOverview.tsx
+new file mode 100644
+index 0000000..f7e5f48
+--- /dev/null
++++ b/apps/studio/components/project/ProjectOverview.tsx
+@@ -0,0 +1,172 @@
++"use client";
++import React from "react";
++import { AppHeader } from "@/components/ui/AppHeader";
++import { Icon, type IconName } from "@/components/ui/Icon";
++import { useSession } from "@/lib/useSession";
++import { STATUS_META, relativeTime } from "@/components/SurveyCard";
++import { fmtMoney } from "@/components/billing/shared";
++import type { ModuleStatus } from "@/lib/projectOverview";
++
++/**
++ * THE PROJECT OVERVIEW (dashboard brief §2) — the page a project opens on.
++ * Login → Projects → this → the tool the researcher chooses. It is a control
++ * panel, not a dashboard: what the project is, which parts of it are set up
++ * (from what is saved, never inferred), what it has spent, what happened
++ * last, and a door into every module. One request (`/api/surveys/{id}/overview`).
++ */
++interface Overview {
++  project: { id: string; code: string; title: string; status: string; version: string | null; revision: number | null; draftSavedAt: string | null; updatedAt: string; createdAt: string; locked: boolean; role: string | null; clientName: string | null; projectManager: string | null; fieldworkFrom: string | null; fieldworkTo: string | null; dueDate: string | null; languages: number; sourceLanguage: string };
++  counts: { questions: number; pages: number; responses: number | null; live: number | null; test: number | null; complete: number | null; lastResponseAt: string | null };
++  modules: ModuleStatus[];
++  summary: { configured: number; total: number; attention: ModuleStatus[] };
++  spend: { currency: string; used: number; limit: number | null; allowance: number; mode: string; level: string; state: string; events: number; walletRemaining: number } | null;
++  activity: { id: string; text: string; category: string; at: string; actorName: string | null }[];
++  warnings: string[];
++}
++
++const STATE_WORD: Record<ModuleStatus["state"], string> = { configured: "Configured", incomplete: "Incomplete", not_configured: "Not set up", needs_attention: "Needs attention" };
++
++/** the modules a researcher reaches from here, in the order the work happens; each is a Studio tab */
++const MODULES: { key: string; label: string; tab: string; icon: IconName; blurb: string }[] = [
++  { key: "programming", label: "Programming", tab: "questions", icon: "questions", blurb: "Questions, logic, flow — Studio, Intelligent, Flow and Grid modes" },
++  { key: "quotas", label: "Quotas", tab: "quotas", icon: "quotas", blurb: "Cells, limits and fills" },
++  { key: "collection", label: "Versions & Deploy", tab: "versions", icon: "versions", blurb: "Save a version, deploy test and live links" },
++  { key: "data", label: "Data", tab: "data", icon: "data", blurb: "Responses, quality, exports" },
++  { key: "fieldwork", label: "Fieldwork", tab: "fieldwork", icon: "clean", blurb: "Sample sources, timeline, cost" },
++  { key: "analytics", label: "Data Analytics", tab: "analytics", icon: "analytics", blurb: "Analyses, dashboards, reports" },
++  { key: "languages", label: "Translation", tab: "localization", icon: "share", blurb: "Languages and translations" },
++  { key: "settings", label: "Survey Settings", tab: "settings", icon: "settings", blurb: "Research design, brief, enforcement" },
++  { key: "project", label: "Project", tab: "project", icon: "home", blurb: "Client, manager, dates, access" },
++  { key: "usage", label: "Usage & Wallet", tab: "usage", icon: "chart", blurb: "This project's spend and its limit" },
++];
++
++export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
++  const session = useSession();
++  const [data, setData] = React.useState<Overview | null>(null);
++  const [error, setError] = React.useState<string | null>(null);
++  const load = React.useCallback(async () => {
++    try {
++      const r = await fetch(`/api/surveys/${surveyDbId}/overview`, { cache: "no-store" });
++      const j = await r.json();
++      if (!r.ok) { setError(j.error ?? r.statusText); return; }
++      setData(j as Overview); setError(null);
++    } catch (e) { setError((e as Error).message); }
++  }, [surveyDbId]);
++  React.useEffect(() => { void load(); }, [load]);
++  const href = (tab: string) => (tab === "analytics" ? `/analytics?survey=${surveyDbId}` : `/studio/${surveyDbId}?tab=${tab}`);
++  const p = data?.project;
++  const meta = p ? STATUS_META[p.status] ?? { label: p.status, tone: "draft", hint: "" } : null;
++  const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString());
++
++  return (
++    <div className="dash po" data-testid="project-overview" data-loaded={data ? "true" : "false"}>
++      <AppHeader active="dashboard" user={session.state.kind === "signed_in" ? session.state.user : null} onSignOut={() => void session.signOut()}
++        crumbs={<span className="crumbs"><a href="/">Projects</a><span className="sep">/</span><span className="here" data-testid="po-crumb">{p?.title ?? "…"}</span></span>} />
++
++      {error && <p className="iq-error" data-testid="po-error"><Icon name="warning" size={12} /> {error} <button className="btn small" onClick={() => void load()}>Retry</button></p>}
++
++      <section className="po-head" data-testid="po-head">
++        <div className="po-title">
++          <h1>{p?.title ?? <span className="sk sk-line" />}</h1>
++          {p && <span className="survey-code mono">{p.code}</span>}
++          {meta && <span className={`status-pill ${meta.tone}`} title={meta.hint} data-testid="po-status"><span className="dot" />{meta.label}</span>}
++          {p?.locked && <span className="chip" title="Frozen by the owner">Frozen</span>}
++        </div>
++        {p && (
++          <div className="po-meta muted" data-testid="po-meta">
++            {p.version ? `v${p.version}` : "no saved version"}{p.revision != null ? ` · rev ${p.revision}` : ""}
++            {p.draftSavedAt ? ` · draft saved ${relativeTime(p.draftSavedAt)}` : ""}
++            {p.clientName ? ` · ${p.clientName}` : ""}{p.projectManager ? ` · ${p.projectManager}` : ""}{p.dueDate ? ` · due ${p.dueDate}` : ""}
++            {p.role ? ` · you are ${p.role}` : ""}
++          </div>
++        )}
++        <div className="po-actions">
++          <a className="btn primary" href={href("questions")} data-testid="po-open-programming"><Icon name="questions" size={15} /> Open programming</a>
++          <a className="btn" href={href("data")} data-testid="po-open-data"><Icon name="data" size={15} /> Data</a>
++          <a className="btn" href="/" data-testid="po-back">← All projects</a>
++        </div>
++      </section>
++
++      <div className="po-grid">
++        <section className="card po-card" data-testid="po-info">
++          <h3>Project information</h3>
++          <dl className="po-facts">
++            <div><dt>Questions</dt><dd data-testid="po-questions">{data ? num(data.counts.questions) : "—"}<span className="muted"> on {data ? num(data.counts.pages) : "—"} pages</span></dd></div>
++            <div><dt>Live responses</dt><dd data-testid="po-live">{data ? num(data.counts.live) : "—"}</dd></div>
++            <div><dt>Test responses</dt><dd data-testid="po-test">{data ? num(data.counts.test) : "—"}</dd></div>
++            <div><dt>Completed</dt><dd data-testid="po-complete">{data ? num(data.counts.complete) : "—"}</dd></div>
++            <div><dt>Last response</dt><dd>{data?.counts.lastResponseAt ? relativeTime(data.counts.lastResponseAt) : "none yet"}</dd></div>
++            <div><dt>Fieldwork</dt><dd>{p?.fieldworkFrom || p?.fieldworkTo ? `${p?.fieldworkFrom ?? "—"} → ${p?.fieldworkTo ?? "—"}` : "not scheduled"}</dd></div>
++            <div><dt>Languages</dt><dd>{p ? (p.languages ? `${p.sourceLanguage} + ${p.languages}` : p.sourceLanguage) : "—"}</dd></div>
++            <div><dt>Updated</dt><dd>{p ? relativeTime(p.updatedAt) : "—"}</dd></div>
++          </dl>
++        </section>
++
++        <section className="card po-card" data-testid="po-spend">
++          <h3>Project utilization</h3>
++          {data && !data.spend && <p className="muted" data-testid="po-spend-none">Usage metering is not available on this Studio.</p>}
++          {data?.spend && (
++            <>
++              <div className="po-spend-main">
++                <span className="po-spend-v" data-testid="po-spend-used">{fmtMoney(data.spend.used, data.spend.currency)}</span>
++                <span className="muted">spent by this project{data.spend.events ? ` · ${data.spend.events} billable operations` : ""}</span>
++              </div>
++              <div className="muted po-spend-sub" data-testid="po-spend-sub">
++                {data.spend.limit == null ? `No project limit — it spends from the owner's wallet (${fmtMoney(data.spend.walletRemaining, data.spend.currency)} left there)` : `Project limit ${fmtMoney(data.spend.limit, data.spend.currency)} · ${fmtMoney(data.spend.allowance, data.spend.currency)} left of it`}
++                {data.spend.state === "frozen" ? " · stopped at its limit" : data.spend.state === "read_only" ? " · stopped: the wallet is empty" : ""}
++              </div>
++              <a className="btn small" href={href("usage")} data-testid="po-spend-open">Usage & Wallet</a>
++            </>
++          )}
++          {!data && <span className="sk sk-line" />}
++        </section>
++
++        <section className="card po-card po-wide" data-testid="po-config">
++          <h3>Configuration &amp; setup {data && <span className="muted" data-testid="po-config-summary">· {data.summary.configured} of {data.summary.total} configured</span>}</h3>
++          {data?.summary.attention.length ? <p className="iq-warning" data-testid="po-attention"><Icon name="warning" size={12} /> Needs attention: {data.summary.attention.map((m) => m.label).join(", ")}</p> : null}
++          <ul className="po-modules">
++            {(data?.modules ?? []).map((m) => (
++              <li key={m.key} data-testid="po-module" data-key={m.key} data-state={m.state}>
++                <a href={href(m.tab)} className="po-module-row">
++                  <span className={`po-state ${m.state}`}>{STATE_WORD[m.state]}</span>
++                  <span className="po-module-label">{m.label}{m.count != null ? <span className="nav-count">{m.count}</span> : null}</span>
++                  <span className="po-module-detail muted">{m.detail}</span>
++                  <Icon name="chevron-right" size={14} />
++                </a>
++              </li>
++            ))}
++            {!data && [1, 2, 3, 4].map((i) => <li key={i}><span className="sk sk-line" /></li>)}
++          </ul>
++        </section>
++
++        <section className="card po-card po-wide" data-testid="po-nav">
++          <h3>Modules</h3>
++          <div className="po-nav">
++            {MODULES.map((m) => (
++              <a key={m.key} href={href(m.tab)} className="po-nav-item" data-testid={`po-nav-${m.key}`}>
++                <Icon name={m.icon} size={18} />
++                <span className="po-nav-label">{m.label}</span>
++                <span className="po-nav-blurb muted">{m.blurb}</span>
++              </a>
++            ))}
++          </div>
++        </section>
++
++        <section className="card po-card po-wide" data-testid="po-activity">
++          <h3>Recent activity</h3>
++          {data && !data.activity.length && <p className="muted" data-testid="po-activity-empty">Nothing recorded yet.</p>}
++          <ul className="po-activity">
++            {(data?.activity ?? []).map((e) => (
++              <li key={e.id} data-testid="po-activity-row" data-category={e.category}>
++                <span className="muted po-when" title={e.at}>{relativeTime(e.at)}</span>
++                <span>{e.text}{e.actorName ? <span className="muted"> — {e.actorName}</span> : null}</span>
++              </li>
++            ))}
++          </ul>
++          {data && data.activity.length > 0 && <a className="btn small" href={href("activity")} data-testid="po-activity-all">All activity</a>}
++        </section>
++      </div>
++      {data?.warnings.length ? <p className="muted po-warnings" data-testid="po-warnings">Some facts could not be read: {data.warnings.join("; ")}</p> : null}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/studio/MenuBar.tsx b/apps/studio/components/studio/MenuBar.tsx
+index 4190362..2b9bea2 100644
+--- a/apps/studio/components/studio/MenuBar.tsx
++++ b/apps/studio/components/studio/MenuBar.tsx
+@@ -40,12 +40,14 @@ export interface MenuBarProps {
+   setTab(tab: string): void;
+   counts: Partial<Record<string, number>>;
+   analyticsHref?: string;
++  /** beside the Mode cluster: this project's spend (dashboard brief §2C) — absent in the sandbox */
++  after?: React.ReactNode;
+ }
+ 
+ const HOVER_OPEN_MS = 140;
+ const LEAVE_CLOSE_MS = 220;
+ 
+-export function MenuBar({ nav, tab, setTab, counts, analyticsHref }: MenuBarProps) {
++export function MenuBar({ nav, tab, setTab, counts, analyticsHref, after }: MenuBarProps) {
+   const mode = useMode();
+   const groups = React.useMemo(() => buildMenuGroups(nav, { analyticsHref }), [nav, analyticsHref]);
+   const iconOf = React.useMemo(() => new Map(nav.map((n) => [n.key, n.icon])), [nav]);
+@@ -183,6 +185,7 @@ export function MenuBar({ nav, tab, setTab, counts, analyticsHref }: MenuBarProp
+           testId="mode-cluster">
+           <ModeMenu onDone={closeAll} />
+         </Group>
++        {after}
+       </div>
+ 
+       {/* WHERE AM I — the group and tool on screen, and the environment when it matters */}
+diff --git a/apps/studio/components/studio/Studio.tsx b/apps/studio/components/studio/Studio.tsx
+index 75098a5..8537d0e 100644
+--- a/apps/studio/components/studio/Studio.tsx
++++ b/apps/studio/components/studio/Studio.tsx
+@@ -31,6 +31,7 @@ import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
+ import { Icon, type IconName } from "@/components/ui/Icon";
+ import { LocalizationPanel } from "./localization/LocalizationPanel";
+ import { UsagePanel, useMeterView } from "./UsagePanel";
++import { WalletMenu } from "../billing/WalletMenu";
+ import { fmtMoney } from "@/components/billing/shared";
+ import { ModeProvider } from "./ModeContext";
+ import { SelectionProvider } from "./SelectionContext";
+@@ -886,7 +887,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+     <ModeChooser />
+     <div className={`ide${modeCtx?.focus ? " is-focus" : ""}${modeCtx?.focus && programmingMode === "studio" && tab === "questions" ? " focus-studio" : ""}`} data-testid="ide">
+       <div className="topbar">
+-        <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="Dashboard">R</a>
++        <a href="/" className="logo-mark" style={{ width: 30, height: 30, fontSize: 15 }} title="All projects">R</a>
++        {/* the project's overview is one click away, and the overview is one click from the project list (dashboard brief §2) */}
++        <a href={s.surveyDbId === "sandbox" ? "/sandbox/overview" : `/studio/${s.surveyDbId}`} className="btn small ctx-overview" data-testid="project-overview-link" title="Project overview — status, configuration, spend, modules">← Overview</a>
+         <div className="ctx" data-testid="project-context">
+           <span className="ctx-title title">{s.def.meta.title}</span>
+           <span className="ctx-meta">
+@@ -913,8 +916,9 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+         <a className="btn" href={`/api/surveys/${s.surveyDbId}/export/xlsx`} target="_blank"><Icon name="download" size={15} /> Variables .xlsx</a>
+         <button className="btn" data-testid="export-survey" onClick={() => setExportOpen(true)}
+           title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
+-        <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />
+         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
++        {/* the wallet, compact, beside the account (dashboard brief §3): the owner's balance, never this project's spend; its actions behind it */}
++        {s.surveyDbId === "sandbox" ? <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} /> : <WalletMenu inStudio onAddFunds={() => setTab("usage")} />}
+         {session.state.kind === "signed_in" && (
+           <span className="row" style={{ gap: 6 }} data-testid="studio-user">
+             <span
+@@ -941,7 +945,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
+         * The workspace below gets the sidebar's width back.
+         */}
+       <MenuBar nav={NAV} tab={tab} setTab={setTabGuarded} counts={counts}
+-        analyticsHref={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"} />
++        analyticsHref={s.surveyDbId ? `/analytics?survey=${encodeURIComponent(s.surveyDbId)}` : "/analytics"}
++        after={<ProjectSpendChip surveyId={s.surveyDbId} onOpen={() => setTab("usage")} />} />
+       {blocker && (
+         <div className="save-blocker" role="alert" data-testid="save-blocker">
+           <div className="save-blocker-head">
+@@ -1189,6 +1194,26 @@ function WalletBadge({ surveyId, onOpen }: { surveyId: string; onOpen: () => voi
+   );
+ }
+ 
++/**
++ * THIS PROJECT'S SPEND, BESIDE MODE (dashboard brief §2C): `Project spend:
++ * $12.34` from the same meter the Usage tab reads — the project's own figure,
++ * never the wallet's balance, which the header shows. Re-reads with the meter
++ * (five-second cache, and on every change the Usage tab makes). Absent in the
++ * sandbox and on a Studio without the billing tables.
++ */
++function ProjectSpendChip({ surveyId, onOpen }: { surveyId: string; onOpen: () => void }) {
++  const { view } = useMeterView(surveyId);
++  if (!view || !view.project) return null;
++  const p = view.project;
++  return (
++    <button type="button" className={`menubar-btn project-spend ${p.state === "frozen" || p.state === "read_only" ? "stopped" : ""}`} onClick={onOpen} data-testid="project-spend" data-used={p.used} data-state={p.state}
++      title={`What this project has spent${p.limit != null ? ` of its ${fmtMoney(p.limit, view.wallet.currency)} limit` : " from the owner's wallet"}${p.state === "frozen" ? " — stopped at its limit" : p.state === "read_only" ? " — stopped: the wallet is empty" : ""}. Open Usage & Wallet.`}>
++      <span className="menubar-btn-label">Project spend</span>
++      <span className="menubar-btn-detail mono" data-testid="project-spend-amount">{fmtMoney(p.used, view.wallet.currency)}</span>
++    </button>
++  );
++}
++
+ /** The sentence the brief specifies, across the top of a project at its usage limit (§14). */
+ function ReadOnlyBar({ surveyId, onOpen }: { surveyId: string; onOpen: () => void }) {
+   const { view } = useMeterView(surveyId);
+diff --git a/apps/studio/components/ui/AppHeader.tsx b/apps/studio/components/ui/AppHeader.tsx
+index 612ba45..c619000 100644
+--- a/apps/studio/components/ui/AppHeader.tsx
++++ b/apps/studio/components/ui/AppHeader.tsx
+@@ -3,6 +3,7 @@ import React from "react";
+ import type { SessionUser } from "@/lib/useSession";
+ import { interviewsHandoffHref } from "@/lib/interviews-url";
+ import { Icon } from "./Icon";
++import { WalletMenu } from "../billing/WalletMenu";
+ 
+ /**
+  * THE TOP-LEVEL HEADER shared by the Dashboard and Data Analytics pages:
+@@ -10,11 +11,13 @@ import { Icon } from "./Icon";
+  * Profile / Security / Administration / Sign out). Presentation only — every
+  * link goes where the old buttons went and sign-out calls the same handler.
+  */
+-export function AppHeader({ active, user, onSignOut, crumbs }: {
++export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
+   active: "dashboard" | "analytics" | "account";
+   user: SessionUser | null;
+   onSignOut?: () => void;
+   crumbs?: React.ReactNode;
++  /** the page's own add-funds dialog, when it has one; otherwise the wallet menu links to /billing */
++  onAddFunds?: () => void;
+ }) {
+   const [open, setOpen] = React.useState(false);
+   /* read once — NEXT_PUBLIC_INTERVIEWS_URL is inlined at build time and cannot change */
+@@ -39,12 +42,13 @@ export function AppHeader({ active, user, onSignOut, crumbs }: {
+       <span className="grow" />
+       {user && (
+         <div className="apph-account" data-testid="dash-account">
++          {/* the wallet, compact, beside the account controls (dashboard brief §3) — the one place the balance lives on these pages */}
++          <WalletMenu onAddFunds={onAddFunds} />
+           {active !== "account" && (
+             <>
+               {!!user.unread && <a className="btn small" href="/profile" title="You have unread notifications"><Icon name="bell" size={14} /> {user.unread} new</a>}
+               <a className="btn small" href="/profile">Profile</a>
+               <a className="btn small" href="/security">Security</a>
+-              <a className="btn small" href="/billing">My usage</a>
+               {user.isPlatformAdmin && <a className="btn small" href="/admin">Administration</a>}
+               <button className="btn small" data-testid="dash-signout" onClick={() => onSignOut?.()}>Sign out</button>
+             </>
+diff --git a/apps/studio/content/docs/api.md b/apps/studio/content/docs/api.md
+index 1f4838f..0adee9b 100644
+--- a/apps/studio/content/docs/api.md
++++ b/apps/studio/content/docs/api.md
+@@ -22,6 +22,7 @@ All under `/api/`. `{id}` is the survey (project) id.
+ | `surveys/{id}/lock` | GET, POST | project.read (acquire, release, request the edit lock) |
+ | `surveys/{id}/clone`, `/transfer` | POST | project.clone; project.transfer |
+ | `surveys/{id}/activity`, `/diagnostics` | GET | project.read_activity; project.read |
++| `surveys/{id}/overview` | GET | project.read — the project overview: facts, counts, the state of every module read from what is saved, this project's spend, its last activity |
+ | `surveys/{id}/themes`, `/glossary`, `/brand-scrape` | GET, POST, PUT, DELETE | project.read; survey.edit |
+ | `surveys/{id}/tests` | GET, POST | responses.read; survey.edit (the QA regression suite) |
+ | `surveys/{id}/export/survey` | POST | project.read — `{ "format": "json" \| "docx" }` |
+@@ -59,7 +60,7 @@ All under `/api/`. `{id}` is the survey (project) id.
+ | `copilot/corpus` | POST | project.read | `{ surveyId, replay?, download? }` → the project's language corpus (every sentence with its reading, and the survey), optionally replayed against the engine as it runs |
+ | `briefs` | GET | a session | the project briefs of the caller's projects, for copying one into the research design |
+ 
+-**AI and translation:** `ai/logic`, `ai/rephrase`, `ai/transcribe`, `ai/tts`, `import/custom-logic` (metered AI calls), `ai/translate`, `translation/languages`, `translation/memory`, `translation/status`, `localization/export`, `localization/import`. **Import:** `import/analyze` (a questionnaire document → a definition), `import/quotas`, `import/record`. **Billing:** `billing/me`, `billing/projects`, `billing/transfer`, `surveys/{id}/billing`. **Auth and account:** `auth/login`, `auth/signup`, `auth/password`, `auth/logout`, `auth/me`, `auth/heartbeat`, `sessions`, `profile`, `notifications`.
++**AI and translation:** `ai/logic`, `ai/rephrase`, `ai/transcribe`, `ai/tts`, `import/custom-logic` (metered AI calls), `ai/translate`, `translation/languages`, `translation/memory`, `translation/status`, `localization/export`, `localization/import`. **Import:** `import/analyze` (a questionnaire document → a definition), `import/quotas`, `import/record`. **Billing:** `billing/me`, `billing/projects`, `billing/wallet` (the signed-in person's wallet alone — what the header shows), `billing/transfer`, `surveys/{id}/billing`. **Auth and account:** `auth/login`, `auth/signup`, `auth/password`, `auth/logout`, `auth/me`, `auth/heartbeat`, `sessions`, `profile`, `notifications`.
+ 
+ ## The respondent runtime
+ 
+diff --git a/apps/studio/lib/metering.ts b/apps/studio/lib/metering.ts
+index 608f650..55d88f3 100644
+--- a/apps/studio/lib/metering.ts
++++ b/apps/studio/lib/metering.ts
+@@ -31,7 +31,7 @@ import type { Capability } from "@rescript/access";
+  * wallet drain. Never set in production.
+  */
+ 
+-const SANDBOX_CUSTOMER = "sandbox";
++export const SANDBOX_CUSTOMER = "sandbox";
+ const dbConfigured = () => !!process.env.SUPABASE_URL && !!process.env.SUPABASE_SERVICE_ROLE_KEY;
+ 
+ declare global {
+diff --git a/apps/studio/lib/projectOverview.test.ts b/apps/studio/lib/projectOverview.test.ts
+new file mode 100644
+index 0000000..562fe50
+--- /dev/null
++++ b/apps/studio/lib/projectOverview.test.ts
+@@ -0,0 +1,80 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { moduleStates, overviewSummary } from "./projectOverview.ts";
++
++/**
++ * THE PROJECT OVERVIEW'S MODULE STATES (dashboard brief §2B): every state is
++ * read from the saved definition and the facts the route fetched — nothing
++ * inferred from the lifecycle status, nothing hard-coded.
++ */
++const opts = (...ls: string[]) => ls.map((l, i) => ({ code: i + 1, label: l }));
++const rule = (ref: string, value: unknown) => ({ type: "rule", source: { kind: "question", ref }, operator: "eq", value });
++function survey(extra: Record<string, unknown> = {}) {
++  return SurveyDefinition.parse({
++    meta: { id: "s", code: "S", title: "T" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "Age?" },
++      { id: "q2", code: "Q2", variableName: "GENDER", type: "single_select", text: "Gender?", options: opts("M", "F") },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2"] }, { type: "end", id: "e", status: "complete" }],
++    ...extra,
++  });
++}
++const by = (ms: ReturnType<typeof moduleStates>, k: string) => ms.find((m) => m.key === k)!;
++
++test("an empty project: nothing set up, said plainly; a programmed one with a logic error needs attention", () => {
++  const empty = moduleStates(SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "T" }, questions: [], flow: [] }));
++  assert.equal(empty.length, 10);
++  assert.equal(by(empty, "programming").state, "not_configured");
++  assert.ok(empty.every((m) => m.state === "not_configured"), empty.map((m) => `${m.key}:${m.state}`).join(" "));
++  assert.deepEqual(overviewSummary(empty), { configured: 0, total: 10, attention: [] });
++
++  const ok = moduleStates(survey());
++  assert.equal(by(ok, "programming").state, "configured");
++  assert.match(by(ok, "programming").detail, /^2 questions/);
++  assert.equal(by(ok, "programming").count, 2);
++
++  const broken = moduleStates(survey({ questions: [{ id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "Age?", displayLogic: rule("q9", 1) }] }));
++  assert.equal(by(broken, "programming").state, "needs_attention");
++  assert.match(by(broken, "programming").detail, /1 logic error to fix/);
++  assert.equal(by(broken, "programming").tab, "logic");
++  assert.deepEqual(overviewSummary(broken).attention.map((m) => m.key), ["programming"]);
++});
++
++test("quotas, collection, quality, research, plan, reports, languages, fieldwork and project facts — each from what is saved", () => {
++  const def = survey({
++    quotas: [{ id: "qt", name: "Gender", cells: [{ id: "c1", label: "M", when: rule("q2", 1), limit: 100 }, { id: "c2", label: "F", when: rule("q2", 2), limit: 100 }] }],
++    quality: { enabled: true, profile: "Standard" },
++    research: { objective: "Why switch", hypotheses: ["H"], constructs: [{ name: "C", role: "dependent", questionIds: ["q1"] }], strict: true, analysisPlan: { crosstabs: [{ id: "x", rows: ["AGE"], columns: ["GENDER"], priority: 1, hypotheses: [] }], tests: [], derived: [], segments: [] } },
++    localization: { sourceLanguage: "en", languages: [{ code: "de", status: "ready" }, { code: "fr", status: "draft" }] },
++  });
++  // quotas defined but no check in the flow: incomplete, with the live fill
++  const a = moduleStates(def, { quotaCounts: { qt: { c1: 40, c2: 10 } } });
++  assert.equal(by(a, "quotas").state, "incomplete");
++  assert.match(by(a, "quotas").detail, /1 quota, 2 cells · 50 of 200 live completes · no quota check in the flow yet/);
++  const withCheck = SurveyDefinition.parse({ ...def, flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2"] }, { type: "quota_check", id: "qc", quotaIds: ["qt"], onFull: { kind: "terminate" } }, { type: "end", id: "e", status: "complete" }] });
++  assert.equal(by(moduleStates(withCheck), "quotas").state, "configured");
++  // collection: from the deployments table, and the status only to flag a contradiction
++  assert.equal(by(moduleStates(def, { deployments: [] }), "collection").state, "not_configured");
++  assert.equal(by(moduleStates(def, { deployments: [{ mode: "test", active: true }] }), "collection").state, "incomplete");
++  assert.equal(by(moduleStates(def, { deployments: [{ mode: "live", active: true }, { mode: "test", active: true }] }), "collection").detail, "Live link active · test link active");
++  assert.equal(by(moduleStates(def, { deployments: [{ mode: "live", active: false }], status: "live" }), "collection").state, "needs_attention");
++  assert.equal(by(moduleStates(def, { deployments: [], status: "draft" }), "collection").state, "not_configured");
++  // the rest
++  assert.match(by(a, "quality").detail, /Quality engine on · profile “Standard”/);
++  assert.equal(by(a, "research").state, "configured"); assert.match(by(a, "research").detail, /1 hypothesis · 1 construct · enforced/);
++  assert.equal(by(moduleStates(survey({ research: { objective: "O", hypotheses: [] } })), "research").state, "incomplete");
++  assert.equal(by(moduleStates(survey({ research: { hypotheses: [], brief: { client: "Acme", stakeholders: [], deliverables: [] } } })), "research").detail, "Brief recorded · no objective yet");
++  assert.match(by(moduleStates(def, { latestRun: { computedAt: "2026-10-01T10:00:00Z", n: 120, trigger: "halfway" } }), "analysis").detail, /1 crosstab, 0 tests · last run 2026-10-01 on 120 completes/);
++  assert.match(by(a, "analysis").detail, /not run yet/);
++  assert.equal(by(moduleStates(def, { reports: [{ kind: "dashboard" }, { kind: "report" }, { kind: "report" }], analyses: 4 }), "reporting").detail, "1 dashboard, 2 reports · 4 saved analyses");
++  assert.equal(by(moduleStates(def, { analyses: 2 }), "reporting").state, "not_configured");
++  assert.equal(by(a, "languages").state, "incomplete"); assert.match(by(a, "languages").detail, /2 languages beside en · 1 not ready/);
++  assert.equal(by(moduleStates(def, { config: { fieldworkFrom: "2026-11-01", fieldworkTo: "2026-11-20" }, sampleSources: 2 }), "fieldwork").detail, "2026-11-01 → 2026-11-20 · 2 sample sources");
++  assert.equal(by(moduleStates(def, { config: { fieldworkFrom: "2026-11-01" } }), "fieldwork").state, "incomplete");
++  assert.equal(by(moduleStates(def, { config: { clientName: "Acme", dueDate: "2026-12-01" } }), "project").detail, "Acme · due 2026-12-01");
++  assert.equal(by(moduleStates(def, { config: { projectManager: "Ann" } }), "project").state, "incomplete");
++  assert.deepEqual(a.filter((m) => m.state === "configured").map((m) => m.key), ["programming", "quality", "research", "analysis"]);
++  assert.equal(overviewSummary(a).configured, 4);
++});
+diff --git a/apps/studio/lib/projectOverview.ts b/apps/studio/lib/projectOverview.ts
+new file mode 100644
+index 0000000..007f7d2
+--- /dev/null
++++ b/apps/studio/lib/projectOverview.ts
+@@ -0,0 +1,137 @@
++import type { SurveyDefinition } from "@rescript/schema";
++import { runQualityCheck } from "@rescript/engine";
++
++/**
++ * THE PROJECT OVERVIEW (dashboard brief §2): the facts a researcher wants
++ * before opening any tool — what the project is, how far each part of it is
++ * set up, what it has spent, what happened last. Every state here is READ
++ * FROM SAVED DATA: the definition as it is (draft first), the deployments
++ * table, the quota counters, the reports and runs, the project
++ * configuration, the usage events. Nothing is inferred from the lifecycle
++ * status alone and nothing is hard-coded.
++ *
++ * Pure where it can be: `moduleStates(def, facts)` reads the definition and a
++ * bag of facts the route has fetched, so the states are unit-testable
++ * without a database.
++ */
++export type ModuleKey = "programming" | "quotas" | "collection" | "quality" | "research" | "analysis" | "reporting" | "languages" | "fieldwork" | "project";
++export type ModuleState = "configured" | "incomplete" | "not_configured" | "needs_attention";
++
++export interface ModuleStatus {
++  key: ModuleKey;
++  label: string;
++  state: ModuleState;
++  /** one line: what is there, or what is missing */
++  detail: string;
++  /** the Studio tab that edits it */
++  tab: string;
++  /** a number worth showing beside the label (questions, quotas, languages…) */
++  count?: number;
++}
++
++/** what the route fetches beside the definition — all optional, so a database missing a table still answers */
++export interface OverviewFacts {
++  deployments?: { mode: string; active: boolean; version_id?: string | null }[];
++  /** quotaId → cellId → count, for LIVE */
++  quotaCounts?: Record<string, Record<string, number>>;
++  reports?: { kind: string }[];
++  analyses?: number;
++  latestRun?: { computedAt: string; n: number; trigger: string } | null;
++  config?: { clientName?: string | null; projectManager?: string | null; fieldworkFrom?: string | null; fieldworkTo?: string | null; dueDate?: string | null } | null;
++  sampleSources?: number;
++  status?: string;
++}
++
++const n = (k: number, w: string, pl = `${w}s`) => `${k} ${k === 1 ? w : pl}`;
++
++export function moduleStates(def: SurveyDefinition, facts: OverviewFacts = {}): ModuleStatus[] {
++  const out: ModuleStatus[] = [];
++  const asked = def.questions.filter((q) => !["html", "hidden", "calculated", "embedded_data"].includes(q.type));
++
++  /* programming: the questionnaire and whether its logic holds */
++  if (!asked.length) out.push({ key: "programming", label: "Questionnaire", state: "not_configured", detail: "No questions yet — program the questionnaire or import one.", tab: "questions", count: 0 });
++  else {
++    const q = runQualityCheck(def);
++    const logic = def.questions.filter((x) => x.displayLogic || (x.skipLogic?.length ?? 0) > 0).length;
++    const base = `${n(asked.length, "question")}${logic ? ` · ${n(logic, "question")} with logic` : ""}`;
++    if (q.errors > 0) out.push({ key: "programming", label: "Questionnaire", state: "needs_attention", detail: `${base} · ${n(q.errors, "logic error")} to fix before deploying`, tab: "logic", count: asked.length });
++    else out.push({ key: "programming", label: "Questionnaire", state: "configured", detail: `${base}${q.warnings ? ` · ${n(q.warnings, "warning")}` : ""}`, tab: "questions", count: asked.length });
++  }
++
++  /* quotas: defined, and how full */
++  const quotas = def.quotas ?? [];
++  if (!quotas.length) out.push({ key: "quotas", label: "Quotas", state: "not_configured", detail: "No quotas — every respondent counts.", tab: "quotas", count: 0 });
++  else {
++    const cells = quotas.reduce((a, q) => a + q.cells.length, 0);
++    const checked = JSON.stringify(def.flow).includes("\"quota_check\"");
++    let fill = "";
++    if (facts.quotaCounts) {
++      let have = 0, limit = 0;
++      for (const q of quotas) for (const c of q.cells) { have += facts.quotaCounts[q.id]?.[c.id] ?? 0; if (typeof c.limit === "number") limit += c.limit; }
++      fill = limit ? ` · ${have} of ${limit} live completes` : "";
++    }
++    out.push({ key: "quotas", label: "Quotas", state: checked ? "configured" : "incomplete", detail: `${n(quotas.length, "quota")}, ${n(cells, "cell")}${fill}${checked ? "" : " · no quota check in the flow yet"}`, tab: "quotas", count: quotas.length });
++  }
++
++  /* collection: the links that exist and whether a live survey actually has one */
++  const deps = facts.deployments ?? [];
++  const live = deps.find((d) => d.mode === "live" && d.active);
++  const test = deps.find((d) => d.mode === "test" && d.active);
++  if (live) out.push({ key: "collection", label: "Response collection", state: "configured", detail: `Live link active${test ? " · test link active" : ""}`, tab: "versions" });
++  else if (facts.status === "live") out.push({ key: "collection", label: "Response collection", state: "needs_attention", detail: "The project is marked live but no live link is deployed.", tab: "versions" });
++  else if (test) out.push({ key: "collection", label: "Response collection", state: "incomplete", detail: "Test link active · not deployed live", tab: "versions" });
++  else out.push({ key: "collection", label: "Response collection", state: "not_configured", detail: "Not deployed — save a version and deploy a test or live link.", tab: "versions" });
++
++  /* data quality */
++  const quality = def.quality;
++  if (quality?.enabled) out.push({ key: "quality", label: "Data quality", state: "configured", detail: `Quality engine on${quality.profile ? ` · profile “${quality.profile}”` : ""}`, tab: "data" });
++  else out.push({ key: "quality", label: "Data quality", state: "not_configured", detail: "Quality checks off — responses are not scored.", tab: "data" });
++
++  /* research design */
++  const r = def.research;
++  const hyps = r?.hypotheses.length ?? 0;
++  if (r?.objective && hyps) out.push({ key: "research", label: "Research design", state: "configured", detail: `Objective recorded · ${n(hyps, "hypothesis", "hypotheses")}${r.constructs.length ? ` · ${n(r.constructs.length, "construct")}` : ""}${r.strict ? " · enforced" : ""}`, tab: "settings", count: hyps });
++  else if (r?.objective || hyps || r?.brief) out.push({ key: "research", label: "Research design", state: "incomplete", detail: r?.objective ? "Objective recorded · no hypotheses yet" : r?.brief ? "Brief recorded · no objective yet" : `${n(hyps, "hypothesis", "hypotheses")} · no objective`, tab: "settings", count: hyps });
++  else out.push({ key: "research", label: "Research design", state: "not_configured", detail: "No objective or hypotheses — the analysis cannot be planned.", tab: "settings", count: 0 });
++
++  /* analysis plan and its runs */
++  const plan = r?.analysisPlan;
++  if (plan) {
++    const run = facts.latestRun;
++    out.push({ key: "analysis", label: "Analysis plan", state: "configured", detail: `${n(plan.crosstabs.length, "crosstab")}, ${n(plan.tests.length, "test")}${run ? ` · last run ${run.computedAt.slice(0, 10)} on ${run.n} completes` : " · not run yet"}`, tab: "questions", count: plan.crosstabs.length + plan.tests.length });
++  } else out.push({ key: "analysis", label: "Analysis plan", state: "not_configured", detail: "No plan — ask Intelligent mode to plan the analysis.", tab: "questions", count: 0 });
++
++  /* reporting: dashboards and reports, saved analyses */
++  const reports = facts.reports ?? [];
++  const dashboards = reports.filter((x) => x.kind === "dashboard").length;
++  const docs = reports.filter((x) => x.kind === "report").length;
++  if (reports.length) out.push({ key: "reporting", label: "Dashboards & reports", state: "configured", detail: `${n(dashboards, "dashboard")}, ${n(docs, "report")}${facts.analyses ? ` · ${n(facts.analyses, "saved analysis", "saved analyses")}` : ""}`, tab: "data", count: reports.length });
++  else out.push({ key: "reporting", label: "Dashboards & reports", state: "not_configured", detail: facts.analyses ? `${n(facts.analyses, "saved analysis", "saved analyses")} · no dashboard or report yet` : "No dashboard or report yet.", tab: "data", count: 0 });
++
++  /* languages */
++  const langs = def.localization?.languages ?? [];
++  if (langs.length) {
++    const ready = langs.filter((l) => l.status === "ready" || l.status === "live").length;
++    out.push({ key: "languages", label: "Languages", state: ready === langs.length ? "configured" : "incomplete", detail: `${n(langs.length, "language")} beside ${def.localization?.sourceLanguage ?? "the source"}${ready < langs.length ? ` · ${langs.length - ready} not ready` : ""}`, tab: "localization", count: langs.length });
++  } else out.push({ key: "languages", label: "Languages", state: "not_configured", detail: "Source language only.", tab: "localization", count: 0 });
++
++  /* fieldwork: dates and sample sources */
++  const c = facts.config;
++  const dates = c?.fieldworkFrom || c?.fieldworkTo;
++  const sources = facts.sampleSources ?? 0;
++  if (dates && (c?.fieldworkFrom && c?.fieldworkTo)) out.push({ key: "fieldwork", label: "Fieldwork", state: "configured", detail: `${c.fieldworkFrom} → ${c.fieldworkTo}${sources ? ` · ${n(sources, "sample source")}` : ""}`, tab: "fieldwork" });
++  else if (dates || sources) out.push({ key: "fieldwork", label: "Fieldwork", state: "incomplete", detail: dates ? "Only one fieldwork date set" : `${n(sources, "sample source")} · no fieldwork dates`, tab: "fieldwork" });
++  else out.push({ key: "fieldwork", label: "Fieldwork", state: "not_configured", detail: "No fieldwork dates or sample sources.", tab: "fieldwork" });
++
++  /* project facts */
++  if (c?.clientName && (c.projectManager || c.dueDate)) out.push({ key: "project", label: "Project details", state: "configured", detail: `${c.clientName}${c.projectManager ? ` · ${c.projectManager}` : ""}${c.dueDate ? ` · due ${c.dueDate}` : ""}`, tab: "project" });
++  else if (c?.clientName || c?.projectManager || c?.dueDate) out.push({ key: "project", label: "Project details", state: "incomplete", detail: [c?.clientName, c?.projectManager, c?.dueDate ? `due ${c.dueDate}` : ""].filter(Boolean).join(" · "), tab: "project" });
++  else out.push({ key: "project", label: "Project details", state: "not_configured", detail: "No client, manager or due date recorded.", tab: "project" });
++
++  return out;
++}
++
++/** the headline: how many modules are set up, and what needs attention first */
++export function overviewSummary(modules: ModuleStatus[]): { configured: number; total: number; attention: ModuleStatus[] } {
++  return { configured: modules.filter((m) => m.state === "configured").length, total: modules.length, attention: modules.filter((m) => m.state === "needs_attention") };
++}
+diff --git a/packages/access/src/audit.ts b/packages/access/src/audit.ts
+index 0af1cc3..bdfb892 100644
+--- a/packages/access/src/audit.ts
++++ b/packages/access/src/audit.ts
+@@ -89,6 +89,8 @@ export const AUDIT_EVENTS = [
+      the request, what it created / modified / removed; the change itself is in the version history */
+   "survey.ai_changed",
+   "survey.saved",
++  /* the lifecycle status (draft → testing → live → paused → closed → archived) — the project's state changed by hand */
++  "survey.status_changed",
+   "version.created",
+   "version.restored",
+   "deployment.started",
+@@ -246,6 +248,7 @@ export function describeEvent(r: AuditRow): string {
+     case "survey.imported": return `${who} imported ${str(d.fileName) || "a file"}${d.label ? ` (${str(d.label)})` : ""}${d.mode === "merge" ? " into this survey" : ""}${d.questions != null ? ` — ${str(d.questions)} questions${Number(d.review) ? `, ${str(d.review)} to review` : ""}` : ""}`;
+     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
+     case "survey.saved": return `${who} saved the survey`;
++    case "survey.status_changed": return `${who} changed the status${d.from ? ` from ${str(d.from)}` : ""} to ${str(d.to) || "?"}`;
+     case "version.created": return `${who} created version ${str(d.version) || "?"}`;
+     case "quota.created": return `${who} created quota “${str(d.quotaName) || str(d.quotaId)}”`;
+     case "quota.modified": {
+diff --git a/scripts/auth-guard-audit.mjs b/scripts/auth-guard-audit.mjs
+index d256406..0a2b024 100644
+--- a/scripts/auth-guard-audit.mjs
++++ b/scripts/auth-guard-audit.mjs
+@@ -476,6 +476,7 @@ const PUBLIC_PAGES = {
+   "login/page.tsx": "signing in cannot require being signed in",
+   "docs/page.tsx": "the public developer documentation (Phase 7): markdown files shipped with the app, read from disk, no database, no account",
+   "docs/[slug]/page.tsx": "the public developer documentation (Phase 7): one shipped markdown file by slug (validated against [a-z0-9-]), no database, no account",
++  "sandbox/overview/page.tsx": "the sandbox's project overview: renders the client component for the id \"sandbox\" only, which reads /api/surveys/sandbox/overview — a route that answers nothing without a session; no database, no service role",
+ };
+ const PAGE_GUARDS = ["projectPageGate", "requireUser", "requireProject", "userForSession"];
+ 
+diff --git a/scripts/dashboard-overview-test.mjs b/scripts/dashboard-overview-test.mjs
+new file mode 100644
+index 0000000..5ee989e
+--- /dev/null
++++ b/scripts/dashboard-overview-test.mjs
+@@ -0,0 +1,196 @@
++/**
++ * DASHBOARD, PROJECT OVERVIEW AND THE COMPACT WALLET (dashboard brief §1–§3).
++ *
++ *   1. the dashboard: the summary band is two numbers (projects, live); the
++ *      cards keep their five metrics and carry no spend; no balance filter or
++ *      spend sort; the large wallet panel is gone
++ *   2. the wallet: a compact `$125.50` pill in the header beside the account
++ *      controls, its menu with Add funds (the page's dialog), Usage & billing,
++ *      Transaction history; the precise balance in the title
++ *   3. the project overview: the facts, the configuration states from the
++ *      fixture (never inferred), the spend distinct from the wallet, the
++ *      modules' links, recent activity, the way back
++ *   4. the Studio: the Overview link in the top bar; `?tab=` deep links still open the tool
++ *
++ *   node scripts/dashboard-overview-test.mjs      (studio on 3000)
++ */
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import assert from "node:assert/strict";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++
++const SURVEYS = [
++  { id: "11111111-1111-4111-8111-111111111111", code: "ACME-01", title: "Acme brand tracker", status: "live", created_at: "2026-09-01T10:00:00Z", updated_at: "2026-10-09T10:00:00Z", current_version_id: null, created_by: "u1", myRole: "owner", roleSource: "owner", owner: { userId: "u1", name: "Test Researcher", userCode: "USR-10000", isMe: true }, collaborators: 1, version: "3.0", editing: null },
++  { id: "22222222-2222-4222-8222-222222222222", code: "DRAFT-02", title: "Pricing study", status: "draft", created_at: "2026-10-01T10:00:00Z", updated_at: "2026-10-08T10:00:00Z", current_version_id: null, created_by: "u1", myRole: "owner", roleSource: "owner", owner: { userId: "u1", name: "Test Researcher", userCode: "USR-10000", isMe: true }, collaborators: 0, version: "1.0", editing: null },
++];
++const STATS = {
++  [SURVEYS[0].id]: { questionCount: 24, responseCount: 310, testResponseCount: 12, liveResponseCount: 298, completeCount: 240, lastResponseAt: "2026-10-09T09:00:00Z", contributorIds: ["u1"], versionCount: 3 },
++  [SURVEYS[1].id]: { questionCount: 8, responseCount: 0, testResponseCount: 0, liveResponseCount: 0, completeCount: 0, lastResponseAt: null, contributorIds: ["u1"], versionCount: 1 },
++};
++const WALLET = { walletId: "w1", currency: "USD", balance: 125.5, reserved: 0, available: 125.5, totalAdded: 500, totalUsed: 374.5, transferredOut: 0, transferredIn: 0, level: "normal", state: "active" };
++const OVERVIEW = {
++  ok: true,
++  project: { id: SURVEYS[0].id, code: "ACME-01", title: "Acme brand tracker", status: "live", version: "3.0", revision: 41, draftSavedAt: "2026-10-09T10:00:00Z", updatedAt: "2026-10-09T10:00:00Z", createdAt: "2026-09-01T10:00:00Z", locked: false, role: "owner", clientName: "Acme Foods", projectManager: "Ann Lee", fieldworkFrom: "2026-10-01", fieldworkTo: "2026-10-31", dueDate: "2026-11-15", languages: 1, sourceLanguage: "en" },
++  counts: { questions: 24, pages: 9, responses: 310, live: 298, test: 12, complete: 240, lastResponseAt: "2026-10-09T09:00:00Z" },
++  modules: [
++    { key: "programming", label: "Questionnaire", state: "configured", detail: "24 questions · 6 questions with logic", tab: "questions", count: 24 },
++    { key: "quotas", label: "Quotas", state: "incomplete", detail: "2 quotas, 4 cells · 120 of 400 live completes · no quota check in the flow yet", tab: "quotas", count: 2 },
++    { key: "collection", label: "Response collection", state: "configured", detail: "Live link active · test link active", tab: "versions" },
++    { key: "quality", label: "Data quality", state: "not_configured", detail: "Quality checks off — responses are not scored.", tab: "data" },
++    { key: "research", label: "Research design", state: "needs_attention", detail: "Objective recorded · 2 hypotheses · 1 construct unmeasured", tab: "settings", count: 2 },
++    { key: "analysis", label: "Analysis plan", state: "configured", detail: "3 crosstabs, 2 tests · last run 2026-10-08 on 240 completes", tab: "questions", count: 5 },
++    { key: "reporting", label: "Dashboards & reports", state: "configured", detail: "1 dashboard, 1 report", tab: "data", count: 2 },
++    { key: "languages", label: "Languages", state: "incomplete", detail: "1 language beside en · 1 not ready", tab: "localization", count: 1 },
++    { key: "fieldwork", label: "Fieldwork", state: "configured", detail: "2026-10-01 → 2026-10-31 · 1 sample source", tab: "fieldwork" },
++    { key: "project", label: "Project details", state: "configured", detail: "Acme Foods · Ann Lee · due 2026-11-15", tab: "project" },
++  ],
++  summary: { configured: 6, total: 10, attention: [{ key: "research", label: "Research design", state: "needs_attention", detail: "", tab: "settings" }] },
++  spend: { currency: "USD", used: 42.3123, limit: null, allowance: 125.5, mode: "shared", level: "normal", state: "active", events: 57, walletRemaining: 125.5 },
++  activity: [
++    { id: "a1", text: "Ann Lee changed the status from testing to live", category: "survey", at: "2026-10-09T08:00:00Z", actorName: "Ann Lee" },
++    { id: "a2", text: "Test Researcher created quota “Gender”", category: "survey", at: "2026-10-08T08:00:00Z", actorName: "Test Researcher" },
++  ],
++  warnings: [],
++};
++
++const browser = await chromium.launch();
++const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
++await ctx.addCookies([{ name: "rescript_session", value: "dashboard-overview-test-0000", url: STUDIO }]);
++const page = await ctx.newPage();
++const errors = [];
++page.on("pageerror", (e) => errors.push(e.message));
++page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource|net::ERR|status of (404|501|502|402|409|401|400)/.test(m.text())) errors.push(m.text()); });
++
++await page.route("**/api/auth/me", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ userId: "u1", userCode: "USR-10000", name: "Test Researcher", email: "t@example.com", platformRole: "programmer", isPlatformAdmin: false, sessionId: "sess", unread: 0, policies: { heartbeatSeconds: 300, lockHeartbeatSeconds: 20, presenceHeartbeatSeconds: 15, idleAfterSeconds: 300, staleAfterSeconds: 900, lockStaleAfterSeconds: 180 } }) }));
++await page.route("**/api/auth/heartbeat", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "active", alive: true }) }));
++await page.route("**/api/surveys", (r) => r.request().method() === "GET" ? r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ surveys: SURVEYS, stats: STATS, contributors: { u1: { id: "u1", name: "Test Researcher", initials: "TR" } }, warnings: [] }) }) : r.continue());
++await page.route("**/api/billing/projects", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, currency: "USD", wallet: WALLET, thresholds: { low: 20, critical: 5, readOnly: 0 }, isPlatformAdmin: false, projects: SURVEYS.map((s) => ({ id: s.id, meter: { surveyId: s.id, currency: "USD", used: 42.31, limit: null, mode: "shared", allowance: 125.5, walletRemaining: 125.5, reserved: 0, usedPct: 25, level: "normal", state: "active", events: 57 }, canBudget: true })) }) }));
++let walletReads = 0;
++/* the wallet the next read returns — switched to a sub-cent balance after a request, so the re-read is visible */
++let walletNow = WALLET;
++await page.route("**/api/billing/wallet", (r) => { walletReads++; r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, wallet: walletNow, thresholds: { low: 20, critical: 5, readOnly: 0 } }) }); });
++await page.route("**/api/billing/me", (r) => r.request().method() === "POST" ? r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, request: { id: "cr1", amount: 50, status: "pending" } }) }) : r.continue());
++await page.route("**/api/surveys/sandbox/overview", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(OVERVIEW) }));
++
++/* ------------------------------------------------ 1. the dashboard */
++await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
++await page.waitForSelector(".survey-card");
++{
++  const metrics = await page.$$eval('[data-testid="dash-metrics"] .metric', (es) => es.map((e) => [e.querySelector(".metric-l").textContent, e.querySelector(".metric-v").textContent]));
++  assert.deepEqual(metrics, [["Projects", "2"], ["Live", "1"]], JSON.stringify(metrics));
++  assert.equal(await page.$('[data-testid="dash-wallet"]'), null, "the large wallet panel is gone");
++  assert.equal((await page.$$('[data-testid="card-wallet"]')).length, 0, "no spend on the cards");
++  const labels = await page.$$eval(".survey-card >> nth=0 >> .stat-label", (es) => es.map((e) => e.textContent));
++  assert.deepEqual(labels, ["Questions", "Responses", "Test", "Live", "Complete"]);
++  assert.equal(await page.$('[data-testid="dash-balance-filter"]'), null, "no balance filter");
++  const sorts = await page.$$eval('[aria-label="Sort surveys"] option', (os) => os.map((o) => o.textContent));
++  assert.ok(!sorts.some((s) => /spent|spend/i.test(s)), sorts.join(", "));
++  assert.match(await page.textContent(".dash-summary"), /^2 projects · 1 live$/);
++  const w = await page.$eval("body", (b) => b.scrollWidth <= b.clientWidth + 1);
++  assert.ok(w, "no horizontal overflow at 1440");
++  ok("the dashboard: two summary numbers, cards with their five metrics and no spend, no balance filter or spend sorts, no wallet panel");
++}
++
++/* ------------------------------------------------ 2. the compact wallet in the header */
++{
++  await page.waitForSelector('[data-testid="wallet-menu"]');
++  assert.equal(await page.textContent('[data-testid="wallet-pill-balance"]'), "$125.50", "two decimals on the pill");
++  assert.match(await page.getAttribute('[data-testid="wallet-pill"]', "title"), /\$125\.50 available/);
++  // beside the account controls: inside the account area, before Profile
++  const order = await page.$$eval('[data-testid="dash-account"] > *', (es) => es.map((e) => e.getAttribute("data-testid") || e.textContent.trim().slice(0, 12)));
++  assert.equal(order[0], "wallet-menu", order.join(" | "));
++  assert.ok(order.includes("Profile") && order.includes("Security"), order.join(" | "));
++  await page.click('[data-testid="wallet-pill"]');
++  await page.waitForSelector('[data-testid="wallet-menu-panel"]');
++  assert.equal(await page.textContent('[data-testid="wallet-menu-balance"]'), "$125.50");
++  assert.match(await page.textContent('[data-testid="wallet-menu-panel"]'), /\$374\.50 used of \$500\.00 added/);
++  assert.equal(await page.getAttribute('[data-testid="wallet-usage"]', "href"), "/billing");
++  assert.equal(await page.getAttribute('[data-testid="wallet-transactions"]', "href"), "/billing#transactions");
++  // Add funds opens the dashboard's own dialog; a request re-reads the wallet
++  const reads = walletReads;
++  walletNow = { ...WALLET, balance: 0.0042, available: 0.0042, level: "critical" };
++  await page.click('[data-testid="wallet-add-funds"]');
++  await page.waitForSelector('[data-testid="add-funds-dialog"]');
++  await page.click('[data-testid="add-funds-submit"]');
++  await page.waitForSelector('[data-testid="add-funds-done"]');
++  await page.waitForFunction((k) => true, reads);
++  await page.waitForTimeout(300);
++  assert.ok(walletReads > reads, "the header re-read the wallet after the request");
++  // the pill stays concise (two decimals) while the precise balance lives in the title
++  await page.waitForFunction(() => document.querySelector('[data-testid="wallet-pill-balance"]')?.textContent === "$0.00");
++  assert.match(await page.getAttribute('[data-testid="wallet-pill"]', "title"), /\$0\.0042 available/);
++  walletNow = WALLET;
++  ok("the wallet: a compact two-decimal pill beside the account controls, the precise balance in its title, a menu with Add funds (the page's dialog), Usage & billing and Transaction history, re-read after a request");
++}
++
++/* ------------------------------------------------ 3. the project overview */
++{
++  await page.goto(`${STUDIO}/sandbox/overview`, { waitUntil: "networkidle" });
++  await page.waitForSelector('[data-testid="project-overview"][data-loaded="true"]');
++  assert.equal(await page.textContent('[data-testid="po-crumb"]'), "Acme brand tracker");
++  assert.equal(await page.textContent('[data-testid="po-status"]'), "Live");
++  assert.match(await page.textContent('[data-testid="po-meta"]'), /v3\.0 · rev 41 · draft saved .* · Acme Foods · Ann Lee · due 2026-11-15 · you are owner/);
++  assert.equal(await page.textContent('[data-testid="po-questions"]'), "24 on 9 pages");
++  assert.equal(await page.textContent('[data-testid="po-live"]'), "298");
++  assert.equal(await page.textContent('[data-testid="po-test"]'), "12");
++  assert.equal(await page.textContent('[data-testid="po-complete"]'), "240");
++  // configuration states, exactly as the server said them
++  const mods = await page.$$eval('[data-testid="po-module"]', (es) => es.map((e) => [e.getAttribute("data-key"), e.getAttribute("data-state"), e.querySelector(".po-state").textContent]));
++  assert.deepEqual(mods.map((m) => m[1]), OVERVIEW.modules.map((m) => m.state));
++  assert.deepEqual(mods.find((m) => m[0] === "research").slice(1), ["needs_attention", "Needs attention"]);
++  assert.deepEqual(mods.find((m) => m[0] === "quality").slice(1), ["not_configured", "Not set up"]);
++  assert.equal(await page.textContent('[data-testid="po-config-summary"]'), "· 6 of 10 configured");
++  assert.match(await page.textContent('[data-testid="po-attention"]'), /Needs attention: Research design/);
++  assert.equal(await page.getAttribute('[data-testid="po-module"][data-key="quotas"] a', "href"), "/studio/sandbox?tab=quotas");
++  // spend: the project's figure, distinct from the wallet
++  assert.equal(await page.textContent('[data-testid="po-spend-used"]'), "$42.31");
++  assert.match(await page.textContent('[data-testid="po-spend-sub"]'), /No project limit — it spends from the owner's wallet \(\$125\.50 left there\)/);
++  assert.equal(await page.textContent('[data-testid="wallet-pill-balance"]'), "$125.50", "the header's wallet is the wallet, not the spend");
++  // modules and activity, and the way back
++  assert.equal(await page.getAttribute('[data-testid="po-nav-programming"]', "href"), "/studio/sandbox?tab=questions");
++  assert.equal(await page.getAttribute('[data-testid="po-nav-analytics"]', "href"), "/analytics?survey=sandbox");
++  assert.equal(await page.getAttribute('[data-testid="po-open-programming"]', "href"), "/studio/sandbox?tab=questions");
++  assert.equal(await page.getAttribute('[data-testid="po-back"]', "href"), "/");
++  const acts = await page.$$eval('[data-testid="po-activity-row"]', (es) => es.map((e) => e.textContent));
++  assert.equal(acts.length, 2); assert.match(acts[0], /changed the status from testing to live/);
++  assert.equal(await page.getAttribute('[data-testid="po-activity-all"]', "href"), "/studio/sandbox?tab=activity");
++  const w = await page.$eval("body", (b) => b.scrollWidth <= b.clientWidth + 1);
++  assert.ok(w, "no horizontal overflow at 1440");
++  ok("the project overview: the facts, every configuration state as the server read it, the spend distinct from the wallet, the modules' links, the activity, the way back");
++}
++
++/* ------------------------------------------------ 4. the Studio keeps its deep links; the dashboard's card opens the bare project URL */
++{
++  await page.goto(`${STUDIO}/`, { waitUntil: "networkidle" });
++  await page.waitForSelector(".survey-card");
++  // the Open button sets window.location to the project's bare URL; the server page is not reachable here (no database), so the destination is read before it loads
++  await page.route(`**/studio/${SURVEYS[0].id}`, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<html><body data-testid='stub-overview'>overview</body></html>" }));
++  await page.click(".survey-card >> nth=0 >> .card-actions >> text=Open");
++  await page.waitForSelector("[data-testid='stub-overview']");
++  assert.ok(page.url().endsWith(`/studio/${SURVEYS[0].id}`), `a card opens the project's bare URL (the overview): ${page.url()}`);
++  ok("opening a project goes to its bare URL — the overview; `?tab=` deep links keep opening the tool (covered by the Studio suites)");
++}
++
++/* ------------------------------------------------ 5. the Studio: the Overview link in the top bar, the project's spend beside Mode */
++{
++  const studio = await ctx.newPage();
++  await studio.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++  await studio.waitForSelector(".menubar");
++  assert.equal(await studio.getAttribute('[data-testid="project-overview-link"]', "href"), "/sandbox/overview", "the top bar leads back to the overview");
++  await studio.waitForSelector('[data-testid="project-spend"]', { timeout: 15000 });
++  const chip = await studio.textContent('[data-testid="project-spend"]');
++  assert.match(chip, /Project spend\s*\$[\d.,]+/, chip);
++  // the chip sits after the Mode cluster, inside the menubar; the sandbox's wallet badge is the wallet, a different figure
++  const after = await studio.$eval('[data-testid="mode-cluster"]', (e) => e.nextElementSibling?.getAttribute("data-testid"));
++  assert.equal(after, "project-spend");
++  const bar = await studio.$eval(".menubar", (e) => e.getBoundingClientRect().height);
++  assert.ok(bar <= 40, `the menubar stays one line: ${bar}px`);
++  await studio.close();
++  ok("the Studio: the Overview link in the top bar, and `Project spend: $…` beside Mode on one line");
++}
++
++assert.deepEqual(errors, [], `console errors: ${errors.join("\n")}`);
++await browser.close();
++console.log(`\n${passed} passed`);
+diff --git a/scripts/project-meter-test.mjs b/scripts/project-meter-test.mjs
+index 9f5acc5..9b316e0 100644
+--- a/scripts/project-meter-test.mjs
++++ b/scripts/project-meter-test.mjs
+@@ -74,6 +74,8 @@ const routes = async (p) => {
+     status: 200, contentType: "application/json",
+     body: JSON.stringify({ ok: true, currency: "USD", wallet: WALLET, thresholds: { low: 20, critical: 5, readOnly: 0 }, isPlatformAdmin: false, projects: PROJECTS }),
+   }));
++  /* the header's compact wallet (dashboard brief §3) reads the wallet alone */
++  await p.route("**/api/billing/wallet", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, wallet: WALLET, thresholds: { low: 20, critical: 5, readOnly: 0 } }) }));
+ };
+ await routes(page);
+ 
+@@ -113,127 +115,77 @@ await page.route("**/api/surveys/*", (route) => route.continue());
+ 
+ await page.goto("http://localhost:3000/", { waitUntil: "networkidle" });
+ await page.waitForSelector(".survey-card:not(.skeleton)");
+-await page.waitForSelector('[data-testid="dash-wallet"]');
++await page.waitForSelector('[data-testid="wallet-menu"]');
+ 
+ const card = (title) => `.survey-card:has-text("${title}")`;
+ const textOf = async (sel) => (await page.$eval(sel, (el) => el.innerText.replace(/\s+/g, " "))).trim();
+ 
+-/* -------------------------------------------------- 1. one wallet, at the top */
++/* -------------------------------------------------- 1. one wallet, in the header */
+ 
+-console.log("\nTHE WALLET — one balance for the whole page, not one per card");
++console.log("\nTHE WALLET — one compact balance in the header, its actions behind it (dashboard brief §3)");
+ {
+-  const w = await textOf('[data-testid="dash-wallet"]');
+-  assert.ok(w.includes("$265.00"), `the balance is shown once, at the top: ${w}`);
++  assert.equal(await page.$('[data-testid="dash-wallet"]'), null, "the large wallet panel is gone from the page");
++  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "the balance, two decimals, in the header");
++  await page.click('[data-testid="wallet-pill"]');
++  await page.waitForSelector('[data-testid="wallet-menu-panel"]');
++  const w = await textOf('[data-testid="wallet-menu-panel"]');
+   assert.ok(w.toUpperCase().includes("MY WALLET"));
+   assert.match(w, /\$235\.00 used of \$500\.00 added/);
+-  assert.equal(await textOf('[data-testid="dash-wallet-level"]'), "Healthy");
+-  assert.ok(await page.$('[data-testid="dash-add-funds"]'), "and funds are added in one place, not per project");
+-
+-  /*
+-   * No card presents the wallet's balance as THIS project's figure. A card
+-   * may name the wallet — the frozen one does, to say the money is still
+-   * there — but the "left" figure on a budgeted project is its own headroom.
+-   */
+-  for (const t of ["Brand Tracker", "Pricing Pilot"]) {
+-    const left = await textOf(`${card(t)} [data-testid="cw-remaining"]`);
+-    assert.notEqual(left, "$265.00", `${t} shows its own headroom, not the wallet balance`);
+-    assert.ok((await textOf(`${card(t)} [data-testid="card-wallet"]`)).toUpperCase().includes("LEFT OF IT"),
+-      `${t} labels that figure as its own budget's`);
+-  }
+-  console.log("  ok   $265.00 once, above the list, with Add funds beside it");
++  assert.equal(await textOf('[data-testid="wallet-menu-level"]'), "Healthy");
++  assert.ok(await page.$('[data-testid="wallet-add-funds"]'), "funds are added from the wallet, not per project");
++  assert.ok(await page.$('[data-testid="wallet-usage"]') && await page.$('[data-testid="wallet-transactions"]'), "usage and the transaction history are one click away");
++  await page.keyboard.press("Escape"); await page.click("body", { position: { x: 5, y: 400 } }); await page.waitForTimeout(150);
++  console.log("  ok   $265.00 once, in the header, with Add funds, Usage & billing and Transaction history behind it");
+ }
+ 
+-/* ------------------------------------------- 2. each card: spent, and out of what */
++/* ------------------------------------------- 2. the cards: no spend on the list */
+ 
+-console.log("\nTHE CARDS — what this study spent, and which limit will stop it");
++console.log("\nTHE CARDS — metrics, no money (dashboard brief §1): the spend lives on the project's overview and in Usage & Wallet");
+ {
+-  const shared = await textOf(`${card("Consumer Research")} [data-testid="card-wallet"]`);
+-  assert.ok(shared.includes("$120.00"), `its own spend: ${shared}`);
+-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="cw-limit"]`), "No limit");
+-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="cw-remaining"]`), "$265.00");
+-  assert.ok(shared.toUpperCase().includes("WALLET LEFT"), "labelled as the WALLET's money, not the project's");
+-
+-  const capped = await textOf(`${card("Brand Tracker")} [data-testid="card-wallet"]`);
+-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-used"]`), "$0.60");
+-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-limit"]`), "$1.00");
+-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-remaining"]`), "$0.40");
+-  assert.ok(capped.toUpperCase().includes("LEFT OF IT"), "a budgeted project is measured against ITS budget");
+-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="card-wallet-level"]`), "Critical",
+-    "40c left of its dollar is critical even though the wallet is healthy");
+-
+-  console.log("  ok   shared: $120 spent, no limit, $265 wallet left · capped: $0.60 of $1.00, $0.40 left, Critical");
++  assert.equal((await page.$$('[data-testid="card-wallet"]')).length, 0, "no spend on any card");
++  for (const t of ["Consumer Research", "Brand Tracker", "Pricing Pilot"]) {
++    const labels = await page.$$eval(`${card(t)} .stat-label`, (els) => els.map((e) => e.textContent));
++    assert.deepEqual(labels, ["Questions", "Responses", "Test", "Live", "Complete"], `${t} keeps its five metrics`);
++  }
++  console.log("  ok   five metrics per card, no spend figure, no meter bar");
+ }
+ 
+-/* --------------------------------------- 3. stopped by its own limit vs by the wallet */
++/* --------------------------------------- 3. an empty wallet is said in the header */
+ 
+-console.log("\nTWO WAYS TO STOP — and they read differently, because they need different actions");
++console.log("\nAN EMPTY WALLET — said once, where the wallet is");
+ {
+-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Limit reached");
+-  const frozen = await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-frozen"]`);
+-  assert.match(frozen, /own limit of \$1\.00/);
+-  assert.match(frozen, /wallet still has \$265\.00 for other projects/,
+-    "it says the money is still there — the remedy is a limit, not a top-up");
+-  assert.equal(await page.$(`${card("Pricing Pilot")} [data-testid="card-wallet-readonly"]`), null);
+-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-budget"]`), "Raise limit",
+-    "and the button offers exactly that");
+-
+-  /* now empty the wallet: every project stops, for the other reason */
+   const before = { ...WALLET };
+   WALLET = { ...WALLET, balance: 0, available: 0, totalUsed: 500, level: "locked", state: "read_only" };
+-  PROJECTS = PROJECTS.map((p) => p.meter
+-    ? { ...p, meter: { ...p.meter, walletRemaining: 0, allowance: 0, state: p.meter.state === "frozen" ? "frozen" : "read_only" } }
+-    : p);
+   await page.reload({ waitUntil: "networkidle" });
+-  await page.waitForSelector('[data-testid="dash-wallet"]');
+-  assert.equal(await textOf('[data-testid="dash-wallet-level"]'), "Empty");
+-  assert.ok(await page.$('[data-testid="dash-wallet-empty"]'), "the wallet says why everything stopped");
+-  assert.equal(await textOf(`${card("Consumer Research")} [data-testid="card-wallet-level"]`), "Wallet empty");
+-  assert.match(await textOf(`${card("Consumer Research")} [data-testid="card-wallet-readonly"]`), /wallet is empty/i);
+-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Limit reached",
+-    "a project already stopped by its own rule still says so — that is still its problem");
+-
++  await page.waitForSelector('[data-testid="wallet-menu"][data-state="read_only"]');
++  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$0.00");
++  await page.click('[data-testid="wallet-pill"]');
++  await page.waitForSelector('[data-testid="wallet-menu-panel"]');
++  assert.equal(await textOf('[data-testid="wallet-menu-level"]'), "Empty");
++  await page.click("body", { position: { x: 5, y: 400 } }); await page.waitForTimeout(150);
+   WALLET = before;
+-  PROJECTS = [
+-    { id: "s1", meter: meter({ used: 120, allowance: 265, usedPct: 31.17, level: "normal" }), canBudget: true },
+-    { id: "s2", meter: meter({ used: 0.6, limit: 1, mode: "budget", allowance: 0.4, usedPct: 60, level: "critical" }), canBudget: true },
+-    { id: "s3", meter: meter({ used: 1, limit: 1, mode: "budget", allowance: 0, usedPct: 100, level: "locked", state: "frozen" }), canBudget: true },
+-    { id: "s4", meter: null, canBudget: false },
+-  ];
+   await page.reload({ waitUntil: "networkidle" });
+-  await page.waitForSelector('[data-testid="dash-wallet"]');
+-  console.log("  ok   'Limit reached' names the project's rule; 'Wallet empty' names the wallet's");
++  await page.waitForSelector('[data-testid="wallet-menu"][data-state="active"]');
++  console.log("  ok   'Empty' in the header when the wallet is out");
+ }
+ 
+-/* ------------------------------------------------------ 4. finding them in a list */
++/* ------------------------------------------------------ 4. no money filters on the list */
+ 
+-console.log("\nFILTERS — which study is at its limit, which is running low");
++console.log("\nFILTERS — the list is about projects, not balances");
+ {
+-  await page.selectOption('[data-testid="dash-balance-filter"]', "frozen");
+-  await page.waitForTimeout(150);
+-  let titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
+-  assert.deepEqual(titles, ["Pricing Pilot"], `at its limit: ${titles}`);
+-
+-  await page.selectOption('[data-testid="dash-balance-filter"]', "critical");
+-  await page.waitForTimeout(150);
+-  titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
+-  assert.deepEqual(titles, ["Brand Tracker Wave 3"], "a project close to its own limit is critical");
+-
+-  await page.selectOption('[data-testid="dash-balance-filter"]', "all");
+-  await page.selectOption('[aria-label="Sort surveys"]', "balance_asc");
+-  await page.waitForTimeout(150);
+-  titles = await page.$$eval(".survey-card .survey-title", (els) => els.map((e) => e.innerText.split("\n")[0]));
+-  assert.deepEqual(titles.slice(0, 2), ["Pricing Pilot", "Brand Tracker Wave 3"], `least left to spend first: ${titles}`);
+-  assert.equal(titles[3], "Colleague Study", "a project with no meter sorts last, never first");
+-  await page.selectOption('[aria-label="Sort surveys"]', "updated");
+-  await page.waitForTimeout(150);
+-  console.log("  ok   'at its limit' and 'critical' filters, and least-left-to-spend first");
++  assert.equal(await page.$('[data-testid="dash-balance-filter"]'), null, "no balance filter");
++  const sorts = await page.$$eval('[aria-label="Sort surveys"] option', (os) => os.map((o) => o.value));
++  assert.ok(!sorts.some((v) => /^(balance|used)_/.test(v)), `no spend sorts: ${sorts.join(", ")}`);
++  console.log("  ok   no balance filter, no spend sorts");
+ }
+ 
+ /* ------------------------------------------------------------- 5. the limit */
+ 
+ console.log("\nSETTING A LIMIT — which moves no money, and says so");
+ {
+-  await page.click(`${card("Brand Tracker")} [data-testid="card-budget"]`);
++  await page.click(`${card("Brand Tracker")} .card-actions .menu-anchor button`);
++  await page.waitForSelector('[data-testid="budget-menu-item"]');
++  await page.click('[data-testid="budget-menu-item"]');
+   await page.waitForSelector('[data-testid="budget-dialog"]');
+   assert.match(await textOf('[data-testid="budget-context"]'), /\$0\.60 spent by this project/);
+   assert.match(await textOf('[data-testid="budget-context"]'), /wallet holds \$265\.00/);
+@@ -255,25 +207,25 @@ console.log("\nSETTING A LIMIT — which moves no money, and says so");
+   await page.click('[data-testid="budget-dialog"] .btn.primary');
+   await page.waitForTimeout(400);
+ 
+-  assert.equal(await textOf(`${card("Brand Tracker")} [data-testid="cw-limit"]`), "$100.00");
+-  assert.equal(await textOf('[data-testid="dash-wallet-balance"]'), "$265.00", "and the wallet is exactly what it was");
+-  console.log("  ok   $1 → $100 on the card; the wallet balance unchanged");
++  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "and the wallet is exactly what it was");
++  console.log("  ok   $1 → $100 saved from the card's menu; the wallet balance unchanged");
+ }
+ 
+ /* ----------------------------------------------- 6. raising a limit frees a project */
+ 
+ console.log("\nRAISING A LIMIT — a stopped project runs again, with nothing transferred");
+ {
+-  await page.click(`${card("Pricing Pilot")} [data-testid="card-budget"]`);
++  await page.click(`${card("Pricing Pilot")} .card-actions .menu-anchor button`);
++  await page.waitForSelector('[data-testid="budget-menu-item"]');
++  await page.click('[data-testid="budget-menu-item"]');
+   await page.waitForSelector('[data-testid="budget-dialog"]');
+   await page.fill('[data-testid="budget-limit"]', "50");
+   await page.click('[data-testid="budget-save"]');
+   await page.waitForSelector('[data-testid="budget-done"]');
+   await page.click('[data-testid="budget-dialog"] .btn.primary');
+   await page.waitForTimeout(400);
+-  assert.equal(await textOf(`${card("Pricing Pilot")} [data-testid="card-wallet-level"]`), "Healthy");
+-  assert.equal(await page.$(`${card("Pricing Pilot")} [data-testid="card-wallet-frozen"]`), null);
+-  assert.equal(await textOf('[data-testid="dash-wallet-balance"]'), "$265.00", "still nothing moved");
++  assert.deepEqual({ mode: saved.body.mode, limit: saved.body.limit }, { mode: "budget", limit: 50 });
++  assert.equal(await textOf('[data-testid="wallet-pill-balance"]'), "$265.00", "still nothing moved");
+   console.log("  ok   the project is running; the balance never changed");
+ }
+ 
+@@ -281,7 +233,9 @@ console.log("\nRAISING A LIMIT — a stopped project runs again, with nothing tr
+ 
+ console.log("\nADD FUNDS — a request, because payments are not connected yet");
+ {
+-  await page.click('[data-testid="dash-add-funds"]');
++  await page.click('[data-testid="wallet-pill"]');
++  await page.waitForSelector('[data-testid="wallet-add-funds"]');
++  await page.click('[data-testid="wallet-add-funds"]');
+   await page.waitForSelector('[data-testid="add-funds-dialog"]');
+   assert.match(await textOf('[data-testid="add-funds-balance"]'), /\$265\.00 in your wallet now/);
+   await page.click('[data-testid="add-funds-100"]');
+@@ -314,19 +268,17 @@ console.log("\nCLONE — still there, and still honest about the wallet");
+ 
+ /* ------------------------------------------------------------ 9. narrow screen */
+ 
+-console.log("\nNARROW SCREEN — the wallet and the cards survive a phone");
++console.log("\nNARROW SCREEN — the header wallet and the cards survive a phone");
+ {
+   const phone = await browser.newContext({ viewport: { width: 390, height: 900 } });
+   await phone.addCookies([{ name: "rescript_session", value: "meter-test-session-0000", url: "http://localhost:3000" }]);
+   const p2 = await phone.newPage();
+   await routes(p2);
+   await p2.goto("http://localhost:3000/", { waitUntil: "networkidle" });
+-  await p2.waitForSelector('[data-testid="card-wallet"]');
++  await p2.waitForSelector(".survey-card:not(.skeleton)");
+   const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+   assert.ok(overflow <= 0, `no sideways scroll on a phone (${overflow}px)`);
+-  assert.ok(await p2.$('[data-testid="dash-wallet"]'), "the wallet is still there");
+-  const bar = await p2.$('[data-testid="card-wallet-bar"]');
+-  assert.ok((await bar.boundingBox()).width > 100, "and the meter is still readable");
++  assert.ok(await p2.$('[data-testid="wallet-menu"]'), "the wallet is still there, in the header");
+   await p2.click('.survey-card:has-text("Consumer Research") .card-actions .menu-anchor button');
+   await p2.waitForSelector('[data-testid="budget-menu-item"]');
+   await p2.screenshot({ path: "/tmp/project-meter-phone.png" });
+-- 
+2.43.0
+

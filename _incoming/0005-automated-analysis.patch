@@ -1,0 +1,1612 @@
+From 487e59d22b8b0ab53563fa1288a36da42a4b4b73 Mon Sep 17 00:00:00 2001
+From: Miures Manager <contact@miures.com>
+Date: Mon, 5 Oct 2026 07:12:26 +0000
+Subject: [PATCH] Automated analysis after fieldwork: the plan runs itself, the
+ findings are read, the hypotheses judged (research intelligence, Phase 5)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Phase 2 wrote the analysis plan before fieldwork and the analytics package
+could run every planned item — but results were recomputed on request and
+never kept, nothing judged a hypothesis, nothing ran by itself, and the
+copilot saw no results. Now:
+
+packages/analytics/src/findings.ts (new): findingsFor reads each result
+structurally — the tests' p-values and effect sizes, a regression's
+coefficient table (intercept left out, terms resolved back to variables,
+direction kept), a correlation's r and p, the NPS KPI, the reliability
+table — never the insight sentences — into findings with their evidence
+(test, statistic, p, effect, n) and a strength on the usual scales; a
+crosstab yields one finding per banner variable with the largest gap as
+detail; a small base carries the caution, an empty one is a placeholder.
+hypothesisVerdicts judges each H1, H2… from the analyses planned for it:
+supported / not supported / mixed / inconclusive (small base, or only
+descriptives — with what to add) / untested, each with its reason; a
+crosstab's banner counts as evidence only when the hypothesis names the
+variable, a planned test pairs the same two, or it is the only banner.
+runPlan executes the whole plan on one dataset (saved "Planned"
+refinements replace the engine's definition by planned id), ranks the
+findings, gives the verdicts and the chart each result is best shown as;
+compactRun is what is stored; briefText is the run in a few lines for the
+copilot; nextMilestone names the fieldwork milestone due — first readable
+base (30), halfway to target, target, end of field — once each.
+
+Studio: migration 0046 analytics_runs; lib/analytics runPlanFor /
+latestRun / listRuns / dueMilestone; analytics route GET plan/latest,
+GET plan/runs, POST plan/run (audited: analytics.plan_run); the hourly
+cron /api/cron/analysis-runs runs due milestones for live surveys with a
+plan (analysisPlan.autoRun, on unless false). The copilot: findingsIntent
+and the FINDINGS GUIDE (answer from the run's numbers only; quote test,
+p, effect, base; a verdict is the run's; "none yet" without a run; "not
+tested" plus the analysis action that would test it); the outline carries
+the run's brief on findings and analysis turns; the hook loads the latest
+run (and a test seam) and sends verdicts and the strongest findings with
+every turn; Intelligent → Findings: verdicts with reasons (an untested
+hypothesis offers Plan a test through the copilot), findings strongest
+first with evidence, significant-only toggle, the run's trigger/time/base,
+the milestone due, Run the plan now, Ask the copilot to narrate, Open in
+Analytics.
+
+Tests: analytics findings.test.ts (4; 37 mutations, 37 caught); studio
+copilot.test.ts (+1; 6/6); browser scripts/findings-copilot-test.mjs (6
+checks; 11/11 against the Studio surfaces). Analytics 222, engine 1424,
+import 28, Studio 223; findings, analysis-framework, copilot,
+quota-copilot, translation-copilot, ux-copilot, intelligent-mode and
+analytics browser suites green. Docs: docs/AUTOMATED-ANALYSIS-2026-10-05.md.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/copilot/turn/route.ts     |  15 +-
+ .../app/api/cron/analysis-runs/route.ts       |  66 ++++
+ .../[id]/analytics/[[...path]]/route.ts       |  25 +-
+ .../intelligent/copilot/CopilotPanel.tsx      |   4 +
+ .../intelligent/copilot/FindingsTab.tsx       | 112 ++++++
+ .../intelligent/copilot/useCopilot.ts         |  51 ++-
+ apps/studio/lib/analytics.ts                  |  77 +++-
+ apps/studio/lib/copilot/copilot.test.ts       |  31 +-
+ apps/studio/lib/copilot/outline.ts            |  13 +-
+ apps/studio/lib/copilot/prompt.ts             |  17 +
+ apps/studio/vercel.json                       |  14 +-
+ docs/AUTOMATED-ANALYSIS-2026-10-05.md         |  49 +++
+ packages/access/src/audit.ts                  |   2 +
+ packages/analytics/src/findings.test.ts       | 183 ++++++++++
+ packages/analytics/src/findings.ts            | 344 ++++++++++++++++++
+ packages/analytics/src/index.ts               |   1 +
+ packages/schema/src/analysisPlan.ts           |   6 +
+ scripts/findings-copilot-test.mjs             | 166 +++++++++
+ supabase/migrations/0046_analytics_runs.sql   |  35 ++
+ 19 files changed, 1196 insertions(+), 15 deletions(-)
+ create mode 100644 apps/studio/app/api/cron/analysis-runs/route.ts
+ create mode 100644 apps/studio/components/intelligent/copilot/FindingsTab.tsx
+ create mode 100644 docs/AUTOMATED-ANALYSIS-2026-10-05.md
+ create mode 100644 packages/analytics/src/findings.test.ts
+ create mode 100644 packages/analytics/src/findings.ts
+ create mode 100644 scripts/findings-copilot-test.mjs
+ create mode 100644 supabase/migrations/0046_analytics_runs.sql
+
+diff --git a/apps/studio/app/api/copilot/turn/route.ts b/apps/studio/app/api/copilot/turn/route.ts
+index 87b866e..459376a 100644
+--- a/apps/studio/app/api/copilot/turn/route.ts
++++ b/apps/studio/app/api/copilot/turn/route.ts
+@@ -7,7 +7,9 @@ import { ResearchIndex } from "@rescript/import/research";
+ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
+ import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+ import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
+-import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
++import type { AnalysisRun } from "@rescript/analytics";
++type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger">;
++import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+ import { researchCards, researchPassages } from "@/lib/copilot/research";
+ import { researchStoreFor } from "@/lib/copilot/store";
+ import { copilotOutline } from "@/lib/copilot/outline";
+@@ -47,7 +49,7 @@ const TTL = 15 * 60_000;
+ 
+ export async function POST(req: NextRequest) {
+   const authed = await requireUser(req);
+-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown };
++  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown };
+   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
+   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
+   let user: AuthedUser | null = null;
+@@ -86,7 +88,10 @@ export async function POST(req: NextRequest) {
+   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
+   const quotaTurn = quotaIntent(message);
+   const quotaCounts = body.quotaCounts && typeof body.quotaCounts === "object" ? body.quotaCounts as Record<string, Record<string, number>> : null;
+-  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts });
++  // findings: what the data showed — the latest analysis run the Studio sent, answered from its numbers
++  const findingsTurn = findingsIntent(message);
++  const analysisRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
++  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun });
+   let research = "";
+   let passageIds: string[] = [];
+   let charge = 0;
+@@ -113,7 +118,7 @@ export async function POST(req: NextRequest) {
+     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
+     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
+     ux: uxTurn, uxOnly: cls.uxOnly,
+-    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn,
++    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn,
+     ...(themeImageText ? { themeImage: themeImageText } : {}),
+     ...(themeScope ? { themeOnly: true } : {}),
+   });
+@@ -194,7 +199,7 @@ export async function POST(req: NextRequest) {
+     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
+     ...(deterministic ? { review: deterministic } : {}),
+     passages,
+-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(repair ? { repair } : {}) },
++    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, ...(repair ? { repair } : {}) },
+     usage: { charge },
+   });
+ }
+diff --git a/apps/studio/app/api/cron/analysis-runs/route.ts b/apps/studio/app/api/cron/analysis-runs/route.ts
+new file mode 100644
+index 0000000..65fa7db
+--- /dev/null
++++ b/apps/studio/app/api/cron/analysis-runs/route.ts
+@@ -0,0 +1,66 @@
++import "server-only";
++import { NextResponse } from "next/server";
++import { timingSafeEqual } from "node:crypto";
++import type { SurveyDefinition } from "@rescript/schema";
++import { supabaseService } from "@/lib/authServer";
++import { loadDefinition, dueMilestone, runPlanFor } from "@/lib/analytics";
++
++/**
++ * THE PLAN RUNS BY ITSELF (research-intelligence Phase 5).
++ *
++ * Hourly: every live survey with an analysis plan (and autoRun not turned
++ * off) is checked against the milestones of its fieldwork — the first
++ * readable base (30 completes), halfway to the suppliers' target, the
++ * target, the end of the field window — and the plan is run once for each
++ * milestone reached, the findings and the hypothesis verdicts kept in
++ * `analytics_runs`. Nothing is recomputed that was already run; a survey
++ * with nothing due costs one count query.
++ *
++ * Authorised by CRON_SECRET like the other jobs; bounded in time so a slow
++ * survey never blocks the rest — the next hour picks up what was left.
++ */
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++export const maxDuration = 60;
++
++const BUDGET_MS = 45_000;
++const MAX_SURVEYS = 200;
++
++function authorised(req: Request): boolean {
++  const secret = (process.env.CRON_SECRET ?? "").trim();
++  if (!secret) return false;
++  const header = req.headers.get("authorization") ?? "";
++  const offered = header.startsWith("Bearer ") ? header.slice(7) : header;
++  const a = Buffer.from(offered), b = Buffer.from(secret);
++  return a.length === b.length && timingSafeEqual(a, b);
++}
++
++export async function GET(req: Request) { return run(req); }
++export async function POST(req: Request) { return run(req); }
++
++async function run(req: Request): Promise<NextResponse> {
++  if (!authorised(req)) return NextResponse.json({ error: "not authorised" }, { status: 401 });
++  const db = supabaseService();
++  const startedAt = Date.now();
++  // only a survey whose definition carries an analysis plan can have a run due
++  const { data: withPlan, error } = await db.from("surveys").select("id").not("draft_definition->research->>analysisPlan", "is", null).in("status", ["testing", "live", "closed"]).order("updated_at", { ascending: false }).limit(MAX_SURVEYS);
++  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
++  const surveyIds = (withPlan ?? []).map((r) => String((r as { id: string }).id));
++  const ran: { surveyId: string; trigger: string; n: number; findings: number }[] = [];
++  const skipped: { surveyId: string; reason: string }[] = [];
++  let checked = 0;
++  for (const surveyId of surveyIds) {
++    if (Date.now() - startedAt > BUDGET_MS) { skipped.push({ surveyId, reason: "time budget spent — next hour" }); continue; }
++    checked++;
++    const loaded = await loadDefinition(db, surveyId);
++    if ("error" in loaded) { skipped.push({ surveyId, reason: loaded.error }); continue; }
++    const def = loaded.def as SurveyDefinition;
++    if (!def.research?.analysisPlan) continue;
++    const due = await dueMilestone(db, surveyId, def);
++    if (!due) continue;
++    const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", trigger: due });
++    if (r.error && !r.stored) { skipped.push({ surveyId, reason: r.error }); continue; }
++    ran.push({ surveyId, trigger: due, n: r.run.n, findings: r.run.findings.length });
++  }
++  return NextResponse.json({ ok: true, checked, ran, skipped, elapsedMs: Date.now() - startedAt });
++}
+diff --git a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+index 382545a..6c55c08 100644
+--- a/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
++++ b/apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts
+@@ -9,7 +9,7 @@ import {
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { supabaseService } from "@/lib/authServer";
+ import { audit, isFailure, requireProject, type ProjectContext } from "@/lib/guard";
+-import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload } from "@/lib/analytics";
++import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, dueMilestone } from "@/lib/analytics";
+ 
+ /**
+  * The environment a report is built from.
+@@ -89,6 +89,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string;
+     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
+     return json(await variablesPayload(db, surveyId, loaded));
+   }
++  /* the analysis runs (research-intelligence Phase 5): the latest, the list, and what milestone is due */
++  if (head === "plan" && itemId === "latest") {
++    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
++    const env = req.nextUrl.searchParams.get("environment");
++    const run = await latestRun(db, surveyId, env === "TEST" || env === "ALL" || env === "LIVE" ? env : undefined);
++    const loaded = await loadDefinition(db, surveyId);
++    const due = "error" in loaded ? null : await dueMilestone(db, surveyId, loaded.def as SurveyDefinition);
++    return json({ run, due });
++  }
++  if (head === "plan" && itemId === "runs") {
++    const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
++    return json({ runs: await listRuns(db, surveyId) });
++  }
+   if (head === "home") {
+     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+     const [a, c, r, s] = await Promise.all([
+@@ -254,6 +267,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
+   const db = supabaseService();
+   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+ 
++  /* run the whole plan now and keep the findings */
++  if (head === "plan" && itemId === "run") {
++    const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
++    const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
++    const env = body.environment === "TEST" || body.environment === "ALL" ? body.environment : "LIVE";
++    const r = await runPlanFor(db, surveyId, loaded, { environment: env as DatasetSpec["environment"], dataset: body.dataset === "clean" ? "clean" : "all", trigger: typeof body.trigger === "string" && body.trigger.trim() ? body.trigger.trim().slice(0, 40) : "manual", primaries: body.primaries === true, userId: ctx.user.userId });
++    if (r.error && !r.stored) return bad(r.error, r.run.items.length ? 500 : 400);
++    log(ctx, "analytics.plan_run", r.stored?.id ?? null, { trigger: r.run.trigger, n: r.run.n, analyses: r.run.items.length, findings: r.run.findings.length });
++    return json({ run: r.stored, results: Object.fromEntries(r.run.items.map((it) => [it.definition.options?.planned ?? it.definition.name, it.result])) }, 201);
++  }
+   if (head === "run") {
+     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
+     const def = body.definition as AnalysisDefinition | undefined;
+diff --git a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+index 42862ab..ba20583 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+@@ -8,6 +8,7 @@ import { UxPreview } from "./UxPreview";
+ import { AnalysisTab } from "./AnalysisTab";
+ import { LanguagesTab } from "./LanguagesTab";
+ import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
++import { FindingsTab } from "./FindingsTab";
+ import { Linked } from "./CopilotCard";
+ import type { Copilot, PanelTab } from "./useCopilot";
+ 
+@@ -28,6 +29,7 @@ import type { Copilot, PanelTab } from "./useCopilot";
+  *   Analysis   the analysis framework (AnalysisTab)
+  *   Languages  each language version's state and next step (LanguagesTab)
+  *   Quotas     the feasibility review, the live counts' advice, the sheet import (QuotasTab)
++ *   Findings   what the data said: the latest analysis run's verdicts and findings (FindingsTab)
+  *   Inspector  the object in focus (the existing inspector)
+  */
+ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, applyNote, readOnly, onImportQuotaSheet, quotaImport }: {
+@@ -47,6 +49,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+     { id: "research", label: "Research", badge: copilot.docs.length || undefined },
+     { id: "history", label: "History", badge: copilot.history.filter((h) => !h.reverted).length || undefined },
+     { id: "analysis", label: "Analysis", badge: def.research?.analysisPlan ? (def.research.analysisPlan.crosstabs.length + def.research.analysisPlan.tests.length) || undefined : undefined },
++    { id: "findings", label: "Findings", badge: copilot.analysisRun ? copilot.analysisRun.findings.filter((f) => f.significant).length || undefined : undefined },
+     { id: "languages", label: "Languages", badge: def.localization?.languages?.length || undefined },
+     { id: "quotas", label: "Quotas", badge: def.quotas.length || undefined },
+     { id: "ux", label: "UX", badge: def.ux ? (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) || undefined : undefined },
+@@ -67,6 +70,7 @@ export function CopilotPanel({ copilot, def, onSelect, inspector, onApply, apply
+         {copilot.tab === "research" && <ResearchTab copilot={copilot} />}
+         {copilot.tab === "history" && <HistoryTab copilot={copilot} readOnly={readOnly} />}
+         {copilot.tab === "analysis" && <AnalysisTab copilot={copilot} def={def} onSelect={onSelect} />}
++        {copilot.tab === "findings" && <FindingsTab copilot={copilot} def={def} />}
+         {copilot.tab === "languages" && <LanguagesTab copilot={copilot} def={def} onSelect={onSelect} />}
+         {copilot.tab === "quotas" && <QuotasTab copilot={copilot} def={def} onSelect={onSelect} onImportSheet={() => onImportQuotaSheet?.()} lastImport={quotaImport ?? null} readOnly={readOnly} />}
+         {copilot.tab === "ux" && <UxTab copilot={copilot} def={def} onSelect={onSelect} />}
+diff --git a/apps/studio/components/intelligent/copilot/FindingsTab.tsx b/apps/studio/components/intelligent/copilot/FindingsTab.tsx
+new file mode 100644
+index 0000000..a32ef3d
+--- /dev/null
++++ b/apps/studio/components/intelligent/copilot/FindingsTab.tsx
+@@ -0,0 +1,112 @@
++"use client";
++import React from "react";
++import type { SurveyDefinition } from "@rescript/schema";
++import { hypothesisLabel } from "@rescript/schema";
++import type { Finding, Verdict } from "@rescript/analytics";
++import { Icon } from "../../ui/Icon";
++import type { Copilot } from "./useCopilot";
++import { useStudio } from "../../studio/store";
++
++/**
++ * THE FINDINGS — Intelligent → Findings.
++ *
++ * What the data said, from the latest analysis run: each hypothesis with its
++ * verdict and the reason; the findings strongest first, each with its test,
++ * p-value, effect size and base, so every line traces to a table in
++ * Analytics; the caveats; and the run itself — when it was made, on how many
++ * completes, by which milestone — with "Run the plan now" and the next
++ * milestone due. An untested hypothesis offers to plan a test (the copilot's
++ * analysis actions); the whole thing can be put to the copilot in words.
++ *
++ * Nothing here computes: the runs are the Studio's, stored by the analytics
++ * route at the fieldwork milestones or on request. The Analytics workspace
++ * stays the place to open a result and work on it.
++ */
++const VERDICT_WORD: Record<Verdict, string> = { supported: "supported", not_supported: "not supported", mixed: "mixed", inconclusive: "inconclusive", untested: "untested" };
++const VERDICT_SEV: Record<Verdict, string> = { supported: "suggestion", not_supported: "critical", mixed: "warning", inconclusive: "warning", untested: "warning" };
++const STRENGTH_SEV: Record<Finding["strength"], string> = { strong: "critical", moderate: "warning", weak: "suggestion", none: "suggestion" };
++const MILESTONE_WORD: Record<string, string> = { first_results: "first results (30 completes)", halfway: "halfway to target", target_reached: "target reached", field_end: "end of fieldwork", manual: "on request" };
++
++export function FindingsTab({ copilot, def }: { copilot: Copilot; def: SurveyDefinition }) {
++  const s = useStudio();
++  const run = copilot.analysisRun;
++  const [onlySig, setOnlySig] = React.useState(true);
++  const plan = def.research?.analysisPlan;
++  const hyps = def.research?.hypotheses ?? [];
++  const shown = React.useMemo(() => (run ? run.findings.filter((f) => f.kind !== "inconclusive" && (!onlySig || f.significant || ["nps", "topbox", "reliability"].includes(f.kind))) : []), [run, onlySig]);
++  const sigCount = run ? run.findings.filter((f) => f.significant).length : 0;
++  const ask = (t: string) => void copilot.ask(t);
++  const sandbox = s.surveyDbId === "sandbox";
++  const analyticsHref = `/analytics?survey=${encodeURIComponent(s.surveyDbId)}&tab=analysis`;
++
++  return (
++    <div className="cp-analysis cp-findings" data-testid="cp-findings">
++      <section>
++        <div className="row" style={{ alignItems: "center", gap: 8 }}>
++          <div className="iq-label">Findings{run ? ` · ${sigCount} significant of ${run.findings.length}` : ""}</div>
++          <span className="grow" />
++          {plan && <button type="button" className="iq-btn primary" data-testid="fd-run" disabled={copilot.running || sandbox} onClick={() => void copilot.runPlanNow()} title={sandbox ? "The sandbox has no responses" : "Run every planned analysis on the live completes now and keep the findings"}>{copilot.running ? "Running…" : run ? "Run again" : "Run the plan now"}</button>}
++        </div>
++        {!plan && <p className="cp-empty" data-testid="fd-no-plan">There is no analysis plan yet — plan it in the Analysis tab (or ask the copilot) and the plan runs by itself at the fieldwork milestones, with the findings here.</p>}
++        {plan && !run && <p className="cp-empty" data-testid="fd-no-run">The plan has not been run on responses yet. It runs by itself at the first 30 completes, halfway to target, at target and at the end of fieldwork{copilot.runDue ? ` — ${MILESTONE_WORD[copilot.runDue] ?? copilot.runDue} is due now` : ""}; or run it now.</p>}
++        {copilot.runError && <p className="iq-error" data-testid="fd-error"><Icon name="warning" size={12} /> {copilot.runError}</p>}
++        {run && (
++          <p className="iqi-dim" data-testid="fd-run-meta">
++            Run {MILESTONE_WORD[run.trigger] ?? run.trigger} · {new Date(run.computedAt).toLocaleString()} · {run.n} {run.environment.toLowerCase()} completes{run.items?.length ? ` · ${run.items.length} analyses` : ""}
++            {copilot.runDue && <> · <b>{MILESTONE_WORD[copilot.runDue] ?? copilot.runDue} is due</b></>}
++            {plan?.autoRun === false && <> · automatic runs off</>}
++          </p>
++        )}
++        {run && run.n < 30 && <p className="iq-warning" data-testid="fd-small"><Icon name="warning" size={12} /> Only {run.n} completes — read every finding with caution; nothing here is conclusive yet.</p>}
++      </section>
++
++      {run && hyps.length > 0 && (
++        <section data-testid="fd-verdicts">
++          <div className="iq-label">Hypotheses · {hyps.length}</div>
++          {hyps.map((text, i) => {
++            const label = hypothesisLabel(i);
++            const v = run.verdicts.find((x) => x.label === label);
++            const verdict: Verdict = v?.verdict ?? "untested";
++            return (
++              <div key={label} className="cp-block" data-testid="fd-verdict" data-label={label} data-verdict={verdict}>
++                <div><b>{label}</b> {text} <span className={`cp-sev v-${VERDICT_SEV[verdict]}`}>{VERDICT_WORD[verdict]}</span></div>
++                {v?.reason && <div className="iqi-dim">{v.reason}</div>}
++                {verdict === "untested" && !s.readOnly && <div><button type="button" className="iq-btn" data-testid="fd-plan-test" disabled={copilot.busy} onClick={() => ask(`${label} (“${text}”) is untested: add the crosstab or test to the analysis plan that would test it, naming the questions that measure it.`)}>Plan a test</button></div>}
++              </div>
++            );
++          })}
++        </section>
++      )}
++
++      {run && (
++        <section data-testid="fd-list">
++          <div className="row" style={{ alignItems: "center", gap: 8 }}>
++            <div className="iq-label">What the data says · strongest first</div>
++            <span className="grow" />
++            <label className="iqi-dim" style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={onlySig} onChange={(e) => setOnlySig(e.target.checked)} data-testid="fd-only-sig" /> significant only</label>
++          </div>
++          {!shown.length && <p className="iqi-dim" data-testid="fd-none">{onlySig ? "No significant finding yet — untick to see the null results." : "No findings yet."}</p>}
++          <ul className="cp-review-list">
++            {shown.slice(0, 40).map((f) => (
++              <li key={f.id} data-testid="fd-finding" data-kind={f.kind} data-strength={f.strength} data-significant={f.significant ? "1" : "0"}>
++                <span className={`cp-sev v-${f.significant ? STRENGTH_SEV[f.strength] : "suggestion"}`}>{f.significant ? f.strength : f.kind === "nps" || f.kind === "topbox" || f.kind === "reliability" ? f.kind : "n.s."}</span> {f.headline}
++                <div className="iqi-dim">
++                  {f.analysis.name}{f.hypotheses.length ? ` · ${f.hypotheses.join(", ")}` : ""} · n = {f.evidence.n}{f.evidence.effect ? ` · ${f.evidence.effect.name} = ${f.evidence.effect.value.toFixed(2)}` : ""}{f.chart ? ` · ${String(f.chart).replace(/_/g, " ")}` : ""}
++                  {f.detail ? <> · {f.detail}</> : null}
++                </div>
++              </li>
++            ))}
++          </ul>
++          {run.warnings.length > 0 && <p className="iqi-dim" data-testid="fd-warnings"><Icon name="info" size={12} /> {run.warnings.slice(0, 3).join(" ")}</p>}
++        </section>
++      )}
++
++      {plan && (
++        <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
++          {run && !s.readOnly && <button type="button" className="iq-btn" data-testid="fd-ask" disabled={copilot.busy} onClick={() => ask("What did we find? Summarise the findings and say whether each hypothesis held, with the tests and p-values.")}>Ask the copilot to narrate</button>}
++          {!sandbox && <a className="iq-btn" href={analyticsHref} data-testid="fd-open-analytics">Open in Analytics</a>}
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index 7851641..35761e3 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -1,5 +1,6 @@
+ "use client";
+ import React from "react";
++import type { AnalysisRun } from "@rescript/analytics";
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { reviewSurvey, type SurveyAction, type SurveyReview } from "@rescript/engine";
+ import { useStudio, uid } from "../../studio/store";
+@@ -41,7 +42,9 @@ export interface CopilotEntry {
+ }
+ export interface ResearchDocView { id: string; ref: string; name: string; format: string; kind?: string; pages: number; ocrPages: number; chars: number; summary: import("../../../lib/copilot/research").DocSummary | null; warnings: string[]; createdAt: string }
+ export interface ReviewState { rules: SurveyReview; ai: CopilotFinding[]; at: string; running: boolean }
+-export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "languages" | "quotas" | "ux" | "inspector";
++export type PanelTab = "changes" | "review" | "research" | "history" | "analysis" | "findings" | "languages" | "quotas" | "ux" | "inspector";
++/** the stored analysis run, as the analytics route returns it (results are not stored — only findings, verdicts and each item's chart) */
++export type StoredRunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> & { id?: string; items?: { definition: { name: string; kind: string; options?: Record<string, unknown> }; chart?: string; hypotheses: string[] }[] };
+ 
+ interface Session {
+   proposal: Proposal | null;
+@@ -118,6 +121,47 @@ export function useCopilot(opts: {
+     return () => { delete w.__rescriptQuotaCounts; };
+   }, []);
+ 
++  /*
++   * THE ANALYSIS RUN — the plan executed on the responses (findings with
++   * their evidence, the hypothesis verdicts), read from the analytics
++   * route's latest run so the Findings tab and the model's answers about
++   * "what did we find?" rest on numbers the Studio computed. The sandbox has
++   * none; the browser suites hand one in through the seam.
++   */
++  const [analysisRun, setAnalysisRun] = React.useState<StoredRunBrief | null>(null);
++  const [runDue, setRunDue] = React.useState<string | null>(null);
++  const [running, setRunning] = React.useState(false);
++  const [runError, setRunError] = React.useState<string | null>(null);
++  const refreshAnalysisRun = React.useCallback(async () => {
++    if (s.surveyDbId === "sandbox") return;
++    try {
++      const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/plan/latest`, { cache: "no-store" });
++      if (!r.ok) return;
++      const d = await r.json() as { run?: StoredRunBrief | null; due?: string | null };
++      setAnalysisRun(d.run ?? null); setRunDue(d.due ?? null);
++    } catch { /* offline: the tab says there is no run */ }
++  }, [s.surveyDbId]);
++  React.useEffect(() => { if (s.def.research?.analysisPlan) void refreshAnalysisRun(); }, [refreshAnalysisRun, !!s.def.research?.analysisPlan]); // eslint-disable-line react-hooks/exhaustive-deps
++  const runPlanNow = React.useCallback(async (trigger = "manual"): Promise<boolean> => {
++    if (s.surveyDbId === "sandbox") { setRunError("The sandbox has no responses to analyse — open a saved survey with completes."); return false; }
++    setRunning(true); setRunError(null);
++    try {
++      const r = await fetch(`/api/surveys/${s.surveyDbId}/analytics/plan/run`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ environment: "LIVE", trigger }) });
++      const d = await r.json().catch(() => null) as { run?: StoredRunBrief; error?: string } | null;
++      if (!r.ok || !d?.run) { setRunError(d?.error ?? `The plan could not be run (${r.status}).`); return false; }
++      setAnalysisRun(d.run); setRunDue(null);
++      return true;
++    } catch (e) { setRunError((e as Error).message); return false; }
++    finally { setRunning(false); }
++  }, [s.surveyDbId]);
++  React.useEffect(() => {
++    const w = window as unknown as { __rescriptAnalysisRun?: (r: StoredRunBrief | null) => void };
++    w.__rescriptAnalysisRun = (r) => { setAnalysisRun(r); };
++    return () => { delete w.__rescriptAnalysisRun; };
++  }, []);
++  /** what travels with a turn: the verdicts and the strongest findings, never the results */
++  const runForTurn = React.useMemo(() => (analysisRun ? { computedAt: analysisRun.computedAt, n: analysisRun.n, trigger: analysisRun.trigger, environment: analysisRun.environment, verdicts: analysisRun.verdicts, warnings: analysisRun.warnings.slice(0, 6), findings: analysisRun.findings.slice(0, 40) } : null), [analysisRun]);
++
+   const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate"): Promise<"handled" | "unavailable" | "empty"> => {
+     const id = uid("copilot");
+     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking" });
+@@ -128,7 +172,7 @@ export function useCopilot(opts: {
+       const fake = fakeRef.current.shift();
+       const r = await fetch("/api/copilot/turn", {
+         method: "POST", headers: { "content-type": "application/json" },
+-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}) }),
++        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}) }),
+       });
+       if (themeImage) setThemeImage(null);
+       if (r.status === 501) { setAvailable(false); opts.patch(id, { status: "failed", error: "No language model is configured on this Studio." }); return "unavailable"; }
+@@ -158,7 +202,7 @@ export function useCopilot(opts: {
+     } finally {
+       setBusy(false);
+     }
+-  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts]);
++  }, [session.proposal, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn]);
+ 
+   /* ------------------------------------------------------------ review */
+   const runReview = React.useCallback(async (text = "Review my survey") => {
+@@ -275,6 +319,7 @@ export function useCopilot(opts: {
+     ask, runReview, previewFix, apply, cancel, revert, uploadDocs, deleteDoc, refreshDocs,
+     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
+     quotaCounts, quotaCountsAt, refreshQuotaCounts,
++    analysisRun, runDue, running, runError, refreshAnalysisRun, runPlanNow,
+   };
+ }
+ export type Copilot = ReturnType<typeof useCopilot>;
+diff --git a/apps/studio/lib/analytics.ts b/apps/studio/lib/analytics.ts
+index 8107752..4c22070 100644
+--- a/apps/studio/lib/analytics.ts
++++ b/apps/studio/lib/analytics.ts
+@@ -3,8 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
+ import type { Condition, SurveyDefinition } from "@rescript/schema";
+ import {
+   buildDataset, runAnalysis, variableMetadata, recommendCharts, DEFAULT_THEME,
+-  unionVariableMetadata, definitionResolver,
+-  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta,
++  unionVariableMetadata, definitionResolver, plannedAnalyses, runPlan, compactRun, nextMilestone,
++  type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis,
+ } from "@rescript/analytics";
+ import type { VersionedDefinition } from "@rescript/engine";
+ import { getCachedVersionDefinition } from "@rescript/quality/server";
+@@ -337,3 +337,76 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
+   const [salt] = stored.split("$");
+   return (await hashPassword(pw, salt)) === stored;
+ }
++
++
++/* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
++
++/** a stored run: the compact form plus its row id */
++export type StoredRun = ReturnType<typeof compactRun> & { id: string; surveyVersion?: string | null };
++
++function rowToRun(r: Record<string, unknown>): StoredRun {
++  return {
++    id: String(r.id), computedAt: String(r.computed_at), trigger: String(r.trigger), environment: r.environment as DatasetSpec["environment"], n: Number(r.n ?? 0),
++    items: (r.items as StoredRun["items"]) ?? [], findings: (r.findings as StoredRun["findings"]) ?? [], verdicts: (r.verdicts as StoredRun["verdicts"]) ?? [], warnings: (r.warnings as string[]) ?? [],
++    surveyVersion: (r.survey_version as string | null) ?? null,
++  };
++}
++
++/** The most recent run of this survey's plan, or null. */
++export async function latestRun(db: SupabaseClient, surveyId: string, environment?: DatasetSpec["environment"]): Promise<StoredRun | null> {
++  let q = db.from("analytics_runs").select("*").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(1);
++  if (environment) q = q.eq("environment", environment);
++  const { data, error } = await q;
++  if (error || !data?.length) return null;
++  return rowToRun(data[0] as Record<string, unknown>);
++}
++
++export async function listRuns(db: SupabaseClient, surveyId: string, limit = 20): Promise<StoredRun[]> {
++  const { data } = await db.from("analytics_runs").select("id, survey_id, trigger, environment, n, computed_at, verdicts, warnings, survey_version").eq("survey_id", surveyId).order("computed_at", { ascending: false }).limit(limit);
++  return (data ?? []).map((r) => rowToRun({ ...(r as Record<string, unknown>), items: [], findings: [] }));
++}
++
++/**
++ * RUN THE PLAN on the survey's responses and keep the findings. The planned
++ * analyses (plus any saved analyses in the "Planned" folder, so a
++ * researcher's refinement runs too) all share one dataset spec, so the
++ * dataset is built once; the full results are returned to the caller and
++ * only the compact run is stored.
++ */
++export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; primaries?: boolean; userId?: string | null } = {}): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }> {
++  const spec: DatasetSpec = { environment: opts.environment ?? "LIVE", dataset: opts.dataset ?? "all" };
++  const planned = plannedAnalyses(ctx.def as SurveyDefinition, spec, { primaries: opts.primaries ?? false });
++  // saved refinements of the plan: an analysis the researcher edited keeps its planned id, so the saved one replaces the engine's
++  const { data: saved } = await db.from("analytics_analyses").select("id, definition, tags").eq("survey_id", surveyId).eq("folder", "Planned").is("deleted_at", null);
++  const items: PlannedAnalysis[] = planned.map((p) => {
++    const mine = (saved ?? []).find((r) => String((r.definition as AnalysisDefinition)?.options?.planned ?? "") === String(p.definition.options?.planned ?? "—"));
++    return mine ? { ...p, definition: { ...(mine.definition as AnalysisDefinition), id: String(mine.id), dataset: spec } } : p;
++  });
++  if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
++  const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
++  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
++  const compact = compactRun(run);
++  const { data, error } = await db.from("analytics_runs").insert({
++    survey_id: surveyId, trigger: run.trigger, environment: run.environment, n: run.n, dataset: spec, computed_at: run.computedAt,
++    findings: compact.findings, verdicts: compact.verdicts, items: compact.items, warnings: compact.warnings, survey_version: ctx.version ?? null, created_by: opts.userId ?? null,
++  }).select("*").single();
++  if (error) return { run, stored: null, error: error.message };
++  return { run, stored: rowToRun(data as Record<string, unknown>) };
++}
++
++/**
++ * WHEN THE PLAN RUNS BY ITSELF: the fieldwork milestone this survey has
++ * reached and not yet run for — or null. The target is the project's
++ * supplier total; the field window is the project's own.
++ */
++export async function dueMilestone(db: SupabaseClient, surveyId: string, def: SurveyDefinition, now = new Date()): Promise<string | null> {
++  if (!def.research?.analysisPlan || def.research.analysisPlan.autoRun === false) return null;
++  const [{ count }, proj, targets, runs] = await Promise.all([
++    db.from("responses").select("id", { count: "exact", head: true }).eq("survey_id", surveyId).is("deleted_at", null).eq("status", "complete").eq("is_test", false),
++    db.from("surveys").select("fieldwork_to").eq("id", surveyId).maybeSingle(),
++    db.from("sample_sources").select("target_completes").eq("survey_id", surveyId),
++    db.from("analytics_runs").select("trigger").eq("survey_id", surveyId).eq("environment", "LIVE"),
++  ]);
++  const target = (targets.data ?? []).reduce((t, r) => t + (Number((r as { target_completes?: unknown }).target_completes) || 0), 0) || null;
++  return nextMilestone((runs.data ?? []).map((r) => String((r as { trigger: string }).trigger)), { completes: count ?? 0, target, fieldEnd: (proj.data?.fieldwork_to as string | null) ?? null, now: now.toISOString() });
++}
+diff --git a/apps/studio/lib/copilot/copilot.test.ts b/apps/studio/lib/copilot/copilot.test.ts
+index d4706f7..3cb64e9 100644
+--- a/apps/studio/lib/copilot/copilot.test.ts
++++ b/apps/studio/lib/copilot/copilot.test.ts
+@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
+ import { SurveyDefinition } from "@rescript/schema";
+ import { applySurveyActions } from "@rescript/engine";
+ import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
+-import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE } from "./prompt.ts";
++import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, findingsIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_FINDINGS_GUIDE } from "./prompt.ts";
+ import { copilotOutline } from "./outline.ts";
+ import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
+ 
+@@ -399,3 +399,32 @@ test("quota turns: the intent, the guide, the outline's quotas with their cells,
+   assert.equal(r.actions.length, 1); assert.equal(r.rejected.length, 2);
+   assert.match(r.rejected[0].reason, /needs the total/); assert.match(r.rejected[1].reason, /changes nothing/);
+ });
++
++test("findings turns: the intent, the run's brief in the outline (verdicts, then findings with their evidence), nothing invented when there is no run, the guide", () => {
++  for (const m of ["what did we find?", "did H1 hold?", "is the gender difference significant?", "what drives satisfaction?", "summarise the results", "what does the data say about region?", "how did Brand A perform?"]) assert.ok(findingsIntent(m), m);
++  for (const m of ["make Q7 a 5-point scale", "translate Q5 into German", "add a crosstab of FREQ by BUY", "set up quotas: 500 completes"]) assert.ok(!findingsIntent(m), m);
++  const def = survey();
++  const run = {
++    computedAt: "2026-10-05T09:00:00Z", n: 312, trigger: "halfway", environment: "LIVE" as const, warnings: ["Two analyses are based on fewer than 30 respondents."],
++    verdicts: [{ label: "H1", text: "Social exposure drives purchase", verdict: "supported" as const, reason: "The planned test is significant: FREQ by BUY: a moderate difference (chi-square, p = .003, Cramér's V = 0.21).", findings: [], analyses: 1 }],
++    findings: [
++      { id: "a:0", kind: "difference" as const, strength: "moderate" as const, significant: true, headline: "FREQ by BUY: a moderate difference (chi-square, p = .003, Cramér's V = 0.21).", evidence: { test: "chi_square", statistic: 11.7, p: 0.003, effect: { name: "Cramér's V", value: 0.21 }, n: 312 }, variables: ["FREQ", "BUY"], hypotheses: ["H1"], analysis: { name: "FREQ by BUY", kind: "crosstab", hash: "a" } },
++      { id: "b:0", kind: "no_correlation" as const, strength: "none" as const, significant: false, headline: "Age × FREQ: no significant correlation (r = 0.04, p = .480).", evidence: { test: "correlation", statistic: 0.04, p: 0.48, effect: { name: "r", value: 0.04 }, n: 312 }, variables: ["AGE", "FREQ"], hypotheses: [], analysis: { name: "Age × FREQ", kind: "correlation", hash: "b" } },
++    ],
++  };
++  const o = copilotOutline(def, { findings: true, analysisRun: run });
++  assert.match(o, /Analysis run \(halfway\) on 312 live completes, 2026-10-05 09:00:/);
++  assert.match(o, /  H1 SUPPORTED — Social exposure drives purchase\. The planned test is significant/);
++  assert.match(o, /  Findings \(strongest first\):\n    \[moderate\] FREQ by BUY: a moderate difference \(chi-square, p = \.003, Cramér's V = 0\.21\)\. \(H1\)\n    \[ns\] Age × FREQ: no significant correlation/);
++  assert.match(o, /  Caveats: Two analyses are based on fewer than 30/);
++  assert.ok(!copilotOutline(def, {}).includes("Analysis run"), "a wording edit carries no run");
++  assert.match(copilotOutline(def, { findings: true, analysisRun: null }), /Analysis run: none yet — there is no analysis plan yet \(propose_analysis_plan\); there are no results to report\./);
++  const planned = applySurveyActions(def, [{ op: "propose_analysis_plan" }], { ids }).def;
++  assert.match(copilotOutline(planned, { findings: true, analysisRun: null }), /the plan has not been run on the responses/);
++  assert.ok(copilotOutline(planned, { analysis: true, analysisRun: run }).includes("Analysis run (halfway)"), "an analysis turn with a run carries it too");
++  assert.ok(!copilotOutline(planned, { analysis: true, analysisRun: null }).includes("Analysis run"), "but without one says nothing");
++  const p = copilotUserPrompt({ message: "what did we find?", outline: "o", surveyLanguage: "en", mode: "edit", findings: true });
++  assert.ok(p.includes("FINDINGS GUIDE") && p.includes("never invents") === false && p.includes("Never report a number that is not in the run"));
++  assert.ok(!copilotUserPrompt({ message: "x", outline: "o", surveyLanguage: "en", mode: "edit" }).includes("FINDINGS GUIDE"));
++  for (const w of ["VERDICT", "SUPPORTED", "p-value", "effect size", "not tested", "add_analysis_test", "\"kind\":\"answer\""]) assert.ok(COPILOT_FINDINGS_GUIDE.includes(w), w);
++});
+diff --git a/apps/studio/lib/copilot/outline.ts b/apps/studio/lib/copilot/outline.ts
+index 7913b51..5d6bedf 100644
+--- a/apps/studio/lib/copilot/outline.ts
++++ b/apps/studio/lib/copilot/outline.ts
+@@ -1,6 +1,7 @@
+ import type { SurveyDefinition } from "@rescript/schema";
+ import { listBlocks, formatCondition, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+ import type { FlowNode } from "@rescript/schema";
++import { briefText, type AnalysisRun } from "@rescript/analytics";
+ import { hypothesisLabel } from "@rescript/schema";
+ import { surveyContext } from "../intelligent/context.ts";
+ 
+@@ -15,7 +16,7 @@ import { surveyContext } from "../intelligent/context.ts";
+  * questions in full and the rest by code, plus the named ones in full, so
+  * the prompt stays bounded however large the survey is.
+  */
+-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null } = {}): string {
++export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger"> | null } = {}): string {
+   const n = def.questions.length;
+   const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
+   const lines = [base];
+@@ -114,6 +115,16 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
+     }
+   } else if (opts.quota) lines.push("Quotas: none yet (create_quota).");
+ 
++  /*
++   * THE FINDINGS, on a findings or analysis turn: the latest analysis run —
++   * verdicts and findings with their evidence — so what the data showed is
++   * answered from numbers the Studio computed, never from the model's guess.
++   */
++  if (opts.findings || (opts.analysis && opts.analysisRun)) {
++    if (opts.analysisRun) lines.push(briefText(opts.analysisRun, { maxFindings: opts.findings ? 25 : 10 }));
++    else lines.push(`Analysis run: none yet — ${def.research?.analysisPlan ? "the plan has not been run on the responses (the researcher runs it from the Findings tab, or it runs at the fieldwork milestones)" : "there is no analysis plan yet (propose_analysis_plan)"}; there are no results to report.`);
++  }
++
+   /*
+    * THE LANGUAGES, on a translation turn: which versions exist and how far
+    * along each is, the glossary (what never translates, what is preferred),
+diff --git a/apps/studio/lib/copilot/prompt.ts b/apps/studio/lib/copilot/prompt.ts
+index 8821dc9..60f3402 100644
+--- a/apps/studio/lib/copilot/prompt.ts
++++ b/apps/studio/lib/copilot/prompt.ts
+@@ -284,6 +284,21 @@ ACTIONS:
+ {"op":"set_quota_check","quotas":["Gender × Age","Region"],"after":"Screening","onFull":"terminate","when":"SAMPLE = 1"}   // without "after": right after the last question the quotas read
+ Fieldwork questions ("which cells are behind?", "is the men's quota full?") are answered from the outline's counts and advice when present — no actions unless an adjustment is asked for; propose one update_quota per adjustment, never a silent rewrite of limits.`;
+ 
++/**
++ * THE FINDINGS GUIDE — sent with a request about what the data showed. The
++ * numbers come from an analysis run the Studio made (the plan executed on
++ * the responses: findings with their tests, p-values and effect sizes, the
++ * hypothesis verdicts); the model reads them, never invents them, and says
++ * so when nothing has run.
++ */
++export const COPILOT_FINDINGS_GUIDE = `FINDINGS GUIDE.
++The outline carries the latest ANALYSIS RUN when there is one: the plan executed on the completes so far — each hypothesis's VERDICT (SUPPORTED / NOT SUPPORTED / MIXED / INCONCLUSIVE / UNTESTED, with the reason), then the FINDINGS strongest first, each with its test, p-value, effect size and base. Answer from these and only these: quote the test and the p-value, name the effect size and its strength word, give the base; a verdict is the run's, not yours. Never report a number that is not in the run; if the run is small (base under 30) or old, say so; if there is no run, say that nothing has been run yet and that the researcher can run the plan from the Findings tab (or wait for the fieldwork milestone). A question the plan does not answer ("does income matter?") is answered with "not tested" and, if useful, an analysis action that would test it (add_analysis_test / add_crosstab — the ANALYSIS GUIDE's shapes). Keep the research meaning: a significant difference is not a cause; a null result with a small base is not evidence of no effect. Reply as "kind":"answer" unless the researcher asks for a change to the plan.`;
++
++/** a request about what the data showed — results, findings, whether a hypothesis held */
++export function findingsIntent(text: string): boolean {
++  return /\b(?:findings?|results?|what (?:did|does|do) (?:we|the data|the survey|it) (?:find|show|say|tell)|what have we (?:found|learned)|insights?|key takeaways?|significan\w*|p[- ]?values?|effect sizes?|(?:did|does|is|was|has|have) (?:H\d+|the hypothes\w+|our hypothes\w+)|hypothes\w+ (?:held|hold|supported|confirmed|rejected)|supported|drivers? of|what drives|correlat\w* with|differ(?:s|ence)? (?:by|between|across)|headline|summari[sz]e (?:the )?(?:results|findings|data|analysis)|nps (?:is|score|was)|top[- ]?2?[- ]?box (?:is|score|was)|how (?:did|does) .{0,30} (?:score|perform|compare))\b/i.test(text);
++}
++
+ /** a request about quotas, sample targets or fieldwork fill — the guide goes with it */
+ export function quotaIntent(text: string): boolean {
+   return /\b(?:quotas?|quota ?cells?|cells? (?:is|are) full|interlock\w*|sample (?:plan|targets?|split|frame)|targets? (?:per|by|for) (?:cell|group|gender|age|region|segment)|(?:\d+|n) completes|completes? (?:per|by|for)|50\s*\/\s*50|nat(?:ionally)? rep\w*|screen(?:ed)? out when (?:the )?(?:cell|group) is full|over[- ]?quota|fill(?:ing)? rate|under[- ]?pace)\b/i.test(text);
+@@ -362,6 +377,7 @@ export function copilotUserPrompt(input: {
+   /** the request is about languages: the translation guide goes with it */
+   translation?: boolean;
+   quota?: boolean;
++  findings?: boolean;
+ }): string {
+   const parts: string[] = [];
+   parts.push(`Survey language: ${input.surveyLanguage}`);
+@@ -375,6 +391,7 @@ export function copilotUserPrompt(input: {
+   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
+   if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
+   if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
++  if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
+   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
+   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
+   if (input.themeImage) parts.push(input.themeImage);
+diff --git a/apps/studio/vercel.json b/apps/studio/vercel.json
+index 8e6fec5..7c3b55b 100644
+--- a/apps/studio/vercel.json
++++ b/apps/studio/vercel.json
+@@ -1,7 +1,17 @@
+ {
+   "$schema": "https://openapi.vercel.sh/vercel.json",
+   "crons": [
+-    { "path": "/api/cron/media-delivery", "schedule": "*/10 * * * *" },
+-    { "path": "/api/cron/billing-reservations", "schedule": "*/5 * * * *" }
++    {
++      "path": "/api/cron/media-delivery",
++      "schedule": "*/10 * * * *"
++    },
++    {
++      "path": "/api/cron/billing-reservations",
++      "schedule": "*/5 * * * *"
++    },
++    {
++      "path": "/api/cron/analysis-runs",
++      "schedule": "17 * * * *"
++    }
+   ]
+ }
+diff --git a/docs/AUTOMATED-ANALYSIS-2026-10-05.md b/docs/AUTOMATED-ANALYSIS-2026-10-05.md
+new file mode 100644
+index 0000000..a92ad8f
+--- /dev/null
++++ b/docs/AUTOMATED-ANALYSIS-2026-10-05.md
+@@ -0,0 +1,49 @@
++# Automated analysis after fieldwork — the plan runs itself, the findings are read, the hypotheses judged
++
++*Research-intelligence brief, Phase 5 ("Automated analysis, crosstabs and visualisation after fieldwork"). Built 2026-10-05 on the analysis framework (ANALYSIS-FRAMEWORK-2026-10-04.md), the analytics package (ANALYTICS-RESEARCH-STUDIO.md) and the Intelligent copilot.*
++
++## What it does
++
++Phase 2 wrote the analysis plan before fieldwork and `@rescript/analytics` could already run every planned item as an analysis — but results were recomputed on request, never kept; nothing judged a hypothesis; nothing ran by itself; and the copilot could see no results at all. Now:
++
++- **Findings are read from the results, structurally.** `findingsFor(definition, result)` reads each result's tests (p-values, effect sizes), a regression's coefficient table (estimate, standardized β or odds ratio, p — the intercept left out, each term resolved back to its variable), a correlation table (r, p), the NPS KPI, the reliability table — never the insight sentences — and produces findings with their evidence (`test`, `statistic`, `p`, `effect`, `n`, direction) and a strength on the usual scales (Cramér's V / r / β 0.1–0.3–0.5, Cohen's d 0.2–0.5–0.8, η² 0.01–0.06–0.14, odds ratios). A crosstab gives one finding per banner variable, with the largest gap as detail; a base under 30 adds the caution to every finding; an empty base is an "inconclusive" placeholder, not a finding. `rankFindings` puts significant and strong first.
++- **Hypotheses get verdicts.** `hypothesisVerdicts(def, items)` judges each H1, H2… from the findings of the analyses planned for it: **supported** (every planned test significant), **not supported** (none), **mixed** (some), **inconclusive** (base under 30, or only descriptives planned — with what to add), **untested** (nothing planned) — each with its reason, quoting the finding. A crosstab tagged with a hypothesis may have several banner variables: a banner's finding counts as evidence only when the hypothesis names that variable, a planned test pairs the same two variables, or it is the crosstab's only banner — otherwise it is shown as context, not judged.
++- **A run is the whole plan on one dataset.** `runPlan(def, dataset, { trigger, items })` executes every planned analysis (saved refinements in the Analytics "Planned" folder replace the engine's definition by planned id), collects the findings strongest first, the verdicts, the caveats, and the chart each result is best shown as. `compactRun` strips the results (recomputed when a result is opened in Analytics), and that is what is stored and sent around; `briefText` is the run in a few lines for the copilot.
++- **The plan runs by itself.** `nextMilestone(done, { completes, target, fieldEnd })` names the fieldwork milestone reached and not yet run for — the first readable base (30 completes), halfway to the suppliers' target, the target, the end of the field window — once each. The hourly cron `/api/cron/analysis-runs` checks every live survey whose definition carries a plan (unless `analysisPlan.autoRun` is false), runs the plan for a due milestone and stores it in `analytics_runs` (migration 0046). `POST analytics/plan/run` runs it on request; `GET analytics/plan/latest` returns the latest run and the milestone due; `GET analytics/plan/runs` the history. Each run is audited (`analytics.plan_run`).
++- **The copilot answers from the numbers.** A question about what the data showed (`findingsIntent`: "what did we find?", "did H1 hold?", "is the gender difference significant?", "what drives satisfaction?") brings the FINDINGS GUIDE and, in the outline, the latest run's brief — verdicts, then findings with test, p, effect and base — which the Studio sends with every turn once a run exists; an analysis turn carries it too. The guide binds the model to the run: quote the test and p, name the effect size and its strength, give the base; a verdict is the run's; no run means "nothing has been run yet", a question the plan does not answer means "not tested" plus the analysis action that would test it. The model never computes or invents a number.
++- **Intelligent → Findings.** Each hypothesis with its verdict and reason (an untested one offers **Plan a test**, through the copilot's analysis actions); the findings strongest first with their evidence, a significant-only toggle, the caveats; the run's trigger, time and base, the milestone due, **Run the plan now** / **Run again**, **Ask the copilot to narrate**, **Open in Analytics**.
++
++## Where
++
++| Where | What |
++|---|---|
++| `packages/analytics/src/findings.ts` | `Finding`, `findingsFor`, `strengthOf`, `rankFindings`; `HypothesisVerdict`, `hypothesisVerdicts`; `AnalysisRun`, `RunItem`, `runPlan`, `compactRun`, `briefText`; `Milestone`, `nextMilestone`. |
++| `packages/schema/src/analysisPlan.ts` | `AnalysisPlan.autoRun?: boolean` (on unless false). |
++| `supabase/migrations/0046_analytics_runs.sql` | `analytics_runs` (trigger, environment, n, dataset, computed_at, findings, verdicts, items, warnings, survey_version) with the members' read policy. |
++| `apps/studio/lib/analytics.ts` | `runPlanFor` (one dataset for the plan, saved "Planned" refinements, the compact run stored), `latestRun`, `listRuns`, `dueMilestone` (completes, the suppliers' target, the project's field window, the runs made). |
++| `apps/studio/app/api/surveys/[id]/analytics/[[...path]]/route.ts` | `GET plan/latest`, `GET plan/runs`, `POST plan/run`. |
++| `apps/studio/app/api/cron/analysis-runs/route.ts` + `vercel.json` | The hourly milestone runner (CRON_SECRET, 45 s budget, 200 surveys). |
++| `packages/access/src/audit.ts` | `analytics.plan_run`. |
++| `apps/studio/lib/copilot/prompt.ts`, `outline.ts`, `api/copilot/turn` | `COPILOT_FINDINGS_GUIDE`, `findingsIntent`; the run's brief in the outline on findings and analysis turns (`briefText`), "none yet" without one; the route reads `analysisRun` from the body. |
++| `apps/studio/components/intelligent/copilot/useCopilot.ts` | `analysisRun` from `plan/latest` (and a test seam), `runPlanNow`, `runDue`; the brief (verdicts, top 40 findings) sent with every turn. |
++| `apps/studio/components/intelligent/copilot/FindingsTab.tsx` | Intelligent → **Findings**. |
++
++## Principles kept
++
++- **Reasoning is separated from execution.** The Studio runs the analyses and reads the findings deterministically; the model narrates what the run says and is told, in the guide, to report no number the run does not contain.
++- **Human in the loop.** A run is kept, never acted on: a verdict changes no plan; "Plan a test" and the copilot's answers go through the proposal pipeline; the researcher runs the plan or lets the milestones do it.
++- **Nothing duplicated.** The analyses are the package's own runners; the results are the Analytics workspace's results; the stored run holds only what the results do not keep (findings, verdicts, the chart choice); the counts, target and field window come from fieldwork's own tables.
++
++## Tests
++
++- analytics `findings.test.ts` (4): findings from every result kind on the synthetic data (the planted gender effect, the null region effect, satisfaction driving NPS and age not, the NPS and the reliability, the crosstab per banner with the gap, the strength scales, the ranking); the small base and the empty base; the verdicts (supported / not supported / mixed / untested, the banner rule, the low-base and descriptive-only inconclusives), the brief and the compact form; the milestones.
++- studio `copilot.test.ts` (+1): the intent, the brief in the outline with and without a run, the guide, the vocabulary.
++- browser `scripts/findings-copilot-test.mjs` (6): the tab without a run; a run (computed by the real package on the synthetic data) through the seam → verdicts, findings, toggle, badge; "Plan a test" through the copilot into Changes; the turn route with and without the run; the routes' refusals.
++- **Mutation checks**: analytics `findings.ts` 37 / 37 (9 first survivors closed with tests — negative drivers and correlations, the η² scale, the reliability bands, the ranking of a non-significant headline number, a hypothesis served by a crosstab alone, the brief's tags); Studio prompt/outline 6 / 6; Studio surfaces through the browser suite 11 / 11 (route, Findings tab, badge, seam).
++
++## Not done
++
++- **Charts are chosen, not drawn, in the Findings tab** — each finding names the chart its result is best shown as; the picture is the Analytics workspace's (`Open in Analytics`). A findings report with the charts drawn is Phase 6.
++- **The plan's derived variables and segments** are still not computed by the run (the bridge does not turn them into analyses).
++- **The browser suite cannot run `plan/run`** — it needs a saved survey with responses; the service is covered by the pure `runPlan` tests and shares `buildFor`/`runAnalysis` with the tested `run` route.
++- Phase 6 of the brief (reporting) is next.
+diff --git a/packages/access/src/audit.ts b/packages/access/src/audit.ts
+index 46ed5f3..0af1cc3 100644
+--- a/packages/access/src/audit.ts
++++ b/packages/access/src/audit.ts
+@@ -126,6 +126,7 @@ export const AUDIT_EVENTS = [
+ 
+   /* analytics & reporting (§30) */
+   "analytics.analysis_created",
++  "analytics.plan_run",
+   "analytics.analysis_modified",
+   "analytics.analysis_deleted",
+   "analytics.chart_created",
+@@ -254,6 +255,7 @@ export function describeEvent(r: AuditRow): string {
+     }
+     case "quota.deleted": return `${who} deleted quota “${str(d.quotaName) || str(d.quotaId)}”${d.cells != null ? ` (${str(d.cells)} cells; response data kept)` : ""}`;
+     case "analytics.analysis_created": return `${who} created analysis “${str(d.name)}”${d.kind ? ` (${str(d.kind)})` : ""}`;
++    case "analytics.plan_run": return `${who} ran the analysis plan (${str(d.trigger)}): ${str(d.analyses)} analyses on ${str(d.n)} completes, ${str(d.findings)} findings`;
+     case "analytics.analysis_modified": return `${who} modified analysis “${str(d.name)}”${d.version ? ` → v${str(d.version)}` : ""}`;
+     case "analytics.analysis_deleted": return `${who} deleted analysis “${str(d.name)}”`;
+     case "analytics.chart_created": return `${who} saved chart “${str(d.name)}”`;
+diff --git a/packages/analytics/src/findings.test.ts b/packages/analytics/src/findings.test.ts
+new file mode 100644
+index 0000000..876cd7a
+--- /dev/null
++++ b/packages/analytics/src/findings.test.ts
+@@ -0,0 +1,183 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { def as base, synthDataset, spec } from "./analyses/fixture.js";
++import { runAnalysis } from "./analyses/index.js";
++import { plannedAnalyses } from "./planBridge.js";
++import { findingsFor, hypothesisVerdicts, runPlan, briefText, compactRun, nextMilestone, strengthOf, rankFindings } from "./findings.js";
++
++/*
++ * FINDINGS: what the data said, read from the results — never from the
++ * sentences; the hypotheses judged from the analyses planned for them; the
++ * whole plan run once; the milestones at which it runs by itself.
++ *
++ * The synthetic data plants a gender effect on satisfaction, satisfaction
++ * driving recommendation, and NO region effect.
++ */
++
++function planned() {
++  const def = structuredClone(base);
++  def.research = {
++    objective: "What drives satisfaction and recommendation", population: "adults",
++    hypotheses: ["Women are more satisfied than men", "Region affects satisfaction", "Satisfaction drives recommendation", "Older respondents are more satisfied", "Awareness of Gamma raises consideration of Gamma"],
++    constructs: [{ name: "Satisfaction", role: "dependent", questionIds: ["q_sat"] }, { name: "Recommendation", role: "dependent", questionIds: ["q_nps"] }],
++    analysis: [], assumptions: [], sources: [],
++    analysisPlan: {
++      crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER", "REGION"], priority: 1, hypotheses: ["H1", "H2"], reason: "satisfaction by profile" }],
++      tests: [
++        { id: "t1", method: "t_test", outcome: "SAT", variables: [], groupBy: "GENDER", priority: 1, hypotheses: ["H1"] },
++        { id: "t2", method: "anova", outcome: "SAT", variables: [], groupBy: "REGION", priority: 1, hypotheses: ["H2"] },
++        { id: "t3", method: "regression", outcome: "NPS", variables: ["SAT", "AGE"], priority: 1, hypotheses: ["H3"] },
++        { id: "t4", method: "correlation", outcome: "SAT", variables: ["AGE"], priority: 2, hypotheses: ["H4"] },
++        { id: "t5", method: "nps", variables: ["NPS"], priority: 2, hypotheses: [] },
++        { id: "t6", method: "reliability", variables: ["ITEMS"], priority: 2, hypotheses: [] },
++      ],
++      derived: [], segments: [],
++    },
++  } as never;
++  return def;
++}
++
++test("findings are read from the results' tests and tables: the test, the p, the effect size, the direction — with a strength on the usual scales", () => {
++  const def = planned();
++  const ds = synthDataset(400);
++  const items = plannedAnalyses(def, spec);
++  const byId = (id: string) => items.find((i) => i.source.kind === "test" && i.source.id === id)!;
++  /* the t-test: women more satisfied → a significant difference with Cohen's d */
++  const t1 = byId("t1"); const r1 = runAnalysis(t1.definition, ds);
++  const label = (v: string) => ds.byName.get(v)?.label ?? v;
++  const f1 = findingsFor(t1.definition, r1, { hypotheses: t1.hypotheses, label });
++  assert.equal(f1.length, 1);
++  assert.equal(f1[0].kind, "difference"); assert.ok(f1[0].significant);
++  assert.match(f1[0].headline, /^Overall satisfaction across Gender: a (strong|moderate) difference \((?:Welch's )?t-test, p < \.001, Cohen's d = /);
++  assert.equal(f1[0].evidence.test, "t_welch"); assert.equal(f1[0].evidence.effect?.name, "Cohen's d"); assert.ok((f1[0].evidence.p ?? 1) < 0.001); assert.equal(f1[0].evidence.n, 400);
++  assert.deepEqual(f1[0].hypotheses, ["H1"]); assert.equal(f1[0].analysis.planned, "t1");
++  /* the ANOVA: no region effect */
++  const t2 = byId("t2"); const f2 = findingsFor(t2.definition, runAnalysis(t2.definition, ds), { hypotheses: t2.hypotheses, label });
++  assert.equal(f2[0].kind, "no_difference"); assert.equal(f2[0].strength, "none"); assert.ok(!f2[0].significant);
++  assert.match(f2[0].headline, /^Overall satisfaction across Region: no significant difference \(ANOVA, p = \.\d{3}\)\.$/);
++  /* the regression: satisfaction drives NPS (positive), age does not */
++  const t3 = byId("t3"); const f3 = findingsFor(t3.definition, runAnalysis(t3.definition, ds), { hypotheses: t3.hypotheses, label });
++  const sat = f3.find((f) => f.variables[1] === "SAT")!, age = f3.find((f) => f.variables[1] === "AGE")!;
++  assert.equal(sat.kind, "driver"); assert.equal(sat.strength, "strong"); assert.equal(sat.evidence.direction, "positive");
++  assert.match(sat.headline, /^Overall satisfaction raises Recommend\?: a strong effect \(β = 0\.\d+, p < \.001\)\.$/, "the coefficient's label, resolved back to its variable");
++  assert.equal(age.kind, "no_driver");
++  assert.ok(!f3.some((f) => /intercept/i.test(f.headline)), "the intercept is not a finding");
++  /* the correlation: age × satisfaction, nothing planted */
++  const t4 = byId("t4"); const f4 = findingsFor(t4.definition, runAnalysis(t4.definition, ds), { hypotheses: t4.hypotheses, label });
++  assert.equal(f4.length, 1); assert.equal(f4[0].kind, "no_correlation"); assert.equal(f4[0].evidence.effect?.name, "r");
++  /* NPS and reliability are headline numbers, not tests */
++  const t5 = byId("t5"); const f5 = findingsFor(t5.definition, runAnalysis(t5.definition, ds), { label });
++  assert.equal(f5[0].kind, "nps"); assert.match(f5[0].headline, /^NPS for Recommend\? is -?\d+ on 400 responses\.$/);
++  const t6 = byId("t6"); const f6 = findingsFor(t6.definition, runAnalysis(t6.definition, ds));
++  assert.equal(f6[0].kind, "reliability"); assert.match(f6[0].headline, /Cronbach's α = 0\.5\d+ — the items do not hang together well/);
++  assert.equal(f6[0].strength, "none"); assert.ok(!f6[0].significant, "α of 0.5 is not a reliable scale");
++  /* the crosstab: one finding per banner variable, the largest gap as detail */
++  const x1 = items.find((i) => i.source.kind === "crosstab")!; const fx = findingsFor(x1.definition, runAnalysis(x1.definition, ds), { hypotheses: x1.hypotheses, label });
++  assert.deepEqual(fx.map((f) => [f.kind, ...f.variables]), [["difference", "SAT", "GENDER"], ["no_difference", "SAT", "REGION"]], "one finding per banner variable, each naming its pair");
++  assert.match(fx[0].headline, /^Overall satisfaction by Gender: /); assert.match(fx[1].headline, /^Overall satisfaction by Region: /);
++  assert.ok(fx.some((f) => /Largest gap/.test(f.detail ?? "")), "the crosstab's largest gap travels as the detail");
++  /* strength scales */
++  assert.equal(strengthOf({ name: "Cramér's V", value: 0.35 }, 0.01), "moderate");
++  assert.equal(strengthOf({ name: "Cohen's d", value: 0.9 }, 0.01), "strong");
++  assert.equal(strengthOf({ name: "η²", value: 0.02 }, 0.01), "weak");
++  assert.equal(strengthOf({ name: "η²", value: 0.08 }, 0.01), "moderate", "η² has its own, smaller thresholds");
++  assert.equal(strengthOf({ name: "η²", value: 0.15 }, 0.01), "strong");
++  assert.equal(strengthOf({ name: "Cohen's d", value: 0.9 }, 0.2), "none", "not significant: no strength");
++  assert.equal(strengthOf(undefined, 0.01), "weak", "significant without an effect size: small until shown otherwise");
++  /* ranking: significant first, then strong — a strong but non-significant headline number (a reliable scale) comes after a weak significant one */
++  const ranked = rankFindings([...f2, ...f1, ...f4]);
++  assert.equal(ranked[0].kind, "difference");
++  const weakSig = { ...f1[0], id: "w", strength: "weak" as const };
++  const strongNs = { ...f6[0], id: "s", strength: "strong" as const, significant: false };
++  assert.deepEqual(rankFindings([strongNs, weakSig]).map((f) => f.id), ["w", "s"]);
++  /* directions and signs, from hand-made results */
++  const hand = (tables: typeof r1.tables, kind: "regression" | "correlation") => findingsFor({ name: "h", kind, dataset: spec, variables: kind === "regression" ? ["NPS", "SAT"] : ["SAT", "AGE"] }, { ...r1, tables, tests: [], insights: [], recommendedCharts: [], variablesUsed: kind === "regression" ? ["NPS", "SAT"] : ["SAT", "AGE"] }, { label });
++  const neg = hand([{ id: "coef", title: "c", columns: [], rows: [{ term: "(Intercept)", estimate: 5, p: "< .001" }, { term: "Overall satisfaction", estimate: -0.5, std: -0.4, p: ".002" }] }], "regression");
++  assert.equal(neg.length, 1); assert.match(neg[0].headline, /^Overall satisfaction lowers Recommend\?: a moderate effect \(β = -0\.40, p = \.002\)\.$/); assert.equal(neg[0].evidence.direction, "negative");
++  const negr = hand([{ id: "corr", title: "c", columns: [], rows: [{ pair: "Overall satisfaction × Age", method: "pearson", r: -0.4, p: ".001", n: 400 }] }], "correlation");
++  assert.match(negr[0].headline, /a moderate negative correlation \(r = -0\.40, p = \.001\)/); assert.equal(negr[0].evidence.direction, "negative");
++});
++
++test("a small base: findings carry the caution, and a result with nothing to say is a low-base finding", () => {
++  const def = planned();
++  const ds = synthDataset(20);
++  const items = plannedAnalyses(def, spec);
++  const t1 = items.find((i) => i.source.kind === "test" && i.source.id === "t1")!;
++  const fs = findingsFor(t1.definition, runAnalysis(t1.definition, ds));
++  assert.ok(fs.every((f) => /Base 20 < 30: read with caution/.test(f.detail ?? "")), fs.map((f) => f.detail).join(" | "));
++  const empty = synthDataset(0);
++  const fe = findingsFor(t1.definition, runAnalysis(t1.definition, empty));
++  assert.equal(fe[0].kind, "inconclusive"); assert.match(fe[0].headline, /no respondents in the data yet/);
++});
++
++test("the hypotheses are judged from their planned analyses: supported, not supported, mixed, inconclusive, untested — each with its reason", () => {
++  const def = planned();
++  const run = runPlan(def, synthDataset(400), { trigger: "first_results", now: "2026-10-05T10:00:00Z" });
++  assert.equal(run.n, 400); assert.equal(run.trigger, "first_results"); assert.equal(run.environment, "LIVE");
++  assert.equal(run.items.length, 7);
++  const v = Object.fromEntries(run.verdicts.map((x) => [x.label, x]));
++  assert.equal(v.H1.verdict, "supported", v.H1.reason);
++  assert.match(v.H1.reason, /All 2 planned tests are significant: Overall satisfaction (across|by) Gender/);
++  assert.equal(v.H2.verdict, "not_supported", v.H2.reason);
++  assert.match(v.H2.reason, /None of the 2 planned tests are significant/);
++  assert.equal(v.H3.verdict, "mixed", v.H3.reason);
++  assert.match(v.H3.reason, /1 of 2 planned tests is significant — Overall satisfaction raises Recommend\?.*but Age does not predict Recommend\?/);
++  /* the crosstab's REGION banner is not evidence about H1 (gender), and its GENDER banner is not evidence about H2 (region) */
++  assert.ok(!v.H1.findings.some((f) => f.variables[1] === "REGION"), v.H1.findings.map((f) => f.headline).join(" | "));
++  assert.ok(v.H1.findings.some((f) => f.analysis.kind === "crosstab" && f.variables[1] === "GENDER"), "the gender banner counts: the t-test pairs the same two variables");
++  assert.ok(!v.H2.findings.some((f) => f.variables[1] === "GENDER"));
++  assert.ok(v.H2.findings.some((f) => f.analysis.kind === "crosstab" && f.variables[1] === "REGION"), "“Region affects satisfaction” names the region banner");
++  assert.equal(v.H4.verdict, "not_supported");
++  assert.equal(v.H5.verdict, "untested"); assert.match(v.H5.reason, /No analysis in the plan serves/);
++  assert.equal(v.H1.analyses, 2); assert.equal(v.H5.analyses, 0);
++  /* the findings, strongest first; every one traces to an analysis */
++  assert.ok(run.findings.length >= 8);
++  assert.ok(run.findings[0].significant && run.findings[0].strength === "strong");
++  assert.ok(run.findings.every((f) => f.analysis.hash && f.evidence.n === 400));
++  assert.ok(run.items.every((it) => it.chart), "every item carries the chart it is best shown as");
++  /* a small base makes every hypothesis inconclusive, not false */
++  const small = runPlan(def, synthDataset(20));
++  assert.ok(small.verdicts.filter((x) => x.analyses > 0).every((x) => x.verdict === "inconclusive"), small.verdicts.map((x) => `${x.label} ${x.verdict}`).join(", "));
++  assert.match(small.verdicts[0].reason, /Only 20 respondents so far — below the 30 needed/);
++  /* a hypothesis served only by descriptives is inconclusive, and says what to add */
++  const desc = structuredClone(def);
++  (desc.research!.analysisPlan!.tests as { id: string; hypotheses: string[] }[]).forEach((t) => { if (t.id === "t1") t.hypotheses = []; });
++  (desc.research!.analysisPlan!.crosstabs as { hypotheses: string[] }[])[0].hypotheses = ["H2"];
++  (desc.research!.analysisPlan!.tests as { id: string; hypotheses: string[] }[]).push({ id: "t7", hypotheses: ["H1"], ...({ method: "top_box", outcome: "SAT", variables: [], priority: 2 } as object) } as never);
++  const d = runPlan(desc, synthDataset(400)).verdicts[0];
++  assert.equal(d.verdict, "inconclusive"); assert.match(d.reason, /describes the data but tests nothing/);
++  /* a hypothesis served by a crosstab alone: its banner counts because the hypothesis NAMES the variable */
++  const nameOnly = structuredClone(def);
++  (nameOnly.research!.analysisPlan!.tests as { id: string; hypotheses: string[] }[]).forEach((t) => { if (t.id === "t2") t.hypotheses = []; });
++  const h2 = runPlan(nameOnly, synthDataset(400)).verdicts[1];
++  assert.equal(h2.verdict, "not_supported", h2.reason);
++  assert.ok(h2.findings.some((f) => f.analysis.kind === "crosstab" && f.variables[1] === "REGION") && !h2.findings.some((f) => f.variables[1] === "GENDER"));
++  /* the brief the copilot reads, and the compact form that is stored */
++  const brief = briefText(run);
++  assert.match(brief, /\n    \[ns\] Overall satisfaction across Region: no significant difference/, "a null result is tagged ns, not by a strength");
++  assert.ok(!briefText(runPlan(def, synthDataset(0))).includes("Findings ("), "an empty run has placeholders, not findings");
++  assert.match(brief, /^Analysis run \(first_results\) on 400 live completes, 2026-10-05 10:00:/);
++  assert.match(brief, /  H1 SUPPORTED — Women are more satisfied than men\. All 2 planned tests/);
++  assert.match(brief, /  H2 NOT SUPPORTED — Region affects satisfaction\./);
++  assert.match(brief, /  H5 UNTESTED — /);
++  assert.match(brief, /  Findings \(strongest first\):\n    \[strong\] /);
++  assert.ok(!/inconclusive/.test(brief.split("Findings")[1] ?? ""), "inconclusive placeholders are not findings in the brief");
++  const compact = compactRun(run);
++  assert.ok(compact.items.every((it) => !("result" in it)) && compact.findings.length === run.findings.length);
++  assert.ok(JSON.stringify(compact).length < JSON.stringify(run).length / 2, "the stored form is far smaller than the results");
++});
++
++test("the plan runs by itself at the milestones of fieldwork — once each", () => {
++  assert.equal(nextMilestone([], { completes: 10, target: 400 }), null, "too few to read anything");
++  assert.equal(nextMilestone([], { completes: 30, target: 400 }), "first_results");
++  assert.equal(nextMilestone(["first_results"], { completes: 150, target: 400 }), null);
++  assert.equal(nextMilestone(["first_results"], { completes: 200, target: 400 }), "halfway");
++  assert.equal(nextMilestone(["first_results", "halfway"], { completes: 399, target: 400 }), null);
++  assert.equal(nextMilestone(["first_results", "halfway"], { completes: 400, target: 400 }), "target_reached");
++  assert.equal(nextMilestone(["first_results", "halfway", "target_reached"], { completes: 450, target: 400 }), null);
++  assert.equal(nextMilestone([], { completes: 500, target: 400 }), "first_results", "a late start still takes the milestones in order, one per pass");
++  assert.equal(nextMilestone(["first_results"], { completes: 80, target: null, fieldEnd: "2026-10-01T00:00:00Z", now: "2026-10-05T00:00:00Z" }), "field_end");
++  assert.equal(nextMilestone(["first_results"], { completes: 80, target: null, fieldEnd: "2026-10-09T00:00:00Z", now: "2026-10-05T00:00:00Z" }), null, "the field is still open");
++  assert.equal(nextMilestone([], { completes: 12, fieldEnd: "2026-10-01T00:00:00Z", now: "2026-10-05T00:00:00Z" }), null, "the field ended with too few to read");
++  assert.equal(nextMilestone(["first_results"], { completes: 30, target: 50 }), "halfway");
++});
+diff --git a/packages/analytics/src/findings.ts b/packages/analytics/src/findings.ts
+new file mode 100644
+index 0000000..cbc5df6
+--- /dev/null
++++ b/packages/analytics/src/findings.ts
+@@ -0,0 +1,344 @@
++import type { SurveyDefinition } from "@rescript/schema";
++import { hypothesisLabel } from "@rescript/schema";
++import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec } from "./types.js";
++import type { Dataset } from "./dataset.js";
++import type { TestResult } from "./stats/tests.js";
++import { runAnalysis } from "./analyses/index.js";
++import { MIN_BASE } from "./analyses/common.js";
++import { recommendCharts } from "./recommend.js";
++import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
++
++/*
++ * FINDINGS (research-intelligence Phase 5): what the data SAID, read from the
++ * results structurally — the tests' p-values and effect sizes, the model's
++ * coefficients, the correlation, the NPS — never from the insight sentences,
++ * and never invented. Each finding carries its evidence (test, statistic,
++ * p, effect, n) so every headline traces to a table; the hypotheses are
++ * judged from the findings of the analyses planned for them; a run is the
++ * whole plan executed once on one dataset, with the findings ranked and the
++ * verdicts given, ready for the copilot to narrate and the Studio to show.
++ *
++ * Everything here is pure: a Dataset in, a run out. The Studio stores runs
++ * and decides when to make them (a milestone of fieldwork, or on request).
++ */
++
++export type FindingKind = "difference" | "no_difference" | "driver" | "no_driver" | "correlation" | "no_correlation" | "mediation" | "nps" | "topbox" | "reliability" | "low_base" | "inconclusive";
++export type Strength = "strong" | "moderate" | "weak" | "none";
++
++export interface FindingEvidence { test?: string; statistic?: number | null; df?: number | [number, number]; p?: number | null; effect?: { name: string; value: number }; n: number; direction?: "positive" | "negative" }
++export interface Finding {
++  id: string;
++  kind: FindingKind;
++  strength: Strength;
++  /** significant at the analysis' alpha */
++  significant: boolean;
++  headline: string;
++  detail?: string;
++  evidence: FindingEvidence;
++  variables: string[];
++  hypotheses: string[];
++  analysis: { name: string; kind: string; hash: string; planned?: string; id?: string };
++  chart?: ChartType;
++}
++
++export type Verdict = "supported" | "not_supported" | "mixed" | "inconclusive" | "untested";
++export interface HypothesisVerdict { label: string; text: string; verdict: Verdict; reason: string; findings: Finding[]; analyses: number }
++
++export interface RunItem {
++  definition: AnalysisDefinition;
++  result: AnalysisResult;
++  findings: Finding[];
++  /** the chart the result is best shown as */
++  chart?: ChartType;
++  source?: PlannedAnalysis["source"];
++  priority?: number;
++  hypotheses: string[];
++}
++export interface AnalysisRun {
++  computedAt: string;
++  trigger: string;
++  environment: DatasetSpec["environment"];
++  /** complete responses in the dataset */
++  n: number;
++  items: RunItem[];
++  /** every finding, strongest first */
++  findings: Finding[];
++  verdicts: HypothesisVerdict[];
++  warnings: string[];
++}
++
++/* ------------------------------------------------------------ strength */
++
++/** effect sizes on their usual scales (Cohen, Cramér, Cohen's conventions for r and η²) */
++export function strengthOf(effect: { name: string; value: number } | undefined, p: number | null | undefined, alpha = 0.05): Strength {
++  if (p == null || !(p < alpha)) return "none";
++  if (!effect || !Number.isFinite(effect.value)) return "weak";
++  const v = Math.abs(effect.value);
++  const n = effect.name.toLowerCase();
++  const cut = (small: number, medium: number, large: number) => (v >= large ? "strong" : v >= medium ? "moderate" : v >= small ? "weak" : "weak");
++  if (/cram|phi|^r$|rank-biserial|standardized|beta|β/.test(n)) return cut(0.1, 0.3, 0.5);
++  if (/cohen's d|^d$|hedges/.test(n)) return cut(0.2, 0.5, 0.8);
++  if (/η|eta|epsilon|ε|omega|r²|r2/.test(n)) return cut(0.01, 0.06, 0.14);
++  if (/cohen's h|^h$/.test(n)) return cut(0.2, 0.5, 0.8);
++  if (/odds/.test(n)) { const lo = v < 1 ? 1 / v : v; return lo >= 4.3 ? "strong" : lo >= 2.5 ? "moderate" : "weak"; }
++  if (/kendall|w$/.test(n)) return cut(0.1, 0.3, 0.5);
++  return "weak";
++}
++const RANK: Record<Strength, number> = { strong: 3, moderate: 2, weak: 1, none: 0 };
++const WORD: Record<Strength, string> = { strong: "a strong", moderate: "a moderate", weak: "a small", none: "no" };
++
++const parseP = (s: unknown): number | null => {
++  if (typeof s === "number") return s;
++  if (typeof s !== "string") return null;
++  const t = s.trim();
++  if (t === "< .001") return 0.0005;
++  const n = Number(t.replace(/^\./, "0."));
++  return Number.isFinite(n) ? n : null;
++};
++const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
++const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
++
++/* ------------------------------------------------------------ findings */
++
++const TEST_WORDS: Record<string, string> = {
++  chi_square: "chi-square", fisher_exact: "Fisher's exact test", t_independent: "t-test", t_welch: "Welch's t-test", t_paired: "paired t-test", t_one_sample: "one-sample t-test",
++  anova_one_way: "ANOVA", anova_two_way: "two-way ANOVA", mann_whitney: "Mann–Whitney", kruskal_wallis: "Kruskal–Wallis", wilcoxon: "Wilcoxon", wilcoxon_signed_rank: "Wilcoxon", friedman: "Friedman",
++  proportion_one_sample: "proportion test", proportion_two_sample: "proportion test",
++};
++
++/** The findings one result supports — structurally, from its tests and tables. */
++export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, extra: { hypotheses?: string[]; id?: string; /** a variable's label, as the tables print it */ label?: (variable: string) => string } = {}): Finding[] {
++  const L = (v: string) => extra.label?.(v) ?? v;
++  const out: Finding[] = [];
++  const alpha = typeof def.options?.alpha === "number" ? def.options.alpha : 0.05;
++  const hypotheses = extra.hypotheses ?? ((def.options?.hypotheses as string[] | undefined) ?? []);
++  const analysis = { name: def.name, kind: def.kind, hash: result.definitionHash, ...(def.options?.planned ? { planned: String(def.options.planned) } : {}), ...(extra.id ? { id: extra.id } : {}) };
++  const n = result.base.n;
++  const chart = result.recommendedCharts[0];
++  const vars = result.variablesUsed.length ? result.variablesUsed : def.variables;
++  let k = 0;
++  const push = (f: Omit<Finding, "id" | "analysis" | "hypotheses" | "chart">) => out.push({ id: `${result.definitionHash}:${k++}`, analysis, hypotheses, ...(chart ? { chart } : {}), ...f });
++  const low = n < MIN_BASE;
++  if (n === 0) { push({ kind: "inconclusive", strength: "none", significant: false, headline: `${def.name}: no respondents in the data yet.`, evidence: { n }, variables: vars }); return out; }
++
++  const outcome = vars[0] ?? def.variables[0] ?? "";
++  const by = def.kind === "crosstab" ? (def.columns ?? vars.slice(1)) : vars.slice(1);
++
++  /* tests: a difference (or none) per test result */
++  const testFindings = (tests: TestResult[], labelFor: (t: TestResult, i: number) => string, varsFor: (i: number) => string[] = () => vars) => {
++    tests.forEach((t, i) => {
++      if (t.p == null) return;
++      const effectSize = t.effectSize && t.effectSize.value != null && Number.isFinite(t.effectSize.value) ? { name: t.effectSize.name, value: t.effectSize.value } : undefined;
++      const strength = strengthOf(effectSize, t.p, alpha);
++      const sig = t.p < alpha;
++      const what = labelFor(t, i);
++      const word = TEST_WORDS[t.test] ?? t.test.replace(/_/g, " ");
++      push({
++        kind: sig ? "difference" : "no_difference", strength, significant: sig,
++        headline: sig ? `${what}: ${WORD[strength]} difference (${word}, ${fmtP(t.p)}${effectSize ? `, ${effectSize.name} = ${fmt(effectSize.value)}` : ""}).` : `${what}: no significant difference (${word}, ${fmtP(t.p)}${low ? "; the base is small" : ""}).`,
++        ...(t.note ? { detail: t.note } : {}),
++        evidence: { test: t.test, statistic: t.statistic, ...(t.df !== undefined ? { df: t.df } : {}), p: t.p, ...(effectSize ? { effect: effectSize } : {}), n },
++        variables: varsFor(i),
++      });
++    });
++  };
++
++  switch (def.kind) {
++    case "crosstab": {
++      const gap = result.insights.find((s) => /^Largest gap/.test(s));
++      testFindings(result.tests, (t, i) => `${L(outcome)} by ${L(by[i] ?? by[0] ?? "the banner")}`, (i) => (by[i] ? [outcome, by[i]] : vars));
++      if (gap && out.length) out[out.length - 1].detail = gap;
++      break;
++    }
++    case "test": {
++      testFindings(result.tests, () => by.length ? `${L(outcome)} across ${by.map(L).join(" and ")}` : L(outcome));
++      break;
++    }
++    case "correlation": {
++      const t = result.tables.find((x) => x.id === "corr" || x.id === "corr_pairs");
++      for (const row of t?.rows ?? []) {
++        const r = typeof row.r === "number" ? row.r : null; const p = parseP(row.p);
++        if (r == null || p == null) continue;
++        const pair = (row.pair as string) ?? `${row.a} × ${row.b}`;
++        const strength = strengthOf({ name: "r", value: r }, p, alpha);
++        const sig = p < alpha;
++        push({ kind: sig ? "correlation" : "no_correlation", strength, significant: sig, headline: sig ? `${pair}: ${WORD[strength]} ${r > 0 ? "positive" : "negative"} correlation (r = ${fmt(r)}, ${fmtP(p)}).` : `${pair}: no significant correlation (r = ${fmt(r)}, ${fmtP(p)}).`, evidence: { test: "correlation", statistic: r, p, effect: { name: "r", value: r }, n: typeof row.n === "number" ? row.n : n, direction: r > 0 ? "positive" : "negative" }, variables: vars });
++      }
++      break;
++    }
++    case "regression": {
++      const coef = result.tables.find((x) => x.id === "coef");
++      const logistic = def.options?.model === "logistic";
++      // a coefficient's term is the predictor's label (or "label = category" for a dummy): find the variable behind it
++      const preds = vars.slice(1);
++      const predictorOf = (term: string): string => {
++        const direct = preds.find((v) => L(v) === term || term.startsWith(`${L(v)} = `));
++        if (direct) return direct;
++        const parts = term.split(/\s*[×*:]\s*/);
++        if (parts.length > 1) return parts.map((part) => preds.find((v) => L(v) === part) ?? part).join(" × ");
++        return term;
++      };
++      for (const row of coef?.rows ?? []) {
++        const term = String(row.term ?? "");
++        if (!term || /^\(?intercept\)?$/i.test(term) || /^const/i.test(term)) continue;
++        const p = parseP(row.p); const est = typeof row.estimate === "number" ? row.estimate : null;
++        if (p == null || est == null) continue;
++        const std = typeof row.std === "number" ? row.std : null, or = typeof row.or === "number" ? row.or : null;
++        const effect = logistic ? (or != null ? { name: "odds ratio", value: or } : undefined) : (std != null ? { name: "standardized β", value: std } : undefined);
++        const strength = strengthOf(effect, p, alpha);
++        const sig = p < alpha;
++        const interaction = /×|\*|:/.test(term);
++        push({
++          kind: sig ? "driver" : "no_driver", strength, significant: sig,
++          headline: sig
++            ? `${term} ${interaction ? "changes the effect on" : est > 0 ? "raises" : "lowers"} ${L(outcome)}: ${WORD[strength]} ${interaction ? "interaction" : "effect"} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`
++            : `${term} does not predict ${L(outcome)} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`,
++          evidence: { test: logistic ? "logistic_regression" : "regression", statistic: est, p, ...(effect ? { effect } : {}), n, direction: est > 0 ? "positive" : "negative" },
++          variables: [outcome, predictorOf(term)],
++        });
++      }
++      const med = result.tables.find((x) => x.id === "mediation");
++      if (med) {
++        const ind = med.rows.find((r) => /indirect/i.test(String(r.path ?? "")));
++        const p = parseP(ind?.p);
++        if (ind && p != null) push({ kind: "mediation", strength: p < alpha ? "moderate" : "none", significant: p < alpha, headline: p < alpha ? `${med.title.replace(/^Mediation: /, "")}: the indirect path is significant (${fmtP(p)}) — part of the effect runs through the mediator.` : `${med.title.replace(/^Mediation: /, "")}: no significant indirect path (${fmtP(p)}).`, evidence: { test: "mediation", statistic: typeof ind.estimate === "number" ? ind.estimate : null, p, n }, variables: vars });
++      }
++      break;
++    }
++    case "nps": {
++      const kpi = result.chart.kpis?.find((x) => x.label === "NPS");
++      const npsValue = typeof kpi?.value === "number" ? kpi.value : null;
++      if (kpi && npsValue != null) push({ kind: "nps", strength: "none", significant: false, headline: `NPS for ${L(outcome)} is ${npsValue}${kpi.target != null ? ` (target ${kpi.target})` : ""} on ${n} responses.`, evidence: { statistic: npsValue, n }, variables: vars });
++      break;
++    }
++    case "topbox": {
++      const first = result.insights[0];
++      if (first) push({ kind: "topbox", strength: "none", significant: false, headline: first, evidence: { n }, variables: vars });
++      break;
++    }
++    case "reliability": {
++      const a = result.tables.find((x) => x.id === "alpha")?.rows.find((r) => /α/.test(String(r.stat ?? "")) && !/standard/i.test(String(r.stat ?? "")));
++      const alphaVal = typeof a?.value === "number" ? a.value : null;
++      if (alphaVal != null) push({ kind: "reliability", strength: alphaVal >= 0.8 ? "strong" : alphaVal >= 0.7 ? "moderate" : alphaVal >= 0.6 ? "weak" : "none", significant: alphaVal >= 0.7, headline: `${def.name}: Cronbach's α = ${fmt(alphaVal)} — ${alphaVal >= 0.8 ? "a reliable scale" : alphaVal >= 0.7 ? "acceptable reliability" : "the items do not hang together well"}.`, evidence: { statistic: alphaVal, effect: { name: "alpha", value: alphaVal }, n }, variables: vars });
++      break;
++    }
++    default: {
++      if (result.tests.length) testFindings(result.tests, () => def.name);
++      break;
++    }
++  }
++  if (low && out.length) out.forEach((f) => { f.detail = `${f.detail ? `${f.detail} ` : ""}Base ${n} < ${MIN_BASE}: read with caution.`; });
++  if (low && !out.length) push({ kind: "low_base", strength: "none", significant: false, headline: `${def.name}: only ${n} respondents so far — too few to conclude.`, evidence: { n }, variables: vars });
++  return out;
++}
++
++/** strongest first; a significant finding before a null one; a bigger base before a smaller */
++export function rankFindings(fs: Finding[]): Finding[] {
++  return [...fs].sort((a, b) => Number(b.significant) - Number(a.significant) || RANK[b.strength] - RANK[a.strength] || (a.evidence.p ?? 1) - (b.evidence.p ?? 1) || b.evidence.n - a.evidence.n);
++}
++
++/* ------------------------------------------------------------ verdicts */
++
++const TESTED: FindingKind[] = ["difference", "no_difference", "driver", "no_driver", "correlation", "no_correlation", "mediation"];
++
++/** does the hypothesis name this variable — by variable name, code, the question's words or its option labels? */
++function mentions(def: SurveyDefinition, text: string, variable: string): boolean {
++  const q = def.questions.find((x) => x.variableName === variable || String(x.code) === variable);
++  const words = new Set(text.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []);
++  const candidates = [variable, ...(q ? [String(q.code), q.variableName, ...(q.text.match(/[\p{L}\p{N}]{4,}/gu) ?? []), ...(q.options ?? []).flatMap((o) => o.label.match(/[\p{L}\p{N}]{4,}/gu) ?? [])] : [])].map((w) => w.toLowerCase());
++  return candidates.some((c) => words.has(c) || (c.length >= 5 && [...words].some((w) => w.startsWith(c.slice(0, 5)) || c.startsWith(w.slice(0, 5)))));
++}
++
++/** Each hypothesis judged from the findings of the analyses planned for it. */
++export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): HypothesisVerdict[] {
++  return (def.research?.hypotheses ?? []).map((text, i) => {
++    const label = hypothesisLabel(i);
++    const mine = items.filter((it) => it.hypotheses.includes(label));
++    /*
++     * A crosstab tagged with a hypothesis may have several banner variables;
++     * its finding about a banner counts for the hypothesis only when the
++     * hypothesis names that variable, a planned test pairs the same two
++     * variables, or the banner is the crosstab's only one — otherwise it is
++     * context (shown), not evidence (judged).
++     */
++    const about = (it: RunItem, f: Finding) => {
++      if (it.definition.kind !== "crosstab" || f.variables.length < 2) return true;
++      const [outcome, banner] = f.variables;
++      if ((it.definition.columns ?? []).length <= 1) return true;
++      if (mentions(def, text, banner)) return true;
++      return mine.some((o) => o !== it && o.definition.kind !== "crosstab" && o.definition.variables.includes(outcome) && o.definition.variables.includes(banner));
++    };
++    const fs = rankFindings(mine.flatMap((it) => it.findings.filter((f) => about(it, f))));
++    const tested = fs.filter((f) => TESTED.includes(f.kind));
++    const sig = tested.filter((f) => f.significant), ns = tested.filter((f) => !f.significant);
++    const lowBase = mine.length > 0 && mine.every((it) => it.result.base.n < MIN_BASE);
++    let verdict: Verdict; let reason: string;
++    if (!mine.length) { verdict = "untested"; reason = "No analysis in the plan serves this hypothesis."; }
++    else if (lowBase) { verdict = "inconclusive"; reason = `Only ${Math.max(...mine.map((it) => it.result.base.n))} respondents so far — below the ${MIN_BASE} needed to read a test.`; }
++    else if (!tested.length) { verdict = "inconclusive"; reason = `${mine.length === 1 ? "The analysis" : `The ${mine.length} analyses`} planned for it describe${mine.length === 1 ? "s" : ""} the data but test${mine.length === 1 ? "s" : ""} nothing — add a test or a crosstab with significance.`; }
++    else if (sig.length && !ns.length) { verdict = "supported"; reason = `${sig.length === 1 ? "The planned test" : `All ${sig.length} planned tests`} ${sig.length === 1 ? "is" : "are"} significant: ${sig[0].headline}`; }
++    else if (sig.length && ns.length) { verdict = "mixed"; reason = `${sig.length} of ${tested.length} planned tests ${sig.length === 1 ? "is" : "are"} significant — ${sig[0].headline} — but ${ns[0].headline}`; }
++    else { verdict = "not_supported"; reason = `${ns.length === 1 ? "The planned test is" : `None of the ${ns.length} planned tests are`} significant: ${ns[0].headline}`; }
++    return { label, text, verdict, reason, findings: fs, analyses: mine.length };
++  });
++}
++
++/* ------------------------------------------------------------ the run */
++
++/** The whole plan, run once on a dataset. `items` lets the caller run saved definitions instead of (or as well as) the plan's. */
++export function runPlan(def: SurveyDefinition, dataset: Dataset, opts: { trigger?: string; items?: PlannedAnalysis[]; primaries?: boolean; now?: string } = {}): AnalysisRun {
++  const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false });
++  const items: RunItem[] = planned.map((p) => {
++    const result = runAnalysis(p.definition, dataset);
++    const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
++    const chart = recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
++    return { definition: p.definition, result, findings, ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses };
++  });
++  const findings = rankFindings(items.flatMap((it) => it.findings));
++  const verdicts = hypothesisVerdicts(def, items);
++  const warnings = [...new Set(items.flatMap((it) => it.result.warnings))];
++  return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings };
++}
++
++/** the run without its results — what is stored and sent around */
++export function compactRun(run: AnalysisRun): Omit<AnalysisRun, "items"> & { items: Omit<RunItem, "result">[] } {
++  return { ...run, items: run.items.map(({ result: _r, ...rest }) => { void _r; return rest; }) };
++}
++
++/* ------------------------------------------------------------ for the copilot */
++
++const VERDICT_WORDS: Record<Verdict, string> = { supported: "SUPPORTED", not_supported: "NOT SUPPORTED", mixed: "MIXED", inconclusive: "INCONCLUSIVE", untested: "UNTESTED" };
++
++/** The run in a few lines the model (and a person) can read: verdicts, then the findings strongest first. */
++export function briefText(run: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger">, opts: { maxFindings?: number } = {}): string {
++  const max = opts.maxFindings ?? 15;
++  const lines: string[] = [];
++  lines.push(`Analysis run (${run.trigger}) on ${run.n} ${run.environment.toLowerCase()} completes, ${run.computedAt.slice(0, 16).replace("T", " ")}:`);
++  for (const v of run.verdicts) lines.push(`  ${v.label} ${VERDICT_WORDS[v.verdict]} — ${v.text}. ${v.reason}`);
++  const shown = run.findings.filter((f) => f.kind !== "inconclusive").slice(0, max);
++  if (shown.length) { lines.push(`  Findings (strongest first):`); for (const f of shown) lines.push(`    [${f.significant ? f.strength : "ns"}] ${f.headline}${f.hypotheses.length ? ` (${f.hypotheses.join(", ")})` : ""}${f.detail ? ` ${f.detail}` : ""}`); }
++  if (run.findings.length > shown.length) lines.push(`    … and ${run.findings.length - shown.length} more`);
++  if (run.warnings.length) lines.push(`  Caveats: ${run.warnings.slice(0, 4).join(" ")}`);
++  return lines.join("\n");
++}
++
++/* ------------------------------------------------------------ when to run */
++
++export type Milestone = "first_results" | "halfway" | "target_reached" | "field_end";
++
++/**
++ * The fieldwork milestones at which the plan runs by itself — once each:
++ * the first readable base, half the target, the target, the end of the
++ * field window. `done` are the triggers of the runs already made.
++ */
++export function nextMilestone(done: string[], state: { completes: number; target?: number | null; fieldEnd?: string | null; now?: string }): Milestone | null {
++  const has = (m: Milestone) => done.includes(m);
++  const now = state.now ? new Date(state.now).getTime() : Date.now();
++  if (!has("first_results") && state.completes >= MIN_BASE) return "first_results";
++  if (state.target && state.target > 0) {
++    if (!has("halfway") && state.completes >= state.target / 2 && state.completes >= MIN_BASE) return "halfway";
++    if (!has("target_reached") && state.completes >= state.target) return "target_reached";
++  }
++  if (state.fieldEnd && !has("field_end") && new Date(state.fieldEnd).getTime() <= now && state.completes >= MIN_BASE) return "field_end";
++  return null;
++}
+diff --git a/packages/analytics/src/index.ts b/packages/analytics/src/index.ts
+index 378a6ba..9246094 100644
+--- a/packages/analytics/src/index.ts
++++ b/packages/analytics/src/index.ts
+@@ -13,3 +13,4 @@ export * from "./themes.js";
+ export * from "./fieldwork.js";
+ export * from "./versionedMetadata.js";
+ export * from "./planBridge.js";
++export * from "./findings.js";
+diff --git a/packages/schema/src/analysisPlan.ts b/packages/schema/src/analysisPlan.ts
+index ec60aa9..85f4dad 100644
+--- a/packages/schema/src/analysisPlan.ts
++++ b/packages/schema/src/analysisPlan.ts
+@@ -118,6 +118,12 @@ export const AnalysisPlan = z.object({
+   /** who last wrote it — the engine's proposal, the copilot, or the researcher by hand */
+   source: z.enum(["engine", "copilot", "researcher"]).optional(),
+   updatedAt: z.string().optional(),
++  /**
++   * Run the plan by itself at the milestones of fieldwork (the first readable
++   * base, halfway to target, the target, the end of the field window) and
++   * keep the findings — on unless the researcher turns it off.
++   */
++  autoRun: z.boolean().optional(),
+ });
+ export type AnalysisPlan = z.infer<typeof AnalysisPlan>;
+ 
+diff --git a/scripts/findings-copilot-test.mjs b/scripts/findings-copilot-test.mjs
+new file mode 100644
+index 0000000..a169532
+--- /dev/null
++++ b/scripts/findings-copilot-test.mjs
+@@ -0,0 +1,166 @@
++/**
++ * FINDINGS (research-intelligence Phase 5).
++ *
++ *   - Intelligent → Findings: no run yet (the plan runs by itself at the
++ *     fieldwork milestones, or now); a run handed in through the test seam
++ *     (computed here with the real analytics package on the synthetic data)
++ *     → each hypothesis with its verdict and reason, the findings strongest
++ *     first with their evidence, the significant-only toggle, the badge
++ *   - an untested hypothesis → "Plan a test" asks the copilot, whose analysis
++ *     action lands in Changes
++ *   - the turn route recognises a findings question and carries the run's
++ *     brief (verdicts, findings) with it — and says "none yet" without one
++ *   - the analytics plan routes refuse without a session
++ *
++ *   node scripts/findings-copilot-test.mjs      (studio on 3000)
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, switchMode } from "./lib/nav.mjs";
++import { def as synthDef, synthDataset } from "/home/claude/rescript/packages/analytics/dist/analyses/fixture.js";
++import { runPlan, compactRun } from "/home/claude/rescript/packages/analytics/dist/findings.js";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++let passed = 0;
++const ok = (m) => { console.log("  ok  ", m); passed++; };
++
++/* the synthetic survey with a research design and a plan: a gender effect and satisfaction → recommendation are planted; region is not */
++const FIXTURE = structuredClone(synthDef);
++FIXTURE.meta = { ...FIXTURE.meta, id: "sandbox", code: "SANDBOX" };
++FIXTURE.research = {
++  objective: "What drives satisfaction and recommendation", population: "adults",
++  hypotheses: ["Women are more satisfied than men", "Region affects satisfaction", "Satisfaction drives recommendation", "Awareness of Gamma raises consideration of Gamma"],
++  constructs: [{ name: "Satisfaction", role: "dependent", questionIds: ["q_sat"] }, { name: "Recommendation", role: "dependent", questionIds: ["q_nps"] }],
++  analysis: [], assumptions: [], sources: [],
++  analysisPlan: {
++    crosstabs: [{ id: "x1", rows: ["SAT"], columns: ["GENDER"], priority: 1, hypotheses: ["H1"], reason: "satisfaction by gender" }],
++    tests: [
++      { id: "t1", method: "t_test", outcome: "SAT", variables: [], groupBy: "GENDER", priority: 1, hypotheses: ["H1"] },
++      { id: "t2", method: "anova", outcome: "SAT", variables: [], groupBy: "REGION", priority: 1, hypotheses: ["H2"] },
++      { id: "t3", method: "regression", outcome: "NPS", variables: ["SAT", "AGE"], priority: 1, hypotheses: ["H3"] },
++      { id: "t4", method: "nps", variables: ["NPS"], priority: 2, hypotheses: [] },
++    ],
++    derived: [], segments: [], source: "researcher",
++  },
++};
++const RUN = compactRun(runPlan(FIXTURE, synthDataset(400), { trigger: "halfway", now: "2026-10-05T09:00:00Z" }));
++assert.equal(RUN.verdicts.map((v) => v.verdict).join(), "supported,not_supported,mixed,untested", "the planted structure comes out as expected before the browser is even opened");
++
++const browser = await chromium.launch();
++const context = await browser.newContext({ viewport: { width: 1700, height: 1100 } });
++const page = await context.newPage();
++const errors = [];
++page.on("pageerror", (e) => errors.push(String(e)));
++page.on("dialog", (d) => d.accept());
++
++const loadDef = async (def) => {
++  await openTab(page, "JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(800);
++};
++const texts = (sel) => page.$$eval(sel, (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
++const intelligent = async () => {
++  await openTab(page, "Questions");
++  await switchMode(page, "intelligent");
++  await page.waitForSelector('[data-testid="intelligent-view"]');
++};
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++ok("fixture loaded: the synthetic survey with four hypotheses and a plan");
++
++await intelligent();
++if (!(await page.evaluate(() => typeof window.__rescriptCopilotFake === "function"))) { console.log("  skip  no fake copilot provider in this build"); await browser.close(); process.exit(0); }
++
++/* ------------------------------------------------ no run yet */
++await page.click('[data-testid="cp-tab-findings"]');
++await page.waitForSelector('[data-testid="cp-findings"]');
++assert.ok(await page.$('[data-testid="fd-no-run"]'), "the plan has not run");
++assert.match(await page.textContent('[data-testid="fd-no-run"]'), /runs by itself at the first 30 completes, halfway to target, at target and at the end of fieldwork/);
++assert.ok(await page.$('[data-testid="fd-run"][disabled]'), "the sandbox cannot run it (no responses)");
++assert.equal(await page.$('[data-testid="fd-verdict"]'), null);
++ok("Findings: without a run the tab says when the plan runs by itself, and offers to run it");
++
++/* ------------------------------------------------ a run through the seam */
++await page.evaluate((r) => window.__rescriptAnalysisRun(r), RUN);
++await page.waitForSelector('[data-testid="fd-verdict"]');
++{
++  const verdicts = await page.$$eval('[data-testid="fd-verdict"]', (es) => es.map((e) => [e.getAttribute("data-label"), e.getAttribute("data-verdict"), e.textContent]));
++  assert.deepEqual(verdicts.map((v) => [v[0], v[1]]), [["H1", "supported"], ["H2", "not_supported"], ["H3", "mixed"], ["H4", "untested"]]);
++  assert.match(verdicts[0][2], /All 2 planned tests are significant: Overall satisfaction (across|by) Gender/);
++  assert.match(verdicts[1][2], /The planned test is significant|None of the|The planned test is not/i);
++  assert.match(verdicts[3][2], /No analysis in the plan serves this hypothesis/);
++  const meta = await page.textContent('[data-testid="fd-run-meta"]');
++  assert.match(meta, /Run halfway to target · .* · 400 live completes · 5 analyses/);
++  const findings = await page.$$eval('[data-testid="fd-finding"]', (es) => es.map((e) => ({ kind: e.getAttribute("data-kind"), strength: e.getAttribute("data-strength"), sig: e.getAttribute("data-significant"), t: e.textContent })));
++  assert.ok(findings.length >= 3 && findings.every((f) => f.sig === "1" || /nps/.test(f.kind)), `significant only by default: ${JSON.stringify(findings.map((f) => [f.kind, f.sig]))}`);
++  assert.equal(findings[0].strength, "strong");
++  assert.match(findings[0].t, /Cohen's d|β/);
++  assert.ok(findings.some((f) => f.kind === "nps" && /NPS for Recommend\? is -?\d+ on 400 responses/.test(f.t)));
++  /* the badge counts the significant findings */
++  const badge = await page.textContent('[data-testid="cp-tab-findings"]');
++  assert.match(badge, new RegExp(`Findings${RUN.findings.filter((f) => f.significant).length}`));
++  /* untick: the null results appear */
++  await page.click('[data-testid="fd-only-sig"]');
++  await page.waitForTimeout(150);
++  const all = await page.$$eval('[data-testid="fd-finding"]', (es) => es.map((e) => e.getAttribute("data-significant")));
++  assert.ok(all.includes("0") && all.length > findings.length, "the null results are shown when asked");
++  assert.ok((await texts('[data-testid="fd-finding"]')).some((t) => /Overall satisfaction across Region: no significant difference \(ANOVA, p = \.\d{3}\)/.test(t)));
++}
++ok("Findings: each hypothesis with its verdict and reason; the findings strongest first with their evidence; significant-only toggle; the badge");
++
++/* ------------------------------------------------ an untested hypothesis → plan a test, through the copilot */
++{
++  await page.evaluate((r) => window.__rescriptCopilotFake(r), { kind: "proposal", reply: "Adding the test for H4.", actions: [{ op: "add_crosstab", rows: ["CONSIDER"], columns: ["AWARE"], priority: 1, hypotheses: ["H4"], reason: "consideration by awareness" }, { op: "add_analysis_test", method: "chi_square", outcome: "CONSIDER", variables: ["AWARE"], priority: 1, hypotheses: ["H4"] }] });
++  const n = (await page.$$('[data-testid="cp-turn"]')).length;
++  await page.click('[data-testid="fd-verdict"][data-label="H4"] [data-testid="fd-plan-test"]');
++  await page.waitForFunction((k) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > k && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, n, { timeout: 30000 });
++  await page.click('[data-testid="cp-tab-changes"]');
++  await page.waitForSelector('[data-testid="cp-changes"]');
++  const sm = await texts('[data-testid="cp-summary"] li');
++  assert.ok(sm.some((t) => /Plan crosstab: CONSIDER by AWARE/.test(t)) && sm.some((t) => /Plan chi.square on CONSIDER/.test(t)), sm.join(" | "));
++  await page.click('[data-testid="cp-panel-apply"]');
++  await page.waitForTimeout(600);
++}
++ok("an untested hypothesis: “Plan a test” asks the copilot, whose crosstab and chi-square land in Changes and apply to the plan");
++
++/* ------------------------------------------------ the turn route: a findings question carries the run */
++{
++  const call = async (message, run) => {
++    const r = await fetch(`${STUDIO}/api/copilot/turn`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: "sandbox", message, definition: FIXTURE, fake: { kind: "answer", reply: "ok" }, ...(run ? { analysisRun: run } : {}) }) });
++    assert.equal(r.status, 200);
++    return (await r.json()).context;
++  };
++  const brief = { computedAt: RUN.computedAt, n: RUN.n, trigger: RUN.trigger, environment: RUN.environment, verdicts: RUN.verdicts, warnings: RUN.warnings, findings: RUN.findings };
++  // a findings question that is not also an analysis-planning one, so the run and the guide travel on the findings intent alone
++  const withRun = await call("What did we find? Give me the headline results.", brief);
++  const noRun = await call("What did we find? Give me the headline results.");
++  const plain = await call("Reword Q4", brief);
++  assert.equal(withRun.findings, true); assert.equal(withRun.hasRun, true);
++  assert.equal(noRun.findings, true); assert.equal(noRun.hasRun, false);
++  assert.equal(plain.findings, false);
++  assert.ok(withRun.outlineChars > noRun.outlineChars + 300, `the run's brief is in the outline: ${withRun.outlineChars} vs ${noRun.outlineChars}`);
++  assert.ok(withRun.outlineChars > plain.outlineChars + 300, "and not on a wording edit");
++  assert.ok(withRun.promptChars - withRun.outlineChars > plain.promptChars - plain.outlineChars + 800, "the findings guide goes with it");
++}
++ok("the turn route recognises a findings question and sends the run's verdicts and findings with it — or says none yet");
++
++/* ------------------------------------------------ the plan routes refuse without a session */
++{
++  // the analytics route opens its database client before the gate (as every analytics branch does), so a Studio without Supabase answers 500 and one with it 401 — never 200
++  const r1 = await fetch(`${STUDIO}/api/surveys/00000000-0000-0000-0000-000000000000/analytics/plan/latest`);
++  assert.ok([401, 500].includes(r1.status), String(r1.status));
++  const r2 = await fetch(`${STUDIO}/api/surveys/00000000-0000-0000-0000-000000000000/analytics/plan/run`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
++  assert.ok([401, 500].includes(r2.status), String(r2.status));
++  const r3 = await fetch(`${STUDIO}/api/cron/analysis-runs`);
++  assert.equal(r3.status, 401, "the cron needs its secret");
++}
++ok("the plan routes and the cron refuse without a session or the secret");
++
++assert.deepEqual(errors.filter((e) => !/ResizeObserver/.test(e)), [], errors.join("\n"));
++await browser.close();
++console.log(`\n${passed} checks passed`);
+diff --git a/supabase/migrations/0046_analytics_runs.sql b/supabase/migrations/0046_analytics_runs.sql
+new file mode 100644
+index 0000000..5c495a2
+--- /dev/null
++++ b/supabase/migrations/0046_analytics_runs.sql
+@@ -0,0 +1,35 @@
++-- 0046 — analysis runs (research-intelligence Phase 5).
++--
++-- A run is the analysis plan executed once on one dataset: the findings read
++-- from the results, the hypothesis verdicts, and which chart each planned
++-- analysis is best shown as. Runs are made at fieldwork milestones (first
++-- readable base, halfway, target, end of field) by the cron, or on request;
++-- results themselves are recomputed from the responses when opened, so only
++-- the compact run is stored. Read by the Intelligent copilot's Findings tab
++-- and sent with the copilot's analysis turns.
++
++create table if not exists public.analytics_runs (
++  id uuid primary key default gen_random_uuid(),
++  survey_id uuid not null references public.surveys(id) on delete cascade,
++  trigger text not null,
++  environment text not null default 'LIVE' check (environment in ('TEST', 'LIVE', 'ALL')),
++  n integer not null default 0,
++  dataset jsonb not null default '{}'::jsonb,
++  computed_at timestamptz not null default now(),
++  findings jsonb not null default '[]'::jsonb,
++  verdicts jsonb not null default '[]'::jsonb,
++  items jsonb not null default '[]'::jsonb,
++  warnings jsonb not null default '[]'::jsonb,
++  survey_version text,
++  created_by uuid,
++  created_at timestamptz not null default now()
++);
++create index if not exists analytics_runs_survey_idx on public.analytics_runs (survey_id, computed_at desc);
++
++alter table public.analytics_runs enable row level security;
++drop policy if exists analytics_runs_member_read on public.analytics_runs;
++create policy analytics_runs_member_read on public.analytics_runs for select to authenticated
++  using (
++    public.rescript_project_role(auth.uid(), survey_id) is not null
++    or public.rescript_is_platform_admin(auth.uid())
++  );
+-- 
+2.43.0
+

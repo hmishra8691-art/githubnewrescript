@@ -1,0 +1,13 @@
+An Anthropic API key that is not scoped to a workspace is refused unless
+every request carries anthropic-workspace-id ("This API key is not scoped to
+a workspace, so this request must include the anthropic-workspace-id
+header"), which is what the Intelligent copilot hit. Every request to the AI
+provider - chat, JSON analysis, the copilot, OCR, embeddings, translation,
+speech, and transcription when it is the same provider - now carries
+AI_WORKSPACE_ID as that header, plus any headers in AI_API_HEADERS (a JSON
+object; it cannot override the key or the content type, and invalid JSON is
+ignored rather than half-sent). Both are server environment only, like the
+key. Tests: packages/ai headers.test.ts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

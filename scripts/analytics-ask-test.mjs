@@ -148,7 +148,7 @@ async function fakeApi(route) {
       store.proposes = (store.proposes ?? 0) + 1;
       const request = String(body.request ?? "").trim();
       if (!request) return json(route, { error: "Say what you want done, for example: “cross-tabs of satisfaction by age and gender”." }, 400);
-      return json(route, { ...proposeFromText(request, await contextFor(true)), model: { status: "not_asked", detail: "" } });
+      return json(route, { ...proposeFromText(request, await contextFor(true)), model: store.aiOff ? { status: "ai_off", detail: "AI is off for this project: it runs in Internal mode, so nothing is sent to a language model. The engine's own results and wording are unaffected. Change it in the project's AI setting." } : { status: "not_asked", detail: "" } });
     }
     if (itemId === "apply") {
       const { ops, rejected } = parseAskOps(body.ops);
@@ -515,6 +515,16 @@ assert.ok(hist.some((h) => /Choose the best chart for each question.*1 applied/.
 assert.ok(hist.some((h) => /Remove redundant analyses.*2 applied/.test(h)));
 ok("what was applied is listed after a reload, with how many items landed");
 assert.ok(store.audit.filter((a) => a === "analytics.intelligent_applied").length >= 5);
+
+/* A-2: a project whose AI switch is off says so, beside the rules' own proposal, which still stands */
+store.aiOff = true;
+await ask("Create cross-tabs of satisfaction by age and gender");
+const off = page.locator('[data-testid="ax-ask-model"]');
+assert.equal(await off.getAttribute("data-status"), "ai_off");
+assert.match(await off.textContent(), /AI is off for this project.*Internal mode.*nothing is sent to a language model/);
+assert.ok(await page.locator('[data-testid="ax-ask-review"]').isVisible(), "the proposal from the engine's rules is still there");
+store.aiOff = false;
+ok("a project with AI switched off says so on the Ask tab, and the engine's proposal still stands");
 
 console.log(`\n${passed} checks passed`);
 await browser.close();

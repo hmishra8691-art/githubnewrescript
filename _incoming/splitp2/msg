@@ -1,0 +1,54 @@
+From the Research Engine audit (docs/RESEARCH-ENGINE-AUDIT-2026-10-08.md, section K, Phase 2), on top of Phase 1.
+
+Semantic resolution (packages/engine/src/nlSemantics.ts): population phrases
+("respondents under 25", "women", "Brand A users", "those who switched",
+compounds) become the question and the condition that selects them — on a
+numeric age the sentence's own comparator, on age bands the whole bands
+inside the range with a straddling band refused and the fix named; concepts
+("brand preference", "age") become the variable that measures them (code,
+variable, construct, tag, then wording by word families; equal fits are
+ambiguous); structural roles ("the screener", "demographics", "this
+question", a block); scale descriptions ("5-point", "7-point agree–
+disagree", "1 to 10", "0–10 where 0 = …", NPS, yes/no) become points, start
+and anchors. The concept families moved here from the measures recogniser.
+
+Recognisers (nlIntent.ts): the screener exclusion in six phrasings
+(add_skip to a screened end on the question that learns it; "only allow"
+inverted; a twin rule said as already there; two age questions → a choice
+each a sentence the engine reads), the scale change (update_question.scale
+on the selection, by code or by description; a text question converted; a
+multi-select refused with the single-select conversion offered; already so
+detected), the crosstab (add_crosstab from two concepts, the demographic in
+the banner unless "X by Y" was said; a sentence with a second instruction
+left to the model), the most important crosstabs (the framework's
+hypothesis-linked, priority-1 tables planned; listed when asked which), the
+questions not connected to any hypothesis (answered from the design with
+the roles that explain the expected ones), the research objective by
+sentence. A model hand-off now carries what the engine can do without one:
+standard items for "add a question to measure <X>" and the objective for
+"create a research design for <Y>", as executable sentences.
+
+Studio: the failed model turn shows the engine's fallback choices; once the
+Studio knows there is no model, such a sentence is an engine question with
+the choices and no call is made; after an unusable answer the fallback card
+stands instead of the grammar's guess. The change plan
+(lib/copilot/changePlan.ts, the turn route, useCopilot, CopilotCard): a
+generation is planned first — one schema-bound call for a plan of items with
+objects and reasons, the model's questions and assumptions — shown as a
+CHANGE PLAN card, ticked and approved; the approved items are built one
+schema-bound call each and merged into one proposal through the same gate;
+an item that fails is reported and the rest still land; "Plan first" is a
+header toggle (on by default, kept per browser). A scripted reply that is
+not plan-shaped falls through to the direct turn, so every existing suite
+runs unchanged.
+
+Tests: engine nlSemantics.test.ts (7) and nlPhase2.test.ts (7), studio
+changePlan.test.ts (3), browser scripts/phase2-nl-test.mjs (13 checks);
+phase1-reliability and analysis-framework suites adjusted for behaviour
+this phase changed on purpose. Mutation checks: engine 36/36, Studio
+surfaces 13/13. Full corpus: 118 ok, the 10 known baseline failures only
+(4 need Postgres, 6 unchanged). pnpm -r test green (17 packages), both
+typechecks and the auth-guard audit clean.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

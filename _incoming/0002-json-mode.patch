@@ -1,0 +1,219 @@
+From a0a203e57a07cdb5973b554a72ffbb9dca81bade Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 07:31:14 +0000
+Subject: [PATCH] AI provider: do not send JSON mode to providers that refuse
+ it
+
+Anthropic's OpenAI-compatible endpoint answers response_format:
+json_object with a 400 ("response_format.type: Input should be
+'json_schema'"), so every model call from an installation pointed at it
+failed. JSON mode is now not sent to Anthropic; any other provider that
+refuses it with a 400 naming response_format is asked once more without
+it and not sent it again. completeJson reads a reply wrapped in prose
+(parseJsonReply), as complete already did.
+
+Tests: packages/ai/src/jsonmode.test.ts (3), mutation checked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ docs/INTELLIGENT-COPILOT.md      |  2 +
+ packages/ai/src/index.ts         | 68 +++++++++++++++++++-----------
+ packages/ai/src/jsonmode.test.ts | 71 ++++++++++++++++++++++++++++++++
+ 3 files changed, 117 insertions(+), 24 deletions(-)
+ create mode 100644 packages/ai/src/jsonmode.test.ts
+
+diff --git a/docs/INTELLIGENT-COPILOT.md b/docs/INTELLIGENT-COPILOT.md
+index ec6ab51..b5dc5e3 100644
+--- a/docs/INTELLIGENT-COPILOT.md
++++ b/docs/INTELLIGENT-COPILOT.md
+@@ -68,6 +68,8 @@ Apply → store.replace (one labelled undoable edit) → AI Change #00N
+ | `AI_VISION_MODEL` | OCR of scanned PDF pages (defaults to `AI_MODEL`) |
+ | `AI_EMBEDDINGS_MODEL` | optional semantic retrieval (BM25 alone without it) |
+ 
++JSON mode (`response_format: json_object`) is sent only to providers that accept it: never to Anthropic, whose OpenAI-compatible endpoint refuses it (“response_format.type: Input should be 'json_schema'”), and a provider that refuses it with a 400 is asked once more without it and not sent it again. The reply is read the same way either way.
++
+ ## Decisions
+ 
+ - **Reasoning is separated from execution.** The model's output is data in a
+diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts
+index 38266fc..c44ab87 100644
+--- a/packages/ai/src/index.ts
++++ b/packages/ai/src/index.ts
+@@ -813,6 +813,35 @@ export function parseJsonReply(content: string): { label?: unknown; question?: u
+ 
+ /* ------------------------------------------------------- the http client */
+ 
++/*
++ * JSON MODE, WHERE THE PROVIDER HAS IT. OpenAI-style servers take
++ * `response_format: {type: "json_object"}`; Anthropic's OpenAI-compatible
++ * endpoint refuses it with a 400 ("response_format.type: Input should be
++ * 'json_schema'"), and some gateways do the same. The reply is read by
++ * `parseJsonReply` either way, so json mode is a nicety, never a requirement:
++ * it is not sent to Anthropic, and any other provider that refuses it with a
++ * 400 naming `response_format` is asked once more without it — and not sent
++ * it again for the life of the process.
++ */
++const NO_JSON_MODE = new Set<string>();
++export function acceptsJsonMode(base: string): boolean {
++  if (NO_JSON_MODE.has(base)) return false;
++  try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
++}
++async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal): Promise<{ r: Response; detail?: string }> {
++  const send = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
++    method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
++  });
++  const { response_format: _format, ...plain } = body;
++  if (!("response_format" in body) || !acceptsJsonMode(base)) return { r: await send(plain) };
++  const r = await send(body);
++  if (r.ok || r.status !== 400) return { r };
++  const detail = (await r.text().catch(() => "")).trim();
++  if (!/response_format/i.test(detail)) return { r, detail };
++  NO_JSON_MODE.add(base);
++  return { r: await send(plain) };
++}
++
+ /** The model the Studio / runtime is configured to call. */
+ export function aiModelName(): string {
+   return (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+@@ -873,17 +902,13 @@ export async function completeJson(
+   const ctrl = new AbortController();
+   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+   try {
+-    const r = await fetch(`${base}/chat/completions`, {
+-      method: "POST", signal: ctrl.signal, cache: "no-store",
+-      headers: providerHeaders(key),
+-      body: JSON.stringify({
+-        model, temperature: 0, max_tokens: maxTokens,
+-        response_format: { type: "json_object" },
+-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+-      }),
+-    });
++    const { r, detail: refused } = await postChat(base, key, {
++      model, temperature: 0, max_tokens: maxTokens,
++      response_format: { type: "json_object" },
++      messages: [{ role: "system", content: system }, { role: "user", content: user }],
++    }, ctrl.signal);
+     if (!r.ok) {
+-      const detail = (await r.text().catch(() => "")).trim().slice(0, 200);
++      const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 200);
+       const err = new Error(`the analysis provider refused the request (${r.status}) ${detail}`.trim());
+       (err as Error & { status?: number }).status = r.status;
+       throw err;
+@@ -905,7 +930,8 @@ export async function completeJson(
+     try {
+       return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, ""));
+     } catch {
+-      return null;
++      /* without json mode the object can come after a sentence */
++      return parseJsonReply(content);
+     }
+   } catch (e) {
+     /*
+@@ -1007,19 +1033,13 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
+   const ctrl = new AbortController();
+   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+   try {
+-    const r = await fetch(`${base}/chat/completions`, {
+-      method: "POST",
+-      signal: ctrl.signal,
+-      cache: "no-store",
+-      headers: providerHeaders(key),
+-      body: JSON.stringify({
+-        model,
+-        temperature: 0,
+-        max_tokens: maxTokens,
+-        response_format: { type: "json_object" },
+-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+-      }),
+-    });
++    const { r } = await postChat(base, key, {
++      model,
++      temperature: 0,
++      max_tokens: maxTokens,
++      response_format: { type: "json_object" },
++      messages: [{ role: "system", content: system }, { role: "user", content: user }],
++    }, ctrl.signal);
+     if (!r.ok) {
+       console.warn("[rescript:ai] provider error", JSON.stringify({ status: r.status }));
+       return null;
+diff --git a/packages/ai/src/jsonmode.test.ts b/packages/ai/src/jsonmode.test.ts
+new file mode 100644
+index 0000000..6e085c4
+--- /dev/null
++++ b/packages/ai/src/jsonmode.test.ts
+@@ -0,0 +1,71 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { acceptsJsonMode, classify, completeJson } from "./index.js";
++
++/**
++ * "response_format.type: Input should be 'json_schema'" — Anthropic's
++ * OpenAI-compatible endpoint refuses `response_format: json_object` with a
++ * 400. JSON mode is not sent to Anthropic; any other provider that refuses it
++ * is asked again without it, once, and the reply is read either way.
++ */
++const KEYS = ["AI_API_URL", "AI_API_KEY", "AI_MODEL", "AI_WORKSPACE_ID", "AI_API_HEADERS"];
++async function withEnv(env: Record<string, string>, fn: () => Promise<void>) {
++  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
++  try { for (const k of KEYS) delete process.env[k]; Object.assign(process.env, env); await fn(); }
++  finally { for (const k of KEYS) { delete process.env[k]; if (saved[k] !== undefined) process.env[k] = saved[k]; } }
++}
++type Sent = { url: string; body: Record<string, unknown> };
++async function withFetch(reply: (b: Record<string, unknown>, n: number) => Response, fn: (sent: Sent[]) => Promise<void>) {
++  const sent: Sent[] = [];
++  const real = globalThis.fetch;
++  globalThis.fetch = (async (url: string, init: { body: string }) => {
++    const body = JSON.parse(init.body);
++    sent.push({ url, body });
++    return reply(body, sent.length);
++  }) as never;
++  try { await fn(sent); } finally { globalThis.fetch = real; }
++}
++const ok = (content: string) => new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200 });
++
++test("Anthropic is never sent response_format, and a reply wrapped in prose is still read", async () => {
++  assert.equal(acceptsJsonMode("https://api.anthropic.com/v1"), false);
++  assert.equal(acceptsJsonMode("https://api.openai.com/v1"), true);
++  assert.equal(acceptsJsonMode("https://notanthropic.com.example/v1"), true, "the host, not a substring");
++  await withEnv({ AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k", AI_MODEL: "claude-x" }, () =>
++    withFetch(() => ok('Here is the plan:\n{"ok": true, "n": 2}'), async (sent) => {
++      assert.deepEqual(await completeJson("s", "u", 10), { ok: true, n: 2 });
++      assert.equal(sent.length, 1);
++      assert.equal("response_format" in sent[0].body, false);
++      assert.equal(sent[0].body.model, "claude-x");
++      assert.deepEqual((sent[0].body.messages as unknown[]).length, 2, "everything else is unchanged");
++    }));
++});
++
++test("a provider that refuses json mode is asked once more without it, and not sent it again", async () => {
++  const refuse = () => new Response('{"error":{"message":"response_format.type: Input should be \'json_schema\'"}}', { status: 400 });
++  await withEnv({ AI_API_URL: "https://gateway.example/v1", AI_API_KEY: "k" }, () =>
++    withFetch((b) => ("response_format" in b ? refuse() : ok('{"label":"Price"}')), async (sent) => {
++      assert.deepEqual(await completeJson("s", "u", 10), { label: "Price" });
++      assert.deepEqual(sent.map((x) => "response_format" in x.body), [true, false]);
++      assert.equal(await classify("too expensive", ["Price", "Taste"]), "Price", "the other request path too");
++      assert.deepEqual(sent.map((x) => "response_format" in x.body), [true, false, false], "remembered: no second refusal");
++    }));
++});
++
++test("other refusals are reported, not retried", async () => {
++  await withEnv({ AI_API_URL: "https://other.example/v1", AI_API_KEY: "k" }, () =>
++    withFetch(() => new Response('{"error":{"message":"model not found"}}', { status: 400 }), async (sent) => {
++      await assert.rejects(completeJson("s", "u", 10), /refused the request \(400\).*model not found/);
++      assert.equal(sent.length, 1);
++    }));
++  await withEnv({ AI_API_URL: "https://down.example/v1", AI_API_KEY: "k" }, () =>
++    withFetch(() => new Response("upstream error while applying response_format", { status: 500 }), async (sent) => {
++      await assert.rejects(completeJson("s", "u", 10), /\(500\)/);
++      assert.equal(sent.length, 1, "an outage is not a json-mode refusal");
++    }));
++  await withEnv({ AI_API_URL: "https://openai.example/v1", AI_API_KEY: "k" }, () =>
++    withFetch(() => ok('{"ok":1}'), async (sent) => {
++      await completeJson("s", "u", 10);
++      assert.deepEqual(sent[0].body.response_format, { type: "json_object" }, "providers that have json mode keep it");
++    }));
++});
+-- 
+2.43.0
+

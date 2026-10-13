@@ -1,0 +1,13 @@
+Page-guard suite: the bare project URL is the overview; the editor is ?tab=
+
+blocker-fixes-test R3 fetched /studio/<id> expecting the questionnaire in
+the server HTML. Since the overview landing (058da08) the bare URL is the
+overview shell, which carries no definition; the editor with the definition
+is the ?tab= URL. The check now covers both: a member gets the overview
+shell (no question text in it) and the editor at ?tab=questions (with it);
+a stranger is told "not found" on both URLs and sees neither the question
+nor the option labels. 30/30. The report records the full browser-corpus
+result (128/137; the 9 failures are the known baseline set).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

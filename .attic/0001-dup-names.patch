@@ -1,0 +1,392 @@
+From 7cb5999b40fab02368b09b22c51f0608fa5f4024 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 23 Sep 2026 18:36:25 +0000
+Subject: [PATCH] Duplication: a copy gets a name nothing else is using
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This is the same incident as yesterday's "Your latest changes could not be
+saved. Please retry before starting the test survey." Two questions exporting
+the same variable is a blocking problem at the publish gate — it is the
+fixture I used to test that refusal — so the survey could not be versioned,
+and the Studio rendered the refusal as a vanishing toast that said retry.
+Retrying could never work, because the duplicate name was still there.
+
+THE CAUSE
+
+Both duplicate paths appended `_COPY` unconditionally:
+
+    copy.code = `${q.code}_COPY`;
+    copy.variableName = `${q.variableName}_COPY`;
+
+Duplicating a copy was fine — Q1_COPY becomes Q1_COPY_COPY. Duplicating the
+SAME question twice was not: both copies are Q1_COPY, in both the code and the
+variable name. Reproduced before fixing, and the block path did the same thing
+once per question in the block.
+
+THE FIX
+
+`usedNames(def)` collects every name that already means something — question
+codes AND variable names, calculation targets, embedded-data fields and the
+reserved system columns. Codes and variable names are one namespace because
+`getQuestionByCodeOrVar` resolves both, so a copy whose code lands on another
+question's variable name is just as broken as two identical variable names,
+and a check that looks at only one of them finds half the collisions.
+
+`copyNames(taken, q)` then picks the first free suffix — `_COPY`, `_COPY_2`,
+`_COPY_3` — applying the SAME one to the code and the variable name. They are
+usually identical and a programmer expects them to stay in step, so numbering
+them independently would be its own small betrayal. The block path shares one
+`taken` set across the whole block, because the copies are minted before any
+of them is in the definition.
+
+WHAT WAS ALREADY CORRECT, AND IS UNCHANGED
+
+Requirements 2, 3 and 4 of the report — manual renaming, propagation, and
+refusing a name that is taken — are already built and working.
+`VariableNameInput` is wired into the question editor and the calculation
+editor and goes through `renameImpact` + `applyRename`, which rewrite every
+reference (logic, conditions, piping, calculations, randomisers, embedded
+data, validation) and refuse a collision, a reserved column, an invalid
+identifier or a name that shadows a calc function. I verified this rather than
+rebuilding it, and added tests pinning both behaviours so they stay true.
+
+So the "variable name shown in the editor is the single source of truth"
+requirement was already met on the editing path; it was only duplication that
+could create a second question claiming the same name behind the programmer's
+back.
+
+11 tests. Three mutations — the blind append, dropping codes from the
+namespace, and numbering the two fields independently — each caught, the last
+two only after the first versions of those tests proved too weak to tell the
+difference. 15 packages and typecheck green.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ .../components/studio/QuestionsPanel.tsx      |  30 +++-
+ packages/engine/src/duplicateNaming.test.ts   | 161 ++++++++++++++++++
+ packages/engine/src/variableUsage.ts          |  79 +++++++++
+ 3 files changed, 266 insertions(+), 4 deletions(-)
+ create mode 100644 packages/engine/src/duplicateNaming.test.ts
+
+diff --git a/apps/studio/components/studio/QuestionsPanel.tsx b/apps/studio/components/studio/QuestionsPanel.tsx
+index 5bf2126..1710dbc 100644
+--- a/apps/studio/components/studio/QuestionsPanel.tsx
++++ b/apps/studio/components/studio/QuestionsPanel.tsx
+@@ -89,6 +89,7 @@ import {
+   POSTAL_FORMATS,
+   CURRENCIES,
+   type QuestionReference,
++  usedNames, copyNames,
+ } from "@rescript/engine"; // also registers builtin question types
+ import { isEmptyOptionLogic } from "@rescript/schema";
+ import { useStudio, uid } from "./store";
+@@ -2026,6 +2027,15 @@ export function QuestionsPanel() {
+        */
+       const idMap = new Map<string, string>();
+       const copiedQuestions: any[] = [];
++      /*
++       * ONE `taken` SET FOR THE WHOLE BLOCK.
++       *
++       * The copies are minted before any of them is in the definition, so
++       * recomputing the used names per question would hand the same suffix to
++       * every question in the block — the bug this fixes, multiplied by the
++       * block's length.
++       */
++      const taken = usedNames(d);
+       const copyPage = (page: any) => {
+         const newIds: string[] = [];
+         for (const qid of page.questionIds) {
+@@ -2033,8 +2043,9 @@ export function QuestionsPanel() {
+           if (!q) continue;
+           const copy = structuredClone(q);
+           copy.id = uid("q");
+-          copy.code = `${q.code}_COPY`;
+-          copy.variableName = `${q.variableName}_COPY`;
++          const named = copyNames(taken, q);
++          copy.code = named.code;
++          copy.variableName = named.variableName;
+           reidentify(copy);
+           idMap.set(q.id, copy.id);
+           /* questions are named by code and by variable name as well as by id
+@@ -2248,8 +2259,19 @@ export function QuestionsPanel() {
+       if (!q) return;
+       const copy = structuredClone(q);
+       copy.id = uid("q");
+-      copy.code = `${q.code}_COPY`;
+-      copy.variableName = `${q.variableName}_COPY`;
++      /*
++       * The suffix is chosen against the whole survey, not appended blindly.
++       *
++       * It used to be `${q.code}_COPY` unconditionally, so duplicating the
++       * SAME question twice produced two questions with the same code and the
++       * same variable name. A duplicate variable name is a blocking problem at
++       * the publish gate, so the survey could then no longer be versioned or
++       * tested — which is how this surfaced as "my changes could not be saved"
++       * rather than as anything to do with duplication.
++       */
++      const named = copyNames(usedNames(d), q);
++      copy.code = named.code;
++      copy.variableName = named.variableName;
+       reidentify(copy);
+       d.questions.push(copy);
+       for (const pg of listPages(d.flow as any[])) {
+diff --git a/packages/engine/src/duplicateNaming.test.ts b/packages/engine/src/duplicateNaming.test.ts
+new file mode 100644
+index 0000000..5471836
+--- /dev/null
++++ b/packages/engine/src/duplicateNaming.test.ts
+@@ -0,0 +1,161 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { usedNames, copyNames, renameImpact, applyRename, buildVariableDictionary } from "./index.js";
++
++/**
++ * DUPLICATING A QUESTION MUST NOT PRODUCE A DUPLICATE VARIABLE NAME.
++ *
++ * Both duplicate paths in the Studio appended `_COPY` unconditionally, so
++ * duplicating the SAME question twice produced two questions sharing a code
++ * and a variable name. That is a blocking problem at the publish gate, which
++ * means the survey could no longer be versioned or tested at all — and because
++ * the Studio rendered the gate's refusal as a vanishing toast, it surfaced to
++ * the programmer as "your latest changes could not be saved, please retry".
++ * The duplication was the cause; the save message was the symptom.
++ */
++
++const survey = () =>
++  SurveyDefinition.parse({
++    meta: { id: "svy", code: "S", title: "T" },
++    questions: [
++      { id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "How old?" },
++      { id: "q2", code: "Q2", variableName: "Q2", type: "numeric", text: "How many?" },
++    ],
++    flow: [{ type: "page", id: "p1", questionIds: ["q1", "q2"] }, { type: "end", id: "e1", status: "complete" }],
++    deployment: { clientSlug: "c", studySlug: "s" },
++  });
++
++test("duplicating the same question twice gives two different names", () => {
++  const def = survey();
++  const taken = usedNames(def);
++  const first = copyNames(taken, { code: "Q1", variableName: "Q1" });
++  const second = copyNames(taken, { code: "Q1", variableName: "Q1" });
++
++  assert.equal(first.variableName, "Q1_COPY");
++  assert.equal(second.variableName, "Q1_COPY_2", "the second copy collided with the first — the reported bug");
++  assert.notEqual(first.code, second.code);
++});
++
++test("the code and the variable name take the same suffix", () => {
++  const taken = usedNames(survey());
++  const a = copyNames(taken, { code: "Q1", variableName: "Q1" });
++  assert.equal(a.code, a.variableName, "they start equal and a programmer expects them to stay in step");
++  const b = copyNames(taken, { code: "Q1", variableName: "Q1" });
++  assert.equal(b.code, b.variableName);
++
++  /*
++   * The case that separates "one suffix for both" from "number them
++   * independently": here the CODE `Q1_COPY` is taken and the variable name
++   * `Q1_COPY` is not. Advancing only the one that collided would give a copy
++   * coded Q1_COPY_2 with the variable name Q1_COPY — two fields that no longer
++   * agree, on a question where they started identical.
++   */
++  const def = survey();
++  def.questions.push({ ...def.questions[0], id: "q9", code: "Q1_COPY", variableName: "UNRELATED" } as never);
++  const c = copyNames(usedNames(def), { code: "Q1", variableName: "Q1" });
++  assert.equal(c.code, c.variableName, `code ${c.code} and variable ${c.variableName} drifted apart`);
++});
++
++test("a copy whose code and variable name differ still avoids both collisions", () => {
++  /*
++   * Code and variable name are separate fields and need not match. When they
++   * differ, checking only one of them for a collision is not enough: here
++   * `QA_COPY` is already taken as a code while `VB_COPY` is free, so a check
++   * that looked only at the variable name would accept the pair and mint a
++   * second question coded QA_COPY.
++   */
++  const def = survey();
++  def.questions.push({ ...def.questions[0], id: "qa", code: "QA", variableName: "VB" } as never);
++  def.questions.push({ ...def.questions[0], id: "qx", code: "QA_COPY", variableName: "UNRELATED_2" } as never);
++  const name = copyNames(usedNames(def), { code: "QA", variableName: "VB" });
++  assert.notEqual(name.code, "QA_COPY", "the copy's code collided with an existing code");
++  assert.equal(name.code, "QA_COPY_2");
++  assert.equal(name.variableName, "VB_COPY_2", "both fields advance together");
++});
++
++test("duplicating a copy keeps the convention and stays unique", () => {
++  const taken = usedNames(survey());
++  const copy = copyNames(taken, { code: "Q1", variableName: "Q1" });        // Q1_COPY
++  const copyOfCopy = copyNames(taken, copy);                                 // Q1_COPY_COPY
++  assert.equal(copyOfCopy.variableName, "Q1_COPY_COPY");
++  assert.notEqual(copyOfCopy.variableName, copy.variableName);
++});
++
++test("a copy never lands on a name another question already uses", () => {
++  /*
++   * The collision does not have to come from a copy. A programmer who has
++   * already hand-named something `Q1_COPY` must not have it silently shadowed.
++   */
++  const def = survey();
++  def.questions.push({ ...def.questions[0], id: "q3", code: "Q1_COPY", variableName: "Q1_COPY" } as never);
++  const name = copyNames(usedNames(def), { code: "Q1", variableName: "Q1" });
++  assert.equal(name.variableName, "Q1_COPY_2");
++});
++
++test("codes and variable names are one namespace", () => {
++  /*
++   * `getQuestionByCodeOrVar` resolves both, so a copy's code may not land on a
++   * name already in use even when that name is only a CODE. The question added
++   * here deliberately has a free variable name and a taken code: a uniqueness
++   * check that tracked only variable names would hand the copy `Q1_COPY` and
++   * produce two questions with the same code.
++   */
++  const def = survey();
++  def.questions.push({ ...def.questions[0], id: "q3", code: "Q1_COPY", variableName: "UNRELATED" } as never);
++  const name = copyNames(usedNames(def), { code: "Q1", variableName: "Q1" });
++  assert.notEqual(name.code, "Q1_COPY", "the copy's code collided with an existing question's code");
++  assert.equal(name.code, "Q1_COPY_2");
++});
++
++test("reserved system columns are never handed out", () => {
++  const taken = usedNames(survey());
++  for (const reserved of ["RESP_ID", "SESSION_ID", "STATUS"]) {
++    assert.ok(taken.has(reserved), `${reserved} must be treated as taken`);
++  }
++});
++
++test("a whole block of copies gets distinct names from one shared set", () => {
++  // the block path mints every copy before any is in the definition, so the
++  // set has to be shared or every question in the block gets the same suffix
++  const taken = usedNames(survey());
++  const a = copyNames(taken, { code: "Q1", variableName: "Q1" });
++  const b = copyNames(taken, { code: "Q2", variableName: "Q2" });
++  const c = copyNames(taken, { code: "Q1", variableName: "Q1" });
++  const names = [a, b, c].map((x) => x.variableName);
++  assert.equal(new Set(names).size, 3, `names collided: ${names.join(", ")}`);
++});
++
++test("the duplicated survey has no duplicate variables — the gate's own check", () => {
++  /*
++   * The end-to-end assertion: build the variable dictionary the publish gate
++   * builds, over a survey with two copies of the same question, and confirm
++   * nothing is exported twice.
++   */
++  const def = survey();
++  const taken = usedNames(def);
++  for (let i = 0; i < 3; i++) {
++    const n = copyNames(taken, { code: "Q1", variableName: "Q1" });
++    def.questions.push({ ...def.questions[0], id: `c${i}`, code: n.code, variableName: n.variableName } as never);
++  }
++  const names = buildVariableDictionary(def).map((v) => v.name);
++  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
++  assert.deepEqual(dupes, [], `the dictionary exports these twice: ${dupes.join(", ")}`);
++});
++
++test("a manual rename still refuses a name that is already taken", () => {
++  // requirement 4: the manual path must reject a collision rather than accept it
++  const def = survey();
++  const verdict = renameImpact(def, "Q1", "Q2");
++  assert.equal(verdict.ok, false, "renaming Q1 onto Q2 must be refused");
++  assert.ok(verdict.blockers.length > 0);
++});
++
++test("a manual rename propagates, so nothing is left naming the old variable", () => {
++  // requirement 3: the new name must be reflected everywhere
++  const def = survey();
++  const renamed = applyRename(def, "Q1", "AGE_YEARS", {});
++  const names = buildVariableDictionary(renamed).map((v) => v.name);
++  assert.ok(names.includes("AGE_YEARS"), "the new name should be in the dictionary");
++  assert.ok(!names.includes("Q1"), "the old name should be gone from the dictionary");
++});
+diff --git a/packages/engine/src/variableUsage.ts b/packages/engine/src/variableUsage.ts
+index a93c5a1..e813c79 100644
+--- a/packages/engine/src/variableUsage.ts
++++ b/packages/engine/src/variableUsage.ts
+@@ -701,3 +701,82 @@ export function renameVariable(
+   if (!impact.ok) return { ok: false, impact };
+   return { ok: true, def: applyRename(def, oldName, newName, { alsoCode: opts.alsoCode }), impact };
+ }
++
++/* ------------------------------------------------------- naming a copy */
++
++/**
++ * EVERY NAME THAT ALREADY MEANS SOMETHING IN THIS SURVEY.
++ *
++ * Codes and variable names share one namespace, because
++ * `getQuestionByCodeOrVar` resolves both — so a copy whose CODE collides with
++ * another question's VARIABLE NAME is just as broken as two identical
++ * variable names, and a uniqueness check that looks at only one of them finds
++ * only half the collisions. Calculation targets, embedded-data fields and the
++ * reserved system columns are in the same namespace for the same reason.
++ */
++export function usedNames(def: SurveyDefinition): Set<string> {
++  const taken = new Set<string>(RESERVED);
++  for (const q of def.questions ?? []) {
++    if (q.code) taken.add(q.code);
++    if (q.variableName) taken.add(q.variableName);
++  }
++  for (const c of def.calculations ?? []) if (c.targetVariable) taken.add(c.targetVariable);
++  for (const node of def.flow ?? []) collectEmbeddedNames(node as Record<string, unknown>, taken);
++  return taken;
++}
++
++/** Embedded-data fields live on flow nodes, at any depth. */
++function collectEmbeddedNames(node: Record<string, unknown>, into: Set<string>): void {
++  if (!node || typeof node !== "object") return;
++  const fields = (node as { fields?: { name?: string }[] }).fields;
++  if (Array.isArray(fields)) for (const f of fields) if (f?.name) into.add(f.name);
++  for (const key of ["children", "branches", "cases"]) {
++    const kids = (node as Record<string, unknown>)[key];
++    if (Array.isArray(kids)) for (const k of kids) collectEmbeddedNames(k as Record<string, unknown>, into);
++  }
++}
++
++/**
++ * NAME A DUPLICATED QUESTION SO IT CANNOT COLLIDE.
++ *
++ * Both duplicate paths in the Studio appended `_COPY` blindly. Duplicating one
++ * question TWICE therefore produced two questions with the same code and the
++ * same variable name — and a duplicate variable name is a blocking problem at
++ * the publish gate, so the survey then could not be versioned or tested at
++ * all. The reported symptom was "my changes could not be saved"; this is what
++ * was actually wrong.
++ *
++ * The code and the variable name take the SAME suffix, chosen so that neither
++ * collides. They are usually identical (`Q1`/`Q1`) and a programmer reasonably
++ * expects them to stay in step, so numbering them independently — `Q1_COPY`
++ * with `Q1_COPY_2` — would be its own small betrayal.
++ *
++ * `taken` is passed in and mutated by the caller rather than recomputed per
++ * question, because duplicating a BLOCK mints several copies before any of
++ * them is in the definition; recomputing from `def` each time would hand the
++ * same name to every question in the block.
++ */
++export function copyNames(
++  taken: Set<string>,
++  from: { code?: string; variableName?: string },
++): { code: string; variableName: string } {
++  const code = from.code ?? "";
++  const variableName = from.variableName ?? "";
++  for (let n = 1; n < 1000; n++) {
++    const suffix = n === 1 ? "_COPY" : `_COPY_${n}`;
++    const c = `${code}${suffix}`;
++    const v = `${variableName}${suffix}`;
++    // a name is free only if BOTH are, so the two stay in step
++    if (!taken.has(c) && !taken.has(v)) {
++      taken.add(c);
++      taken.add(v);
++      return { code: c, variableName: v };
++    }
++  }
++  /* a thousand copies of one question is not a real survey; rather than loop
++     for ever, fall back to something that cannot collide */
++  const unique = `_COPY_${Date.now().toString(36).toUpperCase()}`;
++  taken.add(`${code}${unique}`);
++  taken.add(`${variableName}${unique}`);
++  return { code: `${code}${unique}`, variableName: `${variableName}${unique}` };
++}
+-- 
+2.43.0
+

@@ -1,0 +1,960 @@
+From 5da68b32e9495eb64846bb3ea195d432f360eb9f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 19:01:26 +0000
+Subject: [PATCH] Copilot: refused proposals explain themselves, one repair
+ round, real default values
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The bug: asked to start Q2 at 19, the model proposed a sandboxed script that
+set the input's value and dispatched DOM events. The Studio refused it, the
+proposal had nothing left to apply, and the card showed a disabled Apply with
+no reason (its tooltip even said "Apply as one undoable change").
+
+- The card lists refused actions with their reasons; Apply's tooltip says when
+  there is nothing to apply. diffSurveys counts default-value and custom-HTML
+  changes, so a proposal of only those is no longer "empty".
+- The turn route sends refusals back to the model once and uses the corrected
+  answer when the Studio accepts more of it; the card says a correction happened.
+- settings.defaultValue (Properties → Default / piped value) now works at
+  runtime: filled in when the question is first shown, only if unanswered, once;
+  numbers for numeric, codes for choice questions, piping resolved.
+- New look-only copilot action set_default_value, gated against the question.
+- Scripts that try to fill in answers are refused with a pointer to the default
+  value; page_enter/select_option… are accepted as rs.listen aliases.
+- Tests: engine defaultValue.test.ts, studio copilot.test.ts, browser
+  default-value-test.mjs; copilot-test asserts the card's refusal note. All
+  mutation-checked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
+---
+ apps/studio/app/api/copilot/turn/route.ts     |  42 ++++-
+ apps/studio/app/design-system.css             |   4 +
+ .../intelligent/IntelligentView.tsx           |   3 +-
+ .../intelligent/copilot/CopilotCard.tsx       |  14 +-
+ .../intelligent/copilot/CopilotPanel.tsx      |   2 +-
+ .../intelligent/copilot/useCopilot.ts         |   8 +-
+ apps/studio/lib/copilot/copilot.test.ts       |   8 +
+ apps/studio/lib/copilot/prompt.ts             |   8 +-
+ docs/SCRIPT-STUDIO-SYNC.md                    |  27 +++
+ packages/engine/src/defaultValue.test.ts      | 132 +++++++++++++
+ packages/engine/src/defaultValue.ts           |  70 +++++++
+ packages/engine/src/flow.ts                   |   3 +
+ packages/engine/src/index.ts                  |   1 +
+ packages/engine/src/surveyActions.ts          |   5 +
+ packages/engine/src/theme.ts                  |   6 +-
+ packages/engine/src/ux.ts                     |   9 +-
+ packages/engine/src/uxActions.ts              |  49 ++++-
+ packages/renderer/src/UxLayer.tsx             |   6 +-
+ scripts/copilot-test.mjs                      |   3 +
+ scripts/default-value-test.mjs                | 176 ++++++++++++++++++
+ 20 files changed, 554 insertions(+), 22 deletions(-)
+ create mode 100644 packages/engine/src/defaultValue.test.ts
+ create mode 100644 packages/engine/src/defaultValue.ts
+ create mode 100644 scripts/default-value-test.mjs
+
+diff --git a/apps/studio/app/api/copilot/turn/route.ts b/apps/studio/app/api/copilot/turn/route.ts
+index 2b8bdbb..bb68889 100644
+--- a/apps/studio/app/api/copilot/turn/route.ts
++++ b/apps/studio/app/api/copilot/turn/route.ts
+@@ -113,7 +113,9 @@ export async function POST(req: NextRequest) {
+   /* 3: the model — or the cache, for exactly the same request */
+   const maxTokens = mode === "generate" ? 8000 : mode === "review" ? 3000 : uxTurn ? 3500 : 2500;
+   const key = createHash("sha256").update(`${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
+-  const fake = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? body.fake : null;
++  // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request]
++  const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
++  const fake = fakes[0] ?? null;
+   let raw: unknown;
+   let cached = false;
+   const hit = CACHE.get(key);
+@@ -134,12 +136,44 @@ export async function POST(req: NextRequest) {
+ 
+   /* 4: the gate, and the engine's validation on a clone */
+   const coerced = coerceCopilotReply(raw);
+-  const reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
++  let reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
+   if (!reply) {
+     return NextResponse.json({ ok: true, reply: null, message: aiProviderName() === "fake" ? "The FAKE provider cannot reason about surveys; configure a real model to use the copilot." : "The model's answer had nothing I could use. Try rephrasing — nothing was changed.", context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
+   }
+   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
+-  const applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
++  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
++  /*
++   * ONE REPAIR. The model sometimes proposes something the Studio refuses — a
++   * script reaching for the page, an event that does not exist, an option that
++   * is not there. Rather than offer a proposal whose Apply can do nothing, the
++   * refusals go back to the model once, with its answer, and it corrects
++   * them. The corrected answer is used only if the Studio accepts more of it.
++   */
++  let repair: { refused: string[]; fixed: boolean } | undefined;
++  // the failed actions, each "what it was: why" — the first entries of errors, in order
++  const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
++  if (applied && refused.length && !cached && (aiProviderName() !== "fake" || fakes.length > 1)) {
++    const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
++    try {
++      const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens, operation: `copilot_${mode}_repair` },
++        () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, maxTokens, { timeoutMs: 90_000 }));
++      if (m.ok) {
++        charge += m.event?.customerCharge ?? 0;
++        const raw2 = fakes[1] ?? m.value;
++        const c2 = coerceCopilotReply(raw2);
++        const r2 = c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2;
++        const a2 = r2 && r2.actions.length ? applySurveyActions(def, r2.actions, { uxOnly: cls.uxOnly }) : null;
++        const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
++        if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
++          reply = r2; applied = a2;
++          if (!fakes.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
++          repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok) };
++        } else repair = { refused, fixed: false };
++      }
++    } catch (e) {
++      console.warn("[rescript:copilot] repair failed", JSON.stringify({ error: (e as Error).message }));
++    }
++  }
+   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
+   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
+   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation
+@@ -152,7 +186,7 @@ export async function POST(req: NextRequest) {
+     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
+     ...(deterministic ? { review: deterministic } : {}),
+     passages,
+-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly },
++    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(repair ? { repair } : {}) },
+     usage: { charge },
+   });
+ }
+diff --git a/apps/studio/app/design-system.css b/apps/studio/app/design-system.css
+index 2e620f0..2fa855c 100644
+--- a/apps/studio/app/design-system.css
++++ b/apps/studio/app/design-system.css
+@@ -1621,6 +1621,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
+ .cp-cite { font-size: 10.5px; color: var(--c-text-3); margin-left: 4px; cursor: help; }
+ .cp-assumptions { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; }
+ .cp-assumptions ul { margin: 2px 0 0; padding-left: 18px; }
++.cp-refused { border-left: 3px solid var(--c-warning); padding: 4px 10px; background: var(--c-warning-bg); border-radius: 6px; font-size: 12.5px; margin-top: 8px; }
++.cp-refused.all { border-left-color: var(--c-error); background: var(--c-error-bg); }
++.cp-refused ul { margin: 2px 0 0; padding-left: 18px; }
++.cp-repaired { font-size: 12px; margin: 6px 0 0; }
+ .cp-clarify { display: flex; flex-wrap: wrap; gap: 6px; }
+ .cp-q { max-width: 100%; }
+ .cp-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+diff --git a/apps/studio/components/intelligent/IntelligentView.tsx b/apps/studio/components/intelligent/IntelligentView.tsx
+index 0efeff8..d95a130 100644
+--- a/apps/studio/components/intelligent/IntelligentView.tsx
++++ b/apps/studio/components/intelligent/IntelligentView.tsx
+@@ -608,7 +608,8 @@ export function IntelligentView() {
+                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
+                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
+                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
+-                    applyTitle={s.readOnly ? "Read-only" : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
++                    refused={open ? copilot.state!.errors : []}
++                    applyTitle={s.readOnly ? "Read-only" : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
+                 );
+               }
+               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;
+diff --git a/apps/studio/components/intelligent/copilot/CopilotCard.tsx b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+index 88d0673..43bf566 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotCard.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotCard.tsx
+@@ -18,7 +18,7 @@ import type { CopilotEntry } from "./useCopilot";
+  *
+  * Every question code in the copilot's words is a link to the question.
+  */
+-export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, onCancel, onAnswer, counts, canApply, applyTitle }: {
++export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, onCancel, onAnswer, counts, canApply, applyTitle, refused = [] }: {
+   entry: CopilotEntry;
+   def: SurveyDefinition;
+   onSelect(questionId: string): void;
+@@ -28,6 +28,8 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
+   onAnswer(text: string): void;
+   counts: { label: string; value: number }[] | null;
+   canApply: boolean;
++  /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
++  refused?: string[];
+   applyTitle: string;
+ }) {
+   const r = entry.reply;
+@@ -106,6 +108,16 @@ export function CopilotCard({ entry, def, onSelect, onReviewChanges, onApply, on
+               </div>
+             )}
+             {r.rejected.length > 0 && <p className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {r.rejected.length} action{r.rejected.length === 1 ? "" : "s"} from the model {r.rejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {r.rejected.length === 1 ? "was" : "were"} dropped.</p>}
++            {r.actions.length > 0 && state === "open" && refused.length > 0 && (
++              <div className={`cp-refused${counts?.length ? "" : " all"}`} role="alert" data-testid="cp-card-refused">
++                <span className="iq-label">{counts?.length ? `Not included — the Studio refused ${refused.length === 1 ? "one change" : `${refused.length} changes`}` : "Nothing can be applied — the Studio refused this proposal"}</span>
++                <ul>{refused.map((e, i) => <li key={i}><Linked text={e} def={def} onSelect={onSelect} /></li>)}</ul>
++                {!counts?.length && <p className="iqi-dim" style={{ margin: "4px 0 0" }}>Ask again with this in mind, or edit it by hand in Question Studio → Properties.</p>}
++              </div>
++            )}
++            {entry.context?.repair && state === "open" && (
++              <p className="iqi-dim cp-repaired" data-testid="cp-repaired">{entry.context.repair.fixed ? `The first answer had ${entry.context.repair.refused.length === 1 ? "a change" : `${entry.context.repair.refused.length} changes`} the Studio could not accept; the copilot corrected ${entry.context.repair.refused.length === 1 ? "it" : "them"}.` : "The copilot was asked to correct the changes the Studio refused, and could not correct all of them."}</p>
++            )}
+             {r.actions.length > 0 && counts && (
+               <div className="cp-counts" data-testid="cp-counts">
+                 {counts.map((c) => <span key={c.label} className="cp-count"><b>{c.value}</b> {c.label}</span>)}
+diff --git a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+index a657d24..2f823c7 100644
+--- a/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
++++ b/apps/studio/components/intelligent/copilot/CopilotPanel.tsx
+@@ -127,7 +127,7 @@ function ChangesTab({ copilot, onSelect, onApply, applyNote, readOnly }: { copil
+       <div className="iq-actions">
+         <button type="button" className="iq-btn" onClick={copilot.cancel} data-testid="cp-panel-cancel">Cancel</button>
+         <span className="iq-spacer" />
+-        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : "Apply as one undoable change"}>Apply changes</button>
++        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : "Apply as one undoable change"}>Apply changes</button>
+       </div>
+     </div>
+   );
+diff --git a/apps/studio/components/intelligent/copilot/useCopilot.ts b/apps/studio/components/intelligent/copilot/useCopilot.ts
+index fba20d7..e43389a 100644
+--- a/apps/studio/components/intelligent/copilot/useCopilot.ts
++++ b/apps/studio/components/intelligent/copilot/useCopilot.ts
+@@ -29,7 +29,7 @@ export interface CopilotEntry {
+   error?: string;
+   message?: string;
+   usage?: { charge: number };
+-  context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean; ux?: boolean; uxOnly?: boolean };
++  context?: { mode: string; researchUsed: boolean; passages: string[]; promptChars: number; outlineChars?: number; cached: boolean; ux?: boolean; uxOnly?: boolean; repair?: { refused: string[]; fixed: boolean } };
+   passages?: Record<string, Passage>;
+   /** this turn's place in the open proposal */
+   proposal?: "open" | "superseded" | "applied" | "cancelled";
+@@ -171,8 +171,10 @@ export function useCopilot(opts: {
+     s.replace(state.after);
+     setSession((x) => ({ ...x, proposal: null, confirmed: false, history: [...x.history, rec], tab: "history" }));
+     const ux = state.diff.ux;
+-    const targets = [...new Set([...(state.diff.theme.length ? ["the theme"] : []), ...[...ux.added, ...ux.changed, ...ux.removed].map((x) => x.target)])];
+-    const note = (!ux.empty || state.diff.theme.length > 0) && state.structureUnchanged
++    // a question's default value and custom HTML are look-and-behaviour too
++    const qBehaviour = state.diff.questionsModified.flatMap((m) => m.changes.filter((c) => c.field === "default value" || c.field === "custom HTML").map((c) => `${m.code} (${c.field})`));
++    const targets = [...new Set([...(state.diff.theme.length ? ["the theme"] : []), ...[...ux.added, ...ux.changed, ...ux.removed].map((x) => x.target), ...qBehaviour])];
++    const note = (!ux.empty || state.diff.theme.length > 0 || qBehaviour.length > 0) && state.structureUnchanged
+       ? `Done. The look and behaviour of ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? ` and ${targets.length - 3} more` : ""} ${targets.length === 1 ? "has" : "have"} been updated without changing the survey's questions, codes or logic.`
+       : undefined;
+     opts.patchAll((e) => (e.proposal === "open" || e.proposal === "superseded" ? { proposal: e.proposal === "open" ? "applied" : e.proposal, ...(e.proposal === "open" ? { changeN: n, ...(note ? { appliedNote: note } : {}) } : {}) } : null));
+diff --git a/apps/studio/lib/copilot/copilot.test.ts b/apps/studio/lib/copilot/copilot.test.ts
+index 5c3120b..471c27c 100644
+--- a/apps/studio/lib/copilot/copilot.test.ts
++++ b/apps/studio/lib/copilot/copilot.test.ts
+@@ -268,3 +268,11 @@ test("a theme request is look-only; a theme image is told as colours and a place
+   const acts = withThemeImage([{ op: "set_theme", background: { image: THEME_IMAGE_TOKEN, overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }], "https://cdn.example.com/a.jpg");
+   assert.deepEqual(acts, [{ op: "set_theme", background: { image: "https://cdn.example.com/a.jpg", overlay: "rgba(0,0,0,.4)" }, colors: { primary: "#dc3214" } }]);
+ });
++
++test("a default value request reaches the UX guide, which offers set_default_value — never a script that fills in answers", () => {
++  for (const t of ["Set Q2's default value to 19", "Prefill the age question with 19", "Give Q3 a default answer of Yes"]) {
++    const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t);
++  }
++  assert.match(COPILOT_UX_GUIDE, /\{"op":"set_default_value","target":"Q2","value":19\}/);
++  assert.match(COPILOT_UX_GUIDE, /A script CANNOT fill in or change an answer/);
++});
+diff --git a/apps/studio/lib/copilot/prompt.ts b/apps/studio/lib/copilot/prompt.ts
+index bcd699b..06e4a02 100644
+--- a/apps/studio/lib/copilot/prompt.ts
++++ b/apps/studio/lib/copilot/prompt.ts
+@@ -67,7 +67,7 @@ ACTIONS (each an object with "op"; use only these):
+ {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
+ {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
+ {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"]}
+-LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
++LOOK AND BEHAVIOUR — the theme (colours, fonts, background image, cards, options, radios, inputs, spacing, per-device sizes), styling, CSS, custom HTML, animations, transitions, layout, responsive rules, interactions, JavaScript behaviour — are ALSO actions: set_theme, set_custom_html, set_default_value (a question's starting answer), create_style / update_style / remove_style, create_animation / update_animation / remove_animation, create_behavior / update_behavior / remove_behavior, create_responsive_rule, attach_behavior_to_question|option|block|page. Rescript supports them: never answer that the platform cannot style, animate or script a survey. Their full shapes are in the UX GUIDE, which is included whenever a request is about how the survey looks or behaves.
+ 
+ REFS. Give every new question a "ref" that reads as a variable name (AGE, BUY_6M, TRUST_1). The ref becomes its variable, so conditions, calculations and piping can use it in the same batch: "BUY_6M = 2", "{{BRAND}}". A new question's options are coded 1, 2, 3… in the order written ("None of these" 99, "Other" the next free code). Existing questions are named by their CODE or VARIABLE from the outline; never invent a code that is not in the outline or created in this batch.
+ 
+@@ -179,7 +179,9 @@ THEME VARIABLES to prefer over hard-coded values: var(--rs-primary) var(--rs-acc
+   // JavaScript ONLY when the researcher asks for code or nothing above can do it. It runs in a sandbox with only this api:
+   // rs.listen(event, target, fn) — events answer change select deselect click hover page complete; fn gets {question, value, option}
+   // rs.getAnswer("Q3") rs.getQuestion("Q3") rs.getBlock() rs.getPage() rs.addClass(t, name) rs.removeClass(t, name) rs.toggleClass(t, name) rs.animate(t, preset, {duration}) rs.setStyle(t, {prop: value}) rs.clearStyle(t) rs.show(t) rs.hide(t) rs.showMessage(t, text) rs.hideMessage(t) rs.scrollTo(t) rs.focus(t) rs.after(ms, fn) rs.log(…)
+-  // t is a target string above or "self". No loops (while/for/do), no document/window/fetch/storage: refused.
++  // t is a target string above or "self". No loops (while/for/do), no document/window/fetch/storage, no DOM events: refused.
++  // A script CANNOT fill in or change an answer (no rs.setAnswer, no input.value, no dispatchEvent). A starting answer is set_default_value:
++{"op":"set_default_value","target":"Q2","value":19}   // the question's default value (Properties → Default value): filled in when the question is first shown, only if it has no answer yet, never over the respondent's own answer; a number for numeric, text for text, an option CODE (or list of codes for a multi-select) for a choice question; null removes it
+ {"op":"update_behavior","id":"…","effects":[…]}   // or "on", "options", "script": what is given replaces
+ {"op":"remove_style","id":"…"} · {"op":"remove_animation","id":"…"} · {"op":"remove_behavior","id":"…"}
+ 
+@@ -238,7 +240,7 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
+ export function uxIntent(text: string): { ux: boolean; only: boolean } {
+   const t = text.toLowerCase();
+   // strong: only ever about the look and behaviour; weak: usually is, but can be a topic ("mobile banking", "credit cards")
+-  const strong = /\b(?:themes?|branding|dark (?:mode|theme)|light theme|colou?r scheme|palette|background image|custom html|html|look like this|css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
++  const strong = /\b(?:themes?|branding|default (?:value|answer)s?|pre-?fill(?:ed|s)?|pre-?populate[ds]?|dark (?:mode|theme)|light theme|colou?r scheme|palette|background image|custom html|html|look like this|css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
+   const weak = /\b(?:cards?|tiles?|background|design|feel (?:more )?(?:premium|modern|polished)|mobile|desktop|tablet|layout|stack(?:ed)? (?:vertically|horizontally)|horizontal|vertical|next button|buttons?|progress (?:bar|indicator)|expand(?:s|ing)?)\b/.test(t);
+   const ux = strong || weak;
+   if (!ux) return { ux: false, only: false };
+diff --git a/docs/SCRIPT-STUDIO-SYNC.md b/docs/SCRIPT-STUDIO-SYNC.md
+index 4e20780..b528d32 100644
+--- a/docs/SCRIPT-STUDIO-SYNC.md
++++ b/docs/SCRIPT-STUDIO-SYNC.md
+@@ -87,8 +87,35 @@ people to read; it is never what gets stored.
+   - The same functions are used by the runtime, the Branding preview and the copilot's UX preview.
+   - A question-scoped UX style is more specific than the theme and wins on that question.
+ 
++## 5. Default values, and proposals the Studio refuses
++
++- **A question's default value is `settings.defaultValue`**, the Properties →
++  State → "Default / piped value" field. Before this change, nothing used it at runtime.
++  - `engine/src/defaultValue.ts` fills it in when the question is first
++    shown, only if the question has no answer yet. It does this once per question, so a
++    respondent who clears it does not see it come back.
++  - How it is read depends on the question: a number for numeric questions, text for text questions, and option codes for choice questions (labels are resolved to codes). A piped default (`{{Q1}}`) is read from the answers so far.
++  - A default that does not fit the question is ignored.
++- **`set_default_value`** is the copilot action for the same setting. It is look-only, so it is allowed in a look-only request.
++  - It is checked against the question: an unknown option or a non-number on a numeric question is refused.
++  - A value outside the question's validation range gets a warning.
++  - Removing a default is flagged as destructive.
++- **Scripts cannot fill in answers.** `rs.setAnswer`, `x.value = …` and
++  `dispatchEvent` are refused with a message that points to the default value
++  instead. `page_enter`, `select_option` and the other behaviour event names are
++  accepted as aliases in `rs.listen`.
++- **A refused proposal explains itself.** The card lists every refused action
++  with its reason, and when nothing is left, Apply's tooltip says why.
++  `diffSurveys` now counts default-value and custom-HTML changes, so a proposal
++  that only changes those is not mistaken for "nothing to apply".
++- **One repair round.** When the Studio refuses some of the model's actions, the turn route sends the refusals back to the model once.
++  - The corrected answer is used only if the Studio accepts more of it.
++  - The card says that a correction happened.
++  - The repair is a second metered model call.
++
+ ## Regression
+ 
++`scripts/default-value-test.mjs` covers refusals, the repair round and default values.
+ `scripts/codes-sync-test.mjs` covers the brief's 20 steps, from builder
+ → stored code → runtime through Intelligent mode ⇄ Properties ⇄ Branding
+ on desktop, tablet and phone. The engine tests are `optionCodes.test.ts` and
+diff --git a/packages/engine/src/defaultValue.test.ts b/packages/engine/src/defaultValue.test.ts
+new file mode 100644
+index 0000000..2bb5581
+--- /dev/null
++++ b/packages/engine/src/defaultValue.test.ts
+@@ -0,0 +1,132 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { SurveyDefinition } from "@rescript/schema";
++import { applySurveyActions, coerceSurveyActions, diffSurveys } from "./surveyActions.js";
++import { createResponseState } from "./state.js";
++import { start, advance, goBack, setAnswer } from "./flow.js";
++import { validateUxScript } from "./ux.js";
++
++/**
++ * A QUESTION'S DEFAULT VALUE is its starting answer: Properties → Default
++ * value and the copilot's set_default_value write the same setting, and the
++ * runtime fills it in once, never over the respondent's own answer. A script
++ * cannot fill in answers — and says what to use instead.
++ */
++const survey = () => SurveyDefinition.parse({
++  meta: { id: "d", code: "D", title: "Defaults" },
++  questions: [
++    { id: "q1", code: "Q1", variableName: "INTRO", type: "open_text", text: "Name?" },
++    { id: "q2", code: "Q2", variableName: "AGE", type: "numeric", text: "Age?", validation: [{ kind: "min_value", value: 16 }, { kind: "max_value", value: 99 }] },
++    { id: "q3", code: "Q3", variableName: "AGREE", type: "single_select", text: "Agree?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
++    { id: "q4", code: "Q4", variableName: "BRANDS", type: "multi_select", text: "Brands?", options: [{ code: 1, label: "Coke" }, { code: 2, label: "Pepsi" }, { code: 3, label: "Fanta" }] },
++    { id: "q5", code: "Q5", variableName: "END", type: "open_text", text: "Anything else?" },
++  ],
++  flow: [
++    { type: "page", id: "p1", questionIds: ["q1"] },
++    { type: "page", id: "p2", questionIds: ["q2", "q3", "q4"] },
++    { type: "page", id: "p3", questionIds: ["q5"] },
++    { type: "end", id: "e", status: "complete" },
++  ],
++  deployment: { clientSlug: "c", studySlug: "s" },
++});
++const q = (d: SurveyDefinition, id: string) => d.questions.find((x) => x.id === id)!;
++
++test("the runtime fills a default in when the question is first shown — once, and never over an answer", () => {
++  const d = survey();
++  q(d, "q2").settings.defaultValue = "19";           // as the Properties field stores it: text
++  q(d, "q3").settings.defaultValue = "Yes";          // a label → its code
++  q(d, "q4").settings.defaultValue = "Coke, option 3"; // a multi-select: a list, resolved to codes
++  q(d, "q5").settings.defaultValue = "none";
++  const st = createResponseState(d);
++  start(d, st);
++  assert.equal(st.answers.q2, undefined, "not before its page is shown");
++  setAnswer(d, st, "q1", "Ann");
++  advance(d, st);
++  assert.equal(st.answers.q2, 19, "a number for a numeric question");
++  assert.equal(st.answers.q3, 1, "the option code");
++  assert.deepEqual(st.answers.q4, [1, 3]);
++  // the respondent clears one and changes another, goes back and forward: their answers stand
++  setAnswer(d, st, "q2", null);
++  setAnswer(d, st, "q3", 2);
++  goBack(d, st);
++  advance(d, st);
++  assert.equal(st.answers.q2, null, "a cleared default is not filled in again");
++  assert.equal(st.answers.q3, 2, "the respondent's own answer is never overwritten");
++  // an answer that was already there when the page opened is kept
++  const d2 = survey();
++  q(d2, "q2").settings.defaultValue = 19;
++  const st2 = createResponseState(d2);
++  start(d2, st2);
++  st2.answers.q2 = 42;
++  advance(d2, st2);
++  assert.equal(st2.answers.q2, 42);
++  // …and a question that opened already answered never takes its default later, even once the answer is cleared
++  setAnswer(d2, st2, "q2", null);
++  goBack(d2, st2); advance(d2, st2);
++  assert.equal(st2.answers.q2, null);
++  // a default that does not fit the question is ignored, not stored
++  const d3 = survey();
++  q(d3, "q2").settings.defaultValue = "nineteen";
++  q(d3, "q3").settings.defaultValue = "Maybe";
++  const st3 = createResponseState(d3);
++  start(d3, st3); advance(d3, st3);
++  assert.equal(st3.answers.q2, undefined); assert.equal(st3.answers.q3, undefined);
++});
++
++test("set_default_value: the Properties setting, look-only, shown in the diff, checked against the question", () => {
++  const d = survey();
++  const c = coerceSurveyActions([
++    { op: "set_default_value", target: "Q2", value: 19 },
++    { op: "prefill", question: "Q3", value: "Yes" },
++    { op: "set_default_value", target: "Q4", value: ["Pepsi"] },
++  ]);
++  assert.deepEqual(c.rejected, []);
++  const r = applySurveyActions(d, c.actions, { uxOnly: true });
++  assert.deepEqual(r.errors, []);
++  assert.equal(r.uxOnly, true); assert.equal(r.structureUnchanged, true, "a starting answer does not change the questions, codes or logic");
++  assert.equal(q(r.def, "q2").settings.defaultValue, 19);
++  assert.equal(q(r.def, "q3").settings.defaultValue, 1, "stored as the code");
++  assert.deepEqual(q(r.def, "q4").settings.defaultValue, [2]);
++  assert.match(r.results[0].description, /Set Q2's default value to 19 — filled in when the question is first shown, only if it has no answer yet/);
++  const diff = diffSurveys(d, r.def);
++  assert.equal(diff.empty, false, "a proposal that only sets defaults has something to apply");
++  assert.ok(diff.summary.includes("Change Q2: default value"), diff.summary.join("\n"));
++  // refused with the reason
++  const bad = applySurveyActions(d, coerceSurveyActions([{ op: "set_default_value", target: "Q3", value: "Maybe" }, { op: "set_default_value", target: "Q2", value: "old" }]).actions, { uxOnly: true });
++  assert.match(bad.errors[0], /Q3 has no option “Maybe” to start with — its options are 1 = Yes, 2 = No/);
++  assert.match(bad.errors[1], /Q2 is numeric: its default must be a number, not “old”/);
++  // outside the validation range: allowed, with a warning
++  const out = applySurveyActions(d, coerceSurveyActions([{ op: "set_default_value", target: "Q2", value: 12 }]).actions, { uxOnly: true });
++  assert.match(out.warnings.join(" "), /outside its validation range/);
++  // removing it is destructive
++  const rm = applySurveyActions(r.def, coerceSurveyActions([{ op: "set_default_value", target: "Q2", value: null }]).actions, { uxOnly: true });
++  assert.equal(q(rm.def, "q2").settings.defaultValue, undefined);
++  assert.ok(rm.destructive.some((x) => /Removes Q2's default value/.test(x)), rm.destructive.join("\n"));
++});
++
++test("a proposal that only sets custom HTML is a change (Apply has something to do)", () => {
++  const d = survey();
++  const r = applySurveyActions(d, coerceSurveyActions([{ op: "set_custom_html", target: "Q2", html: "<img src=\"https://cdn.example.com/a.png\" alt=\"\">" }]).actions, { uxOnly: true });
++  assert.deepEqual(r.errors, []);
++  const diff = diffSurveys(d, r.def);
++  assert.equal(diff.empty, false);
++  assert.ok(diff.summary.includes("Change Q2: custom HTML"), diff.summary.join("\n"));
++});
++
++test("a script cannot fill in answers — the refusal says what to use; page_enter is the page event", () => {
++  const d = survey();
++  const fill = validateUxScript(`rs.listen("page_enter", "self", () => { if (rs.getAnswer("Q2") == null) rs.setAnswer("Q2", 19); });`, d);
++  assert.ok(fill.errors.some((e) => /scripts cannot fill in or change answers — to start a question with an answer, set its default value/.test(e)), fill.errors.join("\n"));
++  assert.ok(!fill.errors.some((e) => /rs\.listen\("page_enter"\)/.test(e)), "page_enter is accepted as the page event");
++  const dom = validateUxScript(`rs.listen("page", "self", (e) => { e.value = 19; });`, d);
++  assert.ok(dom.errors.some((e) => /cannot fill in or change answers/.test(e)));
++  const dispatch = validateUxScript(`rs.listen("page", "self", (e) => { e.target.dispatchEvent(1); });`, d);
++  assert.ok(dispatch.errors.some((e) => /cannot fill in or change answers/.test(e)));
++  const fine = validateUxScript(`rs.listen("page_enter", "self", () => { if (rs.getAnswer("Q2") === 19) rs.addClass("self", "defaulted"); });`, d);
++  assert.deepEqual(fine.errors, []);
++  const wrong = validateUxScript(`rs.listen("page_show", "self", () => rs.addClass("self", "x"));`, d);
++  assert.match(wrong.errors.join(" "), /the events are .* \(“page” fires when the page opens\)/);
++  // the refusal as the copilot's proposal reports it: the label once
++  const r = applySurveyActions(d, coerceSurveyActions([{ op: "create_behavior", label: "Default 19", target: "Q2", script: `rs.listen("page", "self", () => rs.setAnswer("Q2", 19));` }]).actions, { uxOnly: true });
++  assert.match(r.errors[0], /^Behaviour “Default 19”: scripts cannot fill in/);
++});
+diff --git a/packages/engine/src/defaultValue.ts b/packages/engine/src/defaultValue.ts
+new file mode 100644
+index 0000000..1eee48a
+--- /dev/null
++++ b/packages/engine/src/defaultValue.ts
+@@ -0,0 +1,70 @@
++import type { Question } from "@rescript/schema";
++import { effectiveResponseModel } from "@rescript/schema";
++import type { EvalContext } from "./evaluate.js";
++import type { AnswerValue } from "./state.js";
++import { effectiveQuestion } from "./carryforward.js";
++import { resolveOptionValue, type OptionList } from "./optionCodes.js";
++import { resolvePiping } from "./piping.js";
++
++/**
++ * A QUESTION'S DEFAULT VALUE (`settings.defaultValue`, set in Properties or by
++ * the copilot's `set_default_value`) is the answer the question starts with.
++ *
++ * It is written into the response the first time the question is shown, and
++ * only if the question has no answer yet, so it never overwrites something the
++ * respondent typed. It is written ONCE per question: a respondent who clears it
++ * and comes back finds it still cleared. The default is read as the question
++ * reads answers: a number for a numeric question, text for a text question,
++ * option CODES for a choice question (a label or "option 2" is resolved to its
++ * code, and only options the question actually shows can be chosen). A piped
++ * default (`{{Q1}}`) is read from the answers so far. A default
++ * that does not fit the question is ignored rather than stored.
++ */
++export function defaultAnswerFor(q: Question, ctx: EvalContext): AnswerValue | null {
++  const stored = (q.settings as { defaultValue?: unknown } | undefined)?.defaultValue;
++  if (stored === undefined || stored === null || stored === "") return null;
++  // "static, or {{Q1}} piped" (the Properties field): a piped default is read from the answers so far
++  const raw = typeof stored === "string" && stored.includes("{{") ? resolvePiping(stored, ctx).trim() : stored;
++  if (raw === "") return null;
++  const model = effectiveResponseModel(q);
++  if (model === "numeric") {
++    const n = typeof raw === "number" ? raw : Number(String(raw).trim());
++    return Number.isFinite(n) && String(raw).trim() !== "" ? n : null;
++  }
++  if (model === "text") return typeof raw === "string" || typeof raw === "number" ? String(raw) : null;
++  if (model === "single_choice" || model === "multiple_choice") {
++    const options = effectiveQuestion(q, ctx).options as OptionList;
++    const wanted = Array.isArray(raw) ? raw : model === "multiple_choice" && typeof raw === "string" ? raw.split(/\s*[,;]\s*/).filter(Boolean) : [raw];
++    const codes: (string | number)[] = [];
++    for (const w of wanted) {
++      const r = resolveOptionValue(options, w);
++      if (r.kind === "code" && !codes.some((c) => String(c) === String(r.code))) codes.push(r.code);
++    }
++    if (!codes.length) return null;
++    return (model === "multiple_choice" ? codes : codes[0]) as AnswerValue;
++  }
++  return null;
++}
++
++const APPLIED = "defaultsApplied";
++
++/** fill the defaults of the questions about to be shown; the keys it wrote */
++export function applyDefaultValues(questions: Question[], ctx: EvalContext, answerKeyFor: (q: Question) => string): string[] {
++  const filled: string[] = [];
++  for (const q of questions) {
++    if ((q.settings as { defaultValue?: unknown } | undefined)?.defaultValue === undefined) continue;
++    const key = answerKeyFor(q);
++    const meta = (ctx.state.meta ??= {});
++    const done = (Array.isArray(meta[APPLIED]) ? meta[APPLIED] : []) as string[];
++    if (done.includes(key)) continue;
++    const a = ctx.state.answers[key];
++    const empty = a === undefined || a === null || a === "" || (Array.isArray(a) && a.length === 0);
++    if (!empty) { meta[APPLIED] = [...done, key]; continue; }
++    const v = defaultAnswerFor(q, ctx);
++    if (v === null) continue;
++    ctx.state.answers[key] = v;
++    meta[APPLIED] = [...done, key];
++    filled.push(key);
++  }
++  return filled;
++}
+diff --git a/packages/engine/src/flow.ts b/packages/engine/src/flow.ts
+index 74c1c5b..5a00c48 100644
+--- a/packages/engine/src/flow.ts
++++ b/packages/engine/src/flow.ts
+@@ -13,6 +13,7 @@ import { evaluateExpression } from "./calc.js";
+ import { checkQuotas, type QuotaCounts } from "./quotas.js";
+ import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
+ import { prefillQuestions, maskingVariablesFor } from "./setExpression.js";
++import { applyDefaultValues } from "./defaultValue.js";
+ import { resolveUrlTemplate } from "./redirect.js";
+ import { listFillHiddenDestinations } from "./listFill.js";
+ import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
+@@ -536,6 +537,8 @@ function moveForward(
+        */
+       prefillQuestions(visible, { def, state, loop: s.loop, quotaCounts },
+         (q) => answerKey(q.id, s.loop));
++      // a question's default value is its starting answer — after prefill, so a punch or a preselect wins
++      applyDefaultValues(visible, { def, state, loop: s.loop, quotaCounts }, (q) => answerKey(q.id, s.loop));
+       return { steps, stepIndex: idx, done: false, triggeredSkips, quotaFull: [] };
+     }
+     if (s.kind === "embedded_data") {
+diff --git a/packages/engine/src/index.ts b/packages/engine/src/index.ts
+index cbf7874..26cfe36 100644
+--- a/packages/engine/src/index.ts
++++ b/packages/engine/src/index.ts
+@@ -90,3 +90,4 @@ export * from "./questionShape.js";
+ export * from "./interview.js";
+ export * from "./versionedDictionary.js";
+ export * from "./logicProposal.js";
++export * from "./defaultValue.js";
+diff --git a/packages/engine/src/surveyActions.ts b/packages/engine/src/surveyActions.ts
+index d540450..2ea8224 100644
+--- a/packages/engine/src/surveyActions.ts
++++ b/packages/engine/src/surveyActions.ts
+@@ -975,6 +975,7 @@ export function describeAction(a: SurveyAction): string {
+     case "remove_behavior": return `Remove behaviour ${a.id}`;
+     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
+     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
++    case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
+   }
+ }
+ 
+@@ -1034,6 +1035,10 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition):
+     push("validation", (p.validation ?? []).map((v) => v.kind).join(", "), (q.validation ?? []).map((v) => v.kind).join(", "));
+     push("randomized", p.randomization?.enabled ? "yes" : "no", q.randomization?.enabled ? "yes" : "no");
+     push("punch rules", punchText(before, p), punchText(after, q));
++    // look-and-behaviour fields of a question: without them a proposal that only sets these would read as "no change"
++    const dv = (x: Question) => { const v = (x.settings as { defaultValue?: unknown } | undefined)?.defaultValue; return v === undefined || v === null ? "" : Array.isArray(v) ? v.join(", ") : String(v); };
++    push("default value", dv(p), dv(q));
++    push("custom HTML", (p.customHtml ?? "").slice(0, 120), (q.customHtml ?? "").slice(0, 120));
+     push("block", blockOf(before, q.id)?.title ?? "", blockOf(after, q.id)?.title ?? "");
+     if (!p.displayLogic && q.displayLogic) dAdded++; else if (p.displayLogic && !q.displayLogic) dRemoved++; else if (p.displayLogic && q.displayLogic && cond(before, p.displayLogic) !== cond(after, q.displayLogic)) dChanged++;
+     const ds = (q.skipLogic?.length ?? 0) - (p.skipLogic?.length ?? 0);
+diff --git a/packages/engine/src/theme.ts b/packages/engine/src/theme.ts
+index 4f2e088..4c20128 100644
+--- a/packages/engine/src/theme.ts
++++ b/packages/engine/src/theme.ts
+@@ -145,6 +145,10 @@ export function withoutPresentation(def: SurveyDefinition): SurveyDefinition {
+     const buttons = br.buttons as Record<string, unknown> | undefined;
+     if (buttons) delete buttons.style;
+   }
+-  for (const q of out.questions ?? []) if (q.type !== "custom_component") { delete (q as { customHtml?: string }).customHtml; }
++  for (const q of out.questions ?? []) {
++    if (q.type !== "custom_component") delete (q as { customHtml?: string }).customHtml;
++    // a starting answer is behaviour, not structure: the question, its options, codes and logic are what they were
++    if (q.settings) delete (q.settings as { defaultValue?: unknown }).defaultValue;
++  }
+   return out;
+ }
+diff --git a/packages/engine/src/ux.ts b/packages/engine/src/ux.ts
+index 56bf6a5..1f64558 100644
+--- a/packages/engine/src/ux.ts
++++ b/packages/engine/src/ux.ts
+@@ -657,6 +657,8 @@ const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate
+ const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "document", "window", "parent", "top", "opener", "frames", "globalThis", "self", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
+ const LOOP_KEYWORDS = ["while", "for", "do"];
+ export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete"] as const;
++/** the behaviour-event spellings a script may use for the same thing (the effects form says page_enter, select_option…) */
++export const UX_SCRIPT_EVENT_ALIASES: Record<string, (typeof UX_SCRIPT_EVENTS)[number]> = { page_enter: "page", page_load: "page", load: "page", appear: "page", enter: "page", page_complete: "complete", select_option: "select", deselect_option: "deselect" };
+ 
+ /** code with every string, template and comment blanked (positions kept), and the string literals it had */
+ export function lexJs(code: string): { bare: string; strings: { value: string; start: number; end: number }[] } {
+@@ -697,14 +699,17 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
+   for (const w of LOOP_KEYWORDS) if (new RegExp(`(^|[^\\w$.])${w}(?![\\w$])`).test(bare)) errors.push(`“${w}” loops are not allowed in survey scripts — use the api (targets like "Q5.options" address every option at once)`);
+   for (const id of FORBIDDEN_IDENTIFIERS) if (new RegExp(`(^|[^\\w$])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they can only use the rs api`);
+   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
+-  for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
++  // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting
++  const FILLS = new Set(["setAnswer", "setValue", "setDefault", "fill", "prefill", "answer"]);
++  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*value\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
++  for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name) && !FILLS.has(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
+   if (!usedApi.length) warnings.push("the script never calls the rs api, so it cannot change anything");
+   const firstString = (at: number) => { const s = strings.find((x) => x.start >= at && /^\s*\(\s*$/.test(bare.slice(at, x.start))); return s?.value; };
+   const seenListen = new Set<string>();
+   for (const u of usedApi) {
+     if (u.name === "listen") {
+       const ev = firstString(u.at);
+-      if (ev != null && !(UX_SCRIPT_EVENTS as readonly string[]).includes(ev)) errors.push(`rs.listen("${ev}") — the events are ${UX_SCRIPT_EVENTS.join(", ")}`);
++      if (ev != null && !(UX_SCRIPT_EVENTS as readonly string[]).includes(ev) && !UX_SCRIPT_EVENT_ALIASES[ev]) errors.push(`rs.listen("${ev}") — the events are ${UX_SCRIPT_EVENTS.join(", ")}${/page|load|enter|show|open/i.test(ev) ? " (“page” fires when the page opens)" : ""}`);
+       const evLit = strings.find((x) => x.start >= u.at && /^\s*\(\s*$/.test(bare.slice(u.at, x.start)));
+       const next = evLit ? strings[strings.indexOf(evLit) + 1] : undefined;
+       const tgt = evLit && next && /^\s*,\s*$/.test(bare.slice(evLit.end, next.start)) ? next : undefined;
+diff --git a/packages/engine/src/uxActions.ts b/packages/engine/src/uxActions.ts
+index 1c7961e..a70d99d 100644
+--- a/packages/engine/src/uxActions.ts
++++ b/packages/engine/src/uxActions.ts
+@@ -1,7 +1,10 @@
+ import type { SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+-import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES } from "@rescript/schema";
++import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, effectiveResponseModel } from "@rescript/schema";
+ import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
+ import { applyThemePatch } from "./theme.js";
++import { defaultAnswerFor } from "./defaultValue.js";
++import { createResponseState } from "./state.js";
++import { describeOptions, type OptionList } from "./optionCodes.js";
+ 
+ /**
+  * THE UX ACTIONS — how the copilot changes the survey's look and behaviour,
+@@ -30,6 +33,8 @@ export const UX_ACTION_OPS = [
+   "create_behavior", "update_behavior", "remove_behavior",
+   /* the survey's theme (its branding — the Branding panel's own settings) and a question's decorative HTML */
+   "set_theme", "set_custom_html",
++  /* a question's starting answer (settings.defaultValue — the Properties "Default value" field) */
++  "set_default_value",
+ ] as const;
+ /** accepted from the model and turned into the ops above */
+ export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavior_to_option", "attach_behavior_to_block", "attach_behavior_to_page", "create_responsive_rule", "create_behaviour", "update_behaviour", "remove_behaviour"] as const;
+@@ -49,7 +54,8 @@ export type UxAction =
+   | ({ op: "update_behavior"; id: string; label?: string; target?: unknown } & BehFields)
+   | { op: "remove_behavior"; id: string }
+   | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
+-  | { op: "set_custom_html"; target: string; html: string | null };
++  | { op: "set_custom_html"; target: string; html: string | null }
++  | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null };
+ 
+ export const isUxOp = (op: string) => (UX_ACTION_OPS as readonly string[]).includes(op);
+ 
+@@ -175,6 +181,15 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
+       if (typeof o.html !== "string") return "set_custom_html needs html (or null to remove it)";
+       return { op: "set_custom_html", target, html: o.html.slice(0, 20000) };
+     }
++    case "set_default_value": case "set_default": case "default_value": case "prefill": case "set_prefill": {
++      const target = str(o.target) ?? str(o.question);
++      if (!target) return "set_default_value needs a target question";
++      const v = "value" in o ? o.value : o.default ?? o.defaultValue;
++      if (v === null) return { op: "set_default_value", target, value: null };
++      if (typeof v === "number" || (typeof v === "string" && v.trim())) return { op: "set_default_value", target, value: typeof v === "string" ? v.trim().slice(0, 500) : v };
++      if (Array.isArray(v) && v.length && v.every((x) => typeof x === "number" || typeof x === "string")) return { op: "set_default_value", target, value: v as (string | number)[] };
++      return "set_default_value needs a value (a number, text, an option code or a list of codes — or null to remove it)";
++    }
+     default: return null;
+   }
+ }
+@@ -239,7 +254,9 @@ function find<T extends { id: string; label: string }>(list: T[], id: string, en
+ }
+ function gate(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior): string[] {
+   const v = validateUxItem(def, kind, item);
+-  if (v.errors.length) fail(v.errors.join("; "));
++  // the action is already named by its label; the item's own "“label”: " prefix would say it twice
++  const own = `“${item.label}”: `;
++  if (v.errors.length) fail(v.errors.map((e) => (e.startsWith(own) ? e.slice(own.length) : e)).join("; "));
+   return v.warnings;
+ }
+ const clampAnim = (a: UxAnimation): UxAnimation => ({
+@@ -257,6 +274,32 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
+     def.branding = r.branding;
+     return { description: `Theme${a.label ? ` “${a.label}”` : ""}: ${r.changes.slice(0, 8).join("; ")}${r.changes.length > 8 ? ` and ${r.changes.length - 8} more` : ""}`, warnings: r.errors.map((e) => `Theme: ${e} — left as it was`), touched: [] };
+   }
++  if (a.op === "set_default_value") {
++    const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
++    const settings = (q.settings ??= {} as typeof q.settings) as { defaultValue?: unknown };
++    if (a.value === null) {
++      if (settings.defaultValue === undefined) fail(`${q.code} has no default value`);
++      const was = settings.defaultValue;
++      delete settings.defaultValue;
++      return { description: `Remove ${q.code}'s default value (${Array.isArray(was) ? was.join(", ") : String(was)})`, destructive: `Removes ${q.code}'s default value`, warnings: [], touched: [q.id] };
++    }
++    const probe = { ...q, settings: { ...q.settings, defaultValue: a.value } } as typeof q;
++    const read = defaultAnswerFor(probe, { def, state: createResponseState(def) });
++    if (read === null) {
++      const model = effectiveResponseModel(q);
++      fail(model === "single_choice" || model === "multiple_choice"
++        ? `${q.code} has no option “${Array.isArray(a.value) ? a.value.join(", ") : a.value}” to start with — its options are ${describeOptions(q.options as OptionList)}`
++        : model === "numeric" ? `${q.code} is numeric: its default must be a number, not “${a.value}”` : `${q.code} (${q.type.replace(/_/g, " ")}) cannot have a default value`);
++    }
++    const had = settings.defaultValue !== undefined;
++    settings.defaultValue = read;
++    const shown = Array.isArray(read) ? read.join(", ") : String(read);
++    const warnings: string[] = [];
++    const bound = (kind: string) => { const r = (q.validation ?? []).find((x) => x.kind === kind) as { value?: unknown } | undefined; const n = Number(r?.value); return r && Number.isFinite(n) ? n : null; };
++    const lo = bound("min_value"), hi = bound("max_value");
++    if (typeof read === "number" && ((lo !== null && read < lo) || (hi !== null && read > hi))) warnings.push(`${q.code}'s default ${read} is outside its validation range — the respondent will be asked to change it`);
++    return { description: `${had ? "Change" : "Set"} ${q.code}'s default value to ${shown} — filled in when the question is first shown, only if it has no answer yet`, ...(had ? { destructive: `Replaces ${q.code}'s default value` } : {}), warnings, touched: [q.id] };
++  }
+   if (a.op === "set_custom_html") {
+     const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
+     if (a.html === null) {
+diff --git a/packages/renderer/src/UxLayer.tsx b/packages/renderer/src/UxLayer.tsx
+index 2faa225..535ff16 100644
+--- a/packages/renderer/src/UxLayer.tsx
++++ b/packages/renderer/src/UxLayer.tsx
+@@ -3,7 +3,7 @@ import * as React from "react";
+ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript/schema";
+ import {
+   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
+-  uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript,
++  uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
+ } from "@rescript/engine";
+ 
+ /**
+@@ -128,10 +128,10 @@ function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget,
+ 
+ const SANDBOX_DOC = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'"></head><body><script>
+ (function () {
+-  var handlers = [], answers = {}, meta = { questions: {} }, host = window.parent;
++  var handlers = [], answers = {}, meta = { questions: {} }, host = window.parent, ALIASES = ${JSON.stringify(UX_SCRIPT_EVENT_ALIASES)};
+   function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
+   var rs = {
+-    listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
++    listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } ev = ALIASES[ev] || ev; handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
+     getAnswer: function (code) { return answers[code]; },
+     getQuestion: function (code) { return meta.questions[code] || null; },
+     getBlock: function () { return meta.block || null; },
+diff --git a/scripts/copilot-test.mjs b/scripts/copilot-test.mjs
+index f1b1a5f..eace0f8 100644
+--- a/scripts/copilot-test.mjs
++++ b/scripts/copilot-test.mjs
+@@ -242,6 +242,9 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
+   const refused = await texts('[data-testid="cp-refused"] li');
+   assert.equal(refused.length, 1);
+   assert.match(refused[0], /there is no question “Q9”/);
++  // the card says so too, beside its Apply (which still applies the valid part)
++  assert.match(await (await t.$('[data-testid="cp-card-refused"]')).textContent(), /Not included — the Studio refused one change.*there is no question “Q9”/);
++  assert.equal(await t.$eval('[data-testid="cp-apply"]', (b) => b.disabled), false);
+   assert.ok((await texts('[data-testid="cp-summary"] li')).includes("Add 1 question"), "the valid part is still offered");
+   await page.click('[data-testid="cp-panel-cancel"]');
+   assert.equal(await t.getAttribute("data-proposal"), "cancelled");
+diff --git a/scripts/default-value-test.mjs b/scripts/default-value-test.mjs
+new file mode 100644
+index 0000000..6371b1b
+--- /dev/null
++++ b/scripts/default-value-test.mjs
+@@ -0,0 +1,176 @@
++/**
++ * “I AM NOT ABLE TO APPLY JAVASCRIPT CHANGES” — the bug, and what fixed it.
++ *
++ *   node scripts/default-value-test.mjs      (studio :3000 with AI_API_URL=fake:, runtime :3001)
++ *
++ * The researcher asked for Q2 to start at 19. The model proposed a sandboxed
++ * script that set the input's value and dispatched DOM events; the Studio
++ * refused it (scripts cannot touch the page or fill in answers), so the
++ * proposal had nothing left to apply — and the card showed a greyed-out
++ * Apply with no reason. Now:
++ *
++ *  1. a refused proposal says why, in the card, and Apply's tooltip says so too
++ *  2. the refusals go back to the model once; its corrected answer is used —
++ *     here set_default_value, the question's real "Default value" setting
++ *  3. applied, it is Properties → State → Default value, and the runtime fills
++ *     it in (only when empty, never over the respondent's answer)
++ *  4. typed by hand in Properties, the runtime uses it too
++ *  5. a script listening for "page_enter" (the behaviour spelling) runs
++ */
++import assert from "node:assert/strict";
++import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
++import { openTab, switchMode } from "./lib/nav.mjs";
++import { openPreview } from "./lib/preview.mjs";
++
++const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
++const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
++let passed = 0;
++const ok = (m) => { passed++; console.log(`  ok   ${m}`); };
++
++const FIXTURE = {
++  meta: { id: "sandbox", code: "S", title: "Defaults" },
++  questions: [
++    { id: "q1", code: "Q1", variableName: "NAME", type: "open_text", text: "Your name?" },
++    { id: "q2", code: "Q2", variableName: "AGE", type: "numeric", text: "How old are you?", validation: [{ kind: "min_value", value: 16 }, { kind: "max_value", value: 99 }] },
++    { id: "q3", code: "Q3", variableName: "AGREE", type: "single_select", text: "Do you agree?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
++  ],
++  flow: [
++    { type: "page", id: "p1", questionIds: ["q1"] },
++    { type: "page", id: "p2", questionIds: ["q2", "q3"] },
++    { type: "end", id: "e1", status: "complete" },
++  ],
++  deployment: { clientSlug: "c", studySlug: "s" },
++};
++// what the model answered in the screenshot: a script that sets the input and dispatches DOM events
++const SCRIPT_REPLY = {
++  kind: "proposal",
++  reply: "I'll add a behaviour on Q2 that fires on page_enter and sets the input's default value to 19 — but only if the field is currently empty.",
++  assumptions: ["The default of 19 should only be applied when the field is empty."],
++  actions: [{ op: "create_behavior", label: "Default age 19", target: "Q2", script: `rs.listen("page_enter", "self", () => { const el = rs.getQuestion("Q2"); if (!rs.getAnswer("Q2")) { el.value = 19; el.dispatchEvent("input"); } });` }],
++};
++const FIXED_REPLY = { kind: "proposal", reply: "Q2 starts at 19 — filled in only while it has no answer.", actions: [{ op: "set_default_value", target: "Q2", value: 19 }] };
++
++const browser = await chromium.launch();
++const page = await (await browser.newContext({ viewport: { width: 1600, height: 1050 } })).newPage();
++const pageErrors = [];
++page.on("pageerror", (e) => pageErrors.push(String(e)));
++page.on("dialog", (d) => d.accept());
++const goTab = async (n) => { await openTab(page, n); await page.waitForTimeout(200); };
++const loadDef = async (def) => {
++  await goTab("JSON");
++  await page.waitForSelector("textarea.code");
++  await page.click('button:has-text("edit")');
++  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(def));
++  await page.click('button:has-text("validate & apply")');
++  await page.waitForTimeout(700);
++};
++const readDef = async () => { await goTab("JSON"); await page.waitForSelector("textarea.code"); return JSON.parse(await page.$eval("textarea.code", (e) => e.value)); };
++const q = (d, id) => d.questions.find((x) => x.id === id);
++const say = async (text, reply) => {
++  await page.evaluate((r) => window.__rescriptCopilotFake(r), reply);
++  const k = (await page.$$('[data-testid="cp-turn"]')).length;
++  await page.fill('[data-testid="iq-input"]', text);
++  await page.keyboard.press("Enter");
++  await page.waitForFunction((c) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > c && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, k, { timeout: 30000 });
++  return (await page.$$('[data-testid="cp-turn"]')).at(-1);
++};
++const intelligent = async () => { await goTab("Questions"); await switchMode(page, "intelligent"); await page.waitForSelector('[data-testid="intelligent-view"]'); };
++const runtimeAnswers = async (def, before) => {
++  const pv = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: 1200, height: 900 } });
++  await pv.fill('[data-rs-el="question"][data-rs-id="q1"] input, [data-rs-el="question"][data-rs-id="q1"] textarea', "Ann");
++  if (before) await pv.evaluate(before);
++  await pv.click('[data-testid="rs-next"]');
++  await pv.waitForSelector('[data-rs-el="question"][data-rs-id="q2"]');
++  await pv.waitForTimeout(300);
++  return pv;
++};
++
++await page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
++await page.waitForSelector(".menubar");
++await loadDef(FIXTURE);
++
++/* 1: a refused proposal says why */
++{
++  await intelligent();
++  const turn = await say("Set the default value of Q2 to 19", SCRIPT_REPLY);
++  assert.equal(await turn.getAttribute("data-proposal"), "open");
++  const refused = await page.textContent('[data-testid="cp-card-refused"]');
++  assert.match(refused, /Nothing can be applied — the Studio refused this proposal/);
++  assert.match(refused, /Behaviour “Default age 19”: scripts cannot fill in or change answers — to start a question with an answer, set its default value/);
++  assert.equal(await page.$eval('[data-testid="cp-apply"]', (b) => b.disabled), true);
++  assert.match(await page.getAttribute('[data-testid="cp-apply"]', "title"), /Nothing to apply — the Studio refused every change/);
++  assert.ok(!(await page.getAttribute('[data-testid="cp-apply"]', "title")).includes("undoable"), "the tooltip no longer claims Apply would work");
++  await page.click('[data-testid="cp-cancel"]');
++  ok("1: a proposal the Studio refuses says why in the card — Apply is disabled and its tooltip says there is nothing to apply");
++}
++
++/* 2–3: the refusal goes back to the model; the corrected answer applies as the real Default value */
++{
++  const turn = await say("Set the default value of Q2 to 19", [SCRIPT_REPLY, FIXED_REPLY]);
++  assert.equal(await turn.getAttribute("data-proposal"), "open");
++  assert.match(await page.textContent('[data-testid="cp-repaired"]'), /The first answer had a change the Studio could not accept; the copilot corrected it\./);
++  assert.equal(await page.$('[data-testid="cp-card-refused"]'), null, "nothing left refused");
++  assert.match(await turn.$eval('[data-testid="cp-reply"]', (e) => e.textContent), /Q2 starts at 19/);
++  assert.equal(await page.$eval('[data-testid="cp-apply"]', (b) => b.disabled), false);
++  assert.equal(await page.getAttribute('[data-testid="cp-apply"]', "title"), "Apply as one undoable change");
++  await page.click('[data-testid="cp-apply"]');
++  await page.waitForSelector('[data-testid="cp-applied-note"]');
++  assert.match(await page.textContent('[data-testid="cp-applied-note"]'), /Done\. The look and behaviour of Q2 \(default value\) has been updated without changing the survey's questions, codes or logic\./);
++  const def = await readDef();
++  assert.equal(q(def, "q2").settings.defaultValue, 19);
++  assert.equal(def.ux?.behaviors?.length ?? 0, 0, "no script was stored");
++  // Properties shows it
++  await goTab("Questions"); await switchMode(page, "studio").catch(() => {});
++  await page.waitForSelector(".qcard");
++  for (const c of await page.$$(".qcard")) if ((await c.textContent()).includes("How old")) { await c.click(); break; }
++  const head = '[data-testid="psec-head-state"]';
++  await page.waitForSelector(head);
++  if ((await page.getAttribute(head, "aria-expanded")) !== "true") await page.click(head);
++  assert.equal(await page.locator('label:has-text("Default / piped value") input').inputValue(), "19");
++  // the runtime fills it in when empty — and leaves an answer alone
++  let pv = await runtimeAnswers(def);
++  assert.equal(await pv.inputValue('[data-rs-el="question"][data-rs-id="q2"] input'), "19");
++  assert.equal(await pv.evaluate(() => window.__rescriptState.answers.q2), 19, "a real answer, not just text in the box");
++  await pv.close();
++  // the respondent's own answer survives going back and forward; so does clearing it
++  pv = await runtimeAnswers(def);
++  const box = '[data-rs-el="question"][data-rs-id="q2"] input';
++  const backAndForth = async () => { await pv.click('[data-testid="rs-back"]'); await pv.waitForSelector('[data-rs-el="question"][data-rs-id="q1"]'); await pv.click('[data-testid="rs-next"]'); await pv.waitForSelector(box); await pv.waitForTimeout(300); };
++  await pv.fill(box, "42");
++  await backAndForth();
++  assert.equal(await pv.inputValue(box), "42", "never over the respondent's answer");
++  await pv.fill(box, "");
++  await pv.click('[data-testid="rs-back"]'); await pv.waitForSelector('[data-rs-el="question"][data-rs-id="q1"]');
++  await pv.click('[data-testid="rs-next"]'); await pv.waitForTimeout(500);
++  await pv.waitForSelector(box);
++  assert.equal(await pv.inputValue(box), "", "a cleared default is not filled in again");
++  await pv.close();
++  ok("2–3: the refusal went back to the model once; its correction (set_default_value) applies — Properties → Default value shows 19, the runtime starts Q2 at 19");
++}
++
++/* 4: typed by hand in Properties */
++{
++  await page.fill('label:has-text("Default / piped value") input', "33");
++  await page.waitForTimeout(300);
++  const def = await readDef();
++  assert.equal(q(def, "q2").settings.defaultValue, "33");
++  const pv = await runtimeAnswers(def);
++  assert.equal(await pv.inputValue('[data-rs-el="question"][data-rs-id="q2"] input'), "33");
++  assert.equal(await pv.evaluate(() => window.__rescriptState.answers.q2), 33, "stored as a number for a numeric question");
++  await pv.close();
++  ok("4: a default typed by hand in Properties is the one the runtime uses");
++}
++
++/* 5: page_enter in a script is the page event */
++{
++  const def = structuredClone(FIXTURE);
++  def.ux = { styles: [], animations: [], behaviors: [{ id: "uxb_1", label: "Mark on arrival", target: { kind: "question", questionId: "q2" }, effects: [], script: `rs.listen("page_enter", "self", () => rs.addClass("self", "arrived"));`, createdAt: new Date().toISOString() }] };
++  const pv = await runtimeAnswers(def);
++  await pv.waitForFunction(() => (document.querySelector('[data-rs-el="question"][data-rs-id="q2"]')?.getAttribute("data-rs-ux-on") ?? "").includes("arrived"), null, { timeout: 5000 });
++  await pv.close();
++  ok("5: a script listening for “page_enter” runs when the page opens");
++}
++
++assert.deepEqual(pageErrors.filter((e) => !/401|402|422|501|Failed to load resource/.test(e)), [], pageErrors.join("\n"));
++await browser.close();
++console.log(`\n${passed} passed`);
+-- 
+2.43.0
+

@@ -334,7 +334,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       if (!brief.objective && !brief.keyQuestions.length) return bad("State the objective or at least one key question — the report is built around what you want to learn.");
       const { items, truncated } = await builderItems(db, surveyId, loaded, brief.analysisIds);
       if (!items.length) return bad("This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report.", 409);
-      const model = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: body.interpretation === true, fake: body.fake });
+      const model = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: body.interpretation === true, fake: body.fake, db });
       const draft = draftReport(brief, items, variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden), { story: body.story === true, interpretation: model.interpretation });
       return json({ ...draft, model: { status: model.status, detail: model.detail }, truncated, analysesRead: items.length });
     }
@@ -355,7 +355,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       if (old.source === "model") {
         /* a model-written scene is asked for again, through the same number gate */
         const brief = { objective: story.brief?.objective ?? "", audience: story.audience, tone: story.tone, keyQuestions: story.brief?.keyQuestions ?? [] };
-        const m = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: true, fake: body.fake });
+        const m = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: true, fake: body.fake, db });
         const pool = old.title === "Suggested next steps" ? [m.interpretation?.recommendations.join(" ") ?? ""] : (m.interpretation?.implications ?? []);
         const text = pool.find((t) => t && t !== old.text);
         if (!text) return bad(`${m.detail} No different sentence passed the number check, so the scene is unchanged.`, 409);

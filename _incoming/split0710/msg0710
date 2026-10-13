@@ -1,0 +1,35 @@
+Suraj, Oweas and Prince sheets, every row and screenshot. Fixed at the
+cause, each with a regression test (docs/OCT07-REVIEW-2026-10-08.md).
+
+- Grid / constant-sum "Other, specify" rows (Suraj 1, Oweas 1): the row
+  flag was offered and read by nothing. Row boxes now have their own key
+  (row:<code>), are drawn by one RowLabel in every tabular grid, validated
+  as a pair, exported (VAR_<row>_other), piped, and only offered where a
+  grid can draw them.
+- Matrix with Randomized Rows (Suraj 2): the preset seeded a setting no
+  code read. It now switches on row randomization; saved questions are
+  migrated on parse.
+- List / form fields (Suraj 3, 4, 6): starter fields instead of an item
+  count, Required / Optional per field, the rule written above the fields
+  instead of a star, a label column sized to the labels, label position
+  Left / Above / Right.
+- "Changed elsewhere" (Suraj 5): draft writes are queued so no two share a
+  revision, and a refusal whose server draft is this editor's own write is
+  recovered instead of reported. Real conflicts still stop autosave.
+- HTML Text Box (Oweas 2): one content field, HTML-first; typed tags can be
+  turned back into markup; the unused Instruction / Required / Attention
+  check controls are gone from the block; the save line is live.
+- Rating Matrix (Prince 1): Rows -> Columns -> Rating scale & labels,
+  Numbers / Text labels, 1-3 ... 1-10, drawn as a grid with aligned headers.
+- Header Repeat (Prince 2): Off / Auto / every N / custom on every grid with
+  a header, default by length, display only, aligned.
+- Script UI: named types, structure at a glance, Required pill, quiet
+  actions, keyboard open/close, feedback after move / duplicate.
+
+Engine 1718, Studio 270, pnpm -r test, typechecks and the auth audit pass;
+the new browser suite passes; 49/49 mutations caught; corpus 117/128 with
+the 11 failures triaged (4 need Postgres, 6 match the baseline, 1 flaky
+suite fixed).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

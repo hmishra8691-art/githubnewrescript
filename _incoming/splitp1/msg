@@ -1,0 +1,50 @@
+From the Research Engine audit (docs/RESEARCH-ENGINE-AUDIT-2026-10-08.md, section K, Phase 1).
+
+Model path (packages/ai): completeJson reads finish_reason and continues an
+answer cut off at max_tokens (continuations, default 2, metered per call);
+a prose reply is asked for once more as the object alone; what still cannot
+be read is thrown as AiReplyError (truncated / unparseable / empty) instead
+of returning null. A schema is sent as response_format: json_schema where
+the provider takes it, with a remembered fallback to json_object or plain;
+an unrelated 400 is not retried.
+
+Studio: lib/copilot/failure.ts — every failure of the model path has a code,
+a title, the cause and the next steps (not_configured, wallet, timeout,
+provider, network, truncated, unparseable, empty, unusable). The route
+returns it on 501, 402/423, 502 and the unusable-reply body; the copilot
+card shows it with "What to do" and what the engine had read before it
+handed the sentence on. The grammar's "I did not understand that" no longer
+replaces a model failure: an empty answer still reaches the grammar, which
+is offered when it reads the phrasing and otherwise leaves the failed turn
+as the answer. The engine-only card names the missing model (AI_API_URL),
+the sentences the engine reads and what it read; "NOT UNDERSTOOD" is gone.
+
+Configuration: .env.example documents the AI_* variables; lib/aiConfig.ts
+reports presence only (ai, aiFake, aiModel) with warnings on /platform.
+
+Analytics: buildFor adds the plan's derived variables and segments to every
+dataset (idempotent second pass; an uncomputable variable leaves its note on
+the results that read it); milestone runs use the clean dataset and the
+stored run carries its dataset spec; factor analysis outputs its scores (a
+per-factor table and per-case scores in dataset order — factorAnalysis now
+returns the scored cases' indices, null for a case missing an item); dead
+significanceLetters removed.
+
+Research design editor (components/studio/ResearchDesignEditor.tsx):
+objective, population, methodology, planned completes, hypotheses with
+coverage chips, constructs with role / definition / measuring questions,
+assumptions — in Survey Settings and the Analysis tab. Removing a
+hypothesis goes through the engine's remove_hypothesis so the H-tags on
+questions and plan items are renumbered.
+
+Tests: packages/ai reply.test.ts (4), apps/studio failure.test.ts (4) and
+platformAi.test.ts (3), packages/analytics phase1.test.ts (3), browser
+scripts/phase1-reliability-test.mjs (9 checks); intelligent-mode and
+copilot suites updated for the failed turn with its cause. Mutation checks:
+ai 12/12, analytics 9/9, failure + aiConfig 12/12, Studio surfaces 10/10.
+Full corpus: 119 ok; the 9 failures are the known baseline (4 need
+Postgres, 5 unchanged from the previous run). pnpm -r test green (17
+packages), both typechecks and the auth-guard audit clean.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4

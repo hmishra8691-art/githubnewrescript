@@ -52,7 +52,7 @@ export async function askContext(db: SupabaseClient, surveyId: string, loaded: L
   return { variables: vmeta, known: surveyKnownNames(loaded.def as SurveyDefinition, vmeta), analyses, reports, results, dataset };
 }
 
-export type ModelAsk = "not_asked" | "no_model" | "nothing" | "used";
+export type ModelAsk = "not_asked" | "no_model" | "nothing" | "used" | "ai_off";
 
 /** Rules first; a model only for a request the rules could not read at all, answering in the same closed vocabulary. */
 export async function propose(db: SupabaseClient, user: AuthedUser | null, surveyId: string, loaded: LoadedContext, request: string, dataset: DatasetSpec, opts: { model: boolean; fake?: unknown }): Promise<AskProposal & { model: { status: ModelAsk; detail: string } }> {
@@ -65,7 +65,9 @@ export async function propose(db: SupabaseClient, user: AuthedUser | null, surve
     const billing = await billingProjectFor(user, surveyId, "analytics.edit");
     if ("response" in billing) return { ...p, model: { status: "nothing", detail: "The workspace could not be charged for the model call." } };
     const prompt = `${ASK_INSTRUCTIONS}\n\n${askBrief(p.unread.join("\n"), ctx.variables)}`;
-    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 800, operation: "analytics_ask" }, () => completeJson("You translate analysis requests into a closed set of operations. Answer with JSON only.", prompt, 800, { timeoutMs: 30_000 })).catch(() => null);
+    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: prompt, maxTokens: 800, operation: "analytics_ask", tier: "small" }, () => completeJson("You translate analysis requests into a closed set of operations. Answer with JSON only.", prompt, 800, { timeoutMs: 30_000, tier: "small" })).catch(() => null);
+    /* the project's AI switch said no: say so, and let the rules' proposal stand (audit A-2) */
+    if (m && !m.ok && m.reason === "ai_off") return { ...p, model: { status: "ai_off", detail: m.message } };
     raw = m && m.ok ? m.value : null;
   }
   if (!raw) return { ...p, model: { status: "nothing", detail: "The model gave nothing usable for the parts that could not be read." } };

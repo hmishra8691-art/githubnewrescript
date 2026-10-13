@@ -1,0 +1,41 @@
+Intelligent copilot: research-aware survey design and programming through a controlled action layer
+
+Intelligent mode becomes an AI research and survey-programming copilot on the
+existing AI integration. A researcher types or speaks (any language, Hinglish
+included) an objective, a hypothesis, research documents or a change; the model
+reasons about the research - objective, hypotheses, population, independent /
+dependent / mediating / control variables, method, analysis - and programs the
+survey through a closed action vocabulary in the engine (create block /
+question / branch / loop / randomizer / calculation / quota / embedded data,
+update, move, delete, display logic, skips, validation, page breaks, the
+research design). Nothing the model writes is executed directly: the engine
+applies every action to a clone - references resolved against the real survey,
+conditions through the expression parser, questions made by the picker's own
+maker (moved into the engine) - refuses what does not resolve with the reason,
+flags what removes or rewrites existing content, and diffs the result.
+
+The workspace has the survey on the left, the conversation in the centre and
+a panel on the right: Changes (exactly what will happen, destructive changes
+behind a confirmation, refused actions, new problems, before/after structure,
+field-by-field changes), Review (engine checks - logic, reachability, ranges,
+scales, duplicates, wording, length, hypothesis coverage - merged with the
+model's reading, grouped Critical / Warning / Suggestion, fixes as previews),
+Research (uploaded PDFs - scanned pages read by the vision model - Word, text,
+CSV, Excel; each summarised once into a cited research card), History (AI
+Change #001..., each undoable as one operation). A follow-up while a proposal
+is open revises it; Apply is one labelled undoable edit, audited. Context is
+kept minimal: a bounded outline with the named questions in full, research
+passages only for research requests (BM25, embeddings when configured),
+the model's own running memory, a short response cache. Every model call is
+metered. The grammar remains for exact read-only questions and when no model
+is configured.
+
+New: engine surveyActions, surveyReview, questionCreate; schema
+SurveyDefinition.research; import research extraction/chunking/retrieval and
+PDF page images; ai ocrImage/embedTexts; migration 0045 (copilot research
+store, memory fallback until applied); routes /api/copilot/{turn,documents,
+record}; audit survey.ai_changed. Tests: engine 14, import 3, studio 9,
+browser copilot-test 11; mutation-checked. Plan: docs/INTELLIGENT-COPILOT.md.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QAcfUsJLu3R4pYxzaj9SU4
