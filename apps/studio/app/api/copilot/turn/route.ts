@@ -9,7 +9,9 @@ import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type CoverageReport } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
-import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+import { billingProjectFor, isSandboxProject, meteredAi, refusalResponse } from "@/lib/metering";
+import { latestRun } from "@/lib/analytics";
+import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
@@ -101,7 +103,9 @@ export async function POST(req: NextRequest) {
   const quotaCounts = body.quotaCounts && typeof body.quotaCounts === "object" ? body.quotaCounts as Record<string, Record<string, number>> : null;
   // findings: what the data showed — the latest analysis run the Studio sent, answered from its numbers
   const findingsTurn = findingsIntent(message);
-  const analysisRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
+  /* the findings the copilot answers from are the project's own stored run, read here — never numbers the browser sends (audit A-3). The sandbox has no stored data, so its fixture's run is taken as sent. */
+  const sentRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
+  const analysisRun: RunBrief | null = !findingsTurn ? null : isSandboxProject(surveyId) ? sentRun : await latestRun(supabaseAdmin(), surveyId).catch(() => null);
   const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun });
   let research = "";
   let passageIds: string[] = [];

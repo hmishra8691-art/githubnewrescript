@@ -1846,6 +1846,7 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-mode { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; background: var(--panel2); color: var(--subtle); }
 .ax-mode.snapshot { background: #eef4ff; color: var(--accent2); }
 .ax-mode.live { background: #dcfce7; color: var(--green); }
+.ax-method-flag { font-size: 12.5px; padding: 2px 9px; border-radius: 999px; background: #fff4dc; color: #8a5a00; cursor: help; }
 .ax-report-header, .ax-report-footer { font-size: 12.5px; padding: 6px 20px; }
 .ax-block { position: relative; padding: 14px 20px; }
 .ax-block h3 { margin: 0 0 8px; font-size: 15px; }
@@ -2678,3 +2679,6 @@ p.qs-help { margin: -2px 0 10px; }
 .ax-ask-drawer .ax-panel { border: none; padding: 0; box-shadow: none; }
 @media (max-width: 720px) { .ax-ask-drawer { width: 100vw; } }
 @media (prefers-reduced-motion: no-preference) { .ax-ask-drawer { animation: ax-ask-in .18s ease both; } @keyframes ax-ask-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } } }
+.ax-pro-table thead th:focus-visible { outline: 2px solid var(--c-primary-500, #4f46e5); outline-offset: -2px; }
+.ax-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+.ax-legend-item:focus-visible { outline: 2px solid var(--c-primary-500, #4f46e5); outline-offset: 2px; }

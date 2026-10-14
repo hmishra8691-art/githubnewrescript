@@ -29,23 +29,35 @@ export function conditionalLogit(sets: ChoiceSet[], p: number, opts: { maxIter?:
   let beta = new Array(p).fill(0);
   let ll = 0, iter = 0, converged = false;
   const util = (x: number[], b: number[]) => x.reduce((t, v, i) => t + v * b[i], 0);
+  /*
+   * One pass over the choice sets, with no per-set allocation: the gradient and the Hessian are accumulated in place (the
+   * Hessian by its upper triangle, mirrored at the end). The same arithmetic as before, which allocated four arrays and a
+   * p×p loop per alternative per set — at tens of thousands of respondents that was most of the run time (audit F-3).
+   */
   const evaluate = (b: number[]) => {
     let L = 0;
     const g = new Array(p).fill(0);
-    const H: Matrix = Array.from({ length: p }, () => new Array(p).fill(0));
+    const Hf = new Float64Array(p * p);
+    const xbar = new Float64Array(p);
+    let u = new Float64Array(8), e = new Float64Array(8);
     for (const s of sets) {
-      const w = s.weight ?? 1;
-      const u = s.alternatives.map((x) => util(x, b));
-      const m = Math.max(...u);
-      const e = u.map((v) => Math.exp(v - m));
-      const Z = e.reduce((t, v) => t + v, 0);
-      const pr = e.map((v) => v / Z);
+      const w = s.weight ?? 1, alts = s.alternatives, A = alts.length;
+      if (u.length < A) { u = new Float64Array(A); e = new Float64Array(A); }
+      let m = -Infinity;
+      for (let j = 0; j < A; j++) { const x = alts[j]; let t = 0; for (let i = 0; i < p; i++) t += x[i] * b[i]; u[j] = t; if (t > m) m = t; }
+      let Z = 0;
+      for (let j = 0; j < A; j++) { e[j] = Math.exp(u[j] - m); Z += e[j]; }
       L += w * (u[s.chosen] - m - Math.log(Z));
-      const xbar = new Array(p).fill(0);
-      s.alternatives.forEach((x, j) => x.forEach((v, i) => { xbar[i] += pr[j] * v; }));
-      s.alternatives[s.chosen].forEach((v, i) => { g[i] += w * (v - xbar[i]); });
-      s.alternatives.forEach((x, j) => { for (let a = 0; a < p; a++) for (let c = 0; c < p; c++) H[a][c] -= w * pr[j] * (x[a] - xbar[a]) * (x[c] - xbar[c]); });
+      xbar.fill(0);
+      for (let j = 0; j < A; j++) { const pr = e[j] / Z, x = alts[j]; for (let i = 0; i < p; i++) xbar[i] += pr * x[i]; }
+      const ch = alts[s.chosen];
+      for (let i = 0; i < p; i++) g[i] += w * (ch[i] - xbar[i]);
+      for (let j = 0; j < A; j++) {
+        const wp = w * (e[j] / Z), x = alts[j];
+        for (let a = 0; a < p; a++) { const da = x[a] - xbar[a]; if (da === 0) continue; const f = wp * da; for (let c = a; c < p; c++) Hf[a * p + c] -= f * (x[c] - xbar[c]); }
+      }
     }
+    const H: Matrix = Array.from({ length: p }, (_, a) => Array.from({ length: p }, (_, c) => (c >= a ? Hf[a * p + c] : Hf[c * p + a])));
     for (let i = 0; i < p; i++) { L -= (ridge / 2) * b[i] * b[i]; g[i] -= ridge * b[i]; H[i][i] -= ridge; }
     return { L, g, H };
   };
@@ -60,7 +72,8 @@ export function conditionalLogit(sets: ChoiceSet[], p: number, opts: { maxIter?:
     while (ev.L < cur.L && t > 1e-4) { t /= 2; next = beta.map((b, i) => b + t * step[i]); ev = evaluate(next); }
     const change = Math.abs(ev.L - cur.L);
     beta = next; cur = ev; ll = ev.L;
-    if (change < 1e-8) { converged = true; break; }
+    /* the change is judged against the size of the likelihood: an absolute 1e-8 is below the floating-point noise of a log-likelihood in the hundreds of thousands, so large samples never "converged" and ran all 100 iterations, line search and all (audit F-3) */
+    if (change < 1e-8 * Math.max(1, Math.abs(ev.L))) { converged = true; break; }
   }
   const negH = cur.H.map((r) => r.map((v) => -v));
   const cov = inverse(negH);

@@ -104,7 +104,7 @@ test("the deck tells the story in its fixed order, every sentence from the run; 
   const keys = deck.slides.filter((s): s is Extract<DeckSlide, { type: "key_finding" }> => s.type === "key_finding" && !s.beyond);
   assert.equal(keys.length, 4);
   assert.equal(keys[0].hypothesis, "H1"); assert.equal(keys[0].analysisId, "t1"); assert.equal(keys[0].significant, true);
-  assert.match(keys[0].soWhat, /^This is the evidence for H1 \(“Women are more satisfied than men”\), which is supported overall; a strong effect, so it is a difference worth acting on\.$/);
+  assert.match(keys[0].soWhat, /^This is the evidence for H1 \(“Women are more satisfied than men”\), which is supported overall; a strong effect, so it is large enough to matter in practice\.$/);
   assert.match(keys[0].evidence, /^t welch, p < \.001, Cohen's d = -?1\.01, n = 400 · Holm-adjusted p < \.001$/);
   assert.ok(["bar_grouped", "bar_vertical", "column_clustered"].includes(keys[0].chart.type), keys[0].chart.type);
   const corr = keys.find((k) => k.analysisId === "t4")!;

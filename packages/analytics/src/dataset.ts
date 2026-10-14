@@ -474,6 +474,8 @@ export function answeredCases(ds: Dataset, vars: string[]): boolean[] | null {
     const col = numeric ? numericColumn(ds, v) : categoricalColumn(ds, v);
     col.forEach((x, i) => { if (x != null && !(Array.isArray(x) && !x.length)) answered[i] = true; });
   }
+  /* a zero-weight respondent is not part of the weighted sample, so is not in any base (S-13) */
+  if (ds.weighted) ds.cases.forEach((c, i) => { if (!(c.weight > 0)) answered[i] = false; });
   return answered;
 }
 

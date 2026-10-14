@@ -1,3 +1,18 @@
+import { createRequire } from "node:module";
+import { relative } from "node:path";
+
+/*
+ * The ffmpeg binary's path, found rather than typed (audit R-9). The config
+ * used to name `ffmpeg-static@5.2.0` inside pnpm's store, so a version bump
+ * broke MP4 export with no build error — the trace simply stopped including
+ * the binary. Asking the package where it put the binary survives an upgrade;
+ * if it cannot be resolved the old path is the fallback.
+ */
+const ffmpegFile = (() => {
+  try { return relative(process.cwd(), createRequire(import.meta.url)("ffmpeg-static")); }
+  catch { return "../../node_modules/.pnpm/ffmpeg-static@5.2.0/node_modules/ffmpeg-static/ffmpeg"; }
+})();
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   /*
@@ -36,8 +51,8 @@ const nextConfig = {
     /* the story-report renderer: native modules and a binary, loaded from node_modules at run time, never bundled */
     serverComponentsExternalPackages: ["@resvg/resvg-js", "ffmpeg-static"],
     outputFileTracingIncludes: {
-      "/api/surveys/*/stories/**": ["./public/report-fonts/**", "../../node_modules/.pnpm/ffmpeg-static@5.2.0/node_modules/ffmpeg-static/ffmpeg"],
-      "/api/cron/story-renders": ["./public/report-fonts/**", "../../node_modules/.pnpm/ffmpeg-static@5.2.0/node_modules/ffmpeg-static/ffmpeg"],
+      "/api/surveys/*/stories/**": ["./public/report-fonts/**", ffmpegFile],
+      "/api/cron/story-renders": ["./public/report-fonts/**", ffmpegFile],
       "/docs": ["./content/docs/**"], "/docs/[slug]": ["./content/docs/**"], "/llms.txt": ["./content/docs/**"], "/llms-full.txt": ["./content/docs/**"], "/sitemap.xml": ["./content/docs/**"],
     },
   },

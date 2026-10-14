@@ -86,6 +86,12 @@ const applyFromRow = (r: Record<string, unknown>): StoredApply => ({
   summary: (r.summary as ApplySummary) ?? {}, error: (r.error as string | null) ?? null, startedAt: String(r.started_at), finishedAt: (r.finished_at as string | null) ?? null, createdBy: (r.created_by as string | null) ?? null,
 });
 
+/** a "running" apply older than the lock window crashed: show it as failed, whatever the row still says (audit P-11) */
+export function agedApply(a: StoredApply, now = Date.now()): StoredApply {
+  if (a.status !== "running" || now - Date.parse(a.startedAt) < APPLY_LOCK_MS) return a;
+  return { ...a, status: "failed", error: a.error ?? "This apply did not finish — it was interrupted.", finishedAt: a.finishedAt ?? a.startedAt };
+}
+
 /** the latest apply of this survey's plan, or null; `available: false` when the table is not there yet */
 export async function latestApply(db: SupabaseClient, surveyId: string, environment?: DatasetSpec["environment"]): Promise<{ apply: StoredApply | null; available: boolean }> {
   /* per environment when asked: an apply on test data says nothing about the live outputs' state */
@@ -93,7 +99,7 @@ export async function latestApply(db: SupabaseClient, surveyId: string, environm
   if (environment) q = q.eq("environment", environment);
   const { data, error } = await q.order("started_at", { ascending: false }).limit(1);
   if (error) return { apply: null, available: !missingTable(error.message) };
-  return { apply: data?.[0] ? applyFromRow(data[0] as Record<string, unknown>) : null, available: true };
+  return { apply: data?.[0] ? agedApply(applyFromRow(data[0] as Record<string, unknown>)) : null, available: true };
 }
 
 /** the one report and the one dashboard the apply maintains for this survey */
@@ -252,7 +258,7 @@ export async function syncPlannedAnalyses(db: SupabaseClient, surveyId: string, 
     const version = (row.version ?? 1) + 1;
     const { error } = await db.from("analytics_analyses").update({ definition, version, updated_by: userId }).eq("id", row.id).eq("survey_id", surveyId);
     if (error) continue;
-    await db.from("analytics_analysis_versions").insert({ analysis_id: row.id, survey_id: surveyId, version, definition, summary: `Re-linked from plan item ${l.from} to ${l.to}: the id had come to name a different item`, created_by: userId });
+    await recordVersion(db, { analysis_id: row.id, survey_id: surveyId, version, definition, summary: `Re-linked from plan item ${l.from} to ${l.to}: the id had come to name a different item`, created_by: userId });
     relinked++;
   }
   if (relinked) { rows = await loadRows(db, surveyId); items = view(rows); }
@@ -286,20 +292,20 @@ export async function syncPlannedAnalyses(db: SupabaseClient, surveyId: string, 
       const row = { survey_id: surveyId, name: s.definition.name, kind: s.definition.kind, definition: s.definition, version: 1, folder: "Planned", tags: s.tags, created_by: userId, updated_by: userId };
       const { data, error } = await db.from("analytics_analyses").insert(row).select("*").single();
       if (error || !data) { results.set(it.id, { id: it.id, title: it.title, sync: "skipped_invalid", status: "failed", reason: `The analysis could not be saved: ${error?.message ?? "not saved"}` }); continue; }
-      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition: s.definition, summary: `Created by applying the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+      const vErr2 = await recordVersion(db, { analysis_id: data.id, survey_id: surveyId, version: 1, definition: s.definition, summary: `Created by applying the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
       created.push(data as Record<string, unknown>);
       planned.set(sig, { id: String(data.id), name: s.definition.name });
-      idFor.set(it.id, String(data.id)); results.set(it.id, { id: it.id, title: it.title, sync: "created", status: "pending_data", analysisId: String(data.id) });
+      idFor.set(it.id, String(data.id)); results.set(it.id, { id: it.id, title: it.title, sync: "created", status: "pending_data", analysisId: String(data.id), ...(vErr2 ? { reason: `Saved, but its version history entry was not (${vErr2}).` } : {}) });
       continue;
     }
     /* update: a new version of the same analysis — the plan's part from the plan, the researcher's part kept, the dataset the apply runs on */
     const version = (it.analysis?.version ?? 1) + 1;
     const { error } = await db.from("analytics_analyses").update({ name: s.definition.name, kind: s.definition.kind, definition: s.definition, version, tags: s.tags, updated_by: userId }).eq("id", s.analysisId).eq("survey_id", surveyId);
     if (error) { results.set(it.id, { id: it.id, title: it.title, sync: "unchanged", status: "failed", reason: `The analysis could not be updated: ${error.message}`, analysisId: s.analysisId }); continue; }
-    await db.from("analytics_analysis_versions").insert({ analysis_id: s.analysisId, survey_id: surveyId, version, definition: s.definition, summary: s.summary, created_by: userId });
+    const vErr3 = await recordVersion(db, { analysis_id: s.analysisId, survey_id: surveyId, version, definition: s.definition, summary: s.summary, created_by: userId });
     idFor.set(it.id, s.analysisId); planned.set(analysisSignature(s.definition), { id: s.analysisId, name: s.definition.name });
     const repointedOnly = !!s.repointedFrom && it.state !== "stale";
-    results.set(it.id, { id: it.id, title: it.title, sync: repointedOnly ? "repointed" : "updated", status: "pending_data", analysisId: s.analysisId, ...(s.repointedFrom ? { reason: s.summary } : {}) });
+    results.set(it.id, { id: it.id, title: it.title, sync: repointedOnly ? "repointed" : "updated", status: "pending_data", analysisId: s.analysisId, ...(vErr3 ? { reason: `Saved, but its version history entry was not (${vErr3}).` } : s.repointedFrom ? { reason: s.summary } : {}) });
   }
   return { items, results, idFor, created, relinked, adopted: [...results.values()].filter((r) => r.reason?.startsWith("Uses “")).length, duplicates };
 }
@@ -335,7 +341,7 @@ export async function ensurePlannedAnalyses(db: SupabaseClient, surveyId: string
       const definition: AnalysisDefinition = { ...it.definition, name, surveyVersion: ctx.version ?? undefined };
       const { data, error } = await db.from("analytics_analyses").insert({ survey_id: surveyId, name, kind: it.definition.kind, definition, version: 1, folder: "Planned", tags: it.hypotheses, created_by: userId, updated_by: userId }).select("*").single();
       if (error || !data) { firstError ??= `The analysis “${name}” could not be saved: ${error?.message ?? "not saved"}`; continue; }
-      await db.from("analytics_analysis_versions").insert({ analysis_id: data.id, survey_id: surveyId, version: 1, definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
+      await recordVersion(db, { analysis_id: data.id, survey_id: surveyId, version: 1, definition, summary: `Created from the analysis plan${it.reason ? `: ${it.reason}` : ""}`, created_by: userId });
       byPlanned.set(pid, String(data.id)); created.push(data as Record<string, unknown>);
     }
   }
@@ -458,14 +464,29 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
   }
 }
 
+/** the version row that gives an analysis its history; a failure is reported, not swallowed (audit P-11) */
+async function recordVersion(db: SupabaseClient, row: Record<string, unknown>): Promise<string | null> {
+  const { error } = await db.from("analytics_analysis_versions").insert(row);
+  if (!error) return null;
+  console.error("[rescript:plan] version row not saved", JSON.stringify({ analysis: row.analysis_id, version: row.version, error: error.message }));
+  return error.message;
+}
+
+/** a running row older than this is a crashed apply, not a live one */
+export const APPLY_LOCK_MS = 2 * 60_000;
+
 /** insert the running row, refusing when one is already running */
 async function beginApply(db: SupabaseClient, surveyId: string, meta: { dataset: DatasetSpec; planHash: string | null; planUpdatedAt: string | null; revision: number | null; version: string | null; userId: string | null }): Promise<{ id: string | null; conflict: boolean }> {
-  const since = new Date(Date.now() - 2 * 60_000).toISOString();
+  const since = new Date(Date.now() - APPLY_LOCK_MS).toISOString();
+  /* an apply that never finished (the function was killed, the host restarted) is marked failed, so it neither blocks the next apply nor shows "running" forever (audit P-11) */
+  const aged = await db.from("analytics_plan_applies").update({ status: "failed", error: "This apply did not finish — it was interrupted.", finished_at: new Date().toISOString() }).eq("survey_id", surveyId).eq("status", "running").lt("started_at", since);
+  if (aged.error && missingTable(aged.error.message)) return { id: null, conflict: false };
   const { data: running, error: readError } = await db.from("analytics_plan_applies").select("id").eq("survey_id", surveyId).eq("status", "running").gte("started_at", since).limit(1);
   if (readError) { if (missingTable(readError.message)) return { id: null, conflict: false }; throw new Error(readError.message); }
   if (running?.length) return { id: null, conflict: true };
   const { data, error } = await db.from("analytics_plan_applies").insert({ survey_id: surveyId, status: "running", environment: meta.dataset.environment, dataset: meta.dataset, plan_hash: meta.planHash, plan_updated_at: meta.planUpdatedAt, survey_revision: meta.revision, survey_version: meta.version, created_by: meta.userId }).select("id").single();
-  if (error) { if (missingTable(error.message)) return { id: null, conflict: false }; throw new Error(error.message); }
+  /* the partial unique index (migration 0053) makes the check above race-proof: the loser of two simultaneous applies lands here */
+  if (error) { if (missingTable(error.message)) return { id: null, conflict: false }; if ((error as { code?: string }).code === "23505") return { id: null, conflict: true }; throw new Error(error.message); }
   return { id: String(data.id), conflict: false };
 }
 

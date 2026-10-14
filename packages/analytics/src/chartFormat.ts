@@ -20,7 +20,13 @@ export function chartDecimals(chart: ChartData | undefined, explicit?: number | 
   for (const row of chart?.matrix?.values ?? []) for (const v of row) if (typeof v === "number" && Number.isFinite(v)) values.push(v);
   if (!values.length) return 0;
   if (values.every((v) => Number.isInteger(v))) return 0;
-  return 1;
+  /*
+   * One decimal, unless that would draw two different values the same (3.84 and 3.81 as "3.8" and "3.8"): then two. The
+   * story player uses this same rule, so a chart reads the same in the browser, the PowerPoint and the story.
+   */
+  const distinct = [...new Set(values)];
+  const collides = (d: number) => new Set(distinct.map((v) => v.toFixed(d))).size < distinct.length;
+  return collides(1) ? 2 : 1;
 }
 
 /** the spreadsheet number-format code for the same choice ("0", "0.0", "0.0%" style for a percent shown as a number) */

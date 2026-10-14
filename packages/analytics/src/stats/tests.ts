@@ -30,6 +30,13 @@ const rank = (xs: number[]): number[] => {
   return r;
 };
 
+/** Σ(t³ − t) over the groups of tied values — the tie term of every rank test's variance */
+const tieSum = (xs: number[]): number => {
+  const sorted = [...xs].sort((a, b) => a - b); let t = 0;
+  for (let i = 0; i < sorted.length;) { let j = i; while (j + 1 < sorted.length && sorted[j + 1] === sorted[i]) j++; const g = j - i + 1; t += g ** 3 - g; i = j + 1; }
+  return t;
+};
+
 /* ------------------------------------------------------------ chi-square */
 
 export function chiSquare(table: number[][]): TestResult {
@@ -38,20 +45,55 @@ export function chiSquare(table: number[][]): TestResult {
   const colT = Array.from({ length: C }, (_, j) => table.reduce((a, r) => a + r[j], 0));
   const N = rowT.reduce((a, b) => a + b, 0);
   if (R < 2 || C < 2 || N === 0) return { test: "chi_square", statistic: null, p: null, note: "needs at least a 2×2 table with data" };
-  let x2 = 0, smallExpected = 0;
+  let x2 = 0, smallExpected = 0, minExpected = Infinity;
   for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) {
     const e = (rowT[i] * colT[j]) / N;
     if (e < 5) smallExpected++;
+    if (e < minExpected) minExpected = e;
     if (e > 0) x2 += (table[i][j] - e) ** 2 / e;
   }
   const df = (R - 1) * (C - 1);
-  const p = chiSquareP(x2, df);
+  let p = chiSquareP(x2, df);
   const v = Math.sqrt(x2 / (N * Math.min(R - 1, C - 1)));
+  /*
+   * Cochran's rule: the chi-square approximation is unreliable when more than a fifth of the cells expect fewer than 5,
+   * or any expects fewer than 1. A 2×2 table of whole counts then gets Fisher's exact p; a larger table keeps the
+   * approximate p but says so (`assumptionMet: false`), and a reader or a finding must not call it a clean result.
+   */
+  const assumptionMet = !(minExpected < 1 || smallExpected / (R * C) > 0.2);
+  let pMethod: "asymptotic" | "fisher_exact" = "asymptotic";
+  const whole = table.every((r) => r.every((x) => Number.isInteger(x)));
+  if (!assumptionMet && R === 2 && C === 2 && whole) { p = fisherExact(table[0][0], table[0][1], table[1][0], table[1][1]).p ?? p; pMethod = "fisher_exact"; }
+  const note = !smallExpected ? undefined
+    : pMethod === "fisher_exact" ? `${smallExpected} cell(s) have expected counts below 5, so the exact (Fisher) p-value is given`
+    : assumptionMet ? `${smallExpected} cell(s) have expected counts below 5`
+    : `${smallExpected} cell(s) have expected counts below 5, so the p-value is approximate — combine thin categories or treat it as indicative`;
   return { test: "chi_square", statistic: x2, df, p, effectSize: { name: "Cramér's V", value: v },
-    detail: { n: N, cellsWithExpectedBelow5: smallExpected }, note: smallExpected ? `${smallExpected} cell(s) have expected counts below 5` : undefined };
+    detail: { n: N, cellsWithExpectedBelow5: smallExpected, assumptionMet, pMethod }, note };
 }
 
 /** Fisher's exact test for a 2×2 table (two-sided, by summing tables as or more extreme). */
+/**
+ * Cochran–Armitage test for a trend in proportions across ordered groups (the "chi-square test for trend").
+ * `successes[i]` of `totals[i]` in group i, scored by `scores` (default 1…k). Z = Σ sᵢ(xᵢ − nᵢp̂) / √(p̂(1 − p̂)[Σ nᵢsᵢ² − (Σ nᵢsᵢ)²/N]);
+ * the sign is the direction of the trend (positive: the share rises with the score). It asks for a steady rise or fall — a
+ * chi-square on the same table asks only whether the groups differ, and has less power against a gradient.
+ */
+export function trendProportions(successes: number[], totals: number[], scores?: number[]): TestResult {
+  const k = totals.length;
+  const s = scores && scores.length === k ? scores : Array.from({ length: k }, (_, i) => i + 1);
+  const groups = totals.map((t, i) => ({ x: successes[i], n: t, s: s[i] })).filter((g) => g.n > 0);
+  const N = groups.reduce((a, g) => a + g.n, 0), X = groups.reduce((a, g) => a + g.x, 0);
+  if (groups.length < 3 || N === 0 || X === 0 || X === N) return { test: "trend_proportion", statistic: null, p: null, note: "needs at least three ordered groups and both outcomes present" };
+  const p = X / N;
+  const num = groups.reduce((a, g) => a + g.s * (g.x - g.n * p), 0);
+  const sn = groups.reduce((a, g) => a + g.n * g.s, 0), sn2 = groups.reduce((a, g) => a + g.n * g.s * g.s, 0);
+  const v = p * (1 - p) * (sn2 - (sn * sn) / N);
+  if (!(v > 0)) return { test: "trend_proportion", statistic: null, p: null, note: "the scores do not vary" };
+  const z = num / Math.sqrt(v);
+  return { test: "trend_proportion", statistic: z, p: Math.min(1, 2 * (1 - normalCdf(Math.abs(z)))), effectSize: { name: "slope (share per score step)", value: num / (sn2 - (sn * sn) / N) }, detail: { z, chiSquare: z * z, df: 1, groups: groups.length, n: N, direction: z > 0 ? "rising" : "falling" } };
+}
+
 export function fisherExact(a: number, b: number, c: number, d: number): TestResult {
   const logHyper = (a1: number, b1: number, c1: number, d1: number) => {
     const n = a1 + b1 + c1 + d1;
@@ -176,10 +218,16 @@ export function mannWhitney(a: (number | null | undefined)[], b: (number | null 
   const r1 = r.slice(0, n1).reduce((t, x) => t + x, 0);
   const u1 = r1 - (n1 * (n1 + 1)) / 2, u2 = n1 * n2 - u1;
   const u = Math.min(u1, u2);
-  const mu = (n1 * n2) / 2, sigma = Math.sqrt((n1 * n2 * (n1 + n2 + 1)) / 12);
-  const z = sigma ? (u - mu) / sigma : 0;
-  const p = 2 * (1 - normalCdf(Math.abs(z)));
-  return { test: "mann_whitney", statistic: u, p, effectSize: { name: "rank-biserial r", value: 1 - (2 * u) / (n1 * n2) }, detail: { z, n1, n2, U1: u1, U2: u2 } };
+  /*
+   * Ties and the continuity correction (Audit S-9). Likert answers tie constantly; without the tie term the variance is
+   * too large and p too big, and without the continuity correction a small sample's p is too small. This is scipy's
+   * mannwhitneyu(method="asymptotic", use_continuity=True), which is also what R's wilcox.test does.
+   */
+  const n = n1 + n2;
+  const mu = (n1 * n2) / 2, sigma = Math.sqrt((n1 * n2 / 12) * ((n + 1) - tieSum([...xa, ...xb]) / (n * (n - 1) || 1)));
+  const z = sigma ? Math.max(0, Math.abs(u - mu) - 0.5) / sigma : 0;
+  const p = Math.min(1, 2 * (1 - normalCdf(z)));
+  return { test: "mann_whitney", statistic: u, p, effectSize: { name: "rank-biserial r", value: 1 - (2 * u) / (n1 * n2) }, detail: { z, n1, n2, U1: u1, U2: u2, ties: tieSum([...xa, ...xb]) > 0 } };
 }
 
 export function wilcoxonSignedRank(a: (number | null | undefined)[], b: (number | null | undefined)[]): TestResult {
@@ -191,9 +239,10 @@ export function wilcoxonSignedRank(a: (number | null | undefined)[], b: (number 
   const wPlus = d.reduce((t, x, i) => t + (x > 0 ? r[i] : 0), 0);
   const wMinus = d.reduce((t, x, i) => t + (x < 0 ? r[i] : 0), 0);
   const w = Math.min(wPlus, wMinus);
-  const mu = (n * (n + 1)) / 4, sigma = Math.sqrt((n * (n + 1) * (2 * n + 1)) / 24);
-  const z = sigma ? (w - mu) / sigma : 0;
-  return { test: "wilcoxon", statistic: w, p: 2 * (1 - normalCdf(Math.abs(z))), effectSize: { name: "r", value: Math.abs(z) / Math.sqrt(n) }, detail: { z, n, wPlus, wMinus } };
+  const absd = d.map(Math.abs);
+  const mu = (n * (n + 1)) / 4, sigma = Math.sqrt((n * (n + 1) * (2 * n + 1)) / 24 - tieSum(absd) / 48);
+  const z = sigma ? Math.max(0, Math.abs(w - mu) - 0.5) / sigma : 0;
+  return { test: "wilcoxon", statistic: w, p: Math.min(1, 2 * (1 - normalCdf(z))), effectSize: { name: "r", value: z / Math.sqrt(n) }, detail: { z, n, wPlus, wMinus } };
 }
 
 export function kruskalWallis(groups: { label: string; values: (number | null | undefined)[] }[]): TestResult {
@@ -204,6 +253,10 @@ export function kruskalWallis(groups: { label: string; values: (number | null | 
   let off = 0, h = 0;
   for (const g of gs) { const rs = r.slice(off, off + g.xs.length); off += g.xs.length; const R = rs.reduce((a, b) => a + b, 0); h += (R * R) / g.xs.length; }
   h = (12 / (N * (N + 1))) * h - 3 * (N + 1);
+  /* the tie correction (S-9): H is divided by 1 − Σ(t³ − t)/(N³ − N), as scipy.stats.kruskal does */
+  const tieFactor = 1 - tieSum(gs.flatMap((g) => g.xs)) / (N ** 3 - N);
+  if (tieFactor <= 0) return { test: "kruskal_wallis", statistic: null, p: null, note: "every value is the same, so there is nothing to rank" };
+  h /= tieFactor;
   const df = gs.length - 1;
   return { test: "kruskal_wallis", statistic: h, df, p: chiSquareP(h, df), effectSize: { name: "ε²", value: (h - df) / (N - gs.length) } };
 }
@@ -215,7 +268,11 @@ export function friedman(matrix: (number | null | undefined)[][]): TestResult {
   if (n < 2 || k < 2) return { test: "friedman", statistic: null, p: null, note: "needs at least two complete rows and two conditions" };
   const rankSums = new Array(k).fill(0);
   for (const r of rows) { const rk = rank(r); rk.forEach((v, j) => (rankSums[j] += v)); }
-  const q = (12 / (n * k * (k + 1))) * rankSums.reduce((t, R) => t + R * R, 0) - 3 * n * (k + 1);
+  let q = (12 / (n * k * (k + 1))) * rankSums.reduce((t, R) => t + R * R, 0) - 3 * n * (k + 1);
+  /* ties within a subject (S-9): q is divided by 1 − Σ(t³ − t)/(n·k·(k² − 1)), as scipy.stats.friedmanchisquare does */
+  const tieFactor = 1 - rows.reduce((t, r) => t + tieSum(r), 0) / (n * k * (k * k - 1));
+  if (tieFactor <= 0) return { test: "friedman", statistic: null, p: null, note: "every subject gave the same value in every condition" };
+  q /= tieFactor;
   return { test: "friedman", statistic: q, df: k - 1, p: chiSquareP(q, k - 1), effectSize: { name: "Kendall's W", value: q / (n * (k - 1)) }, detail: { rankSums } };
 }
 

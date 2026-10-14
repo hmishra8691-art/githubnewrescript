@@ -177,6 +177,18 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
       const sig = t.p < alpha;
       const what = labelFor(t, i);
       const word = TEST_WORDS[t.test] ?? t.test.replace(/_/g, " ");
+      const dd = t.detail as { assumptionMet?: boolean; pMethod?: string; cellsWithExpectedBelow5?: number } | undefined;
+      if (sig && dd?.assumptionMet === false && dd.pMethod !== "fisher_exact") {
+        /* an approximate p on thin cells is not a result: say what is known and why it is not called significant */
+        push({
+          kind: "inconclusive", strength: "none", significant: false,
+          headline: `${what}: the chi-square cannot be relied on — ${dd.cellsWithExpectedBelow5 ?? "several"} cell(s) expect fewer than 5 respondents (approximate ${fmtP(t.p)}). Combine thin categories or collect more responses.`,
+          ...(t.note ? { detail: t.note } : {}),
+          evidence: { test: t.test, statistic: t.statistic, ...(t.df !== undefined ? { df: t.df } : {}), p: t.p, ...(effectSize ? { effect: effectSize } : {}), n },
+          variables: varsFor(i),
+        });
+        return;
+      }
       push({
         kind: sig ? "difference" : "no_difference", strength, significant: sig,
         headline: sig ? `${what}: ${WORD[strength]} difference (${word}, ${fmtP(t.p)}${effectSize ? `, ${effectSize.name} = ${fmt(effectSize.value)}` : ""}).` : `${what}: no significant difference (${word}, ${fmtP(t.p)}${low ? "; the base is small" : ""}).`,
@@ -245,7 +257,7 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
         push({
           kind: sig ? "driver" : "no_driver", strength, significant: sig,
           headline: sig
-            ? `${term} ${interaction ? "changes the effect on" : est > 0 ? "raises" : "lowers"} ${L(outcome)}: ${WORD[strength]} ${interaction ? "interaction" : "effect"} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`
+            ? `${term} ${interaction ? "is linked to a different pattern in" : est > 0 ? "is associated with higher" : "is associated with lower"} ${L(outcome)}: ${WORD[strength]} ${interaction ? "interaction" : "association"} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`
             : `${term} does not predict ${L(outcome)} (${logistic ? `OR = ${fmt(or)}` : `β = ${fmt(std)}`}, ${fmtP(p)}).`,
           evidence: { test: logistic ? "logistic_regression" : "regression", statistic: est, p, ...(effect ? { effect } : {}), n, direction: est > 0 ? "positive" : "negative" },
           variables: [outcome, predictorOf(term)],
@@ -287,8 +299,39 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
 }
 
 /** strongest first; a significant finding before a null one; a bigger base before a smaller */
+const PAIR_KINDS: FindingKind[] = ["difference", "no_difference", "correlation", "no_correlation"];
+const pairKey = (f: Finding): string | null => (PAIR_KINDS.includes(f.kind) && f.variables.length === 2 ? [...f.variables.slice(0, 2)].sort().join(" × ") : null);
+
+/**
+ * ONE FINDING PER RELATION (audit I-5). The same two variables could be reported up to three times — a t-test, a
+ * chi-square on the same pair, an adapted test — and a reader counted three findings where there was one. The relation
+ * is kept once, as its strongest reading (one that holds, then the smaller p, then the larger base); the others are
+ * named on it. This is for the lists a person reads — the strongest findings, the Findings place — not for the run
+ * itself, whose items keep every finding so that nothing is lost from the trace.
+ */
+export function dedupeFindings(fs: Finding[]): Finding[] {
+  const groups = new Map<string, Finding[]>();
+  for (const f of fs) { const k = pairKey(f); if (k) groups.set(k, [...(groups.get(k) ?? []), f]); }
+  const better = (a: Finding, b: Finding) => Number(holds(b)) - Number(holds(a)) || (a.evidence.p ?? 1) - (b.evidence.p ?? 1) || b.evidence.n - a.evidence.n;
+  const kept = new Map<string, Finding>();
+  for (const [k, g] of groups) {
+    if (g.length < 2) continue;
+    const [best, ...rest] = [...g].sort(better);
+    const names = [...new Set(rest.map((x) => x.evidence.test ?? x.analysis.name))].filter((x) => x !== best.evidence.test);
+    kept.set(k, names.length ? { ...best, detail: `${best.detail ? `${best.detail} ` : ""}The same relation was also tested by ${names.map((n) => TEST_WORDS[n] ?? n.replace(/_/g, " ")).join(", ")}.`, hypotheses: [...new Set(g.flatMap((x) => x.hypotheses))] } : best);
+  }
+  return fs.filter((f) => { const k = pairKey(f); if (!k || !kept.has(k)) return true; const keep = kept.get(k)!; if (f.id === keep.id) return true; return false; }).map((f) => { const k = pairKey(f); return k && kept.has(k) && kept.get(k)!.id === f.id ? kept.get(k)! : f; });
+}
+
+/**
+ * A finding that holds: significant at its own level AND, when the run corrected for the number of tests (Phase 4), after
+ * that correction. Rankings, summaries and report captions use this, not the raw p (audit I-3) — a finding that only
+ * survives unadjusted is shown, with its correction note, but is never presented as one of the strongest.
+ */
+export const holds = (f: Pick<Finding, "significant" | "evidence">): boolean => f.significant && (f.evidence.adjusted ? f.evidence.adjusted.significant : true);
+
 export function rankFindings(fs: Finding[]): Finding[] {
-  return [...fs].sort((a, b) => Number(b.significant) - Number(a.significant) || RANK[b.strength] - RANK[a.strength] || (a.evidence.p ?? 1) - (b.evidence.p ?? 1) || b.evidence.n - a.evidence.n);
+  return [...fs].sort((a, b) => Number(holds(b)) - Number(holds(a)) || RANK[b.strength] - RANK[a.strength] || (a.evidence.p ?? 1) - (b.evidence.p ?? 1) || b.evidence.n - a.evidence.n);
 }
 
 /* ------------------------------------------------------------ verdicts */

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { DatasetSpec } from "@rescript/analytics";
+import { dedupeFindings } from "@rescript/analytics";
 import { AxApi, type PlanPayload, type Row } from "./api";
 import type { WsTab } from "./navigation";
 
@@ -29,7 +30,7 @@ export function FindingsView({ api, dataset, analyses, onOpenAnalysis, onTab }: 
   }, [api, dataset.environment, dataset.dataset]);
 
   if (run === undefined) return <div className="muted" data-testid="ax-findings-loading">Loading findings…</div>;
-  const findings: Finding[] = run ? [...run.findings].sort((a, b) => (STRENGTH[a.strength]?.rank ?? 9) - (STRENGTH[b.strength]?.rank ?? 9)) : [];
+  const findings: Finding[] = run ? [...dedupeFindings(run.findings as never) as unknown as Finding[]].sort((a, b) => (STRENGTH[a.strength]?.rank ?? 9) - (STRENGTH[b.strength]?.rank ?? 9)) : [];
   const shown = all ? findings : findings.slice(0, 12);
   return (
     <div className="ax-panel" data-testid="ax-findings">

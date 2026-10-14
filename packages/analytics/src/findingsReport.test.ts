@@ -42,7 +42,10 @@ test("the narrative is assembled from the run — the verdicts counted, the stro
   const run = runPlan(def, synthDataset(400), { trigger: "target_reached", now: "2026-10-05T12:00:00Z" });
   const n = reportNarrative(def, run);
   assert.match(n.summary, /^This report reads the 6 planned analyses run on 400 live completes \(target reached, 2026-10-05\)\. Of the 4 hypotheses, 1 supported, 1 not supported, 1 mixed, 1 untested\. The strongest finding: /);
-  assert.match(n.summary, /Also: .*; .*\.$/);
+  assert.match(n.summary, /Also: .*\.$/);
+  /* I-5: the same relation is not told twice in the strongest findings (the satisfaction-by-gender comparison also ran as a crosstab) */
+  const named = [...n.summary.matchAll(/Overall satisfaction across Gender/g)];
+  assert.equal(named.length, 1, n.summary);
   assert.ok(!/conclusive yet/.test(n.summary));
   assert.match(n.hypotheses, /^\*\*H1\*\* Women are more satisfied than men — \*\*Supported\.\*\* All 2 planned tests are significant/m);
   assert.match(n.hypotheses, /\*\*H4\*\* Awareness of Gamma raises consideration of Gamma — \*\*Untested\.\*\* No analysis in the plan serves/);
@@ -78,7 +81,7 @@ test("the report: cover, executive summary over the significant analyses, the hy
   const t3 = run.items.find((it) => it.definition.options?.planned === "t3")!;
   assert.equal(charts[3].chart.type, t3.chart, "the type the run chose for that result");
   assert.ok(new Set(charts.map((c) => c.chart.type)).size > 1, "different results, different charts");
-  assert.match(charts[3].caption ?? "", /^Overall satisfaction raises Recommend\?/, "a mixed result is captioned with its significant finding first");
+  assert.match(charts[3].caption ?? "", /^Overall satisfaction is associated with higher Recommend\?/, "a mixed result is captioned with its significant finding first");
   assert.match(charts[1].caption ?? "", /Overall satisfaction across Gender: a (strong|moderate) difference/);
   assert.match(charts[2].caption ?? "", /no significant difference \(ANOVA/, "a null result is still captioned, with its own words");
   const insights = by(report.blocks, "insights") as Extract<ReportBlock, { type: "insights" }>[];

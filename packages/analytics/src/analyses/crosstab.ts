@@ -2,7 +2,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartData, ResultColumn, Resul
 import { categoricalColumn, categoriesOf, labelOf, numericColumn, weights, type Dataset } from "../dataset.js";
 import { chiSquare, oneWayAnova, type TestResult } from "../stats/tests.js";
 import { normalCdf } from "../stats/distributions.js";
-import { fmtNum, fmtPct, makeResult, opt, pct, round } from "./common.js";
+import { fmtNum, fmtPct, isOrdered, makeResult, MIN_BASE, opt, pct, refused, round } from "./common.js";
 import { adjustP, CORRECTION_WORDS, type CorrectionMethod } from "../posthoc.js";
 
 /**
@@ -138,6 +138,11 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     return makeResult(def, ds, { tables, chart, warnings: ["A crosstab needs at least one row variable and one column variable."], recommendedCharts: ["table"], totalCases });
   }
   for (const v of [...rowVars, ...colVars, ...(layerVar ? [layerVar] : [])]) if (!ds.byName.get(v)) warnings.push(`Variable ${v} is not in this survey's dictionary.`);
+  /* S-8: a mean of unordered categories is a number with no meaning (REGION "averages" 1.97) — refuse it, and say what to do */
+  if (measure === "mean") {
+    const nominal = rowVars.filter((v) => ds.byName.get(v) && !isOrdered(ds, v) && ds.byName.get(v)?.role !== "multi");
+    if (nominal.length) return refused(def, ds, totalCases, `A mean needs a numeric or scale variable, and ${nominal.map((v) => `“${labelOf(ds, v)}”`).join(", ")} ${nominal.length === 1 ? "is a set of unordered categories" : "are sets of unordered categories"}. Show column % or counts instead, or choose a numeric variable. If the answers really are ordered (a rating), mark the question as a scale in the questionnaire.`, ["table"]);
+  }
 
   const layers: { label: string; ds: Dataset }[] = layerVar
     ? categoriesOf(ds, layerVar).map((c) => ({ label: `${labelOf(ds, layerVar)}: ${c.label}`, ds: { ...ds, cases: ds.cases.filter((x) => String(x.vars[layerVar]) === c.code || (Array.isArray(x.vars[layerVar]) && (x.vars[layerVar] as unknown[]).map(String).includes(c.code))) } }))
@@ -175,6 +180,8 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     layer.cases.forEach((_, i) => {
       if (!keep(i)) return;
       const wt = lw?.[i] ?? 1;
+      /* ONE BASE (S-13): a zero-weight respondent is not a case here, as in every other runner; and a multi-select left empty is no answer, not an answer with nothing ticked */
+      if (!(wt > 0)) return;
       // the columns this respondent falls in: Total when any column variable was answered
       const cks: string[] = [];
       cvs.forEach((cv, k) => { const cc = colVals[k][i]; if (cc == null) return; for (const code of Array.isArray(cc) ? cc : [cc]) { const key = keyOf(cv, code); if (known.has(key)) cks.push(key); } });
@@ -187,7 +194,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
         return;
       }
       const rc = rVals[i];
-      if (rc == null) { if (baseMode === "all") for (const ck of cks) { inc(colBase, ck, wt); inc(noAnswer, ck, wt); } return; }
+      if (rc == null || (Array.isArray(rc) && !rc.length)) { if (baseMode === "all") for (const ck of cks) { inc(colBase, ck, wt); inc(noAnswer, ck, wt); } return; }
       const rcs = Array.isArray(rc) ? rc : [rc];
       for (const ck of cks) inc(colBase, ck, wt);
       for (const r of rcs) {
@@ -233,13 +240,18 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const vsTotal = (prop: (ck: string) => { p: number; n: number } | null) => {
       const out: Record<string, string> = {};
       const t = prop("__total"); if (!t) return out;
+      /* each column is tested against the rest of the sample; the columns of one column variable are a family, so their p-values are adjusted together, as the letters are */
+      const families = new Map<string, { key: string; p: number | null; higher: boolean }[]>();
       for (const c of cols) {
         if (!c.variable || suppressed.has(c.key)) continue;
         const me = prop(c.key); if (!me || t.n <= me.n) continue;
         // the column against its complement, so a large column is not tested against itself
         const rest = { p: (t.p * t.n - me.p * me.n) / (t.n - me.n), n: t.n - me.n };
-        const p = zProportions(me.p, me.n, rest.p, rest.n);
-        if (p != null && p < alpha) out[c.key] = me.p > rest.p ? "+" : "−";
+        const f = families.get(c.variable) ?? []; f.push({ key: c.key, p: zProportions(me.p, me.n, rest.p, rest.n), higher: me.p > rest.p }); families.set(c.variable, f);
+      }
+      for (const f of families.values()) {
+        const adj = correction === "none" ? f.map((x) => x.p) : adjustP(f.map((x) => x.p), correction);
+        f.forEach((x, k) => { const p = adj[k]; if (p != null && p < alpha) out[x.key] = x.higher ? "+" : "−"; });
       }
       return out;
     };
@@ -303,7 +315,10 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     }
     // summary rows for a numerically coded frame — mean, boxes, net
     const numericCodes = rCats.map((c) => Number(c.code));
-    if (summaryRows.length && rCats.length >= 2 && numericCodes.every((n) => Number.isFinite(n))) {
+    if (summaryRows.length && !isOrdered(ds, b.rv) && ds.byName.get(b.rv)?.role !== "multi") {
+      const w = `Summary rows (${summaryRows.join(", ")}) are not shown for “${labelOf(ds, b.rv)}”: its categories are not ordered, so a mean or a top box would mean nothing.`;
+      if (!warnings.includes(w)) warnings.push(w);
+    } else if (summaryRows.length && rCats.length >= 2 && numericCodes.every((n) => Number.isFinite(n))) {
       const ordered = [...rCats].map((c) => Number(c.code)).sort((a, b2) => a - b2);
       const topK = (k: number) => new Set(ordered.slice(-k).map(String)), botK = (k: number) => new Set(ordered.slice(0, k).map(String));
       const boxProp = (codes: Set<string>) => (ck: string) => { const base = b.colBase.get(ck); if (!base || !base.w) return null; let w = 0; for (const code of codes) w += b.grid.get(code)?.get(ck)?.w ?? 0; return { p: w / base.w, n: effN(base) }; };
@@ -392,17 +407,34 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     if (table.length >= 2 && liveCols.length >= 2 && ds.byName.get(b.rv)?.role !== "multi" && ds.byName.get(cv)?.role !== "multi") {
       const cs = chiSquare(table);
       tests.push({ ...cs, note: `${labelOf(ds, b.rv)} × ${labelOf(ds, cv)}${ds.weighted ? " (unweighted counts)" : ""}`, detail: { ...(cs.detail ?? {}), rowVariable: b.rv, columnVariable: cv } });
-      if (cs.p != null) insights.push(`${labelOf(ds, b.rv)} ${cs.p < alpha ? "differs significantly" : "does not differ significantly"} by ${labelOf(ds, cv)} (χ² = ${fmtNum(cs.statistic, 2)}, p ${cs.p < 0.001 ? "< .001" : "= " + cs.p.toFixed(3)}${cs.effectSize?.value != null ? `, Cramér's V = ${cs.effectSize.value.toFixed(2)}` : ""}).`);
+      const approx = (cs.detail as { assumptionMet?: boolean; pMethod?: string } | undefined)?.assumptionMet === false && (cs.detail as { pMethod?: string }).pMethod !== "fisher_exact";
+      if (cs.p != null) insights.push(`${labelOf(ds, b.rv)} ${approx && cs.p < alpha ? "may differ (the chi-square is approximate: too few expected in some cells)" : cs.p < alpha ? "differs significantly" : "does not differ significantly"} by ${labelOf(ds, cv)} (χ² = ${fmtNum(cs.statistic, 2)}, p ${cs.p < 0.001 ? "< .001" : "= " + cs.p.toFixed(3)}${cs.effectSize?.value != null ? `, Cramér's V = ${cs.effectSize.value.toFixed(2)}` : ""}).`);
     }
-    // the biggest gap to the total
+    /*
+     * The biggest gap to the total — but only a gap that is real (S-13/I-2). It used to be the largest difference over
+     * every cell, however thin the base and whatever the p: with 40 cells one of them is always "largest". Now each
+     * candidate column needs at least MIN_BASE respondents, is tested against the rest of the sample, and the family of
+     * tests (every cell considered) is adjusted for the correction the table uses; only a significant gap of five points
+     * or more is reported.
+     */
     const totW = b.colBase.get("__total")?.w ?? 0;
-    let best: { row: string; col: string; diff: number; total: number } | null = null;
-    for (const rk of rowKeys) for (const c of cc) {
-      const base = b.colBase.get(c.key); if (!base || base.count < 10 || !base.w) continue;
-      const p = ((b.grid.get(rk)?.get(c.key)?.w ?? 0) / base.w) * 100, tot = totW ? ((b.grid.get(rk)?.get("__total")?.w ?? 0) / totW) * 100 : 0, diff = p - tot;
-      if (!best || Math.abs(diff) > Math.abs(best.diff)) best = { row: rCats.find((x) => x.code === rk)?.label ?? rk, col: c.label, diff, total: tot };
+    const tot = b.colBase.get("__total");
+    type Cand = { row: string; col: string; diff: number; total: number; p: number | null };
+    const cands: Cand[] = [];
+    if (tot && totW) for (const rk of rowKeys) for (const c of cc) {
+      const base = b.colBase.get(c.key); if (!base || base.count < MIN_BASE || !base.w) continue;
+      const pc = (b.grid.get(rk)?.get(c.key)?.w ?? 0) / base.w, pt = (b.grid.get(rk)?.get("__total")?.w ?? 0) / totW;
+      const nMe = effN(base), nAll = effN(tot);
+      if (nAll <= nMe) continue;
+      const rest = { p: (pt * nAll - pc * nMe) / (nAll - nMe), n: nAll - nMe };
+      cands.push({ row: rCats.find((x) => x.code === rk)?.label ?? rk, col: c.label, diff: (pc - pt) * 100, total: pt * 100, p: zProportions(pc, nMe, rest.p, rest.n) });
     }
-    if (best && Math.abs(best.diff) >= 5) insights.push(`Largest gap: “${best.row}” is ${fmtNum(Math.abs(best.diff), 1)} points ${best.diff > 0 ? "higher" : "lower"} among ${best.col} (${fmtPct(best.total + best.diff, 1)} vs ${fmtPct(best.total, 1)} overall).`);
+    if (cands.length) {
+      const adj = correction === "none" ? cands.map((x) => x.p) : adjustP(cands.map((x) => x.p), correction);
+      const real = cands.filter((x, i) => adj[i] != null && (adj[i] as number) < alpha && Math.abs(x.diff) >= 5);
+      const best = real.sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff))[0];
+      if (best) insights.push(`Largest gap: “${best.row}” is ${fmtNum(Math.abs(best.diff), 1)} points ${best.diff > 0 ? "higher" : "lower"} among ${best.col} (${fmtPct(best.total + best.diff, 1)} vs ${fmtPct(best.total, 1)} overall${correction === "none" ? "" : `; significant after ${CORRECTION_WORDS[correction]} adjustment`}).`);
+    }
   };
 
   /** build one table for a set of row variables against a set of column variables in one layer */
@@ -460,7 +492,7 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       measure === "pct_col" ? "Column percentages." : measure === "pct_row" ? "Row percentages." : measure === "pct_total" ? "Percent of total." : measure === "mean" ? "Column means." : ds.weighted ? "Weighted counts." : "Counts.",
       ...(baseMode === "all" ? ["Based on everyone in the column; “No answer” counts the respondents who did not answer the row question."] : []),
       ...(showSig ? [top.meanMode ? `Letters mark columns with a significantly lower mean at the ${Math.round((1 - alpha) * 100)}% level.` : sigNote] : []),
-      ...(sigVsTotal ? ["+ / − mark cells significantly above / below the rest of the sample."] : []),
+      ...(sigVsTotal ? [`+ / − mark cells significantly above / below the rest of the sample${correction === "none" ? "" : ` (${CORRECTION_WORDS[correction]}-adjusted for the columns compared in each row)`}.`] : []),
       ...(suppressed.size ? [`* Columns with fewer than ${minBase} respondents are suppressed.`] : []),
       ...(Object.entries(colBases).some(([k, b]) => k !== "__total" && b > 0 && b < 30) ? ["Some columns have a base below 30 — read with caution."] : []),
     ];

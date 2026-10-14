@@ -59,7 +59,7 @@ test("findings are read from the results' tests and tables: the test, the p, the
   const t3 = byId("t3"); const f3 = findingsFor(t3.definition, runAnalysis(t3.definition, ds), { hypotheses: t3.hypotheses, label });
   const sat = f3.find((f) => f.variables[1] === "SAT")!, age = f3.find((f) => f.variables[1] === "AGE")!;
   assert.equal(sat.kind, "driver"); assert.equal(sat.strength, "strong"); assert.equal(sat.evidence.direction, "positive");
-  assert.match(sat.headline, /^Overall satisfaction raises Recommend\?: a strong effect \(β = 0\.\d+, p < \.001\)\.$/, "the coefficient's label, resolved back to its variable");
+  assert.match(sat.headline, /^Overall satisfaction is associated with higher Recommend\?: a strong association \(β = 0\.\d+, p < \.001\)\.$/, "the coefficient's label, resolved back to its variable");
   assert.equal(age.kind, "no_driver");
   assert.ok(!f3.some((f) => /intercept/i.test(f.headline)), "the intercept is not a finding");
   /* the correlation: age × satisfaction, nothing planted */
@@ -93,7 +93,7 @@ test("findings are read from the results' tests and tables: the test, the p, the
   /* directions and signs, from hand-made results */
   const hand = (tables: typeof r1.tables, kind: "regression" | "correlation") => findingsFor({ name: "h", kind, dataset: spec, variables: kind === "regression" ? ["NPS", "SAT"] : ["SAT", "AGE"] }, { ...r1, tables, tests: [], insights: [], recommendedCharts: [], variablesUsed: kind === "regression" ? ["NPS", "SAT"] : ["SAT", "AGE"] }, { label });
   const neg = hand([{ id: "coef", title: "c", columns: [], rows: [{ term: "(Intercept)", estimate: 5, p: "< .001" }, { term: "Overall satisfaction", estimate: -0.5, std: -0.4, p: ".002" }] }], "regression");
-  assert.equal(neg.length, 1); assert.match(neg[0].headline, /^Overall satisfaction lowers Recommend\?: a moderate effect \(β = -0\.40, p = \.002\)\.$/); assert.equal(neg[0].evidence.direction, "negative");
+  assert.equal(neg.length, 1); assert.match(neg[0].headline, /^Overall satisfaction is associated with lower Recommend\?: a moderate association \(β = -0\.40, p = \.002\)\.$/); assert.equal(neg[0].evidence.direction, "negative");
   const negr = hand([{ id: "corr", title: "c", columns: [], rows: [{ pair: "Overall satisfaction × Age", method: "pearson", r: -0.4, p: ".001", n: 400 }] }], "correlation");
   assert.match(negr[0].headline, /a moderate negative correlation \(r = -0\.40, p = \.001\)/); assert.equal(negr[0].evidence.direction, "negative");
 });
@@ -121,7 +121,7 @@ test("the hypotheses are judged from their planned analyses: supported, not supp
   assert.equal(v.H2.verdict, "not_supported", v.H2.reason);
   assert.match(v.H2.reason, /None of the 2 planned tests are significant/);
   assert.equal(v.H3.verdict, "mixed", v.H3.reason);
-  assert.match(v.H3.reason, /1 of 2 planned tests is significant — Overall satisfaction raises Recommend\?.*but Age does not predict Recommend\?/);
+  assert.match(v.H3.reason, /1 of 2 planned tests is significant — Overall satisfaction is associated with higher Recommend\?.*but Age does not predict Recommend\?/);
   /* the crosstab's REGION banner is not evidence about H1 (gender), and its GENDER banner is not evidence about H2 (region) */
   assert.ok(!v.H1.findings.some((f) => f.variables[1] === "REGION"), v.H1.findings.map((f) => f.headline).join(" | "));
   assert.ok(v.H1.findings.some((f) => f.analysis.kind === "crosstab" && f.variables[1] === "GENDER"), "the gender banner counts: the t-test pairs the same two variables");
@@ -239,7 +239,7 @@ test("verdicts read the direction: a significant effect the other way is evidenc
   assert.match(v.H1.reason, /— in the direction the hypothesis states$/);
   assert.deepEqual([v.H1.direction?.kind, v.H1.direction?.agreeing, v.H1.direction?.contradicting], ["positive", 1, 0]);
   assert.equal(v.H2.verdict, "not_supported", "a significant POSITIVE β does not support “reduces”");
-  assert.match(v.H2.reason, /^The planned test is significant, but in the opposite direction \(β = 0\.\d\d\): Overall satisfaction raises Recommend\?/);
+  assert.match(v.H2.reason, /^The planned test is significant, but in the opposite direction \(β = 0\.\d\d\): Overall satisfaction is associated with higher Recommend\?/);
   assert.equal(v.H2.direction?.contradicting, 1);
   assert.equal(v.H3.verdict, "supported", v.H3.reason);
   assert.equal(v.H4.verdict, "not_supported", v.H4.reason);
@@ -308,4 +308,13 @@ test("verdicts — edges: a group that is not the highest contradicts “higher 
   const v3 = hypothesisVerdicts(def, [item("H3", ["NPS", "SAT", "PRICE"], [main, inter], "regression")])[2];
   assert.equal(v3.verdict, "supported", v3.reason);
   assert.deepEqual([v3.direction?.agreeing, v3.direction?.contradicting, v3.direction?.unread], [1, 0, 1]);
+});
+
+test("I-4: the words the engine writes about a finding are associational — no 'raises', 'lowers', 'drives', 'causes' — and recommend nothing", () => {
+  const run = runPlan(planned(), synthDataset(400));
+  const causal = /\b(raises?|lowers?|drives?|causes?|boosts?|improves?|reduces?|leads? to|worth acting)\b/i;
+  const spoken = [...run.findings.map((f) => f.headline), ...run.findings.flatMap((f) => (f.detail ? [f.detail] : [])), ...run.verdicts.map((v) => v.reason)];
+  const bad = spoken.filter((s) => causal.test(s.replace(/“[^”]*”/g, "")));
+  assert.deepEqual(bad, []);
+  assert.ok(run.findings.some((f) => /is associated with (higher|lower)/.test(f.headline)), "a driver is worded as an association");
 });

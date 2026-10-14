@@ -7,7 +7,9 @@ import { join } from "node:path";
 import { DEFAULT_THEME, type AnalysisResult, type ReportDefinition, type ReportTheme } from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireUser } from "@/lib/guard";
-import { verifyPassword } from "@/lib/analytics";
+import { verifyPassword, hashPassword } from "@/lib/analytics";
+import { assertNotReadOnly, getMeter } from "@/lib/metering";
+import { needsRehash, tooManyGuesses, SHARE_GUESS_WINDOW_MS, tooManyDownloads, SHARE_DOWNLOAD_WINDOW_MS } from "@/lib/sharePassword";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,7 +23,7 @@ export const maxDuration = 60;
  * viewer can ever receive here. There is no code path from a token to
  * `responses`, to a live analysis definition, or to any write.
  *
- *   GET  /api/share/<token>[?password=…]        the snapshot (403 until the password is right)
+ *   GET  /api/share/<token>                     the snapshot (401 until the password — sent in the x-share-password header, never the URL — is right)
  *   POST /api/share/<token>  { format }         PowerPoint / Excel of the same snapshot, if the share permits downloads
  *                                               (a shared STORY: PowerPoint built from the story document itself)
  *
@@ -53,10 +55,16 @@ async function resolve(req: NextRequest, token: string, password: string | null)
   if (r.status === "revoked") return { denied: deny("This shared report has been revoked by its owner.", 410, { status: "revoked" }) };
   if (r.status === "expired") return { denied: deny("This shared link has expired.", 410, { status: "expired" }) };
   if (r.status === "missing" || r.status === "unpublished") return { denied: deny("This report is not available.", 404, { status: r.status }) };
-  if (r.access === "private") return { denied: deny("This report is private.", 403, { status: "private" }) };
   // specific users: a signed-in platform user on the list
   let user: { userId: string; email: string } | null = null;
-  if (r.access === "users") {
+  /* "private" is what the sharing panel calls "Project members": a signed-in member of this survey's project can open it, nobody else (audit R-3 — it used to answer 403 to everyone, owners included) */
+  if (r.access === "private") {
+    const u = await requireUser(req);
+    if (isFailure(u)) return { denied: deny("Sign in to view this report.", 401, { status: "sign_in", reportName: r.report_name }) };
+    user = { userId: u.userId, email: u.email };
+    const { data: role } = await db.rpc("rescript_project_role", { p_user: u.userId, p_survey: r.survey_id });
+    if (!role) { await record("denied", user); return { denied: deny("This report is shared with the project's members only.", 403, { status: "private", reportName: r.report_name }) }; }
+  } else if (r.access === "users") {
     const u = await requireUser(req);
     if (isFailure(u)) { return { denied: deny("Sign in to view this report.", 401, { status: "sign_in", reportName: r.report_name }) }; }
     user = { userId: u.userId, email: u.email };
@@ -67,17 +75,24 @@ async function resolve(req: NextRequest, token: string, password: string | null)
     if (u && !isFailure(u)) user = { userId: u.userId, email: u.email };
   }
   if (r.requires_password) {
+    /* a password may be guessed only so many times: wrong attempts are already recorded on the share, so count them (audit R-4) */
+    if (password) {
+      const since = new Date(Date.now() - SHARE_GUESS_WINDOW_MS).toISOString();
+      const { count } = await db.from("analytics_share_access").select("id", { count: "exact", head: true }).eq("share_id", r.share_id).eq("event", "denied").gte("created_at", since);
+      if (tooManyGuesses(count ?? 0)) return { denied: deny("Too many incorrect passwords. Try again in a few minutes.", 429, { status: "throttled", reportName: r.report_name }) };
+    }
     const { data: sh } = await db.from("analytics_shares").select("password_hash").eq("id", r.share_id).single();
     if (!password || !sh?.password_hash || !(await verifyPassword(password, sh.password_hash))) {
       if (password) await record("denied", user);
       return { denied: deny(password ? "That password is not correct." : "This report is password protected.", 401, { status: "password", reportName: r.report_name }) };
     }
+    if (needsRehash(sh.password_hash)) await db.from("analytics_shares").update({ password_hash: await hashPassword(password) }).eq("id", r.share_id);
   }
   return { r, record, user, db };
 }
 
 export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
-  const password = req.nextUrl.searchParams.get("password") ?? req.headers.get("x-share-password");
+  const password = req.headers.get("x-share-password");
   const res = await resolve(req, params.token, password);
   if ("denied" in res) return res.denied;
   const { r, record, user, db } = res;
@@ -123,6 +138,13 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   if ("denied" in res) return res.denied;
   const { r, record, user, db } = res;
   if (r.permission !== "download") return deny("Downloads are not enabled for this shared report.", 403, { status: "no_download" });
+  /* a public link must not be a free build farm (audit R-2): a ceiling per share per hour, and the owner's read-only wallet applies to a viewer's download as it does to the owner's */
+  const since = new Date(Date.now() - SHARE_DOWNLOAD_WINDOW_MS).toISOString();
+  const { count: recentDownloads } = await db.from("analytics_share_access").select("id", { count: "exact", head: true }).eq("share_id", r.share_id).in("event", ["download_pptx", "download_xlsx"]).gte("created_at", since);
+  if (tooManyDownloads(recentDownloads ?? 0)) return deny("This report has been downloaded a lot in the last hour. Try again later.", 429, { status: "throttled" });
+  const { data: owner } = await db.from("surveys").select("customer_id").eq("id", r.survey_id).maybeSingle();
+  const blocked = await assertNotReadOnly(getMeter(), { customerId: (owner?.customer_id as string | null) ?? "sandbox", surveyId: r.survey_id }, "export");
+  if (blocked) return deny("Downloads are paused for this report. Ask its owner.", 423, { status: "read_only" });
   const format = body.format === "xlsx" ? "xlsx" : "pptx";
   const report = r.definition!, results = r.snapshot ?? {}, theme = r.theme ?? DEFAULT_THEME;
   const storyDoc = (report as { storyDoc?: StoryReport }).storyDoc ?? null;

@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisResult, ChartSpec, ChartType, ReportTheme, ChartData, TreeNode } from "@rescript/analytics";
-import { DEFAULT_THEME, chartDecimals, divergingLayout, stackShares, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
+import { DEFAULT_THEME, readableOn, chartDecimals, divergingLayout, stackShares, seriesForChart, themeSurfaces, fitProjection, regionPath, regionsFor, resolveRegions, worldViewRegions, type Region } from "@rescript/analytics";
 import { ProTable } from "../ProTable";
 
 /**
@@ -62,7 +62,10 @@ export function Chart(props: ChartProps) {
   };
   const d = props.result.chart;
   const title = o.title ?? spec.name;
-  const legendPos = o.legend ?? (shown.length > 1 ? "bottom" : "none");
+  /* judged on all the series, not the visible ones: hiding one of two used to remove the legend, so it could not be shown again */
+  /* a series legend means nothing on a chart that does not draw one colour per series: a donut labels its own slices and a heat map is one colour ramp (the legend used to list the columns of the crosstab under a donut of the total) */
+  const ownLegend = ["pie", "donut", "donut_semi", "donut_nested", "donut_radial", "segment_size", "heatmap", "heatmap_crosstab", "heatmap_correlation", "heatmap_satisfaction", "heatmap_quota", "correlation_matrix", "correlogram", "rank_heatmap", "segment_heatmap", "maxdiff_heatmap", "maxdiff_segment"].includes(spec.type);
+  const legendPos = o.legend ?? (series.length > 1 && !ownLegend ? "bottom" : "none");
   const top = (title ? 26 : 0) + (o.subtitle ? 18 : 0);
   const legendH = legendPos === "bottom" || legendPos === "top" ? 22 : 0;
   const notesH = o.footnote || o.source || o.showBase !== false ? 16 : 0;
@@ -106,6 +109,13 @@ export function Chart(props: ChartProps) {
           </text>
         )}
       </svg>
+      {/* the chart's numbers as a table for keyboard and screen-reader users — the hover tooltip is mouse-only (audit C-10) */}
+      {series.length > 0 && series[0].labels.length > 0 && series[0].labels.length <= 60 && (
+        <table className="ax-sr-only" data-testid="ax-chart-data" aria-label={`Data for ${title || props.result.name}`}>
+          <thead><tr><th scope="col" /> {series.map((s) => <th scope="col" key={s.name}>{s.name}</th>)}</tr></thead>
+          <tbody>{series[0].labels.map((l, i) => <tr key={l + i}><th scope="row">{l}</th>{series.map((s) => <td key={s.name}>{s.values[i] == null ? "—" : fmt(s.values[i] as number, ctx.decimals, ctx.pct)}</td>)}</tr>)}</tbody>
+        </table>
+      )}
       {hover && <div className="ax-tip" style={{ position: "absolute", left: pos ? Math.min(pos.x + 14, Math.max(8, (boxRef.current?.clientWidth ?? 400) - 220)) : 8, top: pos ? Math.max(4, pos.y - 34) : 8, pointerEvents: "none" }}>{hover}</div>}
     </div>
   );
@@ -119,7 +129,8 @@ function Legend({ ctx, series, hidden, toggle, x, y, vertical }: { ctx: Ctx; ser
       {series.map((s, i) => {
         const w = Math.min(s.name.length * (ctx.fs - 2) * 0.55 + 22, vertical ? 140 : 180);
         const el = (
-          <g key={s.name} transform={`translate(${vertical ? x : cx},${vertical ? y + i * 18 : y})`} style={{ cursor: "pointer" }} onClick={() => toggle(s.name)} opacity={hidden.has(s.name) ? 0.35 : 1}>
+          <g key={s.name} transform={`translate(${vertical ? x : cx},${vertical ? y + i * 18 : y})`} style={{ cursor: "pointer" }} role="button" tabIndex={0} aria-pressed={!hidden.has(s.name)} aria-label={`${s.name}: ${hidden.has(s.name) ? "hidden, press to show" : "shown, press to hide"}`} className="ax-legend-item"
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(s.name); } }} onClick={() => toggle(s.name)} opacity={hidden.has(s.name) ? 0.35 : 1}>
             <rect width={10} height={10} y={2} rx={2} fill={ctx.colors[i % ctx.colors.length]} />
             <text x={14} y={11} fill={ctx.textColor}>{trunc(s.name, vertical ? 20 : 28)}</text>
           </g>
@@ -205,7 +216,7 @@ function BarChart({ ctx, inner, series, type, tight, note }: { ctx: Ctx; inner: 
                   {dataLabels && !stacked && (() => { const letter = showSig ? (series.length === 1 ? sig?.[i] : s.sig?.[i]) : ""; return horizontal
                     ? <text x={scale(v) + 4} y={midY + 4} fill={ctx.textColor} fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, ctx.pct)}{letter ? <tspan fill={ctx.theme.colors.accent} fontWeight={700}> {letter}</tspan> : null}</text>
                     : <text x={midX} y={scale(v) - 4} textAnchor="middle" fill={ctx.textColor} fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, ctx.pct)}{letter ? <tspan fill={ctx.theme.colors.accent} fontWeight={700}> {letter}</tspan> : null}</text>; })()}
-                  {dataLabels && stacked && Math.abs(s1 - s0) > 22 && <text x={rect.x + rect.w / 2} y={rect.y + rect.h / 2 + 4} textAnchor="middle" fill="#fff" fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, pct100 || ctx.pct)}</text>}
+                  {dataLabels && stacked && Math.abs(s1 - s0) > 22 && <text x={rect.x + rect.w / 2} y={rect.y + rect.h / 2 + 4} textAnchor="middle" fill={readableOn(color)} fontSize={ctx.fs - 3}>{fmt(v, ctx.decimals, pct100 || ctx.pct)}</text>}
                 </g>
               );
             })}
@@ -271,7 +282,7 @@ function PieChart({ ctx, inner, series, type }: { ctx: Ctx; inner: { x: number; 
         const lab = s.labels[i], selected = ctx.sel === lab;
         return <g key={lab} opacity={ctx.sel && !selected ? 0.45 : 1} style={{ cursor: ctx.onSelect ? "pointer" : "default" }} onClick={() => ctx.onSelect?.(selected ? null : lab)} onMouseEnter={() => setHover(`${lab}: ${fmt(v, ctx.decimals, ctx.pct)} (${fmt((v / total) * 100, 0)}% of total)`)} onMouseLeave={() => setHover(null)}>
           <path d={d} fill={ctx.colors[i % ctx.colors.length]} stroke="#fff" strokeWidth={1.5} />
-          {(ctx.opts.dataLabels ?? true) && v / total > 0.04 && <text x={cx + Math.cos(mid) * (ir ? (r + ir) / 2 : r * 0.65)} y={cy + Math.sin(mid) * (ir ? (r + ir) / 2 : r * 0.65) + 4} textAnchor="middle" fill="#fff" fontWeight={600} fontSize={ctx.fs - 2}>{fmt(v, ctx.decimals, ctx.pct)}</text>}
+          {(ctx.opts.dataLabels ?? true) && v / total > 0.04 && <text x={cx + Math.cos(mid) * (ir ? (r + ir) / 2 : r * 0.65)} y={cy + Math.sin(mid) * (ir ? (r + ir) / 2 : r * 0.65) + 4} textAnchor="middle" fill={readableOn(ctx.colors[i % ctx.colors.length])} fontWeight={600} fontSize={ctx.fs - 2}>{fmt(v, ctx.decimals, ctx.pct)}</text>}
         </g>;
       })}
       {ir > 0 && <text x={cx} y={cy + (semi ? -6 : 5)} textAnchor="middle" fill={ctx.textColor} fontSize={ctx.fs + 4} fontWeight={700}>{fmt(total, ctx.pct ? 0 : ctx.decimals, ctx.pct)}</text>}
@@ -594,6 +605,14 @@ function heat(v: number, min: number, max: number, diverging: boolean, primary: 
   const [r, g, b] = hexRgb(primary);
   return `rgba(${r},${g},${b},${0.08 + t * 0.9})`;
 }
+/** the label colour that reads on a heat-map cell: the cell's translucent fill is blended onto the chart background first, then white or near-black is chosen by contrast (audit C-10) */
+function labelOnHeat(fill: string | null, background: string): string {
+  const m = fill?.match(/rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)/);
+  if (!m) return "#111827";
+  const a = m[4] == null ? 1 : Number(m[4]); const [br, bg, bb] = /^#[0-9a-f]{6}$/i.test(background) ? hexRgb(background) : [255, 255, 255];
+  const mix = (c: number, b: number) => Math.round(c * a + b * (1 - a)).toString(16).padStart(2, "0");
+  return readableOn(`#${mix(Number(m[1]), br)}${mix(Number(m[2]), bg)}${mix(Number(m[3]), bb)}`);
+}
 function hexRgb(h: string): [number, number, number] { const s = h.replace("#", ""); return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)]; }
 
 function HeatmapChart({ ctx, inner, data, series, type }: { ctx: Ctx; inner: { x: number; y: number; w: number; h: number }; data: ChartData; series: ReturnType<typeof seriesForChart>; type: string }) {
@@ -618,7 +637,7 @@ function HeatmapChart({ ctx, inner, data, series, type }: { ctx: Ctx; inner: { x
         {m.columns.map((c, j) => { const v = m.values[i][j]; const isCorr = type === "correlogram"; return <g key={c} onMouseEnter={() => setHover(`${r} × ${c}: ${fmt(v, ctx.decimals + (diverging ? 2 : 0), ctx.pct && !diverging)}`)} onMouseLeave={() => setHover(null)}>
           {isCorr ? <circle cx={px + j * cw + cw / 2} cy={py + i * ch + ch / 2} r={v == null ? 0 : (Math.abs(v) / (Math.max(Math.abs(min), Math.abs(max)) || 1)) * Math.min(cw, ch) * 0.45} fill={heat(v ?? 0, min, max, true, ctx.theme.colors.primary)} />
             : <rect x={px + j * cw + 1} y={py + i * ch + 1} width={Math.max(cw - 2, 0)} height={Math.max(ch - 2, 0)} rx={2} fill={v == null ? "#f1f5f9" : heat(v, min, max, diverging, ctx.theme.colors.primary)} />}
-          {(ctx.opts.dataLabels ?? true) && v != null && cw > 28 && ch > 14 && !isCorr && <text x={px + j * cw + cw / 2} y={py + i * ch + ch / 2 + 4} textAnchor="middle" fill={Math.abs(v - (diverging ? 0 : min)) / ((diverging ? Math.max(Math.abs(min), Math.abs(max)) : max - min) || 1) > 0.55 ? "#fff" : ctx.textColor}>{fmt(v, diverging ? 2 : ctx.decimals, ctx.pct && !diverging)}</text>}
+          {(ctx.opts.dataLabels ?? true) && v != null && cw > 28 && ch > 14 && !isCorr && <text x={px + j * cw + cw / 2} y={py + i * ch + ch / 2 + 4} textAnchor="middle" fill={labelOnHeat(heat(v, min, max, diverging, ctx.theme.colors.primary), ctx.theme.colors.background)}>{fmt(v, diverging ? 2 : ctx.decimals, ctx.pct && !diverging)}</text>}
         </g>; })}
       </g>)}
     </g>
@@ -653,7 +672,7 @@ function FunnelChart({ ctx, inner, series }: { ctx: Ctx; inner: { x: number; y: 
   const [, setHover] = ctx.hover;
   return <g fontFamily={ctx.font} fontSize={ctx.fs - 2}>{s.labels.map((l, i) => { const v = s.values[i] ?? 0, w = (v / maxV) * maxW, next = s.values[i + 1] ?? null; return <g key={l} onMouseEnter={() => setHover(`${l}: ${fmt(v, ctx.decimals, ctx.pct)}`)} onMouseLeave={() => setHover(null)} style={{ cursor: ctx.onSelect ? "pointer" : "default" }} onClick={() => ctx.onSelect?.(ctx.sel === l ? null : l)}>
     <rect x={cx - w / 2} y={inner.y + 4 + i * rowH} width={Math.max(w, 2)} height={rowH - 6} rx={3} fill={ctx.colors[i % ctx.colors.length]} opacity={ctx.sel && ctx.sel !== l ? 0.45 : 1} />
-    <text x={cx} y={inner.y + 4 + i * rowH + rowH / 2 + 4} textAnchor="middle" fill="#fff" fontWeight={600}>{trunc(l, 24)} · {fmt(v, ctx.decimals, ctx.pct)}</text>
+    <text x={cx} y={inner.y + 4 + i * rowH + rowH / 2 + 4} textAnchor="middle" fill={readableOn(ctx.colors[i % ctx.colors.length])} fontWeight={600}>{trunc(l, 24)} · {fmt(v, ctx.decimals, ctx.pct)}</text>
     {next != null && v > 0 && <text x={cx + maxW / 2 + 10} y={inner.y + 4 + i * rowH + rowH + 2} fill={ctx.subtle} fontSize={ctx.fs - 3}>→ {fmt((next / v) * 100, 0)}% convert</text>}
   </g>; })}</g>;
 }
@@ -849,10 +868,10 @@ function ParallelChart({ ctx, inner, series }: { ctx: Ctx; inner: { x: number; y
 }
 
 /* ------------------------------------------------------------ table view (shared by chart fallback, reports and the share view) */
-export function ResultTableView({ table, dense, maxRows }: { table?: AnalysisResult["tables"][number]; dense?: boolean; maxRows?: number }) {
+export function ResultTableView({ table, dense, maxRows, formatting }: { table?: AnalysisResult["tables"][number]; dense?: boolean; maxRows?: number; formatting?: import("../ProTable").TableFormatting }) {
   if (!table) return <div className="muted">No table.</div>;
   const t = maxRows && table.rows.length > maxRows ? { ...table, rows: table.rows.slice(0, maxRows) } : table;
-  return <ProTable table={t} formatting={{ dense }} />;
+  return <ProTable table={t} formatting={{ ...formatting, ...(dense != null ? { dense } : {}) }} />;
 }
 
 export default Chart;

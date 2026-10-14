@@ -602,7 +602,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     };
     const { error } = await db.from("analytics_report_versions").insert({ report_id: itemId, survey_id: surveyId, version, definition, theme, snapshot, dataset, ...(viewerFilters.length ? { variants } : {}), note: typeof body.note === "string" ? body.note : null, published_by: ctx.user.userId });
     if (error) return bad(error.message, 500);
-    await db.from("analytics_reports").update({ published_version: version, updated_by: ctx.user.userId }).eq("id", itemId);
+    const { error: pointerError } = await db.from("analytics_reports").update({ published_version: version, updated_by: ctx.user.userId }).eq("id", itemId);
+    if (pointerError) return bad(`Version ${version} was written but the report could not be pointed at it (${pointerError.message}). Publish again.`, 500);
     log(ctx, "analytics.report_published", itemId, { name: r.name, version, mode: r.mode, viewerFilters: viewerFilters.length });
     return json({ version, publishedAt: new Date().toISOString(), viewerFilters: viewerFilters.length });
   }
@@ -916,6 +917,17 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
     && !!ctx.user.customerId && cur.customer_id === ctx.user.customerId;
   if (!cur || !(ownedByProject || ownedByWorkspace)) return bad("Unknown item.", 404);
   const patch: Record<string, unknown> = { updated_by: ctx.user.userId };
+  /*
+   * OPTIMISTIC CONCURRENCY (audit R-8). A client that says which version of the
+   * row it was editing (`expectedUpdatedAt`) is refused when someone else has
+   * saved since, instead of silently overwriting their work. The check is
+   * repeated on the write itself (below), so two saves that both pass this
+   * read cannot both win.
+   */
+  const expected = typeof body.expectedUpdatedAt === "string" ? Date.parse(body.expectedUpdatedAt) : NaN;
+  const currentStamp = typeof cur.updated_at === "string" ? (cur.updated_at as string) : null;
+  if (Number.isFinite(expected) && currentStamp && Date.parse(currentStamp) !== expected) return json({ error: "Someone else saved this since you opened it. Reload it to see their changes before saving yours.", code: "stale", currentUpdatedAt: currentStamp }, 409);
+  patch.updated_at = new Date().toISOString();
   let detail: Record<string, unknown> = { name: body.name ?? cur.name };
   if (head === "analyses") {
     if (typeof body.name === "string") patch.name = body.name.trim();
@@ -927,7 +939,8 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
       if (analysisChanged(cur.definition as AnalysisDefinition, next)) {
         const version = (cur.version as number) + 1;
         patch.version = version; patch.kind = next.kind;
-        await db.from("analytics_analysis_versions").insert({ analysis_id: itemId, survey_id: surveyId, version, definition: next, summary: typeof body.summary === "string" ? body.summary : "Definition changed", created_by: ctx.user.userId });
+        const { error: versionError } = await db.from("analytics_analysis_versions").insert({ analysis_id: itemId, survey_id: surveyId, version, definition: next, summary: typeof body.summary === "string" ? body.summary : "Definition changed", created_by: ctx.user.userId });
+        if (versionError) return bad(`The change was not saved: its version history entry could not be written (${versionError.message}).`, 500);
         detail = { ...detail, version };
       }
       patch.definition = next;
@@ -953,8 +966,10 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
      the row is the one that has to be safe */
   let q = db.from(coll.table).update(patch).eq("id", itemId);
   q = ownedByProject ? q.eq("survey_id", surveyId) : q.eq("customer_id", ctx.user.customerId ?? "");
-  const { data, error } = await q.select("*").single();
+  if (Number.isFinite(expected) && currentStamp) q = q.eq("updated_at", currentStamp);
+  const { data, error } = await q.select("*").maybeSingle();
   if (error) return bad(error.message, 500);
+  if (!data) return json({ error: "Someone else saved this while you were saving. Reload it to see their changes before saving yours.", code: "stale" }, 409);
   log(ctx, coll.modified, itemId, detail);
   return json({ item: data });
 }

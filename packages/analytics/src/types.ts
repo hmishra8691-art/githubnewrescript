@@ -358,7 +358,8 @@ export const DEFAULT_THEME: ReportTheme = {
  * and the apply leaves it alone unless told to replace it.
  */
 export interface OutputOrigin {
-  kind: "analysis_plan";
+  /** "findings_run": a report drafted from a run on demand or by the milestone cron — one is kept, not one per trigger (audit P-12) */
+  kind: "analysis_plan" | "findings_run";
   appliedAt: string;
   runId?: string | null;
   definitionHash?: string;

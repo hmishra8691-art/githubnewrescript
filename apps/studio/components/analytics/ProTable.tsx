@@ -109,6 +109,8 @@ export function ProTable({ table, formatting, testId = "ax-table", maxHeight }: 
   const visible = rows.slice(first, last);
   const padTop = first * rowH, padBottom = (rows.length - last) * rowH;
 
+  const sortKeys = (key: string) => (e: React.KeyboardEvent) => { if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) { e.preventDefault(); toggleSort(key); } };
+  const ariaSort = (key: string): "ascending" | "descending" | "none" => (sort?.key === key ? (sort.dir === "asc" ? "ascending" : "descending") : "none");
   const toggleSort = (key: string) => setSort((s) => (s?.key !== key ? { key, dir: "desc" } : s.dir === "desc" ? { key, dir: "asc" } : null));
   const toggleGroup = (key: string) => setCollapsed((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const hasCounts = f.showCounts && table.rows.some((r) => dataCols.some((c) => typeof r[`${c.key}__n`] === "number"));
@@ -132,9 +134,9 @@ export function ProTable({ table, formatting, testId = "ax-table", maxHeight }: 
               </tr>
             )}
             <tr>
-              <th className="stub" onClick={() => toggleSort(stub.key)} title="Sort by label" style={widths[stub.key] ? { minWidth: widths[stub.key], maxWidth: widths[stub.key], width: widths[stub.key] } : undefined}>{stub.label}{sort?.key === stub.key ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}<span className="ax-pro-grip" onPointerDown={(e) => startResize(stub.key, e)} title="Drag to resize" /></th>
+              <th className="stub" tabIndex={0} aria-sort={ariaSort(stub.key)} onKeyDown={sortKeys(stub.key)} onClick={() => toggleSort(stub.key)} title="Sort by label" style={widths[stub.key] ? { minWidth: widths[stub.key], maxWidth: widths[stub.key], width: widths[stub.key] } : undefined}>{stub.label}{sort?.key === stub.key ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}<span className="ax-pro-grip" onPointerDown={(e) => startResize(stub.key, e)} title="Drag to resize" /></th>
               {dataCols.map((c) => (
-                <th key={c.key} className={`num ${c.suppressed ? "sup" : ""} ${sort?.key === c.key ? "sorted" : ""}`} onClick={() => toggleSort(c.key)} title={c.suppressed ? "Base below the minimum — cells suppressed" : `Sort by ${c.label}`} style={widths[c.key] ? { minWidth: widths[c.key], width: widths[c.key] } : undefined}>
+                <th key={c.key} className={`num ${c.suppressed ? "sup" : ""} ${sort?.key === c.key ? "sorted" : ""}`} tabIndex={0} aria-sort={ariaSort(c.key)} onKeyDown={sortKeys(c.key)} onClick={() => toggleSort(c.key)} title={c.suppressed ? "Base below the minimum — cells suppressed" : `Sort by ${c.label}`} style={widths[c.key] ? { minWidth: widths[c.key], width: widths[c.key] } : undefined}>
                   {c.label}{sort?.key === c.key ? (sort.dir === "asc" ? " ↑" : " ↓") : ""}<span className="ax-pro-grip" onPointerDown={(e) => startResize(c.key, e)} title="Drag to resize" />
                 </th>
               ))}

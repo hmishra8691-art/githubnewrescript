@@ -11,6 +11,22 @@ function designFor(ds: Dataset, questionId: string) {
   return { q, design, rows: (design?.file?.rows ?? []) as Record<string, unknown>[], columns: design?.file?.columns ?? [] };
 }
 
+/** the alternatives of one task for one version, looked up from an index built once — the filter it replaces ran over the whole design for every task of every respondent (audit F-3) */
+function designIndex(rows: Record<string, unknown>[]) {
+  const byVersion = new Map<string, Record<string, unknown>[]>(), byTask = new Map<string, Record<string, unknown>[]>();
+  for (const r of rows) {
+    const t = String(r.task), v = `${String(r.version ?? "1")}\u0000${t}`;
+    (byVersion.get(v) ?? byVersion.set(v, []).get(v)!).push(r);
+    (byTask.get(t) ?? byTask.set(t, []).get(t)!).push(r);
+  }
+  return (task: string, version: string): Record<string, unknown>[] => byVersion.get(`${version}\u0000${task}`) ?? byTask.get(task) ?? [];
+}
+
+const samplingWarning = (respondents: number, step: number) => `The model was fitted on every ${step === 2 ? "second" : `${step}th`} respondent (about ${Math.ceil(respondents / step).toLocaleString()} of ${respondents.toLocaleString()}) to keep the run within its time limit; counts and shares of choice use everyone. Estimates from this many respondents are already very precise.`;
+
+/** the most respondents whose tasks go into the model fit; beyond it every k-th respondent is used and the result says so (audit F-3) */
+export const MAX_MODEL_RESPONDENTS = 25_000;
+
 function questionIdFor(ds: Dataset, name: string, type: string): string | undefined {
   const meta = ds.byName.get(name);
   if (meta?.questionId && ds.def.questions.find((q) => q.id === meta.questionId)?.type === type) return meta.questionId;
@@ -45,6 +61,8 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     }
     return x;
   };
+  const altsOf = designIndex(rows);
+  const sampleStep = Math.max(1, Math.ceil(ds.cases.length / MAX_MODEL_RESPONDENTS));
   const includeHoldout = opt(def, "includeHoldouts", false) as boolean;
   const sets: ChoiceSet[] = [], holdouts: ChoiceSet[] = [];
   const noneCode = String(((design.config as { alternativesPerTask?: number })?.alternativesPerTask ?? Math.max(...rows.map((r) => Number(r.alt) || 0))) + (hasNone ? 1 : 0));
@@ -57,16 +75,17 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     let any = false;
     for (const [task, choice] of Object.entries(ans)) {
       if (choice == null || choice === "") continue;
-      let alts = rows.filter((r) => String(r.task) === task && String(r.version ?? "1") === version);
-      if (!alts.length) alts = rows.filter((r) => String(r.task) === task);
+      let alts = altsOf(task, version);
       if (!alts.length) continue;
       alts = [...alts].sort((a, b) => Number(a.alt) - Number(b.alt));
       const chosenIdx = alts.findIndex((r) => String(r.alt) === String(choice));
       if (chosenIdx < 0) continue;
       const isNone = Number(alts[chosenIdx].none_option) === 1 || String(choice) === noneCode && Number(alts[chosenIdx].none_option) === 1;
       if (isNone) noneChosen++;
-      const set: ChoiceSet = { alternatives: alts.map(featuresOf), chosen: chosenIdx, weight: wOf(ci) };
-      if (Number(alts[0].is_holdout) === 1 && !includeHoldout) holdouts.push(set); else sets.push(set);
+      if (ci % sampleStep === 0) {
+        const set: ChoiceSet = { alternatives: alts.map(featuresOf), chosen: chosenIdx, weight: wOf(ci) };
+        if (Number(alts[0].is_holdout) === 1 && !includeHoldout) holdouts.push(set); else sets.push(set);
+      }
       tasksAnswered++; any = true;
     }
     if (any) respondents++;
@@ -120,7 +139,7 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   insights.push(`Model fit: McFadden R² ${fmtNum(fit.mcFaddenR2, 2)}, hit rate ${fmtPct(fit.hitRate * 100, 0)}${holdouts.length ? `, holdout hit rate ${fmtPct((holdoutHits / holdouts.length) * 100, 0)}` : ""}.`);
   return makeResult(def, ds, {
     tables, chart: { categories: importance.map((a) => a.attribute), series: [{ name: "Importance %", values: importance.map((a) => pct(a.importance)) }], tree: partWorths.map((a) => ({ name: a.attribute, children: a.levels.map((l) => ({ name: l.level, value: round(l.utility, 3) ?? 0 })) })), kpis: [{ label: "Respondents", value: respondents }, { label: "McFadden R²", value: round(fit.mcFaddenR2, 2) ?? 0 }, { label: "Hit rate", value: round(fit.hitRate * 100, 0) ?? 0, unit: "%" }], valueFormat: "pct" },
-    insights, warnings: fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."], recommendedCharts: ["attribute_importance", "part_worth", "utility_by_level", "preference_share", "wtp"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
+    insights, warnings: [...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []), ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."])], recommendedCharts: ["attribute_importance", "part_worth", "utility_by_level", "preference_share", "wtp"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
   });
 }
 
@@ -136,6 +155,9 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const K = items.length;
   const best = new Array(K).fill(0), worst = new Array(K).fill(0), shown = new Array(K).fill(0);
   const sets: ChoiceSet[] = [];
+  const scratch: ChoiceSet[] = [];
+  const altsOf = designIndex(rows);
+  const sampleStep = Math.max(1, Math.ceil(ds.cases.length / MAX_MODEL_RESPONDENTS));
   const perCase: { ci: number; score: number[] }[] = [];
   let respondents = 0;
   /*
@@ -182,16 +204,18 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
     const w = ds.weighted ? c.weight : 1;
     const score = new Array(K).fill(0);
     let any = false;
+    /* every respondent is counted; only every k-th goes into the model fit, so a very large study still finishes (audit F-3) */
+    scratch.length = 0;
+    const target = ci % sampleStep === 0 ? sets : scratch;
     for (const [task, bw] of Object.entries(ans)) {
       if (!bw || typeof bw !== "object") continue;
-      let alts = rows.filter((r) => String(r.task) === task && String(r.version ?? "1") === version);
-      if (!alts.length) alts = rows.filter((r) => String(r.task) === task);
+      const alts = altsOf(task, version);
       const ids = alts.map((r) => itemIdx.get(String(r.item_index))!).filter((x) => x != null);
       if (ids.length < 2) continue;
       for (const i of ids) shown[i] += w;
       const b = bw.best != null ? itemIdx.get(String(bw.best)) : undefined, wo = bw.worst != null ? itemIdx.get(String(bw.worst)) : undefined;
-      if (b != null && ids.includes(b)) { best[b] += w; score[b] += 1; sets.push({ alternatives: ids.map(feat), chosen: ids.indexOf(b), weight: w }); any = true; }
-      if (wo != null && ids.includes(wo)) { worst[wo] += w; score[wo] -= 1; const rest = ids.filter((i) => i !== b); if (rest.length >= 2) sets.push({ alternatives: rest.map((i) => feat(i).map((v) => -v)), chosen: rest.indexOf(wo), weight: w }); any = true; }
+      if (b != null && ids.includes(b)) { best[b] += w; score[b] += 1; target.push({ alternatives: ids.map(feat), chosen: ids.indexOf(b), weight: w }); any = true; }
+      if (wo != null && ids.includes(wo)) { worst[wo] += w; score[wo] -= 1; const rest = ids.filter((i) => i !== b); if (rest.length >= 2) target.push({ alternatives: rest.map((i) => feat(i).map((v) => -v)), chosen: rest.indexOf(wo), weight: w }); any = true; }
       if (anchored && typeof bw.anchor === "string" && bw.anchor in anchorCounts) {
         anchorCounts[bw.anchor] += w;
         /*
@@ -199,7 +223,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
          * `chosen: 0` is the item winning, `chosen: 1` is the anchor winning.
          */
         const versus = (i: number, itemWins: boolean) =>
-          sets.push({ alternatives: [feat(i), anchorFeat()], chosen: itemWins ? 0 : 1, weight: w });
+          target.push({ alternatives: [feat(i), anchorFeat()], chosen: itemWins ? 0 : 1, weight: w });
         if (bw.anchor === "all") { for (const i of ids) versus(i, true); anchorObservations += ids.length; }
         else if (bw.anchor === "none") { for (const i of ids) versus(i, false); anchorObservations += ids.length; }
         else {
@@ -270,6 +294,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   return makeResult(def, ds, {
     tables, chart: { categories: table.map((t) => t.item), series: [{ name: "Preference share %", values: table.map((t) => pct(t.share)) }, { name: "Best %", values: table.map((t) => pct(t.shown ? (best[itemIdx.get(t.code)!] / t.shown) * 100 : 0)) }, { name: "Worst %", values: table.map((t) => pct(t.shown ? (-worst[itemIdx.get(t.code)!] / t.shown) * 100 : 0)) }], matrix: chartMatrix, kpis: [{ label: "Respondents", value: respondents }, { label: "Top item", value: table[0].item }], valueFormat: "pct" },
     insights, warnings: [
+      ...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []),
       ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."]),
       /*
        * An anchored design whose follow-up was never answered would silently

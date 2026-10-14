@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
-import { loadDefinition, dueMilestone, runPlanFor, draftFindingsReport } from "@/lib/analytics";
+import { loadDefinition, dueMilestone, runPlanFor, draftFindingsReport, hasFindingsReport } from "@/lib/analytics";
 
 /**
  * THE PLAN RUNS BY ITSELF (research-intelligence Phase 5).
@@ -65,7 +65,8 @@ async function run(req: Request): Promise<NextResponse> {
     const r = await runPlanFor(db, surveyId, loaded, { environment: "LIVE", dataset: "clean", trigger: due });
     if (r.error && !r.stored) { skipped.push({ surveyId, reason: r.error }); continue; }
     let report: string | undefined;
-    if ((due === "target_reached" || due === "field_end") && def.research.analysisPlan.autoReport !== false && r.stored) {
+    if ((due === "target_reached" || due === "field_end") && def.research.analysisPlan.autoReport !== false && r.stored && !(await hasFindingsReport(db, surveyId))) {
+      /* one maintained report per survey: a live report keeps itself current, so a second one per milestone would only be a stale twin (audit P-12) */
       const d = await draftFindingsReport(db, surveyId, loaded, r.stored);
       if (d.report) report = String(d.report.id);
     }

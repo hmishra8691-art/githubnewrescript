@@ -89,47 +89,68 @@ export function kMeans(rows: number[][], k: number, seed = 42, maxIter = 100): K
 export interface DendrogramMerge { left: number; right: number; height: number; size: number }
 export interface HierarchicalResult { merges: DendrogramMerge[]; assignments: number[]; k: number }
 
-/** Agglomerative clustering (Ward or average linkage) on ≤ ~1,500 rows; returns the merge tree and a cut at k. */
+/**
+ * Agglomerative clustering (Ward or average linkage); returns the merge tree and a cut at k.
+ *
+ * Distances between clusters are kept in a matrix and updated when two clusters merge (the Lance–Williams recurrence), instead of
+ * being recomputed from the members of every pair at every step. Same merges and heights as the direct computation (which is kept
+ * in the tests as the reference), at a fraction of the cost: 800 rows used to take 17 s (audit F-3). The cost is still cubic in
+ * the number of rows with a small constant, which is what the 1,500-row limit in the cluster analysis is for.
+ */
 export function hierarchical(rows: number[][], k: number, linkage: "ward" | "average" = "ward"): HierarchicalResult {
   const n = rows.length;
-  let clusters = rows.map((r, i) => ({ id: i, members: [i], centroid: r.slice() }));
   const merges: DendrogramMerge[] = [];
-  let nextId = n;
-  const assignmentsAt = (target: number) => {
-    // replay merges until `target` clusters remain
-    const groups = rows.map((_, i) => [i]);
-    const alive = new Map<number, number[]>(groups.map((g, i) => [i, g]));
-    for (const m of merges) {
-      if (alive.size <= target) break;
-      const merged = [...(alive.get(m.left) ?? []), ...(alive.get(m.right) ?? [])];
-      alive.delete(m.left); alive.delete(m.right);
-      alive.set(n + merges.indexOf(m), merged);
-    }
-    const out = new Array(n).fill(0);
-    let c = 0;
-    for (const members of alive.values()) { for (const i of members) out[i] = c; c++; }
-    return out;
-  };
-  const linkDist = (a: typeof clusters[number], b: typeof clusters[number]) => {
-    if (linkage === "ward") return (a.members.length * b.members.length) / (a.members.length + b.members.length) * dist2(a.centroid, b.centroid);
-    let s = 0;
-    for (const i of a.members) for (const j of b.members) s += Math.sqrt(dist2(rows[i], rows[j]));
-    return s / (a.members.length * b.members.length);
-  };
-  while (clusters.length > 1) {
-    let bi = 0, bj = 1, bd = Infinity;
-    for (let i = 0; i < clusters.length; i++) for (let j = i + 1; j < clusters.length; j++) {
-      const d = linkDist(clusters[i], clusters[j]);
-      if (d < bd) { bd = d; bi = i; bj = j; }
-    }
-    const a = clusters[bi], b = clusters[bj];
-    const members = [...a.members, ...b.members];
-    const centroid = rows[0].map((_, col) => members.reduce((t, i) => t + rows[i][col], 0) / members.length);
-    merges.push({ left: a.id, right: b.id, height: Math.sqrt(Math.max(0, bd)), size: members.length });
-    clusters = clusters.filter((_, i) => i !== bi && i !== bj);
-    clusters.push({ id: nextId++, members, centroid });
+  if (n === 0) return { merges, assignments: [], k };
+  // D[a*n+b]: ward → squared distance between centroids; average → mean pairwise distance between members
+  const D = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const d2 = dist2(rows[i], rows[j]);
+    const v = linkage === "ward" ? d2 : Math.sqrt(d2);
+    D[i * n + j] = v; D[j * n + i] = v;
   }
-  return { merges, assignments: assignmentsAt(Math.max(1, Math.min(k, n))), k };
+  // `order` is the live clusters in the order the direct method kept them (a merged cluster goes to the end), which is what breaks ties
+  const slot: number[] = rows.map((_, i) => i);      // order position → matrix slot
+  const id: number[] = rows.map((_, i) => i);        // order position → cluster id (leaf i, merges n, n+1, …)
+  const size: number[] = rows.map(() => 1);
+  let nextId = n;
+  while (slot.length > 1) {
+    let bi = 0, bj = 1, bd = Infinity;
+    for (let i = 0; i < slot.length; i++) {
+      const si = slot[i], ni = size[i];
+      for (let j = i + 1; j < slot.length; j++) {
+        const d = linkage === "ward" ? (ni * size[j]) / (ni + size[j]) * D[si * n + slot[j]] : D[si * n + slot[j]];
+        if (d < bd) { bd = d; bi = i; bj = j; }
+      }
+    }
+    const sa = slot[bi], sb = slot[bj], na = size[bi], nb = size[bj];
+    merges.push({ left: id[bi], right: id[bj], height: Math.sqrt(Math.max(0, bd)), size: na + nb });
+    // the merged cluster reuses slot sa; its distance to every other live cluster is derived from the two it replaces
+    for (let c = 0; c < slot.length; c++) {
+      if (c === bi || c === bj) continue;
+      const sc = slot[c], nc = size[c];
+      const dac = D[sa * n + sc], dbc = D[sb * n + sc];
+      const v = linkage === "ward"
+        ? (na * dac + nb * dbc) / (na + nb) - (na * nb * D[sa * n + sb]) / ((na + nb) * (na + nb))   // squared distance between centroids after the merge
+        : (na * dac + nb * dbc) / (na + nb);
+      D[sa * n + sc] = v; D[sc * n + sa] = v;
+    }
+    for (const arr of [slot, id, size] as number[][]) { arr.splice(bj, 1); arr.splice(bi, 1); }
+    slot.push(sa); id.push(nextId++); size.push(na + nb);
+  }
+  const target = Math.max(1, Math.min(k, n));
+  // replay the merges until `target` clusters remain
+  const alive = new Map<number, number[]>(rows.map((_, i) => [i, [i]]));
+  for (let m = 0; m < merges.length; m++) {
+    if (alive.size <= target) break;
+    const mg = merges[m];
+    const merged = [...(alive.get(mg.left) ?? []), ...(alive.get(mg.right) ?? [])];
+    alive.delete(mg.left); alive.delete(mg.right);
+    alive.set(n + m, merged);
+  }
+  const assignments = new Array(n).fill(0);
+  let c = 0;
+  for (const members of alive.values()) { for (const i of members) assignments[i] = c; c++; }
+  return { merges, assignments, k };
 }
 
 /* ------------------------------------------------------------ PCA / factor */
@@ -205,11 +226,22 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
     if (loadings[big][f] < 0) for (let i = 0; i < p; i++) loadings[i][f] = -loadings[i][f];
   }
   const communalities = loadings.map((row) => row.reduce((t, v) => t + v * v, 0));
-  // scores: z · loadings (component scores for PCA; regression approximation otherwise)
-  const scores = z.map((row) => Array.from({ length: factors }, (_, f) => row.reduce((t, v, i) => t + v * loadings[i][f], 0) / Math.max(1e-9, communalities.reduce((a, b) => a + b, 0) / p)));
+  /*
+   * Factor scores by the regression (Thurstone) method: F = Z · R⁻¹ · Λ, on the data's own correlation matrix R. It
+   * used to be Z · Λ divided by the MEAN communality, which gives a factor a variance that depends on the other
+   * factors (S-12). For principal components this is Z·V/√λ, whose variance is exactly one. A singular R (a variable
+   * that is a copy of another) falls back to dividing each factor by its own sum of squared loadings, which is the same
+   * thing for components.
+   */
+  const corrFull: Matrix = corr.r.map((row) => row.map((v) => v ?? 0));
+  const corrInv = inverse(corrFull);
+  const scoreWeights: Matrix = corrInv
+    ? corrInv.map((rowInv) => Array.from({ length: factors }, (_, f) => rowInv.reduce((t, v, k) => t + v * loadings[k][f], 0)))
+    : loadings.map((row) => row.map((v, f) => v / Math.max(1e-9, loadings.reduce((t, r) => t + r[f] * r[f], 0))));
+  const scores = z.map((row) => Array.from({ length: factors }, (_, f) => row.reduce((t, v, i) => t + v * scoreWeights[i][f], 0)));
   // KMO from the anti-image correlation matrix
   let kmo: number | null = null;
-  const inv = inverse(corr.r.map((row) => row.map((v) => v ?? 0)));
+  const inv = corrInv;
   if (inv) {
     let r2 = 0, q2 = 0;
     for (let i = 0; i < p; i++) for (let j = 0; j < p; j++) {

@@ -2,13 +2,13 @@ import type { AnalysisDefinition, AnalysisResult, ChartData, ResultTable } from 
 import { categoricalColumn, categoriesOf, labelOf, numericColumn, segmentDatasets, weights, weightedN, type Dataset } from "../dataset.js";
 import { describe, frequencies } from "../stats/descriptive.js";
 import {
-  chiSquare, fisherExact, friedman, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest,
+  chiSquare, fisherExact, friedman, trendProportions, independentT, kruskalWallis, mannWhitney, oneSampleT, oneWayAnova, pairedT, proportionCI, proportionTest,
   twoWayAnova, wilcoxonSignedRank, type TestResult,
 } from "../stats/tests.js";
-import { correlate, correlationMatrix } from "../stats/correlation.js";
+import { correlate, correlationInterval, correlationMatrix } from "../stats/correlation.js";
 import { logistic, mediation, multinomialLogistic, ols, type Coefficient } from "../stats/regression.js";
 import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, standardize } from "../stats/multivariate.js";
-import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, round } from "./common.js";
+import { fmtNum, fmtP, fmtPct, isOrdered, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
 
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
@@ -53,7 +53,7 @@ function testTable(tests: TestResult[]): ResultTable {
 const TEST_LABEL: Record<string, string> = {
   chi_square: "Chi-square test of independence", fisher_exact: "Fisher's exact test", t_one_sample: "One-sample t-test", t_independent: "Independent-samples t-test", t_welch: "Welch's t-test", t_paired: "Paired-samples t-test",
   anova_one_way: "One-way ANOVA", anova_two_way: "Two-way ANOVA", mann_whitney: "Mann-Whitney U", wilcoxon: "Wilcoxon signed-rank", wilcoxon_signed_rank: "Wilcoxon signed-rank", kruskal_wallis: "Kruskal-Wallis H", friedman: "Friedman test",
-  proportion_one_sample: "One-sample proportion z-test", proportion_two_sample: "Two-sample proportion z-test",
+  proportion_one_sample: "One-sample proportion z-test", trend_proportion: "Cochran–Armitage test for trend", proportion_two_sample: "Two-sample proportion z-test",
 };
 
 /* ============================================================ tests */
@@ -142,19 +142,30 @@ export function statisticalTest(def: AnalysisDefinition, ds: Dataset, totalCases
     insights.push(`Main effect of ${labelOf(ds, b)} ${sigWord(r.factorA.p, alpha)} (p ${fmtP(r.factorA.p)}); main effect of ${labelOf(ds, c)} ${sigWord(r.factorB.p, alpha)} (p ${fmtP(r.factorB.p)}); the interaction ${sigWord(r.interaction.p, alpha)} (p ${fmtP(r.interaction.p)}).`);
     const aCats = categoriesOf(ds, b), bCats = categoriesOf(ds, c);
     chart = { categories: aCats.map((x) => x.label), series: bCats.map((bc) => ({ name: bc.label, values: aCats.map((ac) => { const cell = rows.filter((rw) => rw.a === ac.code && rw.b === bc.code).map((rw) => rw.y); return cell.length ? round(cell.reduce((s, v) => s + v, 0) / cell.length) : null; }) })) };
-  } else if (chosen === "chi_square" || chosen === "fisher_exact") {
+  } else if (chosen === "chi_square" || chosen === "fisher_exact" || chosen === "trend_proportion") {
     const rc = categoriesOf(ds, a), cc = categoriesOf(ds, b);
     const rv = categoricalColumn(ds, a), cv = categoricalColumn(ds, b);
     const table = rc.map(() => cc.map(() => 0));
     rv.forEach((r, i) => { const col = cv[i]; if (typeof r !== "string" || typeof col !== "string") return; const ri = rc.findIndex((x) => x.code === r), ci = cc.findIndex((x) => x.code === col); if (ri >= 0 && ci >= 0) table[ri][ci]++; });
     const live = table.filter((r) => r.some(Boolean));
     let r: TestResult;
-    if (chosen === "fisher_exact") {
+    if (chosen === "trend_proportion") {
+      /* the outcome is one category of the column variable (default: the first); the rows are the ordered groups */
+      const target = String(opt(def, "category", cc[0]?.code ?? ""));
+      const tj = cc.findIndex((x) => x.code === target);
+      if (tj < 0) return refused(def, ds, totalCases, `“${target}” is not an answer to ${labelOf(ds, b)}. Name the category whose share you want to follow in the “category” option.`);
+      if (roleOf(a) === "categorical") warnings.push(`The trend test takes the rows of ${labelOf(ds, a)} in the order the question lists them; it assumes that order is meaningful (age bands, waves), not alphabetical or arbitrary.`);
+      const keep = table.map((row, i) => ({ row, i })).filter((x) => x.row.some(Boolean));
+      const optScores = opt(def, "scores", null) as number[] | null;
+      const scores = Array.isArray(optScores) && optScores.length === rc.length ? keep.map((x) => optScores[x.i]) : undefined;
+      r = trendProportions(keep.map((x) => x.row[tj]), keep.map((x) => x.row.reduce((t, v) => t + v, 0)), scores);
+      if (r.statistic != null) insights.push(`The share answering “${cc[tj].label}” ${r.p != null && r.p < alpha ? `${(r.detail as { direction: string }).direction === "rising" ? "rises" : "falls"} steadily` : "shows no steady rise or fall"} across ${labelOf(ds, a)} (Cochran–Armitage z = ${fmtNum(r.statistic, 2)}, p ${fmtP(r.p)}).`);
+    } else if (chosen === "fisher_exact") {
       if (live.length !== 2 || live[0].length !== 2) { warnings.push("Fisher's exact test needs a 2×2 table — chi-square used instead."); r = chiSquare(live); }
       else r = fisherExact(live[0][0], live[0][1], live[1][0], live[1][1]);
     } else r = chiSquare(live);
     r.note = `${labelOf(ds, a)} × ${labelOf(ds, b)}`; tests.push(r);
-    insights.push(`The association between ${labelOf(ds, a)} and ${labelOf(ds, b)} ${sigWord(r.p, alpha)} (${TEST_LABEL[r.test]}, p ${fmtP(r.p)}${r.effectSize?.value != null ? `; ${r.effectSize.name} = ${fmtNum(r.effectSize.value, 2)}` : ""}).`);
+    if (chosen !== "trend_proportion") insights.push(`The association between ${labelOf(ds, a)} and ${labelOf(ds, b)} ${sigWord(r.p, alpha)} (${TEST_LABEL[r.test]}, p ${fmtP(r.p)}${r.effectSize?.value != null ? `; ${r.effectSize.name} = ${fmtNum(r.effectSize.value, 2)}` : ""}).`);
     const colTotals = cc.map((_, j) => table.reduce((t, row) => t + row[j], 0));
     tables.push({ id: "contingency", title: `${labelOf(ds, a)} × ${labelOf(ds, b)} (counts)`, columns: [{ key: "row", label: labelOf(ds, a) }, ...cc.map((x) => ({ key: x.code, label: x.label, type: "count" as const }))], rows: rc.map((x, i) => ({ row: x.label, ...Object.fromEntries(cc.map((y, j) => [y.code, table[i][j]])) })), columnBases: Object.fromEntries(cc.map((y, j) => [y.code, colTotals[j]])) });
     chart = { categories: rc.map((x) => x.label), series: cc.map((y, j) => ({ name: y.label, values: rc.map((_, i) => pct(colTotals[j] ? (table[i][j] / colTotals[j]) * 100 : 0)) })), matrix: { rows: rc.map((x) => x.label), columns: cc.map((y) => y.label), values: table.map((row, i) => row.map((v, j) => pct(colTotals[j] ? (v / colTotals[j]) * 100 : 0))) }, valueFormat: "pct" };
@@ -174,6 +185,8 @@ function effectWord(name: string, v: number): string {
 
 /* ============================================================ correlation */
 
+const ciText = (ci: [number, number] | null | undefined) => (ci ? `${ci[0].toFixed(2)} to ${ci[1].toFixed(2)}` : "—");
+
 export function correlation(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
   const method = opt(def, "method", "pearson") as "pearson" | "spearman" | "kendall";
   const alpha = opt(def, "alpha", 0.05) as number;
@@ -185,26 +198,26 @@ export function correlation(def: AnalysisDefinition, ds: Dataset, totalCases: nu
   if (vars.length === 2) {
     const r = correlate(cols[0], cols[1], method);
     const pts = cols[0].map((x, i) => ({ x, y: cols[1][i] })).filter((p): p is { x: number; y: number } => p.x != null && p.y != null);
-    insights.push(`${labelOf(ds, vars[0])} and ${labelOf(ds, vars[1])} are ${strengthWord(r.r)} ${r.r != null && r.r < 0 ? "negatively" : "positively"} correlated (${method} r = ${fmtNum(r.r, 3)}, n = ${r.n}); the correlation ${sigWord(r.p, alpha)} (p ${fmtP(r.p)}).`);
+    insights.push(`${labelOf(ds, vars[0])} and ${labelOf(ds, vars[1])} are ${strengthWord(r.r)} ${r.r != null && r.r < 0 ? "negatively" : "positively"} correlated (${method} r = ${fmtNum(r.r, 3)}${r.ci ? `, 95% CI ${r.ci[0].toFixed(2)} to ${r.ci[1].toFixed(2)}` : ""}, n = ${r.n}); the correlation ${sigWord(r.p, alpha)} (p ${fmtP(r.p)}).`);
     const fit = ols(pts.map((p) => p.y), { predictors: [{ name: "x", values: pts.map((p) => p.x) }] });
     return makeResult(def, ds, {
-      tables: [{ id: "corr", title: "Correlation", columns: [{ key: "pair", label: "Pair" }, { key: "method", label: "Method" }, { key: "r", label: "r", type: "number", decimals: 3 }, { key: "p", label: "p-value" }, { key: "n", label: "n", type: "count" }], rows: [{ pair: `${labelOf(ds, vars[0])} × ${labelOf(ds, vars[1])}`, method, r: round(r.r, 3), p: fmtP(r.p), n: r.n }] }],
+      tables: [{ id: "corr", title: "Correlation", columns: [{ key: "pair", label: "Pair" }, { key: "method", label: "Method" }, { key: "r", label: "r", type: "number", decimals: 3 }, { key: "ci", label: "95% CI" }, { key: "p", label: "p-value" }, { key: "n", label: "n", type: "count" }], rows: [{ pair: `${labelOf(ds, vars[0])} × ${labelOf(ds, vars[1])}`, method, r: round(r.r, 3), ci: ciText(r.ci), p: fmtP(r.p), n: r.n }] }],
       chart: { points: pts, series: "error" in fit ? undefined : [{ name: "Trend", values: [fit.coefficients[0].estimate, fit.coefficients[1].estimate], meta: { kind: "line_fit", r2: fit.r2 } }] },
-      tests: [{ test: `${method}_correlation`, statistic: r.r, p: r.p, note: `n = ${r.n}` }], insights, warnings,
+      tests: [{ test: `${method}_correlation`, statistic: r.r, p: r.p, note: `n = ${r.n}`, ...(r.ci ? { detail: { ci95: r.ci } } : {}) }], insights, warnings,
       recommendedCharts: ["scatter_trendline", "scatter", "bubble", "scatter_ci"], variablesUsed: vars, totalCases,
     });
   }
   const m = correlationMatrix(vars.map((v, i) => ({ name: labelOf(ds, v), values: cols[i] })), method);
   const rows = m.variables.map((v, i) => ({ variable: v, ...Object.fromEntries(m.variables.map((w, j) => [`c${j}`, round(m.r[i][j], 2)])), ...Object.fromEntries(m.variables.map((w, j) => [`c${j}__sig`, i !== j && m.p[i][j] != null && m.p[i][j]! < alpha ? "*" : ""])) }));
-  const pairs: { a: string; b: string; r: number; p: number | null }[] = [];
-  for (let i = 0; i < vars.length; i++) for (let j = i + 1; j < vars.length; j++) if (m.r[i][j] != null) pairs.push({ a: m.variables[i], b: m.variables[j], r: m.r[i][j]!, p: m.p[i][j] });
+  const pairs: { a: string; b: string; r: number; p: number | null; n: number }[] = [];
+  for (let i = 0; i < vars.length; i++) for (let j = i + 1; j < vars.length; j++) if (m.r[i][j] != null) pairs.push({ a: m.variables[i], b: m.variables[j], r: m.r[i][j]!, p: m.p[i][j], n: m.n[i][j] });
   pairs.sort((x, y) => Math.abs(y.r) - Math.abs(x.r));
   if (pairs.length) insights.push(`Strongest correlation: ${pairs[0].a} × ${pairs[0].b} (r = ${fmtNum(pairs[0].r, 2)}, p ${fmtP(pairs[0].p)}).${pairs.length > 1 ? ` Weakest: ${pairs[pairs.length - 1].a} × ${pairs[pairs.length - 1].b} (r = ${fmtNum(pairs[pairs.length - 1].r, 2)}).` : ""}`);
   const sigCount = pairs.filter((p) => p.p != null && p.p < alpha).length;
   insights.push(`${sigCount} of ${pairs.length} pairs are significant at α = ${alpha}.`);
   return makeResult(def, ds, {
     tables: [{ id: "corr_matrix", title: `Correlation matrix (${method})`, columns: [{ key: "variable", label: "" }, ...m.variables.map((v, j) => ({ key: `c${j}`, label: v, type: "number" as const, decimals: 2 }))], rows, notes: [`* p < ${alpha}`] },
-      { id: "corr_pairs", title: "Pairwise correlations", columns: [{ key: "a", label: "Variable A" }, { key: "b", label: "Variable B" }, { key: "r", label: "r", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: pairs.map((p) => ({ a: p.a, b: p.b, r: round(p.r, 3), p: fmtP(p.p) })) }],
+      { id: "corr_pairs", title: "Pairwise correlations", columns: [{ key: "a", label: "Variable A" }, { key: "b", label: "Variable B" }, { key: "r", label: "r", type: "number", decimals: 3 }, { key: "ci", label: "95% CI" }, { key: "p", label: "p-value" }], rows: pairs.map((p) => ({ a: p.a, b: p.b, r: round(p.r, 3), ci: ciText(correlationInterval(p.r, p.n, method)), p: fmtP(p.p) })) }],
     chart: { matrix: { rows: m.variables, columns: m.variables, values: m.r.map((r) => r.map((x) => round(x, 2))) }, valueFormat: "number" },
     insights, warnings, recommendedCharts: ["heatmap_correlation", "correlation_matrix", "correlogram", "network"], variablesUsed: vars, totalCases,
   });
@@ -250,6 +263,14 @@ export function regression(def: AnalysisDefinition, ds: Dataset, totalCases: num
   let chart: ChartData = {};
   if (!y || !xs.length) return makeResult(def, ds, { tables, chart, warnings: ["Regression needs a dependent variable followed by at least one predictor."], recommendedCharts: ["coefficient_plot"], totalCases });
 
+  /* S-8: a regression on a nominal outcome is not a regression: refuse it with the model that fits */
+  if (model === "linear" || model === "mediation") {
+    /* the predictor of a mediation may be a two-group variable (coded 0/1); the mediator and the outcome must be quantities */
+    const [mx, mm] = xs;
+    const checked = model === "mediation" ? [y, ...(mm ? [mm] : []), ...(mx && (ds.byName.get(mx)?.categories?.length ?? 0) > 2 ? [mx] : [])] : [y];
+    const bad = checked.filter((v) => ds.byName.get(v) && !isOrdered(ds, v));
+    if (bad.length) return refused(def, ds, totalCases, `${model === "linear" ? "Linear regression" : "Mediation"} needs numeric or scale variables, and ${bad.map((v) => `“${labelOf(ds, v)}”`).join(", ")} ${bad.length === 1 ? "is" : "are"} categorical. ${model === "linear" ? "Use logistic regression for a two-category outcome, or multinomial for more." : "Use numeric or scale variables for the outcome, the predictor and the mediator."}`, ["coefficient_plot"]);
+  }
   if (model === "mediation") {
     const [x, m] = xs;
     if (!m) return makeResult(def, ds, { tables, chart, warnings: ["Mediation needs outcome, predictor and mediator."], recommendedCharts: ["coefficient_plot"], totalCases });

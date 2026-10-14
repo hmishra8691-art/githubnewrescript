@@ -6,6 +6,7 @@ import { analysisSignature } from "./planCheck.js";
 import { offeredSentences } from "./narrative.js";
 import { checkSentence, claimsFromItems, sentenceLabel, type ClaimLabel } from "./claims.js";
 import { mentionsVariable } from "./analyses/index.js";
+import { adjustP } from "./posthoc.js";
 
 /**
  * THE INTELLIGENT REPORT BUILDER (Data Analytics audit, Oct 2026).
@@ -76,7 +77,26 @@ const analysesOf = (n: number) => `${n} ${n === 1 ? "analysis" : "analyses"}`;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
 
-export const isSignificant = (r: AnalysisResult): boolean => r.tests.some((t) => t.p != null && t.p < ALPHA);
+/** one result on its own, at the default level, unadjusted — for a lone result; a report uses `significanceAcross` (I-3) */
+export const isSignificant = (r: AnalysisResult, alpha = ALPHA): boolean => r.tests.some((t) => t.p != null && t.p < alpha);
+
+/**
+ * Which analyses of a report are significant — each at its own alpha, and with Holm's correction across every test the
+ * report draws on (up to 60 analyses: at .05, three of them are "significant" by luck alone). An item whose test only
+ * survives unadjusted is not called significant, so the report does not lead with it.
+ */
+export function significanceAcross(items: readonly { id: string; definition: AnalysisDefinition; result: AnalysisResult }[]): Map<string, boolean> {
+  const tests: { id: string; alpha: number; p: number }[] = [];
+  for (const it of items) {
+    const raw = Number((it.definition.options as { alpha?: unknown } | undefined)?.alpha);
+    const alpha = Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : ALPHA;
+    for (const t of it.result.tests) if (t.p != null && Number.isFinite(t.p)) tests.push({ id: it.id, alpha, p: t.p });
+  }
+  const adj = adjustP(tests.map((t) => t.p), "holm");
+  const out = new Map<string, boolean>(items.map((i) => [i.id, false]));
+  tests.forEach((t, k) => { const a = adj[k]; if (a != null && a < t.alpha) out.set(t.id, true); });
+  return out;
+}
 
 /** the test line of a result, built from its own numbers: "Chi-square: χ² = 12.4, p = .002, Cramér's V = 0.21" */
 export function testLine(r: AnalysisResult): string | undefined {
@@ -138,9 +158,10 @@ export function rankItems(items: readonly BuilderItem[], variables: readonly Var
   const questions = brief.keyQuestions.map((q) => q.trim()).filter(Boolean);
   const covered = new Set<string>();
   const ranked: Ranked[] = [];
+  const sigOf = significanceAcross(usable);
   for (const it of usable) {
     const kind = it.definition.kind;
-    const significant = isSignificant(it.result);
+    const significant = sigOf.get(it.id) ?? false;
     if (kind === "test" && brief.includeTests === false) { skipped.push({ id: it.id, name: it.name, reason: "Significance tests were left out of the scope." }); continue; }
     if (kind === "crosstab" && brief.includeCrosstabs === false) { skipped.push({ id: it.id, name: it.name, reason: "Cross-tabulations were left out of the scope." }); continue; }
     const about = aboutWords(it, byName);
@@ -306,7 +327,7 @@ export function regenerateScene(story: StoryDefinition, sceneId: string, items: 
     const { usable, skipped } = usability([item]);
     if (!usable.length) return { error: skipped[0]?.reason ?? "This analysis cannot be shown." };
     const advice = adviseChart(item.definition, item.result, variables, { audience: story.audience });
-    const significant = isSignificant(item.result);
+    const significant = significanceAcross(items).get(item.id) ?? false;
     const role: ItemRole = old.type === "difference" ? "difference" : old.type === "comparison" ? "comparison" : "finding";
     const fresh = sceneForItem({ item, role, score: 0, answers: [], significant, advice });
     return { scene: { ...fresh, id: old.id, ...(old.chart && checkChartChoice(item.result, old.chart.type).valid ? { chart: old.chart } : {}) } };

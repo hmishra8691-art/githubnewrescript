@@ -12,7 +12,8 @@
  * categories with no order, a grouped chart with one series), and says why
  * the default was chosen and why each alternative is or is not allowed.
  */
-import type { AnalysisDefinition, AnalysisResult, ChartType } from "../types.js";
+import type { AnalysisDefinition, AnalysisResult, ChartData, ChartType } from "../types.js";
+import { chartDecimals } from "../chartFormat.js";
 import type { Audience } from "../chartPurpose.js";
 import { rankedCharts } from "../questionChart.js";
 import type { ChartRecommendationNote, FrozenChartData, FrozenTable, StoryChartType } from "./types.js";
@@ -141,15 +142,15 @@ export function recommendStoryChart(def: Pick<AnalysisDefinition, "kind" | "vari
 
 /* ------------------------------------------------------------ formatting the numbers */
 
-/** decimals a chart's labels need: the design's setting, raised so non-integer values (means, scores) are never rounded into each other */
+/**
+ * decimals a story chart's labels need: the design's setting, never fewer than the one rule every other chart uses
+ * (`chartDecimals`: none for percentages and whole numbers, one for other values, two where one would draw different
+ * values alike), so the same chart reads the same in the browser, the PowerPoint and the story.
+ */
 export function displayDecimals(data: Pick<FrozenChartData, "valueFormat" | "series">, designDecimals: number): number {
-  const vals = data.series.flatMap((x) => x.values).filter((v): v is number => v != null);
-  if (data.valueFormat === "pct" || data.valueFormat === "count") return designDecimals;
-  const integers = vals.every((v) => Number.isInteger(v));
-  if (integers) return designDecimals;
-  const big = Math.max(0, ...vals.map(Math.abs));
-  const need = big >= 100 ? 0 : big >= 10 ? 1 : data.valueFormat === "mean" ? 1 : 2;
-  return Math.max(designDecimals, need);
+  if (data.valueFormat === "count") return designDecimals;
+  const chart = { valueFormat: data.valueFormat === "pct" ? "pct" : undefined, series: data.series.map((x) => ({ name: x.name, values: x.values.map((v) => v ?? NaN) })) } as unknown as ChartData;
+  return Math.max(designDecimals, chartDecimals(chart));
 }
 
 /** a value as a chart label shows it; null is "—" (not zero), and the decimals never hide a difference that the table shows */

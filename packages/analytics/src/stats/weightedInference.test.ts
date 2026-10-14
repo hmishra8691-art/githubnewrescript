@@ -131,8 +131,8 @@ suite("npsOf()", () => {
   });
 
   it("is unchanged when every weight is the same", () => {
-    const v = [10, 9, 8, 7, 6, 5];
-    const a = npsOf(v), b = npsOf(v, Array(6).fill(4));
+    const v = [10, 9, 8, 7, 6, 5, 10, 9, 8, 7, 6, 5];
+    const a = npsOf(v), b = npsOf(v, Array(12).fill(4));
     assert.equal(a.nps, b.nps);
     assert.ok(Math.abs((a.ci as number[])[0] - (b.ci as number[])[0]) < 1e-9);
   });

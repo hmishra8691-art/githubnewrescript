@@ -1,8 +1,23 @@
-import { normalCdf, tTestP } from "./distributions.js";
+import { normalCdf, normalQuantile, tTestP } from "./distributions.js";
 
 export type CorrelationMethod = "pearson" | "spearman" | "kendall";
 
-export interface Correlation { r: number | null; p: number | null; n: number; method: CorrelationMethod }
+export interface Correlation { r: number | null; p: number | null; n: number; method: CorrelationMethod; /** confidence interval for r (Fisher z), null when not defined */ ci?: [number, number] | null }
+
+/**
+ * A confidence interval for a correlation, by Fisher's z transform: atanh(r) ± z·se, back-transformed.
+ * The standard error depends on the coefficient: 1/√(n−3) for Pearson's r; Bonett & Wright's √((1+r²/2)/(n−3)) for
+ * Spearman's rho (the plain value is too narrow once the data are ranked); Fieller's √(0.437/(n−4)) for Kendall's tau.
+ * Null for n too small, |r| = 1, or no coefficient (a p-value alone said "different from zero", never how large).
+ */
+export function correlationInterval(r: number | null, n: number, method: CorrelationMethod = "pearson", confidence = 0.95): [number, number] | null {
+  if (r == null || !Number.isFinite(r) || Math.abs(r) >= 1) return null;
+  const minN = method === "kendall" ? 5 : 4;
+  if (n < minN) return null;
+  const se = method === "spearman" ? Math.sqrt((1 + (r * r) / 2) / (n - 3)) : method === "kendall" ? Math.sqrt(0.437 / (n - 4)) : 1 / Math.sqrt(n - 3);
+  const z = normalQuantile(1 - (1 - confidence) / 2), c = Math.atanh(r);
+  return [Math.tanh(c - z * se), Math.tanh(c + z * se)];
+}
 
 const pairs = (a: (number | null | undefined)[], b: (number | null | undefined)[]): [number, number][] => {
   const out: [number, number][] = [];
@@ -49,12 +64,12 @@ export function correlate(a: (number | null | undefined)[], b: (number | null | 
     const n0 = (n * (n - 1)) / 2;
     const tau = Math.sqrt((n0 - tx) * (n0 - ty)) ? (conc - disc) / Math.sqrt((n0 - tx) * (n0 - ty)) : null;
     const z = tau == null ? 0 : (3 * tau * Math.sqrt(n * (n - 1))) / Math.sqrt(2 * (2 * n + 5));
-    return { r: tau, p: tau == null ? null : 2 * (1 - normalCdf(Math.abs(z))), n, method };
+    return { r: tau, p: tau == null ? null : 2 * (1 - normalCdf(Math.abs(z))), n, method, ci: correlationInterval(tau, n, "kendall") };
   }
   const r = method === "spearman" ? pearson(ranks(xs), ranks(ys)) : pearson(xs, ys);
   if (r == null) return { r: null, p: null, n, method };
   const t = Math.abs(r) >= 1 ? Infinity : (r * Math.sqrt(n - 2)) / Math.sqrt(1 - r * r);
-  return { r, p: Number.isFinite(t) ? tTestP(t, n - 2) : 0, n, method };
+  return { r, p: Number.isFinite(t) ? tTestP(t, n - 2) : 0, n, method, ci: correlationInterval(r, n, method) };
 }
 
 export interface CorrelationMatrix { variables: string[]; r: (number | null)[][]; p: (number | null)[][]; n: number[][] }

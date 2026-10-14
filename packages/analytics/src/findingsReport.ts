@@ -1,6 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import type { ChartType, ReportBlock, ReportDefinition } from "./types.js";
-import type { AnalysisRun, Finding, HypothesisVerdict, RunItem } from "./findings.js";
+import { dedupeFindings, holds, type AnalysisRun, type Finding, type HypothesisVerdict, type RunItem } from "./findings.js";
 
 /*
  * THE FINDINGS REPORT (research-intelligence Phase 6): the analysis run
@@ -53,7 +53,7 @@ export function reportNarrative(def: SurveyDefinition, run: RunLike): { summary:
   const count = (k: HypothesisVerdict["verdict"]) => v.filter((x) => x.verdict === k).length;
   const parts = ([["supported", "supported"], ["not_supported", "not supported"], ["mixed", "mixed"], ["inconclusive", "inconclusive"], ["untested", "untested"]] as const).filter(([k]) => count(k)).map(([k, w]) => `${count(k)} ${w}`);
   const second = v.length ? `Of the ${v.length} ${v.length === 1 ? "hypothesis" : "hypotheses"}, ${parts.join(", ")}.` : "";
-  const top = run.findings.filter((f) => f.significant).slice(0, 3);
+  const top = dedupeFindings(run.findings).filter(holds).slice(0, 3);
   const third = top.length ? `The strongest finding: ${top[0].headline}${top.length > 1 ? ` Also: ${top.slice(1).map((f) => f.headline.replace(/\.$/, "")).join("; ")}.` : ""}` : "No planned test reached significance on this base.";
   const small = run.n < 30 ? ` With only ${run.n} completes nothing here is conclusive yet.` : "";
   const summary = [first, second, third].filter(Boolean).join(" ") + small;
@@ -68,7 +68,7 @@ const chartFor = (item: RunLike["items"][number]): ChartType => (item.chart as C
 const captionFor = (item: RunLike["items"][number]): string | undefined => {
   const fs = item.findings.filter((f) => f.kind !== "inconclusive" && f.kind !== "low_base");
   if (!fs.length) return undefined;
-  const sig = fs.filter((f) => f.significant);
+  const sig = fs.filter(holds);
   return (sig.length ? sig : fs).slice(0, 2).map((f) => f.headline).join(" ");
 };
 
@@ -79,7 +79,7 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
   const idOf = (item: RunLike["items"][number]) => opts.analysisIdFor(item.definition.options?.planned as string | undefined, item.definition.name);
   const blocks: ReportBlock[] = [];
   blocks.push({ id: bid("cover"), type: "cover", title, subtitle: `${plural(run.n, "complete")} · ${MILESTONE_WORD[run.trigger] ?? run.trigger} · ${date(run.computedAt)}${(opts.client ?? def.research?.brief?.client) ? ` · prepared for ${opts.client ?? def.research?.brief?.client}` : ""}`, date: date(run.computedAt), ...(opts.author ? { author: opts.author } : {}) });
-  const sigItems = run.items.filter((it) => it.findings.some((f) => f.significant));
+  const sigItems = run.items.filter((it) => it.findings.some(holds));
   blocks.push({ id: bid("exec"), type: "executive_summary", title: "Executive summary", analysisIds: sigItems.slice(0, 6).map(idOf).filter((x): x is string => !!x), text: narrative.summary });
   if (run.verdicts.length) blocks.push({ id: bid("hyp"), type: "text", title: "The hypotheses", markdown: narrative.hypotheses });
   blocks.push({ id: bid("pb"), type: "page_break" });
@@ -100,7 +100,7 @@ export function reportFromRun(def: SurveyDefinition, run: RunLike, opts: ReportO
     blocks.push({ id: bid("pb"), type: "page_break" });
   }
 
-  const others = run.items.filter((it) => !used.has(it) && it.findings.some((f) => f.kind !== "inconclusive" && f.kind !== "low_base")).sort((a, b) => Number(b.findings.some((f) => f.significant)) - Number(a.findings.some((f) => f.significant))).slice(0, opts.otherFindings ?? 6);
+  const others = run.items.filter((it) => !used.has(it) && it.findings.some((f) => f.kind !== "inconclusive" && f.kind !== "low_base")).sort((a, b) => Number(b.findings.some(holds)) - Number(a.findings.some(holds))).slice(0, opts.otherFindings ?? 6);
   if (others.length) {
     blocks.push({ id: bid("sec"), type: "section", title: "Other findings", subtitle: "Planned analyses outside the hypotheses" });
     for (const it of others) blocks.push({ id: bid("ch"), type: "chart", title: it.definition.name, analysisId: idOf(it) ?? "", chart: { type: chartFor(it), options: { title: it.definition.name, dataLabels: true } }, ...(captionFor(it) ? { caption: captionFor(it) } : {}) });

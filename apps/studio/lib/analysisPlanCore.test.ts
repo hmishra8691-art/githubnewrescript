@@ -386,3 +386,24 @@ test("P-13: a planned chi-square next to the crosstab that reports it is still i
   assert.equal(by.get("xt_9")!.sync, "unchanged"); assert.equal(by.get("xt_9")!.analysisId, by.get("xt_1")!.analysisId, "an exact repeat of xt_1 shares its analysis");
   assert.equal(rowsOf(db).length, 4);
 });
+
+test("P-11: a crashed apply (a 'running' row older than the lock) neither blocks the next apply nor shows 'running' forever", async () => {
+  const db = setup();
+  const old = new Date(Date.now() - 10 * 60_000).toISOString();
+  db.tables.analytics_plan_applies = [{ id: uuid(), survey_id: SURVEY, status: "running", started_at: old, environment: "LIVE", dataset: LIVE }];
+  const shown = await planPayload(db.as(), SURVEY, ctxOf(db), LIVE, deps());
+  assert.notEqual((shown as { apply?: { status?: string } | null }).apply?.status, "running", "an old running row is displayed as failed");
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.equal(r.ok, true, r.error);
+  const rows = db.tables.analytics_plan_applies;
+  assert.equal(rows.find((a) => a.started_at === old)!.status, "failed");
+  assert.ok(rows.every((a) => a.status !== "running"));
+});
+
+test("P-11: a version row that cannot be written is said in the item, not swallowed", async () => {
+  const db = setup();
+  const real = db.as();
+  const failing = new Proxy(real, { get: (t, k) => k === "from" ? (name: string) => name === "analytics_analysis_versions" ? { insert: async () => ({ error: { message: "boom" } }) } : (t as never as { from: (n: string) => unknown }).from(name) : (t as never)[k] }) as unknown as SupabaseClient;
+  const r = await applyPlan(failing, SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
+  assert.ok(r.summary!.items.some((i) => /version history entry was not/.test(i.reason ?? "")));
+});

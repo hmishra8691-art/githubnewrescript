@@ -43,6 +43,40 @@ export function lowBaseWarning(n: number, what = "This analysis"): string | null
   return null;
 }
 
+/**
+ * Segments with a thin base. Each segment is a table's column in all but name, so it gets the crosstab's rule: a
+ * warning below MIN_BASE always, and with an `options.minBase` the segment's values are left out rather than shown.
+ * One sentence for all of them, the first three named.
+ */
+export function segmentBases(segments: AnalysisResult["segments"], minBase = 0): { segments: AnalysisResult["segments"]; warning: string | null } {
+  if (!segments?.length) return { segments, warning: null };
+  const thin = segments.filter((x) => x.n > 0 && x.n < Math.max(MIN_BASE, minBase));
+  const empty = segments.filter((x) => x.n === 0);
+  const hidden = new Set(minBase > 0 ? segments.filter((x) => x.n < minBase).map((x) => x.name) : []);
+  const list = (xs: typeof thin) => `${xs.slice(0, 3).map((x) => `${x.name} (n = ${x.n})`).join(", ")}${xs.length > 3 ? ` and ${xs.length - 3} more` : ""}`;
+  const parts: string[] = [];
+  if (thin.length) parts.push(`${thin.length === 1 ? "Segment" : "Segments"} ${list(thin)} ${thin.length === 1 ? "has" : "have"} fewer than ${Math.max(MIN_BASE, minBase)} respondents — read with caution`);
+  if (empty.length) parts.push(`${empty.length === 1 ? "Segment" : "Segments"} ${empty.slice(0, 3).map((x) => x.name).join(", ")} ${empty.length === 1 ? "has" : "have"} no respondents`);
+  if (hidden.size) parts.push(`the values of ${hidden.size === 1 ? "the segment" : "those segments"} below the minimum base of ${minBase} are not shown`);
+  return { segments: hidden.size ? segments.map((x) => (hidden.has(x.name) ? { ...x, chart: {} } : x)) : segments, warning: parts.length ? `${parts.join("; ")}.` : null };
+}
+
+/**
+ * An analysis the data cannot honestly answer: no numbers, the reason in words, and `error` set so a caller can tell
+ * "refused" from "computed and empty". (Audit S-8: a mean of REGION came out as 1.97 and a regression on a nominal outcome as R² = 0.)
+ */
+export function refused(def: AnalysisDefinition, ds: Dataset, totalCases: number, message: string, recommendedCharts: ChartType[] = ["table"]): AnalysisResult {
+  const r = makeResult(def, ds, { tables: [], chart: {}, warnings: [message], recommendedCharts, totalCases });
+  return { ...r, error: { code: "not_computable", message } };
+}
+
+/** can the variable's codes be averaged? numeric answers and ordered scales, not nominal categories */
+export const isOrdered = (ds: Dataset, name: string): boolean => { const r = ds.byName.get(name)?.role; return r === "numeric" || r === "scale"; };
+
+/** the kinds whose tests and models do not use the weights */
+export const UNWEIGHTED_KINDS: ReadonlySet<string> = new Set(["test", "correlation", "regression", "factor", "reliability", "cluster", "conjoint", "maxdiff"]);
+const UNWEIGHTED_WORDS: Record<string, string> = { test: "test", correlation: "correlation", regression: "model", factor: "factor analysis", reliability: "reliability analysis", cluster: "cluster analysis", conjoint: "conjoint analysis", maxdiff: "MaxDiff analysis" };
+
 export function makeResult(
   def: AnalysisDefinition,
   ds: Dataset,
@@ -59,6 +93,8 @@ export function makeResult(
   const validWeightedN = answered && ds.weighted ? ds.cases.reduce((t, c, i) => t + (answered[i] ? c.weight : 0), 0) : undefined;
   const lb = lowBaseWarning(validN ?? ds.cases.length);
   if (lb) warnings.unshift(lb);
+  const sb = segmentBases(parts.segments, Math.max(0, Number(def.options?.minBase ?? 0) || 0));
+  if (sb.warning) warnings.push(sb.warning);
   /*
    * A truncated dataset is not a slow result, it is a wrong one — every base,
    * percentage and test in it describes a prefix of the study. It goes at the
@@ -66,12 +102,19 @@ export function makeResult(
    * caveat on the screen matters if this one is true.
    */
   if (ds.truncatedAt) warnings.unshift(`This analysis was computed on the first ${ds.truncatedAt.toLocaleString()} responses only — the study has more. Every base, percentage and test below describes that subset, not the whole study. Narrow the dataset (environment, status or date range) to bring it under the limit.`);
-  if (ds.weighted && ds.weightInfo && ds.weightInfo.efficiency < 70) warnings.push(`Weighting efficiency is ${ds.weightInfo.efficiency.toFixed(0)}% (design effect ${ds.weightInfo.designEffect.toFixed(2)}) — effective sample size is reduced.`);
+  /*
+   * Say which results ignore the weights (S-6). These kinds compute their tests and models on respondents counted once
+   * each; the "effective sample size is reduced" line below would imply they used the weights, so they get the
+   * plain statement instead.
+   */
+  const unweighted = ds.weighted && UNWEIGHTED_KINDS.has(def.kind);
+  if (unweighted) warnings.push(`The study is weighted, but this ${UNWEIGHTED_WORDS[def.kind] ?? "analysis"} is computed without the weights: every respondent counts equally in its tests and statistics.`);
+  if (!unweighted && ds.weighted && ds.weightInfo && ds.weightInfo.efficiency < 70) warnings.push(`Weighting efficiency is ${ds.weightInfo.efficiency.toFixed(0)}% (design effect ${ds.weightInfo.designEffect.toFixed(2)}) — effective sample size is reduced.`);
   return {
     kind: def.kind, name: def.name,
     base: baseOf(ds, parts.totalCases, ds.cases.length, parts.baseLabel, validN, validWeightedN),
     tables: parts.tables, chart: parts.chart, tests: parts.tests ?? [], insights: parts.insights ?? [], warnings,
-    recommendedCharts: parts.recommendedCharts, segments: parts.segments,
+    recommendedCharts: parts.recommendedCharts, segments: sb.segments,
     computedAt: new Date().toISOString(), definitionHash: hashDefinition(def), variablesUsed: parts.variablesUsed ?? def.variables,
   };
 }

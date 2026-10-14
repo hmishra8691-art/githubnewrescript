@@ -1,3 +1,4 @@
+import { singleFlight } from "./singleFlight";
 import { stableStringify } from "@/lib/stableJson";
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -44,6 +45,7 @@ const MAX_ROWS = 250_000;
 
 interface CacheEntry { at: number; stamp: string; rows: AnalyticsRow[]; bytes: number }
 const rowCache = new Map<string, CacheEntry>();
+const coldLoads = singleFlight<AnalyticsRow[]>();
 const TTL_MS = 60_000;
 /*
  * THE CACHE IS BOUNDED IN BYTES, NOT ENTRIES. Forty entries of a 250 000-row
@@ -107,6 +109,8 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
   const stamp = await dataStamp(db, surveyId, spec);
   const hit = rowCache.get(key);
   if (hit && hit.stamp === stamp && Date.now() - hit.at < TTL_MS) return hit.rows;
+  /* the same cold load, asked for at the same moment, is one load (audit F-1) */
+  return coldLoads(`${key}|${stamp}`, async () => {
   const { rows, truncated } = await readAllRows<AnalyticsRow>((from, to, columns) => {
     let q = db.from("responses").select(columns).eq("survey_id", surveyId).is("deleted_at", null).in("status", statuses);
     if (spec.environment === "TEST") q = q.eq("is_test", true);
@@ -134,6 +138,7 @@ export async function loadRows(db: SupabaseClient, surveyId: string, spec: Datas
   if (truncated) truncatedRows.add(rows);
   remember(key, { at: Date.now(), stamp, rows });
   return rows;
+  });
 }
 
 /** Row sets that hit MAX_ROWS, so the dataset built from them can say so. */
@@ -358,17 +363,8 @@ export function newToken(): string {
   return Buffer.from(bytes).toString("base64url");
 }
 
-export async function hashPassword(pw: string, salt?: string): Promise<string> {
-  const s = salt ?? newToken().slice(0, 16);
-  const data = new TextEncoder().encode(`${s}:${pw}`);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return `${s}$${Buffer.from(digest).toString("hex")}`;
-}
-
-export async function verifyPassword(pw: string, stored: string): Promise<boolean> {
-  const [salt] = stored.split("$");
-  return (await hashPassword(pw, salt)) === stored;
-}
+/** share-link passwords: scrypt, with the old SHA-256 form still verifiable (audit R-4; the code lives in sharePassword.ts, testable alone) */
+export { hashSharePassword as hashPassword, verifySharePassword as verifyPassword } from "./sharePassword";
 
 
 /* ------------------------------------------------------------ analysis runs (research-intelligence Phase 5) */
@@ -491,6 +487,12 @@ export async function reportFacts(db: SupabaseClient, surveyId: string, def: Sur
   };
 }
 
+/** Is there already a maintained findings report — the one Apply keeps, or one drafted from a run — so the milestone cron need not make another? (audit P-12) */
+export async function hasFindingsReport(db: SupabaseClient, surveyId: string): Promise<boolean> {
+  const { data } = await db.from("analytics_reports").select("definition").eq("survey_id", surveyId).eq("kind", "report").is("deleted_at", null);
+  return (data ?? []).some((r) => { const k = ((r as { definition?: { origin?: { kind?: string } } }).definition?.origin?.kind); return k === "analysis_plan" || k === "findings_run"; });
+}
+
 export async function draftFindingsReport(db: SupabaseClient, surveyId: string, ctx: LoadedContext, run: StoredRun, opts: { userId?: string | null; title?: string } = {}): Promise<{ report: Record<string, unknown> | null; definition: ReportDefinition; error?: string }> {
   // the report's saved analyses read the same dataset the run did (a clean run is not reported on "all")
   const spec: DatasetSpec = { environment: run.environment, dataset: run.dataset?.dataset ?? "all" };
@@ -502,6 +504,7 @@ export async function draftFindingsReport(db: SupabaseClient, surveyId: string, 
     ...(opts.title ? { title: opts.title } : {}),
     ...facts,
   });
+  definition.origin = { kind: "findings_run", appliedAt: new Date().toISOString(), runId: (run as { id?: string | null }).id ?? null };
   const { data, error } = await db.from("analytics_reports").insert({ survey_id: surveyId, kind: "report", name: definition.title.slice(0, 160), definition, theme_id: null, mode: "live", created_by: opts.userId ?? null, updated_by: opts.userId ?? null }).select("*").single();
   if (error) return { report: null, definition, error: error.message };
   return { report: data as Record<string, unknown>, definition };

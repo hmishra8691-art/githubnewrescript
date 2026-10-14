@@ -255,3 +255,31 @@ test("S-1: a planted effect keeps its letter after adjustment, and the note says
   assert.match((r.tables[0].notes ?? []).join(" "), /Holm-adjusted/);
   assert.doesNotMatch((raw.tables[0].notes ?? []).join(" "), /adjusted/);
 });
+
+const vsCount = (r: ReturnType<typeof runAnalysis>) => {
+  const t = r.tables[0]; let n = 0;
+  for (const row of t.rows.filter((x) => x.__kind === "category")) for (const c of t.columns) if (row[`${c.key}__vs`]) n++;
+  return n;
+};
+
+test("Phase 7: '+/−' against the rest of the sample is adjusted for the columns compared in a row, so null data rarely earns a mark", () => {
+  const dsb = buildDataset(def, synthRows(600, 5), { spec: dsSpec });
+  const R = stream(321);
+  let cells = 0, adjMarks = 0, rawMarks = 0;
+  for (let rep = 0; rep < 120; rep++) {
+    for (const c of dsb.cases) { c.vars.COUNTRY = String(1 + Math.floor(R() * 8)); c.vars.SAT = String(1 + Math.floor(R() * 5)); }
+    const adj = runAnalysis(XT({ rows: ["SAT"], columns: ["COUNTRY"] }, { sigVsTotal: true }), dsb);
+    const raw = runAnalysis(XT({ rows: ["SAT"], columns: ["COUNTRY"] }, { sigVsTotal: true, correction: "none" }), dsb);
+    cells += 5 * 8; adjMarks += vsCount(adj); rawMarks += vsCount(raw);
+  }
+  assert.ok(adjMarks / cells <= 0.01, `adjusted false-mark rate per cell was ${(adjMarks / cells).toFixed(4)}`);
+  assert.ok(rawMarks / cells > 0.03, `the unadjusted option still shows the old behaviour (${(rawMarks / cells).toFixed(4)})`);
+});
+
+test("Phase 7: the '+/−' note says when the marks are adjusted, and a planted effect keeps its mark", () => {
+  const r = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }, { sigVsTotal: true }), ds);
+  assert.match((r.tables[0].notes ?? []).join(" "), /rest of the sample \(Holm-adjusted/);
+  assert.ok(vsCount(r) > 0, "the planted gender effect keeps its +/−");
+  const raw = runAnalysis(XT({ rows: ["SAT"], columns: ["GENDER"] }, { sigVsTotal: true, correction: "none" }), ds);
+  assert.doesNotMatch((raw.tables[0].notes ?? []).join(" "), /adjusted/);
+});

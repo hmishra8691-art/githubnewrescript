@@ -325,11 +325,14 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   }, [api]);
 
   /** Results for analyses referenced by unsaved blocks: computed server-side per analysis. */
+  /* one run per analysis at a time: a keystroke in a block title re-enters here while the first run is still out (audit F-1) */
+  const ensuring = React.useRef<Set<string>>(new Set());
   const ensure = React.useCallback(async (ids: (string | undefined)[]) => {
     for (const id of ids) {
-      if (!id || results[id]) continue;
+      if (!id || results[id] || ensuring.current.has(id)) continue;
       const a = analyses.find((x) => x.id === id); if (!a) continue;
-      try { const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name }); setResults((r) => ({ ...r, [id]: result })); } catch (e) { setError((e as Error).message); }
+      ensuring.current.add(id);
+      try { const { result } = await api.run({ ...(a.definition as AnalysisDefinition), name: a.name }); setResults((r) => ({ ...r, [id]: result })); } catch (e) { setError((e as Error).message); } finally { ensuring.current.delete(id); }
     }
   }, [api, analyses, results]);
 
@@ -387,7 +390,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
     setError(null);
     const sent = def;
     try {
-      const r = await api.update("reports", open.id, { definition: sent, name: (sent as ReportDefinition).title || open.name });
+      const r = await api.update("reports", open.id, { definition: sent, name: (sent as ReportDefinition).title || open.name, expectedUpdatedAt: (open as { updated_at?: string }).updated_at });
       setOpen(r.item);
       /* edits made while the save was in flight are still unsaved */
       setDirty(defRef.current !== sent);
@@ -413,7 +416,9 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         else throw e;
       }
       setMsg(`Published version ${r.version}. Share links pinned to older versions keep showing those; unpinned links now show v${r.version}.`);
-      const v = await api.versions("reports", open.id); setVersions(v.versions); setOpen({ ...open, published_version: r.version }); onChange();
+      const v = await api.versions("reports", open.id); setVersions(v.versions);
+      /* publishing touches the row (updated_at moves), and the next save compares against it: take the stored row, not a guess (audit R-8) */
+      const stored = await api.get("reports", open.id).then((g: { item: Row }) => g.item).catch(() => null); setOpen(stored ?? { ...open, published_version: r.version }); onChange();
     } catch (e) { setError((e as Error).message); }
   };
   const create = async () => { if (!newName.trim() || !creating) return; try { const r = await api.create("reports", { name: newName.trim(), kind: creating, mode: "live" }); setCreating(null); setNewName(""); onChange(); await openReport(r.item); } catch (e) { setError((e as Error).message); } };
@@ -531,7 +536,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
         <button className="btn small" onClick={() => setTemplatesOpen((o) => !o)} data-testid="ax-templates">Templates</button>
         {!isDash && <button className={`btn small ${storyOpen ? "primary" : ""}`} onClick={() => setStoryOpen((o) => !o)} data-testid="ax-story-toggle" title="The animated story of this report">{rd?.story ? "Story ●" : "Story"}</button>}
         <button className="btn small" onClick={() => setShare(true)} data-testid="ax-report-share">Share</button>
-        <button className="btn small" onClick={() => setExp(true)} data-testid="ax-report-export">Export</button>
+        <button className="btn small" onClick={async () => { /* the export reads the saved definition, so unsaved edits are saved first rather than silently left out (audit R-5) */ if (dirty && !(await save())) return; setExp(true); }} data-testid="ax-report-export">Export</button>
         {/*
           * §43 — a dashboard has no PowerPoint or Excel form: its tables,
           * ranked lists and pictogram panels are HTML, and there is no

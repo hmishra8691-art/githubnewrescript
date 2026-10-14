@@ -4,7 +4,7 @@ import { boxShares, describe, frequencies } from "../stats/descriptive.js";
 import { correlate } from "../stats/correlation.js";
 import { proportionCI, proportionTest, type TestResult } from "../stats/tests.js";
 import { ols } from "../stats/regression.js";
-import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, round } from "./common.js";
+import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
 
 /* ============================================================ NPS */
@@ -44,7 +44,25 @@ export function npsOf(values: (number | null)[], w?: number[]): NpsBreakdown {
    */
   const dsc = describe(wv, kept);
   const se = dsc.se ?? 0;
-  return { n, promoters: p, passives: (N / W) * 100, detractors: d, nps, ci: [nps - 1.96 * se, nps + 1.96 * se], mean: describe(values, w).mean };
+  /* no interval for a handful of people (a group of one used to get a zero-width one), or when every answer is the same (S-10) */
+  const ci: [number, number] | null = n < NPS_MIN_CI_N || !se ? null : [nps - 1.96 * se, nps + 1.96 * se];
+  return { n, promoters: p, passives: (N / W) * 100, detractors: d, nps, ci, mean: describe(values, w).mean };
+}
+
+/** the smallest base that gets a confidence interval on an NPS */
+export const NPS_MIN_CI_N = 10;
+
+/**
+ * NPS is defined on a 0–10 question. A 1–5 rating run through it scores every answer a detractor (−100); an answer
+ * outside 0–10 is not an NPS answer at all (S-10). The reason, or null when the values can be an NPS.
+ */
+export function npsScaleProblem(values: (number | null | undefined)[]): string | null {
+  const xs = values.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+  if (!xs.length) return null;
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  if (lo < 0 || hi > 10) return `the answers run from ${lo} to ${hi}, outside 0–10`;
+  if (hi <= 5 && xs.length >= NPS_MIN_CI_N) return `the answers run only from ${lo} to ${hi}, which looks like a 1–5 rating, not a 0–10 question`;
+  return null;
 }
 
 export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
@@ -52,13 +70,15 @@ export function nps(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
   if (!v) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["Choose the 0–10 likelihood-to-recommend question."], recommendedCharts: ["gauge"], totalCases });
   const w = weights(ds);
   const vals = numericColumn(ds, v);
+  const scaleProblem = npsScaleProblem(vals);
+  if (scaleProblem) return refused(def, ds, totalCases, `Net Promoter Score needs the 0–10 likelihood-to-recommend question, and for “${labelOf(ds, v)}” ${scaleProblem}. Choose the recommend question, or use top-box or a mean for this rating.`, ["table"]);
   const r = npsOf(vals, w);
   const dist = frequencies(vals.map((x) => (x == null ? null : String(x))), w, Array.from({ length: 11 }, (_, i) => ({ code: String(i), label: String(i) })));
   const tables: ResultTable[] = [
     { id: "nps", title: "Net Promoter Score", columns: [{ key: "m", label: "Metric" }, { key: "v", label: "Value", type: "number", decimals: 1 }], rows: [{ m: "NPS", v: round(r.nps, 1) }, { m: "95% CI low", v: round(r.ci?.[0], 1) }, { m: "95% CI high", v: round(r.ci?.[1], 1) }, { m: "Promoters % (9–10)", v: pct(r.promoters) }, { m: "Passives % (7–8)", v: pct(r.passives) }, { m: "Detractors % (0–6)", v: pct(r.detractors) }, { m: "Mean score", v: round(r.mean) }, { m: "n", v: r.n }], base: { n: r.n } },
     { id: "dist", title: "Score distribution", columns: [{ key: "label", label: "Score" }, { key: "count", label: "n", type: "count" }, { key: "validPct", label: "%", type: "pct", decimals: 1 }], rows: dist.rows.map((x) => ({ label: x.label, count: x.count, validPct: pct(x.validPct) })) },
   ];
-  const insights = [`NPS is ${fmtNum(r.nps, 0)} (95% CI ${fmtNum(r.ci?.[0], 0)} to ${fmtNum(r.ci?.[1], 0)}): ${fmtPct(r.promoters, 0)} promoters, ${fmtPct(r.passives, 0)} passives, ${fmtPct(r.detractors, 0)} detractors (n = ${r.n}).`];
+  const insights = [`NPS is ${fmtNum(r.nps, 0)} (${r.ci ? `95% CI ${fmtNum(r.ci[0], 0)} to ${fmtNum(r.ci[1], 0)}` : `no interval: fewer than ${NPS_MIN_CI_N} answers`}): ${fmtPct(r.promoters, 0)} promoters, ${fmtPct(r.passives, 0)} passives, ${fmtPct(r.detractors, 0)} detractors (n = ${r.n}).`];
   const tests: TestResult[] = [];
   // by segment / by group
   const by = opt(def, "by", def.columns?.[0] ?? null) as string | null;
@@ -104,6 +124,19 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
   if (!vars.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["Choose one or more satisfaction / effort scale questions."], recommendedCharts: ["gauge"], totalCases });
   const w = weights(ds);
   const kind = opt(def, "metric", "csat") as "csat" | "ces";
+  /*
+   * CSAT and CES used to be the same number under two names (S-12). CSAT is the share satisfied: the top two boxes. CES
+   * is an effort score: its headline is the mean on the scale, and "easy" is the agreeing side of it — the top three
+   * boxes of a seven-point scale, the top two of a shorter one, or the bottom ones when the scale asks "how much
+   * effort" (options.lowIsEasy).
+   */
+  const lowIsEasy = kind === "ces" && (opt(def, "lowIsEasy", false) as boolean);
+  const boxK = (codes: number[]) => (kind === "ces" && codes.length >= 7 ? 3 : 2);
+  const boxOf = (vals: (number | null)[], wt: number[] | undefined, codes: number[]): number | null => {
+    if (codes.length < 3) return null; const k = boxK(codes); const b = boxShares(vals, wt, codes, [k]);
+    return (lowIsEasy ? b[`bottom${k}` as "bottom2"] : b[`top${k}` as "top2"]) ?? null;
+  };
+  const boxName = (codes: number[]) => `${lowIsEasy ? "Bottom" : "Top"}-${boxK(codes)}`;
   const rows = vars.map((v) => {
     const codes = scaleCodes(ds, v);
     const vals = numericColumn(ds, v);
@@ -112,24 +145,26 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
     const max = codes.length ? codes[codes.length - 1] : (d.max ?? 0);
     const min = codes.length ? codes[0] : (d.min ?? 0);
     const index = d.mean == null || max === min ? null : ((d.mean - min) / (max - min)) * 100;
-    // CSAT = % satisfied (top 2 boxes); CES = % low-effort (bottom 2 boxes... conventionally high agreement "easy")
-    const score = kind === "csat" ? top?.top2 ?? null : top?.top2 ?? null;
+    const score = boxOf(vals, w, codes);
     return { item: labelOf(ds, v), n: d.n, mean: round(d.mean), index: pct(index), score: pct(score), top1: pct(top?.top1), bottom2: pct(top?.bottom2), ci: d.ci95 };
   });
   const primary = rows[0];
-  const insights = [`${kind.toUpperCase()} for ${primary.item}: ${fmtPct(primary.score, 0)} ${kind === "csat" ? "satisfied (top-2 box)" : "agree it was easy (top-2 box)"}; mean ${fmtNum(primary.mean, 2)} (index ${fmtNum(primary.index, 0)}/100, n = ${primary.n}).`];
+  const firstCodes = scaleCodes(ds, vars[0]);
+  const insights = [kind === "csat"
+    ? `CSAT for ${primary.item}: ${fmtPct(primary.score, 0)} satisfied (top-2 box); mean ${fmtNum(primary.mean, 2)} (index ${fmtNum(primary.index, 0)}/100, n = ${primary.n}).`
+    : `CES for ${primary.item}: mean ${fmtNum(primary.mean, 2)} (index ${fmtNum(primary.index, 0)}/100, n = ${primary.n})${primary.score != null ? `; ${fmtPct(primary.score, 0)} found it easy (${boxName(firstCodes).toLowerCase()} box${lowIsEasy ? ", low effort" : ""})` : ""}.`];
   if (rows.length > 1) { const s = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)); insights.push(`Highest: ${s[0].item} (${fmtPct(s[0].score, 0)}); lowest: ${s[s.length - 1].item} (${fmtPct(s[s.length - 1].score, 0)}).`); }
-  const tables: ResultTable[] = [{ id: "csat", title: kind === "csat" ? "Customer satisfaction" : "Customer effort", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "score", label: kind === "csat" ? "Satisfied % (top 2)" : "Easy % (top 2)", type: "pct", decimals: 1 }, { key: "top1", label: "Top box %", type: "pct", decimals: 1 }, { key: "bottom2", label: "Bottom 2 %", type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "index", label: "Index (0–100)", type: "number", decimals: 0 }], rows: rows.map(({ ci, ...r }) => r), base: { n: ds.cases.length } }];
+  const tables: ResultTable[] = [{ id: "csat", title: kind === "csat" ? "Customer satisfaction" : "Customer effort", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "score", label: kind === "csat" ? "Satisfied % (top 2)" : `Easy % (${boxName(firstCodes).toLowerCase()})`, type: "pct", decimals: 1 }, { key: "top1", label: "Top box %", type: "pct", decimals: 1 }, { key: "bottom2", label: "Bottom 2 %", type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "index", label: "Index (0–100)", type: "number", decimals: 0 }], rows: rows.map(({ ci, ...r }) => r), base: { n: ds.cases.length } }];
   const by = opt(def, "by", def.columns?.[0] ?? null) as string | null;
   const segRows: { name: string; n: number; chart: ChartData }[] = [];
   if (by && ds.byName.has(by)) {
     const cats = categoriesOf(ds, by), col = categoricalColumn(ds, by), v = vars[0], codes = scaleCodes(ds, v), vals = numericColumn(ds, v);
-    const byRows = cats.map((c) => { const idx = col.map((x, i) => (Array.isArray(x) ? x.includes(c.code) : x === c.code) ? i : -1).filter((i) => i >= 0); const sub = idx.map((i) => vals[i]); const sw = w ? idx.map((i) => w[i]) : undefined; const b = codes.length >= 3 ? boxShares(sub, sw, codes, [1, 2]) : null; const d = describe(sub, sw); return { group: c.label, n: d.n, score: pct(b?.top2), mean: round(d.mean) }; }).filter((x) => x.n > 0);
-    tables.push({ id: "by", title: `${kind.toUpperCase()} by ${labelOf(ds, by)}`, columns: [{ key: "group", label: labelOf(ds, by) }, { key: "n", label: "n", type: "count" }, { key: "score", label: "Top-2 %", type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }], rows: byRows });
+    const byRows = cats.map((c) => { const idx = col.map((x, i) => (Array.isArray(x) ? x.includes(c.code) : x === c.code) ? i : -1).filter((i) => i >= 0); const sub = idx.map((i) => vals[i]); const sw = w ? idx.map((i) => w[i]) : undefined; const d = describe(sub, sw); return { group: c.label, n: d.n, score: pct(boxOf(sub, sw, codes)), mean: round(d.mean) }; }).filter((x) => x.n > 0);
+    tables.push({ id: "by", title: `${kind.toUpperCase()} by ${labelOf(ds, by)}`, columns: [{ key: "group", label: labelOf(ds, by) }, { key: "n", label: "n", type: "count" }, { key: "score", label: `${boxName(codes)} %`, type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }], rows: byRows });
     segRows.push(...byRows.map((x) => ({ name: x.group, n: x.n, chart: { kpis: [{ label: kind.toUpperCase(), value: x.score ?? 0, unit: "%" }] } })));
   }
   const period = opt(def, "period", "_started_month") as string;
-  const tr = trendSeries(ds, period, (sub) => { const codes = scaleCodes(ds, vars[0]); return codes.length >= 3 ? boxShares(numericColumn(sub, vars[0]), weights(sub), codes, [2]).top2 ?? null : describe(numericColumn(sub, vars[0]), weights(sub)).mean; });
+  const tr = trendSeries(ds, period, (sub) => { const codes = scaleCodes(ds, vars[0]); return codes.length >= 3 ? boxOf(numericColumn(sub, vars[0]), weights(sub), codes) : describe(numericColumn(sub, vars[0]), weights(sub)).mean; });
   if (tr.length > 1) tables.push({ id: "trend", title: `${kind.toUpperCase()} over time`, columns: [{ key: "period", label: "Period" }, { key: "n", label: "n", type: "count" }, { key: "value", label: "Score", type: "number", decimals: 1 }], rows: tr.map((t) => ({ period: t.period, n: t.n, value: round(t.value, 1) })) });
   const drivers = (opt(def, "drivers", []) as string[]).filter((d) => ds.byName.has(d));
   if (drivers.length) {
@@ -149,10 +184,22 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
 
 /* ============================================================ trend */
 
+/**
+ * The periods of a trend, in the order they happened (S-11). Sorted as text, wave 10 came before wave 2; and the
+ * grouping copied its array for every case, which is quadratic (15 s at 40,000 cases). A period variable with a code
+ * frame keeps the frame's order; whole numbers sort as numbers; dates ("2026-03", "2026-W05") sort as text already.
+ */
+export function orderPeriods(keys: string[], frame?: { code: string }[]): string[] {
+  const rank = new Map((frame ?? []).map((c, i) => [String(c.code), i] as const));
+  if (keys.length && keys.every((k) => rank.has(k))) return [...keys].sort((a, b) => rank.get(a)! - rank.get(b)!);
+  if (keys.length && keys.every((k) => k.trim() !== "" && Number.isFinite(Number(k)))) return [...keys].sort((a, b) => Number(a) - Number(b));
+  return [...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function trendSeries(ds: Dataset, period: string, metric: (sub: Dataset) => number | null): { period: string; n: number; value: number | null }[] {
   const groups = new Map<string, typeof ds.cases>();
-  for (const c of ds.cases) { const k = c.vars[period]; if (k == null) continue; const key = String(k); groups.set(key, [...(groups.get(key) ?? []), c]); }
-  return [...groups.keys()].sort().map((k) => { const sub = { ...ds, cases: groups.get(k)! }; return { period: k, n: sub.cases.length, value: metric(sub) }; });
+  for (const c of ds.cases) { const k = c.vars[period]; if (k == null) continue; const key = String(k); const g = groups.get(key); if (g) g.push(c); else groups.set(key, [c]); }
+  return orderPeriods([...groups.keys()], categoriesOf(ds, period)).map((k) => { const sub = { ...ds, cases: groups.get(k)! }; return { period: k, n: sub.cases.length, value: metric(sub) }; });
 }
 
 export function trend(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
@@ -319,10 +366,21 @@ export function pricing(def: AnalysisDefinition, ds: Dataset, totalCases: number
     const items = expandBattery(ds, def.variables);
     const prices = (opt(def, "prices", []) as number[]).length ? (opt(def, "prices", []) as number[]) : items.map((_, i) => i + 1);
     const accept = (opt(def, "acceptCodes", []) as (string | number)[]).map(String);
+    /* which answers mean "would buy": the researcher's codes; else the top two points of an ordered scale, or the "yes" of a yes/no question — never a fixed code (1 used to count, though on a 1–5 intent scale it is "definitely not") */
+    const acceptedFor = (v: string): string[] | null => {
+      if (accept.length) return accept;
+      const codes = scaleCodes(ds, v);
+      if (codes.length >= 3) return [...codes].sort((a, b) => a - b).slice(-2).map(String);
+      const yes = categoriesOf(ds, v).filter((c) => /^(yes|would buy|definitely|probably)\b/i.test(c.label) && !/\bnot\b/i.test(c.label));
+      return yes.length ? yes.map((c) => c.code) : null;
+    };
+    const unknown = items.filter((v) => !acceptedFor(v));
+    if (unknown.length) return refused(def, ds, totalCases, `Gabor-Granger needs to know which answers mean “would buy”, and for ${unknown.slice(0, 3).map((v) => `“${labelOf(ds, v)}”`).join(", ")} that cannot be told from the answer options. Say which codes to count as acceptance (acceptCodes).`, ["table"]);
     const rows = items.map((v, i) => {
       const col = categoricalColumn(ds, v);
+      const acc = acceptedFor(v)!;
       let W = 0, yes = 0;
-      col.forEach((x, j) => { if (x == null) return; const wt = w?.[j] ?? 1; W += wt; const codes = Array.isArray(x) ? x : [x]; const ok = accept.length ? codes.some((c) => accept.includes(c)) : codes.some((c) => Number(c) >= 4 || c === "1" || c.toLowerCase() === "yes"); if (ok) yes += wt; });
+      col.forEach((x, j) => { if (x == null) return; const wt = w?.[j] ?? 1; W += wt; const codes = Array.isArray(x) ? x : [x]; if (codes.some((c) => acc.includes(c))) yes += wt; });
       const p = W ? (yes / W) * 100 : 0;
       return { price: prices[i], label: labelOf(ds, v), n: Math.round(W), probability: p, revenue: (p / 100) * prices[i] };
     }).sort((a, b) => a.price - b.price);

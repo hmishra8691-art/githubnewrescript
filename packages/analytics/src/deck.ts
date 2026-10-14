@@ -84,7 +84,7 @@ function soWhatFor(def: SurveyDefinition, f: Finding, verdicts: HypothesisVerdic
   const h = f.hypotheses.map((l) => verdicts.find((v) => v.label === l)).find(Boolean);
   const objective = def.research?.objective ? ` — the objective was: ${short(def.research.objective, 90)}` : "";
   if (f.evidence.adjusted && f.significant && !f.evidence.adjusted.significant) return `Read with caution: significant on its own, this does not hold once the ${CORRECTION_WORDS[f.evidence.adjusted.method]} correction for the family of tests is applied.`;
-  const weight = f.strength === "strong" || f.strength === "moderate" ? `${STRENGTH_WORD[f.strength]}, so it is a difference worth acting on` : f.strength === "weak" ? "a small effect — real, but modest in size" : "no measurable effect";
+  const weight = f.strength === "strong" || f.strength === "moderate" ? `${STRENGTH_WORD[f.strength]}, so it is large enough to matter in practice` : f.strength === "weak" ? "a small effect — real, but modest in size" : "no measurable effect";
   if (h) return `This is the evidence for ${h.label} (“${short(h.text, 80)}”), which is ${VERDICT_WORD[h.verdict]} overall${f.significant ? `; ${weight}` : "; this test did not reach significance"}.`;
   if (f.kind === "segment") return "The plan did not test this pair; it was found by looking at every outcome by every demographic and holds after correction.";
   if (f.kind === "trend") return "A move across the waves of fieldwork, corrected for the number of outcomes looked at.";

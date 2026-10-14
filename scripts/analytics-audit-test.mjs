@@ -450,5 +450,56 @@ await page.click('[data-testid="ax-rail-scope-mine"]');
 assert.equal(await count('[data-testid="ax-rail-item"]'), all - 1, "everything else is the researcher's own");
 ok("the rail separates generated analyses from the ones a person built");
 
+/* ------------------------------------------------------------------ 10 */
+console.log("\n§10 PHASE 7 — keyboard and screen-reader access, and the earlier-method flag");
+const sat10 = mkAnalysis("Satisfaction by gender", { kind: "crosstab", variables: ["SAT", "GENDER"], extra: { rows: ["SAT"], columns: ["GENDER"] } });
+const rep10 = mkReport("Access report", { title: "Access report", mode: "live", blocks: [
+  { id: "k1", type: "chart", title: "Satisfaction by gender", analysisId: sat10.id, chart: { type: "bar_grouped", options: {} } },
+  { id: "k2", type: "table", title: "Satisfaction table", analysisId: sat10.id } ] });
+await openReport("Access report");
+await page.waitForSelector('[data-testid="ax-report"] [data-testid="ax-chart"]');
+const srRows = await page.$$eval('[data-testid="ax-report"] [data-testid="ax-chart-data"] tbody tr', (es) => es.length);
+assert.ok(srRows >= 2, `the chart's numbers are also a table for screen readers (${srRows} rows)`);
+const legend = await page.$$('[data-testid="ax-report"] [data-testid="ax-chart"] .ax-legend-item');
+assert.ok(legend.length >= 2, "the legend has focusable items");
+assert.equal(await legend[0].getAttribute("role"), "button");
+assert.equal(await legend[0].getAttribute("tabindex"), "0");
+assert.equal(await legend[0].getAttribute("aria-pressed"), "true");
+await legend[0].focus(); await page.keyboard.press("Enter");
+assert.equal(await page.$eval('[data-testid="ax-report"] [data-testid="ax-chart"] .ax-legend-item', (e) => e.getAttribute("aria-pressed")), "false", "Enter hides the series");
+await page.keyboard.press(" ");
+assert.equal(await page.$eval('[data-testid="ax-report"] [data-testid="ax-chart"] .ax-legend-item', (e) => e.getAttribute("aria-pressed")), "true", "Space shows it again");
+ok("legend entries are buttons: focusable, Enter/Space toggle a series, aria-pressed says which are shown");
+const th = await page.$('[data-testid="ax-report"] table.ax-pro-table thead th.num');
+assert.ok(th, "the table block renders a sortable header");
+assert.equal(await th.getAttribute("tabindex"), "0");
+assert.equal(await th.getAttribute("aria-sort"), "none");
+await th.focus(); await page.keyboard.press("Enter");
+assert.equal(await page.$eval('[data-testid="ax-report"] table.ax-pro-table thead th.num', (e) => e.getAttribute("aria-sort")), "descending");
+await page.keyboard.press("Enter");
+assert.equal(await page.$eval('[data-testid="ax-report"] table.ax-pro-table thead th.num', (e) => e.getAttribute("aria-sort")), "ascending");
+ok("table sort headers are keyboard-operable and announce their sort order (aria-sort)");
+
+/* the earlier-method flag: a published snapshot that predates the engine fix says so */
+await page.click('[data-testid="ax-report-publish"]');
+await page.waitForSelector('.ax-ok:has-text("Published version 1")');
+await page.click('[data-testid="ax-report-share"]');
+await page.waitForSelector('[data-testid="ax-share-dialog"]');
+await page.click('[data-testid="ax-share-create"]');
+await page.waitForSelector('[data-testid="ax-share-link"] input');
+const link10 = await page.$eval('[data-testid="ax-share-link"] input', (e) => e.value);
+const anon10 = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
+await anon10.route("**/api/share/**", fakeShare);
+const pub10 = await anon10.newPage();
+await pub10.goto(link10, { waitUntil: "networkidle" }); await pub10.waitForSelector('[data-testid="ax-share-view"]');
+assert.equal(await pub10.$$eval('[data-testid="ax-method-flag"]', (es) => es.length), 0, "a snapshot computed by this engine carries no flag");
+const ver10 = store.reportVersions.find((v) => v.report_id === rep10.id);
+for (const r of Object.values(ver10.snapshot)) delete r.provenance;
+await pub10.reload({ waitUntil: "networkidle" }); await pub10.waitForSelector('[data-testid="ax-share-view"]');
+assert.equal(await pub10.$$eval('[data-testid="ax-method-flag"]', (es) => es.length), 1, "a snapshot with no engine version is flagged");
+assert.match(await pub10.$eval('[data-testid="ax-method-flag"]', (e) => e.getAttribute("title")), /earlier|re-publish|Publish/i);
+ok("a published snapshot computed before the corrections is flagged 'Computed with an earlier method' — and a current one is not");
+await anon10.close();
+
 console.log(`\n${passed} checks passed`);
 await browser.close();

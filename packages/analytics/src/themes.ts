@@ -42,6 +42,17 @@ export function luminance(hex: string): number {
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
 
+/** WCAG contrast ratio between two colours. */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** The label colour (white or near-black) that reads better on a given fill — half the default palette is under 3:1 against white (audit C-10). */
+export function readableOn(fill: string): string {
+  return contrastRatio("#ffffff", fill) >= contrastRatio("#111827", fill) ? "#ffffff" : "#111827";
+}
+
 export function isDarkTheme(theme: Pick<ReportTheme, "colors">): boolean {
   return luminance(theme.colors?.background ?? "#ffffff") < 0.4;
 }
