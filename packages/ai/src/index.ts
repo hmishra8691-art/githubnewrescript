@@ -5,7 +5,7 @@ export * from "./provider.js";
 export * from "./connection.js";
 export * from "./registry.js";
 export * from "./netguard.js";
-import { aiFetch, currentAiScope, scopedProvider, type ConnectionSource, type SttScope, type Target } from "./connection.js";
+import { aiFetch, currentAiScope, scopedProvider, type ConnectionSource, type SttScope, type SttTarget, type Target } from "./connection.js";
 import { guardedFetch } from "./netguard.js";
 
 /**
@@ -212,15 +212,24 @@ const NO_STT_HOSTS = [
   { match: /(^|\.)anthropic\.com$/i, vendor: "Anthropic" },
 ];
 
+function noSttVendor(base: string): string | null {
+  if (!base || base === "fake:") return null;
+  let host = "";
+  try { host = new URL(base).hostname; } catch { return null; }
+  return NO_STT_HOSTS.find((h) => h.match.test(host))?.vendor ?? null;
+}
+
+function noSttReason(base: string): string | null {
+  const vendor = noSttVendor(base);
+  if (!vendor) return null;
+  const known = { vendor };
+  return `${known.vendor}'s API has no speech-to-text endpoint — it is OpenAI-compatible for chat only. Set AI_STT_API_URL (and AI_STT_API_KEY) to a provider that serves /audio/transcriptions, such as OpenAI or Groq, and leave AI_API_URL as it is for everything else.`;
+}
+
 export function sttUnavailableReason(): string | null {
   const base = sttBase();
   if (!base) return "No transcription provider is configured (AI_STT_API_URL and AI_API_URL are both unset).";
-  if (base === "fake:") return null;
-  let host = "";
-  try { host = new URL(base).hostname; } catch { return null; }
-  const known = NO_STT_HOSTS.find((h) => h.match.test(host));
-  if (!known) return null;
-  return `${known.vendor}'s API has no speech-to-text endpoint — it is OpenAI-compatible for chat only. Set AI_STT_API_URL (and AI_STT_API_KEY) to a provider that serves /audio/transcriptions, such as OpenAI or Groq, and leave AI_API_URL as it is for everything else.`;
+  return noSttReason(base);
 }
 
 /** Whether this installation can transcribe at all. */
@@ -556,6 +565,8 @@ export interface Transcription {
   language?: string;
   model: string;
   durationSeconds?: number;
+  /** inside a user's connection: the registry id of the provider that answered (never a key). Absent for the installation's own. */
+  provider?: string;
   /** present when `segments` or `diarize` was asked for and the provider obliged */
   segments?: TranscriptSegment[];
   /**
@@ -627,6 +638,61 @@ export type TranscribeOutcome =
   | { ok: true; value: Transcription }
   | { ok: false; reason: string; status?: number };
 
+/** one place a transcription can go: the user's provider, one of the fallbacks they listed, or the installation's own */
+interface SttHop {
+  provider: string;
+  protocol: "openai-stt" | "google-stt";
+  base: string;
+  key: string;
+  model: string;
+  headers: Record<string, string>;
+  source: ConnectionSource;
+  limits?: { maxSeconds?: number; maxBytes?: number };
+  language?: string;
+}
+
+/**
+ * The installation's own transcription provider as an `SttTarget` — what a
+ * user who ALLOWED the platform as a last resort lists among their fallbacks.
+ * Read from the environment, never from a scope; `null` when none is usable
+ * (unset, the fake provider, or a vendor with no speech endpoint).
+ */
+export function platformSttTarget(env: Record<string, string | undefined> = process.env): SttTarget | null {
+  const own = trimBase(env.AI_STT_API_URL ?? "");
+  const base = own || trimBase(env.AI_API_URL ?? "");
+  if (!base || base === "fake:" || noSttReason(base)) return null;
+  return { provider: "platform", protocol: "openai-stt", base, key: (env.AI_STT_API_KEY ?? "").trim() || (env.AI_API_KEY ?? "").trim(), model: (env.AI_STT_MODEL ?? "").trim() || "whisper-1", platform: true, label: "Platform AI" };
+}
+
+/** a fixed-up language tag for Google, which wants a region (en → en-US) */
+const GOOGLE_REGION: Record<string, string> = { en: "en-US", es: "es-ES", fr: "fr-FR", de: "de-DE", it: "it-IT", pt: "pt-BR", nl: "nl-NL", ja: "ja-JP", ko: "ko-KR", hi: "hi-IN", ru: "ru-RU", tr: "tr-TR", pl: "pl-PL", sv: "sv-SE", zh: "cmn-Hans-CN" };
+const googleLanguage = (l: string | undefined): string => { const t = (l ?? "").trim().replace(/_/g, "-"); if (!t) return "en-US"; return t.includes("-") ? t : GOOGLE_REGION[t.toLowerCase()] ?? t; };
+
+/** what Google can read, decided from the bytes (a browser's mime type carries codec suffixes and is not trusted) */
+function googleEncoding(bytes: Uint8Array): { encoding?: "WEBM_OPUS" } | null {
+  const at = (i: number, s: string) => s.split("").every((c, k) => bytes[i + k] === c.charCodeAt(0));
+  if (bytes.length > 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return { encoding: "WEBM_OPUS" };
+  if (bytes.length > 12 && at(0, "RIFF") && at(8, "WAVE")) return {}; /* the header names the format and rate */
+  if (bytes.length > 4 && at(0, "fLaC")) return {};
+  return null;
+}
+
+/** an HTTP status from the user's own speech provider, said so that the fix is theirs to make */
+function ownReason(status: number, model: string, protocol: SttHop["protocol"], detail: string): string {
+  const tail = detail ? ` The service said: ${detail}` : "";
+  const where = " Check it in Settings → AI & Integrations → AI Provider Configuration.";
+  if (status === 401) return `Your speech-to-text provider rejected the API key (401).${where}${tail}`;
+  if (status === 403) return protocol === "google-stt"
+    ? `Google refused this key for Speech-to-Text (403). Enable the Cloud Speech-to-Text API for the key's project, and check the key is not restricted away from it.${where}${tail}`
+    : `Your speech-to-text provider refused this key for that model or endpoint (403).${where}${tail}`;
+  if (status === 404) return `Your speech-to-text provider does not know the model "${model}" or has no transcription endpoint at that address (404).${where}${tail}`;
+  if (status === 429) return `Your speech-to-text provider is rate-limiting this key (429), or the account has no credit left. The audio is saved — try again shortly.${tail}`;
+  if (status === 400 || status === 413 || status === 415 || status === 422) return `Your speech-to-text provider would not accept this audio (${status}).${tail}`;
+  return `Your speech-to-text provider returned ${status}.${tail}`;
+}
+
+type SttAttempt = { ok: true; value: Transcription } | { ok: false; reason: string; status?: number; /** another provider could cure this */ fallbackable: boolean };
+
 export async function transcribe(
   bytes: Uint8Array,
   opts: TranscribeOptions = {},
@@ -639,14 +705,64 @@ export async function transcribe(
     return { ok: true, value: fakeTranscribe(bytes, opts) };
   }
 
-  const base = sttBase();
-  const key = sttKey();
-  if (!base) return { ok: false, reason: "No transcription provider is configured on this installation (AI_STT_API_URL and AI_API_URL are both unset)." };
-  /* a vendor that cannot do this at all, said before the round trip */
-  const impossible = sttUnavailableReason();
-  if (impossible) return { ok: false, reason: impossible };
-  const model = userStt()?.model || (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
+  /*
+   * WHERE THE CALL GOES. Outside a user's connection: the installation's
+   * provider. Inside one: the user's provider, then ONLY the fallbacks the
+   * user's own configuration lists, in order — the installation's key is
+   * reached on a user's behalf only when they allowed the platform as a last
+   * resort (it is then one of their listed fallbacks).
+   */
+  const mine = userStt();
+  const chatUrl = trimBase(process.env.AI_API_URL ?? "");
+  const hopOf = (t: SttTarget, source: ConnectionSource): SttHop => ({
+    provider: t.provider, protocol: t.protocol ?? "openai-stt", base: trimBase(t.base), key: t.key, model: t.model, source,
+    headers: t.platform ? (trimBase(t.base) === chatUrl ? envExtraHeaders() : {}) : t.headers ?? {},
+    ...(t.limits ? { limits: t.limits } : {}), ...(t.language ? { language: t.language } : {}),
+  });
+  let hops: SttHop[];
+  if (mine) hops = [hopOf(mine, mine.source), ...mine.fallbacks.map((f) => hopOf(f, f.platform ? "platform" : "user"))];
+  else {
+    const base = sttBase();
+    if (!base) return { ok: false, reason: "No transcription provider is configured on this installation (AI_STT_API_URL and AI_API_URL are both unset)." };
+    /* a vendor that cannot do this at all, said before the round trip */
+    const impossible = sttUnavailableReason();
+    if (impossible) return { ok: false, reason: impossible };
+    hops = [{
+      provider: "platform", protocol: "openai-stt", base, key: sttKey(), model: (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1", source: "platform",
+      headers: sameProviderAsChat(base) ? envExtraHeaders() : {},
+    }];
+  }
 
+  let last: Extract<SttAttempt, { ok: false }> | null = null;
+  for (let i = 0; i < hops.length; i++) {
+    const hop = hops[i];
+    const a = await attemptHop(hop, i > 0, !!mine, bytes, seconds, opts);
+    if (a.ok) return a;
+    last = a;
+    if (!a.fallbackable) break;
+    const next = hops[i + 1];
+    if (next) console.warn("[rescript:ai] stt fallback", JSON.stringify({ from: hop.provider, status: a.status ?? null, to: next.provider, source: next.source }));
+  }
+  const failure = last!;
+  const hopped = hops.length > 1 && failure.fallbackable;
+  return { ok: false, reason: hopped ? `${failure.reason} (the fallback providers also failed)` : failure.reason, ...(failure.status ? { status: failure.status } : {}) };
+}
+
+/** one attempt at one provider */
+async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, bytes: Uint8Array, seconds: number, opts: TranscribeOptions): Promise<SttAttempt> {
+  const isOwn = own && hop.source !== "platform";
+  const label = isOwn ? "Your speech-to-text provider" : "The transcription service";
+  /* what this provider cannot take, said before the round trip — and a fallback may be able to */
+  const cannot = (r: string): SttAttempt => ({ ok: false, reason: r, fallbackable: true });
+  if (hop.limits?.maxSeconds && seconds > hop.limits.maxSeconds) return cannot(`${label} takes recordings up to ${hop.limits.maxSeconds} seconds; this one is about ${seconds}. Use a provider that takes longer recordings, or allow the platform as a backstop.`);
+  if (hop.limits?.maxBytes && bytes.length > hop.limits.maxBytes) return cannot(`${label} takes recordings up to ${Math.round(hop.limits.maxBytes / 1024 / 1024)} MB; this one is ${Math.round(bytes.length / 1024 / 1024)} MB.`);
+  const vendor = hop.protocol === "openai-stt" ? noSttVendor(hop.base) : null;
+  if (vendor) return cannot(isOwn ? `${vendor}'s API has no speech-to-text endpoint. Choose OpenAI, Groq, Google or another provider that serves /audio/transcriptions.` : (noSttReason(hop.base) ?? `${vendor} has no speech-to-text endpoint.`));
+  const google = hop.protocol === "google-stt" ? googleEncoding(bytes) : undefined;
+  if (hop.protocol === "google-stt" && !google) return cannot("Google Speech-to-Text reads WebM/Opus, WAV and FLAC recordings only; this recording is in another format. Use an OpenAI-compatible provider for it, or allow the platform as a backstop.");
+
+  const doFetch = (url: string, init: RequestInit) => hop.source === "platform" ? fetch(url, init) : guardedFetch(url, init, { allowPrivate: currentAiScope()?.allowPrivate });
+  const reasonOf = (status: number, detail: string) => isOwn ? ownReason(status, hop.model, hop.protocol, detail) : providerReason(status, hop.model, detail);
   /*
    * The timeout scales with the clip, because a fixed one is wrong at both
    * ends. Thirty seconds was generous for a fifteen-second answer and far too
@@ -659,7 +775,7 @@ export async function transcribe(
    * never more than 240s. The ceiling sits under the 300s the calling routes
    * are allowed, so the abort is ours — and produces a message a researcher
    * can act on — rather than the platform killing the function and producing
-   * none.
+   * none. Each provider gets its own budget.
    */
   const scaledMs = Math.min(240_000, Math.max(30_000, Math.round(seconds * 400)));
   const budgetMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs as number) > 0
@@ -667,35 +783,88 @@ export async function transcribe(
     : scaledMs;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), budgetMs);
+  const wantSegments = !!(opts.segments || opts.diarize);
+  const usage = (model: string, measured: number, estimated: boolean) => reportUsage({
+    kind: "stt", provider: hop.protocol === "google-stt" ? "google" : "openai-compatible", model, seconds: measured, requests: 1, estimated,
+    source: hop.source, providerId: hop.provider, ...(usedFallback ? { usedFallback: true } : {}),
+  });
+  const provider = own ? { provider: hop.source === "platform" ? "openai-compatible" : hop.provider } : {};
   try {
+    if (hop.protocol === "google-stt") {
+      const language = googleLanguage(opts.language || hop.language);
+      const r = await doFetch(`${hop.base}/speech:recognize`, {
+        method: "POST", signal: ctrl.signal, cache: "no-store",
+        headers: { "content-type": "application/json", ...hop.headers, "x-goog-api-key": hop.key },
+        body: JSON.stringify({ config: { ...google, languageCode: language, model: hop.model, enableAutomaticPunctuation: true, ...(wantSegments ? { enableWordTimeOffsets: true } : {}) }, audio: { content: Buffer.from(bytes).toString("base64") } }),
+      });
+      if (!r.ok) {
+        const text = await r.text().catch(() => "");
+        const detail = redact(text, 300);
+        /* Google answers a bad key with 400 INVALID_ARGUMENT rather than 401 */
+        const status = r.status === 400 && /API key not valid|API_KEY_INVALID/i.test(text) ? 401 : r.status;
+        console.warn("[rescript:ai] stt provider error", JSON.stringify({ status, model: hop.model, provider: hop.provider }));
+        return { ok: false, status, reason: reasonOf(status, detail), fallbackable: classifyResponse(status, r.headers, detail).fallbackable };
+      }
+      const j = (await r.json().catch(() => null)) as { results?: { alternatives?: { transcript?: string; words?: { startTime?: string; endTime?: string }[] }[]; resultEndTime?: string; languageCode?: string }[]; totalBilledTime?: string } | null;
+      if (!j) return { ok: false, reason: `${label} replied in a format this installation could not read.`, fallbackable: false };
+      const results = Array.isArray(j.results) ? j.results : [];
+      const text = results.map((x) => (x.alternatives?.[0]?.transcript ?? "").trim()).filter(Boolean).join(" ").trim();
+      if (!text) return { ok: false, reason: `${label} heard no speech in this recording. The audio is saved — check that it is audible, then try again.`, fallbackable: false };
+      const secs = (v: string | undefined) => { const t = String(v ?? "").replace(/s$/, "").trim(); const n = t ? Number(t) : NaN; return Number.isFinite(n) ? n : NaN; };
+      const billed = secs(j.totalBilledTime);
+      const measured = Number.isFinite(billed) && billed > 0 ? Math.max(1, Math.round(billed)) : seconds;
+      usage(hop.model, measured, !(Number.isFinite(billed) && billed > 0));
+      let from = 0;
+      const segments: TranscriptSegment[] = wantSegments ? results.map((x) => {
+        const w = x.alternatives?.[0]?.words ?? [];
+        const start = secs(w[0]?.startTime), end = secs(x.resultEndTime ?? w[w.length - 1]?.endTime);
+        const seg = { start: Number.isFinite(start) ? start : from, end, text: (x.alternatives?.[0]?.transcript ?? "").trim() };
+        if (Number.isFinite(end)) from = end;
+        return seg;
+      }).filter((sg) => Number.isFinite(sg.end) && sg.text) : [];
+      return {
+        ok: true,
+        value: {
+          text, language: results[0]?.languageCode || language, model: hop.model, durationSeconds: measured, ...provider,
+          ...(segments.length ? { segments } : {}),
+          /* Google can label speakers, but this adapter does not ask: said truthfully */
+          ...(opts.diarize ? { diarized: false, speakerCount: 0 } : {}),
+        },
+      };
+    }
+
     const form = new FormData();
     /* `Blob` over the raw array: the provider reads the part's filename and
        content type to pick a decoder, and a bare buffer gives it neither */
     form.append("file", new Blob([bytes as unknown as BlobPart], { type: opts.mimeType || "audio/webm" }), opts.fileName || "answer.webm");
-    form.append("model", model);
+    form.append("model", hop.model);
     /*
      * `verbose_json` is what carries segment timings. It is the same request
      * and the same price as `json`, so it is used whenever anything downstream
      * wants timings — and diarization implies them, since a speaker label with
-     * no timing has nothing to attach to.
+     * no timing has nothing to attach to. The GPT-4o transcribe models take
+     * `json` only and refuse `verbose_json`, so they are asked for the text
+     * and the transcript says truthfully that it has no timings.
      */
-    const wantSegments = !!(opts.segments || opts.diarize);
-    form.append("response_format", wantSegments ? "verbose_json" : "json");
-    if (wantSegments) form.append("timestamp_granularities[]", "segment");
+    const jsonOnly = /transcribe/i.test(hop.model) && !/diariz/i.test(hop.model);
+    const timings = wantSegments && !jsonOnly;
+    form.append("response_format", timings ? "verbose_json" : "json");
+    if (timings) form.append("timestamp_granularities[]", "segment");
     /*
      * Sent as an extra field rather than negotiated. Providers that diarize
      * read it; the rest ignore an unknown multipart part, which is why asking
      * is safe against an endpoint that has never heard of it.
      */
-    if (opts.diarize) form.append("diarize", "true");
-    if (opts.language) form.append("language", shortLang(opts.language));
+    if (opts.diarize && !jsonOnly) form.append("diarize", "true");
+    const lang = opts.language || hop.language;
+    if (lang) form.append("language", shortLang(lang));
 
-    const r = await aiFetch("stt", `${base}/audio/transcriptions`, {
+    const r = await doFetch(`${hop.base}/audio/transcriptions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       /* deliberately NO content-type header — fetch sets it with the
          multipart boundary, and setting it by hand produces a body the
          provider cannot parse */
-      headers: userStt() ? { ...(userStt()!.headers ?? {}), ...(key ? { authorization: `Bearer ${key}` } : {}) } : sameProviderAsChat(base) ? providerHeaders(key, false) : { ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: { ...hop.headers, ...(hop.key ? { authorization: `Bearer ${hop.key}` } : {}) },
       body: form,
     });
     if (!r.ok) {
@@ -705,20 +874,20 @@ export async function transcribe(
        * the key, and neither belongs in an error a researcher reads.
        */
       const detail = redact((await r.text().catch(() => "")), 300);
-      console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status, model, detail }));
-      return { ok: false, status: r.status, reason: providerReason(r.status, model, detail) };
+      console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status, model: hop.model, detail }));
+      return { ok: false, status: r.status, reason: reasonOf(r.status, detail), fallbackable: classifyResponse(r.status, r.headers, detail).fallbackable };
     }
     const j = (await r.json().catch(() => null)) as {
       text?: string; language?: string; duration?: number;
       segments?: { start?: number; end?: number; text?: string; speaker?: string; speaker_label?: string }[];
     } | null;
-    if (!j) return { ok: false, reason: "The transcription service replied in a format this installation could not read." };
+    if (!j) return { ok: false, reason: `${label} replied in a format this installation could not read.`, fallbackable: false };
     const text = (j.text ?? "").trim();
     if (!text) {
-      return { ok: false, reason: "The transcription service heard no speech in this recording. The audio is saved — check that it is audible, then try again." };
+      return { ok: false, reason: `${label} heard no speech in this recording. The audio is saved — check that it is audible, then try again.`, fallbackable: false };
     }
     const measured = Number.isFinite(j?.duration) ? Math.max(1, Math.round(j!.duration!)) : seconds;
-    reportUsage({ kind: "stt", provider: "openai-compatible", model, seconds: measured, requests: 1, estimated: !Number.isFinite(j?.duration) });
+    usage(hop.model, measured, !Number.isFinite(j?.duration));
 
     /*
      * Segments are taken only when they are usable. A provider that returns
@@ -739,7 +908,7 @@ export async function transcribe(
     return {
       ok: true,
       value: {
-        text, language: j?.language || opts.language, model, durationSeconds: measured,
+        text, language: j?.language || opts.language, model: hop.model, durationSeconds: measured, ...provider,
         ...(segments.length ? { segments } : {}),
         /* truthful: asked-for is not the same as happened */
         ...(opts.diarize ? { diarized: speakers.size > 0, speakerCount: speakers.size } : {}),
@@ -748,11 +917,12 @@ export async function transcribe(
   } catch (e) {
     const name = (e as Error).name;
     console.warn("[rescript:ai] stt provider unreachable", JSON.stringify({ error: name }));
+    if (name === "EndpointRefused") return { ok: false, reason: `${label} is at an address this Studio will not call: ${redact((e as Error).message, 200)}`, fallbackable: false };
     return {
-      ok: false,
+      ok: false, fallbackable: true,
       reason: name === "AbortError"
-        ? `The transcription service did not answer within ${Math.round(budgetMs / 1000)} seconds. The audio is saved — try again.`
-        : "The transcription service could not be reached. The audio is saved — try again.",
+        ? `${label} did not answer within ${Math.round(budgetMs / 1000)} seconds. The audio is saved — try again.`
+        : `${label} could not be reached. The audio is saved — try again.`,
     };
   } finally { clearTimeout(timer); }
 }

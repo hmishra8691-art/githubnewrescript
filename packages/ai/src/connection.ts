@@ -62,6 +62,7 @@ export interface ChatScope extends Target {
 }
 
 export interface SttTarget {
+  /** registry id: openai-stt, groq-stt, openai-compatible-stt, google-stt (`platform` for the installation's own) */
   provider: string;
   base: string;
   key: string;
@@ -69,6 +70,12 @@ export interface SttTarget {
   headers?: Record<string, string>;
   platform?: boolean;
   label?: string;
+  /** the wire protocol; absent = OpenAI-compatible `/audio/transcriptions` */
+  protocol?: "openai-stt" | "google-stt";
+  /** what this provider can take in one request — a clip beyond it is refused before the round trip, not by the provider mid-way */
+  limits?: { maxSeconds?: number; maxBytes?: number };
+  /** the user's saved language hint for this provider (BCP-47); a per-call hint wins */
+  language?: string;
 }
 export interface SttScope extends SttTarget {
   source: ConnectionSource;

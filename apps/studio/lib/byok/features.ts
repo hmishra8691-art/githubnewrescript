@@ -12,9 +12,21 @@ import type { AiFeature } from "./store.ts";
  *                           rephrase, logic intent, import, analytics
  *                           interpretation and Ask, report and story wording,
  *                           speech synthesis
- *   Speech-to-text, Translation   their own gates (Phases C and D)
+ *   Speech-to-text          every transcription the Studio asks for on a
+ *                           researcher's behalf: spoken instructions (voice
+ *                           input) and recordings in the media pipeline. NOT
+ *                           respondents' or interviewees' audio — those run in
+ *                           the runtime and interview apps, which stay
+ *                           platform-managed.
+ *   Translation             its own gate (Phase D)
  */
+export const STT_OPERATIONS = ["intelligent_voice", "transcribe_question"] as const;
+export const isSttOperation = (operation: string): boolean => (STT_OPERATIONS as readonly string[]).includes(operation);
+
 export function featureOf(operation: string): AiFeature {
+  if (isSttOperation(operation)) return "stt";
+  /* the step that reads a spoken instruction in English is part of Intelligent Mode, though it names itself after the voice route */
+  if (operation === "intelligent_voice_normalise") return "intelligent";
   return operation.startsWith("copilot_") ? "intelligent" : "additional";
 }
 

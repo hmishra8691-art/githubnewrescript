@@ -8,7 +8,7 @@ import { sealSecret, maskSecret } from "./vault.ts";
 const env: Record<string, string | undefined> = { AI_CREDENTIAL_KEY: randomBytes(32).toString("hex") };
 const ALICE = "aaaaaaaa-0000-0000-0000-000000000001", BOB = "bbbbbbbb-0000-0000-0000-000000000002";
 
-async function seed(store: MemoryAiStore, userId: string, o: { id: string; provider?: string; key: string; model?: string; mode?: "user" | "platform"; feature?: "intelligent" | "additional" | "stt"; fallbacks?: SettingRow["fallbacks"]; allowPlatformFallback?: boolean; config?: unknown }) {
+async function seed(store: MemoryAiStore, userId: string, o: { id: string; provider?: string; key: string; model?: string; mode?: "user" | "platform"; feature?: "intelligent" | "additional" | "stt" | "translation"; fallbacks?: SettingRow["fallbacks"]; allowPlatformFallback?: boolean; config?: unknown }) {
   const provider = o.provider ?? "openai";
   const { sealed, keyId } = sealSecret(o.key, { userId, credentialId: o.id }, env);
   const row: CredentialRow = { id: o.id, userId, provider, label: null, sealed, mask: maskSecret(o.key), keyId, createdAt: new Date().toISOString(), rotatedAt: null, lastUsedAt: new Date().toISOString(), lastTest: null };
@@ -57,8 +57,8 @@ test("user-managed never silently becomes platform: every unusable state is a re
   assert.equal(await code({}, env, bad), "invalid_config");
   const mismatch = new MemoryAiStore(); await seed(mismatch, ALICE, { id: CRED1, key: "sk-x-12345678", provider: "anthropic", config: { provider: "openai", base: "", model: "gpt-4.1", extra: {} } });
   assert.equal(await code({}, env, mismatch), "invalid_config", "a key saved for Anthropic is never sent to OpenAI");
-  const st = new MemoryAiStore(); await seed(st, ALICE, { id: CRED1, key: "sk-x-12345678", feature: "stt", config: { provider: "openai", base: "", model: "whisper-1", extra: {} } });
-  assert.equal(await code({ feature: "stt" }, env, st), "unsupported_feature");
+  const tr = new MemoryAiStore(); await seed(tr, ALICE, { id: CRED1, key: "sk-x-12345678", feature: "translation" as never, config: { provider: "openai", base: "", model: "x", extra: {} } });
+  assert.equal(await code({ feature: "translation" as never }, env, tr), "unsupported_feature", "translation arrives in its own phase");
   assert.equal(await code({ need: ["embeddings"] as never }, env, await mk()), "user", "openai supports embeddings");
 });
 
@@ -91,4 +91,57 @@ test("a custom endpoint is re-validated on every resolve: a private address save
   await seed(store, ALICE, { id: CRED1, key: "sk-custom-1234567890", provider: "openai-compatible", config: { provider: "openai-compatible", base: "https://10.0.0.5/v1", model: "llama", extra: {} } });
   const r = await resolveConnection({ userId: ALICE, feature: "intelligent", store, env });
   assert.equal(r.kind, "refused"); assert.equal((r as { code: string }).code, "invalid_config");
+});
+
+
+/* ------------------------------------------------------------------ speech-to-text */
+
+const STT = (provider: string, model: string, extra: Record<string, unknown> = {}) => ({ provider, base: "", model, extra, ...extra });
+
+test("STT resolves to its own kind of scope: the speech provider's address, key, model, limits and language — never a chat scope", async () => {
+  const store = new MemoryAiStore();
+  /* the OpenAI key saved for chat also serves OpenAI speech: one vendor family */
+  await seed(store, ALICE, { id: CRED1, provider: "openai", key: "sk-proj-SPEECHKEYSPEECHKEY", feature: "stt", config: { provider: "openai-stt", base: "", model: "whisper-1", language: "pt-BR", extra: { projectId: "proj_abc123" } } });
+  const r = await resolveConnection({ userId: ALICE, feature: "stt", store, env });
+  assert.equal(r.kind, "user"); if (r.kind !== "user") return;
+  assert.equal(r.scopeKind, "stt");
+  const sc = r.scope as import("@rescript/ai").SttScope;
+  assert.deepEqual([sc.provider, sc.protocol, sc.base, sc.model, sc.key, sc.language], ["openai-stt", "openai-stt", "https://api.openai.com/v1", "whisper-1", "sk-proj-SPEECHKEYSPEECHKEY", "pt-BR"]);
+  assert.deepEqual(sc.headers, { "openai-project": "proj_abc123" }); assert.equal(sc.limits?.maxBytes, 25 * 1024 * 1024);
+  assert.equal("modelSmall" in sc, false, "no chat fields on a speech scope");
+});
+
+test("STT: Google keeps its protocol and its one-minute limit; a key is never offered across vendors or across kinds", async () => {
+  const g = new MemoryAiStore();
+  await seed(g, ALICE, { id: CRED1, provider: "google-stt", key: "AIzaSyGOOGLEKEYGOOGLEKEY", feature: "stt", config: { provider: "google-stt", base: "", model: "latest_short", extra: {} } });
+  const r = await resolveConnection({ userId: ALICE, feature: "stt", store: g, env });
+  assert.equal(r.kind, "user"); if (r.kind !== "user") return;
+  const sc = r.scope as import("@rescript/ai").SttScope; assert.deepEqual([sc.protocol, sc.base, sc.limits?.maxSeconds], ["google-stt", "https://speech.googleapis.com/v1", 60]);
+  const code = async (provider: string, config: unknown) => { const st = new MemoryAiStore(); await seed(st, ALICE, { id: CRED1, provider, key: "sk-x-12345678", feature: "stt", config }); const x = await resolveConnection({ userId: ALICE, feature: "stt", store: st, env }); return x.kind === "refused" ? x.code : x.kind; };
+  assert.equal(await code("anthropic", STT("openai-stt", "whisper-1")), "invalid_config", "an Anthropic key is never sent to OpenAI");
+  assert.equal(await code("openai", STT("groq-stt", "whisper-large-v3")), "invalid_config", "an OpenAI key is never sent to Groq");
+  assert.equal(await code("google-gemini", STT("google-stt", "latest_short")), "invalid_config", "a Gemini key is not a Cloud Speech key");
+  assert.equal(await code("openai", { provider: "openai", base: "", model: "gpt-4.1", extra: {} }), "invalid_config", "a chat provider is not a speech provider");
+  assert.equal(await code("groq", STT("groq-stt", "whisper-large-v3")), "user", "Groq's chat key serves Groq speech");
+});
+
+test("STT is a separate setting: a user-managed chat setting does not make transcription user-managed, and a project's choice still needs the speech setting", async () => {
+  const store = new MemoryAiStore();
+  await seed(store, ALICE, { id: CRED1, key: "sk-proj-CHATONLYCHATONLY" });
+  assert.deepEqual(await resolveConnection({ userId: ALICE, feature: "stt", store, env }), { kind: "platform", reason: "default" }, "no speech setting: the platform transcribes, as before");
+  const r = await resolveConnection({ userId: ALICE, feature: "stt", store, env, project: { mode: "user" } });
+  assert.equal(r.kind, "refused"); assert.equal((r as { code: string }).code, "no_connection"); assert.match((r as { message: string }).message, /speech-to-text/);
+});
+
+test("STT platform backstop: the installation's speech provider, only when the user allowed it and only when it can transcribe", async () => {
+  const mk = async (allow: boolean) => { const st = new MemoryAiStore(); await seed(st, ALICE, { id: CRED1, provider: "openai", key: "sk-proj-SPEECHKEYSPEECHKEY", feature: "stt", allowPlatformFallback: allow, config: STT("openai-stt", "whisper-1") }); return st; };
+  const platform = { ...env, AI_API_URL: "https://chat.example/v1", AI_API_KEY: "chat-key", AI_STT_API_URL: "https://stt.example/v1", AI_STT_API_KEY: "stt-key", AI_STT_MODEL: "whisper-large" };
+  const on = await resolveConnection({ userId: ALICE, feature: "stt", store: await mk(true), env: platform });
+  assert.equal(on.kind, "user"); if (on.kind !== "user") return;
+  assert.deepEqual(on.scope.fallbacks.map((f) => [f.platform, f.base, f.key, f.model]), [[true, "https://stt.example/v1", "stt-key", "whisper-large"]]);
+  const off = await resolveConnection({ userId: ALICE, feature: "stt", store: await mk(false), env: platform });
+  assert.equal(off.kind === "user" && off.scope.fallbacks.length, 0, "not allowed: not listed");
+  /* a platform whose chat provider has no speech endpoint offers no speech backstop */
+  const anthropicOnly = await resolveConnection({ userId: ALICE, feature: "stt", store: await mk(true), env: { ...env, AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k" } });
+  assert.equal(anthropicOnly.kind === "user" && anthropicOnly.scope.fallbacks.length, 0);
 });

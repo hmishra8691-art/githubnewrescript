@@ -8,7 +8,7 @@ import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate
 import { aiAllowed, aiRefusal, type AiRefusal } from "./aiPolicy";
 import { connectionFor } from "./byok/connect";
 import { allowPrivateFrom } from "./byok/resolve";
-import { meteredCore, usageToSpec, type ConnectionRefusal, type Metered, type RunDeps } from "./meterRun";
+import { connectionRefusalStatus, meteredCore, usageToSpec, type ConnectionRefusal, type Metered, type RunDeps } from "./meterRun";
 export { usageToSpec, type ConnectionRefusal, type Metered };
 export { aiSpec, meterModel, meterProvider, type AiEstimate };
 import { supabaseAdmin } from "@/lib/admin";
@@ -217,37 +217,35 @@ export async function meteredTts<T>(meter: Meter, ctx: MeterContext, o: { operat
  * settle with what the provider reported. Shared by the media pipeline's
  * `projectStt` and the Intelligent mode's voice route, so a minute of
  * researcher speech is charged exactly as a minute of respondent speech.
- * A meter that cannot be reached runs the call unmetered and says so in the
- * log — a recording must not be lost to a billing outage.
+ *
+ * It walks the same door as every other model call (`meteredCore`): the project's
+ * feature switch, then WHOSE provider — the project's choice, else the acting
+ * user's own speech provider, else the platform — then money. On the user's own
+ * provider there is no wallet (they pay their provider); the minutes are
+ * recorded at zero charge for attribution. A meter that cannot be reached runs a
+ * platform call unmetered and says so in the log — a recording must not be lost
+ * to a billing outage.
  */
-export async function meteredStt<T>(meter: Meter, ctx: MeterContext, operation: string, seconds: number, fn: () => Promise<T>): Promise<{ value: T } | { refused: string }> {
-  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
+export async function meteredSttCall<T>(meter: Meter, ctx: MeterContext, operation: string, seconds: number, fn: () => Promise<T>): Promise<Metered<T>> {
+  const providerName = process.env.AI_API_URL === "fake:" || process.env.AI_STT_API_URL === "fake:" ? "fake" : "openai-compatible";
   const minutes = Math.max(0.05, seconds / 60);
-  let hold;
-  try {
-    hold = await meter.reserve(ctx, {
+  return meteredCore(runDeps, meter, ctx, {
+    operation, kind: "stt", tolerateMeterOutage: true,
+    reserve: () => ({
       eventType: "SPEECH_TO_TEXT_MINUTE",
       provider: meterProvider(providerName, "stt"),
       service: "stt",
       model: meterModel(providerName, (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1", "stt"),
       quantity: minutes,
       metadata: { operation, seconds },
-    });
-  } catch (e) {
-    console.warn("[rescript:billing] meter unavailable — running unmetered", JSON.stringify({ error: (e as Error).message }));
-    return { value: await fn() };
-  }
-  if (!hold.ok) return { refused: hold.message };
-  try {
-    const { value, usage } = await collectUsage(fn);
-    if (!usage.length) { await meter.release(hold); return { value }; }
-    const spec = usageToSpec(usage, { kind: "stt" });
-    await meter.settle(hold, { ...spec, eventType: "SPEECH_TO_TEXT_MINUTE", metadata: { operation, ...spec.metadata } });
-    return { value };
-  } catch (e) {
-    await meter.release(hold).catch(() => {});
-    throw e;
-  }
+    }),
+  }, fn);
+}
+
+/** the same, in the shape the media pipeline takes: a value, or the sentence that says why it was not run */
+export async function meteredStt<T>(meter: Meter, ctx: MeterContext, operation: string, seconds: number, fn: () => Promise<T>): Promise<{ value: T } | { refused: string }> {
+  const m = await meteredSttCall(meter, ctx, operation, seconds, fn);
+  return m.ok ? { value: m.value } : { refused: m.message };
 }
 
 /** Run a translation batch under the meter: reserve from the characters about to be sent, settle with what the adapter reported. */
@@ -276,7 +274,7 @@ export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est
 /** The HTTP shape of a refusal: 402 when the balance is short, 423 when the project is read-only or suspended. */
 export function refusalResponse(r: MeterRefusal | AiRefusal | ConnectionRefusal): NextResponse {
   if (r.reason === "ai_off") return NextResponse.json({ error: r.message, code: "ai_disabled", why: (r as AiRefusal).why }, { status: 403 });
-  if (r.reason === "ai_connection") return NextResponse.json({ error: r.message, code: "ai_connection", why: r.code, source: r.source }, { status: r.code === "byok_blocked" ? 403 : r.code === "vault_unavailable" ? 503 : 409 });
+  if (r.reason === "ai_connection") return NextResponse.json({ error: r.message, code: "ai_connection", why: r.code, source: r.source }, { status: connectionRefusalStatus(r.code) });
   const status = r.reason === "insufficient_balance" ? 402 : r.reason === "read_only" || r.reason === "suspended" ? 423 : 503;
   return NextResponse.json({ error: r.message, code: `wallet_${r.reason}`, wallet: r.wallet ? { balance: r.wallet.balance, state: r.wallet.state, currency: r.wallet.currency } : null, estimate: r.estimate ? { customerCharge: r.estimate.customerCharge } : null }, { status });
 }

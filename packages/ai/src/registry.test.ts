@@ -1,21 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { PROVIDERS, providerById, publicCatalog, validateConnection, headersFor, discoverModels, inferCapabilities, suggestionsFor } from "./registry.js";
+import { PROVIDERS, providerById, sameKeyFamily, publicCatalog, validateConnection, headersFor, discoverModels, inferCapabilities, suggestionsFor } from "./registry.js";
 
 test("the catalog: every entry is complete, fixed providers have https bases, only the custom one takes an address", () => {
   const ids = new Set<string>();
   for (const p of PROVIDERS) {
     assert.ok(!ids.has(p.id), `duplicate ${p.id}`); ids.add(p.id);
-    assert.ok(p.label && p.capabilities.includes("chat"), p.id);
+    assert.ok(p.label && p.capabilities.includes(p.kind === "stt" ? "stt" : "chat"), p.id);
     if (p.customBase) assert.equal(p.base, null, p.id); else assert.match(p.base!, /^https:\/\/[a-z0-9.-]+(\/[\w./-]*)?$/, p.id);
     assert.ok(!p.base?.endsWith("/"), `${p.id}: no trailing slash`);
     for (const f of p.fields) { assert.ok(f.header && f.pattern.test(f.example.replace("…", "abc123")), `${p.id}.${f.id}`); }
   }
-  assert.deepEqual(PROVIDERS.filter((p) => p.customBase).map((p) => p.id), ["openai-compatible"]);
+  assert.deepEqual(PROVIDERS.filter((p) => p.customBase).map((p) => p.id), ["openai-compatible", "openai-compatible-stt"]);
   for (const id of ["openai", "anthropic", "google-gemini", "openai-compatible"]) assert.ok(providerById(id), id);
   const pub = JSON.stringify(publicCatalog("chat"));
-  assert.ok(!/function|=>|RegExp/.test(pub)); assert.equal(publicCatalog("stt").length, 0, "no speech-to-text entry until its adapter exists");
+  assert.ok(!/function|=>|RegExp/.test(pub)); assert.deepEqual(publicCatalog("stt").map((p) => p.id), ["openai-stt", "groq-stt", "openai-compatible-stt", "google-stt"], "a speech entry exists only with its adapter and its tests (stt.providers.test.ts)");
+  assert.ok(!publicCatalog("chat").some((p) => p.kind !== "chat"), "the chat catalog holds no speech provider");
 });
 
 test("validation: a fixed provider's address is the registry's whatever was sent; a custom one must pass the endpoint guard; identifiers have a shape", () => {

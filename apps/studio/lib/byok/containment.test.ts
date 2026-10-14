@@ -50,3 +50,18 @@ test("the credential tables are never queried from anywhere but the store", () =
   const q = files.filter((f) => /user_ai_credentials|user_ai_settings/.test(f.text)).map((f) => f.rel);
   assert.deepEqual(q, ["lib/byok/store.ts"]);
 });
+
+
+test("respondent and interview AI stays platform-managed: the public apps never open a user's key, never enter a user's connection scope, never read the credential tables", () => {
+  const APPS = join(ROOT, "..");           // apps/
+  const PKGS = join(ROOT, "..", "..", "packages");
+  const roots = [join(APPS, "runtime"), join(APPS, "interviews"), join(PKGS, "interviews", "src"), join(PKGS, "media", "src")];
+  const found: string[] = [];
+  for (const r of roots) {
+    for (const p of walk(r)) {
+      const text = readFileSync(p, "utf8");
+      if (/withAiScope|openSecret|AI_CREDENTIAL_KEY|user_ai_(credentials|settings)|lib\/byok|\/byok\//.test(text)) found.push(relative(join(ROOT, "..", ".."), p));
+    }
+  }
+  assert.deepEqual(found, [], "a respondent's audio would be transcribed with a researcher's key");
+});

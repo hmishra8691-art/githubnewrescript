@@ -25,6 +25,8 @@ export interface TranscriptionResult {
   language?: string;
   model: string;
   durationSeconds?: number;
+  /** the provider that actually answered, when the caller's own differs from the installation's (a researcher's own speech provider) */
+  provider?: string;
 }
 
 /**
@@ -182,7 +184,7 @@ export async function runTranscription(db: MediaDb, mediaId: string, deps: Runne
     text: result.text.trim(),
     language: result.language ?? deps.language ?? null,
     model: result.model,
-    provider: deps.provider ?? null,
+    provider: result.provider ?? deps.provider ?? null,
     error: null,
   });
   log("transcription_completed", { mediaId, jobId: job.id, characters: result.text.trim().length, seconds });

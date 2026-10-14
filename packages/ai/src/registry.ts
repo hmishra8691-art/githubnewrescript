@@ -22,7 +22,7 @@ import { redact } from "./provider.js";
 export type Capability = "chat" | "json_schema" | "json_object" | "embeddings" | "vision" | "stt" | "tts" | "translate";
 export type ProviderKind = "chat" | "stt" | "translate";
 /** the wire protocol an adapter speaks */
-export type Protocol = "openai-chat";
+export type Protocol = "openai-chat" | "openai-stt" | "google-stt";
 
 export interface ProviderField {
   /** the key in the stored configuration */
@@ -62,6 +62,23 @@ export interface ProviderDef {
   hints: ModelHint[];
   docsUrl: string;
   notes?: string;
+  /**
+   * Providers that accept the SAME API key share a family, so a user who saved
+   * their OpenAI key for chat does not paste it again for transcription. A key is
+   * only ever offered to a provider of its own family — never across vendors.
+   */
+  family?: string;
+  /** what one request can carry; a clip beyond it is refused before the call (speech-to-text) */
+  limits?: { maxSeconds?: number; maxBytes?: number };
+}
+
+/** the family a provider's key belongs to (its own id when it names none) */
+export const keyFamily = (def: ProviderDef): string => def.family ?? def.id;
+/** may a key saved for provider `saved` be used with provider `wanted`? Same vendor family only. */
+export function sameKeyFamily(saved: string, wanted: string): boolean {
+  if (saved === wanted) return true;
+  const a = providerById(saved), b = providerById(wanted);
+  return !!a && !!b && keyFamily(a) === keyFamily(b);
 }
 
 const bearer = (key: string) => ({ authorization: `Bearer ${key}` });
@@ -110,6 +127,56 @@ export const PROVIDERS: ProviderDef[] = [
   }),
 ];
 
+const stt = (o: Partial<ProviderDef> & Pick<ProviderDef, "id" | "label" | "base" | "docsUrl">): ProviderDef => ({
+  kind: "stt", protocol: "openai-stt", capabilities: ["stt"], customBase: false,
+  discovery: { path: "/models", headers: bearer }, fields: [], hints: [], ...o,
+});
+const MB = 1024 * 1024;
+
+/**
+ * SPEECH-TO-TEXT PROVIDERS. Separate entries from the chat ones because the
+ * address, the endpoint and the models differ (a vendor that chats may not
+ * transcribe at all — Anthropic), but a key is shared within a family.
+ */
+export const STT_PROVIDERS: ProviderDef[] = [
+  stt({
+    id: "openai-stt", label: "OpenAI", family: "openai", base: "https://api.openai.com/v1", docsUrl: "https://platform.openai.com/api-keys", limits: { maxBytes: 25 * MB },
+    fields: [
+      { id: "organizationId", label: "Organization ID", help: "Only needed if your key belongs to several organizations.", required: false, header: "OpenAI-Organization", pattern: ID, example: "org-…" },
+      { id: "projectId", label: "Project ID", help: "Only needed to bill a specific project.", required: false, header: "OpenAI-Project", pattern: ID, example: "proj_…" },
+    ],
+    hints: [
+      { id: "whisper-1", label: "Whisper", capabilities: ["stt"] },
+      { id: "gpt-4o-transcribe", label: "GPT-4o Transcribe", capabilities: ["stt"] },
+      { id: "gpt-4o-mini-transcribe", label: "GPT-4o mini Transcribe", capabilities: ["stt"] },
+    ],
+    notes: "Whisper returns timings per segment; the GPT-4o transcribe models return text only. Recordings up to 25 MB.",
+  }),
+  stt({
+    id: "groq-stt", label: "Groq", family: "groq", base: "https://api.groq.com/openai/v1", docsUrl: "https://console.groq.com/keys", limits: { maxBytes: 25 * MB },
+    hints: [
+      { id: "whisper-large-v3", label: "Whisper large v3", capabilities: ["stt"] },
+      { id: "whisper-large-v3-turbo", label: "Whisper large v3 turbo", capabilities: ["stt"] },
+    ],
+    notes: "Recordings up to 25 MB.",
+  }),
+  stt({
+    id: "openai-compatible-stt", label: "Other (OpenAI-compatible)", family: "openai-compatible", base: null, customBase: true, docsUrl: "",
+    notes: "Any service that serves POST /audio/transcriptions at a public https address — a hosted gateway or your own Whisper server. The connection test checks it.",
+  }),
+  stt({
+    id: "google-stt", label: "Google Cloud Speech-to-Text", protocol: "google-stt", base: "https://speech.googleapis.com/v1", docsUrl: "https://console.cloud.google.com/apis/credentials",
+    discovery: null, limits: { maxSeconds: 60, maxBytes: 10 * MB },
+    hints: [
+      { id: "latest_long", label: "Latest (long-form)", capabilities: ["stt"] },
+      { id: "latest_short", label: "Latest (short)", capabilities: ["stt"] },
+      { id: "default", label: "Default", capabilities: ["stt"] },
+    ],
+    notes: "Use a Google Cloud API key with the Speech-to-Text API enabled. Takes recordings up to one minute in WebM/Opus, WAV or FLAC — enough for voice instructions, not for long interviews (use an OpenAI-compatible provider, or allow the platform as a backstop).",
+  }),
+];
+PROVIDERS.push(...STT_PROVIDERS);
+
 export const providerById = (id: string): ProviderDef | undefined => PROVIDERS.find((p) => p.id === id);
 export const providersOf = (kind: ProviderKind): ProviderDef[] => PROVIDERS.filter((p) => p.kind === kind);
 
@@ -117,7 +184,7 @@ export const providersOf = (kind: ProviderKind): ProviderDef[] => PROVIDERS.filt
 export function publicCatalog(kind: ProviderKind) {
   return providersOf(kind).map((p) => ({
     id: p.id, label: p.label, kind: p.kind, capabilities: p.capabilities, base: p.base, customBase: p.customBase,
-    canListModels: !!p.discovery, docsUrl: p.docsUrl, notes: p.notes ?? null,
+    canListModels: !!p.discovery, docsUrl: p.docsUrl, notes: p.notes ?? null, family: keyFamily(p), limits: p.limits ?? null,
     fields: p.fields.map((f) => ({ id: f.id, label: f.label, help: f.help, required: f.required, example: f.example })),
     hints: p.hints,
   }));
@@ -127,15 +194,18 @@ export function publicCatalog(kind: ProviderKind) {
 
 export interface ConnectionInput {
   provider?: unknown; base?: unknown; model?: unknown; modelSmall?: unknown; embeddingsModel?: unknown; visionModel?: unknown;
+  /** speech-to-text: the language the recordings are usually in (BCP-47) */
+  language?: unknown;
   extra?: unknown;
 }
 export interface ConnectionConfig {
-  provider: string; base: string; model: string; modelSmall?: string; embeddingsModel?: string; visionModel?: string;
+  provider: string; base: string; model: string; modelSmall?: string; embeddingsModel?: string; visionModel?: string; language?: string;
   /** the registry's optional identifiers, by field id */
   extra: Record<string, string>;
 }
-export type FieldErrors = Partial<Record<"provider" | "base" | "model" | "modelSmall" | "embeddingsModel" | "visionModel" | "extra", string>> & Record<string, string>;
+export type FieldErrors = Partial<Record<"provider" | "base" | "model" | "modelSmall" | "embeddingsModel" | "visionModel" | "language" | "extra", string>> & Record<string, string>;
 
+const LANGUAGE_TAG = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$/;
 
 /**
@@ -162,6 +232,11 @@ export function validateConnection(kind: ProviderKind, input: ConnectionInput, o
     return v || undefined;
   };
   const modelSmall = optionalModel("modelSmall"), embeddingsModel = optionalModel("embeddingsModel"), visionModel = optionalModel("visionModel");
+  let language: string | undefined;
+  if (kind === "stt" && typeof input.language === "string" && input.language.trim()) {
+    const l = input.language.trim();
+    if (!LANGUAGE_TAG.test(l)) errors.language = "Use a language tag such as en, en-US or pt-BR."; else language = l;
+  }
   const extra: Record<string, string> = {};
   const given = input.extra && typeof input.extra === "object" ? input.extra as Record<string, unknown> : {};
   for (const f of def.fields) {
@@ -170,7 +245,7 @@ export function validateConnection(kind: ProviderKind, input: ConnectionInput, o
     if (!f.pattern.test(v)) errors[`extra.${f.id}`] = `That does not look like a ${f.label} (for example ${f.example}).`; else extra[f.id] = v;
   }
   if (Object.keys(errors).length) return { ok: false, errors };
-  return { ok: true, config: { provider: def.id, base, model, ...(modelSmall ? { modelSmall } : {}), ...(embeddingsModel ? { embeddingsModel } : {}), ...(visionModel ? { visionModel } : {}), extra } };
+  return { ok: true, config: { provider: def.id, base, model, ...(modelSmall ? { modelSmall } : {}), ...(embeddingsModel ? { embeddingsModel } : {}), ...(visionModel ? { visionModel } : {}), ...(language ? { language } : {}), extra } };
 }
 
 /** the request headers a configuration's identifiers become — a closed set named by the registry, never free text */
@@ -229,7 +304,8 @@ export async function discoverModels(def: ProviderDef, base: string, key: string
       const caps = h?.capabilities ?? inferCapabilities(id);
       return { id, label: typeof m.display_name === "string" && m.display_name ? m.display_name : h?.label ?? id, capabilities: caps, intelligent: !!h?.intelligent || (caps.includes("chat") && caps.includes("json_object")), source: "provider" as const };
     }).sort((a, b) => Number(b.capabilities.includes("chat")) - Number(a.capabilities.includes("chat")) || a.id.localeCompare(b.id));
-    return { ok: true, models };
+    /* a speech provider's list holds chat and image models too; offer only what can transcribe */
+    return { ok: true, models: def.kind === "stt" ? models.filter((m) => m.capabilities.includes("stt")) : models };
   } catch (e) {
     const name = (e as Error)?.name;
     if (name === "AbortError") return { ok: false, models: [], reason: "timeout", message: "The provider did not answer in time." };

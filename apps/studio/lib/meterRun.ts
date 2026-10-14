@@ -1,5 +1,5 @@
 import type { Meter, MeterContext, MeterRefusal, UsageEvent, UsageSpec } from "@rescript/billing";
-import { collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope } from "@rescript/ai";
+import { collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope, type SttScope } from "@rescript/ai";
 import { meterModel, meterProvider } from "./aiEstimate.ts";
 import { aiAllowed, aiRefusal, type AiRefusal, type AiSource } from "./aiPolicy.ts";
 import type { Resolution } from "./byok/resolve.ts";
@@ -45,13 +45,8 @@ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" |
  */
 export interface ConnectionRefusal { ok: false; reason: "ai_connection"; code: string; message: string; source: "user" | "project" }
 
-/**
- * The user chose their own AI provider and it cannot be used (no key, the key
- * cannot be opened, the workspace forbids it, the provider lacks what this
- * needs). Said in words — and NEVER answered by quietly using the platform's AI
- * instead, which would spend money the person did not agree to.
- */
-export interface ConnectionRefusal { ok: false; reason: "ai_connection"; code: string; message: string; source: "user" | "project" }
+/** the HTTP status a route answers a connection refusal with — one table for every route */
+export const connectionRefusalStatus = (code: string): number => (code === "byok_blocked" ? 403 : code === "vault_unavailable" ? 503 : 409);
 
 export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | MeterRefusal | AiRefusal | ConnectionRefusal;
 
@@ -76,17 +71,31 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  */
 export async function meteredCore<T>(
   deps: RunDeps, meter: Meter, ctx: MeterContext,
-  o: { operation: string; once?: boolean; kind: "chat" | "tts"; reserve: () => UsageSpec },
+  o: { operation: string; once?: boolean; kind: "chat" | "tts" | "stt"; reserve: () => UsageSpec; /** a meter that cannot be reached runs the call unmetered instead of failing it (a recording must not be lost to a billing outage) */ tolerateMeterOutage?: boolean },
   fn: () => Promise<T>,
 ): Promise<Metered<T>> {
-  /* the project's AI switch (audit A-2) — asked before anything is reserved, so an off project makes no provider call and holds no balance */
-  const decision = await aiAllowed(ctx.surveyId, o.operation, { once: o.once });
+  /*
+   * the project's AI switch (audit A-2) — asked before anything is reserved, so an off project makes no provider call and holds no balance.
+   * Speech-to-text is not a language model, so a project that runs INTERNAL ("nothing is sent to a language model") still transcribes, as it
+   * always did; the switch is asked in its one-time form, which keeps what a project can really turn off (the feature list, an unreadable setting)
+   * and still says which AI source the project chose.
+   */
+  const decision = await aiAllowed(ctx.surveyId, o.operation, { once: o.once || o.kind === "stt" });
   if (!decision.allowed) return aiRefusal(decision);
   const conn = await deps.connectionFor({ userId: ctx.userId, customerId: ctx.customerId, surveyId: ctx.surveyId, operation: o.operation, source: decision.source, sourceKnown: true });
   if (conn.kind === "refused") return { ok: false, reason: "ai_connection", code: conn.code, message: conn.message, source: conn.source };
 
+  /* the operation's feature decides the kind of connection; a mismatch is a programming error, never a silent use of the wrong provider */
+  if (conn.kind === "user" && (o.kind === "stt") !== (conn.scopeKind === "stt")) throw new Error(`meteredCore: ${o.operation} is a ${o.kind} call but resolved a ${conn.scopeKind} connection`);
+
   if (conn.kind === "platform") {
-    const hold = await meter.reserve(ctx, o.reserve());
+    let hold: Awaited<ReturnType<Meter["reserve"]>>;
+    try { hold = await meter.reserve(ctx, o.reserve()); }
+    catch (e) {
+      if (!o.tolerateMeterOutage) throw e;
+      console.warn("[rescript:billing] meter unavailable — running unmetered", JSON.stringify({ error: (e as Error).message }));
+      return { ok: true, value: await fn(), event: null };
+    }
     if (!hold.ok) return hold;
     try {
       const { value, usage } = await collectUsage(fn);
@@ -101,7 +110,7 @@ export async function meteredCore<T>(
   }
 
   /* the user's own provider */
-  let scope: ChatScope = conn.scope;
+  let scope: ChatScope | SttScope = conn.scope;
   let hold: Awaited<ReturnType<Meter["reserve"]>> | null = null;
   if (scope.fallbacks.some((f) => f.platform)) {
     const h = await meter.reserve(ctx, o.reserve());
@@ -110,7 +119,7 @@ export async function meteredCore<T>(
   }
   const holdOk = hold && hold.ok ? hold : null;
   try {
-    const { value, usage } = await collectUsage(() => withAiScope({ chat: scope, allowPrivate: deps.allowPrivate() }, fn));
+    const { value, usage } = await collectUsage(() => withAiScope(conn.scopeKind === "stt" ? { stt: scope as SttScope, allowPrivate: deps.allowPrivate() } : { chat: scope as ChatScope, allowPrivate: deps.allowPrivate() }, fn));
     /* inside a user's scope a report is the user's unless it says the platform served it */
     const platformUsage = usage.filter((u) => u.source === "platform");
     const userUsage = usage.filter((u) => u.source !== "platform");
@@ -121,7 +130,7 @@ export async function meteredCore<T>(
     }
     for (const group of groupByConnection(userUsage)) {
       const spec = usageToSpec(group.usage, { kind: o.kind });
-      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: o.kind === "tts" ? "character" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata } });
+      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: o.kind === "tts" ? "character" : o.kind === "stt" ? "minute" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata } });
       event ??= rec;
     }
     return { ok: true, value, event };

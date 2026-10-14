@@ -1,7 +1,8 @@
 import "server-only";
-import { aiConfigured, identityOf, withAiScope, type ChatScope } from "@rescript/ai";
+import { aiConfigured, identityOf, sttConfigured, sttUnavailableReason, withAiScope, type ChatScope } from "@rescript/ai";
 import type { AuthedUser } from "@/lib/guard";
 import { aiAllowed, type AiSource } from "@/lib/aiPolicy";
+import { connectionRefusalStatus } from "@/lib/meterRun";
 import { featureOf, needsOf } from "./features";
 import { allowPrivateFrom, resolveConnection, type Resolution } from "./resolve";
 import { aiStore, workspaceAllowsByok } from "./server";
@@ -52,6 +53,28 @@ export async function aiReadyFor(user: Pick<AuthedUser, "userId" | "customerId">
   if (!user) return false;
   const r = await connectionFor({ userId: user.userId, customerId: user.customerId, surveyId, operation });
   return r.kind !== "platform";
+}
+
+/** may this user transcribe for this project — and if not, what to tell them */
+export type SttPrecheck =
+  | { ok: true; via: "platform" | "user" }
+  | { ok: false; status: number; code: "stt_unconfigured" | "stt_unavailable" | "ai_connection"; error: string; why?: string; source?: "user" | "project" };
+
+/**
+ * The speech-to-text counterpart of `aiReadyFor`, with the reason. A user (or
+ * project) that chose their own speech provider is ready when it resolves —
+ * and refused, in words, when it does not; it never falls back to a platform
+ * provider they did not list. Otherwise the platform must have one that can
+ * actually transcribe.
+ */
+export async function sttPrecheck(user: Pick<AuthedUser, "userId" | "customerId"> | null, surveyId: string | null | undefined, operation = "intelligent_voice"): Promise<SttPrecheck> {
+  const r = await connectionFor({ userId: user?.userId, customerId: user?.customerId, surveyId, operation });
+  if (r.kind === "refused") return { ok: false, status: connectionRefusalStatus(r.code), code: "ai_connection", error: r.message, why: r.code, source: r.source };
+  if (r.kind === "user") return { ok: true, via: "user" };
+  if (!sttConfigured()) return { ok: false, status: 501, code: "stt_unconfigured", error: sttUnavailableReason() ?? "No transcription provider is configured on this Studio (AI_STT_API_URL)." };
+  const impossible = sttUnavailableReason();
+  if (impossible) return { ok: false, status: 501, code: "stt_unavailable", error: impossible };
+  return { ok: true, via: "platform" };
 }
 
 /** run `fn` inside the user's connection scope (or untouched, for the platform) */

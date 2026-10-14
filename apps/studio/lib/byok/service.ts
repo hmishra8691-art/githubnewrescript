@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  classifyResponse, discoverModels, guardedFetch, headersFor, isProviderError, platformTarget, providerById, publicCatalog, redact, suggestionsFor, validateConnection,
-  type ConnectionConfig, type ConnectionInput, type FieldErrors, type ProviderErrorKind,
+  classifyResponse, discoverModels, guardedFetch, headersFor, isProviderError, platformSttTarget, platformTarget, providerById, publicCatalog, redact, sameKeyFamily, suggestionsFor, validateConnection,
+  type ConnectionConfig, type ConnectionInput, type FieldErrors, type ProviderErrorKind, type ProviderKind,
 } from "@rescript/ai";
 import { maskSecret, openSecret, sealSecret, vaultStatus, VaultError } from "./vault.ts";
-import { allowPrivateFrom, SUPPORTED_FEATURES } from "./resolve.ts";
+import { allowPrivateFrom, providerKindOf, SUPPORTED_FEATURES } from "./resolve.ts";
 import {
   isFeature, MemoryAiStore, viewOf, FEATURES,
   type AiFeature, type AiStore, type CredentialRow, type FallbackEntry, type SettingRow, type TestRecord,
@@ -57,8 +57,9 @@ export function cleanKey(v: unknown): string | null {
 }
 const labelOf = (v: unknown) => (typeof v === "string" ? v.trim().replace(/[\u0000-\u001f<>]/g, "").slice(0, 60) : "") || null;
 
-function chatConfig(input: unknown, env: Record<string, string | undefined>): { ok: true; config: ConnectionConfig } | { ok: false; errors: FieldErrors } {
-  return validateConnection("chat", (input ?? {}) as ConnectionInput, { allowPrivate: allowPrivateFrom(env) });
+/** a typed configuration, validated against the registry for the kind of provider the feature talks to (chat or speech) */
+function configFor(kind: ProviderKind, input: unknown, env: Record<string, string | undefined>): { ok: true; config: ConnectionConfig } | { ok: false; errors: FieldErrors } {
+  return validateConnection(kind, (input ?? {}) as ConnectionInput, { allowPrivate: allowPrivateFrom(env) });
 }
 
 /* ---------------------------------------------------------------- overview */
@@ -72,12 +73,16 @@ export async function overview(userId: string, d: Deps) {
     vault: vaultStatus(env),
     workspaceAllows: d.workspaceAllows !== false,
     platformFallbackAvailable: !!platformTarget(env),
+    /** the speech-to-text backstop is its own question: the platform may chat and not transcribe */
+    platformSttFallbackAvailable: !!platformSttTarget(env),
     catalog: publicCatalog("chat"),
+    sttCatalog: publicCatalog("stt"),
     credentials: creds.map(viewOf),
     features: FEATURES.map((feature) => {
       const s = by.get(feature);
       return {
         feature,
+        kind: providerKindOf(feature),
         supported: SUPPORTED_FEATURES.includes(feature),
         mode: s?.mode ?? "platform",
         config: s && s.mode === "user" ? s.config : null,
@@ -100,14 +105,14 @@ export async function saveCredential(userId: string, input: { provider: string; 
   if (!status.ready) return fail(503, "vault_unavailable", status.reason ?? "Saving your own API key is not enabled on this installation.");
   if (d.workspaceAllows === false) return fail(403, "byok_blocked", "Your workspace administrator has turned off user-managed AI providers.");
   const def = providerById(input.provider);
-  if (!def || def.kind !== "chat") return fail(422, "invalid_provider", "Choose a provider from the list.", { provider: "Choose a provider from the list." });
+  if (!def) return fail(422, "invalid_provider", "Choose a provider from the list.", { provider: "Choose a provider from the list." });
   const key = cleanKey(input.apiKey);
   if (!key) return fail(422, "invalid_key", "That does not look like an API key (it must be 8 or more visible characters with no spaces).", { apiKey: "That does not look like an API key." });
   let existing: CredentialRow | null = null;
   if (input.credentialId) {
     existing = await d.store.getCredential(userId, input.credentialId);
     if (!existing) return fail(404, "not_found", "That saved key was not found.");
-    if (existing.provider !== def.id) return fail(422, "provider_mismatch", `That saved key is for a different provider. Add a new key for ${def.label} instead.`);
+    if (!sameKeyFamily(existing.provider, def.id)) return fail(422, "provider_mismatch", `That saved key is for a different provider. Add a new key for ${def.label} instead.`);
   }
   const id = existing?.id ?? randomUUID();
   let sealed: { sealed: string; keyId: string };
@@ -157,7 +162,8 @@ export async function saveSetting(userId: string, input: SaveInput, d: Deps): Pr
   const status = vaultStatus(env);
   if (!status.ready) return fail(503, "vault_unavailable", status.reason ?? "Saving your own API key is not enabled on this installation.");
 
-  const checked = chatConfig(input.config, env);
+  const kind = providerKindOf(feature);
+  const checked = configFor(kind, input.config, env);
   if (!checked.ok) return fail(422, "invalid_config", "Some settings need attention.", checked.errors);
   const config = checked.config;
 
@@ -172,11 +178,11 @@ export async function saveSetting(userId: string, input: SaveInput, d: Deps): Pr
     const prior = await d.store.getSetting(userId, feature);
     if (!credentialId && prior?.credentialId) {
       const priorCred = await d.store.getCredential(userId, prior.credentialId);
-      if (priorCred && priorCred.provider === config.provider) credentialId = priorCred.id;
+      if (priorCred && sameKeyFamily(priorCred.provider, config.provider)) credentialId = priorCred.id;
     }
     const c = credentialId ? await d.store.getCredential(userId, credentialId) : null;
     if (!c) return fail(422, "key_required", "Enter your API key.", { apiKey: "Enter your API key." });
-    if (c.provider !== config.provider) return fail(422, "provider_mismatch", "That saved key is for a different provider. Enter the key for the provider you selected.", { apiKey: "Enter a key for this provider." });
+    if (!sameKeyFamily(c.provider, config.provider)) return fail(422, "provider_mismatch", "That saved key is for a different provider. Enter the key for the provider you selected.", { apiKey: "Enter a key for this provider." });
   }
 
   const fallbacks: FallbackEntry[] = [];
@@ -185,9 +191,9 @@ export async function saveSetting(userId: string, input: SaveInput, d: Deps): Pr
   for (const f of raw as { credentialId?: unknown; config?: unknown }[]) {
     const fc = typeof f?.credentialId === "string" ? await d.store.getCredential(userId, f.credentialId) : null;
     if (!fc) return fail(422, "invalid_fallback", "A fallback provider's saved key was not found.");
-    const fv = chatConfig(f.config, env);
+    const fv = configFor(kind, f.config, env);
     if (!fv.ok) return fail(422, "invalid_fallback", `A fallback provider's settings need attention: ${Object.values(fv.errors)[0]}`, fv.errors);
-    if (fc.provider !== fv.config.provider) return fail(422, "provider_mismatch", "A fallback's saved key belongs to a different provider than the one selected.");
+    if (!sameKeyFamily(fc.provider, fv.config.provider)) return fail(422, "provider_mismatch", "A fallback's saved key belongs to a different provider than the one selected.");
     if (fc.id === credentialId && fv.config.model === config.model) return fail(422, "invalid_fallback", "A fallback must differ from the primary connection.");
     if (fallbacks.some((x) => x.credentialId === fc.id && x.config.model === fv.config.model)) return fail(422, "invalid_fallback", "The same fallback is listed twice.");
     fallbacks.push({ credentialId: fc.id, config: fv.config });
@@ -222,7 +228,7 @@ const SAY: Record<ProviderErrorKind, { code: string; message: string }> = {
   server: { code: "provider_error", message: "The provider had an internal error. Try again in a moment." },
   network: { code: "unreachable", message: "The provider could not be reached from the Studio." },
   timeout: { code: "timeout", message: "The provider did not answer in time." },
-  bad_request: { code: "bad_request", message: "The provider refused the request. The model may not support chat, or a setting is wrong." },
+  bad_request: { code: "bad_request", message: "The provider refused the request. The model may not support this kind of call, or a setting is wrong." },
   busy: { code: "busy", message: "Too many requests in flight; try again." },
 };
 
@@ -234,9 +240,19 @@ async function secretFor(userId: string, input: { apiKey?: unknown; credentialId
   const id = typeof input.credentialId === "string" ? input.credentialId : null;
   const c = id ? await d.store.getCredential(userId, id) : null;
   if (!c) return fail(422, "key_required", "Enter your API key.", { apiKey: "Enter your API key." });
-  if (c.provider !== provider) return fail(422, "provider_mismatch", "That saved key is for a different provider.");
+  if (!sameKeyFamily(c.provider, provider)) return fail(422, "provider_mismatch", "That saved key is for a different provider.");
   try { return { ok: true, key: openSecret(c.sealed, { userId, credentialId: c.id }, env), credential: c }; }
   catch { return fail(409, "credential_unreadable", "Your saved API key could not be opened. Enter it again."); }
+}
+
+/** `seconds` of 16-bit mono 8 kHz silence as a WAV file — the test recording a speech connection is probed with */
+export function silentWav(seconds: number): Uint8Array {
+  const rate = 8000, samples = Math.max(1, Math.round(seconds * rate)), bytes = samples * 2;
+  const out = new Uint8Array(44 + bytes), v = new DataView(out.buffer);
+  const tag = (o: number, t: string) => { for (let i = 0; i < t.length; i++) out[o + i] = t.charCodeAt(i); };
+  tag(0, "RIFF"); v.setUint32(4, 36 + bytes, true); tag(8, "WAVE"); tag(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, "data"); v.setUint32(40, bytes, true);
+  return out;
 }
 
 export interface TestInput { config?: unknown; apiKey?: unknown; credentialId?: unknown; feature?: unknown }
@@ -246,7 +262,11 @@ export async function testConnection(userId: string, input: TestInput, d: Deps):
   const env = d.env ?? process.env;
   if (d.workspaceAllows === false) return fail(403, "byok_blocked", "Your workspace administrator has turned off user-managed AI providers.");
   if (!probeAllowed(userId, (d.now ?? Date.now)())) return fail(429, "too_many_tests", "Too many connection tests. Wait a minute and try again.");
-  const checked = chatConfig(input.config, env);
+  /* the kind of connection under test: the feature's when it names one, else the chosen provider's */
+  const named = typeof input.feature === "string" && isFeature(input.feature) ? providerKindOf(input.feature) : undefined;
+  const given = providerById(String(((input.config ?? {}) as { provider?: unknown }).provider ?? ""));
+  const kind: ProviderKind = named ?? given?.kind ?? "chat";
+  const checked = configFor(kind, input.config, env);
   if (!checked.ok) return fail(422, "invalid_config", "Some settings need attention.", checked.errors);
   const config = checked.config, def = providerById(config.provider)!;
   const secret = await secretFor(userId, input, config.provider, d);
@@ -263,20 +283,37 @@ export async function testConnection(userId: string, input: TestInput, d: Deps):
       return { status: r.status, headers: r.headers, text };
     } finally { clearTimeout(t); }
   };
+  /* speech: one second of silence, sent the way the Studio sends a recording — the cheapest request that proves address, key, model and endpoint */
+  const askStt = async () => {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 30_000);
+    const wav = silentWav(1);
+    const opts = { allowPrivate: allowPrivateFrom(env), maxResponseBytes: 1024 * 1024 };
+    try {
+      const r = def.protocol === "google-stt"
+        ? await fetcher(`${config.base}/speech:recognize`, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": secret.key }, body: JSON.stringify({ config: { languageCode: "en-US", model: config.model }, audio: { content: Buffer.from(wav).toString("base64") } }), signal: ctrl.signal }, opts)
+        : await fetcher(`${config.base}/audio/transcriptions`, { method: "POST", headers: { ...headersFor(def, config.extra), authorization: `Bearer ${secret.key}` }, body: (() => { const f = new FormData(); f.append("file", new Blob([wav as unknown as BlobPart], { type: "audio/wav" }), "probe.wav"); f.append("model", config.model); f.append("response_format", "json"); return f; })(), signal: ctrl.signal }, opts);
+      return { status: r.status, headers: r.headers, text: await r.text() };
+    } finally { clearTimeout(t); }
+  };
   let record: TestRecord & { jsonMode?: boolean };
   const at = new Date((d.now ?? Date.now)()).toISOString();
   try {
-    const a = await ask({});
+    const a = kind === "stt" ? await askStt() : await ask({});
+    if (kind === "stt" && def.protocol === "google-stt" && a.status === 400 && /API key not valid|API_KEY_INVALID/i.test(a.text)) a.status = 401; /* Google answers a bad key with 400 */
     if (a.status >= 200 && a.status < 300) {
-      let json: boolean | undefined;
-      if (input.feature === "intelligent" || input.feature === undefined) {
-        const b = await ask({ response_format: { type: "json_object" }, messages: [{ role: "user", content: 'Reply with a JSON object: {"ok": true}' }] }).catch(() => null);
-        json = !!b && b.status >= 200 && b.status < 300;
+      if (kind === "stt") {
+        record = { at, ok: true, code: "ok", message: "The connection works: a one-second silent test recording was transcribed.", latencyMs: (d.now ?? Date.now)() - started };
+      } else {
+        let json: boolean | undefined;
+        if (input.feature === "intelligent" || input.feature === undefined) {
+          const b = await ask({ response_format: { type: "json_object" }, messages: [{ role: "user", content: 'Reply with a JSON object: {"ok": true}' }] }).catch(() => null);
+          json = !!b && b.status >= 200 && b.status < 300;
+        }
+        record = { at, ok: true, code: "ok", message: json === false ? "The connection works. This model did not accept JSON mode, so structured Intelligent Mode answers may be less reliable." : "The connection works.", latencyMs: (d.now ?? Date.now)() - started, ...(json === undefined ? {} : { jsonMode: json }) };
       }
-      record = { at, ok: true, code: "ok", message: json === false ? "The connection works. This model did not accept JSON mode, so structured Intelligent Mode answers may be less reliable." : "The connection works.", latencyMs: (d.now ?? Date.now)() - started, ...(json === undefined ? {} : { jsonMode: json }) };
     } else {
       const e = classifyResponse(a.status, a.headers, a.text);
-      const s = SAY[e.kind];
+      const s = kind === "stt" && e.kind === "forbidden" && def.protocol === "google-stt" ? { code: "forbidden", message: "Google refused this key for Speech-to-Text. Enable the Cloud Speech-to-Text API for the key's project, and check the key is not restricted away from it." } : SAY[e.kind];
       record = { at, ok: false, code: s.code, message: s.message, latencyMs: (d.now ?? Date.now)() - started };
     }
   } catch (e) {
@@ -299,9 +336,9 @@ export async function modelsFor(userId: string, input: { provider?: unknown; bas
   const env = d.env ?? process.env;
   if (d.workspaceAllows === false) return fail(403, "byok_blocked", "Your workspace administrator has turned off user-managed AI providers.");
   const def = typeof input.provider === "string" ? providerById(input.provider) : undefined;
-  if (!def || def.kind !== "chat") return fail(422, "invalid_provider", "Choose a provider from the list.", { provider: "Choose a provider from the list." });
+  if (!def) return fail(422, "invalid_provider", "Choose a provider from the list.", { provider: "Choose a provider from the list." });
   /* models are listed before a model is chosen: validate the address and identifiers with a placeholder model */
-  const checked = chatConfig({ provider: def.id, base: input.base, model: "placeholder", extra: input.extra }, env);
+  const checked = configFor(def.kind, { provider: def.id, base: input.base, model: "placeholder", extra: input.extra }, env);
   if (!checked.ok) { const { model: _m, ...rest } = checked.errors; if (Object.keys(rest).length) return fail(422, "invalid_config", "Some settings need attention.", rest as FieldErrors); }
   const base = checked.ok ? checked.config.base : def.base ?? "";
   const extra = checked.ok ? checked.config.extra : {};

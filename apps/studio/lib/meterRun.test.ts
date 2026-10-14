@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Meter, MemoryMeterStore, type MeterContext } from "@rescript/billing";
-import { currentAiScope, reportUsage, type ChatScope } from "@rescript/ai";
+import { currentAiScope, reportUsage, type ChatScope, type SttScope } from "@rescript/ai";
 import { meteredCore, type RunDeps } from "./meterRun.ts";
 import { setAiSettingsLoader } from "./aiPolicy.ts";
 import type { Resolution } from "./byok/resolve.ts";
@@ -11,7 +11,7 @@ const ctx = (over: Partial<MeterContext> = {}): MeterContext => ({ customerId: "
 const spec = () => ({ eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 2000, outputUnits: 1000, metadata: { operation: "copilot_turn" } });
 const scopeOf = (over: Partial<ChatScope> = {}): ChatScope => ({ source: "user", provider: "openai", base: "https://api.openai.com/v1", key: "sk-proj-USERKEYUSERKEYUSERKEY", model: "gpt-4.1", fallbacks: [], ...over });
 const PLATFORM_TARGET = { provider: "platform", base: "https://platform.example/v1", key: "platform-key", model: "pm", platform: true as const };
-const userRes = (over: Partial<ChatScope> = {}): Resolution => ({ kind: "user", source: "user", scope: scopeOf(over), credentialId: "c", settingUpdatedAt: "", skippedFallbacks: [] });
+const userRes = (over: Partial<ChatScope> = {}): Resolution => ({ kind: "user", source: "user", scopeKind: "chat", scope: scopeOf(over), credentialId: "c", settingUpdatedAt: "", skippedFallbacks: [] });
 const deps = (r: Resolution | ((ask: { userId?: string | null }) => Resolution), calls: unknown[] = []): RunDeps => ({ connectionFor: async (ask) => { calls.push(ask); return typeof r === "function" ? r(ask) : r; }, allowPrivate: () => false });
 const mk = (balance = 10) => { const store = new MemoryMeterStore(); const meter = new Meter(store, { seedBalance: balance, cacheMs: 0 }); return { store, meter }; };
 const walletOf = async (meter: Meter, c = ctx()) => (await meter.walletFor(c, true))!;
@@ -159,4 +159,95 @@ test("no report, no record: a call that never reached a provider leaves no usage
   const r = await meteredCore(deps(userRes({ fallbacks: [PLATFORM_TARGET] })), meter, ctx(), opts, async () => null);
   assert.ok(r.ok && r.event === null); assert.equal(store.usage.length, 0);
   assert.equal([...store.reservations.values()].filter((x) => x.status === "held").length, 0);
+});
+
+
+/* ------------------------------------------------------------------ speech-to-text */
+
+const sttScopeOf = (over: Partial<SttScope> = {}): SttScope => ({ source: "user", provider: "openai-stt", base: "https://api.openai.com/v1", key: "sk-proj-STTKEYSTTKEYSTTKEY", model: "whisper-1", fallbacks: [], ...over });
+const sttRes = (over: Partial<SttScope> = {}): Resolution => ({ kind: "user", source: "user", scopeKind: "stt", scope: sttScopeOf(over), credentialId: "c", settingUpdatedAt: "", skippedFallbacks: [] });
+const sttSpec = () => ({ eventType: "SPEECH_TO_TEXT_MINUTE", provider: "openai-compatible", service: "stt", model: "whisper-1", quantity: 2, metadata: { operation: "intelligent_voice", seconds: 120 } });
+const sttOpts = { operation: "intelligent_voice", kind: "stt" as const, reserve: sttSpec, tolerateMeterOutage: true };
+const heard = (over: Record<string, unknown> = {}) => reportUsage({ kind: "stt", provider: "openai-compatible", model: "whisper-1", seconds: 90, requests: 1, estimated: false, source: "user", providerId: "openai-stt", ...over } as never);
+
+test("STT, platform path: a hold for the minutes, settled from what the provider reported", async () => {
+  const { meter, store } = mk();
+  const r = await meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), sttOpts, async () => { heard({ source: undefined, providerId: undefined, seconds: 120 }); return "heard"; });
+  assert.ok(r.ok && r.value === "heard" && r.event);
+  assert.equal(r.event!.eventType, "SPEECH_TO_TEXT_MINUTE"); assert.equal(r.event!.quantity, 2);
+  assert.equal(store.usage.length, 1);
+});
+
+test("STT, own provider: runs inside the STT scope (not a chat one), costs the wallet nothing, and is recorded in minutes at zero charge under its provider", async () => {
+  const { meter, store } = mk(0);
+  let seen: { stt?: SttScope; chat?: ChatScope } = {};
+  const r = await meteredCore(deps(sttRes()), meter, ctx(), sttOpts, async () => { seen = { stt: currentAiScope()?.stt, chat: currentAiScope()?.chat }; heard(); return 7; });
+  assert.ok(r.ok && r.value === 7, "an empty wallet does not stop a user's own provider");
+  assert.equal(seen.stt?.key, "sk-proj-STTKEYSTTKEYSTTKEY"); assert.equal(seen.chat, undefined, "the chat provider is not in scope for a transcription");
+  assert.equal(store.usage.length, 1);
+  const e = store.usage[0]!;
+  assert.equal(e.eventType, "AI_REQUEST_BYOK"); assert.equal(e.customerCharge, 0); assert.equal(e.walletId, null);
+  assert.equal(e.provider, "openai-stt"); assert.equal(e.unit, "minute"); assert.equal(e.quantity, 1.5);
+  assert.equal(e.metadata.byok, true); assert.equal(e.metadata.operation, "intelligent_voice"); assert.equal(e.metadata.seconds, 90);
+  assert.equal(JSON.stringify(e).includes("STTKEY"), false);
+  assert.equal(currentAiScope(), undefined);
+});
+
+test("STT is not a language model: a project that runs INTERNAL still transcribes; what a project can switch off (the feature list, an unreadable setting) still stops it", async () => {
+  const { meter } = mk();
+  try {
+    setAiSettingsLoader(async () => ({ mode: "internal", disabled: [] }));
+    const a = await meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), sttOpts, async () => { heard({ source: undefined }); return 1; });
+    assert.ok(a.ok, "transcription is not sent to a language model");
+    const chatOff = await meteredCore(deps(userRes()), meter, ctx(), opts, async () => "x");
+    assert.equal(chatOff.ok, false, "while chat is refused in the same project");
+    setAiSettingsLoader(async () => ({ mode: "cloud", disabled: ["intelligent_voice"] }));
+    const b = await meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), sttOpts, async () => 2);
+    assert.equal(b.ok, false); assert.equal((b as { why?: string }).why, "feature_off");
+    setAiSettingsLoader(async () => null);
+    const c = await meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), sttOpts, async () => 3);
+    assert.equal(c.ok, false); assert.equal((c as { why?: string }).why, "unreadable");
+  } finally { setAiSettingsLoader(async () => OPEN); }
+});
+
+test("STT, project that chose the user's provider: the choice reaches the resolver; a refusal stops everything and never uses the platform", async () => {
+  const { meter, store } = mk();
+  setAiSettingsLoader(async () => ({ ...OPEN, source: "user" as const }));
+  try {
+    const calls: { source?: string; sourceKnown?: boolean; operation?: string }[] = [];
+    let ran = false;
+    const r = await meteredCore(deps({ kind: "refused", code: "no_connection", message: "Add your speech key.", source: "project" }, calls), meter, ctx(), sttOpts, async () => { ran = true; return 1; });
+    assert.equal(r.ok, false); assert.equal((r as { code: string }).code, "no_connection"); assert.equal(ran, false);
+    assert.deepEqual(calls.map((c) => [c.source, c.sourceKnown, c.operation]), [["user", true, "intelligent_voice"]]);
+    assert.equal(store.usage.length, 0); assert.equal(store.reservations.size, 0);
+  } finally { setAiSettingsLoader(async () => OPEN); }
+});
+
+test("STT backstop: the platform answers only after the user's provider failed, is billed as the platform's, and the rest of the hold comes back", async () => {
+  const { meter, store } = mk();
+  const platformStt = { provider: "platform", base: "https://stt.example/v1", key: "platform-stt", model: "whisper-1", platform: true as const };
+  const withBackstop = sttRes({ fallbacks: [platformStt] });
+  const a = await meteredCore(deps(withBackstop), meter, ctx(), sttOpts, async () => { heard(); return "mine"; });
+  assert.ok(a.ok); assert.equal((await walletOf(meter)).balance, 10); assert.equal([...store.reservations.values()].filter((x) => x.status === "held").length, 0);
+  const b = await meteredCore(deps(withBackstop), meter, ctx(), sttOpts, async () => { heard({ source: "platform", providerId: "platform", usedFallback: true, seconds: 60 }); return "platform"; });
+  assert.ok(b.ok && b.event); assert.equal(b.event!.eventType, "SPEECH_TO_TEXT_MINUTE"); assert.equal(b.event!.metadata.source, "platform_fallback");
+  /* unfunded: the backstop is not offered for that call, the user's own provider still runs */
+  const { meter: poor } = mk(0);
+  let seen: SttScope | undefined;
+  const c = await meteredCore(deps(withBackstop), poor, ctx(), sttOpts, async () => { seen = currentAiScope()?.stt; heard(); return "ok"; });
+  assert.ok(c.ok); assert.equal(seen!.fallbacks.some((f) => f.platform), false, "never an unpaid platform call");
+});
+
+test("STT: a billing outage runs the platform call unmetered (a recording is not lost to it); chat would not", async () => {
+  const { meter } = mk();
+  meter.reserve = async () => { throw new Error("db down"); };
+  const a = await meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), sttOpts, async () => "recording kept");
+  assert.ok(a.ok && a.value === "recording kept" && a.event === null);
+  await assert.rejects(() => meteredCore(deps({ kind: "platform", reason: "default" }), meter, ctx(), opts, async () => "x"), /db down/);
+});
+
+test("a speech call that resolves a chat connection (or the reverse) is a programming error, never a silent use of the wrong provider", async () => {
+  const { meter } = mk();
+  await assert.rejects(() => meteredCore(deps(userRes()), meter, ctx(), sttOpts, async () => 1), /resolved a chat connection/);
+  await assert.rejects(() => meteredCore(deps(sttRes()), meter, ctx(), opts, async () => 1), /resolved a stt connection/);
 });

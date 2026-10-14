@@ -27,7 +27,10 @@ test("meteredAi releases the hold when the provider call throws, and settles onl
   assert.match(body, /catch \(e\) \{\s*await meter\.release\(hold\)/, "a throw gives the platform's hold back");
   assert.match(body, /catch \(e\) \{\s*if \(holdOk\) await meter\.release\(holdOk\)/, "and the backstop hold of an own-provider call");
   assert.match(body, /meter\.settle\(hold,/, "a return is settled with the reported usage");
-  assert.ok(body.indexOf("meter.settle(") < body.indexOf("catch (e)"), "settle is inside the try, release in the catch");
+  const settleAt = body.indexOf("meter.settle(");
+  assert.ok(settleAt > 0 && body.indexOf("catch (e)", settleAt) > settleAt, "settle is inside the try, release in the catch");
+  /* the only other catch is around the reservation itself, and it rethrows unless the caller opted into running unmetered (a recording must not be lost) */
+  assert.match(body, /try \{ hold = await meter\.reserve\(ctx, o\.reserve\(\)\); \}\s*catch \(e\) \{\s*if \(!o\.tolerateMeterOutage\) throw e;/);
 });
 
 test("the copilot route reaches the provider only inside meteredAi, and skips items already built", () => {

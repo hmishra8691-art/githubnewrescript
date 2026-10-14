@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { mediaEnvironment } from "@/lib/metering";
 import { mediaDbOrResponse, projectStt } from "@/lib/mediaRoute";
-import { transcribe, sttConfigured, sttProviderName, sttUnavailableReason } from "@rescript/ai";
+import { transcribe, sttProviderName } from "@rescript/ai";
+import { sttPrecheck } from "@/lib/byok/connect";
 import { runTranscription, transcriptFor, queueTranscript, resetTranscript, stageLogger, TRANSCRIPT_SAY, transcriptPending, MediaError, type TranscriptStatus } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
@@ -96,17 +97,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      */
     await resetTranscript(db, mediaId);
 
-    if (!sttConfigured()) {
-      /*
-       * The reason, not the fact. "Transcription is not configured" is true
-       * of an installation whose AI provider is Anthropic — which has chat
-       * and no speech-to-text — and is not a sentence anybody could act on,
-       * because everything about the AI configuration looks correct.
-       */
-      return NextResponse.json({
-        error: sttUnavailableReason() ?? "transcription is not configured on this installation",
-      }, { status: 501 });
-    }
+    /*
+     * Whose provider transcribes: the acting researcher's own speech provider when they (or the
+     * project) chose one, else the platform's. The reason, not the fact: "Transcription is not
+     * configured" is true of an installation whose AI provider is Anthropic — which has chat and no
+     * speech-to-text — and a refused own-provider says what to fix, never silently using the platform's.
+     */
+    const ready = await sttPrecheck(gate.user, params.id, "transcribe_question");
+    if (!ready.ok) return NextResponse.json({ error: ready.error, code: ready.code, ...(ready.why ? { why: ready.why, source: ready.source } : {}) }, { status: ready.status });
 
     const language = typeof body.language === "string" && body.language.trim() ? body.language.trim() : undefined;
     const outcome = await runTranscription(db, mediaId, {
@@ -115,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          and a pilot interview's clip is charged as the pilot it is */
       metered: projectStt(gate, "transcribe_question", await mediaEnvironment(mediaId)),
       language,
-      provider: sttProviderName() ?? undefined,
+      provider: ready.via === "platform" ? sttProviderName() ?? undefined : undefined,
       log: stageLogger(`survey:${params.id}`),
     });
 

@@ -3,7 +3,7 @@ import { isFailure, requireEditRight } from "@/lib/guard";
 import { getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { confirmUpload, queueTranscript, MediaError, MEDIA_KINDS, stageLogger, type MediaKind } from "@rescript/media";
-import { sttConfigured, sttUnavailableReason } from "@rescript/ai";
+import { sttPrecheck } from "@/lib/byok/connect";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -70,12 +70,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     let transcriptStatus: string | null = null;
     let transcriptUnavailable: string | null = null;
     if (MEDIA_KINDS[owned.kind as MediaKind]?.transcribed) {
-      if (sttConfigured()) {
+      /* the acting researcher's own speech provider counts: a job is queued if THEY could run it, and the reason is theirs when they could not */
+      const ready = await sttPrecheck(gate.user, params.id, "transcribe_question");
+      if (ready.ok) {
         const job = await queueTranscript(db, mediaId, params.id);
         transcriptStatus = job.status;
         log("transcription_queued", { mediaId, jobId: job.id });
       } else {
-        transcriptUnavailable = sttUnavailableReason() ?? "No transcription provider is configured on this installation.";
+        transcriptUnavailable = ready.error || "No transcription provider is configured on this installation.";
         log("transcription_failed", { mediaId, at: "not_configured", error: transcriptUnavailable });
       }
     }

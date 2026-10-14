@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { featureOf, needsOf } from "./features.ts";
+import { featureOf, isSttOperation, needsOf } from "./features.ts";
 import { MemoryAiStore } from "./store.ts";
 import { resolveConnection, viewOfResolution } from "./resolve.ts";
 import { saveSetting } from "./service.ts";
@@ -97,4 +97,37 @@ test("the routes that asked 'is a model configured?' now ask 'is there an AI for
     assert.equal(/\baiConfigured\(\)/.test(src.replace(/aiReadyFor[\s\S]*?\n/g, "")) && !/aiReadyFor\(/.test(src), false, f);
     assert.match(src, /aiReadyFor\(/, f);
   }
+});
+
+
+/* ------------------------------------------------------------------ speech-to-text */
+
+test("speech operations map to the speech setting; the English reading of a spoken instruction belongs to Intelligent Mode", () => {
+  assert.equal(featureOf("intelligent_voice"), "stt"); assert.equal(featureOf("transcribe_question"), "stt");
+  assert.ok(isSttOperation("intelligent_voice") && isSttOperation("transcribe_question") && !isSttOperation("copilot_turn"));
+  assert.equal(featureOf("intelligent_voice_normalise"), "intelligent");
+  assert.deepEqual(needsOf("intelligent_voice"), []);
+});
+
+test("structural: every Studio speech route asks the one precheck, and nothing else asks the platform whether it can transcribe", () => {
+  for (const f of ["app/api/ai/transcribe/route.ts", "app/api/surveys/[id]/media/transcript/route.ts", "app/api/surveys/[id]/media/confirm/route.ts"]) {
+    const src = read(f);
+    assert.match(src, /sttPrecheck\(/, f);
+    assert.equal(/sttConfigured\(|sttUnavailableReason\(/.test(src), false, `${f} asks the platform directly and would ignore a user's own provider`);
+  }
+  const voice = read("app/api/ai/transcribe/route.ts");
+  assert.ok(voice.indexOf("sttPrecheck(") < voice.indexOf("meteredSttCall("), "whose provider, then money");
+  assert.match(voice, /fakeSeam = ready\.via === "platform"/, "the fake provider's test seam never applies to a user's own provider");
+  assert.equal(/meter\.reserve\(/.test(voice), false);
+  /* the one door: the speech meter is the shared core, not a second reservation path */
+  const m = read("lib/metering.ts");
+  const body = m.slice(m.indexOf("export async function meteredSttCall"), m.indexOf("export async function meteredStt<"));
+  assert.match(body, /meteredCore\(runDeps/); assert.equal(/meter\.reserve\(/.test(body), false);
+  assert.match(read("lib/mediaRoute.ts"), /meteredStt\(getMeter\(\)/, "the media pipeline's meter is that door");
+});
+
+test("the speech provider that transcribed is recorded with the transcript, never a key", () => {
+  const route = read("app/api/surveys/[id]/media/transcript/route.ts");
+  assert.match(route, /provider: ready\.via === "platform"/);
+  assert.match(readFileSync(new URL("../../../../packages/media/src/runner.ts", import.meta.url), "utf8"), /provider: result\.provider \?\? deps\.provider \?\? null/);
 });

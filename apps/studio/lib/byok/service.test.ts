@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { MemoryAiStore } from "./store.ts";
-import { overview, saveCredential, saveSetting, removeCredential, testConnection, modelsFor, probeAllowed, cleanKey, type Deps } from "./service.ts";
+import { overview, saveCredential, saveSetting, removeCredential, testConnection, modelsFor, probeAllowed, cleanKey, silentWav, type Deps } from "./service.ts";
 import { resolveConnection } from "./resolve.ts";
 
 const env: Record<string, string | undefined> = { AI_CREDENTIAL_KEY: randomBytes(32).toString("hex") };
@@ -21,7 +21,8 @@ test("saving user-managed AI seals the key, masks it, and returns neither — an
   assert.equal(leaks(o, KEY, "ALICESECRET"), false, "no secret, no ciphertext in what a screen is told");
   const f = o.features.find((x) => x.feature === "intelligent")!;
   assert.equal(f.mode, "user"); assert.equal(f.credential!.mask, "sk-proj-••••••••7890"); assert.equal(f.credential!.label, "Work key");
-  assert.equal(o.features.find((x) => x.feature === "stt")!.supported, false);
+  assert.equal(o.features.find((x) => x.feature === "stt")!.supported, true);
+  assert.equal(o.features.find((x) => x.feature === "translation")!.supported, false, "translation arrives in its own phase");
   const res = await resolveConnection({ userId: ALICE, feature: "intelligent", store: d.store, env });
   assert.equal(res.kind, "user"); assert.equal((res as { scope: { key: string } }).scope.key, KEY);
 });
@@ -31,7 +32,7 @@ test("refusals are explicit: no vault key, workspace blocked, unsupported featur
   const code = async (p: ReturnType<typeof s>) => { const r = await p; return r.ok ? "ok" : `${r.status}:${r.code}`; };
   assert.equal(await code(s({}, mk({ env: {} }))), "503:vault_unavailable");
   assert.equal(await code(s({}, mk({ workspaceAllows: false }))), "403:byok_blocked");
-  assert.equal(await code(s({ feature: "stt" }, mk())), "422:unsupported_feature");
+  assert.equal(await code(s({ feature: "translation" }, mk())), "422:unsupported_feature");
   assert.equal(await code(s({ feature: "nope" }, mk())), "422:invalid_feature");
   assert.equal(await code(s({ mode: "maybe" }, mk())), "422:invalid_mode");
   assert.equal(await code(s({ config: { provider: "openai", model: "bad model!" } }, mk())), "422:invalid_config");
@@ -174,4 +175,92 @@ test("model discovery: the provider's list for this key; an unlisting provider y
 test("key cleaning", () => {
   assert.equal(cleanKey("  sk-abc12345  "), "sk-abc12345"); assert.equal(cleanKey("Bearer sk-abc12345"), "sk-abc12345");
   for (const bad of ["short", "has a space1234", "tab\tkey12345", "línea-ñ-12345", 42, null, "x".repeat(401)]) assert.equal(cleanKey(bad), null);
+});
+
+
+/* ------------------------------------------------------------------ speech-to-text */
+
+const DAVE = "dddddddd-0000-0000-0000-000000000004", ERIN = "eeeeeeee-0000-0000-0000-000000000005", FRANK = "ffffffff-0000-0000-0000-000000000006", GINA = "99999999-0000-0000-0000-000000000007";
+const sttCfg = { provider: "openai-stt", model: "whisper-1", language: "en-GB" };
+type Call = { url: string; init: RequestInit };
+const capture = (status: number, body: unknown, calls: Call[]): typeof fetch => (async (url: string | URL, init: RequestInit = {}) => { calls.push({ url: String(url), init }); return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json" } }); }) as never;
+
+test("STT: the OpenAI key saved for chat serves OpenAI speech (one vendor family); the speech setting is saved, resolved and listed as its own kind", async () => {
+  const d = mk();
+  await saveSetting(ALICE, { feature: "intelligent", mode: "user", config: cfg, apiKey: KEY }, d);
+  const saved = (await d.store.listCredentials(ALICE))[0];
+  assert.equal((await saveSetting(ALICE, { feature: "stt", mode: "user", config: sttCfg }, d)).ok, false, "a saved key is chosen explicitly, never picked up silently");
+  const r = await saveSetting(ALICE, { feature: "stt", mode: "user", config: sttCfg, credentialId: saved.id }, d); // the user picks the OpenAI key they already saved
+  assert.ok(r.ok, JSON.stringify(r)); assert.equal(leaks(r, KEY), false);
+  assert.equal((await d.store.listCredentials(ALICE)).length, 1, "one key, two features");
+  const o = await overview(ALICE, d);
+  const f = o.features.find((x) => x.feature === "stt")!;
+  assert.deepEqual([f.kind, f.mode, f.supported, (f.config as { provider: string; language: string }).provider, (f.config as { language: string }).language], ["stt", "user", true, "openai-stt", "en-GB"]);
+  assert.deepEqual(o.sttCatalog.map((p) => p.id), ["openai-stt", "groq-stt", "openai-compatible-stt", "google-stt"]);
+  assert.ok(o.catalog.every((p) => p.kind === "chat"));
+  const res = await resolveConnection({ userId: ALICE, feature: "stt", store: d.store, env });
+  assert.equal(res.kind, "user"); assert.equal((res as { scopeKind: string }).scopeKind, "stt"); assert.equal((res as { scope: { key: string } }).scope.key, KEY);
+  /* the chat setting is untouched by saving the speech one */
+  assert.equal((await resolveConnection({ userId: ALICE, feature: "intelligent", store: d.store, env })).kind, "user");
+});
+
+test("STT: kinds are enforced on save — a chat provider cannot be a speech provider, nor the reverse; a key is not carried across vendors", async () => {
+  const d = mk();
+  const code = async (p: ReturnType<typeof saveSetting>) => { const r = await p; return r.ok ? "ok" : `${r.status}:${r.code}`; };
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { provider: "openai", model: "whisper-1" }, apiKey: KEY }, d)), "422:invalid_config");
+  assert.equal(await code(saveSetting(DAVE, { feature: "intelligent", mode: "user", config: sttCfg, apiKey: KEY }, d)), "422:invalid_config");
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { ...sttCfg, language: "english please" }, apiKey: KEY }, d)), "422:invalid_config");
+  await saveSetting(DAVE, { feature: "intelligent", mode: "user", config: cfg, apiKey: KEY }, d);
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { provider: "groq-stt", model: "whisper-large-v3" } }, d)), "422:key_required", "the saved OpenAI key is not offered to Groq");
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { provider: "groq-stt", model: "whisper-large-v3" }, credentialId: (await d.store.listCredentials(DAVE))[0].id }, d)), "422:provider_mismatch");
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { provider: "google-stt", model: "latest_short" }, apiKey: "AIzaSyGOOGLEKEYGOOGLEKEY" }, d)), "ok");
+  /* a speech fallback must be a speech provider, with its own key of the right family */
+  const fb = (await d.store.listCredentials(DAVE)).find((c) => c.provider === "openai")!;
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: sttCfg, credentialId: fb.id, fallbacks: [{ credentialId: fb.id, config: { provider: "openai", model: "gpt-4.1" } }] }, d)), "422:invalid_fallback");
+  assert.equal(await code(saveSetting(DAVE, { feature: "stt", mode: "user", config: { provider: "google-stt", model: "latest_short" }, credentialId: (await d.store.listCredentials(DAVE)).find((c) => c.provider === "google-stt")!.id, fallbacks: [{ credentialId: fb.id, config: { provider: "openai-stt", model: "whisper-1" } }] }, d)), "ok", "an OpenAI speech fallback behind Google, on the OpenAI key");
+});
+
+test("STT test connection (OpenAI-compatible): one second of silence, the user's key, the real endpoint; the provider's words and the key never come back", async () => {
+  const calls: Call[] = [];
+  const d = mk({ fetcher: capture(200, { text: "" }, calls) });
+  const r = await testConnection(ERIN, { feature: "stt", config: { provider: "openai-stt", model: "whisper-1", extra: { projectId: "proj_abc123" } }, apiKey: KEY }, d);
+  assert.ok(r.ok && r.result.ok); assert.match(r.result.message, /silent test recording was transcribed/);
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, "https://api.openai.com/v1/audio/transcriptions");
+  const h = calls[0].init.headers as Record<string, string>; assert.equal(h.authorization, `Bearer ${KEY}`); assert.equal(h["openai-project"], "proj_abc123");
+  const form = calls[0].init.body as FormData; assert.equal(form.get("model"), "whisper-1"); const file = form.get("file") as File; assert.equal(file.type, "audio/wav"); assert.ok(file.size > 8000 && file.size < 20000);
+  assert.equal(leaks(r, KEY), false);
+  const fail = await testConnection(ERIN, { feature: "stt", config: { provider: "openai-stt", model: "whisper-1" }, apiKey: KEY }, mk({ fetcher: capture(401, { error: { message: `Incorrect API key provided: ${KEY}` } }, []) }));
+  assert.ok(fail.ok && !fail.result.ok); assert.equal(fail.result.code, "auth"); assert.equal(leaks(fail, KEY, "Incorrect API key"), false);
+  const gone = await testConnection(ERIN, { feature: "stt", config: { provider: "openai-stt", model: "whisper-9" }, apiKey: KEY }, mk({ fetcher: capture(404, { error: { message: "model not found" } }, []) }));
+  assert.ok(gone.ok && !gone.result.ok); assert.equal(gone.result.code, "model_not_found");
+});
+
+test("STT test connection (Google): its endpoint, its header, its own sentences for a bad key and a disabled API", async () => {
+  const calls: Call[] = [];
+  const g = { provider: "google-stt", model: "latest_short" };
+  const ok = await testConnection(FRANK, { feature: "stt", config: g, apiKey: "AIzaSyGOOGLEKEYGOOGLEKEY" }, mk({ fetcher: capture(200, {}, calls) }));
+  assert.ok(ok.ok && ok.result.ok);
+  assert.equal(calls[0].url, "https://speech.googleapis.com/v1/speech:recognize");
+  const h = calls[0].init.headers as Record<string, string>; assert.equal(h["x-goog-api-key"], "AIzaSyGOOGLEKEYGOOGLEKEY"); assert.equal(h.authorization, undefined);
+  const body = JSON.parse(String(calls[0].init.body)); assert.deepEqual([body.config.languageCode, body.config.model], ["en-US", "latest_short"]); assert.ok(body.audio.content.length > 1000);
+  const bad = await testConnection(FRANK, { feature: "stt", config: g, apiKey: "AIzaSyGOOGLEKEYGOOGLEKEY" }, mk({ fetcher: capture(400, { error: { code: 400, message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT" } }, []) }));
+  assert.ok(bad.ok && !bad.result.ok); assert.equal(bad.result.code, "auth");
+  const off = await testConnection(FRANK, { feature: "stt", config: g, apiKey: "AIzaSyGOOGLEKEYGOOGLEKEY" }, mk({ fetcher: capture(403, { error: { message: "Cloud Speech-to-Text API has not been used in project 1" } }, []) }));
+  assert.ok(off.ok && !off.result.ok); assert.match(off.result.message, /Enable the Cloud Speech-to-Text API/);
+});
+
+test("STT model discovery: only what can transcribe; Google lists none and says to enter the model", async () => {
+  const calls: Call[] = [];
+  const d = mk({ fetcher: capture(200, { data: [{ id: "gpt-4.1" }, { id: "whisper-1" }, { id: "gpt-4o-mini-transcribe" }, { id: "text-embedding-3-small" }] }, calls) });
+  const r = await modelsFor(GINA, { provider: "openai-stt", apiKey: KEY }, d);
+  assert.ok(r.ok); if (r.ok) assert.deepEqual(r.models.map((m) => m.id).sort(), ["gpt-4o-mini-transcribe", "whisper-1"]);
+  const g = await modelsFor(GINA, { provider: "google-stt", apiKey: "AIzaSyGOOGLEKEYGOOGLEKEY" }, mk({ fetcher: capture(200, {}, []) }));
+  assert.ok(g.ok); if (g.ok) { assert.equal(g.discovered, false); assert.equal(g.reason, "unsupported"); assert.ok(g.suggestions.some((m) => m.id === "latest_long")); }
+});
+
+test("the silent probe recording is a valid WAV", () => {
+  const w = silentWav(1), v = new DataView(w.buffer);
+  assert.equal(String.fromCharCode(...w.slice(0, 4)), "RIFF"); assert.equal(String.fromCharCode(...w.slice(8, 12)), "WAVE");
+  assert.equal(v.getUint32(4, true), w.length - 8); assert.equal(v.getUint32(40, true), w.length - 44); assert.equal(v.getUint32(24, true), 8000);
+  assert.ok(w.slice(44).every((b) => b === 0));
 });

@@ -1,4 +1,4 @@
-import { headersFor, platformTarget, providerById, validateConnection, type Capability, type ChatScope, type ConnectionConfig, type Target } from "@rescript/ai";
+import { headersFor, platformSttTarget, platformTarget, providerById, sameKeyFamily, validateConnection, type Capability, type ChatScope, type ConnectionConfig, type ProviderKind, type SttScope, type SttTarget, type Target } from "@rescript/ai";
 import { openSecret, vaultStatus, VaultError } from "./vault.ts";
 import type { AiFeature, AiStore, CredentialRow, SettingRow } from "./store.ts";
 
@@ -42,7 +42,8 @@ export type RefusalCode =
 
 export type Resolution =
   | { kind: "platform"; reason: "project_platform" | "user_platform" | "default" | "hybrid_capability" }
-  | { kind: "user"; source: "user" | "project"; scope: ChatScope; credentialId: string; settingUpdatedAt: string; skippedFallbacks: string[] }
+  | { kind: "user"; source: "user" | "project"; scopeKind: "chat"; scope: ChatScope; credentialId: string; settingUpdatedAt: string; skippedFallbacks: string[] }
+  | { kind: "user"; source: "user" | "project"; scopeKind: "stt"; scope: SttScope; credentialId: string; settingUpdatedAt: string; skippedFallbacks: string[] }
   | { kind: "refused"; code: RefusalCode; message: string; source: "user" | "project" };
 
 export interface ResolveInput {
@@ -58,8 +59,11 @@ export interface ResolveInput {
   env?: Record<string, string | undefined>;
 }
 
-/** the features whose user-managed connection is implemented (chat now; STT and translation follow in their own phases) */
-export const SUPPORTED_FEATURES: AiFeature[] = ["intelligent", "additional"];
+/** the features whose user-managed connection is implemented (chat and speech-to-text; translation follows in its own phase) */
+export const SUPPORTED_FEATURES: AiFeature[] = ["intelligent", "additional", "stt"];
+
+/** which kind of provider a feature talks to */
+export const providerKindOf = (feature: AiFeature): ProviderKind => (feature === "stt" ? "stt" : feature === "translation" ? "translate" : "chat");
 
 const LABEL: Record<AiFeature, string> = { intelligent: "Intelligent Mode", stt: "speech-to-text", translation: "translation", additional: "the other AI features" };
 const MAX_FALLBACKS = 3;
@@ -69,13 +73,14 @@ export const allowPrivateFrom = (env: Record<string, string | undefined> = proce
 
 function refuse(code: RefusalCode, message: string, source: "user" | "project"): Resolution { return { kind: "refused", code, message, source }; }
 
-/** one saved connection → a Target, or the reason it cannot be one */
-async function targetOf(userId: string, cred: CredentialRow | null, config: unknown, env: Record<string, string | undefined>): Promise<{ ok: true; target: Target; config: ConnectionConfig } | { ok: false; code: RefusalCode; message: string }> {
+/** one saved connection → a Target (chat) or SttTarget (speech), or the reason it cannot be one */
+async function targetOf(kind: ProviderKind, userId: string, cred: CredentialRow | null, config: unknown, env: Record<string, string | undefined>): Promise<{ ok: true; target: Target & SttTarget; config: ConnectionConfig } | { ok: false; code: RefusalCode; message: string }> {
   if (!cred) return { ok: false, code: "credential_missing", message: "The API key saved for this feature was removed. Add it again in Settings → AI & Integrations." };
-  const checked = validateConnection("chat", (config ?? {}) as Record<string, unknown>, { allowPrivate: allowPrivateFrom(env) });
+  const checked = validateConnection(kind, (config ?? {}) as Record<string, unknown>, { allowPrivate: allowPrivateFrom(env) });
   if (!checked.ok) return { ok: false, code: "invalid_config", message: `Your saved provider settings are no longer valid (${Object.values(checked.errors)[0] ?? "check them"}). Review them in Settings → AI & Integrations.` };
   const c = checked.config;
-  if (cred.provider !== c.provider) return { ok: false, code: "invalid_config", message: "The saved API key belongs to a different provider than the one selected. Review it in Settings → AI & Integrations." };
+  /* a key is only ever used with a provider of its own vendor family — the OpenAI key saved for chat also serves OpenAI speech, and nothing else */
+  if (!sameKeyFamily(cred.provider, c.provider)) return { ok: false, code: "invalid_config", message: "The saved API key belongs to a different provider than the one selected. Review it in Settings → AI & Integrations." };
   const def = providerById(c.provider)!;
   let key: string;
   try { key = openSecret(cred.sealed, { userId, credentialId: cred.id }, env); }
@@ -83,7 +88,14 @@ async function targetOf(userId: string, cred: CredentialRow | null, config: unkn
     const code = e instanceof VaultError && e.code === "not_configured" ? "vault_unavailable" : "credential_unreadable";
     return { ok: false, code, message: code === "vault_unavailable" ? "Your own API key cannot be used right now: this installation's credential encryption key is not available." : "Your saved API key could not be opened. Enter it again in Settings → AI & Integrations." };
   }
-  return { ok: true, config: c, target: { provider: c.provider, base: c.base, key, model: c.model, ...(c.modelSmall ? { modelSmall: c.modelSmall } : {}), ...(c.embeddingsModel ? { embeddingsModel: c.embeddingsModel } : {}), ...(c.visionModel ? { visionModel: c.visionModel } : {}), headers: headersFor(def, c.extra), label: `${def.label} · ${c.model}` } };
+  const protocol = def.protocol === "google-stt" ? "google-stt" : "openai-stt";
+  return {
+    ok: true, config: c,
+    target: {
+      provider: c.provider, base: c.base, key, model: c.model, headers: headersFor(def, c.extra), label: `${def.label} · ${c.model}`,
+      ...(kind === "chat" ? { ...(c.modelSmall ? { modelSmall: c.modelSmall } : {}), ...(c.embeddingsModel ? { embeddingsModel: c.embeddingsModel } : {}), ...(c.visionModel ? { visionModel: c.visionModel } : {}) } : { protocol, ...(def.limits ? { limits: def.limits } : {}), ...(c.language ? { language: c.language } : {}) }),
+    },
+  };
 }
 
 export async function resolveConnection(input: ResolveInput): Promise<Resolution> {
@@ -104,28 +116,32 @@ export async function resolveConnection(input: ResolveInput): Promise<Resolution
   if (!vaultStatus(env).ready) return refuse("vault_unavailable", "Your own API key cannot be used right now: this installation's credential encryption key is not available.", source);
   if (!setting.credentialId) return refuse("no_connection", `You chose your own provider for ${LABEL[feature]} but no API key is saved. Add it in Settings → AI & Integrations.`, source);
 
-  const primary = await targetOf(userId, await store.getCredential(userId, setting.credentialId), setting.config, env);
+  const kind = providerKindOf(feature);
+  const primary = await targetOf(kind, userId, await store.getCredential(userId, setting.credentialId), setting.config, env);
   if (!primary.ok) return refuse(primary.code, primary.message, source);
   const def = providerById(primary.config.provider)!;
   for (const need of input.need ?? []) {
     if (def.capabilities.includes(need)) continue;
     /* HYBRID: the user allowed the platform as a backstop, so what their provider cannot do (speech synthesis, say) is done by the platform, and billed as the platform's */
-    if (setting.allowPlatformFallback && platformTarget(env)) return { kind: "platform", reason: "hybrid_capability" };
+    if (setting.allowPlatformFallback && (providerKindOf(feature) === "stt" ? platformSttTarget(env) : platformTarget(env))) return { kind: "platform", reason: "hybrid_capability" };
     return refuse("capability_missing", `${def.label} cannot be used for this: it does not support ${need.replace("_", " ")}. Choose a provider that does, or allow the platform's AI as a backstop in Settings → AI & Integrations.`, source);
   }
 
-  const fallbacks: Target[] = [];
+  const fallbacks: (Target & SttTarget)[] = [];
   const skipped: string[] = [];
   for (const f of (setting.fallbacks ?? []).slice(0, MAX_FALLBACKS)) {
-    const t = await targetOf(userId, await store.getCredential(userId, f.credentialId), f.config, env);
+    const t = await targetOf(kind, userId, await store.getCredential(userId, f.credentialId), f.config, env);
     if (t.ok) fallbacks.push(t.target); else skipped.push(t.message); // a broken fallback is skipped and reported — never replaced by something the user did not choose
   }
-  if (setting.allowPlatformFallback) { const p = platformTarget(env); if (p) fallbacks.push(p); }
+  if (setting.allowPlatformFallback) { const p = kind === "stt" ? platformSttTarget(env) : platformTarget(env); if (p) fallbacks.push(p as Target & SttTarget); }
 
   const cred = await store.getCredential(userId, setting.credentialId);
   if (cred && (!cred.lastUsedAt || Date.now() - Date.parse(cred.lastUsedAt) > TOUCH_EVERY_MS)) void store.updateCredential(userId, cred.id, { lastUsedAt: new Date().toISOString() }).catch(() => undefined);
 
-  return { kind: "user", source, credentialId: setting.credentialId, settingUpdatedAt: setting.updatedAt, skippedFallbacks: skipped, scope: { ...primary.target, source, fallbacks } };
+  const common = { kind: "user" as const, source, credentialId: setting.credentialId, settingUpdatedAt: setting.updatedAt, skippedFallbacks: skipped };
+  return kind === "stt"
+    ? { ...common, scopeKind: "stt", scope: { ...(primary.target as SttTarget), source, fallbacks: fallbacks as SttTarget[] } }
+    : { ...common, scopeKind: "chat", scope: { ...(primary.target as Target), source, fallbacks: fallbacks as Target[] } };
 }
 
 /** what a screen may be told about a resolution: who provides the AI and why — never a key, a header or a fallback's credential */
