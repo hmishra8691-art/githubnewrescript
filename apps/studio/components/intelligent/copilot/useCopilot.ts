@@ -13,7 +13,11 @@ import {
 } from "../../../lib/copilot/history";
 import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
-import { describeFailure, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
+import { describeFailure, failureFromTransport, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
+import {
+  STATUS, MAX_AUTO_RETRIES, MAX_STALLED_ROUNDS, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, waitBeforeRetry,
+  type BuiltItem, type Checkpoint, type TurnResponse,
+} from "@/lib/copilot/resume";
 import type { ChangePlan } from "@/lib/copilot/changePlan";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
@@ -59,6 +63,16 @@ export interface CopilotEntry {
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
   message?: string;
+  /**
+   * What an unfinished generation is doing, in the researcher's words — never a
+   * spinner without a reason: generating, waiting for AI capacity (with when it
+   * resumes), resuming, or done. No status codes, no provider text.
+   */
+  progress?: { phase: "planning" | "generating" | "waiting" | "resuming" | "done" | "partial"; message: string; done?: number; total?: number; until?: number };
+  /** the work kept for a build that stopped: items built, items still to build, items that failed — what Resume and Review-what's-ready act on */
+  work?: { built: number; total: number; pending: number; failed: number };
+  /** a heads-up from the AI service, only when its allowance is nearly spent */
+  notice?: string;
   /** why a model turn failed — the cause and what to do next, never the grammar's "not understood" (Phase 1) */
   failure?: TurnFailure;
   /** what the engine read before handing the sentence to the model: its category, its reason, what it detected */
@@ -305,6 +319,11 @@ export function useCopilot(opts: {
   const setAvailable = (v: boolean) => { copilotKnown = v; setAvailableState(v); };
   const [busy, setBusy] = React.useState(false);
   const fakeRef = React.useRef<unknown[]>([]);
+  /** TEST SEAM: scripted faults / time budgets for the next requests (fake provider only), one entry per request */
+  const faultRef = React.useRef<{ faults?: unknown[]; budgetMs?: number }[]>([]);
+  /** the unfinished builds' checkpoints by card, and the waits a click can end */
+  const checkpointRef = React.useRef<Map<string, Checkpoint>>(new Map());
+  const wakeRef = React.useRef<Map<string, () => void>>(new Map());
   /* an image to build the theme from, sent with the next request */
   const [themeImage, setThemeImage] = React.useState<ThemeImage | null>(null);
   const [themeImageError, setThemeImageError] = React.useState<string | null>(null);
@@ -319,7 +338,8 @@ export function useCopilot(opts: {
     w.__rescriptCopilotFake = (reply) => { fakeRef.current.push(reply); };
     // a sentence the engine answered never reached the model: the suite drops the reply it had queued for it
     (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset = () => { fakeRef.current = []; };
-    return () => { delete w.__rescriptCopilotFake; delete (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset; };
+    (w as { __rescriptCopilotFault?: (f: { faults?: unknown[]; budgetMs?: number }) => void }).__rescriptCopilotFault = (f) => { faultRef.current.push(f); };
+    return () => { delete w.__rescriptCopilotFake; delete (w as { __rescriptCopilotFakeReset?: () => void }).__rescriptCopilotFakeReset; delete (w as { __rescriptCopilotFault?: unknown }).__rescriptCopilotFault; };
   }, []);
 
   /*
@@ -468,10 +488,90 @@ export function useCopilot(opts: {
       const proposal = session.proposal;
       const working: SurveyDefinition = proposal ? (stale ? evaluateProposal(rebaseProposal(proposal, s.def)).after : evaluateProposal(proposal).after) : s.def;
       const fake = fakeRef.current.shift();
-      const r = await fetch("/api/copilot/turn", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(fake ? { fake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra }),
-      });
+      /*
+       * THE CHECKPOINT. From the moment a request is sent the researcher's
+       * words — and, for a plan being built, every item as it comes back — are
+       * kept: in memory for Resume, in the browser's storage for a reload. The
+       * server is told which items are done and never builds them again.
+       */
+      const isBuild = extra.stage === "execute";
+      const plan = isBuild ? (extra.plan as ChangePlan) : undefined;
+      const items = isBuild ? (extra.items as string[]) : undefined;
+      const finalize = extra.finalize === true;
+      const given = Array.isArray(extra.done) ? (extra.done as (BuiltItem & { applied?: boolean })[]) : [];
+      const cp: Checkpoint = {
+        v: 1, entryId: id, surveyId: s.surveyDbId, text, ...(mode ? { mode } : {}), kind: isBuild ? "build" : "turn", ...(plan ? { plan } : {}), ...(items ? { items } : {}),
+        built: given.filter((g) => !g.applied).map((g) => ({ id: g.id, raw: g.raw })), applied: given.filter((g) => g.applied).map((g) => ({ id: g.id, raw: g.raw })), failed: [], at: Date.now(),
+      };
+      const store = (): Storage | null => { try { return window.localStorage; } catch { return null; } };
+      const remember = () => { cp.at = Date.now(); checkpointRef.current.set(id, cp); saveCheckpoint(store(), cp); };
+      const forget = () => { checkpointRef.current.delete(id); clearCheckpoint(store(), s.surveyDbId); };
+      if (!finalize) remember();
+      const startBuilt = cp.built.length;
+      const total = items?.length ?? 0;
+      let chargeAcc = 0;
+      const workOf = () => (isBuild ? { built: cp.built.length, total, pending: pendingIds(items ?? [], cp.built, cp.failed).length, failed: cp.failed.length } : undefined);
+      /* the words on the card for this moment — only where there is a generation to describe */
+      const say = (progress: CopilotEntry["progress"] | undefined) => opts.patch(id, { progress });
+      if (isBuild && !finalize) say({ phase: "generating", message: STATUS.building(cp.built.length, total), done: cp.built.length, total });
+      else if (mode === "generate") say({ phase: "planning", message: planFirst ? STATUS.planning : STATUS.generating });
+      /* one round trip. A scripted fault (browser suites) rides along; a request that never gets a JSON answer is status 0 */
+      const send = async (): Promise<TurnResponse> => {
+        const f = faultRef.current.shift();
+        const sentFake = Array.isArray(fake) ? fake.slice(cp.built.length - startBuilt) : fake;
+        try {
+          const r = await fetch("/api/copilot/turn", {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(sentFake ? { fake: sentFake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra, ...(isBuild ? { done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {}), ...(f?.faults ? { faults: f.faults } : {}), ...(f?.budgetMs ? { budgetMs: f.budgetMs } : {}) }),
+          });
+          const d = await r.json().catch(() => null) as Record<string, unknown> | null;
+          return { status: r.status, ok: r.ok, d };
+        } catch { return { status: 0, ok: false, d: null }; }
+      };
+      /* a wait the researcher can end with "Resume now" */
+      const pause = (ms: number) => new Promise<void>((resolve) => { const end = () => { clearTimeout(t); wakeRef.current.delete(id); resolve(); }; const t = setTimeout(end, ms); wakeRef.current.set(id, end); });
+      const waitFor = async (ms: number) => {
+        say({ phase: "waiting", message: STATUS.waiting, until: Date.now() + ms, done: cp.built.length, total });
+        await pause(ms);
+        say({ phase: "resuming", message: STATUS.resuming, done: cp.built.length, total });
+      };
+      /* a temporary failure of the whole request — busy, a dropped connection, the platform's own time limit — is waited out and sent again, with the same words and the same checkpoint */
+      const exchange = async (): Promise<TurnResponse> => {
+        for (let attempt = 0; ; attempt++) {
+          const res = await send();
+          if (!isTemporary(res) || attempt >= MAX_AUTO_RETRIES) return res;
+          await waitFor(waitBeforeRetry(failureOfResponse(res) ?? failureFromTransport(res.status), attempt));
+        }
+      };
+      /* stopped, with the work kept: the card says why, what is kept, and offers Resume / Review what's ready */
+      const stopWith = (failure: TurnFailure) => {
+        const f = isBuild ? pausedFailure(failure, cp.built.length, total) : failure;
+        remember();
+        opts.patch(id, { status: "failed", error: f.message, failure: f, progress: undefined, work: workOf(), usage: { charge: chargeAcc } });
+        opts.patch(id, { opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "" }, statusDetail: `${f.title}: ${f.message}`, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: chargeAcc, error: `${f.title}: ${f.message}` }] }) });
+      };
+      let res: TurnResponse;
+      let stalls = 0;
+      for (;;) {
+        res = await exchange();
+        const pd = res.d;
+        if (!(res.ok && pd?.stage === "progress")) break;
+        /* a checkpoint from the server: what it built before its time ran out or the provider paused it */
+        chargeAcc += Number((pd.usage as { charge?: number } | undefined)?.charge) || 0;
+        const newly = Array.isArray(pd.built) ? (pd.built as BuiltItem[]) : [];
+        cp.built = mergeBuilt(cp.built, newly);
+        if (Array.isArray(pd.failed)) cp.failed = pd.failed as { id: string; failure: TurnFailure }[];
+        remember();
+        say({ phase: "generating", message: STATUS.building(cp.built.length, total), done: cp.built.length, total });
+        const notice = (pd.context as { notice?: string } | undefined)?.notice;
+        if (notice) opts.patch(id, { notice });
+        if (isTurnFailure(pd.halted)) { setBusy(false); stopWith(pd.halted); return "handled"; }
+        stalls = newly.length ? 0 : stalls + 1;
+        const wf = pd.waiting as { retryAfterMs?: number; failure?: TurnFailure } | undefined;
+        if (stalls > MAX_STALLED_ROUNDS) { stopWith(wf?.failure && isTurnFailure(wf.failure) ? wf.failure : describeFailure("capacity")); return "handled"; }
+        if (wf) await waitFor(waitBeforeRetry({ retryAfterMs: wf.retryAfterMs }, stalls));
+      }
+      const r = { status: res.status, ok: res.ok };
       if (themeImage) setThemeImage(null);
       /* every model turn is in the history with the call it made and what it cost — a failed one too */
       const call = (d: Record<string, unknown> | null, error?: string): OpApiCall => {
@@ -490,24 +590,36 @@ export function useCopilot(opts: {
        * offered instead of the failed turn.
        */
       const failTurn = (d: Record<string, unknown> | null, status: number, fallback: FailureCode) => {
-        const failure = isTurnFailure(d?.failure) ? d.failure : describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
+        /* the server's own failure when it sent one; when no JSON came back at all, what the status means (the platform's time limit, a dropped connection) — never a bare "provider refused" */
+        let failure = isTurnFailure(d?.failure) ? d.failure : !d ? failureFromTransport(status) : describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
+        if (isBuild) failure = pausedFailure(failure, cp.built.length, total);
         const error = `${failure.message}`;
-        opts.patch(id, { status: "failed", error, failure, usage: d?.usage as { charge: number } | undefined, context: d?.context as CopilotEntry["context"] });
+        /* the work stays saved unless the failure is one no Resume can change (nothing usable, no model, internal mode) */
+        if (["unusable", "engine_unparsed", "internal_mode", "not_configured"].includes(failure.code)) forget(); else remember();
+        opts.patch(id, { status: "failed", error, failure, progress: undefined, work: workOf(), usage: { charge: chargeAcc + (Number((d?.usage as { charge?: number } | undefined)?.charge) || 0) }, context: d?.context as CopilotEntry["context"] });
         failedTurn(d, `${failure.title}: ${failure.message}`);
         void status;
       };
-      if (r.status === 501) { setAvailable(false); const d = await r.json().catch(() => null) as Record<string, unknown> | null; failTurn(d, 501, "not_configured"); return "unavailable"; }
-      const d = await r.json().catch(() => null) as Record<string, unknown> | null;
+      /* the progress responses of earlier rounds were already counted: this is the last round's */
+      const d = res.d;
+      if (r.status === 501) { setAvailable(false); failTurn(d, 501, "not_configured"); return "unavailable"; }
       if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
       setAvailable(true);
       if (d.stage === "plan" && d.plan) {
         // the change plan: read and approved before anything is built
         const plan = d.plan as ChangePlan;
-        opts.patch(id, { status: "plan", changePlan: plan, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
+        forget();
+        opts.patch(id, { status: "plan", changePlan: plan, progress: undefined, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: "plan" }, statusDetail: `Change plan: ${plan.items.map((i) => i.title).join("; ")}`.slice(0, 2000), apiCalls: [call(d)] }) });
         return "handled";
       }
       const reply = d.reply as CopilotReply | null;
       const review = d.review as SurveyReview | undefined;
+      /* the whole charge of this turn: every round of it, once */
+      const charged = { charge: chargeAcc + (Number((d.usage as { charge?: number } | undefined)?.charge) || 0) };
+      const notice = (d.context as { notice?: string } | undefined)?.notice;
+      /* a partial build keeps its place: what is in the proposal now is context for building the rest, never merged twice */
+      const partialIds = d.partial && Array.isArray(d.planPending) ? (d.planPending as string[]) : [];
+      if (partialIds.length) { cp.applied = mergeBuilt(cp.applied ?? [], cp.built); cp.built = []; cp.items = partialIds; remember(); } else forget();
       if (!reply) {
         if (review) {
           // the model had nothing, the engine's own review stands: shown as the answer
@@ -521,7 +633,8 @@ export function useCopilot(opts: {
         failTurn(d, 200, "unusable");
         return "empty";
       }
-      const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
+      const doneBuilding = isBuild && !partialIds.length;
+      const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: charged, ...(notice ? { notice } : {}), progress: doneBuilding ? { phase: "done", message: STATUS.ready } : partialIds.length ? { phase: "partial", message: STATUS.partial((cp.applied ?? []).length, (cp.applied ?? []).length + partialIds.length), done: (cp.applied ?? []).length, total: (cp.applied ?? []).length + partialIds.length } : undefined, ...(partialIds.length ? { work: { built: (cp.applied ?? []).length, total: (cp.applied ?? []).length + partialIds.length, pending: partialIds.length, failed: Array.isArray(d.planFailures) ? (d.planFailures as unknown[]).length : 0 } } : {}), context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
       if (d.coverage && typeof d.coverage === "object") patch.coverage = d.coverage as CopilotEntry["coverage"];
       if (d.stage === "executed" && d.plan) {
         const built = d.plan as ChangePlan;
@@ -567,6 +680,64 @@ export function useCopilot(opts: {
     opts.patch(entryId, { status: "thinking", changePlan: { ...entry.changePlan, approved: items } });
     await run(entryId, entry.text, mode, { stage: "execute", plan: entry.changePlan, items });
   }, [copilotTurns, opts, run]);
+
+  /*
+   * KEEPING AND RESUMING THE WORK. The checkpoint of a card (its words, its
+   * plan, the items built) is in memory and in the browser's storage. After a
+   * pause — a busy provider, a connection to fix, a reload — Resume sends it
+   * again from where it stopped; Review what's ready turns what exists into a
+   * proposal; Build the rest continues a partial one; Discard lets it go.
+   */
+  const checkpointOf = React.useCallback((entryId: string): Checkpoint | null => {
+    const mem = checkpointRef.current.get(entryId);
+    if (mem) return mem;
+    let store: Storage | null = null; try { store = window.localStorage; } catch { /* a private window */ }
+    const cp = loadCheckpoint(store, s.surveyDbId);
+    return cp && cp.entryId === entryId ? cp : null;
+  }, [s.surveyDbId]);
+  const resume = React.useCallback(async (entryId: string): Promise<void> => {
+    const cp = checkpointOf(entryId);
+    if (!cp) return;
+    opts.patch(entryId, { status: "thinking", error: undefined, failure: undefined, progress: { phase: "resuming", message: STATUS.resuming }, ...(cp.kind === "build" ? {} : {}) });
+    await run(entryId, cp.text, cp.mode, cp.kind === "build" ? { stage: "execute", plan: cp.plan, items: cp.items, done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {});
+  }, [checkpointOf, opts, run]);
+  /** open what is built so far as a proposal; the items still to build stay pending */
+  const reviewReady = React.useCallback(async (entryId: string): Promise<void> => {
+    const cp = checkpointOf(entryId);
+    if (!cp || cp.kind !== "build" || !cp.built.length) return;
+    opts.patch(entryId, { status: "thinking", error: undefined, failure: undefined, progress: { phase: "resuming", message: STATUS.resuming } });
+    await run(entryId, cp.text, cp.mode, { stage: "execute", plan: cp.plan, items: cp.items, finalize: true, done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] });
+  }, [checkpointOf, opts, run]);
+  /** a partial proposal's remaining items, built on a new card as a revision of the open proposal */
+  const buildRemaining = React.useCallback(async (entryId: string): Promise<void> => {
+    const cp = checkpointOf(entryId);
+    if (!cp || cp.kind !== "build" || !cp.items?.length) return;
+    const id = uid("copilot");
+    opts.push({ id, kind: "copilot", text: `Build the remaining ${cp.items.length} item${cp.items.length === 1 ? "" : "s"} of the plan`, status: "thinking", changePlan: { ...(cp.plan as ChangePlan), approved: cp.items } });
+    checkpointRef.current.delete(entryId);
+    await run(id, cp.text, cp.mode, { stage: "execute", plan: cp.plan, items: cp.items, done: (cp.applied ?? []).map((a) => ({ ...a, applied: true })) });
+  }, [checkpointOf, opts, run]);
+  /** end the current wait now and try again */
+  const resumeNow = React.useCallback((entryId: string) => { wakeRef.current.get(entryId)?.(); }, []);
+  const discardWork = React.useCallback((entryId: string) => {
+    checkpointRef.current.delete(entryId);
+    try { clearCheckpoint(window.localStorage, s.surveyDbId); } catch { /* a private window */ }
+    opts.patch(entryId, { status: "empty", message: "The saved work was discarded.", failure: undefined, error: undefined, work: undefined, progress: undefined });
+  }, [opts, s.surveyDbId]);
+  /* a reload in the middle of a generation: the request, the plan and the items built come back as a card that offers to carry on */
+  const restoredRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (restoredRef.current === s.surveyDbId) return;
+    restoredRef.current = s.surveyDbId;
+    let store: Storage | null = null; try { store = window.localStorage; } catch { return; }
+    const cp = loadCheckpoint(store, s.surveyDbId);
+    if (!cp || copilotTurns.some((t) => t.id === cp.entryId)) return;
+    checkpointRef.current.set(cp.entryId, cp);
+    const failure = interruptedFailure(cp);
+    const total = cp.items?.length ?? 0;
+    opts.push({ id: cp.entryId, kind: "copilot", text: cp.text, status: "failed", error: failure.message, failure, ...(cp.kind === "build" ? { changePlan: { ...(cp.plan as ChangePlan), approved: cp.items ?? [] }, work: { built: cp.built.length, total, pending: pendingIds(cp.items ?? [], cp.built, cp.failed).length, failed: cp.failed.length } } : {}) });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.surveyDbId]);
 
   /** a change plan the researcher does not want: the card says so, nothing was built or charged beyond the plan */
   const cancelPlan = React.useCallback((entryId: string) => {
@@ -948,7 +1119,7 @@ export function useCopilot(opts: {
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
-    planFirst, setPlanFirst, executePlan, cancelPlan,
+    planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,

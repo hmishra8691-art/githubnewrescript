@@ -798,6 +798,7 @@ export function IntelligentView() {
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
+                    onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
                     refused={open ? copilot.state!.errors : []}

@@ -1,5 +1,7 @@
 import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe, placeholderMismatch, placeholdersIn } from "@rescript/engine";
 import { approxTokens, reportUsage } from "./usage.js";
+import { ProviderError, classifyResponse, DEFAULT_RETRY, fallbackProvider, isProviderError, logProvider, managedSend, type ProviderEvent, type RetryPolicy } from "./provider.js";
+export * from "./provider.js";
 
 /**
  * THE AI PROVIDER — one client, shared by the runtime (classification,
@@ -841,39 +843,19 @@ export function acceptsJsonMode(base: string): boolean {
   if (NO_JSON_MODE.has(base)) return false;
   try { return !/(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return true; }
 }
-/**
- * ONE RETRY, WITH BACK-OFF, FOR WHAT IS TRANSIENT (Data Analytics audit A-5).
- * A 429 or a 5xx (not 501) and a dropped connection are retried — once by
- * default — after the provider's own `Retry-After` when it gives one, else a
- * short doubling pause. Never inside the caller's time budget: if the wait
- * would outlast the abort signal the response stands. A 4xx other than 429 is
- * the request's fault and is returned at once, as is an abort (the timeout).
+/*
+ * RETRY, PACING AND CLASSIFICATION live in provider.ts (the AI request
+ * manager): a 429 is retried after the provider's own Retry-After, with
+ * jittered exponential back-off, inside the caller's deadline, behind a
+ * cool-down every request on this server shares; a 401, a 403 that is not a
+ * rate limit, a 404 and a spent quota are never retried. This function adds
+ * the one thing that is specific to the chat endpoint: json mode.
  */
-export interface RetryPolicy { retries: number; delayMs: number }
-const DEFAULT_RETRY: RetryPolicy = { retries: 1, delayMs: 800 };
-const transient = (status: number) => status === 429 || (status >= 500 && status !== 501);
-const wait = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => { const t = setTimeout(resolve, ms); signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true }); });
-
-async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy = DEFAULT_RETRY): Promise<{ r: Response; detail?: string }> {
+async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy = DEFAULT_RETRY, deadline = Date.now() + TIMEOUT_MS, label?: string, onEvent?: (e: ProviderEvent) => void): Promise<{ r: Response; detail?: string }> {
   const once = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
     method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
   });
-  const send = async (b: Record<string, unknown>): Promise<Response> => {
-    for (let attempt = 0; ; attempt++) {
-      let r: Response | null = null;
-      try { r = await once(b); }
-      catch (e) {
-        if ((e as Error)?.name === "AbortError" || signal.aborted) throw e;
-        if (attempt >= retry.retries) { const err = new Error(`could not reach the analysis provider (${(e as Error)?.message ?? "network error"})`); (err as Error & { transient?: boolean }).transient = true; throw err; }
-      }
-      if (r && (!transient(r.status) || attempt >= retry.retries)) return r;
-      const ra = r ? Number(r.headers.get("retry-after")) : NaN;
-      const pause = Math.min(5000, Number.isFinite(ra) && ra > 0 ? ra * 1000 : retry.delayMs * 2 ** attempt);
-      await r?.text().catch(() => "");
-      await wait(pause, signal);
-      if (signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
-    }
-  };
+  const send = (b: Record<string, unknown>): Promise<Response> => managedSend({ base, key, once: () => once(b), signal, deadline, retry, label, onEvent });
   const { response_format: format, ...plain } = body;
   const schema = !!format && typeof format === "object" && (format as { type?: string }).type === "json_schema";
   /*
@@ -969,9 +951,26 @@ export interface CompleteJsonOptions {
   continuations?: number;
   /** the tier to call — the small model for a short structuring reply (Phase 6); the large tier when absent */
   tier?: AiModelTier;
-  /** retries on a 429, a 5xx or a dropped connection (default 1; 0 turns it off) and the first pause in ms (default 800, doubling; a `Retry-After` wins) — audit A-5 */
+  /**
+   * Retries on a 429, a 5xx, a dropped connection (default 3, so four
+   * attempts; 0 turns it off) and the first pause in ms (default 800; each
+   * retry doubles the window, with jitter; the provider's `Retry-After` wins).
+   * Never past `deadline`/`timeoutMs`: a wait that does not fit ends the call
+   * with a `ProviderError` that says how long to come back.
+   */
   retries?: number;
   retryDelayMs?: number;
+  /**
+   * The caller's own time limit as an absolute time (ms since the epoch) — a
+   * serverless route that must answer within its platform limit passes it so
+   * the call, its retries and its queueing end in time to say what happened,
+   * instead of being cut off by the platform with no answer at all.
+   */
+  deadline?: number;
+  /** told what happened on the way (a retry and its wait, a recovery, the fallback) — for a caller that shows progress */
+  onEvent?: (e: ProviderEvent) => void;
+  /** a name for the log line ("copilot_plan") */
+  operation?: string;
 }
 
 /**
@@ -1019,9 +1018,13 @@ export async function completeJson(
     return {};
   }
 
-  const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
+  const startedAt = Date.now();
+  const askedMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs as number) > 0
     ? Math.min(300_000, Math.round(options.timeoutMs as number))
     : TIMEOUT_MS;
+  /* the caller's deadline shortens the time allowed; there is always a second, so a late call fails fast and says so */
+  const timeoutMs = Number.isFinite(options.deadline) ? Math.max(1_000, Math.min(askedMs, Math.round((options.deadline as number) - startedAt))) : askedMs;
+  const deadline = startedAt + timeoutMs;
   const continuations = Number.isFinite(options.continuations) ? Math.max(0, Math.min(8, Math.round(options.continuations as number))) : 2;
   /*
    * THE OUTPUT LIMIT IS THE PROVIDER'S, NOT OURS (Research Engine audit,
@@ -1036,23 +1039,52 @@ export async function completeJson(
   let limit = Math.max(1, Math.round(maxTokens));
   const known = OUTPUT_CEILING.get(`${base} ${model}`);
   if (known && known < limit) limit = known;
-  const retry: RetryPolicy = { retries: Number.isFinite(options.retries) ? Math.max(0, Math.min(3, Math.round(options.retries as number))) : DEFAULT_RETRY.retries, delayMs: Number.isFinite(options.retryDelayMs) ? Math.max(0, Math.min(5000, Math.round(options.retryDelayMs as number))) : DEFAULT_RETRY.delayMs };
+  const retry: RetryPolicy = { retries: Number.isFinite(options.retries) ? Math.max(0, Math.min(6, Math.round(options.retries as number))) : DEFAULT_RETRY.retries, delayMs: Number.isFinite(options.retryDelayMs) ? Math.max(0, Math.min(5000, Math.round(options.retryDelayMs as number))) : DEFAULT_RETRY.delayMs, maxWaitMs: DEFAULT_RETRY.maxWaitMs };
+  /* where the next call goes: the configured provider, then — once, and only for a failure a second provider can cure — the fallback the operator named */
+  const primary = { base, key, model };
+  const fb = fallbackProvider();
+  let target = primary;
+  let onFallback = false;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   type Msg = { role: "system" | "user" | "assistant"; content: string };
   const format = options.schema
     ? { type: "json_schema", json_schema: { name: options.schema.name, schema: options.schema.schema, ...(options.schema.strict ? { strict: true } : {}) } }
     : { type: "json_object" };
+  /*
+   * THE SECOND PROVIDER, WHEN ONE IS CONFIGURED. A failure the first provider
+   * cannot cure on its own — it is rate-limiting past our patience, its
+   * credit is spent, its key is refused, it is down — goes once to the
+   * fallback the operator named, for the rest of this call. A request the
+   * first provider found malformed, or a model that does not exist, would
+   * fail there too and is not forwarded.
+   */
+  const viaFallback = async <T,>(e: ProviderError, again: () => Promise<T>): Promise<T> => {
+    if (!fb || onFallback || !e.fallbackable) throw e;
+    onFallback = true;
+    target = { base: fb.base, key: fb.key, model: options.tier === "small" ? fb.modelSmall : fb.model };
+    limit = Math.min(Math.max(1, Math.round(maxTokens)), OUTPUT_CEILING.get(`${target.base} ${target.model}`) ?? Infinity);
+    logProvider("fallback", { from: e.host, kind: e.kind, status: e.status, to: new URL(fb.base).host, model: target.model, operation: options.operation });
+    options.onEvent?.({ type: "fallback", from: e.kind, host: new URL(fb.base).host });
+    try { return await again(); }
+    catch (e2) { if (isProviderError(e2)) throw new ProviderError({ kind: e2.kind, status: e2.status, detail: `${e2.detail} (the fallback provider also failed; the first failed with ${e.kind})`, retryAfterMs: e2.retryAfterMs ?? e.retryAfterMs, host: e2.host, exhausted: true, attempts: e2.attempts, viaFallback: true }); throw e2; }
+  };
   /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
   const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
-    const { r, detail: refused } = await postChat(base, key, { model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry);
+    let r: Response, refused: string | undefined;
+    try {
+      ({ r, detail: refused } = await postChat(target.base, target.key, { model: target.model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry, deadline, options.operation ? `${options.operation} ${target.model}` : target.model, options.onEvent));
+    } catch (e) {
+      if (isProviderError(e)) return viaFallback(e, () => call(messages, lowered));
+      throw e;
+    }
     if (!r.ok) {
       const detail = (refused ?? (await r.text().catch(() => ""))).trim().slice(0, 300);
       const ceiling = r.status === 400 && !lowered ? outputCeilingFrom(detail, limit) : null;
-      if (ceiling) { OUTPUT_CEILING.set(`${base} ${model}`, ceiling); limit = ceiling; return call(messages, true); }
-      const err = new Error(r.status === 429 ? `the analysis provider is rate-limiting requests (429) ${detail.slice(0, 160)}`.trim() : r.status >= 500 ? `the analysis provider is unavailable (${r.status}) ${detail.slice(0, 160)}`.trim() : `the analysis provider refused the request (${r.status}) ${detail.slice(0, 200)}`.trim());
-      (err as Error & { status?: number }).status = r.status;
-      throw err;
+      if (ceiling) { OUTPUT_CEILING.set(`${target.base} ${target.model}`, ceiling); limit = ceiling; return call(messages, true); }
+      const err = classifyResponse(r.status, r.headers, detail);
+      const exhausted = new ProviderError({ kind: err.kind, status: r.status, detail: detail.slice(0, 200), retryAfterMs: err.retryAfterMs, host: err.host, exhausted: err.retryable, viaFallback: onFallback, contextTooLong: err.contextTooLong });
+      return viaFallback(exhausted, () => call(messages, lowered));
     }
     const j = await r.json().catch(() => null) as {
       choices?: { message?: { content?: string }; finish_reason?: string }[];
@@ -1063,7 +1095,7 @@ export async function completeJson(
     const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
     const outputTokens = typeof outTok === "number" ? outTok : approxTokens(content);
     reportUsage({
-      kind: "chat", provider: "openai-compatible", model: j?.model || model,
+      kind: "chat", provider: "openai-compatible", model: j?.model || target.model,
       inputTokens: typeof inTok === "number" ? inTok : approxTokens(messages.map((m) => m.content).join("")),
       outputTokens,
       requests: 1, estimated: typeof inTok !== "number",
@@ -1119,7 +1151,7 @@ export async function completeJson(
      * number lets whoever reads the log see whether the budget was the problem.
      */
     if ((e as Error)?.name === "AbortError") {
-      throw new Error(`the analysis provider did not answer within ${Math.round(timeoutMs / 1000)} seconds`);
+      throw new ProviderError({ kind: "timeout", detail: `${Math.round(timeoutMs / 1000)} seconds`, exhausted: true });
     }
     throw e;
   } finally {
@@ -1156,7 +1188,7 @@ export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJs
   const timeoutMs = Math.min(300_000, opts.timeoutMs ?? 90_000);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(`${base}/chat/completions`, {
+    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + timeoutMs, label: "ocr", once: () => fetch(`${base}/chat/completions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       headers: providerHeaders(key),
       body: JSON.stringify({
@@ -1166,7 +1198,7 @@ export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJs
           { role: "user", content: [{ type: "text", text: "Transcribe this page." }, { type: "image_url", image_url: { url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}` } }] },
         ],
       }),
-    });
+    }) });
     if (!r.ok) { const detail = (await r.text().catch(() => "")).trim().slice(0, 200); const err = new Error(`the OCR model refused the page (${r.status}) ${detail}`.trim()); (err as Error & { status?: number }).status = r.status; throw err; }
     const j = await r.json().catch(() => null) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; model?: string } | null;
     const content = j?.choices?.[0]?.message?.content ?? "";
@@ -1191,11 +1223,11 @@ export async function embedTexts(texts: string[], opts: CompleteJsonOptions = {}
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(120_000, opts.timeoutMs ?? 30_000));
   try {
-    const r = await fetch(`${base}/embeddings`, {
+    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + Math.min(120_000, opts.timeoutMs ?? 30_000), retry: { retries: 1, delayMs: 500, maxWaitMs: 4000 }, label: "embeddings", once: () => fetch(`${base}/embeddings`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       headers: providerHeaders(key),
       body: JSON.stringify({ model, input: texts.map((t) => t.slice(0, 8000)) }),
-    });
+    }) });
     if (!r.ok) return null;
     const j = await r.json().catch(() => null) as { data?: { embedding?: number[]; index?: number }[]; usage?: { prompt_tokens?: number } } | null;
     const rows = (j?.data ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0)).map((d) => d.embedding ?? []);
@@ -1218,7 +1250,7 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
       max_tokens: maxTokens,
       response_format: { type: "json_object" },
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    }, ctrl.signal);
+    }, ctrl.signal, { retries: 1, delayMs: 400, maxWaitMs: 2000 }, Date.now() + TIMEOUT_MS, "respondent");
     if (!r.ok) {
       console.warn("[rescript:ai] provider error", JSON.stringify({ status: r.status }));
       return null;

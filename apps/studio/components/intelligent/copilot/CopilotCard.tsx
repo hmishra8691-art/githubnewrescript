@@ -20,7 +20,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -38,6 +38,16 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   onExecutePlan?(entryId: string, items: string[]): void;
   /** set the change plan aside */
   onCancelPlan?(entryId: string): void;
+  /** carry on from the saved work: the request, the plan and every item already built */
+  onResume?(entryId: string): void;
+  /** open what is already built as a proposal */
+  onReviewReady?(entryId: string): void;
+  /** build the items a partial proposal still lacks */
+  onBuildRest?(entryId: string): void;
+  /** end the wait for AI capacity now and try again */
+  onResumeNow?(entryId: string): void;
+  /** let the saved work go */
+  onDiscard?(entryId: string): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -75,12 +85,27 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           {entry.usage && entry.usage.charge > 0 && <span className="iqi-dim" data-testid="cp-charge">{formatCharge(entry.usage.charge)}</span>}
         </div>
         {entry.status === "thinking" && <div className="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
+        {entry.progress && (entry.status === "thinking" || entry.status === "ready") && <Progress entry={entry} onResumeNow={onResumeNow} />}
+        {entry.notice && <p className="iqi-dim cp-notice" data-testid="cp-notice"><Icon name="info" size={11} /> {entry.notice}</p>}
         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
         {entry.failure && (
           /* the cause and the next step (Phase 1) — and what the engine had read before it handed the sentence on */
           <div className="cp-failure" data-testid="cp-failure" data-code={entry.failure.code}>
             <span className="iq-label">What to do</span>
             <ul>{entry.failure.next.map((n, i) => <li key={i}>{n}</li>)}</ul>
+            {entry.failure.admin && <p className="iqi-dim cp-admin" data-testid="cp-admin"><span className="iq-label">For your administrator</span> {entry.failure.admin}</p>}
+            {entry.work && entry.work.total > 0 && (
+              <p className="iqi-dim" data-testid="cp-work" data-built={entry.work.built} data-pending={entry.work.pending} data-failed={entry.work.failed}>
+                <Icon name="check" size={11} /> Kept: {entry.work.built} of {entry.work.total} items built{entry.work.pending ? `, ${entry.work.pending} still to build` : ""}{entry.work.failed ? `, ${entry.work.failed} could not be built` : ""}.
+              </p>
+            )}
+            {KEEPS_WORK.has(entry.failure.code) && (
+              <div className="cp-actions" data-testid="cp-recover">
+                <button type="button" className="iq-btn primary" onClick={() => onResume?.(entry.id)} data-testid="cp-resume">Resume</button>
+                {!!entry.work?.built && <button type="button" className="iq-btn" onClick={() => onReviewReady?.(entry.id)} data-testid="cp-review-ready">Review what&apos;s ready</button>}
+                <button type="button" className="iq-btn" onClick={() => onDiscard?.(entry.id)} data-testid="cp-discard">Discard</button>
+              </div>
+            )}
             {entry.handoff && (entry.handoff.category || entry.handoff.detected.length > 0 || entry.handoff.reason) && (
               <div className="cp-handoff" data-testid="cp-handoff">
                 <span className="iq-label">What the engine read</span>
@@ -131,6 +156,11 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
             <ol className="cp-plan">
               {entry.changePlan.items.map((it) => { const failed = entry.changePlan!.failures?.find((f) => f.id === it.id); return <li key={it.id} data-testid="cp-plan-built-item" data-failed={failed ? "1" : ""}><b>{it.title}</b>{it.objects.length ? <span className="iqi-dim"> · {it.objects.join(", ")}</span> : null}{failed ? <span className="iq-error"> — not built: {failed.failure.message}</span> : null}</li>; })}
             </ol>
+          </div>
+        )}
+        {entry.status === "ready" && !!entry.work?.pending && (
+          <div className="cp-actions" data-testid="cp-partial">
+            <button type="button" className="iq-btn primary" onClick={() => onBuildRest?.(entry.id)} data-testid="cp-build-rest">Build the remaining {entry.work.pending} item{entry.work.pending === 1 ? "" : "s"}</button>
           </div>
         )}
         {entry.message && <p className="iq-warning" data-testid="cp-empty"><Icon name="info" size={12} /> {entry.message}</p>}
@@ -333,5 +363,31 @@ function PlanCard({ entry, def, onSelect, onExecute, onCancel, onAnswer }: { ent
         <span className="iqi-dim">Nothing is written until the built proposal is applied.</span>
       </div>
     </div>
+  );
+}
+
+/** the failures after which the researcher's request (and what was built) is still kept, so Resume means something */
+const KEEPS_WORK = new Set(["capacity", "network", "timeout", "auth", "forbidden", "quota", "not_found", "wallet", "provider", "interrupted", "truncated", "unparseable", "empty"]);
+
+/**
+ * WHAT THE GENERATION IS DOING, in plain words: never a spinner without a
+ * reason. While the AI service is busy the card says the work is saved and
+ * counts down to the automatic resume (or resumes now, on a click).
+ */
+function Progress({ entry, onResumeNow }: { entry: CopilotEntry; onResumeNow?: (entryId: string) => void }) {
+  const p = entry.progress!;
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (p.phase !== "waiting" || !p.until) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [p.phase, p.until]);
+  const secs = p.phase === "waiting" && p.until ? Math.max(0, Math.ceil((p.until - now) / 1000)) : null;
+  return (
+    <p className={`cp-progress cp-progress-${p.phase}`} data-testid="cp-progress" data-phase={p.phase} data-done={p.done ?? ""} data-total={p.total ?? ""} role="status" aria-live="polite">
+      <Icon name={p.phase === "done" ? "check" : p.phase === "waiting" ? "info" : "sparkle"} size={12} /> <span data-testid="cp-progress-text">{p.message}</span>
+      {secs != null && <span className="iqi-dim"> Resuming in {secs}s.</span>}
+      {p.phase === "waiting" && <button type="button" className="iq-btn" onClick={() => onResumeNow?.(entry.id)} data-testid="cp-resume-now">Resume now</button>}
+    </p>
   );
 }

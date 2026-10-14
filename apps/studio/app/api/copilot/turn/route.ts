@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "node:crypto";
 import { SurveyDefinition } from "@rescript/schema";
-import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError } from "@rescript/ai";
+import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError, isProviderError, capacityNotice, ProviderError, type ProviderErrorKind, type ProviderEvent } from "@rescript/ai";
 import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
+import { singleFlight } from "@/lib/singleFlight";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
@@ -53,12 +54,60 @@ export const maxDuration = 180;
 const CACHE = new Map<string, { at: number; value: unknown }>();
 const TTL = 15 * 60_000;
 
+/*
+ * THE TIME THIS REQUEST HAS. The route may run 180 s (maxDuration); past that
+ * the platform answers for us with an error page that is not JSON — which is
+ * how a long generation used to end in "the provider refused the request"
+ * with nothing in it, and every item already built was lost. The route now
+ * keeps its own clock: provider calls are given a DEADLINE inside it, items
+ * are built only while there is time for another, and whatever is not done
+ * is handed back as PENDING, with what is done, so the browser carries on in
+ * the next request. Nothing is lost to a clock.
+ */
+const ROUTE_BUDGET_MS = 165_000;
+/** the gate and the proposal need a few seconds after the last item */
+const GATE_RESERVE_MS = 15_000;
+/** the fewest ms left that justify starting another item (the slowest item so far, 1.5×, if more) */
+const MIN_ITEM_MS = 30_000;
+
+/** TEST SEAM, fake provider only: a scripted failure or delay for the next model call(s) — one entry per call, null to let it through */
+interface Fault { kind?: ProviderErrorKind; status?: number; retryAfterMs?: number; delayMs?: number }
+const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const flights = singleFlight<unknown>();
+
+/** an item's line in the "already built" list the next item is told about: its title and the codes it made */
+function builtLine(item: { title: string }, raw: unknown): string {
+  const o = (raw && typeof raw === "object" ? raw : {}) as { actions?: { code?: string; title?: string }[] };
+  const codes = (o.actions ?? []).map((a) => a?.code ?? a?.title ?? "").filter(Boolean).slice(0, 12);
+  return `${item.title}${codes.length ? ` (${codes.join(", ")})` : ""}`;
+}
+
+/**
+ * the items a previous request already built, as the browser kept them: by plan item id, objects only, a plan's worth at most.
+ * `applied` marks an item that is already in the open proposal — told to the model as context, never merged again.
+ */
+function sanitizeDone(x: unknown, allowed: Set<string>): Map<string, { raw: unknown; applied: boolean }> {
+  const out = new Map<string, { raw: unknown; applied: boolean }>();
+  if (!Array.isArray(x)) return out;
+  for (const e of x.slice(0, 80)) {
+    const r = e as { id?: unknown; raw?: unknown; applied?: unknown };
+    if (typeof r?.id === "string" && allowed.has(r.id) && r.raw && typeof r.raw === "object" && !out.has(r.id)) out.set(r.id, { raw: r.raw, applied: r.applied === true });
+  }
+  return out;
+}
+
+/** what the provider layer did on the way — retries and a fallback — for the log and the history, never a provider's words */
+function providerNote(events: ProviderEvent[]): { retries: number; fallback: boolean; recovered: boolean } {
+  return { retries: events.filter((e) => e.type === "retry").length, fallback: events.some((e) => e.type === "fallback"), recovered: events.some((e) => e.type === "recovered") };
+}
+
 /** the scripted replies an executed plan consumed: one per approved item */
 const approvedCount = (plan: { items: unknown[] }) => plan.items.length;
 
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown };
+  const startedAt = Date.now();
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   /* the researcher chose "send this once" while the project runs Internal: that one request may reach the model (audit A-2); nothing else may */
@@ -127,9 +176,10 @@ export async function POST(req: NextRequest) {
     passageIds = p.ids;
   }
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
-  const prompt = copilotUserPrompt({
+  /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns */
+  const promptFor = (compact: boolean) => copilotUserPrompt({
     message, outline, surveyLanguage: surveyLanguageOf(def), mode,
-    memory: sanitizeMemory(body.memory), research: research || undefined,
+    memory: compact ? undefined : sanitizeMemory(body.memory), research: compact ? undefined : research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly,
@@ -137,6 +187,9 @@ export async function POST(req: NextRequest) {
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
   });
+  const prompt = promptFor(false);
+  let compactPrompt: string | null = null;
+  const promptOf = (compact: boolean) => (compact ? (compactPrompt ??= promptFor(true)) : prompt);
 
   /* 3: the model — or the cache, for exactly the same request. The answer is not rationed (Phase 7): the provider's ceiling, the expected size reserved */
   const budget = outputBudget(mode === "generate" ? "generate" : mode === "review" ? "review" : uxTurn ? "ux" : "edit");
@@ -158,13 +211,52 @@ export async function POST(req: NextRequest) {
    */
   const stage = body.stage === "execute" ? "execute" : body.stage === "plan" || (body.planFirst !== false && mode === "generate" && !(fake && (fake as { kind?: string }).kind !== "plan")) ? "plan" : null;
   let planFailures: { id: string; failure: TurnFailure }[] = [];
+  let planPending: string[] = [];
   let executedPlan: ChangePlan | null = null;
+  /* this request's clock and what the provider told us on the way */
+  const fakeProvider = aiProviderName() === "fake";
+  const budgetMs = fakeProvider && Number.isFinite(Number(body.budgetMs)) && Number(body.budgetMs) > 0 ? Number(body.budgetMs) : ROUTE_BUDGET_MS;
+  const deadline = startedAt + budgetMs;
+  const events: ProviderEvent[] = [];
+  const onEvent = (e: ProviderEvent) => { events.push(e); };
+  const faults: Fault[] = fakeProvider && Array.isArray(body.faults) ? (body.faults as Fault[]).slice(0, 40) : [];
+  /** the test seam: a scripted fault or delay in front of a model call (nothing, outside the fake provider) */
+  const model = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const f = faults.shift();
+    if (f?.delayMs) await sleepMs(Math.min(5000, f.delayMs));
+    if (f?.kind) throw new ProviderError({ kind: f.kind, status: f.status, retryAfterMs: f.retryAfterMs, detail: "scripted", host: "fake", exhausted: true });
+    return fn();
+  };
+  /** one provider call, once: a request that repeats an identical call still running (a double click, a refresh while the first is in flight) shares it instead of paying for a second */
+  const shared = <T,>(label: string, text: string, fn: () => Promise<T>): Promise<T> =>
+    fakeProvider ? fn() : flights(`${user?.userId ?? "sandbox"}|${surveyId}|${label}|${createHash("sha256").update(text).digest("hex")}`, fn as () => Promise<unknown>) as Promise<T>;
+  /** a prompt the provider says is longer than the model's context window is sent once more in compact form — a bulk job is not lost to its own size */
+  const fitting = async <T,>(run: (compact: boolean) => Promise<T>): Promise<T> => {
+    try { return await run(false); }
+    catch (e) {
+      if (!(isProviderError(e) && e.contextTooLong)) throw e;
+      console.warn("[rescript:copilot]", JSON.stringify({ event: "context too long — retrying compact", surveyId, userId: user?.userId }));
+      return run(true);
+    }
+  };
+  /** the browser is told what happened: the card, the retry and the log all read the same failure */
+  const failureOfError = (e: unknown, where: string): TurnFailure => {
+    const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError(isProviderError(e) ? e : (e as Error)?.message ?? "");
+    console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
+    return failure;
+  };
+  /** a failed turn: nothing was changed, nothing was charged for the failed call, the request is kept — and a temporary failure says when to come back (HTTP 503 + Retry-After) */
+  const failedTurn = (failure: TurnFailure, promptChars: number, extra: Record<string, unknown> = {}) => {
+    const res = NextResponse.json({ ok: false, error: `${failure.message}${failure.retryable ? "" : " Nothing was changed."}`, failure, retryable: !!failure.retryable, saved: true, context: { mode, promptChars, cached: false }, usage: { charge }, ...extra }, { status: failure.retryable ? 503 : 502 });
+    if (failure.retryAfterMs) res.headers.set("retry-after", String(Math.max(1, Math.ceil(failure.retryAfterMs / 1000))));
+    return res;
+  };
   if (stage === "plan") {
     const planPrompt = prompt + planStagePrompt();
     try {
       const pb = outputBudget("plan");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, planPrompt, pb.maxTokens, { timeoutMs: pb.timeoutMs, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations }));
+        () => fitting((c) => shared("plan", promptOf(c) + planStagePrompt(), () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, promptOf(c) + planStagePrompt(), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -172,12 +264,10 @@ export async function POST(req: NextRequest) {
       }
       charge += m.event?.customerCharge ?? 0;
       const plan = coerceChangePlan(fake ?? m.value);
-      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, cached: false }, usage: { charge } });
+      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, cached: false, provider: providerNote(events) }, usage: { charge } });
       // nothing plan-shaped came back: the single-reply turn below, as before (and the scripted reply, if any, is that turn's)
     } catch (e) {
-      console.warn("[rescript:copilot] plan failed", JSON.stringify({ error: (e as Error).message }));
-      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
-      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: planPrompt.length, cached: false }, usage: { charge } }, { status: 502 });
+      return failedTurn(failureOfError(e, "plan"), planPrompt.length);
     }
   }
   if (stage === "execute") {
@@ -187,37 +277,74 @@ export async function POST(req: NextRequest) {
     const approved = plan.items.filter((it) => !wanted || wanted.has(it.id));
     if (!approved.length) return NextResponse.json({ error: "no plan item was approved" }, { status: 400 });
     executedPlan = { ...plan, items: approved };
-    const built: { item: typeof approved[number]; raw: unknown }[] = [];
-    const done: string[] = [];
+    /*
+     * WHAT IS ALREADY BUILT IS NEVER BUILT AGAIN. The browser keeps each
+     * item's reply as it arrives (a checkpoint) and sends the ones it has
+     * back with every continuation: an item in `done` is not asked of the
+     * model again — not after a retry, a rate limit, a refresh or a resume —
+     * so nothing is duplicated and nothing is paid for twice.
+     */
+    const prior = sanitizeDone(body.done, new Set(plan.items.map((i) => i.id)));
+    const finalize = body.finalize === true;
+    /* mergeable: built earlier and not yet in a proposal; the rest of `prior` is context for the next item's prompt */
+    const built: { item: typeof approved[number]; raw: unknown }[] = approved.filter((it) => prior.has(it.id) && !prior.get(it.id)!.applied).map((item) => ({ item, raw: prior.get(item.id)!.raw }));
+    const newlyBuilt: { id: string; raw: unknown }[] = [];
+    const done: string[] = plan.items.filter((it) => prior.has(it.id)).map((it) => builtLine(it, prior.get(it.id)!.raw));
+    let waiting: { retryAfterMs: number; failure: TurnFailure } | null = null;
+    let halted: TurnFailure | null = null;
     const ib = outputBudget("item");
-    for (let i = 0; i < approved.length; i++) {
+    const itemDeadline = deadline - GATE_RESERVE_MS;
+    let slowest = 0;
+    if (!finalize) for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
+      if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
+      /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
+      if (newlyBuilt.length && itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5)) break;
       const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
+      const t0 = Date.now();
       try {
         const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
-          () => completeJson(COPILOT_SYSTEM_PROMPT, itemPrompt, ib.maxTokens, { timeoutMs: ib.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations }));
+          () => fitting((c) => { const p = promptOf(c) + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, p, ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }));
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
           if (!built.length) return NextResponse.json({ ...body, failure: failureOf(body) }, { status: r.status });
-          planFailures.push({ id: item.id, failure: failureOf(body) });
+          halted = failureOf(body);
           break;
         }
         charge += m.event?.customerCharge ?? 0;
-        const itemRaw = fakes[i] ?? m.value;
+        const itemRaw = fakes[newlyBuilt.length] ?? m.value;
         built.push({ item, raw: itemRaw });
-        const o = (itemRaw && typeof itemRaw === "object" ? itemRaw : {}) as { actions?: { op?: string; code?: string; text?: string; title?: string }[] };
-        const codes = (o.actions ?? []).map((a) => a?.code ?? a?.title ?? "").filter(Boolean).slice(0, 12);
-        done.push(`${item.title}${codes.length ? ` (${codes.join(", ")})` : ""}`);
+        newlyBuilt.push({ id: item.id, raw: itemRaw });
+        slowest = Math.max(slowest, Date.now() - t0);
+        done.push(builtLine(item, itemRaw));
       } catch (e) {
-        console.warn("[rescript:copilot] plan item failed", JSON.stringify({ item: item.id, error: (e as Error).message }));
-        const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
+        const failure = failureOfError(e, `plan item ${item.id}`);
+        if (isProviderError(e) && (e.retryable || !["bad_request"].includes(e.kind))) {
+          /* the provider, not this item: a temporary failure waits and resumes; a refused key or spent quota stops and says so — the item stays PENDING either way */
+          if (e.retryable) waiting = { retryAfterMs: Math.max(0, Math.round(e.retryAfterMs ?? (e.kind === "timeout" ? 0 : 5000 + Math.random() * 5000))), failure };
+          else halted = failure;
+          break;
+        }
         planFailures.push({ id: item.id, failure });
       }
     }
+    const failedIds = new Set(planFailures.map((f) => f.id));
+    planPending = approved.filter((it) => !built.some((b) => b.item.id === it.id) && !failedIds.has(it.id)).map((it) => it.id);
     if (!built.length) {
-      const failure = planFailures[0]?.failure ?? describeFailure("unusable");
-      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
+      /* nothing built, nothing to keep: a failure to retry as it is (the browser holds the request) */
+      const failure = halted ?? waiting?.failure ?? planFailures[0]?.failure ?? describeFailure("unusable");
+      return failedTurn(waiting ? { ...failure, retryAfterMs: waiting.retryAfterMs || failure.retryAfterMs } : failure, prompt.length);
+    }
+    if (planPending.length && !finalize) {
+      /* a checkpoint: what was built in this request, what is still to do, why it stopped — the browser stores it and carries on */
+      return NextResponse.json({
+        ok: true, stage: "progress", built: newlyBuilt, builtIds: built.map((b) => b.item.id), pending: planPending, failed: planFailures,
+        ...(waiting ? { waiting: { retryAfterMs: waiting.retryAfterMs, failure: { ...waiting.failure, retryAfterMs: waiting.retryAfterMs || undefined } } } : {}),
+        ...(halted ? { halted } : {}),
+        context: { mode, promptChars: prompt.length, cached: false, provider: providerNote(events), elapsedMs: Date.now() - startedAt, ...(capacityNotice() ? { notice: capacityNotice() } : {}) },
+        usage: { charge },
+      });
     }
     raw = mergeItemReplies(built);
   }
@@ -234,7 +361,7 @@ export async function POST(req: NextRequest) {
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, prompt, maxTokens, { timeoutMs: budget.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations }));
+        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, promptOf(c), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -244,9 +371,7 @@ export async function POST(req: NextRequest) {
       raw = fake ?? m.value;
       if (raw && !fake) { CACHE.set(key, { at: Date.now(), value: raw }); if (CACHE.size > 300) CACHE.delete(CACHE.keys().next().value!); }
     } catch (e) {
-      console.warn("[rescript:copilot] turn failed", JSON.stringify({ error: (e as Error).message }));
-      const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError((e as Error).message);
-      return NextResponse.json({ ok: false, error: `${failure.message} Nothing was changed.`, failure, context: { mode, promptChars: prompt.length, cached: false }, usage: { charge } }, { status: 502 });
+      return failedTurn(failureOfError(e, "turn"), prompt.length);
     }
   }
 
@@ -271,12 +396,12 @@ export async function POST(req: NextRequest) {
   let repair: { refused: string[]; fixed: boolean } | undefined;
   // the failed actions, each "what it was: why" — the first entries of errors, in order
   const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
-  if (applied && refused.length && !cached && !executedPlan && (aiProviderName() !== "fake" || fakes.length > 1)) {
+  if (applied && refused.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
     const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
     try {
       const rb = outputBudget("repair");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
-        () => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, { timeoutMs: rb.timeoutMs, continuations: rb.continuations }));
+        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, { timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent })));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
@@ -306,12 +431,14 @@ export async function POST(req: NextRequest) {
   if (mode === "generate" && applied?.valid && reply.actions.length) {
     coverage = coverageReport(applied.def);
     const nextFake = executedPlan ? fakes[approvedCount(executedPlan)] : fakes[repair ? 2 : 1];
-    if (!coverage.ok && !cached && (aiProviderName() !== "fake" || nextFake)) {
+    /* a partial build is not sent round again to connect what is not there yet; and a pass is only started with time to finish it */
+    const partialBuild = !!executedPlan && (planPending.length > 0 || planFailures.length > 0);
+    if (!coverage.ok && !cached && !partialBuild && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || nextFake)) {
       const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
       try {
         const cb = outputBudget("coverage");
         const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
-          () => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, cb.maxTokens, { timeoutMs: cb.timeoutMs, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations }));
+          () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;
           const raw3 = nextFake ?? m.value;
@@ -338,12 +465,12 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({
     ok: true, reply,
-    ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}) } : {}),
+    ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}), ...(planPending.length ? { planPending, partial: true } : {}) } : {}),
     ...(coverage ? { coverage: { ok: coverage.ok, summary: coverage.summary, unmeasured: coverage.unmeasured, unconnected: coverage.unconnected.map((q) => String(q.code)), hypotheses: coverage.hypotheses } } : {}),
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

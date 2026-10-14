@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { completeJson } from "./index.js";
+import { completeJson, resetProviderState, setProviderLogger, isProviderError } from "./index.js";
 
 /**
  * ONE RETRY, WITH BACK-OFF (Data Analytics audit A-5): a 429, a 5xx or a
@@ -10,6 +10,7 @@ import { completeJson } from "./index.js";
 const KEYS = ["AI_API_URL", "AI_API_KEY", "AI_MODEL", "AI_MODEL_SMALL", "AI_WORKSPACE_ID", "AI_API_HEADERS"];
 async function withEnv(fn: () => Promise<void>) {
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  resetProviderState(); setProviderLogger(() => {});
   const real = globalThis.fetch;
   try { for (const k of KEYS) delete process.env[k]; Object.assign(process.env, { AI_API_URL: "https://retry.test/v1", AI_API_KEY: "k", AI_MODEL: "m" }); await fn(); }
   finally { globalThis.fetch = real; for (const k of KEYS) { delete process.env[k]; if (saved[k] !== undefined) process.env[k] = saved[k]; } }
@@ -53,17 +54,19 @@ test("a request the provider refuses (400, 401, 404) is not retried", async () =
   }
 });
 
-test("still failing after the retry: the cause is named, after exactly two calls", async () => {
+test("still failing after the retries: the cause is named, after exactly four calls (one try, three retries)", async () => {
   await withEnv(async () => {
     let calls = script([new Response("busy", { status: 503 })]);
     await assert.rejects(() => completeJson("s", "u", 100, { retryDelayMs: 1 }), /unavailable \(503\)/);
-    assert.equal(calls(), 2);
+    assert.equal(calls(), 4);
+    resetProviderState();
     calls = script([new Response("limit", { status: 429 })]);
     await assert.rejects(() => completeJson("s", "u", 100, { retryDelayMs: 1 }), /rate-limiting requests \(429\)/);
-    assert.equal(calls(), 2);
+    assert.equal(calls(), 4);
+    resetProviderState();
     calls = script([new TypeError("fetch failed")]);
     await assert.rejects(() => completeJson("s", "u", 100, { retryDelayMs: 1 }), /could not reach the analysis provider/);
-    assert.equal(calls(), 2);
+    assert.equal(calls(), 4);
   });
 });
 
@@ -84,12 +87,15 @@ test("the caller's timeout is final: an abort is not retried and says how long i
   });
 });
 
-test("the wait never outlasts the time budget: a long Retry-After on a short timeout ends as a timeout", async () => {
+test("the wait never outlasts the time budget: a long Retry-After on a short timeout ends at once, saying how long to come back", async () => {
   await withEnv(async () => {
     const calls = script([new Response("limit", { status: 429, headers: { "retry-after": "4" } }), ok()]);
     const t0 = Date.now();
-    await assert.rejects(() => completeJson("s", "u", 100, { timeoutMs: 100 }), /did not answer within|aborted/);
-    assert.ok(Date.now() - t0 < 1500);
+    const err = await completeJson("s", "u", 100, { timeoutMs: 1500 }).catch((e) => e);
+    assert.ok(isProviderError(err));
+    assert.equal(err.kind, "rate_limited");
+    assert.equal(err.retryAfterMs, 4000);
+    assert.ok(Date.now() - t0 < 1500, "did not wait");
     assert.equal(calls(), 1);
   });
 });

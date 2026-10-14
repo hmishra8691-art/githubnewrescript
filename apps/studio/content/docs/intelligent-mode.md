@@ -170,3 +170,14 @@ Two model **tiers** are configured on the server: the large model (`AI_MODEL`) d
 ## Failure, said plainly
 
 A model turn that fails says why on its card and in History — no model configured, the wallet refused, a timeout, the provider refused, the answer was cut off, the answer was words not changes, the answer was empty, internal mode — with what to do next. A sentence the engine cannot read and no model is there to read says what the engine detected and the forms it does read.
+
+### When the AI service is busy, refuses, or the page is reloaded
+
+Intelligent mode keeps your work through a bad moment. The request, the change plan and every item already built are a **checkpoint** — held in the page and in your browser — and are sent back with each continuation, so an item that is built is never asked of the model again, never paid for twice and never duplicated.
+
+- **Busy (rate limit, overload, a slow or dropped connection, the platform's own time limit):** the card says *"Temporarily waiting for AI capacity. Your work has been saved."*, counts down to the provider's own Retry-After (with a bounded, jittered back-off when it gave none) and resumes by itself — *"Resuming survey generation…"* — with **Resume now** to end the wait early. A long build runs as a chain of requests, each within the server's time limit; you press Build once. When it is done: *"Your survey draft is ready for review."*
+- **Not temporary (the connection to the AI service, a permission, a spent usage limit, a model that does not exist):** it is not retried by itself and not mistaken for a rate limit. The card says what it is in plain words, says the work is saved, and gives your administrator the thing to check (`AI_API_KEY`, the model, the provider's billing). **Resume** carries on once it is fixed.
+- **Kept work:** *Review what's ready* opens what is built as a proposal (the rest marked pending); *Build the remaining N items* finishes it as a revision; *Discard* lets it go. A reload brings the card back as *"Your generation was interrupted"* with the same buttons.
+- **Charges:** a failed or paused call is released, not charged; a retried call that succeeds is settled once.
+- **Too long for the model's context window:** the call is sent once more in compact form instead of failing. Output that outgrows the provider's cap is continued, as before. You are told about the provider's allowance only when it reports under 5 % left.
+- **Administrator:** `AI_MAX_CONCURRENCY` paces requests; `AI_FALLBACK_API_URL` / `_KEY` / `_MODEL` name a second provider used only when the first cannot answer; `GET /api/ai/health` shows each provider lane (cooling down, blocked, queued) without keys or prompts.
