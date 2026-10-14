@@ -80,7 +80,7 @@ const trimBase = (s: string) => s.trim().replace(/\/+$/, "");
 /** the chat provider's address and key for THIS call: the user's connection when the call runs inside one, else the installation's */
 function chatBase(): string { const u = userChat(); return u ? trimBase(u.base) : trimBase(process.env.AI_API_URL ?? ""); }
 function chatKey(): string { const u = userChat(); return u ? u.key : (process.env.AI_API_KEY ?? "").trim(); }
-function ttsModelName(): string { return userChat()?.ttsModel || (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1"; }
+function ttsModelName(): string { const u = userChat(); return u ? (u.ttsModel || "tts-1") : (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1"; }
 
 /**
  * The installation's own chat provider as a `Target` — what a user who ALLOWED
@@ -88,11 +88,11 @@ function ttsModelName(): string { return userChat()?.ttsModel || (process.env.AI
  * environment, never from a scope. `null` when no real provider is configured
  * (the fake provider is not a fallback anyone chose).
  */
-export function platformTarget(): Target | null {
-  const base = trimBase(process.env.AI_API_URL ?? "");
+export function platformTarget(env: Record<string, string | undefined> = process.env): Target | null {
+  const base = trimBase(env.AI_API_URL ?? "");
   if (!base || base === "fake:") return null;
-  const model = (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
-  return { provider: "platform", base, key: (process.env.AI_API_KEY ?? "").trim(), model, modelSmall: (process.env.AI_MODEL_SMALL ?? "").trim() || model, platform: true, label: "Platform AI" };
+  const model = (env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+  return { provider: "platform", base, key: (env.AI_API_KEY ?? "").trim(), model, modelSmall: (env.AI_MODEL_SMALL ?? "").trim() || model, platform: true, label: "Platform AI" };
 }
 
 export function aiConfigured(): boolean {

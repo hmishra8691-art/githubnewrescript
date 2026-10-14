@@ -59,6 +59,8 @@ export const AUDIT_EVENTS = [
 
   /* projects */
   "project.created",
+  /* the project's choice of whose AI it uses: the platform's, or each member's own provider */
+  "project.ai_source_changed",
   /*
    * A clone writes TWO records, deliberately: `project.cloned` against the
    * original ("this study was copied, by whom, when") and `project.created`
@@ -232,6 +234,7 @@ export function describeEvent(r: AuditRow): string {
     case "account.unlocked": return `${who} unlocked the account ${target}`;
     case "account.role_changed": return `${who} changed ${target}'s platform role to ${role}`;
 
+    case "project.ai_source_changed": return `${who} set this project\'s AI to ${d.source === "user" ? "each person\'s own provider" : d.source === "platform" ? "the platform\'s AI" : "follow each person\'s own setting"}`;
     case "project.created": return `${who} created this project${d.clonedFrom ? ` as a copy of ${str(d.clonedFromTitle) || "another project"}` : ""}`;
     case "project.cloned": return `${who} cloned this project${d.newTitle ? ` into ${str(d.newTitle)}` : ""}`;
     case "billing.project_budget_changed": return d.mode === "budget"

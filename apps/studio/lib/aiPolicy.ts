@@ -29,8 +29,10 @@ const isSandboxProject = (surveyId: string | null | undefined): boolean => !surv
 
 export type AiMode = "internal" | "cloud";
 export type AiOffReason = "project_internal" | "feature_off" | "unreadable";
-export interface AiSettings { mode: AiMode; disabled: string[] }
-export interface AiDecision { allowed: boolean; reason?: AiOffReason; message?: string }
+/** whose AI the project uses: the platform's, or the acting user's own provider; absent = the user's own setting decides */
+export type AiSource = "platform" | "user";
+export interface AiSettings { mode: AiMode; disabled: string[]; source?: AiSource }
+export interface AiDecision { allowed: boolean; reason?: AiOffReason; message?: string; /** the project's choice of AI source, when it made one */ source?: AiSource }
 export interface AiRefusal { ok: false; reason: "ai_off"; why: AiOffReason; message: string }
 
 /** the AI settings out of a project's `settings` bag — anything unrecognised is the default (cloud, nothing disabled) */
@@ -38,7 +40,8 @@ export function aiSettingsOf(settings: unknown): AiSettings {
   const bag = settings && typeof settings === "object" ? settings as Record<string, unknown> : {};
   const ai = bag.ai && typeof bag.ai === "object" ? bag.ai as Record<string, unknown> : {};
   const disabled = Array.isArray(ai.disabled) ? ai.disabled.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
-  return { mode: ai.mode === "internal" ? "internal" : "cloud", disabled };
+  const source: AiSource | undefined = ai.source === "platform" || ai.source === "user" ? ai.source : undefined;
+  return { mode: ai.mode === "internal" ? "internal" : "cloud", disabled, ...(source ? { source } : {}) };
 }
 
 const OFF_MESSAGE: Record<AiOffReason, string> = {
@@ -51,7 +54,7 @@ const OFF_MESSAGE: Record<AiOffReason, string> = {
 export function decideAi(settings: AiSettings, operation: string, opts: { once?: boolean } = {}): AiDecision {
   if (settings.disabled.some((d) => operation === d || operation.startsWith(d.endsWith("*") ? d.slice(0, -1) : `${d}_`) )) return { allowed: false, reason: "feature_off", message: OFF_MESSAGE.feature_off };
   if (settings.mode === "internal" && !opts.once) return { allowed: false, reason: "project_internal", message: OFF_MESSAGE.project_internal };
-  return { allowed: true };
+  return { allowed: true, ...(settings.source ? { source: settings.source } : {}) };
 }
 
 type Loader = (surveyId: string) => Promise<AiSettings | null>;

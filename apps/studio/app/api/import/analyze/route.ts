@@ -4,6 +4,7 @@ import { aiProviderName, aiConfigured } from "@rescript/ai";
 import { detectFormat, readSource, mapCanonical, buildReport, workload, verifyImport, type ImportScope, type VerificationReport } from "@rescript/import";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi, recordUsage } from "@/lib/metering";
+import { aiReadyFor } from "@/lib/byok/connect";
 import { CUSTOM_LOGIC_SYSTEM_PROMPT } from "@/lib/import/customLogic";
 
 export const dynamic = "force-dynamic";
@@ -88,9 +89,10 @@ export async function POST(req: NextRequest) {
 
   /* the estimate: before anything is charged */
   const importCharge = await meter.estimate(ctx, { eventType: "FILE_UPLOAD", quantity: mb, metadata: { operation: "survey_import" } }).then((b) => b.customerCharge).catch(() => 0);
-  const deep = work && work.aiRequests > 0 && aiConfigured()
+  const aiReady = await aiReadyFor(user, surveyId, "import_custom_logic");
+  const deep = work && work.aiRequests > 0 && aiReady
     ? { requests: work.aiRequests, customerCharge: await estimateAi(meter, ctx, "AI_REQUEST", { estimateText: CUSTOM_LOGIC_SYSTEM_PROMPT + "x".repeat(2400), maxTokens: 700, requests: work.aiRequests, operation: "import_custom_logic" }) }
-    : { requests: work?.aiRequests ?? 0, customerCharge: 0, unavailable: !aiConfigured() };
+    : { requests: work?.aiRequests ?? 0, customerCharge: 0, unavailable: !aiReady };
   const estimate = { import: { customerCharge: importCharge }, deepAnalysis: deep, currency };
 
   if (!canonical) {

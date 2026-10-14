@@ -3,6 +3,7 @@ import { aiConfigured, aiProviderName, completeJson, ocrImage, embedTexts, aiEmb
 import { extractResearchDocument, chunkResearchDocument } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
+import { aiReadyFor } from "@/lib/byok/connect";
 import { outputBudget } from "@/lib/copilot/budget";
 import { DOC_SUMMARY_SYSTEM_PROMPT, coerceDocSummary, summaryInput } from "@/lib/copilot/research";
 import { researchStoreFor, type StoredChunk } from "@/lib/copilot/store";
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
     /* OCR: the pages of a scan, through the vision model, one metered call per page */
     let ocrPages = 0;
     if (doc.images.length) {
-      if (!aiConfigured()) warnings.push(`${doc.images.length} scanned page${doc.images.length === 1 ? "" : "s"} could not be read: no AI provider is configured for OCR.`);
+      if (!(await aiReadyFor(user, surveyId, "copilot_ocr"))) warnings.push(`${doc.images.length} scanned page${doc.images.length === 1 ? "" : "s"} could not be read: no AI provider is configured for OCR.`);
       else {
         for (const img of doc.images.slice(0, MAX_OCR_PAGES)) {
           const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: "x".repeat(4000), maxTokens: 2500, operation: "copilot_ocr" }, () => ocrImage(img.bytes, img.mime, { timeoutMs: 90_000 }).catch((e) => { warnings.push(`OCR failed on page ${img.page}: ${(e as Error).message}`); return ""; }));
@@ -117,7 +118,7 @@ export async function POST(req: NextRequest) {
     }
     /* the research card: once, from the document's most informative passages */
     let summary = null;
-    if (aiConfigured()) {
+    if (await aiReadyFor(user, surveyId, "copilot_document_summary")) {
       const input = summaryInput(chunks);
       const prompt = `Document: ${file.name}\n\n${input.text}`;
       try {

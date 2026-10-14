@@ -3,9 +3,13 @@ import {
   Meter, MemoryMeterStore, SupabaseMeterStore, estimateTokens,
   type MeterContext, type MeterRefusal, type UsageSpec, type UsageEvent, type Environment,
 } from "@rescript/billing";
-import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
+import { aiModelName, collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope } from "@rescript/ai";
 import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate";
 import { aiAllowed, aiRefusal, type AiRefusal } from "./aiPolicy";
+import { connectionFor } from "./byok/connect";
+import { allowPrivateFrom } from "./byok/resolve";
+import { meteredCore, usageToSpec, type ConnectionRefusal, type Metered, type RunDeps } from "./meterRun";
+export { usageToSpec, type ConnectionRefusal, type Metered };
 export { aiSpec, meterModel, meterProvider, type AiEstimate };
 import { supabaseAdmin } from "@/lib/admin";
 import { isFailure, requireProjectFor, type AuthedUser, type ProjectContext } from "@/lib/guard";
@@ -176,24 +180,6 @@ export async function billingProjectFor(user: AuthedUser | null, surveyId: unkno
 }
 
 /** Provider ids as the cost registry knows them; the fake provider is priced as the real one only when simulation is on. */
-/** Turn collected provider reports into the usage the meter settles. */
-export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" | "stt" | "translate" }): Partial<UsageSpec> {
-  const t = sumUsage(usage);
-  const provider = t.provider ?? "fake";
-  const kind = usage[0]?.kind ?? fallback.kind;
-  /*
-   * Speech-to-text is priced PER AUDIO MINUTE, not per token. Without this
-   * branch an stt report fell through to the chat one and was billed as
-   * tokens it does not have — quantity zero, so a transcription cost
-   * nothing and the rate row `ai.stt.*` was never reached.
-   */
-  if (kind === "stt") return { provider: meterProvider(provider, "stt"), service: "stt", model: meterModel(provider, t.model, "stt"), quantity: (t.seconds ?? 0) / 60, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, seconds: t.seconds ?? 0 } };
-  if (kind === "translate") return { provider: meterProvider(provider, "translate"), service: "translate", model: meterModel(provider, t.model, "translate"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
-  if (kind === "tts") return { provider: meterProvider(provider, "tts"), service: "tts", model: meterModel(provider, t.model, "tts"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
-  return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
-}
-
-export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | MeterRefusal | AiRefusal;
 
 /**
  * Run an AI call under the meter: reserve from the prompt size and the
@@ -204,25 +190,26 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  * for the "estimated cost" a person sees before choosing to run it (the
  * import brief §33). Touches no wallet.
  */
+const runDeps: RunDeps = { connectionFor, allowPrivate: () => allowPrivateFrom() };
+
 export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate): Promise<number> {
-  try { return (await meter.estimate(ctx, aiSpec(eventType, est))).customerCharge; } catch { return 0; }
+  try {
+    /* on the user's own provider the platform charges nothing for the model — the estimate says so (the provider bills the user directly) */
+    const conn = await connectionFor({ userId: ctx.userId, customerId: ctx.customerId, surveyId: ctx.surveyId, operation: est.operation });
+    if (conn.kind === "user" && !conn.scope.fallbacks.some((f) => f.platform)) return 0; return (await meter.estimate(ctx, aiSpec(eventType, est))).customerCharge; } catch { return 0; }
 }
 
 export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate, fn: () => Promise<T>): Promise<Metered<T>> {
-  /* the project's AI switch (audit A-2) — asked before anything is reserved, so an off project makes no provider call and holds no balance */
-  const decision = await aiAllowed(ctx.surveyId, est.operation, { once: est.consent === "once" });
-  if (!decision.allowed) return aiRefusal(decision);
-  const hold = await meter.reserve(ctx, aiSpec(eventType, est));
-  if (!hold.ok) return hold;
-  try {
-    const { value, usage } = await collectUsage(fn);
-    if (!usage.length) { await meter.release(hold); return { ok: true, value, event: null }; }
-    const event = await meter.settle(hold, { ...usageToSpec(usage, { kind: "chat" }), metadata: { operation: est.operation, ...usageToSpec(usage, { kind: "chat" }).metadata } });
-    return { ok: true, value, event };
-  } catch (e) {
-    await meter.release(hold).catch(() => {});
-    throw e;
-  }
+  return meteredCore(runDeps, meter, ctx, { operation: est.operation, once: est.consent === "once", kind: "chat", reserve: () => aiSpec(eventType, est) }, fn);
+}
+
+/** Run a text-to-speech call under the meter: priced per character, on the user's own provider when they chose one that can speak. */
+export async function meteredTts<T>(meter: Meter, ctx: MeterContext, o: { operation: string; characters: number; language?: string }, fn: () => Promise<T>): Promise<Metered<T>> {
+  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
+  return meteredCore(runDeps, meter, ctx, {
+    operation: o.operation, kind: "tts",
+    reserve: () => ({ eventType: "TEXT_TO_SPEECH_CHARACTER", provider: meterProvider(providerName, "tts"), service: "tts", model: meterModel(providerName, (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", "tts"), quantity: o.characters, metadata: { operation: o.operation, ...(o.language ? { language: o.language } : {}) } }),
+  }, fn);
 }
 
 /**
@@ -287,8 +274,9 @@ export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est
 }
 
 /** The HTTP shape of a refusal: 402 when the balance is short, 423 when the project is read-only or suspended. */
-export function refusalResponse(r: MeterRefusal | AiRefusal): NextResponse {
+export function refusalResponse(r: MeterRefusal | AiRefusal | ConnectionRefusal): NextResponse {
   if (r.reason === "ai_off") return NextResponse.json({ error: r.message, code: "ai_disabled", why: (r as AiRefusal).why }, { status: 403 });
+  if (r.reason === "ai_connection") return NextResponse.json({ error: r.message, code: "ai_connection", why: r.code, source: r.source }, { status: r.code === "byok_blocked" ? 403 : r.code === "vault_unavailable" ? 503 : 409 });
   const status = r.reason === "insufficient_balance" ? 402 : r.reason === "read_only" || r.reason === "suspended" ? 423 : 503;
   return NextResponse.json({ error: r.message, code: `wallet_${r.reason}`, wallet: r.wallet ? { balance: r.wallet.balance, state: r.wallet.state, currency: r.wallet.currency } : null, estimate: r.estimate ? { customerCharge: r.estimate.customerCharge } : null }, { status });
 }

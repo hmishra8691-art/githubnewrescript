@@ -89,25 +89,29 @@ test("every file that reaches a model provider passes the project's AI switch, o
     const rel = relative(ROOT, f).split("\\").join("/");
     if (EXEMPT[rel]) continue;
     const src = readFileSync(f, "utf8");
-    if (!/\b(meteredAi|meteredTranslation|aiAllowed|withAiGate)\(/.test(src)) bare.push(rel);
+    if (!/\b(meteredAi|meteredTts|meteredTranslation|aiAllowed|withAiGate)\(/.test(src)) bare.push(rel);
   }
   assert.deepEqual(bare, [], "these reach a provider without the project's AI switch");
 });
 
-test("meteredAi asks the switch BEFORE it reserves anything, so an off project holds no balance and reaches no provider", () => {
-  const src = readFileSync(join(ROOT, "lib/metering.ts"), "utf8");
-  const body = src.slice(src.indexOf("export async function meteredAi"), src.indexOf("export async function meteredStt") > 0 ? src.indexOf("export async function meteredStt") : undefined);
+test("the metering core asks the switch BEFORE it resolves whose AI or reserves anything, so an off project holds no balance and reaches no provider", () => {
+  const src = readFileSync(join(ROOT, "lib/meterRun.ts"), "utf8");
+  const body = src.slice(src.indexOf("export async function meteredCore"));
   const gate = body.indexOf("aiAllowed(");
-  assert.ok(gate > 0, "meteredAi asks aiAllowed");
+  assert.ok(gate > 0, "the core asks aiAllowed");
+  assert.ok(gate < body.indexOf("deps.connectionFor("), "before it decides whose AI");
   assert.ok(gate < body.indexOf("meter.reserve("), "before it reserves");
-  assert.ok(gate < body.indexOf("await collectUsage(fn)") || body.indexOf("collectUsage(fn)") > gate, "and before the call");
-  const tr = src.slice(src.indexOf("export async function meteredTranslation"));
+  assert.ok(gate < body.indexOf("collectUsage("), "and before the call");
+  const metering = readFileSync(join(ROOT, "lib/metering.ts"), "utf8");
+  assert.match(metering.slice(metering.indexOf("export async function meteredAi"), metering.indexOf("export async function meteredTts")), /meteredCore\(/, "meteredAi walks the core");
+  const tr = metering.slice(metering.indexOf("export async function meteredTranslation"));
   assert.ok(tr.indexOf("aiAllowed(") > 0 && tr.indexOf("aiAllowed(") < tr.indexOf("meter.reserve("), "a translation by the language model asks too");
 });
 
-test("the hand-reserving sites ask the switch before they reserve", () => {
-  for (const [file, marker] of [["lib/analyticsBuilder.ts", "billing.meter.reserve("], ["app/api/ai/tts/route.ts", "billing.meter.reserve("]] as const) {
+test("the speech sites that used to reserve by hand now walk the same door, so the switch is asked for them too", () => {
+  for (const file of ["lib/analyticsBuilder.ts", "app/api/ai/tts/route.ts"]) {
     const src = readFileSync(join(ROOT, file), "utf8");
-    assert.ok(src.indexOf("aiAllowed(") > 0 && src.indexOf("aiAllowed(") < src.indexOf(marker), file);
+    assert.ok(/meteredTts\(/.test(src), `${file} uses the door`);
+    assert.equal(/meter\.reserve\(/.test(src), false, `${file} does not reserve by hand`);
   }
 });

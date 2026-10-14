@@ -28,7 +28,8 @@ export type FailureCode =
   | "empty"            // the answer had no content
   | "unusable"         // valid JSON with no reply, actions or findings
   | "engine_unparsed"  // no model, and the engine could not read the sentence
-  | "internal_mode";   // the project runs internally: no model is called (Phase 6)
+  | "internal_mode"    // the project runs internally: no model is called (Phase 6)
+  | "connection";      // the user chose their own AI provider and it cannot be used (no key, workspace policy, missing capability)
 
 export interface TurnFailure {
   code: FailureCode;
@@ -66,11 +67,36 @@ const TITLES: Record<FailureCode, string> = {
   unusable: "THE MODEL'S ANSWER HAD NOTHING TO APPLY",
   engine_unparsed: "THE ENGINE COULD NOT READ THIS",
   internal_mode: "INTERNAL MODE — NO MODEL CALLED",
+  connection: "YOUR AI PROVIDER IS NOT READY",
 };
 
+/** the cards for a failure on the USER'S OWN provider: the fix is theirs, in Settings — not "ask your administrator" */
+const OWN_TITLES: Partial<Record<FailureCode, string>> = {
+  auth: "YOUR AI PROVIDER REJECTED YOUR KEY",
+  forbidden: "YOUR AI PROVIDER DID NOT ALLOW THIS REQUEST",
+  quota: "YOUR AI PROVIDER'S USAGE LIMIT WAS REACHED",
+  not_found: "YOUR CHOSEN AI MODEL WAS NOT FOUND",
+};
+const SETTINGS = "Settings → AI & Integrations → AI Provider Configuration";
+
+function ownOverride(f: TurnFailure, own: string): TurnFailure {
+  const saved = "Your request and anything already generated are saved.";
+  const press = "Then press Resume — nothing needs to be typed again.";
+  const { admin: _admin, ...rest } = f;
+  switch (f.code) {
+    case "auth": return { ...rest, title: OWN_TITLES.auth!, message: `${own} did not accept your API key. ${saved}`, next: [`Open ${SETTINGS} and replace the key — the old one may have been revoked, expired or copied wrongly. Use Test connection to check it.`, press] };
+    case "forbidden": return { ...rest, title: OWN_TITLES.forbidden!, message: `${own} accepted your key but did not allow this request — usually the key's permissions, project or region, or access to this model. ${saved}`, next: [`Check the key's permissions with ${own}, or choose another model in ${SETTINGS}.`, press] };
+    case "quota": return { ...rest, title: OWN_TITLES.quota!, message: `Your ${own} account has no credit left or has reached its spending limit. ${saved} Nothing was charged for the failed call.`, next: [`Add credit or raise the limit with ${own}.`, `Or, in ${SETTINGS}, allow the platform's AI as a backstop, or switch this feature to the platform's AI.`, press] };
+    case "not_found": return { ...rest, title: OWN_TITLES.not_found!, message: `${own} does not know the model you chose, or your key cannot use it. ${saved}`, next: [`Choose another model in ${SETTINGS} (the model list there shows what your key can use).`, press] };
+    case "provider": return { ...rest, message: `${own} could not process this request. Nothing was changed, and your request is kept.`, next: ["Try rephrasing, or ask for one block at a time.", `Use Test connection in ${SETTINGS} to check the key and model.`] };
+    default: return rest;
+  }
+}
+
 /** The failure for a code, with the cause and the next steps written for the researcher. */
-export function describeFailure(code: FailureCode, detail?: string, extra: { retryAfterMs?: number } = {}): TurnFailure {
-  const f = describeCode(code, detail);
+export function describeFailure(code: FailureCode, detail?: string, extra: { retryAfterMs?: number; /** the user's own provider's name, when the failing call was on it */ own?: string } = {}): TurnFailure {
+  const f0 = describeCode(code, detail);
+  const f = extra.own ? ownOverride(f0, extra.own) : f0;
   const retryable = code === "capacity" || code === "network" || code === "timeout";
   return { ...f, ...(retryable ? { retryable: true } : {}), ...(extra.retryAfterMs ? { retryAfterMs: Math.round(extra.retryAfterMs) } : {}) };
 }
@@ -148,6 +174,10 @@ function describeCode(code: FailureCode, detail?: string): TurnFailure {
       return { code, title: TITLES[code], detail: d,
         message: "The engine reads instructions that name their objects — a question by code or variable, an option by label, a condition with its operator. It could not resolve this one on its own.",
         next: ["Examples it reads: “Terminate if Q1 < 25”, “Show Q12 only if Q1 is Male”, “Make Q5 required”, “Add an Other option to Q3”, “What will break if I delete Q6?”.", "With a language model configured, descriptive requests are read by the model and applied through the same review."] };
+    case "connection":
+      return { code, title: TITLES[code], detail: d,
+        message: d ?? "The AI provider you chose for this feature cannot be used right now.",
+        next: [`Open ${SETTINGS} to fix it — or switch this feature to the platform's AI there.`, "Nothing was sent to a model and nothing was changed."] };
     case "internal_mode":
       return { code, title: TITLES[code], detail: d,
         message: "This project runs in internal mode: nothing is sent to a language model, so only the engine's own reading is available — instructions that name their objects, the standard items, the research workflow's own steps.",
@@ -169,17 +199,17 @@ const CODE_OF_KIND: Record<string, FailureCode> = {
  * busy, a connection to fix, a limit reached — and never quotes the
  * provider's status code or response body (those are in the server log).
  */
-export function failureFromError(input: string | { message?: string; kind?: string; retryAfterMs?: number; status?: number; detail?: string; name?: string }): TurnFailure {
+export function failureFromError(input: string | { message?: string; kind?: string; retryAfterMs?: number; status?: number; detail?: string; name?: string }, opts: { own?: string } = {}): TurnFailure {
   if (input && typeof input === "object" && typeof input.kind === "string" && input.kind in CODE_OF_KIND) {
     const code = CODE_OF_KIND[input.kind];
     const secs = /within (\d+ seconds)/i.exec(input.message ?? "")?.[1];
-    return describeFailure(code, code === "timeout" ? secs : code === "network" ? input.detail : undefined, { retryAfterMs: input.retryAfterMs });
+    return describeFailure(code, code === "timeout" ? secs : code === "network" ? input.detail : undefined, { retryAfterMs: input.retryAfterMs, ...(opts.own ? { own: opts.own } : {}) });
   }
   const m = typeof input === "string" ? input : input?.message ?? "";
   if (/did not answer within (\d+) seconds/i.test(m)) return describeFailure("timeout", /within (\d+ seconds)/i.exec(m)?.[1]);
   const status = /\((\d{3})\)/.exec(m)?.[1];
   const refused = /refused the request \((\d{3})\)/i.exec(m);
-  if (refused) return describeFailure(refused[1] === "401" ? "auth" : refused[1] === "403" ? "forbidden" : refused[1] === "404" ? "not_found" : "provider");
+  if (refused) return describeFailure(refused[1] === "401" ? "auth" : refused[1] === "403" ? "forbidden" : refused[1] === "404" ? "not_found" : "provider", undefined, opts.own ? { own: opts.own } : {});
   if (/rate-limiting|is unavailable \(|overloaded/i.test(m) || status === "429") return describeFailure("capacity");
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|socket|ECONNRESET|TLS|certificate|could not reach/i.test(m)) return describeFailure("network", m.slice(0, 160));
   return describeFailure("provider");

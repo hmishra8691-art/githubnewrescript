@@ -5,8 +5,9 @@ import {
   type AnalysisDefinition, type AnalysisResult, type BuilderItem, type GatedInterpretation, type ReportBrief, type StoryDefinition,
 } from "@rescript/analytics";
 import type { AuthedUser } from "@/lib/guard";
-import { billingProjectFor, meteredAi, meterModel, meterProvider, usageToSpec } from "@/lib/metering";
+import { billingProjectFor, meteredAi, meteredTts } from "@/lib/metering";
 import { aiAllowed } from "@/lib/aiPolicy";
+import { aiReadyFor, connectionTag } from "@/lib/byok/connect";
 import { keepReply, recordAiRefused, recordAiText, replyFromCache, replyKey } from "@/lib/aiText";
 import { compute, type LoadedContext } from "@/lib/analytics";
 export { parseBrief } from "@/lib/analyticsBrief";
@@ -43,7 +44,7 @@ export type ModelStatus = "not_asked" | "no_model" | "gated" | "nothing" | "ai_o
  */
 export async function modelInterpretation(user: AuthedUser | null, surveyId: string, brief: ReportBrief, items: readonly BuilderItem[], opts: { ask: boolean; fake?: unknown; db?: SupabaseClient }): Promise<{ interpretation: GatedInterpretation | null; status: ModelStatus; detail: string; withheld?: Withheld[] }> {
   if (!opts.ask) return { interpretation: null, status: "not_asked", detail: "Interpretation was not requested." };
-  if (!aiConfigured()) return { interpretation: null, status: "no_model", detail: "No AI model is configured for this workspace, so no interpretation was written. Findings are unaffected." };
+  if (!(await aiReadyFor(user, surveyId, "analytics_interpretation"))) return { interpretation: null, status: "no_model", detail: "No AI model is configured for this workspace, so no interpretation was written. Findings are unaffected." };
   const red = redactItemsForModel(items.filter((i) => !i.result.error && i.result.base.n > 0).slice(0, 12));
   const usable = red.items;
   if (!usable.length) return { interpretation: null, status: "nothing", detail: red.withheld.length ? "Every result rests on groups too small to send to a model, so no interpretation was written." : "There are no usable results to interpret.", withheld: red.withheld };
@@ -58,7 +59,8 @@ export async function modelInterpretation(user: AuthedUser | null, surveyId: str
   if (!allowed.allowed) { void recordAiRefused(who, "analytics_interpretation", allowed.reason ?? "project_internal"); return { interpretation: null, status: "ai_off", detail: allowed.message ?? "AI is off for this project." }; }
   if (!raw) {
     const prompt = redactPrompt(`${INTERPRETATION_INSTRUCTIONS}\n\n${interpretationBrief(brief, usable)}`).text;
-    const key = replyKey({ op: "interpretation", pv, model, claims: claimsHash(claims), brief: hash64(prompt) });
+    const conn = await connectionTag({ userId: user?.userId, customerId: user?.customerId, surveyId, operation: "analytics_interpretation" });
+    const key = replyKey({ op: "interpretation", pv, model, claims: claimsHash(claims), brief: hash64(prompt), ...(conn ? { conn } : {}) });
     const hit = await replyFromCache<unknown>(opts.db, surveyId, key);
     if (hit) { raw = hit; cached = true; }
     else {
@@ -86,26 +88,25 @@ export interface Narration { audio: Record<string, string>; narrated: number; fa
 export async function narrateStory(user: AuthedUser | null, surveyId: string, story: Pick<StoryDefinition, "scenes">, opts: { language?: string } = {}): Promise<Narration> {
   const audio: Record<string, string> = {}; const failed: string[] = [];
   const scenes = story.scenes.filter((s) => !s.hidden && s.narration.trim());
-  if (!aiConfigured()) return { audio, narrated: 0, failed, status: "not_configured", message: "No speech provider is configured (AI_API_URL / AI_API_KEY, optionally AI_TTS_MODEL), so the story was exported without narration." };
+  if (!(await aiReadyFor(user, surveyId, "story_narration"))) return { audio, narrated: 0, failed, status: "not_configured", message: "No speech provider is configured (AI_API_URL / AI_API_KEY, optionally AI_TTS_MODEL), so the story was exported without narration." };
   const billing = await billingProjectFor(user, surveyId, "analytics.export");
   if ("response" in billing) return { audio, narrated: 0, failed, status: "refused", message: "The workspace could not be charged for narration, so the story was exported without it." };
-  /* this reserves by hand, so it asks the project's AI switch itself (audit A-2) */
-  const allowed = await aiAllowed(billing.ctx.surveyId, "story_narration");
-  if (!allowed.allowed) return { audio, narrated: 0, failed, status: "refused", message: `${allowed.message} The story was exported without narration.` };
-  const providerName = process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible";
   let chars = 0;
   for (const s of scenes) {
     const text = s.narration.slice(0, 1200);
     if (chars + text.length > 8000) { failed.push(s.id); continue; }
     chars += text.length;
-    const hold = await billing.meter.reserve(billing.ctx, { eventType: "TEXT_TO_SPEECH_CHARACTER", provider: meterProvider(providerName, "tts"), service: "tts", model: meterModel(providerName, (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", "tts"), quantity: text.length, metadata: { operation: "story_narration" } });
-    if (!hold.ok) { failed.push(...scenes.slice(scenes.indexOf(s)).map((x) => x.id).filter((id) => !failed.includes(id))); return { audio, narrated: Object.keys(audio).length, failed, status: Object.keys(audio).length ? "partial" : "refused", message: `Narration stopped: ${hold.message}` }; }
-    try {
-      const { value: out, usage } = await collectUsage(() => synthesizeSpeech(text, { language: opts.language ?? "en", format: "mp3" }));
-      if (!out || !usage.length) { await billing.meter.release(hold).catch(() => {}); failed.push(s.id); continue; }
-      await billing.meter.settle(hold, { ...usageToSpec(usage, { kind: "tts" }), metadata: { operation: "story_narration" } }).catch((e: unknown) => console.warn("[rescript:billing] story narration settle failed", (e as Error)?.message));
-      audio[s.id] = `data:${out.mimeType};base64,${Buffer.from(out.bytes).toString("base64")}`;
-    } catch (e) { await billing.meter.release(hold).catch(() => {}); console.warn("[analytics] narration failed for a scene:", (e as Error)?.message); failed.push(s.id); }
+    /* one door: the project's AI switch, then whose AI (the user's own provider if it can speak), then the wallet */
+    let m;
+    try { m = await meteredTts(billing.meter, billing.ctx, { operation: "story_narration", characters: text.length }, () => synthesizeSpeech(text, { language: opts.language ?? "en", format: "mp3" })); }
+    catch (e) { console.warn("[analytics] narration failed for a scene:", (e as Error)?.message); failed.push(s.id); continue; }
+    if (!m.ok) {
+      failed.push(...scenes.slice(scenes.indexOf(s)).map((x) => x.id).filter((id) => !failed.includes(id)));
+      return { audio, narrated: Object.keys(audio).length, failed, status: Object.keys(audio).length ? "partial" : "refused", message: `Narration stopped: ${m.message}` };
+    }
+    const out = m.value;
+    if (!out || !m.event) { failed.push(s.id); continue; }
+    audio[s.id] = `data:${out.mimeType};base64,${Buffer.from(out.bytes).toString("base64")}`;
   }
   const narrated = Object.keys(audio).length;
   return { audio, narrated, failed, status: !narrated ? "not_configured" : failed.length ? "partial" : "ok", message: !narrated ? "The speech provider returned no audio, so the story was exported without narration." : failed.length ? `${narrated} of ${scenes.length} scenes were narrated; the others are silent.` : `All ${narrated} scenes narrated.` };

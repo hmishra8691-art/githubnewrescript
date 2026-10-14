@@ -46,6 +46,17 @@ export type BillableEventDef = z.infer<typeof BillableEventDef>;
 export const DEFAULT_BILLABLE_EVENTS: BillableEventDef[] = [
   { type: "AI_REQUEST", label: "AI request", category: "ai", unit: "request", billable: true, rate: null, description: "One call to the AI model — priced from its input and output tokens (AI_INPUT_TOKEN / AI_OUTPUT_TOKEN rates).", active: true },
   /*
+   * THE USER'S OWN PROVIDER. A researcher who connected their own AI provider
+   * (bring-your-own-key) pays that provider directly; the platform neither
+   * resells nor charges for the model. The call is still RECORDED — who, what,
+   * which provider and model, how many tokens — so usage, attribution and
+   * support have the same picture as for platform AI, at a customer charge of
+   * zero and a platform cost of zero. Not billable, never reserves a wallet.
+   * Platform fees (storage, exports, speech minutes on the platform's key…)
+   * are separate events and are untouched.
+   */
+  { type: "AI_REQUEST_BYOK", label: "AI request (own provider)", category: "ai", unit: "request", billable: false, rate: null, description: "One call to the user's own AI provider. Recorded for attribution; the platform neither pays nor charges for it.", active: true },
+  /*
    * NOT CHARGEABLE EVENTS — the two halves AI_REQUEST is PRICED FROM.
    *
    * Nothing emits these and nothing should: an AI_REQUEST already carries the

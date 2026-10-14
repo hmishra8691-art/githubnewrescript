@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { aiConfigured, aiProviderName } from "@rescript/ai";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
+import { aiReadyFor } from "@/lib/byok/connect";
 
 /**
  * WHO MAY SPEND THE AI PROVIDER FROM THE STUDIO — shared by the rephrase,
@@ -13,11 +14,14 @@ import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
  * here ever returns the key or the provider URL.
  */
 export async function requireAiCaller(req: NextRequest): Promise<{ ok: true; user: AuthedUser | null } | { ok: false; response: NextResponse }> {
-  if (!aiConfigured()) return { ok: false, response: NextResponse.json({ error: "AI is not configured on this Studio" }, { status: 501 }) };
+  const unconfigured = () => ({ ok: false as const, response: NextResponse.json({ error: "AI is not configured on this Studio" }, { status: 501 }) });
   const user = await requireUser(req);
   if (isFailure(user)) {
+    if (!aiConfigured()) return unconfigured();
     if (aiProviderName() !== "fake") return { ok: false, response: user.response };
     return { ok: true, user: null };
   }
+  /* no platform model is not "no AI" for a person who connected their own provider: the metered call itself says whether it can be used */
+  if (!aiConfigured() && !(await aiReadyFor(user, null, "additional"))) return unconfigured();
   return { ok: true, user };
 }

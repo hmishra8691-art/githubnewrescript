@@ -7,6 +7,7 @@ import {
 import type { SurveyDefinition } from "@rescript/schema";
 import type { AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
+import { aiReadyFor } from "@/lib/byok/connect";
 import { compute, type LoadedContext } from "@/lib/analytics";
 export { applyOps, undoRecords, type AppliedItem, type Undone } from "@/lib/analyticsAskApply";
 
@@ -59,7 +60,7 @@ export async function propose(db: SupabaseClient, user: AuthedUser | null, surve
   const ctx = { ...(await askContext(db, surveyId, loaded, dataset, { results: true })), ...(opts.focus ? { focus: opts.focus } : {}) };
   const p = proposeFromText(request, ctx);
   if (!opts.model || !p.unread.length) return { ...p, model: { status: "not_asked", detail: "" } };
-  if (!aiConfigured()) return { ...p, model: { status: "no_model", detail: "No AI model is configured, so only the parts that could be read by rules were proposed." } };
+  if (!(await aiReadyFor(user, surveyId, "analytics_ask"))) return { ...p, model: { status: "no_model", detail: "No AI model is configured, so only the parts that could be read by rules were proposed." } };
   let raw: unknown = aiProviderName() === "fake" && opts.fake && typeof opts.fake === "object" ? opts.fake : null;
   if (!raw) {
     const billing = await billingProjectFor(user, surveyId, "analytics.edit");

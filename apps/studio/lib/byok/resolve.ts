@@ -41,7 +41,7 @@ export type RefusalCode =
   | "unsupported_feature"; // user-managed is not available for this feature yet
 
 export type Resolution =
-  | { kind: "platform"; reason: "project_platform" | "user_platform" | "default" }
+  | { kind: "platform"; reason: "project_platform" | "user_platform" | "default" | "hybrid_capability" }
   | { kind: "user"; source: "user" | "project"; scope: ChatScope; credentialId: string; settingUpdatedAt: string; skippedFallbacks: string[] }
   | { kind: "refused"; code: RefusalCode; message: string; source: "user" | "project" };
 
@@ -107,7 +107,12 @@ export async function resolveConnection(input: ResolveInput): Promise<Resolution
   const primary = await targetOf(userId, await store.getCredential(userId, setting.credentialId), setting.config, env);
   if (!primary.ok) return refuse(primary.code, primary.message, source);
   const def = providerById(primary.config.provider)!;
-  for (const need of input.need ?? []) if (!def.capabilities.includes(need)) return refuse("capability_missing", `${def.label} cannot be used for this: it does not support ${need.replace("_", " ")}.`, source);
+  for (const need of input.need ?? []) {
+    if (def.capabilities.includes(need)) continue;
+    /* HYBRID: the user allowed the platform as a backstop, so what their provider cannot do (speech synthesis, say) is done by the platform, and billed as the platform's */
+    if (setting.allowPlatformFallback && platformTarget(env)) return { kind: "platform", reason: "hybrid_capability" };
+    return refuse("capability_missing", `${def.label} cannot be used for this: it does not support ${need.replace("_", " ")}. Choose a provider that does, or allow the platform's AI as a backstop in Settings → AI & Integrations.`, source);
+  }
 
   const fallbacks: Target[] = [];
   const skipped: string[] = [];
@@ -115,10 +120,22 @@ export async function resolveConnection(input: ResolveInput): Promise<Resolution
     const t = await targetOf(userId, await store.getCredential(userId, f.credentialId), f.config, env);
     if (t.ok) fallbacks.push(t.target); else skipped.push(t.message); // a broken fallback is skipped and reported — never replaced by something the user did not choose
   }
-  if (setting.allowPlatformFallback) { const p = platformTarget(); if (p) fallbacks.push(p); }
+  if (setting.allowPlatformFallback) { const p = platformTarget(env); if (p) fallbacks.push(p); }
 
   const cred = await store.getCredential(userId, setting.credentialId);
   if (cred && (!cred.lastUsedAt || Date.now() - Date.parse(cred.lastUsedAt) > TOUCH_EVERY_MS)) void store.updateCredential(userId, cred.id, { lastUsedAt: new Date().toISOString() }).catch(() => undefined);
 
   return { kind: "user", source, credentialId: setting.credentialId, settingUpdatedAt: setting.updatedAt, skippedFallbacks: skipped, scope: { ...primary.target, source, fallbacks } };
+}
+
+/** what a screen may be told about a resolution: who provides the AI and why — never a key, a header or a fallback's credential */
+export type ResolutionView =
+  | { kind: "platform"; reason: Extract<Resolution, { kind: "platform" }>["reason"] }
+  | { kind: "user"; source: "user" | "project"; provider: string; model: string; label: string | null; fallbacks: number; platformBackstop: boolean }
+  | { kind: "refused"; code: RefusalCode; message: string };
+
+export function viewOfResolution(r: Resolution): ResolutionView {
+  if (r.kind === "platform") return { kind: "platform", reason: r.reason };
+  if (r.kind === "refused") return { kind: "refused", code: r.code, message: r.message };
+  return { kind: "user", source: r.source, provider: r.scope.provider, model: r.scope.model, label: r.scope.label ?? null, fallbacks: r.scope.fallbacks.length, platformBackstop: r.scope.fallbacks.some((f) => f.platform) };
 }

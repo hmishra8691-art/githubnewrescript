@@ -4,6 +4,8 @@ import { SurveyDefinition } from "@rescript/schema";
 import { aiConfigured, aiProviderName, completeJson, embedTexts, aiEmbeddingsModelName, isAiReplyError, isProviderError, capacityNotice, ProviderError, type ProviderErrorKind, type ProviderEvent } from "@rescript/ai";
 import { describeFailure, failureFromError, failureFromReplyError, type TurnFailure } from "@/lib/copilot/failure";
 import { singleFlight } from "@/lib/singleFlight";
+import { aiReadyFor, connectionFor } from "@/lib/byok/connect";
+import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
@@ -113,12 +115,12 @@ export async function POST(req: NextRequest) {
   /* the researcher chose "send this once" while the project runs Internal: that one request may reach the model (audit A-2); nothing else may */
   const consent: { consent?: "once" } = body.aiOnce === true ? { consent: "once" } : {};
   /* a refusal body is a wallet failure unless the project's AI switch refused it */
-  const failureOf = (b: Record<string, unknown>) => (b.code === "ai_disabled" ? describeFailure("internal_mode") : describeFailure("wallet", String(b.error ?? "")));
+  const failureOf = (b: Record<string, unknown>) => (b.code === "ai_disabled" ? describeFailure("internal_mode") : b.code === "ai_connection" ? describeFailure("connection", String(b.error ?? "")) : describeFailure("wallet", String(b.error ?? "")));
   let user: AuthedUser | null = null;
   if (isFailure(authed)) {
     if (!(surveyId === "sandbox" && aiProviderName() === "fake")) return authed.response;
   } else user = authed;
-  if (!aiConfigured()) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
+  if (!(await aiReadyFor(user, surveyId, "copilot_turn"))) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
   const message = typeof body.message === "string" ? body.message.trim().slice(0, 8000) : "";
   if (!message) return NextResponse.json({ error: "say what you want" }, { status: 400 });
   const parsed = SurveyDefinition.safeParse(body.definition);
@@ -127,6 +129,10 @@ export async function POST(req: NextRequest) {
   const billing = await billingProjectFor(user, surveyId);
   if ("response" in billing) return billing.response;
   const { meter, ctx } = billing;
+  /* WHOSE AI this request uses (the project's choice, else the user's, else the platform's): the cache and single-flight keys carry it, so an answer made under one connection is never served under another; a failure on the user's own provider is told as theirs to fix */
+  const conn = await connectionFor({ userId: ctx.userId, customerId: ctx.customerId, surveyId: ctx.surveyId, operation: "copilot_turn" });
+  const connTag = conn.kind === "user" ? `|${conn.source}:${identityOf(conn.scope)}` : "";
+  const ownProvider = conn.kind === "user" ? providerById(conn.scope.provider)?.label ?? "Your AI provider" : undefined;
 
   /* 1–2: the context this request needs, and no more */
   const store = await researchStoreFor(surveyId);
@@ -195,7 +201,7 @@ export async function POST(req: NextRequest) {
   const budget = outputBudget(mode === "generate" ? "generate" : mode === "review" ? "review" : uxTurn ? "ux" : "edit");
   const maxTokens = budget.maxTokens;
   // the key names the project and the person too (consolidation, audit §C.2 #4): a copy of a survey under another project is never served another project's reply
-  const key = createHash("sha256").update(`${surveyId}\u0000${user?.userId ?? "sandbox"}\u0000${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
+  const key = createHash("sha256").update(`${surveyId}\u0000${user?.userId ?? "sandbox"}${connTag}\u0000${COPILOT_SYSTEM_PROMPT}\u0000${prompt}\u0000${maxTokens}`).digest("hex");
   // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
   const fake = fakes[0] ?? null;
@@ -229,7 +235,7 @@ export async function POST(req: NextRequest) {
   };
   /** one provider call, once: a request that repeats an identical call still running (a double click, a refresh while the first is in flight) shares it instead of paying for a second */
   const shared = <T,>(label: string, text: string, fn: () => Promise<T>): Promise<T> =>
-    fakeProvider ? fn() : flights(`${user?.userId ?? "sandbox"}|${surveyId}|${label}|${createHash("sha256").update(text).digest("hex")}`, fn as () => Promise<unknown>) as Promise<T>;
+    fakeProvider ? fn() : flights(`${user?.userId ?? "sandbox"}|${surveyId}|${aiIdentity()}|${label}|${createHash("sha256").update(text).digest("hex")}`, fn as () => Promise<unknown>) as Promise<T>;
   /** a prompt the provider says is longer than the model's context window is sent once more in compact form — a bulk job is not lost to its own size */
   const fitting = async <T,>(run: (compact: boolean) => Promise<T>): Promise<T> => {
     try { return await run(false); }
@@ -241,7 +247,7 @@ export async function POST(req: NextRequest) {
   };
   /** the browser is told what happened: the card, the retry and the log all read the same failure */
   const failureOfError = (e: unknown, where: string): TurnFailure => {
-    const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError(isProviderError(e) ? e : (e as Error)?.message ?? "");
+    const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError(isProviderError(e) ? e : (e as Error)?.message ?? "", { own: ownProvider });
     console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host, said: e.detail.slice(0, 200) } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
     return failure;
   };

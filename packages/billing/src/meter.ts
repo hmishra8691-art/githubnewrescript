@@ -341,6 +341,24 @@ export class Meter {
     if (hold.reservation) await this.store.release(hold.reservation.id, "released");
   }
 
+  /**
+   * Write a usage event that cost the platform nothing and charges nobody — a
+   * call made on the user's OWN provider key. It touches no wallet: no
+   * reservation, no balance test, no read-only or suspension gate (those guard
+   * the platform's money, and none is spent), no ledger line. `providerCost`
+   * and `infraCost` are recorded as zero so the platform's profit-and-loss is
+   * not skewed by work somebody else paid for. The tokens and the provider
+   * stay on the row for attribution.
+   */
+  async recordUnbilled(ctx: MeterContext, spec: UsageSpec): Promise<UsageEvent> {
+    const cfg = await this.config();
+    const free: UsageSpec = { ...spec, eventType: "AI_REQUEST_BYOK", providerCost: 0, infraCost: 0 };
+    const priced = await this.price(free, ctx.environment);
+    const input = eventInput(ctx, free, priced, null, null);
+    const { event } = await this.store.record({ ...input, customerCharge: 0, providerCost: 0, infraCost: 0 }, cfg.readOnlyThreshold);
+    return event;
+  }
+
   /** Reserve + settle in one step, for events whose size is known when they happen (a completed response, a file upload). */
   async record(ctx: MeterContext, spec: UsageSpec): Promise<{ ok: true; event: UsageEvent } | MeterRefusal> {
     const hold = await this.reserve(ctx, spec);

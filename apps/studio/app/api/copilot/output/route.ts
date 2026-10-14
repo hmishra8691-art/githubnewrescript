@@ -9,6 +9,7 @@ import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/a
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
+import { aiReadyFor, connectionTag } from "@/lib/byok/connect";
 import { outputBudget } from "@/lib/copilot/budget";
 import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
 
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
    */
   let narrative: NarrativeSections | undefined;
   let gate = "none";
-  if (body.narrative !== false && aiConfigured()) {
+  if (body.narrative !== false && await aiReadyFor(user, surveyId, "copilot_narrative")) {
     const fake = fakeProvider && body.fake && typeof body.fake === "object" ? body.fake : null;
     const red = redactRunForModel(run);
     const claims = claimsFromRun(red.run);
@@ -138,7 +139,9 @@ export async function POST(req: NextRequest) {
     else if (!raw) {
         const brief = briefText(red.run, { maxFindings: 25 });
         const prompt = redactPrompt(`${NARRATIVE_INSTRUCTIONS}\n\nAUDIENCE: ${output.audience}.\n\nRUN BRIEF:\n${brief}\n\nCLAIMS (cite these ids):\n${claimsBrief(claims)}`).text;
-        const key = replyKey({ op: "narrative", pv, model, audience: output.audience, claims: claimsHash(claims), brief: hash64(brief) });
+        /* an answer is only reused under the connection that wrote it: the platform's keep their keys; a user's own provider adds its identity (no secret) */
+        const conn = await connectionTag({ userId: user?.userId, customerId: user?.customerId, surveyId, operation: "copilot_narrative" });
+        const key = replyKey({ op: "narrative", pv, model, audience: output.audience, claims: claimsHash(claims), brief: hash64(brief), ...(conn ? { conn } : {}) });
         const hit = await replyFromCache<unknown>(db ?? undefined, surveyId, key);
         if (hit) { raw = hit; cached = true; }
         else {

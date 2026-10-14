@@ -71,7 +71,7 @@ export async function overview(userId: string, d: Deps) {
   return {
     vault: vaultStatus(env),
     workspaceAllows: d.workspaceAllows !== false,
-    platformFallbackAvailable: !!platformTarget(),
+    platformFallbackAvailable: !!platformTarget(env),
     catalog: publicCatalog("chat"),
     credentials: creds.map(viewOf),
     features: FEATURES.map((feature) => {

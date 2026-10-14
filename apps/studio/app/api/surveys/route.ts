@@ -186,7 +186,8 @@ export async function POST(req: NextRequest) {
 
   const { data: survey, error } = await db
     .from("surveys")
-    .insert({ customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId })
+    /* the project's choice of whose AI it uses, made at creation (the owner can change it later): "platform", "user", or none — each person's own setting decides */
+    .insert({ customer_id: user.customerId, code, title, owner_id: user.userId, created_by: user.userId, ...(body.aiSource === "platform" || body.aiSource === "user" ? { settings: { ai: { source: body.aiSource } } } : {}) })
     .select("id")
     .single();
   if (error) {

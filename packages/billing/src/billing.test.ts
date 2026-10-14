@@ -687,3 +687,36 @@ test("the current Claude models are priced at their own list rates, not the fall
   /* a model with no row still falls back */
   assert.equal(price("some-new-model", "input")?.id, "ai.chat.*.in");
 });
+
+test("a call on the user's OWN provider key is recorded at zero charge and zero platform cost, and never touches a wallet", async () => {
+  const store = new MemoryMeterStore();
+  const meter = new Meter(store, { seedBalance: 0, cacheMs: 0 });
+  const ctx = { customerId: "cust", surveyId: "s1", userId: "u1", environment: "LIVE" as const };
+  const wallet = await meter.walletFor(ctx, true);
+  const before = wallet!.balance;
+  const ev = await meter.recordUnbilled(ctx, { eventType: "AI_REQUEST", provider: "anthropic", service: "chat", model: "claude-opus-5-5", inputUnits: 1_000_000, outputUnits: 1_000_000, metadata: { operation: "copilot_turn", byok: true } });
+  assert.equal(ev.eventType, "AI_REQUEST_BYOK", "whatever the caller named, it is the own-provider event");
+  assert.equal(ev.customerCharge, 0); assert.equal(ev.providerCost, 0); assert.equal(ev.infraCost, 0); assert.equal(ev.walletId, null);
+  assert.equal(ev.inputUnits, 1_000_000, "the tokens stay on the row for attribution");
+  assert.equal(ev.provider, "anthropic"); assert.equal(ev.userId, "u1");
+  assert.equal((await meter.walletFor(ctx, true))!.balance, before);
+  assert.equal(store.ledger.length, 0, "no ledger line");
+  assert.equal(store.reservations.size, 0, "no hold");
+  const def = DEFAULT_BILLABLE_EVENTS.find((e) => e.type === "AI_REQUEST_BYOK")!;
+  assert.equal(def.billable, false);
+  /* a million tokens of the platform's own AI is a real charge — the contrast the record exists to keep clear */
+  const platform = await meter.estimate(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "claude-opus-5-5", inputUnits: 1_000_000, outputUnits: 1_000_000 });
+  assert.ok(platform.customerCharge > 0);
+});
+
+test("own-provider usage is recorded even when the wallet is suspended or read-only: no platform money is at stake", async () => {
+  const store = new MemoryMeterStore();
+  const meter = new Meter(store, { seedBalance: 0, cacheMs: 0 });
+  const ctx = { customerId: "cust", surveyId: "s2", userId: "u1", environment: "LIVE" as const };
+  const w = await meter.walletFor(ctx, true);
+  await store.setWallet(w!.id, { state: "suspended" });
+  const ev = await meter.recordUnbilled(ctx, { eventType: "AI_REQUEST", provider: "openai", service: "chat", model: "gpt-4.1", inputUnits: 10, outputUnits: 10 });
+  assert.equal(ev.customerCharge, 0);
+  const refused = await meter.reserve(ctx, { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", inputUnits: 1000, outputUnits: 1000 });
+  assert.equal(refused.ok, false, "while the platform's own AI stays refused");
+});

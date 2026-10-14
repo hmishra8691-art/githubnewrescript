@@ -20,8 +20,12 @@ const metering = readFileSync(join(ROOT, "lib/metering.ts"), "utf8");
 const route = readFileSync(join(ROOT, "app/api/copilot/turn/route.ts"), "utf8");
 
 test("meteredAi releases the hold when the provider call throws, and settles only a call that returned", () => {
-  const body = metering.slice(metering.indexOf("export async function meteredAi"), metering.indexOf("export async function meteredStt"));
-  assert.match(body, /catch \(e\) \{\s*await meter\.release\(hold\)/, "a throw gives the hold back");
+  /* the rule lives in the metering core now (lib/meterRun.ts); meteredAi delegates to it */
+  const core = readFileSync(join(ROOT, "lib/meterRun.ts"), "utf8");
+  const body = core.slice(core.indexOf("export async function meteredCore"));
+  assert.match(metering.slice(metering.indexOf("export async function meteredAi"), metering.indexOf("export async function meteredTts")), /meteredCore\(/, "meteredAi walks the core");
+  assert.match(body, /catch \(e\) \{\s*await meter\.release\(hold\)/, "a throw gives the platform's hold back");
+  assert.match(body, /catch \(e\) \{\s*if \(holdOk\) await meter\.release\(holdOk\)/, "and the backstop hold of an own-provider call");
   assert.match(body, /meter\.settle\(hold,/, "a return is settled with the reported usage");
   assert.ok(body.indexOf("meter.settle(") < body.indexOf("catch (e)"), "settle is inside the try, release in the catch");
 });

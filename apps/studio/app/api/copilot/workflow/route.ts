@@ -5,6 +5,7 @@ import { modelSteps, researchWorkflow, type ExecutionMode, type ResearchWorkflow
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, estimateAi } from "@/lib/metering";
+import { aiReadyFor } from "@/lib/byok/connect";
 import { outputBudget } from "@/lib/copilot/budget";
 import { loadDefinition } from "@/lib/analytics";
 
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
     }
   }
   const effective = override ?? projectMode;
-  const configured = aiConfigured();
+  const configured = await aiReadyFor(user, surveyId, "copilot_plan");
   const wf = researchWorkflow(def, { mode: configured ? effective : "internal", runAvailable, ...(typeof body.objective === "string" && body.objective.trim() ? { objective: body.objective.trim().slice(0, 500) } : {}), ...(Array.isArray(body.produced) ? { produced: body.produced.filter((x): x is "design_document" | "deck" => x === "design_document" || x === "deck") } : {}) });
 
   /* the cost of every model step, priced and never reserved */
