@@ -245,6 +245,8 @@ export function classifyResponse(status: number, headers: Pick<Headers, "get"> &
 
 /** a thrown fetch error that is not an abort: the request did not arrive */
 export function networkError(e: unknown, host?: string): ProviderError {
+  /* the endpoint guard refused the address: a permanent, user-fixable refusal — not a flaky network, never retried */
+  if ((e as Error)?.name === "EndpointRefused") return new ProviderError({ kind: "bad_request", detail: (e as Error).message, host });
   const msg = (e as Error)?.message ?? "network error";
   const cause = (e as { cause?: { code?: string } })?.cause?.code;
   return new ProviderError({ kind: "network", detail: `${msg}${cause ? ` ${cause}` : ""}`.slice(0, 160), host });

@@ -25,6 +25,12 @@ export interface AiUsage {
   requests: number;
   /** the provider did not report usage; the numbers are estimated from the text */
   estimated: boolean;
+  /** WHOSE provider answered: the installation's, the user's own, or a project's — what billing and the usage record read. Absent on calls that predate scoping (the installation's). */
+  source?: "platform" | "user" | "project";
+  /** the registry id of the provider that answered (openai, anthropic…) — never a key */
+  providerId?: string;
+  /** this call was answered by a fallback, not the first choice */
+  usedFallback?: boolean;
 }
 
 const sink = new AsyncLocalStorage<AiUsage[]>();

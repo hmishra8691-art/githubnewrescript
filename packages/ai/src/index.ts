@@ -2,6 +2,11 @@ import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe, pl
 import { approxTokens, reportUsage } from "./usage.js";
 import { ProviderError, classifyResponse, redact, DEFAULT_RETRY, fallbackProvider, isProviderError, logProvider, managedSend, type ProviderEvent, type RetryPolicy } from "./provider.js";
 export * from "./provider.js";
+export * from "./connection.js";
+export * from "./registry.js";
+export * from "./netguard.js";
+import { aiFetch, currentAiScope, scopedProvider, type ConnectionSource, type SttScope, type Target } from "./connection.js";
+import { guardedFetch } from "./netguard.js";
 
 /**
  * THE AI PROVIDER — one client, shared by the runtime (classification,
@@ -68,11 +73,36 @@ export * from "./provider.js";
 const TIMEOUT_MS = 8_000;
 const MAX_TEXT = 4_000;
 
+/** the user's chat connection for this request, if the call runs inside one (else the installation's environment is the provider) */
+function userChat() { return scopedProvider("chat") ? currentAiScope()!.chat! : null; }
+function userStt(): SttScope | null { return scopedProvider("stt") ? currentAiScope()!.stt! : null; }
+const trimBase = (s: string) => s.trim().replace(/\/+$/, "");
+/** the chat provider's address and key for THIS call: the user's connection when the call runs inside one, else the installation's */
+function chatBase(): string { const u = userChat(); return u ? trimBase(u.base) : trimBase(process.env.AI_API_URL ?? ""); }
+function chatKey(): string { const u = userChat(); return u ? u.key : (process.env.AI_API_KEY ?? "").trim(); }
+function ttsModelName(): string { return userChat()?.ttsModel || (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1"; }
+
+/**
+ * The installation's own chat provider as a `Target` — what a user who ALLOWED
+ * the platform as a last resort lists among their fallbacks. Read from the
+ * environment, never from a scope. `null` when no real provider is configured
+ * (the fake provider is not a fallback anyone chose).
+ */
+export function platformTarget(): Target | null {
+  const base = trimBase(process.env.AI_API_URL ?? "");
+  if (!base || base === "fake:") return null;
+  const model = (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
+  return { provider: "platform", base, key: (process.env.AI_API_KEY ?? "").trim(), model, modelSmall: (process.env.AI_MODEL_SMALL ?? "").trim() || model, platform: true, label: "Platform AI" };
+}
+
 export function aiConfigured(): boolean {
+  const u = userChat();
+  if (u) return !!u.base;
   return !!(process.env.AI_API_URL ?? "").trim();
 }
 
 export function aiProviderName(): "fake" | "openai-compatible" | null {
+  if (userChat()) return "openai-compatible";
   const url = (process.env.AI_API_URL ?? "").trim();
   if (!url) return null;
   return url === "fake:" ? "fake" : "openai-compatible";
@@ -117,6 +147,14 @@ export function aiProviderName(): "fake" | "openai-compatible" | null {
  * (authorization) or the body's type is not accepted from AI_API_HEADERS.
  */
 export function aiExtraHeaders(): Record<string, string> {
+  /* a user's provider gets the headers THEIR configuration names — never the installation's workspace or organization */
+  const u = userChat();
+  if (u) return { ...(u.headers ?? {}) };
+  return envExtraHeaders();
+}
+
+/** the installation's own extra headers (AI_API_HEADERS, AI_WORKSPACE_ID) — for the platform provider and a platform fallback the user allowed */
+export function envExtraHeaders(): Record<string, string> {
   const out: Record<string, string> = {};
   const raw = (process.env.AI_API_HEADERS ?? "").trim();
   if (raw) {
@@ -137,21 +175,26 @@ export function aiExtraHeaders(): Record<string, string> {
 }
 
 /** The headers of one request to the configured AI provider: the key, and the extra headers above. */
-function providerHeaders(key: string, json = true): Record<string, string> {
-  return { ...(json ? { "content-type": "application/json" } : {}), ...aiExtraHeaders(), ...(key ? { authorization: `Bearer ${key}` } : {}) };
+function providerHeaders(key: string, json = true, extra: Record<string, string> = aiExtraHeaders()): Record<string, string> {
+  return { ...(json ? { "content-type": "application/json" } : {}), ...extra, ...(key ? { authorization: `Bearer ${key}` } : {}) };
 }
 
 export function sttBase(): string {
+  const u = userStt();
+  if (u) return trimBase(u.base);
   const own = (process.env.AI_STT_API_URL ?? "").trim();
   return (own || (process.env.AI_API_URL ?? "").trim()).replace(/\/+$/, "");
 }
 
 /** the transcription provider is the chat provider (no AI_STT_API_URL of its own): it gets the same extra headers */
 function sameProviderAsChat(base: string): boolean {
+  if (userStt()) return false; /* a user's transcription provider carries its own headers, never the chat provider's */
   return base === (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 function sttKey(): string {
+  const u = userStt();
+  if (u) return u.key;
   return ((process.env.AI_STT_API_KEY ?? "").trim() || (process.env.AI_API_KEY ?? "").trim());
 }
 
@@ -435,21 +478,21 @@ export async function synthesizeSpeech(text: string, opts: SpeechOptions): Promi
   const t = stripTags(text).slice(0, 2000);
   if (!t) return null;
   if (aiProviderName() === "fake") { reportUsage({ kind: "tts", provider: "fake", model: "fake-tts", characters: t.length, requests: 1, estimated: true }); return fakeSpeech(t, opts.speed ?? 1); }
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
-  const key = (process.env.AI_API_KEY ?? "").trim();
+  const base = chatBase();
+  const key = chatKey();
   if (!base) return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 30_000);
   try {
-    const r = await fetch(`${base}/audio/speech`, {
+    const r = await aiFetch("chat", `${base}/audio/speech`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       headers: providerHeaders(key),
-      body: JSON.stringify({ model: (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", input: t, voice: opts.voiceId || defaultVoiceFor(opts.gender), speed: Math.max(0.5, Math.min(2, opts.speed ?? 1)), response_format: opts.format ?? "mp3", ...(opts.style ? { instructions: `Speak in ${opts.language}, ${opts.style}.` } : {}) }),
+      body: JSON.stringify({ model: ttsModelName(), input: t, voice: opts.voiceId || defaultVoiceFor(opts.gender), speed: Math.max(0.5, Math.min(2, opts.speed ?? 1)), response_format: opts.format ?? "mp3", ...(opts.style ? { instructions: `Speak in ${opts.language}, ${opts.style}.` } : {}) }),
     });
     if (!r.ok) { console.warn("[rescript:ai] tts provider error", JSON.stringify({ status: r.status })); return null; }
     const buf = new Uint8Array(await r.arrayBuffer());
     if (!buf.length) return null;
-    reportUsage({ kind: "tts", provider: "openai-compatible", model: (process.env.AI_TTS_MODEL ?? "").trim() || "tts-1", characters: t.length, requests: 1, estimated: false });
+    reportUsage({ kind: "tts", provider: "openai-compatible", model: ttsModelName(), characters: t.length, requests: 1, estimated: false });
     const mime = opts.format === "wav" ? "audio/wav" : "audio/mpeg";
     return { bytes: buf, mimeType: mime, durationMs: Math.round((t.length / 15) * 1000 / (opts.speed ?? 1)) };
   } catch (e) {
@@ -602,7 +645,7 @@ export async function transcribe(
   /* a vendor that cannot do this at all, said before the round trip */
   const impossible = sttUnavailableReason();
   if (impossible) return { ok: false, reason: impossible };
-  const model = (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
+  const model = userStt()?.model || (process.env.AI_STT_MODEL ?? "").trim() || "whisper-1";
 
   /*
    * The timeout scales with the clip, because a fixed one is wrong at both
@@ -647,12 +690,12 @@ export async function transcribe(
     if (opts.diarize) form.append("diarize", "true");
     if (opts.language) form.append("language", shortLang(opts.language));
 
-    const r = await fetch(`${base}/audio/transcriptions`, {
+    const r = await aiFetch("stt", `${base}/audio/transcriptions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       /* deliberately NO content-type header — fetch sets it with the
          multipart boundary, and setting it by hand produces a body the
          provider cannot parse */
-      headers: sameProviderAsChat(base) ? providerHeaders(key, false) : { ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      headers: userStt() ? { ...(userStt()!.headers ?? {}), ...(key ? { authorization: `Bearer ${key}` } : {}) } : sameProviderAsChat(base) ? providerHeaders(key, false) : { ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: form,
     });
     if (!r.ok) {
@@ -661,7 +704,7 @@ export async function transcribe(
        * request — the body we sent carries the audio and the headers carry
        * the key, and neither belongs in an error a researcher reads.
        */
-      const detail = (await r.text().catch(() => "")).trim().slice(0, 300);
+      const detail = redact((await r.text().catch(() => "")), 300);
       console.warn("[rescript:ai] stt provider error", JSON.stringify({ status: r.status, model, detail }));
       return { ok: false, status: r.status, reason: providerReason(r.status, model, detail) };
     }
@@ -851,10 +894,15 @@ export function acceptsJsonMode(base: string): boolean {
  * rate limit, a 404 and a spent quota are never retried. This function adds
  * the one thing that is specific to the chat endpoint: json mode.
  */
-async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy = DEFAULT_RETRY, deadline = Date.now() + TIMEOUT_MS, label?: string, onEvent?: (e: ProviderEvent) => void): Promise<{ r: Response; detail?: string }> {
-  const once = (b: Record<string, unknown>) => fetch(`${base}/chat/completions`, {
-    method: "POST", signal, cache: "no-store", headers: providerHeaders(key), body: JSON.stringify(b),
-  });
+/** how one request reaches its provider when it is not simply "the current scope": a fallback target says its own headers and whether the endpoint guard applies */
+interface Via { headers?: Record<string, string>; guard: boolean; allowPrivate?: boolean }
+
+async function postChat(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy = DEFAULT_RETRY, deadline = Date.now() + TIMEOUT_MS, label?: string, onEvent?: (e: ProviderEvent) => void, via?: Via): Promise<{ r: Response; detail?: string }> {
+  const once = (b: Record<string, unknown>) => {
+    const init: RequestInit = { method: "POST", signal, cache: "no-store", headers: via ? providerHeaders(key, true, via.headers ?? {}) : providerHeaders(key), body: JSON.stringify(b) };
+    const url = `${base}/chat/completions`;
+    return via ? (via.guard ? guardedFetch(url, init, { allowPrivate: via.allowPrivate }) : fetch(url, init)) : aiFetch("chat", url, init);
+  };
   const send = (b: Record<string, unknown>): Promise<Response> => managedSend({ base, key, once: () => once(b), signal, deadline, retry, label, onEvent });
   const { response_format: format, ...plain } = body;
   const schema = !!format && typeof format === "object" && (format as { type?: string }).type === "json_schema";
@@ -886,6 +934,8 @@ export type AiModelTier = "small" | "large";
 
 /** The model the Studio / runtime is configured to call, by tier (the large tier when none is named). */
 export function aiModelName(tier: AiModelTier = "large"): string {
+  const u = userChat();
+  if (u) return tier === "small" ? (u.modelSmall || u.model) : u.model;
   const large = (process.env.AI_MODEL ?? "").trim() || "gpt-4o-mini";
   if (tier === "small") return (process.env.AI_MODEL_SMALL ?? "").trim() || large;
   return large;
@@ -1002,9 +1052,9 @@ export async function completeJson(
   maxTokens = 160,
   options: CompleteJsonOptions = {},
 ): Promise<unknown | null> {
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const base = chatBase();
   const model = aiModelName(options.tier);
-  const key = (process.env.AI_API_KEY ?? "").trim();
+  const key = chatKey();
   if (!base) return null;
 
   if (aiProviderName() === "fake") {
@@ -1040,10 +1090,23 @@ export async function completeJson(
   const known = OUTPUT_CEILING.get(`${base} ${model}`);
   if (known && known < limit) limit = known;
   const retry: RetryPolicy = { retries: Number.isFinite(options.retries) ? Math.max(0, Math.min(6, Math.round(options.retries as number))) : DEFAULT_RETRY.retries, delayMs: Number.isFinite(options.retryDelayMs) ? Math.max(0, Math.min(5000, Math.round(options.retryDelayMs as number))) : DEFAULT_RETRY.delayMs, maxWaitMs: DEFAULT_RETRY.maxWaitMs };
-  /* where the next call goes: the configured provider, then — once, and only for a failure a second provider can cure — the fallback the operator named */
-  const primary = { base, key, model };
-  const fb = fallbackProvider();
-  let target = primary;
+  /*
+   * WHERE THE NEXT CALL GOES. Outside a user's connection: the installation's
+   * provider, then the operator's fallback (AI_FALLBACK_*), once. Inside one:
+   * the user's provider, then ONLY the fallbacks the user's own configuration
+   * lists, in order — the operator's fallback and the installation's key are
+   * never reached on a user's behalf unless the user explicitly allowed the
+   * platform as a last resort (it is then one of their listed fallbacks).
+   */
+  const mine = userChat();
+  type Hop = { base: string; key: string; model: string; via?: Via; source: ConnectionSource; provider: string };
+  const primary: Hop = { base, key, model, source: mine ? mine.source : "platform", provider: mine ? mine.provider : "openai-compatible" };
+  const env = fallbackProvider();
+  const fbs: Hop[] = mine
+    ? mine.fallbacks.map((f: Target) => ({ base: trimBase(f.base), key: f.key, model: options.tier === "small" ? f.modelSmall || f.model : f.model, source: (f.platform ? "platform" : "user") as ConnectionSource, provider: f.provider, via: { headers: f.platform ? envExtraHeaders() : f.headers ?? {}, guard: !f.platform, allowPrivate: currentAiScope()?.allowPrivate } }))
+    : env ? [{ base: env.base, key: env.key, model: options.tier === "small" ? env.modelSmall : env.model, source: "platform" as ConnectionSource, provider: "openai-compatible" }] : [];
+  let target: Hop = primary;
+  let next = 0;
   let onFallback = false;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -1060,12 +1123,15 @@ export async function completeJson(
    * fail there too and is not forwarded.
    */
   const viaFallback = async <T,>(e: ProviderError, again: () => Promise<T>): Promise<T> => {
-    if (!fb || onFallback || !e.fallbackable) throw e;
+    const f = fbs[next];
+    if (!f || !e.fallbackable) throw e;
+    next++;
     onFallback = true;
-    target = { base: fb.base, key: fb.key, model: options.tier === "small" ? fb.modelSmall : fb.model };
+    target = f;
     limit = Math.min(Math.max(1, Math.round(maxTokens)), OUTPUT_CEILING.get(`${target.base} ${target.model}`) ?? Infinity);
-    logProvider("fallback", { from: e.host, kind: e.kind, status: e.status, to: new URL(fb.base).host, model: target.model, operation: options.operation });
-    options.onEvent?.({ type: "fallback", from: e.kind, host: new URL(fb.base).host });
+    const toHost = (() => { try { return new URL(f.base).host; } catch { return "provider"; } })();
+    logProvider("fallback", { from: e.host, kind: e.kind, status: e.status, to: toHost, model: target.model, operation: options.operation, source: f.source });
+    options.onEvent?.({ type: "fallback", from: e.kind, host: toHost });
     try { return await again(); }
     catch (e2) { if (isProviderError(e2)) throw new ProviderError({ kind: e2.kind, status: e2.status, detail: `${e2.detail} (the fallback provider also failed; the first failed with ${e.kind})`, retryAfterMs: e2.retryAfterMs ?? e.retryAfterMs, host: e2.host, exhausted: true, attempts: e2.attempts, viaFallback: true }); throw e2; }
   };
@@ -1073,7 +1139,7 @@ export async function completeJson(
   const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
     let r: Response, refused: string | undefined;
     try {
-      ({ r, detail: refused } = await postChat(target.base, target.key, { model: target.model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry, deadline, options.operation ? `${options.operation} ${target.model}` : target.model, options.onEvent));
+      ({ r, detail: refused } = await postChat(target.base, target.key, { model: target.model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry, deadline, options.operation ? `${options.operation} ${target.model}` : target.model, options.onEvent, target.via));
     } catch (e) {
       if (isProviderError(e)) return viaFallback(e, () => call(messages, lowered));
       throw e;
@@ -1097,7 +1163,7 @@ export async function completeJson(
     const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
     const outputTokens = typeof outTok === "number" ? outTok : approxTokens(content);
     reportUsage({
-      kind: "chat", provider: "openai-compatible", model: j?.model || target.model,
+      kind: "chat", provider: "openai-compatible", model: j?.model || target.model, source: target.source, providerId: target.provider, ...(onFallback ? { usedFallback: true } : {}),
       inputTokens: typeof inTok === "number" ? inTok : approxTokens(messages.map((m) => m.content).join("")),
       outputTokens,
       requests: 1, estimated: typeof inTok !== "number",
@@ -1165,10 +1231,14 @@ export async function completeJson(
 
 /** The model that reads page images: AI_VISION_MODEL, else the chat model (most current chat models are multimodal). */
 export function aiVisionModelName(): string {
+  const u = userChat();
+  if (u) return u.visionModel || u.model;
   return (process.env.AI_VISION_MODEL ?? "").trim() || aiModelName();
 }
 /** Embeddings are optional: only with AI_EMBEDDINGS_MODEL set. Without them retrieval is BM25 alone. */
 export function aiEmbeddingsModelName(): string | null {
+  const u = userChat();
+  if (u) return u.embeddingsModel || null;
   return (process.env.AI_EMBEDDINGS_MODEL ?? "").trim() || null;
 }
 
@@ -1181,16 +1251,16 @@ const OCR_PROMPT = "You transcribe scanned document pages. Return the page's tex
  * FAKE provider reads nothing — it cannot see — and says so by returning "".
  */
 export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJsonOptions = {}): Promise<string> {
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const base = chatBase();
   if (!base) throw new Error("no AI provider is configured for OCR");
   if (aiProviderName() === "fake") { reportFake("chat", OCR_PROMPT + "x".repeat(3000), 0); return ""; }
-  const key = (process.env.AI_API_KEY ?? "").trim();
+  const key = chatKey();
   const model = aiVisionModelName();
   const ctrl = new AbortController();
   const timeoutMs = Math.min(300_000, opts.timeoutMs ?? 90_000);
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + timeoutMs, label: "ocr", once: () => fetch(`${base}/chat/completions`, {
+    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + timeoutMs, label: "ocr", once: () => aiFetch("chat", `${base}/chat/completions`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       headers: providerHeaders(key),
       body: JSON.stringify({
@@ -1218,14 +1288,14 @@ export async function ocrImage(bytes: Uint8Array, mime: string, opts: CompleteJs
  * ranks by BM25 alone. The fake provider has none.
  */
 export async function embedTexts(texts: string[], opts: CompleteJsonOptions = {}): Promise<number[][] | null> {
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const base = chatBase();
   const model = aiEmbeddingsModelName();
   if (!base || !model || aiProviderName() === "fake" || !texts.length) return null;
-  const key = (process.env.AI_API_KEY ?? "").trim();
+  const key = chatKey();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(120_000, opts.timeoutMs ?? 30_000));
   try {
-    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + Math.min(120_000, opts.timeoutMs ?? 30_000), retry: { retries: 1, delayMs: 500, maxWaitMs: 4000 }, label: "embeddings", once: () => fetch(`${base}/embeddings`, {
+    const r = await managedSend({ base, key, signal: ctrl.signal, deadline: Date.now() + Math.min(120_000, opts.timeoutMs ?? 30_000), retry: { retries: 1, delayMs: 500, maxWaitMs: 4000 }, label: "embeddings", once: () => aiFetch("chat", `${base}/embeddings`, {
       method: "POST", signal: ctrl.signal, cache: "no-store",
       headers: providerHeaders(key),
       body: JSON.stringify({ model, input: texts.map((t) => t.slice(0, 8000)) }),
@@ -1239,9 +1309,9 @@ export async function embedTexts(texts: string[], opts: CompleteJsonOptions = {}
 }
 
 async function complete(system: string, user: string, maxTokens = 160): Promise<{ label?: unknown; question?: unknown; translations?: unknown } | null> {
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const base = chatBase();
   const model = aiModelName();
-  const key = (process.env.AI_API_KEY ?? "").trim();
+  const key = chatKey();
   if (!base) return null;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -1310,7 +1380,7 @@ export interface ProbeResult {
  * reading a log and without pasting a key anywhere. Costs a few tokens.
  */
 export async function probeProvider(opts: { maxTokens?: number } = {}): Promise<ProbeResult> {
-  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  const base = chatBase();
   if (!base) return { configured: false, provider: null, verdict: "No AI provider is configured (AI_API_URL)." };
   const provider = aiProviderName();
   if (provider === "fake") return { configured: true, provider, model: "fake", verdict: "The built-in test provider is configured — nothing is sent anywhere." };

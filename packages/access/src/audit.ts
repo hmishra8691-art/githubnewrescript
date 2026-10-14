@@ -30,6 +30,11 @@ export const AUDIT_EVENTS = [
   "user.logged_out",
   "user.profile_updated",
   "user.password_changed",
+  /* the user's OWN AI provider (BYOK): a key added, replaced or removed, and a feature switched between the platform's AI and theirs.
+     The detail names the feature, the provider and the model — never the key, not even its mask. */
+  "user.ai_credential_saved",
+  "user.ai_credential_removed",
+  "user.ai_connection_changed",
 
   /* sessions */
   "session.started",
@@ -213,6 +218,9 @@ export function describeEvent(r: AuditRow): string {
     case "user.logged_out": return `${who} signed out`;
     case "user.profile_updated": return `${who} updated their profile`;
     case "user.password_changed": return `${who} changed their password`;
+    case "user.ai_credential_saved": return `${who} saved an API key for ${str(d.provider) || "an AI provider"}`;
+    case "user.ai_credential_removed": return `${who} removed an API key for ${str(d.provider) || "an AI provider"}`;
+    case "user.ai_connection_changed": return `${who} set ${str(d.feature) || "an AI feature"} to ${d.mode === "user" ? `their own provider (${str(d.provider)}${d.model ? ` · ${str(d.model)}` : ""})` : "the platform's AI"}`;
 
     case "session.started": return `${who} started a session${d.device ? ` on ${str(d.device)}` : ""}`;
     case "session.expired": return `${who}'s session expired after inactivity`;
