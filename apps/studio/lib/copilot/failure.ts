@@ -93,7 +93,8 @@ function describeCode(code: FailureCode, detail?: string): TurnFailure {
     case "provider":
       return { code, title: TITLES[code], detail: d,
         message: "The AI service could not process this request. Nothing was changed, and your request is kept.",
-        next: ["Try rephrasing, or ask for one block at a time.", "If it keeps happening, tell your administrator — the Studio's log has the details."] };
+        next: ["Try rephrasing, or ask for one block at a time.", "If it keeps happening, tell your administrator — the Studio's log has the details."],
+        admin: "The provider refused the request itself. Open Administration → AI connection → “Check the AI connection” to see what the provider said (credit, key, model, ceiling or schema), or read the “[rescript:ai] refused” line in the server log (field “said”)." };
     case "capacity":
       return { code, title: TITLES[code], detail: d,
         message: "The AI service is busy right now. Your work has been saved and nothing was lost.",

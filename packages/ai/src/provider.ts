@@ -77,6 +77,22 @@ const RETRYABLE: ReadonlySet<ProviderErrorKind> = new Set(["rate_limited", "over
 /** kinds a second configured provider could cure */
 const FALLBACKABLE: ReadonlySet<ProviderErrorKind> = new Set(["rate_limited", "quota_exhausted", "overloaded", "server", "network", "timeout", "busy", "auth", "forbidden"]);
 
+/**
+ * What a provider said, made safe to log and to show an administrator: any
+ * key- or token-shaped string, an Authorization header and an address with
+ * credentials in it are removed, whitespace is collapsed and the length is
+ * capped. A provider does not normally echo a key; this is the belt for the
+ * braces.
+ */
+export function redact(text: string, max = 300): string {
+  return String(text ?? "")
+    .replace(/\b(?:sk|pk|rk|key|tok|xox[a-z]?)[-_][A-Za-z0-9_-]{8,}/gi, "[redacted]")
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [redacted]")
+    .replace(/(x-api-key|api[-_]?key|authorization)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, "$1$2[redacted]")
+    .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@")
+    .replace(/\s+/g, " ").trim().slice(0, max);
+}
+
 export class ProviderError extends Error {
   readonly kind: ProviderErrorKind;
   readonly status?: number;
@@ -88,7 +104,7 @@ export class ProviderError extends Error {
   readonly viaFallback: boolean;
   readonly contextTooLong: boolean;
   constructor(init: ProviderErrorInit) {
-    const detail = (init.detail ?? "").trim().slice(0, 300);
+    const detail = redact(init.detail ?? "", 300);
     super(providerMessage(init.kind, init.status, detail, init.retryAfterMs));
     this.name = "ProviderError";
     this.kind = init.kind;
@@ -178,9 +194,22 @@ export function retryAfterFrom(headers: Pick<Headers, "get"> & { forEach?: Heade
   return hints.length ? clamp(Math.min(...hints)) : null;
 }
 
+/*
+ * A SPENT ACCOUNT IS NOT ALWAYS A 429. Anthropic answers "Your credit balance
+ * is too low to access the Anthropic API" with HTTP 400 (invalid_request_error),
+ * and "This organization has been disabled" with 400 as well; OpenAI-style
+ * gateways answer a spent budget with 400, 402 or 403. Read as the status
+ * alone, those were "the request is malformed" — a card that told the
+ * researcher to rephrase a request that was never the problem. The words
+ * decide, whatever the status.
+ */
 const QUOTA_WORDS = /insufficient_quota|exceeded your current quota|credit balance|plan and billing|billing (?:details|hard limit|issue)|out of (?:credits|funds)|usage limits?|regain access|spend(?:ing)? limit|monthly (?:limit|quota)|quota (?:exceeded|exhausted)|payment required/i;
 /** a prompt longer than the model's context window — said many ways */
 const CONTEXT_WORDS = /context.?(?:length|window)|prompt is too long|maximum context|too many (?:input )?tokens|input is too long|reduce the length|exceeds? the (?:model'?s )?(?:maximum|context)|request too large/i;
+/** the account or organization is switched off, or may not use this API */
+const DISABLED_WORDS = /organization (?:has been|is) disabled|account (?:has been|is) (?:disabled|suspended|deactivated)|has been (?:suspended|deactivated)|not (?:authorized|permitted) to (?:use|access)|permission_error/i;
+/** a 400 that is really "no such model" (some providers and gateways do not use 404 for it) */
+const MODEL_WORDS = /model[^.]{0,60}(?:not found|does not exist|is not available)|(?:unknown|invalid) model|no such model/i;
 const RATE_WORDS = /rate.?limit|too many requests|throttl|slow down|capacity|overloaded|temporarily|try again (?:later|in)|requests? per (?:minute|second)|tokens? per (?:minute|second)/i;
 
 /**
@@ -201,6 +230,12 @@ export function classifyResponse(status: number, headers: Pick<Headers, "get"> &
     return init("forbidden");
   }
   if (status === 404) return init("not_found");
+  /* a 400 (or another 4xx) that is, in words, a spent account, a disabled organization or an unknown model — not a malformed request */
+  if (status >= 400 && status < 500 && status !== 408 && status !== 413) {
+    if (QUOTA_WORDS.test(text) && !CONTEXT_WORDS.test(text)) return init("quota_exhausted");
+    if (DISABLED_WORDS.test(text)) return init("forbidden");
+    if (MODEL_WORDS.test(text) && !CONTEXT_WORDS.test(text)) return init("not_found");
+  }
   if (status === 413 || (status === 400 && CONTEXT_WORDS.test(text))) return init("bad_request", { contextTooLong: true });
   if (status === 408) return init("timeout", { detail: "the provider timed out" });
   if (status === 529 || (status === 503 && /overload|capacity/i.test(text))) return init("overloaded");
@@ -235,7 +270,8 @@ export interface LaneHealth {
   queued: number;
   cooldownMs: number;
   consecutiveFailures: number;
-  lastError?: { kind: ProviderErrorKind; status?: number; at: string };
+  /** `detail` is the provider's own words, redacted — present only when asked for (an administrator's view) */
+  lastError?: { kind: ProviderErrorKind; status?: number; at: string; detail?: string };
   lastSuccessAt?: string;
   blockedBy?: ProviderErrorKind;
 }
@@ -249,7 +285,7 @@ class Lane {
   blocked: { until: number; error: ProviderError } | null = null;
   consecutiveFailures = 0;
   successesSinceCut = 0;
-  lastError?: { kind: ProviderErrorKind; status?: number; at: number };
+  lastError?: { kind: ProviderErrorKind; status?: number; at: number; detail?: string };
   lastSuccessAt?: number;
   readonly waiters: Waiter[] = [];
   /** what the provider last said it had left (token and request allowances), from its rate-limit headers */
@@ -300,7 +336,7 @@ export function recentProviderEvents(): typeof recent { return recent.slice(); }
 export function resetProviderState(): void { lanes.clear(); recent.length = 0; }
 
 /** the state of every provider lane this process has used — for a health endpoint and the log */
-export function providerHealth(now = Date.now()): LaneHealth[] {
+export function providerHealth(now = Date.now(), opts: { detail?: boolean } = {}): LaneHealth[] {
   return [...lanes.values()].map((l) => {
     const cooldownMs = Math.max(0, l.cooldownUntil - now);
     const blocked = l.blocked && l.blocked.until > now ? l.blocked : null;
@@ -308,7 +344,7 @@ export function providerHealth(now = Date.now()): LaneHealth[] {
       lane: l.name,
       state: blocked ? "blocked" : cooldownMs > 0 ? "cooling_down" : l.consecutiveFailures > 0 || l.limit < l.maxLimit ? "degraded" : "ok",
       limit: l.limit, active: l.active, queued: l.waiters.length, cooldownMs, consecutiveFailures: l.consecutiveFailures,
-      ...(l.lastError ? { lastError: { kind: l.lastError.kind, ...(l.lastError.status ? { status: l.lastError.status } : {}), at: new Date(l.lastError.at).toISOString() } } : {}),
+      ...(l.lastError ? { lastError: { kind: l.lastError.kind, ...(l.lastError.status ? { status: l.lastError.status } : {}), at: new Date(l.lastError.at).toISOString(), ...(opts.detail && l.lastError.detail ? { detail: l.lastError.detail } : {}) } } : {}),
       ...(l.lastSuccessAt ? { lastSuccessAt: new Date(l.lastSuccessAt).toISOString() } : {}),
       ...(blocked ? { blockedBy: blocked.error.kind } : {}),
     };
@@ -405,7 +441,7 @@ function noteSuccess(lane: Lane): void {
 }
 function noteFailure(lane: Lane, err: ProviderError): void {
   lane.consecutiveFailures++;
-  lane.lastError = { kind: err.kind, ...(err.status ? { status: err.status } : {}), at: Date.now() };
+  lane.lastError = { kind: err.kind, ...(err.status ? { status: err.status } : {}), at: Date.now(), ...(err.detail ? { detail: err.detail } : {}) };
   if (err.kind === "rate_limited" || err.kind === "overloaded") {
     /* the provider asked everyone to slow down: one cool-down for the lane, and half the concurrency */
     const wait = err.retryAfterMs ?? backoffMs(Math.min(lane.consecutiveFailures - 1, 4), { delayMs: 1000, maxWaitMs: 20_000 });
@@ -484,7 +520,7 @@ export async function managedSend(o: ManagedOptions): Promise<Response> {
     const wait = err.retryAfterMs != null ? err.retryAfterMs + Math.round(rng() * 250) : backoffMs(attempt, retry);
     const fits = Date.now() + wait < o.deadline - 250;
     if (!err.retryable || last || !fits) {
-      if (err.kind !== "bad_request") logProvider(err.retryable ? "gave_up" : "refused", { host, label: o.label, kind: err.kind, status: err.status, attempts: attempt + 1, retryAfterMs: err.retryAfterMs, reason: !err.retryable ? "not retryable" : last ? "retries used" : "no time left for the wait" });
+      if (err.kind !== "bad_request") logProvider(err.retryable ? "gave_up" : "refused", { host, label: o.label, kind: err.kind, status: err.status, attempts: attempt + 1, retryAfterMs: err.retryAfterMs, said: err.detail.slice(0, 200), reason: !err.retryable ? "not retryable" : last ? "retries used" : "no time left for the wait" });
       if (res) return res;
       throw new ProviderError({ kind: err.kind, status: err.status, detail: err.detail, retryAfterMs: err.retryAfterMs ?? (fits ? undefined : wait), host, exhausted: true, attempts: attempt + 1 });
     }

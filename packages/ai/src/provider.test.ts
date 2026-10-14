@@ -293,3 +293,80 @@ test("the researcher is told about tokens only when the provider's allowance is 
     assert.equal(capacityNotice(Date.now() + 10 * 60_000), null, "a stale reading says nothing");
   });
 });
+
+/* ---------------------------------------------- "THE AI SERVICE COULD NOT PROCESS THIS REQUEST" */
+
+const ANTHROPIC_CREDIT = '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}';
+
+test("a 400 that says, in words, the account is out of credit / disabled / has no such model is not a malformed request", () => {
+  const k = (s: number, body: string) => classifyResponse(s, new Headers(), body);
+  /* Anthropic reports a spent balance as HTTP 400 invalid_request_error — the exact body below */
+  assert.equal(k(400, ANTHROPIC_CREDIT).kind, "quota_exhausted");
+  assert.equal(k(400, ANTHROPIC_CREDIT).retryable, false);
+  assert.equal(k(400, '{"error":{"message":"This organization has been disabled."}}').kind, "forbidden");
+  assert.equal(k(400, '{"error":{"code":"billing_hard_limit_reached","message":"Billing hard limit has been reached"}}').kind, "quota_exhausted");
+  assert.equal(k(400, "The model `gpt-9` does not exist or you do not have access to it").kind, "not_found");
+  assert.equal(k(402, "").kind, "quota_exhausted");
+  /* what stays a refusal of the request: a malformed field, an unsupported parameter, and a prompt that is too long */
+  assert.equal(k(400, "messages.0.content: Input should be a valid string").kind, "bad_request");
+  assert.equal(k(400, "Unsupported parameter: 'temperature' is not supported with this model").kind, "bad_request");
+  assert.equal(k(400, "response_format.type: Input should be 'json_schema'").kind, "bad_request");
+  assert.equal(k(400, "model does not support response_format json_schema").kind, "bad_request");
+  const long = k(400, "prompt is too long: 250000 tokens > 200000 maximum");
+  assert.equal(long.kind, "bad_request"); assert.equal(long.contextTooLong, true);
+});
+
+test("redact: keys, bearer tokens, key headers and credentials in an address never reach a log or a screen", async () => {
+  const { redact } = await import("./index.js");
+  const said = redact('invalid x-api-key: sk-ant-api03-ABCDEF1234567890 sent as Bearer abcdefghijklmnop1234 to https://user:pass@host.test/v1 "api_key": "supersecretvalue1" authorization=Basic dXNlcjpwYXNzd29yZA==');
+  for (const leak of ["ABCDEF1234567890", "abcdefghijklmnop1234", "user:pass", "supersecretvalue1", "dXNlcjpwYXNzd29yZA"]) assert.equal(said.includes(leak), false, leak);
+  assert.match(redact("Your credit balance is too low"), /credit balance is too low/);
+  assert.equal(redact("x".repeat(900), 300).length, 300);
+});
+
+test("a credit-balance 400 from the provider ends as `quota_exhausted` — one request, no retry, not asked again, and what it said is logged", async () => {
+  await withEnv({}, async () => {
+    const lines: { event: string; fields: Record<string, unknown> }[] = [];
+    setProviderLogger((event, fields) => lines.push({ event, fields }));
+    const log = serve(() => status(400, ANTHROPIC_CREDIT));
+    const e = await completeJson("sys", "user", 100, { ...fast, schema: { name: "s", schema: { type: "object" } } }).catch((x) => x) as ProviderError;
+    assert.ok(isProviderError(e)); assert.equal(e.kind, "quota_exhausted"); assert.equal(e.status, 400);
+    assert.match(e.detail, /credit balance is too low/);
+    assert.equal(log.length, 1, "the credit refusal is not the schema's fault: no second shape is tried, no retry");
+    const again = await completeJson("sys", "user", 100, fast).catch((x) => x) as ProviderError;
+    assert.equal(again.kind, "quota_exhausted"); assert.equal(log.length, 1, "the lane remembers a spent account for a moment");
+    const refused = lines.find((l) => l.event === "refused");
+    assert.ok(refused, "the refusal is logged"); assert.match(String(refused!.fields.said), /credit balance/); assert.equal(JSON.stringify(lines).includes("sk-primary-secret"), false);
+  });
+});
+
+test("a request the provider refuses as malformed is LOGGED with what it said (it never was), and ends as `bad_request`", async () => {
+  await withEnv({}, async () => {
+    const lines: { event: string; fields: Record<string, unknown> }[] = [];
+    setProviderLogger((event, fields) => lines.push({ event, fields }));
+    serve(() => status(400, '{"error":{"message":"messages.1.content: Input should be a valid string"}}'));
+    const e = await completeJson("sys", "user", 100, fast).catch((x) => x) as ProviderError;
+    assert.equal(e.kind, "bad_request");
+    const refused = lines.find((l) => l.event === "refused" && l.fields.kind === "bad_request");
+    assert.ok(refused); assert.match(String(refused!.fields.said), /Input should be a valid string/); assert.equal(refused!.fields.status, 400);
+  });
+});
+
+test("probeProvider: names the refused request — credit, key, schema, ceiling — and costs a few tokens", async () => {
+  const { probeProvider } = await import("./index.js");
+  await withEnv({}, async () => {
+    serve(() => status(400, ANTHROPIC_CREDIT));
+    const r = await probeProvider({ maxTokens: 32000 });
+    assert.equal(r.plain?.ok, false); assert.equal(r.plain?.kind, "quota_exhausted"); assert.match(r.verdict, /out of credit/i); assert.equal(r.schema, undefined, "nothing further is asked of an account that cannot answer");
+  });
+  await withEnv({}, async () => {
+    serve((_u, init) => { const b = JSON.parse(init.body); return b.response_format?.type === "json_schema" ? status(400, "response_format.json_schema: additionalProperties must be false") : reply('{"ok":true}'); });
+    const r = await probeProvider({ maxTokens: 32000 });
+    assert.equal(r.plain?.ok, true); assert.equal(r.schema?.ok, true, "a provider that refuses a schema is asked again without one, as the copilot does"); assert.match(r.verdict, /accepted every kind/);
+  });
+  await withEnv({}, async () => {
+    serve(() => status(401, "invalid x-api-key"));
+    const r = await probeProvider(); assert.equal(r.plain?.kind, "auth"); assert.match(r.verdict, /key/);
+  });
+  await withEnv({ AI_API_URL: "" }, async () => { assert.equal((await probeProvider()).configured, false); });
+});

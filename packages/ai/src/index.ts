@@ -1,6 +1,6 @@
 import { pickCategory, pickSentiment, fakeClassify, fakeSentiment, fakeProbe, placeholderMismatch, placeholdersIn } from "@rescript/engine";
 import { approxTokens, reportUsage } from "./usage.js";
-import { ProviderError, classifyResponse, DEFAULT_RETRY, fallbackProvider, isProviderError, logProvider, managedSend, type ProviderEvent, type RetryPolicy } from "./provider.js";
+import { ProviderError, classifyResponse, redact, DEFAULT_RETRY, fallbackProvider, isProviderError, logProvider, managedSend, type ProviderEvent, type RetryPolicy } from "./provider.js";
 export * from "./provider.js";
 
 /**
@@ -1084,6 +1084,8 @@ export async function completeJson(
       if (ceiling) { OUTPUT_CEILING.set(`${target.base} ${target.model}`, ceiling); limit = ceiling; return call(messages, true); }
       const err = classifyResponse(r.status, r.headers, detail);
       const exhausted = new ProviderError({ kind: err.kind, status: r.status, detail: detail.slice(0, 200), retryAfterMs: err.retryAfterMs, host: err.host, exhausted: err.retryable, viaFallback: onFallback, contextTooLong: err.contextTooLong });
+      /* a refusal of the request itself is the one failure the request manager does not log (json-mode probing would flood it): the ladder is over, so what the provider said is logged here — once, redacted — because it is the only way an administrator learns why */
+      if (exhausted.kind === "bad_request") logProvider("refused", { host: exhausted.host ?? (() => { try { return new URL(target.base).host; } catch { return "provider"; } })(), label: options.operation ? `${options.operation} ${target.model}` : target.model, kind: "bad_request", status: r.status, said: exhausted.detail.slice(0, 200), maxTokens: limit, schema: !!options.schema, attempts: 1, reason: "the request was refused" });
       return viaFallback(exhausted, () => call(messages, lowered));
     }
     const j = await r.json().catch(() => null) as {
@@ -1281,3 +1283,58 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
 
 export * from "./translation.js";
 export * from "./usage.js";
+
+/* ------------------------------------------------------ the configuration check */
+
+export interface ProbeStep { ok: boolean; kind?: string; status?: number; /** the provider's own words, redacted — for an administrator */ said?: string; ms: number }
+export interface ProbeResult {
+  configured: boolean;
+  provider: "fake" | "openai-compatible" | null;
+  host?: string;
+  model?: string;
+  /** a one-line verdict for the administrator */
+  verdict: string;
+  /** a tiny request with no format asked for: does the key, the model and the account work? */
+  plain?: ProbeStep;
+  /** the same with a JSON schema, the way the copilot asks: does this provider take it (or fall back cleanly)? */
+  schema?: ProbeStep;
+  /** the output ceiling the copilot asks for, and whether the provider accepts it */
+  ceiling?: ProbeStep & { asked: number };
+}
+
+/**
+ * ASK THE PROVIDER, IN MINIATURE, THE THREE THINGS A COPILOT REQUEST DEPENDS
+ * ON — and report what it said. "The AI service could not process this
+ * request" was a refusal whose reason only the provider knew and nobody could
+ * see; this makes it visible in one click, for an administrator, without
+ * reading a log and without pasting a key anywhere. Costs a few tokens.
+ */
+export async function probeProvider(opts: { maxTokens?: number } = {}): Promise<ProbeResult> {
+  const base = (process.env.AI_API_URL ?? "").trim().replace(/\/+$/, "");
+  if (!base) return { configured: false, provider: null, verdict: "No AI provider is configured (AI_API_URL)." };
+  const provider = aiProviderName();
+  if (provider === "fake") return { configured: true, provider, model: "fake", verdict: "The built-in test provider is configured — nothing is sent anywhere." };
+  const model = aiModelName();
+  let host: string | undefined; try { host = new URL(base).host; } catch { /* shown as configured, unparsed */ }
+  const step = async (run: () => Promise<unknown>): Promise<ProbeStep> => {
+    const t = Date.now();
+    try { await run(); return { ok: true, ms: Date.now() - t }; }
+    catch (e) {
+      if (isProviderError(e)) return { ok: false, kind: e.kind, status: e.status, said: e.detail, ms: Date.now() - t };
+      if (e instanceof AiReplyError) return { ok: true, ms: Date.now() - t }; /* it answered; what it said was not JSON — the provider is reachable and accepted the request */
+      return { ok: false, kind: "error", said: redact((e as Error)?.message ?? "", 200), ms: Date.now() - t };
+    }
+  };
+  const quiet = { retries: 0, timeoutMs: 20_000, continuations: 0 } as const;
+  const plain = await step(() => completeJson("Reply with the JSON object {\"ok\":true}.", "ping", 16, { ...quiet, operation: "probe_plain" }));
+  /* nothing further to learn when the key, the account or the model is the problem */
+  const stop = !plain.ok && ["auth", "forbidden", "quota_exhausted", "not_found", "network", "timeout"].includes(plain.kind ?? "");
+  const schema = stop ? undefined : await step(() => completeJson("Reply with the JSON object {\"ok\":true}.", "ping", 32, { ...quiet, operation: "probe_schema", schema: { name: "probe", schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] } } }));
+  const asked = Math.max(16, Math.round(opts.maxTokens ?? 32_000));
+  const ceiling = stop ? undefined : { asked, ...(await step(() => completeJson("Reply with the JSON object {\"ok\":true}.", "ping", asked, { ...quiet, operation: "probe_ceiling" }))) };
+  const verdict = plain.ok && schema?.ok && ceiling?.ok ? "The provider accepted every kind of request the copilot makes."
+    : !plain.ok ? ({ auth: "The provider rejected the key (AI_API_KEY).", forbidden: "The provider refused this key's access (model, workspace or organization).", quota_exhausted: "The provider's account is out of credit or at its spending limit — add credit with the provider.", not_found: `The provider does not know the model “${model}” (AI_MODEL).`, network: "The Studio could not reach the provider (AI_API_URL).", timeout: "The provider did not answer in time.", bad_request: "The provider refused even a minimal request — read what it said below.", rate_limited: "The provider is rate-limiting this key right now.", overloaded: "The provider is overloaded right now.", server: "The provider reported an error on its side." } as Record<string, string>)[plain.kind ?? ""] ?? "The provider did not accept a minimal request — read what it said below."
+    : !schema?.ok ? "A plain request works, but a request with a JSON schema is refused — read what the provider said below."
+    : `A plain request works, but asking for ${asked} output tokens is refused — set AI_MAX_OUTPUT_TOKENS to what ${model} allows.`;
+  return { configured: true, provider, ...(host ? { host } : {}), model, verdict, plain, ...(schema ? { schema } : {}), ...(ceiling ? { ceiling } : {}) };
+}

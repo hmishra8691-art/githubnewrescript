@@ -76,3 +76,13 @@ test("not configured says what the engine reads and how to configure a model", (
   assert.match(f.next.join(" "), /AI_API_URL/);
   assert.match(f.next.join(" "), /Terminate if Q1 < 25/);
 });
+
+test("the provider card tells an administrator where the reason is — the connection check and the log's `said` field", () => {
+  const f = failureFromError("something the provider refused");
+  assert.equal(f.code, "provider");
+  assert.match(f.admin ?? "", /AI connection/);
+  assert.match(f.admin ?? "", /said/);
+  /* and a provider's credit-balance 400 is no longer read as a malformed request */
+  const q = failureFromError({ kind: "quota_exhausted", status: 400, message: "x" });
+  assert.equal(q.code, "quota");
+});

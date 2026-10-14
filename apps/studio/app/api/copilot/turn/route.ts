@@ -242,7 +242,7 @@ export async function POST(req: NextRequest) {
   /** the browser is told what happened: the card, the retry and the log all read the same failure */
   const failureOfError = (e: unknown, where: string): TurnFailure => {
     const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError(isProviderError(e) ? e : (e as Error)?.message ?? "");
-    console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
+    console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host, said: e.detail.slice(0, 200) } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
     return failure;
   };
   /** a failed turn: nothing was changed, nothing was charged for the failed call, the request is kept — and a temporary failure says when to come back (HTTP 503 + Retry-After) */

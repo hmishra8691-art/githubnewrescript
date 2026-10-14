@@ -2,6 +2,7 @@
 import React from "react";
 import { AccountHeader } from "@/components/AccountHeader";
 import { AccessPolicyPanel } from "@/components/AccessPolicyPanel";
+import { AiConnectionPanel } from "@/components/AiConnectionPanel";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -82,7 +83,7 @@ function whenLabel(iso: string | null | undefined): string {
 
 export default function AdminPage() {
   const { state, signOut } = useSession({ redirectOnSignOut: true });
-  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access">("sessions");
+  const [tab, setTab] = React.useState<"sessions" | "accounts" | "access" | "ai">("sessions");
 
   const [sessions, setSessions] = React.useState<AdminSessionsPayload | null>(null);
   const [accounts, setAccounts] = React.useState<AccountsPayload | null>(null);
@@ -242,12 +243,21 @@ export default function AdminPage() {
         >
           Access policy
         </button>
+        <button
+          type="button"
+          data-testid="admin-tab-ai"
+          className={tab === "ai" ? "active" : undefined}
+          onClick={() => { setTab("ai"); setNote(null); }}
+        >
+          AI connection
+        </button>
       </div>
 
       {error && <div className="auth-note err">{error}</div>}
       {note && !error && <div className="auth-note ok">{note}</div>}
 
       {tab === "access" && <AccessPolicyPanel />}
+      {tab === "ai" && <AiConnectionPanel />}
 
       {tab === "sessions" && (
         <>
