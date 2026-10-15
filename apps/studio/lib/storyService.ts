@@ -8,6 +8,7 @@ import { loadReportFonts, speechNarration } from "@rescript/reportvideo";
 import { compute, reportFacts, runPlanFor } from "./analytics";
 import { mediaDb } from "./mediaRoute";
 import { getMeter, meteredAi, recordUsage, SANDBOX_CUSTOMER } from "./metering";
+import { aiReadyFor } from "./byok/connect";
 import type { StoryDeps } from "./storyEngine";
 
 /**
@@ -38,11 +39,19 @@ export function storyDeps(db: SupabaseClient, opts: { userId?: string | null; su
       const m = await meteredAi(getMeter(), ctx, "AI_REQUEST", { estimateText: text, maxTokens: 0, operation: "report_narration" }, () => synthesizeSpeech(text, { language: o.language, ...(o.voiceId ? { voiceId: o.voiceId } : {}), format: o.format ?? "mp3" }));
       return m.ok ? m.value : null;
     }, aiConfigured),
-    ...(aiConfigured() && opts.surveyId ? {
+    /*
+     * The design assistant words a look the grammar could not read. It is offered to a signed-in person on a project
+     * whether or not the PLATFORM has a model: when it has none, the person's own choice (Settings → AI) decides, and a
+     * person with no usable AI gets exactly what they got before — no assistant, no call, nothing spent. The model call
+     * itself goes through the metering door, which resolves the acting person's connection and never the platform's on
+     * their behalf. (Background narration renders have no acting person and stay on the platform's speech service.)
+     */
+    ...(opts.surveyId && opts.userId ? {
       designModel: async (text: string, current: DesignConfig) => {
+        const ctx = await meterCtx(db, opts.surveyId!, "TEST", opts.userId ?? null);
+        if (!(await aiReadyFor({ userId: opts.userId!, customerId: ctx.customerId }, opts.surveyId, "report_design"))) return null;
         /* the request's words and the current look — no report content, no data */
         const user = `Current design: ${describeDesign(current)}\nRequest: ${text.slice(0, 600)}`;
-        const ctx = await meterCtx(db, opts.surveyId!, "TEST", opts.userId ?? null);
         const m = await meteredAi(getMeter(), ctx, "AI_REQUEST", { estimateText: DESIGN_PATCH_INSTRUCTIONS + user, maxTokens: 300, operation: "report_design" }, () => completeJson(DESIGN_PATCH_INSTRUCTIONS, user, 300, { timeoutMs: 15_000 }));
         return m.ok && m.value ? sanitizeDesignPatch(m.value) : null;
       },

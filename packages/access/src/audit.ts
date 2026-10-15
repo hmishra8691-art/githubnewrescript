@@ -56,6 +56,7 @@ export const AUDIT_EVENTS = [
    * shortened the session lifetime to five minutes" has to be answerable.
    */
   "workspace.access_policy_changed",
+  "workspace.ai_byok_policy_changed",
 
   /* projects */
   "project.created",
@@ -243,6 +244,7 @@ export function describeEvent(r: AuditRow): string {
     case "project.opened": return `${who} opened this project${d.readOnly ? " (read-only)" : ""}`;
     case "project.deleted": return `${who} deleted this project`;
     case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}`;
+    case "workspace.ai_byok_policy_changed": return `${who} ${d.allowed === false ? "turned off" : "turned on"} user-managed AI providers for ${str(d.workspace) || "a workspace"}`;
     case "workspace.access_policy_changed":
       return `${who} changed the workspace access policy${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "project.access_removed": return `${who} removed ${target}'s access`;

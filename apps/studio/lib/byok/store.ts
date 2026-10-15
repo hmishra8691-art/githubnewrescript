@@ -57,6 +57,8 @@ export interface AiStore {
   getSetting(userId: string, feature: AiFeature): Promise<SettingRow | null>;
   putSetting(row: SettingRow): Promise<void>;
   deleteSetting(userId: string, feature: AiFeature): Promise<boolean>;
+  /** EVERY credential of every user, a page at a time — for the operator's key-rotation tool only; no route calls it */
+  listCredentialsPage(offset: number, limit: number): Promise<CredentialRow[]>;
 }
 
 /* ------------------------------------------------------------------ memory */
@@ -78,6 +80,7 @@ export class MemoryAiStore implements AiStore {
   async getSetting(userId: string, feature: AiFeature) { const s = this.settings.get(`${userId}|${feature}`); return s ? { ...s } : null; }
   async putSetting(row: SettingRow) { this.settings.set(`${row.userId}|${row.feature}`, { ...row }); }
   async deleteSetting(userId: string, feature: AiFeature) { return this.settings.delete(`${userId}|${feature}`); }
+  async listCredentialsPage(offset: number, limit: number) { return [...this.creds.values()].sort((a, b) => a.id.localeCompare(b.id)).slice(offset, offset + limit).map((c) => ({ ...c })); }
 }
 
 /* ---------------------------------------------------------------- database */
@@ -123,6 +126,11 @@ export class SupabaseAiStore implements AiStore {
     const { error } = await this.db.from("user_ai_credentials").delete().eq("id", id).eq("user_id", userId);
     if (error) this.fail("delete credential", error);
     return true;
+  }
+  async listCredentialsPage(offset: number, limit: number) {
+    const { data, error } = await this.db.from("user_ai_credentials").select("*").order("id").range(offset, offset + limit - 1);
+    if (error) this.fail("list credentials page", error);
+    return (data ?? []).map(credFromDb);
   }
   async listSettings(userId: string) {
     const { data, error } = await this.db.from("user_ai_settings").select("*").eq("user_id", userId);

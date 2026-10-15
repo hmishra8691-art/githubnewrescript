@@ -3,6 +3,7 @@ import React from "react";
 import { AccountHeader } from "@/components/AccountHeader";
 import { AccessPolicyPanel } from "@/components/AccessPolicyPanel";
 import { AiConnectionPanel } from "@/components/AiConnectionPanel";
+import { AiWorkspacePolicyPanel } from "@/components/AiWorkspacePolicyPanel";
 import { api, useSession } from "@/lib/useSession";
 
 /**
@@ -257,7 +258,7 @@ export default function AdminPage() {
       {note && !error && <div className="auth-note ok">{note}</div>}
 
       {tab === "access" && <AccessPolicyPanel />}
-      {tab === "ai" && <AiConnectionPanel />}
+      {tab === "ai" && <><AiConnectionPanel /><AiWorkspacePolicyPanel /></>}
 
       {tab === "sessions" && (
         <>
