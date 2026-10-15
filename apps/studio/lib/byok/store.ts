@@ -91,10 +91,22 @@ type Db = { from(table: string): any };
 const credFromDb = (r: any): CredentialRow => ({ id: r.id, userId: r.user_id, provider: r.provider, label: r.label ?? null, sealed: r.sealed, mask: r.mask, keyId: r.key_id, createdAt: r.created_at, rotatedAt: r.rotated_at ?? null, lastUsedAt: r.last_used_at ?? null, lastTest: r.last_test ?? null });
 const settingFromDb = (r: any): SettingRow => ({ userId: r.user_id, feature: r.feature, mode: r.mode, config: r.config ?? {}, credentialId: r.credential_id ?? null, fallbacks: Array.isArray(r.fallbacks) ? r.fallbacks : [], allowPlatformFallback: !!r.allow_platform_fallback, lastTest: r.last_test ?? null, updatedAt: r.updated_at });
 
+/**
+ * The tables are not there (migration 0054 has not been applied to this database) or the API has not seen them yet.
+ * Not a fault of the request: the feature is simply not installed, and everything that does not need it must carry on.
+ */
+export class AiStoreUnavailable extends Error {
+  constructor(op: string, detail?: string) { super(`ai store ${op}: the user AI tables are not available (migration 0054 not applied?)${detail ? ` — ${detail}` : ""}`); this.name = "AiStoreUnavailable"; }
+}
+export const isMissingTable = (message: string | undefined | null): boolean => /relation .*(user_ai_|customers).* does not exist|could not find the (table|'[^']+' column)|schema cache|column .*ai_byok_allowed.* does not exist|42P01|PGRST205/i.test(message ?? "");
+
 export class SupabaseAiStore implements AiStore {
   private db: Db;
   constructor(db: Db) { this.db = db; }
-  private fail(op: string, error: { message?: string } | null): never { throw new Error(`ai store ${op} failed${error?.message ? `: ${error.message}` : ""}`); }
+  private fail(op: string, error: { message?: string; code?: string } | null): never {
+    if (isMissingTable(`${error?.message ?? ""} ${error?.code ?? ""}`)) throw new AiStoreUnavailable(op, error?.message);
+    throw new Error(`ai store ${op} failed${error?.message ? `: ${error.message}` : ""}`);
+  }
   async listCredentials(userId: string) {
     const { data, error } = await this.db.from("user_ai_credentials").select("*").eq("user_id", userId).order("created_at");
     if (error) this.fail("list credentials", error);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { audit, isFailure, requireUser } from "@/lib/guard";
-import { byokDeps, readJson } from "@/lib/byok/server";
+import { byokDeps, readJson, storeSafe } from "@/lib/byok/server";
 import { overview, saveSetting } from "@/lib/byok/service";
 
 export const dynamic = "force-dynamic";
@@ -21,13 +21,16 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
-  const body = await overview(user.userId, await byokDeps(user));
-  return NextResponse.json(body, { headers: { "cache-control": "no-store" } });
+  return storeSafe(async () => {
+    const body = await overview(user.userId, await byokDeps(user));
+    return NextResponse.json(body, { headers: { "cache-control": "no-store" } });
+  });
 }
 
 export async function PUT(req: NextRequest) {
   const user = await requireUser(req);
   if (isFailure(user)) return user.response;
+  return storeSafe(async () => {
   const body = await readJson(req);
   if (!body) return NextResponse.json({ error: "Send the settings as JSON." }, { status: 400 });
   const r = await saveSetting(user.userId, body as never, await byokDeps(user));
@@ -35,4 +38,5 @@ export async function PUT(req: NextRequest) {
   if (r.credentialSaved) await audit({ action: "user.ai_credential_saved", userId: user.userId, sessionId: user.sessionId, customerId: user.customerId, entity: "ai_credential", detail: { provider: r.provider, feature: r.feature } });
   await audit({ action: "user.ai_connection_changed", userId: user.userId, sessionId: user.sessionId, customerId: user.customerId, entity: "ai_feature", entityId: user.userId, detail: { feature: r.feature, mode: r.mode, provider: r.provider ?? null, model: r.model ?? null } });
   return NextResponse.json({ ok: true, ...(await overview(user.userId, await byokDeps(user))) }, { headers: { "cache-control": "no-store" } });
+  });
 }

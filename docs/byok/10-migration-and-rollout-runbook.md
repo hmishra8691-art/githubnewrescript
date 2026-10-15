@@ -2,7 +2,7 @@
 
 ## What changes in the database
 
-Migration `0054_user_ai_providers.sql`: `user_ai_credentials`, `user_ai_settings` (RLS enabled and forced, **no policies**, all privileges revoked from `anon`/`authenticated`, `on delete cascade` from `profiles`), and `customers.ai_byok_allowed boolean default true`. Additive; no existing row changes. Code tolerates the migration being absent (`501 byok_unavailable`, workspace policy defaults to allowed, saved settings unreachable).
+Migration `0054_user_ai_providers.sql`: `user_ai_credentials`, `user_ai_settings` (RLS enabled and forced, **no policies**, all privileges revoked from `anon`/`authenticated`, `on delete cascade` from `profiles`), and `customers.ai_byok_allowed boolean default true`. Additive; no existing row changes. Code tolerates the migration being absent (since the Phase F follow-up fix): the account API answers `501 byok_unavailable` with the instruction to apply 0054, every AI call behaves exactly as before (a missing table means nobody has chosen their own provider), a project that demanded each person's own AI is refused in words, and the workspace policy defaults to allowed. Any other storage fault is a `503 byok_storage_error`, logged for the operator without a key. (Found in practice: the settings page showed "Request failed (500)" on a database without 0054.)
 
 ## Order
 

@@ -188,6 +188,8 @@ try {
   ok("unsaved: the section's chip, the banner and the navigation dot all say so");
   await T("ai-intelligent-discard").click();
   assert.equal(await T("ai-feature-intelligent").getAttribute("data-dirty"), "0");
+  /* the page's banner learns of the discard one render after the section does: wait for it to go (it still fails if it never does) */
+  await T("ai-unsaved-banner").waitFor({ state: "detached", timeout: 5000 });
   assert.equal(await T("ai-unsaved-banner").count(), 0);
   assert.equal(await T("ai-intelligent-mode-platform").isChecked(), true);
   ok("Discard returns the section to what is saved");

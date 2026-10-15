@@ -11,6 +11,8 @@ Phases A–E built and surfaced the feature. Phase F re-examined everything for 
 5. A containment test caught the rotation tool naming the master-key variable (the vault is meant to be its only reader) → reworded.
 Verified clean: operator fallback unreachable inside a user scope; no key-bearing logging; no client file knows the vault/tables; only three files open a stored key.
 
+6. **Found on the real installation: the settings page said "Request failed (500)"** because migration 0054 had not been applied to the database, and nothing handled a missing table — and every AI call began with a read of that table. Fixed: `AiStoreUnavailable` (typed), `storeSafe` on every account route (501 with the instruction / 503), and `connectionFor` treats a missing table as "no own-provider configured" (platform behaviour as before; a project that demanded each person's own AI is refused in words). Migration 0054 was then applied to the `rescript-survey-platform` Supabase project at your request and verified (RLS forced, no policies, no client grants, `customers.ai_byok_allowed` present). The database is also missing `0053_plan_apply_single_running` — not touched. Four tests in `lib/byok/unavailable.test.ts`.
+
 ## The twelve deliverables (`docs/byok/`)
 
 1. `01-architecture.md` 2. `02-provider-catalog.md` 3. `03-security-and-vault.md` 4. `04-api-reference.md` 5. `05-settings-guide.md` 6. `06-billing-and-usage.md` 7. `07-project-level-selection.md` 8. `08-fallbacks-and-failure-behavior.md` 9. `09-operator-setup.md` 10. `10-migration-and-rollout-runbook.md` 11. `11-test-report.md` 12. `12-known-limits-and-live-checklist.md`

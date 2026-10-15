@@ -1,9 +1,9 @@
 import "server-only";
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import type { AuthedUser } from "@/lib/guard";
 import { memoryStore, type Deps } from "./service";
-import { SupabaseAiStore, type AiStore } from "./store";
+import { AiStoreUnavailable, SupabaseAiStore, type AiStore } from "./store";
 
 /**
  * The server-side wiring of user-owned AI providers: which store, and what the
@@ -42,4 +42,22 @@ export async function readJson(req: NextRequest, maxBytes = 16_000): Promise<Rec
   const text = await req.text().catch(() => "");
   if (!text || text.length > maxBytes) return null;
   try { const v = JSON.parse(text); return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null; } catch { return null; }
+}
+
+/**
+ * Run an account-AI handler so that a missing migration is an honest 501 with the
+ * instruction to fix it, and any other storage fault is a 503 that says so —
+ * never a bare 500 with nothing to act on. No message from the database is
+ * returned to the browser; it is logged for the operator (it names no key).
+ */
+export async function storeSafe(run: () => Promise<NextResponse>): Promise<NextResponse> {
+  try { return await run(); }
+  catch (e) {
+    if (e instanceof AiStoreUnavailable) {
+      console.error("[byok]", e.message);
+      return NextResponse.json({ error: "Using your own AI provider is not enabled on this installation yet: the database update for it (migration 0054) has not been applied. Ask your administrator.", code: "byok_unavailable" }, { status: 501, headers: { "cache-control": "no-store" } });
+    }
+    console.error("[byok] storage fault:", (e as Error)?.message);
+    return NextResponse.json({ error: "Your AI settings could not be read or saved right now. Try again in a moment.", code: "byok_storage_error" }, { status: 503, headers: { "cache-control": "no-store" } });
+  }
 }

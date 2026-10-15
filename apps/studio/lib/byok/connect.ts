@@ -6,6 +6,7 @@ import { connectionRefusalStatus } from "@/lib/meterRun";
 import { featureOf, needsOf } from "./features";
 import { allowPrivateFrom, resolveConnection, type Resolution } from "./resolve";
 import { aiStore, workspaceAllowsByok } from "./server";
+import { AiStoreUnavailable } from "./store";
 
 /**
  * THE STUDIO'S ONE QUESTION ABOUT WHOSE AI A CALL USES.
@@ -31,9 +32,20 @@ export async function connectionFor(ask: ConnectionAsk): Promise<Resolution> {
   const feature = featureOf(ask.operation);
   const source = ask.sourceKnown ? ask.source : ask.source ?? await projectAiSource(ask.surveyId, ask.operation);
   const store = aiStore();
-  /* a user with no AI settings at all (the common case) costs one indexed read and no workspace lookup */
-  if (!source && !(await store.getSetting(ask.userId, feature))) return { kind: "platform", reason: "default" };
-  return resolveConnection({ userId: ask.userId, feature, store, workspaceAllows: await workspaceAllowsByok(ask.customerId), project: source ? { mode: source } : null, need: needsOf(ask.operation) });
+  try {
+    /* a user with no AI settings at all (the common case) costs one indexed read and no workspace lookup */
+    if (!source && !(await store.getSetting(ask.userId, feature))) return { kind: "platform", reason: "default" };
+    return await resolveConnection({ userId: ask.userId, feature, store, workspaceAllows: await workspaceAllowsByok(ask.customerId), project: source ? { mode: source } : null, need: needsOf(ask.operation) });
+  } catch (e) {
+    /*
+     * The user-AI tables are not on this database (migration 0054 not applied): nobody can have chosen their own provider,
+     * so every call behaves exactly as it did before the feature — EXCEPT a project that asked for each person's own AI,
+     * which is refused in words rather than silently answered by the platform.
+     */
+    if (!(e instanceof AiStoreUnavailable)) throw e;
+    if (source === "user") return { kind: "refused", code: "vault_unavailable", message: "This project uses each person's own AI provider, which is not enabled on this installation yet (a database update has not been applied). Ask your administrator.", source: "project" };
+    return { kind: "platform", reason: "default" };
+  }
 }
 
 /** a short tag for cache keys: empty for the platform, else the connection's identity (no secret) — so a cached answer is only served under the connection that produced it */
