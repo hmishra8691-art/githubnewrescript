@@ -7,6 +7,7 @@ import { NumberField, SliderCell, ctxOf, RowLabel, headerEveryFor, RepeatedHeade
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
+import { CellMultiDropdown } from "../cellMultiDropdown";
 
 /**
  * List / Form Fields family — the presentations that were "coming soon".
@@ -203,21 +204,8 @@ function SheetCell({
         </select>
       );
     case "multi":
-    case "multi_dropdown": {
-      const arr = (Array.isArray(value) ? value : []) as (string | number)[];
-      return (
-        <select className="rs-select rs-sheet-in" aria-label={label} disabled={ro} multiple
-          size={Math.min(col.options.length || 1, 3)}
-          value={arr.map(String)}
-          onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o) => o.value))}>
-          {col.options.map((o) => (
-            <option key={String(o.code)} value={String(o.code)}>
-              {o.label.replace(/<[^>]*>/g, "")}
-            </option>
-          ))}
-        </select>
-      );
-    }
+    case "multi_dropdown":
+      return <CellMultiDropdown col={col} readOnly={ro} label={label} value={value} onChange={onChange} />;
     case "checkbox":
       return (
         <input type="checkbox" aria-label={label} disabled={ro}

@@ -49,6 +49,31 @@ export const OptionSourceRule = z.object({
 export type OptionSourceRule = z.infer<typeof OptionSourceRule>;
 
 /**
+ * A MESSAGE SHOWN WHEN AN OPTION IS SELECTED.
+ *
+ * Per option, independent of eligibility, exclusion and every other rule on
+ * it: it never deselects the option, never hides it, and is never shown when
+ * the option is deselected. `information` and `warning` have one button;
+ * `confirmation` has Continue and Cancel, where Cancel only closes the
+ * message — the selection stays, so a message can warn without taking a
+ * respondent's answer away.
+ */
+export const OptionPopup = z.object({
+  enabled: z.boolean().default(false),
+  /** the message itself — plain text or the same simple markup question text takes */
+  message: z.string().default(""),
+  title: z.string().optional(),
+  type: z.enum(["information", "warning", "confirmation"]).default("information"),
+  /** `immediate`: the moment it is selected. `on_next`: when the respondent presses Next with it selected. */
+  trigger: z.enum(["immediate", "on_next"]).default("immediate"),
+  /** the accept button's text; absent = "OK" (information, warning) or "Continue" (confirmation) */
+  buttonText: z.string().optional(),
+  /** `every`: each time it is selected. `once`: the first time, per respondent session. */
+  frequency: z.enum(["every", "once"]).default("every"),
+});
+export type OptionPopup = z.infer<typeof OptionPopup>;
+
+/**
  * The full per-option control set (req §1).
  * Every field is optional; an absent field imposes no constraint.
  */
@@ -73,6 +98,8 @@ export const OptionLogic = z.object({
   /** Membership rules against earlier / later questions. */
   carryForward: OptionSourceRule.optional(),
   carryBack: OptionSourceRule.optional(),
+  /** A message shown when this option is selected (see OptionPopup). */
+  popup: OptionPopup.optional(),
   /** Programmer note shown in the logic summary. */
   notes: z.string().optional(),
 });
@@ -90,7 +117,8 @@ export function isEmptyOptionLogic(l: OptionLogic | undefined): boolean {
     !l.deprioritizeWhen &&
     !l.randomizeWhen &&
     !l.carryForward &&
-    !l.carryBack
+    !l.carryBack &&
+    !l.popup
   );
 }
 
@@ -115,7 +143,8 @@ export function optionLogicHasEffect(l: OptionLogic | undefined): boolean {
     !isEmptyConditionTree(l.deprioritizeWhen) ||
     !isEmptyConditionTree(l.randomizeWhen) ||
     !!l.carryForward ||
-    !!l.carryBack
+    !!l.carryBack ||
+    !!(l.popup?.enabled && l.popup.message.trim())
   );
 }
 
@@ -219,3 +248,43 @@ export const LIST_OP_LABELS: Record<ListOperationKind, string> = {
   sort: "sort",
   randomize: "randomize",
 };
+
+/* ------------------------------------------- legacy "Show when" / "Hide when" */
+
+const hasRows = (c: Condition | undefined): c is Condition => !!c && !isEmptyConditionTree(c);
+
+/**
+ * "SHOW WHEN" AND "HIDE WHEN" ARE ELIGIBLE WHEN AND EXCLUDE WHEN.
+ *
+ * Two controls said the same thing: an option shown only while a condition
+ * holds is an option that is ELIGIBLE only while it holds, and one hidden
+ * while a condition holds is one EXCLUDED while it holds. The evaluator even
+ * ran them through the same two checks. The visibility choice therefore keeps
+ * only what is not a condition — Default, Always show, Always hide — and a
+ * stored rule written the old way is rewritten to the equivalent new one:
+ *
+ *   show_when W   →  default, eligibleWhen = (existing eligibleWhen AND W)
+ *   hide_when W   →  default, excludeWhen  = (existing excludeWhen  OR  W)
+ *
+ * An empty condition imposed nothing and is simply dropped. Nothing else on
+ * the logic is touched, and the result is a fixed point: migrating it again
+ * changes nothing.
+ */
+export function migrateOptionVisibility(l: OptionLogic): { logic: OptionLogic; changed: boolean } {
+  const mode = l.visibility ?? "default";
+  if (mode !== "show_when" && mode !== "hide_when") return { logic: l, changed: false };
+  const { when, ...rest } = l;
+  const next: OptionLogic = { ...rest, visibility: "default" };
+  if (hasRows(when)) {
+    if (mode === "show_when") {
+      next.eligibleWhen = hasRows(l.eligibleWhen)
+        ? { type: "group", op: "and", children: [l.eligibleWhen, when] }
+        : when;
+    } else {
+      next.excludeWhen = hasRows(l.excludeWhen)
+        ? { type: "group", op: "or", children: [l.excludeWhen, when] }
+        : when;
+    }
+  }
+  return { logic: next, changed: true };
+}

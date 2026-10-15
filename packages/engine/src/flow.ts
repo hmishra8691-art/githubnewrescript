@@ -18,7 +18,7 @@ import { applyDefaultValues } from "./defaultValue.js";
 import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
-import { calcOptionsFor } from "./calcContext.js";
+import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -333,16 +333,18 @@ export function runCalculations(
    * same function. Two inline copies is how one language becomes two.
    */
   const flat = flattenVariables(def, state);
-  const { resolver, names } = calcOptionsFor(def, state);
+  const calcOpts = calcOptionsFor(def, state);
   for (const calc of def.calculations) {
     if (calc.trigger !== trigger && !(trigger === "on_page_submit" && calc.trigger === "on_change")) continue;
     if (!evaluateCondition(calc.when, { def, state })) continue;
     try {
-      const v = evaluateExpression(calc.expression, { resolver, names });
+      const v = evaluateExpression(calc.expression, calcOpts);
       state.calculated[calc.targetVariable] = Array.isArray(v) ? v.length : (v as any);
       flat[calc.targetVariable] = state.calculated[calc.targetVariable];
-    } catch {
+      noteCalcOutcome(state, calc.targetVariable);
+    } catch (e) {
       state.calculated[calc.targetVariable] = null;
+      noteCalcOutcome(state, calc.targetVariable, e);
     }
   }
   // calculated-type questions with expressions
@@ -369,17 +371,21 @@ export function runCalculations(
           try {
             const v = evaluateExpression(q.settings.expression, calcOptionsFor(def, state, ctx));
             state.answers[answerKey(q.id, ctx)] = v as any;
-          } catch {
-            /* leave unset */
+            noteCalcOutcome(state, q.variableName);
+          } catch (e) {
+            /* leave unset — and say why */
+            noteCalcOutcome(state, q.variableName, e);
           }
         }
         continue;
       }
       try {
-        const v = evaluateExpression(q.settings.expression, { resolver, names });
+        const v = evaluateExpression(q.settings.expression, calcOpts);
         state.answers[q.id] = Array.isArray(v) ? (v as any) : (v as any);
-      } catch {
-        /* leave unset */
+        noteCalcOutcome(state, q.variableName);
+      } catch (e) {
+        /* leave unset — and say why */
+        noteCalcOutcome(state, q.variableName, e);
       }
     }
   }

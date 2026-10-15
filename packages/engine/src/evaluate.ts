@@ -1,3 +1,4 @@
+import { displayedCodesFor, hasDisplayedResolver } from "./displayedRegistry.js";
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
 import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
@@ -8,6 +9,7 @@ import { safeExpression } from "./calcContext.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { getEffectiveListsResolver } from "./piping.js";
 import { isEmptyAnswer } from "./answers.js";
+import { isCategoricalGrid } from "./gridCell.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -85,6 +87,18 @@ export interface EvalTrace {
  * Only reads that really are several cells are marked, so a multi-select's
  * own answer array and every scalar answer behave exactly as before.
  */
+/**
+ * WHAT THE RESPONDENT WAS SHOWN — registered, not imported.
+ *
+ * "Was this question / this option displayed" needs the option pipeline
+ * (eligibility, exclusion, carry-forward), which lives in `carryforward.ts`,
+ * which imports this file. Importing it back would close the cycle, so it
+ * registers itself here — the same arrangement `piping.ts` has with
+ * `getEffectiveListsResolver`. Returns the codes (rows, for a grid) that were
+ * shown, or `null` when the question itself is not shown.
+ */
+export { registerDisplayedCodesResolver, type DisplayedCodesResolver } from "./displayedRegistry.js";
+
 const CELL_SETS = new WeakSet<object>();
 const GRID_RECORDS = new WeakSet<object>();
 const cellSet = (cells: unknown[]): unknown[] => { CELL_SETS.add(cells); return cells; };
@@ -724,10 +738,46 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
     return held;
   }
 
+  /*
+   * DISPLAYED / NOT DISPLAYED — was the question, or this option of it, on the
+   * respondent's screen, whatever they answered. Not `selected`: an option
+   * can be shown and not chosen, and that is exactly the case this exists for.
+   * With no option named the question itself is asked about. A question that
+   * cannot be found, or a survey with nothing registered to answer, reads as
+   * "not shown" — the safe direction for a rule that gates an option.
+   */
+  if (rule.operator === "displayed" || rule.operator === "notDisplayed") {
+    const src = rule.source;
+    let held = false;
+    if ((src.kind === "question" || src.kind === "variable") && src.ref && hasDisplayedResolver()) {
+      const shown = displayedCodesFor(src.ref, ctx) ?? null;
+      const wanted = resolveComparisonValue(rule.value, ctx);
+      const list = Array.isArray(wanted) ? wanted : wanted === undefined || wanted === null || wanted === "" ? [] : [wanted];
+      held = shown !== null && (list.length === 0 ? true : list.some((w) => shown.some((c) => String(c) === String(w))));
+    }
+    const out = rule.operator === "displayed" ? held : !held;
+    ctx.trace?.push({ rule: `${rule.source.ref}${rule.value != null && typeof rule.value !== "object" ? `.${String(rule.value)}` : ""}`, result: out, left: held, operator: rule.operator, right: rule.value });
+    return out;
+  }
   const left = resolveSourceValue(rule, ctx);
   const { operator } = rule;
-  const right = resolveComparisonValue(rule.value, ctx);
+  let right = resolveComparisonValue(rule.value, ctx);
   const right2 = resolveComparisonValue(rule.value2, ctx);
+  /*
+   * A CATEGORICAL GRID CELL: row + answer column, and no value (see gridCell.ts).
+   * The scale point lives in `columnId`, so it is what the row's answer is
+   * tested for. With no row named the cells are the rows that chose that
+   * column (see `resolveSourceValue`), and `selected` asks whether there are any.
+   * A rule that still carries its own `value` is read exactly as it always was.
+   */
+  if (
+    (operator === "selected" || operator === "notSelected") &&
+    (rule.value === undefined || rule.value === null || rule.value === "") &&
+    rule.source.columnId != null && rule.source.kind === "question" && !rule.source.count &&
+    isCategoricalGrid(getQuestionByCodeOrVar(ctx.def, rule.source.ref))
+  ) {
+    right = rule.source.columnId;
+  }
   let result: boolean;
   const ex = EXISTENTIAL[operator];
   const cells = ex

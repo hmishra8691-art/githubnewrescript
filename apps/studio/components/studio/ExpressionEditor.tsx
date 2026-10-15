@@ -2,8 +2,8 @@
 import React from "react";
 import type { Condition } from "@rescript/schema";
 import {
-  parseLogicExpression, formatCondition, referenceTree,
-  type ReferenceNode, type ExpressionError,
+  parseLogicExpression, formatCondition, referenceTree, mapRules, copyCondition, remapConditionReferences,
+  type ReferenceNode, type ExpressionError, type ReferenceMap,
 } from "@rescript/engine";
 import { useStudio } from "./store";
 
@@ -84,6 +84,36 @@ export function ExpressionEditor({ value, onChange, perOption }: {
   const [text, setText] = React.useState(printed);
   const [dirty, setDirty] = React.useState(false);
   const [filter, setFilter] = React.useState("");
+  /*
+   * COPY IS EXACT; REMAP IS A SEPARATE, CONFIRMED STEP.
+   * "Copy expression" puts the saved logic's text on the clipboard as it is —
+   * pasting it anywhere reads the same questions, rows, columns and answers.
+   * "Remap references…" is how a copy is deliberately pointed at other
+   * questions: it lists what it would change and does nothing until applied.
+   */
+  const [remapOpen, setRemapOpen] = React.useState(false);
+  const [remap, setRemap] = React.useState<Record<string, string>>({});
+  const referenced = React.useMemo(() => {
+    const ids = new Set<string>();
+    mapRules(value, (r) => {
+      if (r.source?.kind === "question" || r.source?.kind === "variable") {
+        const q = s.def.questions.find((x) => x.id === r.source.ref || x.code === r.source.ref || x.variableName === r.source.ref);
+        if (q) ids.add(q.id);
+      }
+      return r;
+    });
+    return [...ids];
+  }, [value, s.def.questions]);
+  const remapPlan = React.useMemo(() => {
+    const questions: Record<string, string> = {};
+    for (const [from, to] of Object.entries(remap)) if (to && to !== from) questions[from] = to;
+    const map: ReferenceMap = { questions };
+    return remapConditionReferences(copyCondition(value), map, s.def);
+  }, [remap, value, s.def]);
+  const copyExact = async () => {
+    try { await navigator.clipboard.writeText(printed); s.toast("Expression copied exactly"); }
+    catch { s.toast("Could not copy — select the text and copy it"); }
+  };
 
   // when the tree changes elsewhere (visual builder, undo), show it — but
   // never overwrite what is being typed
@@ -215,10 +245,44 @@ export function ExpressionEditor({ value, onChange, perOption }: {
           title="Wrap the selected part — or everything — in brackets"
           onClick={wrapSelection}>( … ) wrap</button>
         <span className="grow" />
+        <button className="btn small" data-testid="xe-copy"
+          title="Copy this logic exactly as it is — the same questions, rows, columns and answers"
+          onClick={copyExact}>copy expression</button>
+        <button className="btn small" data-testid="xe-remap-toggle" aria-expanded={remapOpen}
+          title="Point this logic at other questions — shows what changes and waits for you to apply it"
+          onClick={() => setRemapOpen((v) => !v)}>remap references…</button>
         <button className="btn small" data-testid="xe-format"
           title="Re-print from the saved logic" onClick={apply}
           disabled={result.errors.length > 0}>tidy up</button>
       </div>
+
+      {remapOpen && (
+        <div className="card" style={{ padding: 8, margin: "6px 0" }} data-testid="xe-remap">
+          <div className="flabel">Remap references — nothing changes until you apply</div>
+          {referenced.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>This logic reads no questions.</div>}
+          {referenced.map((id) => {
+            const q = s.def.questions.find((x) => x.id === id)!;
+            return (
+              <div key={id} className="row" style={{ gap: 6, marginBottom: 4 }}>
+                <span className="mono" style={{ minWidth: 70 }}>{q.code}</span>
+                <span aria-hidden>→</span>
+                <select className="select" data-testid={`xe-remap-${id}`} value={remap[id] ?? id}
+                  onChange={(e) => setRemap((m) => ({ ...m, [id]: e.target.value }))}>
+                  {s.def.questions.map((x) => <option key={x.id} value={x.id}>{x.code}{x.id === id ? " (unchanged)" : ""}</option>)}
+                </select>
+              </div>
+            );
+          })}
+          <div className="muted" style={{ fontSize: 12.5 }} data-testid="xe-remap-preview">
+            {remapPlan.changes.length ? `Will change: ${remapPlan.changes.join("; ")}` : "No changes yet."}
+          </div>
+          <button className="btn small primary" style={{ marginTop: 6 }} data-testid="xe-remap-apply"
+            disabled={remapPlan.changes.length === 0}
+            onClick={() => { s.labelNextEdit?.("remap references"); onChange(remapPlan.value); setRemap({}); setRemapOpen(false); setDirty(false); }}>
+            apply remap
+          </button>
+        </div>
+      )}
 
       <textarea
         ref={area}

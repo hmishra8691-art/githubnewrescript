@@ -10,7 +10,7 @@ import { setExprSources } from "./setExpression.js";
 import { lintAiCalls } from "./aiFunctions.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { pipeTokensIn } from "./pipingTokens.js";
-import { referencedNames } from "./embedded.js";
+import { referencedNames, embeddedCatalog } from "./embedded.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { findNamedExpression } from "./namedExpressions.js";
 
@@ -651,8 +651,37 @@ export function lintCalculations(def: SurveyDefinition): string[] {
     );
   }
   out.push(...calculationOrderProblems(def));
+  out.push(...embeddedReferenceProblems(def));
   // AI-derived calculations have their own shape rules (aiFunctions.ts); they
   // are calculations, so their problems belong in this list, not a second one.
   out.push(...lintAiCalls(def));
+  return out;
+}
+
+
+/**
+ * `{{ed.NAME}}` in a calculation, checked against the embedded data the survey
+ * actually has: a name nothing declares reads as empty on every respondent,
+ * and a field declared as a date, URL or other non-number cannot be used in
+ * arithmetic — both are found here, by name, before anyone runs the survey.
+ */
+export function embeddedReferenceProblems(def: SurveyDefinition): string[] {
+  const out: string[] = [];
+  const catalog = new Map(embeddedCatalog(def).map((e) => [e.name.toLowerCase(), e]));
+  const NON_NUMERIC = new Set(["date", "datetime", "url", "boolean"]);
+  for (const c of def.calculations ?? []) {
+    const seen = new Set<string>();
+    for (const n of referencedNames(c.expression ?? "")) {
+      const m = /^(?:ed|embedded)\.(.+)$/i.exec(n);
+      if (!m || seen.has(m[1].toLowerCase())) continue;
+      seen.add(m[1].toLowerCase());
+      const field = catalog.get(m[1].toLowerCase());
+      if (!field) {
+        out.push(`Calculation ${c.targetVariable} reads embedded data field "${m[1]}", which no embedded data declares — it will always be empty.`);
+      } else if (NON_NUMERIC.has(field.dataType) && c.dataType === "numeric") {
+        out.push(`Calculation ${c.targetVariable} uses embedded data field "${field.name}", declared as ${field.dataType}, in a numeric calculation.`);
+      }
+    }
+  }
   return out;
 }

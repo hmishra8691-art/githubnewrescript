@@ -31,6 +31,7 @@ import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
 import { embeddedCatalog, isNamedEmbeddedField, embeddedFieldName, coerceEmbedded } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
+import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
 import { effectiveScale } from "./scale.js";
@@ -410,7 +411,23 @@ function lintCondition(
     }
   }
 
-  if (!VALUELESS_OPERATORS.includes(operator) && (c.value === undefined || c.value === "")) {
+  /*
+   * A grid cell — row + answer column on a categorical grid — IS the answer it
+   * names and has no value to set (see gridCell.ts). The rules that spell the
+   * scale point twice are the ones worth a warning: the evaluator compared the
+   * value, so a column that disagrees with it was never what ran.
+   */
+  const gridQ = c.source?.kind === "question" ? getQuestionByCodeOrVar(ctx.def, c.source.ref) : undefined;
+  const isGridCell = !!gridQ && isCategoricalGrid(gridQ) && !c.source.count && c.source.columnId != null
+    && (operator === "selected" || operator === "notSelected") && (c.value === undefined || c.value === "" || c.value === null);
+  if (gridQ && isCategoricalGrid(gridQ) && !c.source.count) {
+    const n = normalizeGridRule(gridQ, c);
+    if (n.conflict) ctx.push({ level: "warning", path, message: `${gridQ.code}: ${n.conflict}` });
+    if (c.source.rowCode != null && c.source.columnId != null && (operator === "answered" || operator === "unanswered")) {
+      ctx.push({ level: "warning", path, message: `${gridQ.code} row “${c.source.rowCode}” “${operator}” ignores the column “${c.source.columnId}” — it only asks whether the row has an answer. Use “selected” on the column to ask about that answer.` });
+    }
+  }
+  if (!isGridCell && !VALUELESS_OPERATORS.includes(operator) && (c.value === undefined || c.value === "")) {
     ctx.push({ level: "warning", path, message: `Operator “${operator}” has no value set.` });
   }
   if (TWO_VALUE_OPERATORS.includes(operator) && (c.value2 === undefined || c.value2 === "")) {

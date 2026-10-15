@@ -49,6 +49,8 @@ import { variantRenderers } from "./variants/registry";
 import { MediaEmbed, SafeImage } from "./Media";
 import { SpeechInputButton } from "./SpeechInput";
 import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
+import { announceSelection } from "./optionPopup";
+import { CellMultiDropdown } from "./cellMultiDropdown";
 import { TimeSelects } from "./TimeSelects";
 import { enhanceMediaCarousels } from "./mediaCarousel";
 import { CardFace, cardFrameClass } from "./CardFace";
@@ -1691,15 +1693,8 @@ function CompositeCell({
         </select>
       );
     case "multi_dropdown":
-      return (
-        <select className="rs-select" multiple disabled={ro} size={Math.min(col.options.length, 4)}
-          value={Array.isArray(value) ? (value as unknown[]).map(String) : []}
-          onChange={(e) => onChange(Array.from(e.target.selectedOptions).map((o) => o.value))}>
-          {col.options.map((o) => (
-            <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
-          ))}
-        </select>
-      );
+      /* checkboxes in a popover that stays open — see cellMultiDropdown.tsx */
+      return <CellMultiDropdown col={col} readOnly={ro} label={col.label.replace(/<[^>]*>/g, "")} value={value} onChange={onChange} />;
     case "slider":
       if (col.min != null && col.max != null) {
         return (
@@ -2682,7 +2677,23 @@ function QuestionScript(p: QRProps) {
 
 /* ------------------------------------------------------------------ shell */
 export function QuestionRenderer(props: QRProps) {
-  const p = withPipedMedia(props, ctxOf(props));
+  /*
+   * A MESSAGE WHEN AN OPTION IS SELECTED, FOR EVERY CHOICE RENDERER AT ONCE.
+   * The change handler is wrapped here, once, so a radio list, a checkbox
+   * list, a dropdown, buttons, cards and an image select all announce a
+   * selected option the same way without any of them knowing. The selection
+   * is made first and is never undone; only options ADDED by the change are
+   * looked at, so deselecting says nothing.
+   */
+  const gated: QRProps = React.useMemo(() => ({
+    ...props,
+    onChange: (v: unknown) => {
+      const before = props.value;
+      props.onChange(v);
+      announceSelection(props.def, props.q, props.state, props.loop, before, v);
+    },
+  }), [props]);
+  const p = withPipedMedia(gated, ctxOf(gated));
   const ctx = ctxOf(p);
   /*
    * `settings.accessibility` has been in the schema, and in the properties

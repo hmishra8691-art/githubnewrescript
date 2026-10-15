@@ -137,9 +137,9 @@ await page.click('[data-testid="legacy-visibleif-convert"]');
 await page.waitForTimeout(300);
 const o2 = q(await readDef(), "q3").options[1];
 assert.equal(o2.visibleIf, undefined);
-assert.equal(o2.logic.visibility, "show_when");
-assert.equal(o2.logic.when.source.ref, "q1");
-ok("the older “visible if” is shown, editable, and converts to Show when with the same meaning");
+assert.equal(o2.logic.visibility ?? "default", "default");
+assert.equal(o2.logic.eligibleWhen.source.ref, "q1");
+ok("the older “visible if” is shown, editable, and converts to Eligible when with the same meaning");
 
 /* ---------------------------------------------- Prince 11: several images */
 await selectQuestion("Q4");

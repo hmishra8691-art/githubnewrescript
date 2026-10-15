@@ -96,7 +96,11 @@ assert.ok(await page.$('[data-testid="ap-empty"]'));
 await page.click('[data-testid="ap-add-simple"]');
 await page.waitForSelector('[data-testid="ap-rule"]');
 // default: Q1.A selected → select Q2.A ; make it Q2.B
-await page.selectOption('[data-testid="ap-rule"] [data-testid="ap-target-opt"]', "B");
+// the target options are a dropdown of checkboxes (Q2 is multi-select): untick A, tick B — the list stays open
+await page.click('[data-testid="ap-rule"] [data-testid="ap-builder-target"]');
+await page.check('[data-testid="ap-builder-target-opt-B"]');
+await page.uncheck('[data-testid="ap-builder-target-opt-A"]');
+await page.keyboard.press("Escape");
 def = await h.readDef();
 let q2 = def.questions.find((q) => q.id === "q2");
 assert.equal(q2.punches.length, 1, "the rule is stored on the TARGET question");
@@ -137,8 +141,8 @@ assert.equal(q2.punches[1].action, "deselect");
 assert.equal(q3.punches[0].when.type, "group", "the complex condition is the canonical AND/OR/NOT tree");
 // the complex rule cannot be flattened into the simple row
 await h.goTab("Logic");
-const modes = await page.$$eval('[data-testid="ap-rule"] [data-testid="ap-mode-simple"]', (els) => els.map((e) => e.disabled));
-assert.deepEqual(modes, [false, true, true], "the two rules born of the complex condition are edited as expressions only");
+assert.equal(await page.locator('[data-testid="ap-mode-simple"]').count(), 0, "there is no Simple mode any more");
+assert.equal(await page.locator('[data-testid="ap-rule"] [data-testid="ap-mode-builder"]').count(), 3, "every rule, simple or complex, is edited in the Builder");
 // bad expressions are explained, not stored
 await page.fill('[data-testid="ap-add-expression"]', "IF Q1.A THEN SELECT Q9.B");
 await page.click('[data-testid="ap-add-apply"]');

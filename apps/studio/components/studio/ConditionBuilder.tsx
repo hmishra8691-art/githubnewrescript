@@ -11,6 +11,7 @@ import {
 import {
   operatorsForQuestion, conditionSummary, embeddedCatalog, authoringQuestionView,
   gridAxes, authoringValueChoicesFor, describeReference,
+  isCategoricalGrid, normalizeGridRule, gridCellOperators, isCellOperator, isDisplayOperator, withGridOperator,
   type LogicPath,
   editableCondition, canonicalCondition, pathKey, appendTo, replaceAt, removeAt,
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, canUngroup, validateLogicTree,
@@ -72,6 +73,9 @@ const OPERATOR_LABELS: Record<ComparisonOperator, string> = {
   dateAfter: "after",
   dateEquals: "on",
   dateBetween: "between dates",
+  /* "Display": the option (or row) was on the respondent's screen after display / exclusion logic, selected or not */
+  displayed: "option is displayed",
+  notDisplayed: "option is not displayed",
 };
 
 const VALUE2_PLACEHOLDER: Partial<Record<ComparisonOperator, string>> = {
@@ -84,7 +88,12 @@ const VALUE2_PLACEHOLDER: Partial<Record<ComparisonOperator, string>> = {
   rankLessThan: "rank",
 };
 
-function newRule(defaultRef: string): ConditionRule {
+function newRule(defaultRef: string, def?: SurveyDefinition): ConditionRule {
+  /* a new rule on a categorical grid starts as the cell question — "is" an answer column — with no value to fill in */
+  const q = def?.questions.find((x) => x.id === defaultRef);
+  if (q && def && isCategoricalGrid(authoringQuestionView(q, def))) {
+    return { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "selected" };
+  }
   return { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "eq", value: "" };
 }
 
@@ -114,11 +123,18 @@ const rhsQuestion = (def: SurveyDefinition, ref: unknown) =>
     ? def.questions.find((x) => x.id === ref || x.code === ref || x.variableName === ref)
     : undefined;
 
-function RuleEditor({ rule, onChange, onRemove, perOption }: {
+function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
   rule: ConditionRule; onChange(r: ConditionRule): void; onRemove(): void; perOption?: boolean;
 }) {
   const s = useStudio();
-  const q: Question | undefined = s.def.questions.find((x) => x.id === rule.source.ref);
+  const q: Question | undefined = s.def.questions.find((x) => x.id === storedRule.source.ref);
+  /*
+   * A RULE THAT SPELT ITS SCALE POINT TWICE is shown as the one cell it means.
+   * Nothing is rewritten until somebody edits it — the first change is made to
+   * the canonical form, so opening a survey never alters a stored condition.
+   */
+  const gridNorm = normalizeGridRule(q, storedRule);
+  const rule = gridNorm.rule;
   /*
    * A carry-forward question has no rows/options of its own in the static
    * schema — they only exist as a runtime computation from another
@@ -140,7 +156,24 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const axes = gridAxes(srcQuestion);
   const valueChoices = authoringValueChoicesFor(q, s.def, { rowCode: rule.source.rowCode, columnId: rule.source.columnId });
   const listOps = LIST_VALUE_OPERATORS.includes(rule.operator);
-  const needsValue = !VALUELESS_OPERATORS.includes(rule.operator);
+  /*
+   * ROW + ANSWER COLUMN: on a single- or multi-select matrix the answer column
+   * IS the answer, so "is / is not / has selected" take the column and nothing
+   * else. A comparison takes a value and no column. One control, never both.
+   */
+  const gridQ = !rule.source.count && srcQuestion && isCategoricalGrid(srcQuestion) ? srcQuestion : undefined;
+  const cellForm = !!gridQ && isCellOperator(rule.operator);
+  /*
+   * "DISPLAY" asks what the respondent SAW, not what they answered: Source
+   * Question + Source Option (a row, on a grid). So it takes no row/column
+   * picker of its own — the one value picker below IS the option — and it
+   * lists the question's options as displayable things, never its scale.
+   */
+  const displayOp = isDisplayOperator(rule.operator);
+  const displayChoices: { ref: string; label: string }[] = !displayOp || !srcQuestion ? [] : gridQ
+    ? axes.rows.map((r) => ({ ref: String(r.ref), label: String(r.label) }))
+    : valueChoices.map((o) => ({ ref: String(o.ref), label: String(o.label) }));
+  const needsValue = !VALUELESS_OPERATORS.includes(rule.operator) && !cellForm;
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
   const usesOption = isOptionValueRef(rule.value);
   const usesQuestion = isQuestionValueRef(rule.value);
@@ -160,9 +193,13 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const allowed: ComparisonOperator[] =
     counting
       ? COUNT_OPERATORS
-      : rule.source.kind === "question" && q
-        ? operatorsForQuestion(q)
-        : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
+      : gridQ
+        ? gridCellOperators(gridQ)
+        : rule.source.kind === "question" && q
+          ? operatorsForQuestion(q)
+          : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
+  /* a stored `=` on a grid still evaluates — it is not "stale", it is just not offered for new rules */
+  const legacyAllowed = !!gridQ && !!q && operatorsForQuestion(q).includes(rule.operator);
   /*
    * AN OPERATOR THE SOURCE CAN NO LONGER TAKE.
    *
@@ -177,8 +214,13 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
    * which is the same lie the other way round — but it is labelled for what
    * it is, and the row says so with a one-click fix beside it.
    */
-  const operatorStale = !counting && !allowed.includes(rule.operator);
-  const operatorChoices = operatorStale ? [rule.operator, ...allowed] : allowed;
+  const operatorStale = !counting && !allowed.includes(rule.operator) && !legacyAllowed;
+  const operatorChoices = operatorStale || (legacyAllowed && !allowed.includes(rule.operator)) ? [rule.operator, ...allowed] : allowed;
+  /* the words for an operator on a grid: the answer column reads as a sentence */
+  const operatorLabel = (o: ComparisonOperator): string =>
+    gridQ && o === "selected" ? (gridQ.type === "matrix_multi" ? "has selected" : "is")
+      : gridQ && o === "notSelected" ? (gridQ.type === "matrix_multi" ? "hasn't selected" : "is not")
+      : (OPERATOR_LABELS[o] ?? o);
 
   /**
    * Turn counting on or off for this rule.
@@ -227,7 +269,29 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
   const pickSource = (raw: string) => {
     const [kind, ...rest] = raw.split(":");
     const ref = rest.join(":");
-    if (kind === "q") return setSource({ kind: "question", ref });
+    if (kind === "q") {
+      /*
+       * ANOTHER QUESTION IS ANOTHER VOCABULARY. The row, the answer column and
+       * the value belong to the question they were picked on — carried over,
+       * they would name a row or a code the new question does not have. The
+       * operator is kept when the new question can take it, and otherwise
+       * becomes that question's natural one.
+       */
+      if (ref === rule.source.ref) return;
+      const next = s.def.questions.find((x) => x.id === ref);
+      const nextAllowed = next
+        ? (isCategoricalGrid(authoringQuestionView(next, s.def)) ? gridCellOperators(authoringQuestionView(next, s.def)) : operatorsForQuestion(next))
+        : [];
+      const keep = nextAllowed.includes(rule.operator) && !LIST_VALUE_OPERATORS.includes(rule.operator) ? rule.operator : (nextAllowed[0] ?? rule.operator);
+      const { rowCode: _r, columnId: _c, rowPosition: _rp, optionPosition: _op, count: _ct, ...rest } = rule.source;
+      return onChange({
+        ...rule,
+        source: { ...rest, kind: "question", ref },
+        operator: keep,
+        value: VALUELESS_OPERATORS.includes(keep) || (next && isCategoricalGrid(next) && isCellOperator(keep)) ? undefined : "",
+        value2: undefined,
+      });
+    }
     /*
      * A named expression already answers yes or no, so choosing one fixes the
      * operator too — leaving "= " and an empty value would ask the programmer
@@ -412,7 +476,7 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
         * "what are this question's axes" once, for both spellings, and the
         * pickers follow it.
         */}
-      {!counting && axes.isGrid && (axes.rows.length > 0 || axes.columns.length > 0) && (
+      {!counting && !displayOp && axes.isGrid && (axes.rows.length > 0 || axes.columns.length > 0) && (
         <>
           {axes.rows.length > 0 && (
             <select className="select" data-testid="cond-row" value={rule.source.rowCode ?? ""}
@@ -421,23 +485,27 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
               {axes.rows.map((r) => <option key={r.ref} value={r.ref}>row: {r.label}</option>)}
             </select>
           )}
-          {axes.columns.length > 0 && (
+          {/* on a categorical grid the column is the ANSWER and belongs to "is / is not"; a comparison has a value instead */}
+          {axes.columns.length > 0 && (!gridQ || cellForm) && (
             <select className="select" data-testid="cond-column" value={rule.source.columnId ?? ""}
               onChange={(e) => setSource({ columnId: e.target.value || undefined })}
               title={axes.columnMeaning === "option_code"
                 ? "The columns of this grid are its answer scale. Naming one asks about any row with that answer."
                 : "Naming a column asks about that column's cell."}>
-              <option value="">{axes.columnMeaning === "option_code" ? "any answer" : "any col"}</option>
-              {axes.columns.map((c) => <option key={c.ref} value={c.ref}>{axes.columnMeaning === "option_code" ? "rated" : "col"}: {c.label}</option>)}
+              <option value="">{gridQ ? "— answer —" : axes.columnMeaning === "option_code" ? "any answer" : "any col"}</option>
+              {axes.columns.map((c) => <option key={c.ref} value={c.ref}>{gridQ ? c.label : axes.columnMeaning === "option_code" ? "rated" : "col"}{gridQ ? "" : ": "}{gridQ ? "" : c.label}</option>)}
             </select>
           )}
         </>
       )}
       {/* what the reference reads as, so there is never a doubt which cell it names */}
-      {!counting && axes.isGrid && (rule.source.rowCode || rule.source.columnId) && (
+      {!counting && !displayOp && axes.isGrid && (rule.source.rowCode || rule.source.columnId) && (
         <span className="chip mono" data-testid="cond-reference" title="the element this condition reads">
           {describeReference(srcQuestion, rule.source)}
         </span>
+      )}
+      {gridNorm.conflict && (
+        <span className="chip warn" data-testid="cond-conflict" title={gridNorm.conflict}>column and value disagreed — value kept</span>
       )}
       {/*
         * A NAMED EXPRESSION NEEDS NO OPERATOR. It already answers yes or no,
@@ -453,12 +521,18 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
         >{rule.value === false ? "is NOT true" : "is true"}</button>
       ) : (
         <>
-          <select className={`select op-select${operatorStale ? " stale" : ""}`} value={rule.operator}
+          <select className={`select op-select${operatorStale ? " stale" : ""}`} value={rule.operator} data-testid="cond-operator"
             data-stale={operatorStale ? "1" : undefined}
-            onChange={(e) => onChange({ ...rule, operator: e.target.value as ComparisonOperator })}>
+            onChange={(e) => {
+              const op = e.target.value as ComparisonOperator;
+              if (gridQ) return onChange(withGridOperator(rule, op));
+              /* to or from Display the old value is a different kind of thing (an answer vs an option shown) */
+              if (isDisplayOperator(op) !== displayOp) return onChange({ ...rule, operator: op, value: undefined, value2: undefined });
+              onChange({ ...rule, operator: op });
+            }}>
             {operatorChoices.map((o) => (
               <option key={o} value={o}>
-                {(OPERATOR_LABELS[o] ?? o) + (operatorStale && o === rule.operator ? " — not available for this question" : "")}
+                {operatorLabel(o) + (operatorStale && o === rule.operator ? " — not available for this question" : "")}
               </option>
             ))}
           </select>
@@ -509,6 +583,15 @@ function RuleEditor({ rule, onChange, onRemove, perOption }: {
             <option value="">— question —</option>
             {s.def.questions.filter((x) => x.id !== rule.source.ref).map((x) => (
               <option key={x.id} value={x.id}>{x.code} — {stripHtml(x.text).slice(0, 40)}</option>
+            ))}
+          </select>
+        ) : displayOp ? (
+          <select className="select" data-testid="cond-display-option" aria-label="Source option"
+            value={String(rule.value ?? "")}
+            onChange={(e) => onChange({ ...rule, value: e.target.value === "" ? undefined : e.target.value })}>
+            <option value="">{gridQ ? "— any row (the question) —" : "— the question itself —"}</option>
+            {displayChoices.map((o) => (
+              <option key={o.ref} value={o.ref}>{o.ref}: {o.label}</option>
             ))}
           </select>
         ) : valueChoices.length > 0 && !listOps && rule.operator !== "matches" ? (
@@ -635,7 +718,7 @@ function ConditionList({ ctx, path, group }: {
   const isRoot = path.length === 0;
 
   const addCondition = () =>
-    ctx.commit(appendTo(ctx.root, path, newRule(firstRef)), "add condition");
+    ctx.commit(appendTo(ctx.root, path, newRule(firstRef, s.def)), "add condition");
 
   if (group.children.length === 0) {
     return (

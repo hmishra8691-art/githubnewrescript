@@ -102,7 +102,7 @@ await page.waitForTimeout(300);
 const selectors = [
   '[data-testid="ap-chain-mode"]',
   '[data-testid="ap-rule-text"]',
-  '[data-testid="ap-mode-simple"]',
+  '[data-testid="ap-mode-builder"]',
   '[data-testid="ap-mode-expression"]',
   '[data-testid="ap-remove"]',
 ];
@@ -117,15 +117,15 @@ for (let i = 0; i < selectors.length; i++) {
     );
   }
 }
-ok("chain-mode select, rule text, Simple, Expression, and × never overlap each other at the default panel width");
+ok("chain-mode select, rule text, Builder, Expression, and × never overlap each other at the default panel width");
 
 /* -------- the button GROUP travels together: none of the three buttons split
    across rows independently of the others */
-const simpleTop = rects['[data-testid="ap-mode-simple"]'].top;
+const simpleTop = rects['[data-testid="ap-mode-builder"]'].top;
 const exprTop = rects['[data-testid="ap-mode-expression"]'].top;
 const removeTop = rects['[data-testid="ap-remove"]'].top;
 assert.ok(Math.abs(simpleTop - exprTop) < 4 && Math.abs(exprTop - removeTop) < 4,
-  "Simple / Expression / × must stay on the same line as each other, wrapping together rather than splitting mid-group");
+  "Builder / Expression / × must stay on the same line as each other, wrapping together rather than splitting mid-group");
 ok("the mode/remove button group wraps as one unit, never splitting across lines independently");
 
 /* --------------------------------------- the full text survives, via title */

@@ -37,6 +37,8 @@ export interface InspectorSnapshot {
   answers: Record<string, unknown>;
   flatVariables: Record<string, unknown>;
   calculated: Record<string, unknown>;
+  /** why a calculation has no value, by variable — e.g. a non-numeric embedded field named in full */
+  calcErrors: Record<string, string>;
   embedded: Record<string, unknown>;
   flags: string[];
   displayLogicResults: { questionId: string; visible: boolean; trace: EvalTrace[] }[];
@@ -191,6 +193,7 @@ export function inspect(
     answers: state.answers,
     flatVariables: flattenVariables(def, state),
     calculated: state.calculated,
+    calcErrors: { ...(state.calcErrors ?? {}) },
     embedded: state.embedded,
     flags: state.flags,
     displayLogicResults,

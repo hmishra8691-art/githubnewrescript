@@ -275,7 +275,7 @@ export function StudioProvider({
   const withOptionCodes = (d: SurveyDefinition): SurveyDefinition => {
     const r = canonicalizeSurveyConditions(d);
     if (!r.changes.length) return d;
-    showToast(`Logic uses option codes — ${r.changes.slice(0, 2).join("; ")}${r.changes.length > 2 ? ` (+${r.changes.length - 2} more)` : ""}.`);
+    showToast(`Logic tidied — ${r.changes.slice(0, 2).join("; ")}${r.changes.length > 2 ? ` (+${r.changes.length - 2} more)` : ""}.`);
     return r.def;
   };
   const showToast = React.useCallback((msg: string, kind: "ok" | "err" = "ok") => {

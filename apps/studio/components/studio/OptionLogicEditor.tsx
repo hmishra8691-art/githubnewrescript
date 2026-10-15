@@ -1,17 +1,17 @@
 "use client";
 import React from "react";
-import type { Condition, OptionLogic, OptionSourceRule } from "@rescript/schema";
-import { isEmptyOptionLogic } from "@rescript/schema";
+import type { Condition, OptionLogic, OptionPopup, OptionSourceRule } from "@rescript/schema";
+import { isEmptyOptionLogic, migrateOptionVisibility } from "@rescript/schema";
 import { optionLogicSummary } from "@rescript/engine";
 import { useStudio } from "./store";
-import { ConditionEditor, OptionalCondition, newConditionGroup } from "./ConditionBuilder";
+import { ConditionEditor, OptionalCondition } from "./ConditionBuilder";
 
 /**
  * Option-level logic editor (reqs §1–4, §12–14).
  *
  * Everything a programmer can do to a single option lives here, built
- * entirely through the UI: always show / always hide / show when / hide when,
- * eligibility, exclusion, prioritisation, randomisation participation and
+ * entirely through the UI: always show / always hide, eligibility (the old
+ * "Show when…"), exclusion (the old "Hide when…"), prioritisation, randomisation participation and
  * carry forward / carry back. The readable summary at the bottom is the
  * check that what they configured is what they meant.
  */
@@ -20,9 +20,90 @@ const VISIBILITY: { value: NonNullable<OptionLogic["visibility"]>; label: string
   { value: "default", label: "Default", hint: "Shown unless another rule removes it." },
   { value: "always_show", label: "Always show", hint: "Pinned visible — filtering can’t remove it. Ideal for Other / None of the above." },
   { value: "always_hide", label: "Always hide", hint: "Kept in the definition for reference, never displayed." },
-  { value: "show_when", label: "Show when…", hint: "Displayed only while the condition holds." },
-  { value: "hide_when", label: "Hide when…", hint: "Removed while the condition holds." },
 ];
+/*
+ * "Show when…" and "Hide when…" are gone from the pills: they were exactly
+ * "Eligible when" and "Exclude when" under two more names, and having both
+ * meant the same rule could be written in two places that disagreed. A saved
+ * option that still carries one is migrated into the equivalent rule (the
+ * store does it on load; the editor does it again defensively below).
+ */
+
+const POPUP_TYPES: { value: OptionPopup["type"]; label: string; hint: string }[] = [
+  { value: "information", label: "Information", hint: "A note the respondent acknowledges." },
+  { value: "warning", label: "Warning", hint: "A caution the respondent acknowledges." },
+  { value: "confirmation", label: "Confirmation", hint: "Continue or Cancel. Cancel on a Next-triggered message keeps the respondent on the page." },
+];
+
+const DEFAULT_POPUP: OptionPopup = {
+  enabled: true, message: "", type: "information", trigger: "immediate", frequency: "every",
+};
+
+/** "Show Popup Message When Selected" — the controls appear only once it is switched on. */
+function PopupEditor({ popup, onChange }: { popup: OptionPopup | undefined; onChange(p: OptionPopup | undefined): void }) {
+  const p = popup;
+  const on = !!p?.enabled;
+  const set = (patch: Partial<OptionPopup>) => onChange({ ...(p ?? DEFAULT_POPUP), ...patch });
+  const empty = on && !p!.message.trim();
+  return (
+    <div style={{ margin: "10px 0" }} data-testid="popup-editor">
+      <label className="row" style={{ gap: 6, cursor: "pointer" }}>
+        <input type="checkbox" data-testid="popup-enabled" checked={on}
+          onChange={(e) => (e.target.checked ? set({ enabled: true }) : p && onChange({ ...p, enabled: false }))} />
+        <span className="flabel" style={{ margin: 0 }}>Show Popup Message When Selected</span>
+      </label>
+      {on && (
+        <div className="card" style={{ marginTop: 6, padding: 8 }} data-testid="popup-fields">
+          <div className="flabel">Message</div>
+          <textarea className="textarea" rows={3} data-testid="popup-message" value={p!.message}
+            placeholder="What the respondent should see…"
+            onChange={(e) => set({ message: e.target.value })} />
+          {empty && <div style={{ color: "var(--amber, #b45309)", fontSize: 12.5 }} data-testid="popup-empty">
+            Add a message — an empty popup is never shown.</div>}
+          <div className="flabel" style={{ marginTop: 8 }}>Title (optional)</div>
+          <input className="input" data-testid="popup-title" value={p!.title ?? ""}
+            onChange={(e) => set({ title: e.target.value || undefined })} />
+          <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+            <div>
+              <div className="flabel">Popup type</div>
+              <select className="select" data-testid="popup-type" value={p!.type}
+                title={POPUP_TYPES.find((t) => t.value === p!.type)?.hint}
+                onChange={(e) => set({ type: e.target.value as OptionPopup["type"] })}>
+                {POPUP_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div className="flabel">Trigger</div>
+              <select className="select" data-testid="popup-trigger" value={p!.trigger}
+                onChange={(e) => set({ trigger: e.target.value as OptionPopup["trigger"] })}>
+                <option value="immediate">Immediately when selected</option>
+                <option value="on_next">When the respondent clicks Next</option>
+              </select>
+            </div>
+            <div>
+              <div className="flabel">Show</div>
+              <select className="select" data-testid="popup-frequency" value={p!.frequency}
+                onChange={(e) => set({ frequency: e.target.value as OptionPopup["frequency"] })}>
+                <option value="every">Every selection</option>
+                <option value="once">Only once</option>
+              </select>
+            </div>
+            <div>
+              <div className="flabel">Button text</div>
+              <input className="input" data-testid="popup-button" style={{ width: 130 }}
+                placeholder={p!.type === "confirmation" ? "Continue" : "OK"} value={p!.buttonText ?? ""}
+                onChange={(e) => set({ buttonText: e.target.value || undefined })} />
+            </div>
+          </div>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+            Deselecting never shows a message and the option is never deselected for the respondent.
+            This works alongside every other rule on the option.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** An "always true" condition — an empty AND group. */
 export const EMPTY_CONDITION: Condition = { type: "group", op: "and", children: [] };
@@ -73,16 +154,13 @@ function SourceRuleEditor({ title, rule, direction, onChange }: {
 
 /**
  * The older `visibleIf` gate, folded into option logic with the same meaning:
- * with no visibility rule (or "Show when") it becomes / joins the Show-when
- * condition; with any other mode it is an extra "Eligible when" gate — which
- * is exactly where `eligibilityVerdict` evaluates it.
+ * it is an extra "Eligible when" gate — which is exactly where
+ * `eligibilityVerdict` evaluates it ("Show when…" no longer exists as its own
+ * mode; it was this rule under another name).
  */
 export function absorbLegacyVisibleIf(l: OptionLogic, visibleIf: Condition): OptionLogic {
   const and = (a: Condition | undefined, b: Condition): Condition =>
     a && !(a.type === "group" && a.children.length === 0) ? { type: "group", op: "and", children: [a, b] } : b;
-  const v = l.visibility ?? "default";
-  if (v === "default") return { ...l, visibility: "show_when", when: visibleIf };
-  if (v === "show_when") return { ...l, when: and(l.when, visibleIf) };
   return { ...l, eligibleWhen: and(l.eligibleWhen, visibleIf) };
 }
 
@@ -93,14 +171,20 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
   onChange(patch: { logic?: OptionLogic; visibleIf?: Condition }): void;
 }) {
   const s = useStudio();
-  const [advanced, setAdvanced] = React.useState(
-    !!(logic?.eligibleWhen || logic?.excludeWhen || logic?.prioritizeWhen ||
-       logic?.deprioritizeWhen || logic?.randomizeWhen || logic?.carryForward || logic?.carryBack),
-  );
-  const l: OptionLogic = { visibility: "default", ...(logic ?? {}) } as OptionLogic;
-  const starter = () => newConditionGroup(s.def.questions[0]?.id ?? "");
-  const hasRows = (c: Condition | undefined) =>
-    !!c && (c.type === "rule" || c.children.length > 0);
+  /*
+   * Opening the Logic panel lands straight on the Advanced Rules. The rules
+   * people came for (Eligible / Exclude / popup …) used to sit behind a
+   * second click on a collapsed toggle; the toggle stays so it can be folded
+   * away, but the panel starts open.
+   */
+  const [advanced, setAdvanced] = React.useState(true);
+  /* an option saved with "Show when…"/"Hide when…" is read as the Eligible/Exclude rule it always meant */
+  const migrated = logic ? migrateOptionVisibility(logic) : null;
+  const l: OptionLogic = { visibility: "default", ...((migrated?.logic ?? logic) ?? {}) } as OptionLogic;
+  React.useEffect(() => {
+    if (logic && migrated?.changed) onChange({ logic: isEmptyOptionLogic(migrated.logic) ? undefined : migrated.logic });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [migrated?.changed]);
 
   const setLogic = (patch: Partial<OptionLogic>) => {
     const next = { ...l, ...patch } as OptionLogic;
@@ -129,10 +213,6 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
               data-testid={`vis-${v.value}`}
               onChange={() => setLogic({
                 visibility: v.value,
-                // land on an editable row rather than an empty box
-                when: v.value === "show_when" || v.value === "hide_when"
-                  ? (hasRows(l.when) ? l.when : starter())
-                  : l.when,
               })} />
             {v.label}
           </label>
@@ -141,14 +221,6 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
         {VISIBILITY.find((v) => v.value === l.visibility)?.hint}
       </div>
-
-      {(l.visibility === "show_when" || l.visibility === "hide_when") && (
-        <>
-          <div className="flabel">{l.visibility === "show_when" ? "SHOW THIS OPTION WHEN" : "HIDE THIS OPTION WHEN"}</div>
-          <ConditionEditor perOption value={hasRows(l.when) ? l.when! : starter()}
-            onChange={(when) => setLogic({ when })} />
-        </>
-      )}
 
       {visibleIf && (
         /*
@@ -162,7 +234,7 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
             <span className="flabel" style={{ margin: 0 }}>ALSO SHOWN ONLY WHEN (older “visible if”)</span>
             <span className="grow" />
             <button className="btn small" data-testid="legacy-visibleif-convert"
-              title="Move this condition into the visibility rules above — same behaviour, one place"
+              title="Move this condition into “Eligible when” — same behaviour, one place"
               onClick={() => onChange({ logic: absorbLegacyVisibleIf(l, visibleIf), visibleIf: undefined })}>convert</button>
             <button className="btn small danger" onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
           </div>
@@ -171,24 +243,26 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
       )}
 
       <button className="btn small" style={{ margin: "8px 0" }} onClick={() => setAdvanced((v) => !v)}>
-        {advanced ? "▾ hide advanced rules" : "▸ eligibility, exclusion, ordering, carry forward"}
+        {advanced ? "▾ hide advanced rules" : "▸ advanced rules: eligibility, exclusion, ordering, popup, carry forward"}
       </button>
 
       {advanced && (
         <div className="option-logic-adv">
-          <OptionalCondition perOption label="Eligible when" value={l.eligibleWhen}
-            hint="An extra gate on top of visibility."
-            onChange={(c) => setLogic({ eligibleWhen: c })} />
-          <OptionalCondition perOption label="Exclude when" value={l.excludeWhen}
-            hint="Hard removal — overrides Always Show."
-            onChange={(c) => setLogic({ excludeWhen: c })} />
-          <OptionalCondition perOption label="Prioritize when (move to top)" value={l.prioritizeWhen}
-            onChange={(c) => setLogic({ prioritizeWhen: c })} />
-          <OptionalCondition perOption label="Deprioritize when (move to bottom)" value={l.deprioritizeWhen}
-            onChange={(c) => setLogic({ deprioritizeWhen: c })} />
-          <OptionalCondition perOption label="Randomize when" value={l.randomizeWhen}
+          <div data-testid="adv-eligible"><OptionalCondition perOption label="Eligible when" value={l.eligibleWhen}
+            hint="The option is shown only while this holds (what “Show when…” used to do)."
+            onChange={(c) => setLogic({ eligibleWhen: c })} /></div>
+          <div data-testid="adv-exclude"><OptionalCondition perOption label="Exclude when" value={l.excludeWhen}
+            hint="The option is removed while this holds — overrides Always Show (what “Hide when…” used to do)."
+            onChange={(c) => setLogic({ excludeWhen: c })} /></div>
+          <div data-testid="adv-prioritize"><OptionalCondition perOption label="Prioritize when (move to top)" value={l.prioritizeWhen}
+            onChange={(c) => setLogic({ prioritizeWhen: c })} /></div>
+          <div data-testid="adv-deprioritize"><OptionalCondition perOption label="Deprioritize when (move to bottom)" value={l.deprioritizeWhen}
+            onChange={(c) => setLogic({ deprioritizeWhen: c })} /></div>
+          <div data-testid="adv-randomize"><OptionalCondition perOption label="Randomize when" value={l.randomizeWhen}
             hint="When the condition is false the option stays in its programmed position."
-            onChange={(c) => setLogic({ randomizeWhen: c })} />
+            onChange={(c) => setLogic({ randomizeWhen: c })} /></div>
+
+          <PopupEditor popup={l.popup} onChange={(popup) => setLogic({ popup })} />
 
           <div className="flabel" style={{ marginTop: 10 }}>Carry forward / carry back</div>
           <SourceRuleEditor title="Carry forward" direction="forward" rule={l.carryForward}

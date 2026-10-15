@@ -15,7 +15,15 @@
  * Preserving that keeps every existing survey's piped output byte-identical.
  * Use `|and`, `|or`, `|lines` or `|bullets` for spaced, readable lists.
  */
-export const PIPE_TOKEN_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
+/*
+ * A token body may CONTAIN `{{…}}` references, one level deep, so
+ * `{{expr: {{ed.A}} + {{ed.B}} * 2}}` is one token. Without that the lazy
+ * match ended at the first `}}`, took `expr: {{ed.A` as the token and left
+ * ` + {{ed.B}} * 2}}` behind as literal text — the stray fragments that
+ * showed up in preview. A lone `{` that does not open a `{{` is still plain
+ * text inside a body, exactly as before.
+ */
+export const PIPE_TOKEN_RE = /\{\{\s*((?:[^{}]|\{(?!\{)|\{\{[^{}]*\}\})+?)\s*\}\}/g;
 
 /** Where a pipe reads from. */
 export type PipeKind = "question" | "calc" | "embedded" | "loop" | "expr";

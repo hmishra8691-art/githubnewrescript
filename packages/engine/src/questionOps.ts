@@ -2,6 +2,7 @@ import type { Question, SurveyDefinition } from "@rescript/schema";
 import { listPages } from "./blocks.js";
 import { pruneReferencesTo, type QuestionReference } from "./references.js";
 import { usedNames, copyNames } from "./variableUsage.js";
+import { pointCopyAtItself } from "./conditionCopy.js";
 
 /**
  * QUESTION OPERATIONS — add, duplicate, remove, move — as engine functions.
@@ -79,6 +80,7 @@ export function reidentifyQuestion(copy: Record<string, unknown>, ids: IdMinter 
  */
 export function cloneQuestion(q: Question, taken: Set<string>, ids: IdMinter = defaultIds): Question {
   const copy = structuredClone(q);
+  const originalColumnIds = (q.columns ?? []).map((c) => c.id);
   copy.id = ids("q");
   /*
    * The suffix is chosen against the whole survey, not appended blindly.
@@ -91,6 +93,8 @@ export function cloneQuestion(q: Question, taken: Set<string>, ids: IdMinter = d
   copy.code = named.code;
   copy.variableName = named.variableName;
   reidentifyQuestion(copy as unknown as Record<string, unknown>, ids);
+  /* the copy's own rules read the copy — not the question it was made from */
+  pointCopyAtItself(copy, { id: q.id, columnIds: originalColumnIds }, (copy.columns ?? []).map((c) => c.id));
   return copy;
 }
 

@@ -3,6 +3,7 @@ import type { EvalContext } from "./evaluate.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
+import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
 import { escapeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
@@ -168,12 +169,21 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
   const fmt = (parts: string[]) => formatPipeValues(parts, t.format, joiner);
 
   if (t.kind === "expr") {
-    const flat = flattenVariables(ctx.def, ctx.state);
-    const v = evaluateExpression(t.ref, {
-      resolver: (n) => flat[n],
-      names: () => Object.keys(flat),
-    });
-    return v == null ? "" : escapeHtml(String(v));
+    /*
+     * The calc engine's one resolver — answers, calculated variables, embedded
+     * data (`{{ed.X}}`), named expressions and the current loop — rather than
+     * the flat answer map alone. And never a throw: a piped expression that
+     * cannot be computed (a non-numeric field, an unknown name) reads as empty
+     * text on the page; the reason is recorded where the test console shows it.
+     */
+    try {
+      const v = evaluateExpression(t.ref, calcOptionsFor(ctx.def, ctx.state, ctx.loop));
+      noteCalcOutcome(ctx.state, `{{expr:${t.ref}}}`);
+      return v == null ? "" : escapeHtml(String(v));
+    } catch (e) {
+      noteCalcOutcome(ctx.state, `{{expr:${t.ref}}}`, e);
+      return "";
+    }
   }
   if (t.kind === "calc") {
     const v = ctx.state.calculated[t.ref];

@@ -185,7 +185,9 @@ assert.equal(logic.op, "and");
 assert.equal(logic.children[0].op, "or", "the bracket became a group");
 assert.deepEqual(logic.children[0].children.map((c) => c.value), ["brandA", "brandB"]);
 assert.equal(logic.children[1].source.rowCode, "1");
-assert.equal(logic.children[1].value, "2", "the matrix scale point");
+// canonical grid cell (M1): the scale point IS the column — one home, no value
+assert.equal(logic.children[1].source.columnId, "2", "the matrix scale point");
+assert.equal(logic.children[1].value, undefined, "a grid cell carries no separate value");
 console.log("✔ §3/§4: brackets decide the nesting, matrix references resolve");
 
 const readsAs = await page.textContent(".rightpanel .logic-summary");
@@ -320,7 +322,7 @@ assert.equal(when.type, "group");
 assert.equal(when.op, "and");
 assert.equal(when.children[0].source.ref, "q_brand");
 assert.equal(when.children[1].source.rowCode, "2");
-assert.equal(when.children[1].value, "3");
+assert.equal(when.children[1].source.columnId, "3", "the scale point is the column (M1)");
 console.log("✔ §20: the expression editor works identically in Survey Flow branch logic");
 
 await page.screenshot({ path: "/tmp/st-expression.png", fullPage: false });

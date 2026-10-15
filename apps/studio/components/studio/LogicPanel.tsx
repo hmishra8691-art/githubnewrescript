@@ -596,7 +596,26 @@ export function CalcPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Calculations</h2>
         <span className="muted" style={{ fontSize: 13 }}>
           Calc DSL: + − × ÷ %, sum() avg() min() max() count() countif() pct() weighted() if() round(),
-          wildcards like sum(ALLOC_*)
+          wildcards like sum(ALLOC_*). Embedded data: {"{{ed.FieldName}}"}
+        </span>
+      </div>
+
+      {/*
+        * How calculations treat an EMPTY embedded-data field. One survey-wide
+        * setting, read by this list, by Embedded Data calculations and by every
+        * Calc DSL expression, so the three cannot disagree.
+        */}
+      <div className="row" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }} data-testid="calc-empty-embedded-row">
+        <span className="flabel" style={{ margin: 0 }}>Empty Embedded Data Handling</span>
+        <select className="select" style={{ width: 230 }} data-testid="calc-empty-embedded"
+          value={s.def.calculationSettings?.emptyEmbedded ?? "zero"}
+          onChange={(e) => s.update((d) => { d.calculationSettings = { emptyEmbedded: e.target.value as "zero" | "error" | "skip" }; })}>
+          <option value="zero">Treat Empty as 0</option>
+          <option value="error">Show Calculation Error</option>
+          <option value="skip">Skip Empty Values (sum, avg, count, min, max)</option>
+        </select>
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          A numeric text value like "1" is used as the number 1. A value that is not a number is reported by field name.
         </span>
       </div>
 

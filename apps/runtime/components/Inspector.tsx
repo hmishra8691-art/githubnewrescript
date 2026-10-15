@@ -146,6 +146,9 @@ export function Inspector({ snap, logs }: { snap: InspectorSnapshot; logs: strin
         {Object.entries(snap.calculated).map(([k, v]) => (
           <tr key={k}><td className="k">{k}</td><td><Val v={v} /></td></tr>
         ))}
+        {Object.entries(snap.calcErrors ?? {}).map(([k, msg]) => (
+          <tr key={`err-${k}`} data-testid="inspector-calc-error"><td className="k" style={{ color: "#b91c1c" }}>{k}</td><td style={{ color: "#b91c1c" }}>⚠ {msg}</td></tr>
+        ))}
       </tbody></table>
 
       <h3>Embedded data</h3>

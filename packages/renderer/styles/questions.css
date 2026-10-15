@@ -853,3 +853,47 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 /* inputs */
 .rs-input-filled :is(.rs-input, .rs-select, .rs-textarea) { border-color: transparent; background: color-mix(in srgb, var(--rs-text) 6%, var(--rs-input-bg)); }
 .rs-input-underline :is(.rs-input, .rs-select, .rs-textarea) { border-width: 0 0 var(--rs-border-w, 1.5px) 0; border-radius: 0; background: transparent; padding-left: 2px; padding-right: 2px; }
+
+/* ── Option popup messages (per-option "Show Popup Message When Selected") ─────
+   Drawn by showOptionPopup(). Fixed to the viewport so it works the same on a
+   desktop, tablet and phone; colours come from the survey theme variables. */
+.rs-popup-overlay {
+  position: fixed; inset: 0; z-index: 2147483000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(15, 23, 42, 0.5);
+}
+.rs-popup {
+  width: 100%; max-width: 440px; max-height: calc(100vh - 32px); overflow: auto;
+  background: var(--rs-card-bg, var(--rs-bg, #fff)); color: var(--rs-text, #111827);
+  border-radius: var(--rs-radius, 12px); border-top: 5px solid var(--rs-button-bg, #2563eb);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3); padding: 20px 22px;
+  font-family: var(--rs-font, inherit);
+}
+.rs-popup-warning { border-top-color: #d97706; }
+.rs-popup-confirmation { border-top-color: #7c3aed; }
+.rs-popup-title { font-weight: 700; font-size: 1.1em; margin-bottom: 8px; }
+.rs-popup-message { line-height: 1.5; overflow-wrap: anywhere; }
+.rs-popup-message p { margin: 0 0 8px; }
+.rs-popup-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+@media (max-width: 480px) { .rs-popup-actions .rs-btn { flex: 1 1 100%; } }
+
+/* ---------- multi-select dropdown inside a matrix cell ---------- */
+.rs-cmd { display: inline-block; max-width: 100%; min-width: 150px; }
+.rs-cmd-button {
+  width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  text-align: left; cursor: pointer;
+}
+.rs-cmd-button:disabled { cursor: default; opacity: .7; }
+.rs-cmd-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-cmd-caret { color: var(--rs-subtle); font-size: .8em; }
+.rs-cmd-panel {
+  z-index: 2147482000; max-width: calc(100vw - 16px);
+  background: var(--rs-surface, #fff); color: var(--rs-text, inherit); border: 1.5px solid var(--rs-border, #cbd5e1); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .18); padding: 6px; font-family: var(--rs-font, inherit);
+}
+.rs-cmd-list { max-height: min(260px, 45vh); overflow-y: auto; }
+.rs-cmd-item { display: flex; gap: 8px; align-items: center; padding: 9px 8px; border-radius: 6px; cursor: pointer; text-align: left; }
+.rs-cmd-item:hover { background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface, #fff)); }
+.rs-cmd-item.disabled { opacity: .45; cursor: default; }
+.rs-cmd-item input { accent-color: var(--rs-primary); width: 18px; height: 18px; flex: none; }
+.rs-cmd-hint { font-size: .82em; color: var(--rs-subtle, #64748b); padding: 4px 8px; }

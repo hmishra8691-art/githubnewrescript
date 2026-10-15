@@ -5,9 +5,10 @@ import type {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { stripHtmlText } from "./html.js";
-import { isQuestionValueRef } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
+import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 import { CODE_OPERATORS, answerKind, canonicalizeCondition, describeOptions, normalizeOptionText, resolveOptionValue, type OptionList } from "./optionCodes.js";
 import { stripVacuous } from "./conditionWalk.js";
 import { gridAxes } from "./gridAxes.js";
@@ -88,12 +89,28 @@ function tokenize(src: string): { tokens: Tok[]; error?: ExpressionError } {
     if (/\s/.test(ch)) { i += 1; continue; }
 
     if (ch === '"' || ch === "'") {
-      const end = src.indexOf(ch, i + 1);
-      if (end < 0) {
+      /*
+       * A backslash escapes the quote it is next to and itself — nothing else.
+       * `"it's \"x\""` is the text it's "x". The printer writes exactly these
+       * two escapes, so any text round-trips; before, a value holding a quote
+       * printed as text the tokenizer could not read back, and "copy this
+       * expression into another question" lost the rule.
+       */
+      let j = i + 1;
+      let text = "";
+      let closed = false;
+      while (j < src.length) {
+        const c2 = src[j];
+        if (c2 === "\\" && (src[j + 1] === ch || src[j + 1] === "\\")) { text += src[j + 1]; j += 2; continue; }
+        if (c2 === ch) { closed = true; break; }
+        text += c2;
+        j += 1;
+      }
+      if (!closed) {
         return { tokens, error: { message: "Unclosed quote", position: i } };
       }
-      tokens.push({ kind: "string", text: src.slice(i + 1, end), pos: i });
-      i = end + 1;
+      tokens.push({ kind: "string", text, pos: i });
+      i = j + 1;
       continue;
     }
 
@@ -176,6 +193,8 @@ export const OPERATOR_WORDS: Partial<Record<ComparisonOperator, string[]>> = {
   rankGreaterThan: ["rank after", "rankGreaterThan"],
   rankLessThan: ["rank before", "rankLessThan"],
   notRanked: ["not ranked", "notRanked"],
+  displayed: ["displayed", "displayed"],
+  notDisplayed: ["not displayed", "notDisplayed"],
   dateBefore: ["before", "dateBefore"],
   dateAfter: ["after", "dateAfter"],
   dateEquals: ["on", "dateEquals"],
@@ -235,7 +254,15 @@ export interface ParseResult {
  * in the rule's VALUE, which is where the evaluator and the visual builder
  * both look for it, so `strip()` moves it out before the rule is built.
  */
-type DraftSource = ConditionRule["source"] & { optionCode?: string };
+type DraftSource = ConditionRule["source"] & {
+  optionCode?: string;
+  /**
+   * `Q5.R1.C2` / `Q5.C2` on a categorical grid: `columnId` is the scale point,
+   * and the reference reads "that answer is chosen" — a cell with no value of
+   * its own (see gridCell.ts).
+   */
+  columnCell?: boolean;
+};
 
 /** Every loopVar in the flow — what lets `brand.Category` name the outer loop. */
 function loopVarsIn(nodes: FlowNode[]): string[] {
@@ -675,7 +702,23 @@ export function parseLogicExpression(
       if ((q!.rows?.length ?? 0) > 0) source.rowPosition = pos2;
       else source.optionPosition = pos2;
     } else if (segments.length > 1) {
-      const second = resolveRowOrOption(q!, segments[1]);
+      const grid = isCategoricalGrid(q!);
+      let second = resolveRowOrOption(q!, segments[1]);
+      /*
+       * `Q5.C2` — no row named, the scale point alone: "any row answered 2".
+       * Printed this way for a column-only reference, so it has to be read
+       * this way too; it used to be "Q5 has no C2" and the rule could not be
+       * pasted back into an expression box at all.
+       */
+      if (grid && segments.length === 2 && (!second || second.kind === "option")) {
+        const col = resolveColumnOrOption(q!, segments[1]);
+        if (col && col.kind === "option" && (!second || String(second.code) === String(col.code))) {
+          source.columnId = String(col.code);
+          source.columnCell = true;
+          second = null;
+          return { source, question: q!, segments };
+        }
+      }
       if (!second) fail(`${head} has no “${segments[1]}”`, tok!.pos);
       /*
        * A CONSTANT SUM stores one number per option (`{ "1": 4, "2": 6 }`), so
@@ -691,7 +734,11 @@ export function parseLogicExpression(
       const third = resolveColumnOrOption(q!, segments[2]);
       if (!third) fail(`${segments.slice(0, 2).join(".")} has no “${segments[2]}”`, tok!.pos);
       if (third.kind === "column") source.columnId = String(third.code);
-      else source.optionCode = String(third.code);
+      else if (isCategoricalGrid(q!) && source.rowCode != null) {
+        /* a scale point of a categorical grid: the cell's answer column, with no value of its own */
+        source.columnId = String(third.code);
+        source.columnCell = true;
+      } else source.optionCode = String(third.code);
     }
     if (segments.length > 3) {
       fail(`“${raw}” has more parts than this question has dimensions`, tok!.pos);
@@ -797,7 +844,17 @@ export function parseLogicExpression(
       return list;
     }
     at += 1;
-    if (t!.kind === "number") return Number(t!.text);
+    if (t!.kind === "number") {
+      /*
+       * `02` is an option CODE, not the number 2. Reading it as a number threw
+       * the zero away, so a survey whose codes are zero-padded (`01`, `02`,
+       * `10`) could not say "option 02" in text at all — and the same rule
+       * copied through the expression editor came back pointing at option 2.
+       * Anything whose digits are not what `Number` would print back is kept
+       * as the text it was written as.
+       */
+      return /^-?0\d/.test(t!.text) ? t!.text : Number(t!.text);
+    }
     if (t!.kind === "string") {
       // strict: a quoted non-number against a numeric question (or a COUNT) is refused before it is stored
       if (opts.strict && lhs?.numeric && t!.text !== "" && !numericText(t!.text)) fail(`${lhs.question ? String(lhs.question.code) : "The count"} is numeric — compare it with a number, not “${t!.text}”`, t!.pos);
@@ -818,6 +875,17 @@ export function parseLogicExpression(
      * behaviour that changes is the one that was previously always wrong.
      */
     if (t!.kind === "ident") {
+      /*
+       * `@option.code` on the right: "the option this rule is attached to".
+       * It printed as "[object Object]" before, so a per-option rule did not
+       * survive a trip through the expression editor — the rule was kept as
+       * the literal text it was printed as.
+       */
+      const optRef = /^@option(?:\.(code|label|value|index))?$/i.exec(t!.text);
+      if (optRef) {
+        if (!opts.perOption && countWhereDepth === 0) fail("“@option” can only be used in option-level logic", t!.pos);
+        return { $option: (optRef[1] ?? "code").toLowerCase() };
+      }
       /* `COUNT(Q6)` on the right: how many codes Q6 holds */
       if (COUNT_FUNCTIONS.has(t!.text.toLowerCase()) && peek()?.kind === "punct" && peek()!.text === "(") {
         at += 1;
@@ -964,6 +1032,46 @@ export function parseLogicExpression(
      * words parsed as "Q1 equals the text SELECTED", which is never what a
      * programmer who writes it means.
      */
+    /*
+     * `Q3 displayed 02`, `Q3.O02 displayed`, `Q5.R1 displayed`, `Q3 displayed`:
+     * was the option (the row, for a grid; the question, with none named)
+     * shown to the respondent. The one operator whose operand is optional.
+     */
+    if (operator === "displayed" || operator === "notDisplayed") {
+      const p = peek();
+      const endsHere = !p || (p.kind === "punct" && [")", ",", "]"].includes(p.text)) || isWord(p, "and") || isWord(p, "or") || isWord(p, "nor") || isWord(p, "then");
+      if (source.optionCode != null) return { type: "rule", source: strip(source), operator, value: source.optionCode };
+      if (source.rowCode != null && question && !isAllocation(question)) {
+        const { rowCode, ...rest } = strip(source);
+        return { type: "rule", source: rest, operator, value: rowCode };
+      }
+      if (endsHere) return { type: "rule", source: strip(source), operator };
+      const value = readOperand(lhsFor(source, question, operator));
+      return { type: "rule", source: strip(source), operator, value };
+    }
+    if (source.columnCell) {
+      /*
+       * A grid cell is a yes/no already — `Q5.R1.C2`, `Q5.R1.C2 is selected`,
+       * `Q5.R1.C2 not selected` — and carries no value. `answered` on it is
+       * the same question as `selected`. Any other operator would compare an
+       * answer column with something, which is not a thing a grid cell holds.
+       */
+      const SELECTED_WORDS = ["selected", "checked", "chosen", "ticked", "picked"];
+      const nextIsSelectedWord = SELECTED_WORDS.some((w) => isWord(peek(), w));
+      if ((operator === "eq" || operator === "ne") && nextIsSelectedWord) {
+        at += 1;
+        return { type: "rule", source: strip(source), operator: operator === "eq" ? "selected" : "notSelected" };
+      }
+      if (operator === "selected" || operator === "notSelected" || operator === "answered" || operator === "unanswered") {
+        const p = peek();
+        const endsHere = !p || (p.kind === "punct" && [")", ",", "]"].includes(p.text)) || isWord(p, "and") || isWord(p, "or") || isWord(p, "nor") || isWord(p, "then");
+        if (endsHere || NO_OPERAND.includes(operator)) {
+          const op = operator === "answered" ? "selected" : operator === "unanswered" ? "notSelected" : operator;
+          return { type: "rule", source: strip(source), operator: op };
+        }
+      }
+      fail(`${question ? String(question.code) : "This reference"} names one answer column of a grid — it is either selected or not. To compare the row's answer, drop the column: Q5.R1 >= 4`, tokens[opStart]?.pos);
+    }
     if (source.optionCode != null) {
       const SELECTED_WORDS = ["selected", "checked", "chosen", "ticked", "picked"];
       const nextIsSelectedWord = SELECTED_WORDS.some((w) => isWord(peek(), w));
@@ -1087,7 +1195,7 @@ export function parseLogicExpression(
      * that is what a choice question's answer holds. A value that names no
      * option is an error here, not a rule that can never be true.
      */
-    const canon = canonicalizeCondition(def, condition);
+    const canon = canonicalizeCondition(def, condition, { typed: true });
     if (canon.errors.length) return { errors: canon.errors.map((message) => ({ message })), warnings };
     for (const c of canon.changes) warnings.push({ message: `Read as the option code — ${c}` });
     return { condition: canon.condition, errors, warnings };
@@ -1103,7 +1211,7 @@ export function parseLogicExpression(
  * evaluator and the visual builder both look for it.
  */
 function strip(source: DraftSource): ConditionRule["source"] {
-  const { optionCode: _dropped, ...rest } = source;
+  const { optionCode: _dropped, columnCell: _cell, ...rest } = source;
   return rest;
 }
 
@@ -1111,6 +1219,8 @@ function strip(source: DraftSource): ConditionRule["source"] {
 function bareCondition(source: DraftSource, question?: Question): ConditionRule {
   const optionCode = source.optionCode;
   const clean = strip(source);
+  /* `Q5.R1.C2` / `Q5.C2`: that answer column is chosen */
+  if (source.columnCell) return { type: "rule", source: clean, operator: "selected" };
   if (optionCode != null) {
     // `Q1.brandA` — that option is selected
     return { type: "rule", source: clean, operator: "selected", value: optionCode };
@@ -1127,6 +1237,11 @@ const positional = (token: string, prefix: string): number | null => {
   const m = new RegExp(`^${prefix}(\\d+)$`, "i").exec(token);
   return m ? Number(m[1]) : null;
 };
+/** the digits after the prefix exactly as written — `O01` is code "01" before it is position 1 */
+const positionalRaw = (token: string, prefix: string): string | null => {
+  const m = new RegExp(`^${prefix}(\\d+)$`, "i").exec(token);
+  return m ? m[1] : null;
+};
 
 /** The second segment: a row when the question has rows, else an option. */
 /** a constant sum / allocation: one amount per option, keyed by option code */
@@ -1142,13 +1257,14 @@ export function resolveRowOrOption(q: Question, token: string): Resolved | null 
 
   const rn = positional(token, "R");
   if (rn != null) {
-    const byCode = q.rows.find((r) => String(r.code) === String(rn));
+    const byCode = q.rows.find((r) => String(r.code) === (positionalRaw(token, "R") ?? "") || String(r.code) === String(rn));
     if (byCode) return { kind: "row", code: byCode.code };
     if (q.rows[rn - 1]) return { kind: "row", code: q.rows[rn - 1].code };
   }
   const on = positional(token, "O") ?? positional(token, "A");
   if (on != null) {
-    const byCode = q.options.find((o) => String(o.code) === String(on));
+    const raw = positionalRaw(token, "O") ?? positionalRaw(token, "A") ?? "";
+    const byCode = q.options.find((o) => String(o.code) === raw || String(o.code) === String(on));
     if (byCode) return { kind: "option", code: byCode.code };
     if (q.options[on - 1]) return { kind: "option", code: q.options[on - 1].code };
   }
@@ -1173,12 +1289,13 @@ export function resolveColumnOrOption(q: Question, token: string): Resolved | nu
   /* `O`/`A` accepted here as well, so a scale option spelled either way reads */
   const cn = positional(token, "C") ?? positional(token, "O") ?? positional(token, "A");
   if (cn != null) {
+    const raw = positionalRaw(token, "C") ?? positionalRaw(token, "O") ?? positionalRaw(token, "A") ?? "";
     if (q.columns.length) {
-      const byCode = q.columns.find((c) => c.id === String(cn));
+      const byCode = q.columns.find((c) => c.id === raw || c.id === String(cn));
       if (byCode) return { kind: "column", code: byCode.id };
       if (q.columns[cn - 1]) return { kind: "column", code: q.columns[cn - 1].id };
     }
-    const byOptCode = q.options.find((o) => String(o.code) === String(cn));
+    const byOptCode = q.options.find((o) => String(o.code) === raw) ?? q.options.find((o) => String(o.code) === String(cn));
     if (byOptCode) return { kind: "option", code: byOptCode.code };
     if (q.options[cn - 1]) return { kind: "option", code: q.options[cn - 1].code };
   }
@@ -1219,8 +1336,8 @@ function countText(def: SurveyDefinition, source: ConditionRule["source"]): stri
   return `COUNT(${args.join(", ")})`;
 }
 
-function operandText(v: unknown, def?: SurveyDefinition): string {
-  if (Array.isArray(v)) return `[${v.map((x) => operandText(x, def)).join(", ")}]`;
+function operandText(v: unknown, def?: SurveyDefinition, quoteNumeric = false): string {
+  if (Array.isArray(v)) return `[${v.map((x) => operandText(x, def, quoteNumeric)).join(", ")}]`;
   if (typeof v === "number") return String(v);
   /*
    * A question reference on the right prints as the question's name, exactly
@@ -1228,6 +1345,7 @@ function operandText(v: unknown, def?: SurveyDefinition): string {
    * unquoted is also what makes the round trip an identity: `readOperand`
    * promotes that same bare word straight back to a reference.
    */
+  if (isOptionValueRef(v)) return `@option.${v.$option ?? "code"}`;
   if (isQuestionValueRef(v)) {
     if (v.read === "count") return `COUNT(${v.$question})`;
     const rq = def ? getQuestionByCodeOrVar(def, v.$question) : undefined;
@@ -1236,8 +1354,18 @@ function operandText(v: unknown, def?: SurveyDefinition): string {
   }
   const s = String(v ?? "");
   if (s === "") return '""';
-  if (IDENT_SAFE.test(s) || /^-?\d+(\.\d+)?$/.test(s)) return s;
-  return `"${s.replace(/"/g, '\\"')}"`;
+  /*
+   * Bare only when reading it back gives THE SAME VALUE: a word, a number
+   * `Number` would print as written, or a zero-padded integer code (`02`),
+   * which the reader keeps as text. Everything else is quoted, and a quote or
+   * backslash inside is escaped — the reader undoes exactly those two.
+   * `quoteNumeric` is for a text answer, where the string "4" is text and
+   * must not come back as the number 4.
+   */
+  const plainNumber = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(s) && String(Number(s)) === s;
+  const code = /^-?0\d+$/.test(s);
+  if (IDENT_SAFE.test(s) || code || (plainNumber && !quoteNumeric)) return s;
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /** The reference text for a rule's source. */
@@ -1292,10 +1420,16 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
  * One rule as text. `selected`/`notSelected` on an option collapse into the
  * dotted reference (`Q1.brandA`), which is how the shorthand round-trips.
  */
-function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
+function ruleText(def: SurveyDefinition, rawRule: ConditionRule): string {
+  const q = rawRule.source.kind === "question" ? getQuestionByCodeOrVar(def, rawRule.source.ref) : undefined;
+  /*
+   * A grid rule that spells its scale point twice (column AND value) prints as
+   * the one cell it means, the one the evaluator reads. Printed as stored it
+   * was `Q5.B.C2.C2`, which does not parse.
+   */
+  const rule = normalizeGridRule(q, rawRule).rule;
   const ref = referenceText(def, rule);
   const { operator, value, value2 } = rule;
-  const q = rule.source.kind === "question" ? getQuestionByCodeOrVar(def, rule.source.ref) : undefined;
 
   /*
    * The bare-reference shorthand for `answered` applies to a question, not to
@@ -1313,6 +1447,10 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
    * which means the same thing but is a different tree, and the round trip
    * between the two editors has to be an identity.
    */
+  /* a categorical grid's cell: row + answer column, no value — `Q5.R1.C2`, `Q5.R1.C2 not selected`, `Q5.C2` */
+  if (q && isCategoricalGrid(q) && (operator === "selected" || operator === "notSelected") && value == null && rule.source.columnId != null) {
+    return operator === "selected" ? ref : `${ref} ${OPERATOR_SPELLING("notSelected")}`;
+  }
   if (operator === "selected" && value != null && q) {
     const opt = q.options.find((o) => String(o.code) === String(value));
     /*
@@ -1334,15 +1472,20 @@ function ruleText(def: SurveyDefinition, rule: ConditionRule): string {
     if (opt) return `${ref}.${codeToken(opt.code, rule.source.rowCode != null ? "C" : "O")}`;
   }
 
+  if (operator === "displayed" || operator === "notDisplayed") {
+    return value === undefined || value === null || value === "" ? `${ref} ${OPERATOR_SPELLING(operator)}` : `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def)}`;
+  }
   if (NO_OPERAND.includes(operator)) return `${ref} ${OPERATOR_SPELLING(operator)}`;
+  /* a text answer's literal "4" is text; on every other kind a numeric-looking value reads back as itself */
+  const qn = q && !rule.source.count && answerKind(q) === "other";
   if (TWO_OPERANDS.includes(operator)) {
-    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def)} and ${operandText(value2, def)}`;
+    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def, qn)} and ${operandText(value2, def, qn)}`;
   }
   if (LIST_OPERAND.includes(operator)) {
     const list = Array.isArray(value) ? value : [value];
-    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(list, def)}`;
+    return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(list, def, qn)}`;
   }
-  return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def)}`;
+  return `${ref} ${OPERATOR_SPELLING(operator)} ${operandText(value, def, qn)}`;
 }
 
 export interface FormatOptions {

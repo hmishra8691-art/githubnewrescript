@@ -69,7 +69,7 @@ await page.click(".qcard >> nth=1");
 await page.waitForSelector(".qcard.selected");
 await page.click('.qcard.selected [data-testid="option-logic-0"]');
 await page.waitForSelector('[data-testid="option-logic"]');
-await page.click('[data-testid="option-logic"] [data-testid="vis-show_when"]');
+await page.click('[data-testid="option-logic"] [data-testid="adv-eligible"] [data-testid="optional-add"]');
 await page.waitForSelector('[data-testid="option-logic"] [data-testid="logic-builder"]');
 await page.click('[data-testid="option-logic"] [data-testid="lb-add-condition"]');
 await page.waitForSelector('[data-testid="option-logic"] .cond-rule');
@@ -149,7 +149,7 @@ await page.fill(`${RULE} [data-testid="count-value"]`, "2");
 await page.waitForTimeout(350);
 
 def = await readDef();
-let stored = def.questions[1].options[0].logic.when;
+let stored = def.questions[1].options[0].logic.eligibleWhen;
 let rule0 = stored.children ? stored.children[0] : stored;
 assert.equal(rule0.source.count.of, "selected");
 assert.equal(rule0.source.count.scope, "options");
@@ -174,7 +174,7 @@ await page.waitForSelector(`${RULE} [data-testid="count-quick-eq"]`);
 await page.click(`${RULE} [data-testid="count-quick-eq"]`);
 await page.waitForTimeout(300);
 def = await readDef();
-stored = def.questions[1].options[0].logic.when;
+stored = def.questions[1].options[0].logic.eligibleWhen;
 rule0 = stored.children ? stored.children[0] : stored;
 assert.equal(rule0.operator, "eq", "exactly 2 is stored as eq, not gte");
 assert.equal(rule0.value, 2);
@@ -193,7 +193,7 @@ await page.click(`${RULE} [data-testid="count-only-${codes[4]}"]`);
 await page.waitForTimeout(350);
 
 def = await readDef();
-stored = def.questions[1].options[0].logic.when;
+stored = def.questions[1].options[0].logic.eligibleWhen;
 rule0 = stored.children ? stored.children[0] : stored;
 assert.deepEqual(rule0.source.count.only.map(String), [codes[0], codes[2], codes[4]],
   `the subset is stored: ${JSON.stringify(rule0.source.count.only)}`);
@@ -224,7 +224,7 @@ await page.click(`${RULE} [data-testid="count-subset"] summary`).catch(() => {})
 await page.click(`${RULE} [data-testid="count-only-clear"]`);
 await page.waitForTimeout(350);
 def = await readDef();
-stored = def.questions[1].options[0].logic.when;
+stored = def.questions[1].options[0].logic.eligibleWhen;
 rule0 = stored.children ? stored.children[0] : stored;
 assert.equal(rule0.source.count.only, undefined, "counting all stores no subset");
 ok("clearing the subset counts the whole list again");
@@ -236,7 +236,7 @@ await page.waitForTimeout(350);
 assert.equal((await page.$$(`${RULE} [data-testid="count-editor"]`)).length, 0,
   "the count editor closes");
 def = await readDef();
-stored = def.questions[1].options[0].logic.when;
+stored = def.questions[1].options[0].logic.eligibleWhen;
 rule0 = stored.children ? stored.children[0] : stored;
 assert.equal(rule0.source.count, undefined,
   "TURNING COUNTING OFF LEAVES AN ORDINARY RULE — the count is dropped, not kept dormant");
@@ -289,7 +289,7 @@ assert.equal(gridQ.rows.length, 3);
 ok("a 3×5 grid applied through the JSON door");
 
 await reopen(1, 1);
-await page.click('[data-testid="option-logic"] [data-testid="vis-show_when"]');
+await page.click('[data-testid="option-logic"] [data-testid="adv-eligible"] [data-testid="optional-add"]');
 await page.waitForSelector('[data-testid="option-logic"] [data-testid="logic-builder"]');
 await page.click('[data-testid="option-logic"] [data-testid="lb-add-condition"]');
 await page.waitForSelector(RULE);
@@ -323,7 +323,7 @@ assert.match(gridReading, /Good or Very good/, gridReading);
 ok(`the grid count reads back by LABEL, not by code: “${gridReading.trim()}”`);
 
 def = await readDef();
-const st = def.questions[1].options[1].logic.when;
+const st = def.questions[1].options[1].logic.eligibleWhen;
 const r = st.children ? st.children[0] : st;
 assert.equal(r.source.count.scope, "rows");
 assert.equal(r.source.count.of, "matching");
@@ -343,7 +343,7 @@ await page.click(`${RULE} [data-testid="count-only-pa"]`);
 await page.click(`${RULE} [data-testid="count-only-pc"]`);
 await page.waitForTimeout(400);
 def = await readDef();
-const st2 = def.questions[1].options[1].logic.when;
+const st2 = def.questions[1].options[1].logic.eligibleWhen;
 const r2 = st2.children ? st2.children[0] : st2;
 assert.deepEqual(r2.source.count.only.map(String), ["pa", "pc"]);
 ok("COUNT SPECIFIC GRID ROWS — “at least 3 of Products A and C rated Good+” is expressible");

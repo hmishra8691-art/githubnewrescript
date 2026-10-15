@@ -41,3 +41,4 @@ export { QuestionAudio } from "./QuestionAudio";
 export { brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss, backgroundLayers, safeCssValue, safeImageUrl, SHADOWS } from "./branding";
 
 export { MediaGateContext, useMediaHold, useMediaGateState, type MediaGate } from "./mediaGate";
+export { showOptionPopup, announceSelection } from "./optionPopup";

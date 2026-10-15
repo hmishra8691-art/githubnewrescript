@@ -183,6 +183,13 @@ export interface ResponseState {
   embedded: Record<string, string | number | boolean | null>;
   /** calculated variable values */
   calculated: Record<string, string | number | boolean | null>;
+  /**
+   * Why a calculation produced no value, by the variable it was meant to fill —
+   * `LOWCAL_TOTAL: 'Embedded data field "LOWCAL_2" contains a non-numeric value ("abc")…'`.
+   * Cleared when the calculation succeeds. Read by the test console and the
+   * inspector; never exported with the response.
+   */
+  calcErrors?: Record<string, string>;
   /** flags raised by soft quotas / scripts */
   flags: string[];
   /** current position in the compiled step sequence */

@@ -122,3 +122,6 @@ export * from "./researchPlanner.js";
 export * from "./nlSemanticMatch.js";
 export * from "./researchBlockers.js";
 export * from "./languageCorpus.js";
+export * from "./gridCell.js";
+export * from "./conditionCopy.js";
+export * from "./optionPopups.js";

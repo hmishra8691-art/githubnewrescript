@@ -1,7 +1,7 @@
 import type { SurveyDefinition, EmbeddedDataType, FlowNode } from "@rescript/schema";
 import type { ResponseState } from "./state.js";
-import { flattenVariables } from "./flatten.js";
 import { CALC_FUNCTION_NAMES, evaluateExpression, validateExpression } from "./calc.js";
+import { calcOptionsFor } from "./calcContext.js";
 
 /**
  * Typed embedded data (reqs §12–15).
@@ -366,9 +366,13 @@ export function checkEmbeddedExpression(
     ...embeddedCatalog(def).map((e) => e.name),
     ...def.variables.map((v) => v.name),
   ]);
-  const unknownRefs = [...new Set(referencedNames(src))].filter(
-    (n) => !known.has(n) && !known.has(n.split(".")[0]) && !n.includes("*"),
-  );
+  const embeddedNames = new Set(embeddedCatalog(def).map((e) => e.name.toLowerCase()));
+  const unknownRefs = [...new Set(referencedNames(src))].filter((n) => {
+    /* `ed.NAME` / `{{ed.NAME}}` names an embedded field, and is checked against those */
+    const ed = /^(?:ed|embedded)\.(.+)$/i.exec(n);
+    if (ed) return !embeddedNames.has(ed[1].toLowerCase());
+    return !known.has(n) && !known.has(n.split(".")[0]) && !n.includes("*");
+  });
 
   const note = dataType && dataType !== "string"
     ? `Result is stored as ${dataType}.`
@@ -447,11 +451,13 @@ export function applyEmbeddedField(
          * and it reports the reason; it is not the end of the interview.
          */
         try {
-          const flat = flattenVariables(def, state);
-          const v = evaluateExpression(normalizeExpression(field.value), {
-            resolver: (n) => flat[n],
-            names: () => Object.keys(flat),
-          });
+          /*
+           * The SAME resolver the Calculations list uses: this one read only the
+           * flat answer map, so an embedded-data calculation could not see
+           * `ed.X`, another embedded field, a calculated variable or a named
+           * expression — three places, three vocabularies.
+           */
+          const v = evaluateExpression(normalizeExpression(field.value), calcOptionsFor(def, state));
           raw = Array.isArray(v) ? v.join(",") : v;
         } catch (e) {
           state.embedded[name] = null;

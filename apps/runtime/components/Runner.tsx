@@ -63,8 +63,11 @@ import {
   type RuntimeStep,
   type QuotaCounts,
   type InspectorSnapshot,
+  popupsOnNext,
+  markPopupSeen,
+  unmarkPopupSeen,
 } from "@rescript/engine";
-import { QuestionRenderer, UxLayer, MediaGateContext, useMediaGateState } from "@rescript/renderer";
+import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
@@ -1185,6 +1188,28 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
     }
     ackWarnRef.current = null;
     setErrors([]);
+    /*
+     * "SHOW A MESSAGE WHEN NEXT IS PRESSED" — options whose popup is set to
+     * appear on the way out. The answers are valid, nothing has been
+     * allocated or recorded as left yet, so this is the last point where the
+     * respondent can still change their mind: a confirmation's Cancel keeps
+     * them on the page (the selection is untouched, they simply have not
+     * moved on). Information and warning messages are acknowledged and the
+     * flow continues. A message set to "only once" is marked seen when shown,
+     * so confirming it and pressing Next again does not ask a second time.
+     */
+    for (const q of shownQuestions) {
+      const requests = popupsOnNext(def, q, state, pageStep.loop ?? null, state.answers[answerKey(q.id, pageStep.loop ?? null)]);
+      for (const req of requests) {
+        if (req.frequency === "once") markPopupSeen(state, q.id, pageStep.loop ?? null, req.code);
+        const accepted = await showOptionPopup(req);
+        if (!accepted) {
+          // a Cancel on a confirmation: stay here; a "once" message shows again next time, since it was not agreed to
+          if (req.frequency === "once") unmarkPopupSeen(state, q.id, pageStep.loop ?? null, req.code);
+          return;
+        }
+      }
+    }
     /*
      * List Fill runs HERE — after the page's answers are valid and before the
      * flow moves. That order matters: the allocation is what a later branch,

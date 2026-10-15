@@ -1,7 +1,9 @@
-import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
+import type { Condition, ConditionRule, OptionLogic, Question, SurveyDefinition } from "@rescript/schema";
+import { migrateOptionVisibility } from "@rescript/schema";
 import { mapConditionRoots } from "./conditionWalk.js";
 import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
+import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 
 /**
  * What a question's answer is made of — the same reading as lintLogic's
@@ -104,6 +106,7 @@ export const CODE_OPERATORS = new Set<string>([
   "eq", "ne", "in", "notIn", "contains", "notContains", "selected", "notSelected",
   "containsAny", "containsAll", "containsNone",
   "rankedFirst", "rankedLast", "rankedTopN", "rankEquals", "rankGreaterThan", "rankLessThan", "notRanked",
+  "displayed", "notDisplayed",
 ]);
 /** multi-select: a list answer — "equals one code" means "that code is selected" */
 const LIST_REWRITE: Record<string, ConditionRule["operator"]> = { eq: "selected", ne: "notSelected", in: "containsAny", notIn: "containsNone" };
@@ -125,9 +128,19 @@ function domainOf(def: SurveyDefinition, rule: ConditionRule): { q: Question; op
   if ((src.kind !== "question" && src.kind !== "variable") || !src.ref || src.count) return null;
   const q = getQuestionByCodeOrVar(def, src.ref);
   if (!q) return null;
-  const kind = answerKind(q);
-  if (kind === "other" || kind === "numeric") return null;
   const column = src.columnId ? q.columns?.find((c) => c.id === src.columnId) : undefined;
+  /*
+   * A COLUMN OF A COMPOSITE / DROPDOWN / TABLE GRID has its own option list and
+   * is a choice (or a multi-choice) in its own right, whatever the question as
+   * a whole reads as. Without this its option values were never normalised to
+   * codes, so `selected 1` came back from the expression editor as the number
+   * 1 where the column stores the string "1".
+   */
+  const colKind = column?.options?.length
+    ? (/multi|check/i.test(String(column.responseType)) ? "list" : "choice") as "list" | "choice"
+    : undefined;
+  const kind = colKind ?? answerKind(q);
+  if (kind === "other" || kind === "numeric") return null;
   const options = (column?.options?.length ? column.options : q.options) as OptionList;
   if (!options?.length) return null;
   // a grid read without a row is its whole answer (row → code), not one code
@@ -138,7 +151,7 @@ function domainOf(def: SurveyDefinition, rule: ConditionRule): { q: Question; op
 export interface CanonicalCondition { condition: Condition; errors: string[]; changes: string[] }
 
 /** the condition with every option value as its code; what changed, and what cannot be resolved */
-export function canonicalizeCondition(def: SurveyDefinition, condition: Condition): CanonicalCondition {
+export function canonicalizeCondition(def: SurveyDefinition, condition: Condition, opts: { typed?: boolean } = {}): CanonicalCondition {
   const errors: string[] = [], changes: string[] = [];
   const walk = (c: Condition, counted?: { q: Question; options: OptionList }): Condition => {
     if (c.type === "group") return { ...c, children: c.children.map((k) => walk(k, counted)) };
@@ -154,6 +167,50 @@ export function canonicalizeCondition(def: SurveyDefinition, condition: Conditio
         ? { q: cq, options: cq.options as OptionList } : undefined;
       c = { ...r0, source: { ...r0.source, count: { ...r0.source.count!, where: walk(r0.source.count!.where!, inner) } } } as ConditionRule;
     }
+    /*
+     * ROW + ANSWER COLUMN ON A CATEGORICAL GRID IS ONE REFERENCE. A stored rule
+     * that spelt the scale point twice (column AND value) is rewritten to the
+     * canonical single form — see gridCell.ts. Anything else passes through.
+     */
+    if (c.source?.kind === "question" && c.source.ref) {
+      const gq = getQuestionByCodeOrVar(def, c.source.ref);
+      const g = normalizeGridRule(gq, c as ConditionRule);
+      if (g.changed) {
+        changes.push(`${gq!.code}: the answer column and the value were the same thing — stored once, as the column`);
+        if (g.conflict) changes.push(`${gq!.code}: ${g.conflict}`);
+        c = g.rule;
+      }
+    }
+    /*
+     * An ordinal comparison on a grid's scale (`Q1.R1 >= 4`) compares scale
+     * CODES, so a typed 4 takes the type the scale stores — the same rule as
+     * for option codes, for the same reason: text has no types.
+     */
+    if (opts.typed && ["gt", "gte", "lt", "lte", "between", "notBetween"].includes(c.operator) && c.source?.kind === "question" && c.source.ref) {
+      const oq = getQuestionByCodeOrVar(def, c.source.ref);
+      if (oq && isCategoricalGrid(oq) && !c.source.count && !c.source.columnId) {
+        const scale = (oq.options ?? []) as OptionList;
+        const typedCode = (v: unknown) => {
+          const hit = typeof v === "number" || typeof v === "string" ? scale.find((o) => String(o.code) === String(v)) : undefined;
+          return hit ? hit.code : v;
+        };
+        const nv = typedCode(c.value), nv2 = c.value2 === undefined ? undefined : typedCode(c.value2);
+        if (nv !== c.value || nv2 !== c.value2) c = { ...c, value: nv, ...(nv2 !== undefined ? { value2: nv2 } : {}) } as ConditionRule;
+      }
+    }
+    /*
+     * "Row displayed" on a grid names a ROW, so a typed 1 takes the type the
+     * row's code is stored with — the same rule as every other code, and what
+     * makes the expression editor's copy come back as the condition it was.
+     */
+    if (opts.typed && (c.operator === "displayed" || c.operator === "notDisplayed") && c.source?.kind === "question" && c.source.ref && !c.source.count) {
+      const rq = getQuestionByCodeOrVar(def, c.source.ref);
+      const dv = (c as ConditionRule).value;
+      if (rq && (rq.rows?.length ?? 0) > 0 && (typeof dv === "number" || typeof dv === "string")) {
+        const hit = rq.rows.find((r) => String(r.code) === String(dv));
+        if (hit && hit.code !== dv) c = { ...c, value: hit.code } as ConditionRule;
+      }
+    }
     if (!CODE_OPERATORS.has(c.operator)) return c;
     const d = c.source?.kind === "option" && (c.source.ref ?? "code") === "code" && counted
       ? { q: counted.q, options: counted.options, list: false }
@@ -168,12 +225,20 @@ export function canonicalizeCondition(def: SurveyDefinition, condition: Conditio
         errors.push(`${d.q.code} has no option “${String(v)}” — conditions compare option CODES (${describeOptions(d.options)})`);
         return v;
       }
-      // already the code (a "1" for a 1 compares equal): left exactly as written
-      if (r.via === "code" && String(r.code) === String(v)) return v;
+      /*
+       * already the code. A stored survey is left exactly as written (a "1"
+       * for the code 1 is already right). `typed` is for text a person typed:
+       * a bare 4 carries no type of its own, so it takes the one the option
+       * STORES — a 1 and a "1" compare equal, which is why the difference was
+       * never noticed, but it does show in a tree that is diffed or copied,
+       * where the same condition used to come back as a different one.
+       */
+      if (r.via === "code" && String(r.code) === String(v)) return opts.typed ? r.code : v;
       changes.push(r.via === "code" ? `${d.q.code}: “${String(v)}” is code ${r.code}` : `${d.q.code}: “${String(v)}” is option ${r.code}`);
       return r.code;
     };
-    let next: ConditionRule = { ...c, value: fix(c.value) };
+    /* a rule with no value (a grid cell) stays without one — an explicit `value: undefined` is a different key on a stored tree */
+    let next: ConditionRule = c.value === undefined ? { ...c } : { ...c, value: fix(c.value) };
     // ranking operators compare a code (value) and a rank (value2): only the code is an option
     if (c.value2 !== undefined && !String(c.operator).startsWith("rank")) next.value2 = fix(c.value2);
     if (d.list && LIST_REWRITE[next.operator] && !(next.operator === "eq" || next.operator === "ne" ? Array.isArray(next.value) : false)) {
@@ -197,8 +262,52 @@ const isGroup = (x: unknown): x is Extract<Condition, { type: "group" }> => !!x 
  * codes. Values that resolve to nothing are left as they are (and reported),
  * never guessed.
  */
-export function canonicalizeSurveyConditions(input: SurveyDefinition): { def: SurveyDefinition; changes: string[]; unresolved: string[] } {
+/**
+ * Every option / row / column whose logic still says "Show when" or "Hide
+ * when", rewritten to Eligible when / Exclude when (see
+ * `migrateOptionVisibility`). Structural — a `logic` object is found wherever
+ * it sits under a question — and copy-on-write: a definition with none comes
+ * back as the same object.
+ */
+export function migrateSurveyOptionVisibility(input: SurveyDefinition): { def: SurveyDefinition; changes: string[] } {
+  const changes: string[] = [];
+  const walk = (node: unknown, owner: string): unknown => {
+    if (!node || typeof node !== "object") return node;
+    if (Array.isArray(node)) {
+      let changed = false;
+      const out = node.map((x) => { const n = walk(x, owner); if (n !== x) changed = true; return n; });
+      return changed ? out : node;
+    }
+    const o = node as Record<string, unknown>;
+    let next: Record<string, unknown> | null = null;
+    for (const [k, v] of Object.entries(o)) {
+      if (!v || typeof v !== "object") continue;
+      let nv: unknown;
+      if (k === "logic" && !Array.isArray(v) && typeof (v as { visibility?: unknown }).visibility === "string") {
+        const r = migrateOptionVisibility(v as OptionLogic);
+        if (r.changed) {
+          const mode = (v as OptionLogic).visibility === "show_when" ? "Show when → Eligible when" : "Hide when → Exclude when";
+          const who = o.code != null ? `${owner} ${String(o.code)}` : owner;
+          changes.push(`${who}: ${mode}`);
+        }
+        nv = r.logic;
+      } else {
+        const childOwner = typeof o.code === "string" && typeof o.variableName === "string" ? o.code : owner;
+        nv = walk(v, childOwner);
+      }
+      if (nv !== v) { next ??= { ...o }; next[k] = nv; }
+    }
+    return next ?? node;
+  };
+  const questions = walk(input.questions, "") as SurveyDefinition["questions"];
+  return questions === input.questions ? { def: input, changes } : { def: { ...input, questions }, changes: [...new Set(changes)] };
+}
+
+export function canonicalizeSurveyConditions(rawInput: SurveyDefinition): { def: SurveyDefinition; changes: string[]; unresolved: string[] } {
   const changes: string[] = [], unresolved: string[] = [];
+  const visibility = migrateSurveyOptionVisibility(rawInput);
+  changes.push(...visibility.changes);
+  const input = visibility.def;
   // every condition, wherever it sits (UX behaviour guards and COUNT wheres included) — see conditionWalk
   const def = mapConditionRoots(input, (c) => {
     const r = canonicalizeCondition(input, c);

@@ -47,6 +47,21 @@ function tokenize(src: string): Tok[] {
       toks.push({ t: "str", v: s });
       i = j + 1; continue;
     }
+    /*
+     * A PIPED REFERENCE — `{{ed.LOWCAL_1}}`, `{{Q1}}` — is the same thing as the
+     * bare name, written the way every other text field in the platform writes
+     * it. It used to be "Unexpected character '{' in expression at 0": the
+     * piping syntax the whole Studio teaches was refused by the one place
+     * that does arithmetic with it.
+     */
+    if (c === "{" && src[i + 1] === "{") {
+      const end = src.indexOf("}}", i + 2);
+      if (end < 0) throw new Error(`Unclosed "{{" in expression at ${i}`);
+      const inner = src.slice(i + 2, end).trim();
+      if (!inner) throw new Error(`Empty reference "{{}}" in expression at ${i}`);
+      toks.push({ t: "id", v: inner });
+      i = end + 2; continue;
+    }
     if (isIdStart(c)) {
       let j = i;
       while (j < src.length && isId(src[j])) j++;
@@ -222,10 +237,70 @@ function cmp(op: string, l: number, r: number): boolean {
   }
 }
 
+/**
+ * HOW AN EMPTY EMBEDDED-DATA FIELD IS TREATED BY A CALCULATION.
+ *   zero   — it counts as 0 (the historical behaviour, and still the default)
+ *   error  — the calculation fails and says which field was empty
+ *   skip   — it is left out of sums, averages, counts, minimums and maximums
+ *            (in plain arithmetic there is nothing to leave out, so it is 0)
+ */
+export type EmptyEmbeddedHandling = "zero" | "error" | "skip";
+
+/** An embedded-data field a calculation cannot use, named so the programmer can fix it. */
+export class EmbeddedDataError extends Error {
+  constructor(public readonly field: string, public readonly reason: "empty" | "non_numeric", public readonly value?: unknown) {
+    super(reason === "empty"
+      ? `Embedded data field "${field}" is empty, so the calculation cannot use it.`
+      : `Embedded data field "${field}" contains a non-numeric value (${JSON.stringify(value)}), so it cannot be used in arithmetic.`);
+    this.name = "EmbeddedDataError";
+  }
+}
+
 export interface CalcOptions {
   resolver: VarResolver;
   /** enumerate names for wildcard patterns */
   names?: () => string[];
+  /**
+   * Embedded data. When present, a reference that names an embedded field
+   * (`ed.LOWCAL_1`, `{{ed.LOWCAL_1}}`, or a bare name that is one) is read
+   * through it, so numeric strings become numbers where arithmetic needs
+   * them, empty fields follow `empty`, and a non-numeric value is an error
+   * that names the field.
+   */
+  embedded?: {
+    /** the embedded field a reference names, or null when it names something else */
+    field(name: string): string | null;
+    /** the field's CURRENT value — read on every evaluation, never cached */
+    value(field: string): unknown;
+    empty: EmptyEmbeddedHandling;
+  };
+}
+
+/** Functions whose arguments are numbers, so an embedded argument is read as one. */
+const NUMERIC_FUNCTIONS = new Set([
+  "sum", "avg", "mean", "average", "min", "max", "pct", "percent", "weighted", "round", "abs",
+  "floor", "ceil", "ceiling", "sqrt", "pow",
+]);
+/** Functions that produce text — an operand of `+` that is one of these makes `+` concatenation. */
+const STRING_FUNCTIONS = new Set(["concat", "text", "upper", "lower", "trim", "substring", "left", "right", "replace", "pad", "format", "join"]);
+const isStringy = (n: Node): boolean => n.k === "str" || (n.k === "call" && STRING_FUNCTIONS.has(n.name));
+
+function readEmbedded(field: string, o: NonNullable<CalcOptions["embedded"]>, numeric: boolean): CalcValue {
+  const raw = o.value(field);
+  const empty = raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "");
+  if (empty) {
+    if (o.empty === "error") throw new EmbeddedDataError(field, "empty");
+    if (o.empty === "skip") return null;
+    return numeric ? 0 : null;
+  }
+  if (!numeric) return raw as CalcValue;
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "boolean") return raw ? 1 : 0;
+  /* a numeric STRING is a number: "1" + "1" is 2, never "11" */
+  const text = String(raw).trim().replace(/,(?=\d{3}(\D|$))/g, "");
+  const n = Number(text);
+  if (text !== "" && Number.isFinite(n)) return n;
+  throw new EmbeddedDataError(field, "non_numeric", raw);
 }
 
 /**
@@ -248,7 +323,7 @@ const MAX_STEPS = 20_000;
 /** Parsed expressions kept. Bounded, because the cache was a slow leak. */
 const MAX_CACHE = 500;
 
-function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }): CalcValue {
+function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }, numeric = false): CalcValue {
   const used = budget ?? { steps: 0 };
   if (depth > MAX_DEPTH) {
     throw new Error(`Expression is nested more than ${MAX_DEPTH} levels deep`);
@@ -257,11 +332,13 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
     throw new Error(`Expression did not finish within ${MAX_STEPS} steps`);
   }
   /** every recursive step carries the depth and shares the one step budget */
-  const ev = (m: Node) => evalNode(m, o, depth + 1, used);
+  const ev = (m: Node, num = false) => evalNode(m, o, depth + 1, used, num);
   switch (n.k) {
     case "num": return n.v;
     case "str": return n.v;
     case "var": {
+      const emb = o.embedded?.field(n.name);
+      if (emb) return readEmbedded(emb, o.embedded!, numeric);
       if (n.name.includes("*")) {
         return resolveWildcard(n.name, o.resolver, o.names ?? (() => []));
       }
@@ -269,15 +346,17 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
       return (v === undefined ? null : (v as CalcValue));
     }
     case "un": {
-      const a = ev(n.a);
+      const a = ev(n.a, n.op === "-");
       if (n.op === "-") return -toNum(a);
       return !truthy(a);
     }
     case "bin": {
       if (n.op === "and") return truthy(ev(n.a)) && truthy(ev(n.b));
       if (n.op === "or") return truthy(ev(n.a)) || truthy(ev(n.b));
-      const a = ev(n.a);
-      const b = ev(n.b);
+      /* arithmetic and ordering read their operands as NUMBERS; `+` only when neither side is text */
+      const num = ["-", "*", "/", "%", ">", "<", ">=", "<="].includes(n.op) || (n.op === "+" && !isStringy(n.a) && !isStringy(n.b));
+      const a = ev(n.a, num);
+      const b = ev(n.b, num);
       switch (n.op) {
         case "+":
           if (typeof a === "string" || typeof b === "string") return String(a ?? "") + String(b ?? "");
@@ -304,7 +383,8 @@ function evalNode(n: Node, o: CalcOptions, depth = 0, budget?: { steps: number }
       }
     }
     case "call": {
-      const rawArgs = n.args.map((a) => ev(a));
+      const numericArgs = NUMERIC_FUNCTIONS.has(n.name) || (n.name === "countif");
+      const rawArgs = n.args.map((a, i) => ev(a, numericArgs && !(n.name === "countif" && i >= n.args.length - 2)));
       const flat = () => flattenArgs(rawArgs).filter((v) => v !== null && v !== "");
       const nums = () => flat().map(toNum);
       switch (n.name) {

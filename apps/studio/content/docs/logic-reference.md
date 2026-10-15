@@ -41,6 +41,8 @@ Each operator's spellings, canonical first (the one the Studio prints). The came
 | `rankGreaterThan` | `rank after`, `rankGreaterThan` | two (`X and Y`) |
 | `rankLessThan` | `rank before`, `rankLessThan` | two (`X and Y`) |
 | `notRanked` | `not ranked`, `notRanked` | one |
+| `displayed` | `displayed` | one |
+| `notDisplayed` | `not displayed`, `notDisplayed` | one |
 | `dateBefore` | `before`, `dateBefore` | one |
 | `dateAfter` | `after`, `dateAfter` | one |
 | `dateEquals` | `on`, `dateEquals` | one |
@@ -53,11 +55,11 @@ Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BU
 | kind | operators |
 |---|---|
 | `any` | `answered`, `unanswered`, `isEmpty`, `isNotEmpty`, `eq`, `ne` |
-| `choice` | `selected`, `notSelected`, `in`, `notIn`, `contains`, `notContains`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween` |
-| `list` | `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `selected`, `notSelected`, `in`, `notIn` |
+| `choice` | `selected`, `notSelected`, `in`, `notIn`, `contains`, `notContains`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `displayed`, `notDisplayed` |
+| `list` | `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `selected`, `notSelected`, `in`, `notIn`, `displayed`, `notDisplayed` |
 | `text` | `eq`, `ne`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches`, `isEmpty`, `isNotEmpty` |
 | `numeric` | `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `in`, `notIn` |
-| `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone` |
+| `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `displayed`, `notDisplayed` |
 | `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered` |
 
 ## Calculation functions

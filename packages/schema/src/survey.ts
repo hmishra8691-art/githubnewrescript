@@ -776,6 +776,17 @@ export const SurveyDefinition = z.object({
       defaultValue: z.string().optional(),
     }))
     .default([]),
+  /**
+   * HOW CALCULATIONS TREAT EMBEDDED DATA. One setting, read by the
+   * Calculations list, Embedded Data calculations and every Calc DSL
+   * expression, so they cannot disagree:
+   *   zero  — an empty embedded field counts as 0 (default; the old behaviour)
+   *   error — the calculation fails and names the empty field
+   *   skip  — an empty field is left out of sums, averages, counts, min and max
+   */
+  calculationSettings: z.object({
+    emptyEmbedded: z.enum(["zero", "error", "skip"]).default("zero"),
+  }).optional(),
   deployment: DeploymentConfig.default({}),
   /** Response quality & fraud detection settings (`@rescript/quality`). */
   quality: QualityConfig.default({}),

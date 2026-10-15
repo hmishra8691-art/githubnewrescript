@@ -121,38 +121,36 @@ assert.equal(q(await readDef(), "q1").skipLogic.length, 0);
 await selectQuestion("Q8");
 await ensureSectionOpen("auto-punch");
 await page.click('[data-testid="ap-add-simple"]');
-await page.waitForSelector('[data-testid="ap-source-q"]');
-const groups = await page.$$eval('[data-testid="ap-source-q"] optgroup', (gs) => gs.map((g) => ({ label: g.label, items: [...g.querySelectorAll("option")].map((o) => o.value) })));
-const numeric = groups.find((g) => /Numeric/.test(g.label));
-assert.ok(numeric && numeric.items.includes("q3"), `the numeric open end is offered: ${JSON.stringify(groups)}`);
-ok("“If question” lists numeric / text questions, in their own group");
-await page.selectOption('[data-testid="ap-source-q"]', "q3");
-await page.waitForSelector('[data-testid="ap-value-test"]');
-await page.selectOption('[data-testid="ap-value-test"]', "between");
-await page.waitForSelector('[data-testid="ap-value2"]');
-await page.fill('[data-testid="ap-value"]', "4");
-await page.fill('[data-testid="ap-value2"]', "7");
+await page.waitForSelector('[data-testid="ap-builder"]');
+/* the rule opens in the Builder — there is no Simple row — and its source list offers numeric / text questions in the ordinary condition source picker */
+const AP = '[data-testid="ap-builder"]';
+const sources = await page.$$eval(`${AP} .cond-rule .ref-select option`, (os) => os.map((o) => o.value));
+assert.ok(sources.includes("q:q3"), `the numeric open end is offered as a source: ${sources}`);
+ok("the punch condition's source list offers numeric / text questions");
+await page.selectOption(`${AP} .cond-rule .ref-select`, "q:q3");
+await page.waitForTimeout(200);
+await page.selectOption(`${AP} [data-testid="cond-operator"]`, "between");
+await page.waitForTimeout(150);
+const nums = `${AP} .cond-rule input.input`;
+await page.fill(`${nums} >> nth=0`, "4");
+await page.fill(`${nums} >> nth=1`, "7");
 await page.waitForTimeout(300);
 let rule = q(await readDef(), "q8").punches[0];
-assert.deepEqual({ op: rule.when.operator, ref: rule.when.source.ref, v: rule.when.value, v2: rule.when.value2 }, { op: "between", ref: "q3", v: 4, v2: 7 });
+assert.deepEqual({ op: rule.when.operator, ref: rule.when.source.ref, v: Number(rule.when.value), v2: Number(rule.when.value2) }, { op: "between", ref: "q3", v: 4, v2: 7 });
 ok("a numeric range is stored as Q3 between 4 and 7");
 
-/* the chain position survives a simple-mode edit */
+/* the chain position survives an edit */
+await selectQuestion("Q8");
+await ensureSectionOpen("auto-punch");
 await page.selectOption('[data-testid="ap-chain-mode"]', "else_if");
 await page.waitForTimeout(200);
-await page.fill('[data-testid="ap-value2"]', "8");
+await page.fill(`${nums} >> nth=1`, "8");
 await page.waitForTimeout(300);
 rule = q(await readDef(), "q8").punches[0];
-assert.equal(rule.mode, "else_if", "before: a Simple-mode edit turned ELSE IF back into IF");
-assert.equal(rule.when.value2, 8);
+assert.equal(rule.mode, "else_if", "before: an edit turned ELSE IF back into IF");
+assert.equal(Number(rule.when.value2), 8);
 assert.match(await page.textContent('[data-testid="ap-rule-text"]'), /^ELSE IF /);
 ok("Oweas #5 — an ELSE IF rule stays ELSE IF through an edit, and prints as ELSE IF");
-
-/* "+ add condition" opens the nested builder */
-await page.click('[data-testid="ap-add-condition"]');
-await page.waitForSelector('[data-testid="ap-builder"]');
-assert.ok(await page.$('[data-testid="ap-builder"] .lb-root-head, [data-testid="ap-builder"] [data-testid="lb-root-op"], [data-testid="ap-builder"] .lb-group, [data-testid="ap-builder"] .cond-group'), "the condition builder is shown");
-ok("29-09 #3 — “+ add condition” opens the AND / OR / NOT builder for the punch");
 
 /* ------------------------------------------------ Prince 44: constant sum per option */
 await selectQuestion("Q10");

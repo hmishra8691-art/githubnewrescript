@@ -70,10 +70,33 @@ export function loopScopedName(def: SurveyDefinition, state: ResponseState, loop
   return undefined;
 }
 
+/** the prefix that says "this is embedded data" — `ed.LOWCAL_1`, `embedded.LOWCAL_1` */
+const EMBEDDED_PREFIX = /^(?:ed|embedded)\./i;
+
 export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop?: LoopContext | null): CalcOptions {
   const flat = flattenVariables(def, state);
   const embedded = state.embedded ?? {};
+  const declared = new Set((def.embeddedData ?? []).map((e) => e.name));
+  /* the field as stored: exact name first, then case-insensitively, so `{{ed.lowcal_1}}` finds LOWCAL_1 */
+  const storedName = (field: string): string => {
+    if (field in embedded || declared.has(field)) return field;
+    const lower = field.toLowerCase();
+    return Object.keys(embedded).find((k) => k.toLowerCase() === lower) ?? [...declared].find((k) => k.toLowerCase() === lower) ?? field;
+  };
   return {
+    embedded: {
+      field: (n: string) => {
+        const m = EMBEDDED_PREFIX.exec(n);
+        /* the explicit spelling always means embedded data, whatever else shares the name */
+        if (m) return storedName(n.slice(m[0].length));
+        /* a bare name is embedded data only when nothing earlier in the order claims it */
+        if (n in flat || n in state.calculated) return null;
+        return n in embedded || declared.has(n) ? n : null;
+      },
+      /* read live on every evaluation — a field that changed since the last run is read as it is now */
+      value: (field: string) => (state.embedded ?? {})[field],
+      empty: def.calculationSettings?.emptyEmbedded ?? "zero",
+    },
     resolver: (n: string) => {
       if (loop) {
         const v = loopScopedName(def, state, loop, n);
@@ -82,6 +105,7 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
       if (n in flat) return flat[n];
       if (n in state.calculated) return state.calculated[n];
       if (n in embedded) return (embedded as Record<string, unknown>)[n];
+      if (EMBEDDED_PREFIX.test(n)) return (embedded as Record<string, unknown>)[storedName(n.replace(EMBEDDED_PREFIX, ""))];
       /*
        * A NAMED EXPRESSION, as 1 (holds) or 0 — `IS_HIGH_VALUE * 10`,
        * `if(rule.ELIGIBLE, 1, 0)`. Calculations could not read one, so a
@@ -128,4 +152,13 @@ export function safeExpression(
   } catch {
     return null;
   }
+}
+
+/** Remember (or clear) why a calculation has no value, so the test console can say so. */
+export function noteCalcOutcome(state: ResponseState, key: string, error?: unknown): void {
+  if (error === undefined) {
+    if (state.calcErrors && key in state.calcErrors) delete state.calcErrors[key];
+    return;
+  }
+  (state.calcErrors ??= {})[key] = error instanceof Error ? error.message : String(error);
 }

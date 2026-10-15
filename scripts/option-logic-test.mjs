@@ -87,7 +87,7 @@ console.log("✔ Always Hide keeps the option in the definition but marks it hid
 /* ------------------------------------ show-when + option-to-option matching */
 
 await page.click('.qcard.selected [data-testid="option-logic-0"]');
-await page.click('[data-testid="option-logic"] [data-testid="vis-show_when"]');
+await page.click('[data-testid="option-logic"] [data-testid="adv-eligible"] [data-testid="optional-add"]');
 // the builder now opens EMPTY — conditions come first, groups only when asked
 // for — so the first condition is added rather than assumed
 await page.waitForSelector('[data-testid="option-logic"] [data-testid="logic-builder"]');
@@ -115,8 +115,9 @@ console.log("✔ summary reads:", summary2.trim());
 
 def = await readDef();
 const optLogic = def.questions[2].options[0].logic;
-assert.equal(optLogic.visibility, "show_when");
-const firstRule = optLogic.when.children ? optLogic.when.children[0] : optLogic.when;
+assert.equal(optLogic.visibility ?? "default", "default", "Show when… no longer exists as a mode");
+assert.equal(optLogic.when, undefined);
+const firstRule = optLogic.eligibleWhen.children ? optLogic.eligibleWhen.children[0] : optLogic.eligibleWhen;
 assert.deepEqual(firstRule.value, { $option: "code" }, "value references the option itself");
 console.log("✔ option-to-option rule built visually:", JSON.stringify(firstRule.value));
 

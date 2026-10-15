@@ -49,6 +49,15 @@ export const ComparisonOperator = z.enum([
   "rankLessThan", // rank of `value` < value2 (i.e. ranked higher up)
   "notRanked", // value was not ranked at all
 
+  /* --- display ----------------------------------------------------------
+   * Was the question (or one of its options / rows) SHOWN to the respondent —
+   * after display logic, eligibility and exclusion — whatever they answered?
+   * Distinct from `selected`: an option can be displayed and not chosen, and
+   * "displayed" is the only way to ask about an option that was on the screen.
+   */
+  "displayed",
+  "notDisplayed",
+
   /* --- date ------------------------------------------------------------ */
   "dateBefore",
   "dateAfter",
@@ -106,6 +115,7 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
   choice: [
     "selected", "notSelected", "in", "notIn", "contains", "notContains",
     "gt", "gte", "lt", "lte", "between", "notBetween",
+    "displayed", "notDisplayed",
   ],
   list: [
     "contains",
@@ -117,6 +127,8 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "notSelected",
     "in",
     "notIn",
+    "displayed",
+    "notDisplayed",
   ],
   text: [
     "eq",
@@ -149,6 +161,8 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "containsAny",
     "containsAll",
     "containsNone",
+    "displayed",
+    "notDisplayed",
   ],
   date: ["dateBefore", "dateAfter", "dateEquals", "dateBetween", "answered", "unanswered"],
 };

@@ -1,3 +1,4 @@
+import { isCategoricalGrid } from "./gridCell.js";
 import type {
   ComparisonOperator,
   Condition,
@@ -61,6 +62,8 @@ const OPERATOR_WORDS: Record<ComparisonOperator, string> = {
   dateAfter: "is after",
   dateEquals: "is on",
   dateBetween: "is between",
+  displayed: "was shown",
+  notDisplayed: "was not shown",
 };
 
 const stripHtml = (s: string) => stripHtmlText(String(s ?? ""));
@@ -165,7 +168,16 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
     if (source.columnId) {
       const col = q?.columns.find((x) => x.id === source.columnId);
       const scale = col ? undefined : q?.options.find((x) => String(x.code) === String(source.columnId));
-      subject += ` — ${stripHtml(col?.label ?? scale?.label ?? source.columnId)}`;
+      const colText = stripHtml(col?.label ?? scale?.label ?? source.columnId);
+      /*
+       * A categorical grid cell has no value of its own — the answer column IS
+       * the answer — so it reads as a sentence about that answer instead of
+       * "selected …": `Q1 row “Service” is “Good”`, `… is not “Good”`.
+       */
+      if ((operator === "selected" || operator === "notSelected") && (c.value === undefined || c.value === null || c.value === "") && q && isCategoricalGrid(q) && !source.count) {
+        return `${subject} ${operator === "selected" ? "is" : "is not"} “${colText}”`;
+      }
+      subject += ` — ${colText}`;
     } else if (source.rowCode && q && (q.columns?.length ?? 0) > 1) subject += " (any column)";
   }
 

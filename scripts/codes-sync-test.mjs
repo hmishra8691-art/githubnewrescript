@@ -360,7 +360,7 @@ await loadDef(FIXTURE);
   await p2.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle" });
   await p2.waitForSelector(".menubar");
   await p2.waitForSelector(".toast", { timeout: 10000 });
-  assert.match(await p2.textContent(".toast"), /option codes/i);
+  assert.match(await p2.textContent(".toast"), /Logic tidied|option codes/i);
   await p2.waitForSelector(".toast", { state: "detached", timeout: 15000 }).catch(() => {});
   await openTab(p2, "JSON");
   await p2.waitForSelector("textarea.code");

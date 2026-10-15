@@ -97,7 +97,8 @@ test("§25: row + column — Q2.R1.C2 is “row 1 answered scale point 2”", ()
   assert.equal(c.source.ref, "q_matrix");
   assert.equal(c.source.rowCode, "1");
   assert.equal(c.operator, "selected");
-  assert.equal(c.value, "2", "the scale point lives in the value, as the visual builder stores it");
+  assert.equal(c.source.columnId, "2", "the scale point is the cell's answer column — one reference, stored once");
+  assert.equal(c.value, undefined, "and it has no value of its own");
 });
 
 test("a composite table's third segment is a column, by id or by name", () => {
@@ -222,8 +223,8 @@ test("§25: matrix references combine like anything else", () => {
   const c = tree("(Q2.R1.C1 OR Q2.R2.C2) AND Q4.a.spend") as ConditionGroup;
   assert.equal(c.op, "and");
   const or = c.children[0] as ConditionGroup;
-  assert.deepEqual(or.children.map((x: any) => [x.source.rowCode, x.value]),
-    [["1", "1"], ["2", "2"]]);
+  assert.deepEqual(or.children.map((x: any) => [x.source.rowCode, x.source.columnId, x.value]),
+    [["1", "1", undefined], ["2", "2", undefined]]);
   assert.equal((c.children[1] as any).source.columnId, "spend");
 });
 

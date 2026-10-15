@@ -16,7 +16,8 @@ import type {
 import { LIST_OPS_WITH_SOURCES, optionLogicHasEffect } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, conditionFires, isVacuousCondition, withOption, withLegacyOptionLoop } from "./evaluate.js";
-import { getQuestion, lookupAnswer, loopKeySuffix } from "./state.js";
+import { registerDisplayedCodesResolver } from "./displayedRegistry.js";
+import { getQuestion, getQuestionByCodeOrVar, lookupAnswer, loopKeySuffix } from "./state.js";
 import { resolvePiping, registerDisplayedOptionsResolver, registerEffectiveRowsResolver } from "./piping.js";
 import { evaluateSetExpr, LIST_ACTIONS } from "./setExpression.js";
 import { sanitizeHtml, stripHtmlText } from "./html.js";
@@ -1729,3 +1730,29 @@ export function displayedListCanVary(def: SurveyDefinition, q: Question, axis: "
 function isEmptyOptionLogicEffect(l: unknown): boolean {
   return !optionLogicHasEffect(l as never);
 }
+
+
+/**
+ * "WAS IT DISPLAYED" — the answer the `displayed` / `notDisplayed` operators
+ * read. A question is displayed when its display logic and the survey's named
+ * display rules let it through; its options (rows, for a grid) are displayed
+ * when they survived the same pipeline the respondent's screen was drawn
+ * from — the one `effectiveQuestion` runs — so what a rule here sees is what
+ * the respondent saw. A cycle (A's options depend on B's being displayed and
+ * B's on A's) reads as "everything was displayed" for the question already
+ * being resolved, which is the same guard `codesFrom` uses.
+ */
+const visibilityResolving = new Set<string>();
+registerDisplayedCodesResolver((ref, ctx) => {
+  const q = getQuestionByCodeOrVar(ctx.def, ref) ?? getQuestion(ctx.def, ref);
+  if (!q) return null;
+  if (visibilityResolving.has(q.id)) return codesFrom(q.id, "displayed", ctx);
+  visibilityResolving.add(q.id);
+  try {
+    if (q.displayLogic && !evaluateCondition(q.displayLogic, ctx)) return null;
+    if (!visibleByRules(ctx.def, "question", q.id, ctx)) return null;
+    return codesFrom(q.id, "displayed", ctx);
+  } finally {
+    visibilityResolving.delete(q.id);
+  }
+});
