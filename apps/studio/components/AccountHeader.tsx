@@ -17,7 +17,7 @@ import { AppHeader } from "@/components/ui/AppHeader";
  */
 
 export interface AccountHeaderProps {
-  active: "profile" | "security" | "admin" | "billing" | "admin-billing";
+  active: "profile" | "security" | "ai" | "admin" | "billing" | "admin-billing";
   user: SessionUser | null;
   onSignOut: () => void;
 }
@@ -25,6 +25,7 @@ export interface AccountHeaderProps {
 const TITLES: Record<AccountHeaderProps["active"], string> = {
   profile: "Your profile",
   security: "Sign-in & sessions",
+  ai: "AI & Integrations",
   admin: "Administration",
   billing: "My usage",
   "admin-billing": "Billing administration",
@@ -87,6 +88,7 @@ export function AccountHeader({ active, user, onSignOut }: AccountHeaderProps) {
       <nav className="acct-nav">
         <a href="/profile" className={active === "profile" ? "active" : undefined}>Profile</a>
         <a href="/security" className={active === "security" ? "active" : undefined}>Security</a>
+        <a href="/settings/ai" className={active === "ai" ? "active" : undefined} data-testid="nav-ai">AI &amp; Integrations</a>
         <a href="/billing" className={active === "billing" ? "active" : undefined} data-testid="nav-billing">My usage</a>
         {user?.isPlatformAdmin && (
           <a href="/admin" className={active === "admin" ? "active" : undefined}>Administration</a>

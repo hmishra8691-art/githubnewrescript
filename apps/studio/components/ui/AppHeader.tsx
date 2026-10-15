@@ -75,6 +75,7 @@ export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
                   <a className="menu-item" href="/profile" role="menuitem"><Icon name="user" size={15} /> Profile</a>
                   <a className="menu-item" href="/security" role="menuitem"><Icon name="shield" size={15} /> Security &amp; sessions</a>
                   <a className="menu-item" href="/billing" role="menuitem"><Icon name="chart" size={15} /> My usage</a>
+                  <a className="menu-item" href="/settings/ai" role="menuitem" data-testid="menu-ai-settings"><Icon name="settings" size={15} /> AI &amp; Integrations</a>
                   <a className="menu-item" href="/" role="menuitem"><Icon name="grid" size={15} /> Projects</a>
                   {interviewsHref && (
                     <a className="menu-item" href={interviewsHref} role="menuitem"><Icon name="play" size={15} /> Interviews</a>
