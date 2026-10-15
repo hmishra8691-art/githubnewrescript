@@ -32,6 +32,8 @@ const GUARDS = ["requireUser", "requireProject", "requireProjectFor", "requireEd
 const LIB_GATES = {
   requireAiCaller: "lib/aiGate.ts",
   requireTranslationCaller: "lib/translationGate.ts",
+  requireTranslationSession: "lib/translationGate.ts",
+  requireTranslationUser: "lib/translationGate.ts",
   requireBillingAdmin: "lib/billingAdmin.ts",
 };
 

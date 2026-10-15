@@ -1522,6 +1522,7 @@ async function complete(system: string, user: string, maxTokens = 160): Promise<
 }
 
 export * from "./translation.js";
+export { PROTOCOLS, type ServiceProtocol, type ServiceProtocolId } from "./translateServices.js";
 export * from "./usage.js";
 
 /* ------------------------------------------------------ the configuration check */

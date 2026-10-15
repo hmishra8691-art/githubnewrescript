@@ -1,5 +1,5 @@
 import type { Meter, MeterContext, MeterRefusal, UsageEvent, UsageSpec } from "@rescript/billing";
-import { collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope, type SttScope } from "@rescript/ai";
+import { collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope, type SttScope, type TranslateScope } from "@rescript/ai";
 import { meterModel, meterProvider } from "./aiEstimate.ts";
 import { aiAllowed, aiRefusal, type AiRefusal, type AiSource } from "./aiPolicy.ts";
 import type { Resolution } from "./byok/resolve.ts";
@@ -71,7 +71,7 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  */
 export async function meteredCore<T>(
   deps: RunDeps, meter: Meter, ctx: MeterContext,
-  o: { operation: string; once?: boolean; kind: "chat" | "tts" | "stt"; reserve: () => UsageSpec; /** a meter that cannot be reached runs the call unmetered instead of failing it (a recording must not be lost to a billing outage) */ tolerateMeterOutage?: boolean },
+  o: { operation: string; once?: boolean; kind: "chat" | "tts" | "stt" | "translate"; reserve: () => UsageSpec; /** translation: the PLATFORM's provider for this call is a language model (so the project's AI switch applies to it) rather than a translation service */ platformIsLlm?: boolean; /** a meter that cannot be reached runs the call unmetered instead of failing it (a recording must not be lost to a billing outage) */ tolerateMeterOutage?: boolean },
   fn: () => Promise<T>,
 ): Promise<Metered<T>> {
   /*
@@ -80,13 +80,23 @@ export async function meteredCore<T>(
    * always did; the switch is asked in its one-time form, which keeps what a project can really turn off (the feature list, an unreadable setting)
    * and still says which AI source the project chose.
    */
-  const decision = await aiAllowed(ctx.surveyId, o.operation, { once: o.once || o.kind === "stt" });
+  const decision = await aiAllowed(ctx.surveyId, o.operation, { once: o.once || o.kind === "stt" || o.kind === "translate" });
   if (!decision.allowed) return aiRefusal(decision);
   const conn = await deps.connectionFor({ userId: ctx.userId, customerId: ctx.customerId, surveyId: ctx.surveyId, operation: o.operation, source: decision.source, sourceKnown: true });
   if (conn.kind === "refused") return { ok: false, reason: "ai_connection", code: conn.code, message: conn.message, source: conn.source };
 
   /* the operation's feature decides the kind of connection; a mismatch is a programming error, never a silent use of the wrong provider */
-  if (conn.kind === "user" && (o.kind === "stt") !== (conn.scopeKind === "stt")) throw new Error(`meteredCore: ${o.operation} is a ${o.kind} call but resolved a ${conn.scopeKind} connection`);
+  const expected = o.kind === "stt" ? ["stt"] : o.kind === "translate" ? ["translate", "chat"] : ["chat"]; // translation may be done by a translation service or, on "My AI model", by the chat connection
+  if (conn.kind === "user" && !expected.includes(conn.scopeKind)) throw new Error(`meteredCore: ${o.operation} is a ${o.kind} call but resolved a ${conn.scopeKind} connection`);
+
+  /*
+   * A translation by a dedicated service is not a language-model call, so a project that runs INTERNAL still translates with one (as it always did);
+   * but when the language model is what will translate — the platform's, or the person's own AI model — the project's full AI switch applies.
+   */
+  if (o.kind === "translate" && (conn.kind === "user" ? conn.scopeKind === "chat" : !!o.platformIsLlm)) {
+    const full = await aiAllowed(ctx.surveyId, o.operation, { once: o.once });
+    if (!full.allowed) return aiRefusal(full);
+  }
 
   if (conn.kind === "platform") {
     let hold: Awaited<ReturnType<Meter["reserve"]>>;
@@ -110,7 +120,7 @@ export async function meteredCore<T>(
   }
 
   /* the user's own provider */
-  let scope: ChatScope | SttScope = conn.scope;
+  let scope: ChatScope | SttScope | TranslateScope = conn.scope;
   let hold: Awaited<ReturnType<Meter["reserve"]>> | null = null;
   if (scope.fallbacks.some((f) => f.platform)) {
     const h = await meter.reserve(ctx, o.reserve());
@@ -119,7 +129,7 @@ export async function meteredCore<T>(
   }
   const holdOk = hold && hold.ok ? hold : null;
   try {
-    const { value, usage } = await collectUsage(() => withAiScope(conn.scopeKind === "stt" ? { stt: scope as SttScope, allowPrivate: deps.allowPrivate() } : { chat: scope as ChatScope, allowPrivate: deps.allowPrivate() }, fn));
+    const { value, usage } = await collectUsage(() => withAiScope(conn.scopeKind === "stt" ? { stt: scope as SttScope, allowPrivate: deps.allowPrivate() } : conn.scopeKind === "translate" ? { translate: scope as TranslateScope, allowPrivate: deps.allowPrivate() } : { chat: scope as ChatScope, allowPrivate: deps.allowPrivate() }, fn));
     /* inside a user's scope a report is the user's unless it says the platform served it */
     const platformUsage = usage.filter((u) => u.source === "platform");
     const userUsage = usage.filter((u) => u.source !== "platform");
@@ -130,7 +140,7 @@ export async function meteredCore<T>(
     }
     for (const group of groupByConnection(userUsage)) {
       const spec = usageToSpec(group.usage, { kind: o.kind });
-      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: o.kind === "tts" ? "character" : o.kind === "stt" ? "minute" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata } });
+      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: spec.service === "tts" || spec.service === "translate" ? "character" : spec.service === "stt" ? "minute" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata } });
       event ??= rec;
     }
     return { ok: true, value, event };

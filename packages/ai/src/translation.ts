@@ -1,7 +1,14 @@
 import { LANGUAGE_LIBRARY } from "@rescript/schema";
-import { reportUsage } from "./usage.js";
-import { placeholdersIn } from "@rescript/engine";
+import { collectUsage, reportUsage } from "./usage.js";
+import { currentAiScope, type TranslateTarget } from "./connection.js";
 import { translateBatch as llmTranslateBatch, fakeTranslate, aiConfigured, aiProviderName, placeholdersMatch, tagsBalanced, type TranslateItem, type TranslateOptions } from "./index.js";
+import {
+  FALLBACKABLE, FRIENDLY, protectPlaceholders, restorePlaceholders, TranslationProviderError,
+  type SupportedLanguage, type TranslationAdapter, type TranslationAdapterId, type TranslationErrorCode,
+} from "./translationCore.js";
+import { AZURE_V3, DEEPL, GOOGLE_V2, PROTOCOLS, runService, serviceLanguages, type ServiceProtocol } from "./translateServices.js";
+
+export * from "./translationCore.js";
 
 /**
  * THE TRANSLATION ADAPTER — one interface, several providers, no provider
@@ -28,209 +35,42 @@ import { translateBatch as llmTranslateBatch, fakeTranslate, aiConfigured, aiPro
  * `retryable` flag; raw provider bodies and credentials are never returned.
  */
 
-export type TranslationErrorCode = "auth" | "quota" | "rate_limit" | "unsupported_language" | "invalid" | "network" | "timeout" | "unavailable" | "unconfigured";
-
-export class TranslationProviderError extends Error {
-  constructor(public code: TranslationErrorCode, message: string, public retryable: boolean, public status?: number) { super(message); }
-  toJSON() { return { code: this.code, message: this.message, retryable: this.retryable }; }
-}
-
-export const FRIENDLY: Record<TranslationErrorCode, string> = {
-  auth: "The translation provider rejected the credentials. Check the API key configured on the server.",
-  quota: "The translation provider's quota is used up for now. Try again later or raise the quota in the provider console.",
-  rate_limit: "The translation provider is rate-limiting requests. The remaining strings will be retried more slowly.",
-  unsupported_language: "The translation provider does not support this language pair.",
-  invalid: "The provider refused the request — usually a string too long or an unsupported format.",
-  network: "The translation provider could not be reached.",
-  timeout: "The translation provider took too long to answer.",
-  unavailable: "The translation provider is temporarily unavailable.",
-  unconfigured: "No translation provider is configured on this server.",
-};
-
-export interface SupportedLanguage { code: string; name?: string }
-
-export interface TranslationAdapter {
-  readonly id: "google" | "llm" | "fake";
-  readonly name: string;
-  configured(): boolean;
-  /** the provider's own list, or null when it has none to offer */
-  supportedLanguages(): Promise<SupportedLanguage[] | null>;
-  /** translate the given strings; keys map to translations; strings the provider could not handle are absent */
-  translate(items: TranslateItem[], opts: TranslateOptions): Promise<Record<string, string>>;
-}
-
-/* --------------------------------------------------------- placeholders */
-
-/**
- * LIFT OUT what must never be translated and put it back afterwards. WHAT
- * that is comes from the engine's one placeholder grammar (`placeholdersIn`,
- * packages/engine/src/placeholders.ts) — the same tokens the engine's lint
- * checks and `set_translations` refuses to lose: `{{Q1}}` pipes, `${brand}`,
- * `[[loop.item]]`, every `{label}`-style parameter, and the question codes
- * (`Q7`, `Q7.R1`) the source names. It used to be a fourth regex of its own,
- * which agreed with none of the other three. The marker is a `translate="no"`
- * span with a language-neutral token, which Google's HTML mode leaves alone
- * and which survives a machine that ignores the attribute; `restore` finds
- * the tokens even if a provider moved or spaced them, and reports when one
- * went missing so the caller can drop that string rather than store a
- * broken one.
- */
-/** @deprecated the grammar is the engine's `placeholdersIn`; kept for callers that tested a string against it */
-export const PROTECT_RE = /\{\{[^}]+\}\}|\$\{[^}]+\}|\{\w+\}|\[\[[^\]]+\]\]/g;
-
-export function protectPlaceholders(text: string): { text: string; tokens: string[] } {
-  const tokens: string[] = [];
-  let out = "", at = 0;
-  for (const p of placeholdersIn(text)) {
-    out += text.slice(at, p.start);
-    tokens.push(p.text);
-    out += `<span translate="no" class="notranslate">RSV${tokens.length - 1}RSV</span>`;
-    at = p.end;
-  }
-  return { text: out + text.slice(at), tokens };
-}
-
-export function restorePlaceholders(translated: string, tokens: string[]): { text: string; complete: boolean } {
-  let seen = 0;
-  let out = translated.replace(/<span[^>]*>\s*RSV\s*(\d+)\s*RSV\s*<\/span>|RSV\s*(\d+)\s*RSV/gi, (_, a, b) => { seen++; const i = Number(a ?? b); return tokens[i] ?? ""; });
-  out = out.replace(/\s+([,.;:!?])/g, "$1");
-  return { text: out, complete: seen === tokens.length && tokens.every((t) => out.includes(t)) };
-}
-
-const HTML_ENTITIES: Record<string, string> = { "&#39;": "'", "&quot;": '"', "&amp;": "&", "&lt;": "<", "&gt;": ">", "&#34;": '"', "&nbsp;": " " };
-/** HTML mode returns entities; a source that had no markup wants plain characters back. */
-export function unescapeIfPlain(source: string, translated: string): string {
-  if (/<[a-zA-Z][^>]*>/.test(source)) return translated;
-  return translated.replace(/&#39;|&quot;|&amp;|&lt;|&gt;|&#34;|&nbsp;/g, (m) => HTML_ENTITIES[m] ?? m);
-}
-
 /* ------------------------------------------------------------- google */
 
-/** Our language code + locale → what Google expects (zh needs its script variant; everything else the base code). */
-export function googleLanguageCode(code: string, locale?: string): string {
-  const base = code.toLowerCase().split(/[-_]/)[0];
-  if (base === "zh") {
-    const tag = (locale ?? code).toLowerCase();
-    return /tw|hk|hant/.test(tag) ? "zh-TW" : "zh-CN";
-  }
-  if (base === "fil" || base === "tl") return "tl";
-  if (base === "nb" || base === "nn") return "no";
-  if (base === "he") return "iw";
-  return base;
-}
-
 const GOOGLE_ENDPOINT = "https://translation.googleapis.com/language/translate/v2";
-const GOOGLE_BATCH = 100;
-const GOOGLE_TIMEOUT_MS = 20_000;
 
 export function googleConfigured(): boolean {
   return !!(process.env.GOOGLE_TRANSLATE_API_KEY ?? "").trim();
 }
 
-function mapGoogleError(status: number, body: unknown): TranslationProviderError {
-  const msg = String((body as { error?: { message?: string; status?: string } } | null)?.error?.message ?? "");
-  const reason = String((body as { error?: { status?: string; errors?: { reason?: string }[] } } | null)?.error?.errors?.[0]?.reason ?? (body as { error?: { status?: string } } | null)?.error?.status ?? "");
-  if (status === 401 || status === 403) {
-    if (/quota|limit|exceeded|billing/i.test(msg + reason) && !/key|credential|permission|api not enabled|forbidden/i.test(msg)) return new TranslationProviderError("quota", FRIENDLY.quota, true, status);
-    return new TranslationProviderError("auth", FRIENDLY.auth, false, status);
-  }
-  if (status === 429) return new TranslationProviderError(/quota/i.test(msg + reason) && !/rate|per minute|per user/i.test(msg) ? "quota" : "rate_limit", /quota/i.test(msg + reason) && !/rate|per minute|per user/i.test(msg) ? FRIENDLY.quota : FRIENDLY.rate_limit, true, status);
-  if (status === 400) {
-    if (/language|target|source/i.test(msg) && /invalid|unsupported|not supported/i.test(msg)) return new TranslationProviderError("unsupported_language", FRIENDLY.unsupported_language, false, status);
-    return new TranslationProviderError("invalid", FRIENDLY.invalid, false, status);
-  }
-  if (status >= 500) return new TranslationProviderError("unavailable", FRIENDLY.unavailable, true, status);
-  return new TranslationProviderError("invalid", FRIENDLY.invalid, false, status);
-}
-
-async function googleFetch(path: string, init: RequestInit, timeoutMs = GOOGLE_TIMEOUT_MS): Promise<unknown> {
+/** the installation's own Cloud Translation key and address — read when used, and an unset key is the `unconfigured` failure */
+function platformGoogleTarget(): TranslateTarget {
   const key = (process.env.GOOGLE_TRANSLATE_API_KEY ?? "").trim();
   if (!key) throw new TranslationProviderError("unconfigured", FRIENDLY.unconfigured, false);
-  const endpoint = (process.env.GOOGLE_TRANSLATE_ENDPOINT ?? "").trim().replace(/\/+$/, "") || GOOGLE_ENDPOINT;
-  const url = `${endpoint}${path}${path.includes("?") ? "&" : "?"}key=${encodeURIComponent(key)}`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
-    const body = await r.json().catch(() => null);
-    if (!r.ok) throw mapGoogleError(r.status, body);
-    return body;
-  } catch (e) {
-    if (e instanceof TranslationProviderError) throw e;
-    if ((e as Error).name === "AbortError") throw new TranslationProviderError("timeout", FRIENDLY.timeout, true);
-    throw new TranslationProviderError("network", FRIENDLY.network, true);
-  } finally { clearTimeout(timer); }
+  const base = (process.env.GOOGLE_TRANSLATE_ENDPOINT ?? "").trim().replace(/\/+$/, "") || GOOGLE_ENDPOINT;
+  return { provider: "platform", base, key, model: "v2", platform: true, protocol: "google-v2" };
 }
-
-let googleLanguagesCache: { at: number; list: SupportedLanguage[] } | null = null;
 
 export const googleTranslationAdapter: TranslationAdapter = {
   id: "google",
   name: "Google Cloud Translation",
   configured: googleConfigured,
+  languageKey: GOOGLE_V2.languageKey,
   async supportedLanguages() {
     if (!googleConfigured()) return null;
-    if (googleLanguagesCache && Date.now() - googleLanguagesCache.at < 24 * 3600 * 1000) return googleLanguagesCache.list;
-    const body = await googleFetch("/languages?target=en", { method: "GET" }) as { data?: { languages?: { language: string; name?: string }[] } };
-    const list = (body?.data?.languages ?? []).map((l) => ({ code: l.language, name: l.name }));
-    googleLanguagesCache = { at: Date.now(), list };
-    return list;
+    return serviceLanguages(GOOGLE_V2, platformGoogleTarget(), false);
   },
   async translate(items, opts) {
-    const clean = items.filter((i) => i.text?.trim());
-    if (!clean.length) return {};
-    const source = googleLanguageCode(opts.sourceLanguage);
-    const target = googleLanguageCode(opts.targetLanguage, opts.locale);
-    if (source === target) return Object.fromEntries(clean.map((i) => [i.key, i.text]));
-    const out: Record<string, string> = {};
-    for (let i = 0; i < clean.length; i += GOOGLE_BATCH) {
-      const chunk = clean.slice(i, i + GOOGLE_BATCH);
-      const protectedItems = chunk.map((it) => ({ it, ...protectPlaceholders(applyDoNotTranslate(it.text, opts)) }));
-      const q = protectedItems.map((p) => p.text);
-      const body = await googleFetch("", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ q, source, target, format: "html" }),
-      }) as { data?: { translations?: { translatedText: string }[] } };
-      // Google bills every character of `q` — the protected text, wrappers included — per request
-      reportUsage({ kind: "translate", provider: "google", model: "v2", characters: q.reduce((n, t) => n + t.length, 0), requests: 1, estimated: false });
-      const results = body?.data?.translations ?? [];
-      protectedItems.forEach((p, k) => {
-        const raw = results[k]?.translatedText;
-        if (typeof raw !== "string" || !raw.trim()) return;
-        const restored = restorePlaceholders(stripDoNotTranslate(raw), p.tokens);
-        const text = unescapeIfPlain(p.it.text, restored.text).trim();
-        if (!restored.complete || !placeholdersMatch(p.it.text, text) || !tagsBalanced(text)) { console.warn("[rescript:translate] google result dropped — placeholders or HTML changed", JSON.stringify({ key: p.it.key })); return; }
-        out[p.it.key] = applyGlossaryTargets(text, opts);
-      });
-    }
-    return out;
+    const r = await runService(GOOGLE_V2, platformGoogleTarget, items, opts);
+    if (r.failure) { r.failure.partial = r.out; throw r.failure; }
+    return r.out;
   },
 };
 
-/** Glossary terms that must not be translated are wrapped so the provider leaves them; preferred wordings are enforced afterwards. */
-function applyDoNotTranslate(text: string, opts: TranslateOptions): string {
-  let out = text;
-  for (const g of opts.glossary ?? []) {
-    if (!g.source.trim() || g.source !== g.target) continue;
-    const re = new RegExp(`(^|[^\\p{L}\\p{N}_])(${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})(?=$|[^\\p{L}\\p{N}_])`, "giu");
-    out = out.replace(re, (_, pre, term) => `${pre}<span translate="no" class="notranslate rs-dnt">${term}</span>`);
-  }
-  return out;
-}
-function stripDoNotTranslate(text: string): string {
-  return text.replace(/<span[^>]*rs-dnt[^>]*>([\s\S]*?)<\/span>/gi, "$1");
-}
-function applyGlossaryTargets(text: string, opts: TranslateOptions): string {
-  let out = text;
-  for (const g of opts.glossary ?? []) {
-    if (!g.source.trim() || g.source === g.target || !g.target.trim()) continue;
-    const re = new RegExp(`(^|[^\\p{L}\\p{N}_])${g.source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\p{L}\\p{N}_])`, "giu");
-    out = out.replace(re, (_, pre) => `${pre}${g.target}`);
-  }
-  return out;
-}
-
 /* ----------------------------------------------------------------- llm */
+
+/** the chat model reads this many strings per request (`translateBatch` stops there) */
+const LLM_BATCH = 80;
 
 export const llmTranslationAdapter: TranslationAdapter = {
   id: "llm",
@@ -239,15 +79,20 @@ export const llmTranslationAdapter: TranslationAdapter = {
   async supportedLanguages() { return null; },
   async translate(items, opts) {
     // the model is told about placeholders; the same lift-out/restore guards it anyway
-    const protectedItems = items.map((it) => ({ it, ...protectPlaceholders(it.text) }));
-    const res = await llmTranslateBatch(protectedItems.map((p) => ({ ...p.it, text: p.text })), opts);
+    const clean = items.filter((i) => i.text?.trim());
     const out: Record<string, string> = {};
-    for (const p of protectedItems) {
-      const t = res[p.it.key];
-      if (!t) continue;
-      const restored = restorePlaceholders(t, p.tokens);
-      if (!restored.complete || !placeholdersMatch(p.it.text, restored.text) || !tagsBalanced(restored.text)) continue;
-      out[p.it.key] = restored.text.trim();
+    for (let at = 0; at < clean.length; at += LLM_BATCH) {
+      const protectedItems = clean.slice(at, at + LLM_BATCH).map((it) => ({ it, ...protectPlaceholders(it.text) }));
+      let res: Record<string, string>;
+      try { res = await llmTranslateBatch(protectedItems.map((p) => ({ ...p.it, text: p.text })), opts); }
+      catch (e) { if (Object.keys(out).length && e instanceof Error) (e as Error & { partial?: Record<string, string> }).partial = out; throw e; }
+      for (const p of protectedItems) {
+        const t = res[p.it.key];
+        if (!t) continue;
+        const restored = restorePlaceholders(t, p.tokens);
+        if (!restored.complete || !placeholdersMatch(p.it.text, restored.text) || !tagsBalanced(restored.text)) continue;
+        out[p.it.key] = restored.text.trim();
+      }
     }
     return out;
   },
@@ -266,6 +111,107 @@ export const fakeTranslationAdapter: TranslationAdapter = {
     return out;
   },
 };
+
+/* ----------------------------------------------------- the user's own */
+
+/** the installation's own translation provider, offered as a last resort the user explicitly allowed (null when it has none) */
+export function platformTranslateTarget(): TranslateTarget | null {
+  return translationAdapter() ? { provider: "platform", base: "", key: "", model: "platform", platform: true, label: "the platform's translation" } : null;
+}
+
+/** the cache identity of a service: the same provider's output is the same whoever's key made it, so Google is Google; no key or user is in it */
+const CACHE_ID: Record<string, TranslationAdapterId> = { "google-translate": "google", deepl: "deepl", "deepl-free": "deepl", "azure-translator": "azure" };
+
+const protocolOf = (t: TranslateTarget): ServiceProtocol | null => (t.protocol ? PROTOCOLS[t.protocol] : null);
+
+/**
+ * THE ADAPTER FOR A USER'S OWN CONNECTION. It has no state of its own: it reads
+ * the connection of the call it is running in (`withAiScope`), which the
+ * Studio's one billing door set from the acting user's saved settings.
+ *
+ *   - a translation SERVICE scope (their Google / DeepL / Azure key): try their
+ *     primary; on a failure another provider can cure (auth, quota, rate limit,
+ *     outage, a language this one lacks), try the fallbacks THEY listed in order,
+ *     and the platform's own provider only if they allowed it. A request the
+ *     provider found malformed is not forwarded. What was translated before a
+ *     failure is kept and only the rest is offered on.
+ *   - a CHAT scope (their AI model, set under "Other AI features"): the language
+ *     model translates, through that connection's own chat fallbacks.
+ *
+ * Outside either scope it is not a provider at all (`configured()` is false) —
+ * it never falls back to the installation's key by itself.
+ */
+export const scopedTranslationAdapter: TranslationAdapter = {
+  get id(): TranslationAdapterId {
+    const t = currentAiScope()?.translate;
+    return t ? CACHE_ID[t.provider] ?? "llm-own" : "llm-own";
+  },
+  get name() {
+    const s = currentAiScope();
+    return s?.translate ? (s.translate.label?.split(" · ")[0] ?? "Your translation provider") : "Your AI model";
+  },
+  configured: () => { const s = currentAiScope(); return !!s?.translate || (!!s?.chat && s.chat.source !== "platform"); },
+  languageKey(code) {
+    const t = currentAiScope()?.translate;
+    const p = t && protocolOf(t);
+    return p ? p.languageKey(code) : GOOGLE_V2.languageKey(code);
+  },
+  async supportedLanguages() {
+    const t = currentAiScope()?.translate;
+    const p = t && protocolOf(t);
+    return t && p ? serviceLanguages(p, t, true) : null;
+  },
+  async translate(items, opts) {
+    const scope = currentAiScope();
+    if (!scope?.translate) {
+      if (scope?.chat && scope.chat.source !== "platform") return llmTranslationAdapter.translate(items, opts);
+      throw new TranslationProviderError("unconfigured", "Your translation provider is not set up — check Settings → AI & Integrations → AI Provider Configuration.", false);
+    }
+    const primary = scope.translate;
+    const hops: TranslateTarget[] = [primary, ...primary.fallbacks];
+    let remaining = items.filter((i) => i.text?.trim());
+    const out: Record<string, string> = {};
+    let first: TranslationProviderError | null = null;
+    for (let i = 0; i < hops.length && remaining.length; i++) {
+      const hop = hops[i];
+      const run = hop.platform ? await platformHop(remaining, opts) : await runUserHop(hop, remaining, opts, scope.translate.source, i > 0);
+      Object.assign(out, run.out);
+      if (!run.failure) return out;
+      first ??= run.failure;
+      remaining = run.undone.filter((x) => !(x.key in out));
+      if (!FALLBACKABLE.has(run.failure.code)) break;
+    }
+    if (!first) return out;
+    if (hops.length > 1 && FALLBACKABLE.has(first.code)) first.message += ` The fallback provider${hops.length > 2 ? "s" : ""} you listed did not complete it either.`;
+    first.partial = out;
+    throw first;
+  },
+};
+
+async function runUserHop(hop: TranslateTarget, items: TranslateItem[], opts: TranslateOptions, source: "user" | "project" | "platform", usedFallback: boolean) {
+  const p = protocolOf(hop);
+  if (!p) return { out: {}, failure: new TranslationProviderError("invalid", "This translation provider is not set up correctly — check Settings → AI & Integrations → AI Provider Configuration.", false), undone: items };
+  return runService(p, () => hop, items, opts, { source, providerId: hop.provider, usedFallback }, true);
+}
+
+/**
+ * The platform's own provider as a listed backstop. What it spends is the
+ * platform's, so every usage it reports is marked as the platform's and as a
+ * fallback — the billing door then settles the hold it reserved up front for
+ * exactly that, and nothing else.
+ */
+async function platformHop(items: TranslateItem[], opts: TranslateOptions) {
+  const adapter = translationAdapter();
+  if (!adapter) return { out: {} as Record<string, string>, failure: new TranslationProviderError("unconfigured", FRIENDLY.unconfigured, false), undone: items };
+  const { value, usage } = await collectUsage(async () => {
+    try { return { out: await adapter.translate(items, opts) } as { out: Record<string, string>; err?: undefined }; }
+    catch (e) { return { out: ((e as { partial?: Record<string, string> }).partial ?? {}), err: e } as { out: Record<string, string>; err: unknown }; }
+  });
+  for (const u of usage) reportUsage({ ...u, source: "platform", providerId: "platform", usedFallback: true });
+  if (!value.err) return { out: value.out, undone: [] as TranslateItem[] };
+  const failure = value.err instanceof TranslationProviderError ? value.err : new TranslationProviderError("unavailable", FRIENDLY.unavailable, true);
+  return { out: value.out, failure, undone: items.filter((i) => !(i.key in value.out)) };
+}
 
 /* ---------------------------------------------------------- selection */
 
@@ -375,13 +321,22 @@ export async function translateWithCache(items: TranslateItem[], opts: Translate
     return { translations, cached: cachedKeys, provider: providerId };
   } catch (e) {
     const err = e instanceof TranslationProviderError ? e : new TranslationProviderError("unavailable", FRIENDLY.unavailable, true);
+    /* what the provider translated (and billed) before it failed is kept, and remembered, instead of thrown away */
+    const partial = (e as { partial?: Record<string, string> }).partial;
+    if (partial && Object.keys(partial).length) {
+      Object.assign(translations, partial);
+      if (useCache) {
+        const entries: CacheEntry[] = pending.filter((i) => partial[i.key]).map((i) => ({ key: cacheKey(i.text, opts.sourceLanguage, opts.targetLanguage, providerId), sourceText: i.text, sourceLanguage: opts.sourceLanguage, targetLanguage: opts.targetLanguage, provider: providerId, translatedText: partial[i.key] }));
+        for (const c of caches) await c.set(entries).catch(() => {});
+      }
+    }
     return { translations, cached: cachedKeys, provider: providerId, error: err.toJSON() };
   }
 }
 
 /** Remember an approved human wording so the next survey that says the same thing gets it without a provider call. */
 export async function rememberApproved(entry: Omit<CacheEntry, "key" | "provider"> & { provider?: string }, caches: TranslationCache[] = [memoryCache]): Promise<void> {
-  const providers = entry.provider ? [entry.provider] : ["google", "llm", "fake", "none"];
+  const providers = entry.provider ? [entry.provider] : ["google", "llm", "fake", "none", "deepl", "azure", "llm-own"];
   const entries = providers.map((p) => ({ ...entry, provider: p, approved: true, key: cacheKey(entry.sourceText, entry.sourceLanguage, entry.targetLanguage, p) }));
   for (const c of caches) await c.set(entries).catch(() => {});
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { rememberApproved } from "@rescript/ai";
-import { requireTranslationCaller } from "@/lib/translationGate";
+import { requireTranslationUser } from "@/lib/translationGate";
 import { cachesFor } from "@/lib/translationCache";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  *   POST { sourceText, sourceLanguage, targetLanguage, translatedText }
  */
 export async function POST(req: NextRequest) {
-  const gate = await requireTranslationCaller(req);
+  const gate = await requireTranslationUser(req);
   if (!gate.ok) return gate.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }

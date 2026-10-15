@@ -22,7 +22,9 @@ test("saving user-managed AI seals the key, masks it, and returns neither — an
   const f = o.features.find((x) => x.feature === "intelligent")!;
   assert.equal(f.mode, "user"); assert.equal(f.credential!.mask, "sk-proj-••••••••7890"); assert.equal(f.credential!.label, "Work key");
   assert.equal(o.features.find((x) => x.feature === "stt")!.supported, true);
-  assert.equal(o.features.find((x) => x.feature === "translation")!.supported, false, "translation arrives in its own phase");
+  assert.equal(o.features.find((x) => x.feature === "translation")!.supported, true);
+  assert.equal(o.features.find((x) => x.feature === "translation")!.kind, "translate");
+  assert.deepEqual(o.translateCatalog.map((p) => p.id), ["google-translate", "deepl", "deepl-free", "azure-translator", "llm"]);
   const res = await resolveConnection({ userId: ALICE, feature: "intelligent", store: d.store, env });
   assert.equal(res.kind, "user"); assert.equal((res as { scope: { key: string } }).scope.key, KEY);
 });
@@ -32,7 +34,7 @@ test("refusals are explicit: no vault key, workspace blocked, unsupported featur
   const code = async (p: ReturnType<typeof s>) => { const r = await p; return r.ok ? "ok" : `${r.status}:${r.code}`; };
   assert.equal(await code(s({}, mk({ env: {} }))), "503:vault_unavailable");
   assert.equal(await code(s({}, mk({ workspaceAllows: false }))), "403:byok_blocked");
-  assert.equal(await code(s({ feature: "translation" }, mk())), "422:unsupported_feature");
+  assert.equal(await code(s({ feature: "translation" }, mk())), "422:invalid_config", "a chat provider is not a translation provider");
   assert.equal(await code(s({ feature: "nope" }, mk())), "422:invalid_feature");
   assert.equal(await code(s({ mode: "maybe" }, mk())), "422:invalid_mode");
   assert.equal(await code(s({ config: { provider: "openai", model: "bad model!" } }, mk())), "422:invalid_config");
@@ -263,4 +265,87 @@ test("the silent probe recording is a valid WAV", () => {
   assert.equal(String.fromCharCode(...w.slice(0, 4)), "RIFF"); assert.equal(String.fromCharCode(...w.slice(8, 12)), "WAVE");
   assert.equal(v.getUint32(4, true), w.length - 8); assert.equal(v.getUint32(40, true), w.length - 44); assert.equal(v.getUint32(24, true), 8000);
   assert.ok(w.slice(44).every((b) => b === 0));
+});
+
+/* ---------------------------------------------------------------- translation (Phase D) */
+
+test("translation settings: a service with its own key; the model and address are the registry's; the key is sealed and never returned", async () => {
+  const d = mk();
+  const bad = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "openai", model: "gpt-4.1" }, apiKey: KEY }, d);
+  assert.equal(bad.ok, false);
+  const r = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "deepl-free", base: "https://evil.example/v2", model: "whatever" }, apiKey: "abcd1234-efgh-5678:fx" }, d);
+  assert.ok(r.ok, JSON.stringify(r)); assert.equal(leaks(r, "abcd1234"), false);
+  const o = await overview(ALICE, d);
+  const f = o.features.find((x) => x.feature === "translation")!;
+  assert.equal(f.mode, "user"); assert.deepEqual({ p: (f.config as { provider: string }).provider, b: (f.config as { base: string }).base, m: (f.config as { model: string }).model }, { p: "deepl-free", b: "https://api-free.deepl.com/v2", m: "v2" });
+  assert.equal(leaks(o, "abcd1234", "efgh-5678"), false);
+  assert.equal(f.credential!.mask.endsWith(":fx"), true);
+  /* a Google Cloud key saved for speech is offered to Translation (same family) but an OpenAI key is not */
+  const g = mk();
+  assert.ok((await saveSetting(ALICE, { feature: "stt", mode: "user", config: { provider: "google-stt", model: "latest_short" }, apiKey: "AIzaSyALICE-CLOUD-KEY-0123456789" }, g)).ok);
+  const cred = (await overview(ALICE, g)).credentials[0];
+  assert.ok((await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "google-translate" }, credentialId: cred.id }, g)).ok, "the same Google Cloud key");
+  const o2 = mk();
+  assert.ok((await saveSetting(ALICE, { feature: "additional", mode: "user", config: cfg, apiKey: KEY }, o2)).ok);
+  const oc = (await overview(ALICE, o2)).credentials[0];
+  const mism = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "deepl" }, credentialId: oc.id }, o2);
+  assert.equal(mism.ok, false); assert.equal((mism as { code: string }).code, "provider_mismatch");
+});
+
+test("translation settings: 'My AI model' needs no key but needs Other AI features to be the user's own provider; fallbacks are services with their own keys", async () => {
+  const d = mk();
+  const early = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "llm" } }, d);
+  assert.equal(early.ok, false); assert.equal((early as { code: string }).code, "chat_required");
+  assert.ok((await saveSetting(ALICE, { feature: "additional", mode: "user", config: cfg, apiKey: KEY }, d)).ok);
+  const ok = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "llm" }, allowPlatformFallback: true }, d);
+  assert.ok(ok.ok);
+  const s = await d.store.getSetting(ALICE, "translation");
+  assert.equal(s!.credentialId, null); assert.equal(s!.allowPlatformFallback, false, "its backstop is the one on Other AI features");
+  assert.equal((await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "llm" }, fallbacks: [{ credentialId: "x", config: {} }] }, d)).ok, false);
+  const d2 = mk();
+  assert.ok((await saveSetting(ALICE, { feature: "additional", mode: "user", config: cfg, apiKey: KEY }, d2)).ok);
+  const key = (await overview(ALICE, d2)).credentials[0];
+  assert.ok((await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "deepl" }, apiKey: "deeplkey-0123456789" }, d2)).ok);
+  const fb = await saveSetting(ALICE, { feature: "translation", mode: "user", config: { provider: "deepl" }, fallbacks: [{ credentialId: key.id, config: { provider: "llm" } }] }, d2);
+  assert.equal(fb.ok, false); assert.equal((fb as { code: string }).code, "invalid_fallback");
+});
+
+let nextUser = 1000;
+/* each probe is rate-limited per user, so a test that makes many uses a user per probe */
+const fresh = () => `dddddddd-0000-0000-0000-${String(nextUser++).padStart(12, "0")}`;
+
+test("translation Test Connection: two characters translated the way the Studio does; each provider's failure said in words; the provider's own text and the key never come back", async () => {
+  const d = mk();
+  const seen: { url: string; init: RequestInit }[] = [];
+  const ok = (body: unknown) => (async (url: string, init: RequestInit) => { seen.push({ url, init }); return new Response(JSON.stringify(body), { status: 200 }); }) as never;
+  const t = await testConnection(fresh(), { feature: "translation", config: { provider: "deepl" }, apiKey: "deeplkey-0123456789:fx" }, mk({ fetcher: ok({ translations: [{ text: "OK" }] }) }));
+  assert.ok(t.ok && t.result.ok, JSON.stringify(t)); assert.match((t as { result: { message: string } }).result.message, /translated/);
+  assert.equal(seen[0].url, "https://api.deepl.com/v2/translate"); assert.equal((seen[0].init.headers as Record<string, string>).authorization, "DeepL-Auth-Key deeplkey-0123456789:fx");
+  assert.deepEqual(JSON.parse(String(seen[0].init.body)).text, ["OK"]);
+  const az = await testConnection(fresh(), { feature: "translation", config: { provider: "azure-translator", extra: { region: "westeurope" } }, apiKey: "azurekey-0123456789" }, mk({ fetcher: ok([{ translations: [{ text: "OK", to: "es" }] }]) }));
+  assert.ok(az.ok && az.result.ok); assert.equal((seen.at(-1)!.init.headers as Record<string, string>)["ocp-apim-subscription-region"], "westeurope");
+  const g = await testConnection(fresh(), { feature: "translation", config: { provider: "google-translate" }, apiKey: "AIzaSyGOOGLE-0123456789" }, mk({ fetcher: ok({ data: { translations: [{ translatedText: "OK" }] } }) }));
+  assert.ok(g.ok && g.result.ok); assert.equal((seen.at(-1)!.init.headers as Record<string, string>)["x-goog-api-key"], "AIzaSyGOOGLE-0123456789"); assert.ok(!seen.at(-1)!.url.includes("AIza"), "the key is not in the URL");
+  /* failures */
+  const fail = async (status: number, body: unknown, provider = "deepl", apiKey = "deeplkey-0123456789") => (await testConnection(fresh(), { feature: "translation", config: { provider }, apiKey }, mk({ fetcher: reply(status, body) as never }))) as { ok: true; result: { ok: boolean; code: string; message: string } };
+  const a = await fail(403, { message: "Authorization failure SECRET-PROVIDER-TEXT" });
+  assert.equal(a.result.ok, false); assert.equal(a.result.code, "auth"); assert.match(a.result.message, /:fx/); assert.equal(leaks(a, "SECRET-PROVIDER-TEXT", "deeplkey"), false);
+  assert.equal((await fail(456, {})).result.code, "quota");
+  assert.equal((await fail(429, {})).result.code, "rate_limited");
+  assert.equal((await fail(401, { error: { code: 401000, message: "x" } }, "azure-translator", "azurekey-0123456789")).result.code, "auth");
+  const html = await testConnection(fresh(), { feature: "translation", config: { provider: "deepl" }, apiKey: "deeplkey-0123456789" }, mk({ fetcher: reply(200, "<html>captive portal</html>") as never }));
+  assert.ok(html.ok && !html.result.ok && html.result.code === "unexpected");
+  /* "My AI model" tests the chat connection it uses */
+  const d3 = mk({ fetcher: reply(200, { choices: [{ message: { content: "OK" } }] }) as never });
+  const L = fresh();
+  assert.equal(((await testConnection(L, { feature: "translation", config: { provider: "llm" } }, d3)) as { code: string }).code, "chat_required");
+  assert.ok((await saveSetting(L, { feature: "additional", mode: "user", config: cfg, apiKey: KEY }, d3)).ok);
+  const viaChat = await testConnection(L, { feature: "translation", config: { provider: "llm" } }, d3);
+  assert.ok(viaChat.ok && viaChat.result.ok);
+  void d;
+});
+
+test("translation has no model list to fetch", async () => {
+  const r = await modelsFor(ALICE, { provider: "deepl", apiKey: "deeplkey-0123456789" }, mk());
+  assert.ok(r.ok); if (r.ok) { assert.equal(r.discovered, false); assert.deepEqual(r.models, []); }
 });

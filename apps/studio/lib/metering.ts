@@ -3,9 +3,9 @@ import {
   Meter, MemoryMeterStore, SupabaseMeterStore, estimateTokens,
   type MeterContext, type MeterRefusal, type UsageSpec, type UsageEvent, type Environment,
 } from "@rescript/billing";
-import { aiModelName, collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope } from "@rescript/ai";
+import { aiModelName } from "@rescript/ai";
 import { aiSpec, meterModel, meterProvider, type AiEstimate } from "./aiEstimate";
-import { aiAllowed, aiRefusal, type AiRefusal } from "./aiPolicy";
+import type { AiRefusal } from "./aiPolicy";
 import { connectionFor } from "./byok/connect";
 import { allowPrivateFrom } from "./byok/resolve";
 import { connectionRefusalStatus, meteredCore, usageToSpec, type ConnectionRefusal, type Metered, type RunDeps } from "./meterRun";
@@ -248,27 +248,28 @@ export async function meteredStt<T>(meter: Meter, ctx: MeterContext, operation: 
   return m.ok ? { value: m.value } : { refused: m.message };
 }
 
-/** Run a translation batch under the meter: reserve from the characters about to be sent, settle with what the adapter reported. */
+/**
+ * Run a translation batch under the meter. It walks the same door as every other
+ * model call (`meteredCore`): the project's switch, then WHOSE provider — the
+ * project's choice, else the acting user's own translation service (or AI
+ * model), else the platform's — then money.
+ *
+ * On the platform's provider: reserve from the characters about to be sent,
+ * settle with what the adapter reported (a language model is priced as a chat
+ * call, a translation service per character). On the user's own: no wallet — the
+ * characters are recorded at zero charge for attribution; their provider bills
+ * them. `est.providerId` is the PLATFORM's adapter for the call, reserved only
+ * on the platform path and for a backstop the user allowed.
+ */
 export async function meteredTranslation<T>(meter: Meter, ctx: MeterContext, est: { characters: number; providerId: string; operation: string }, fn: () => Promise<T>): Promise<Metered<T>> {
   const prov = est.providerId === "llm" ? "openai-compatible" : est.providerId;
   const isChat = prov === "openai-compatible";
-  /* a translation by the language model is an AI call; a dedicated translation service is not (audit A-2) */
-  if (isChat) { const decision = await aiAllowed(ctx.surveyId, est.operation); if (!decision.allowed) return aiRefusal(decision); }
-  const hold = await meter.reserve(ctx, isChat
-    ? { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: aiModelName(), inputUnits: estimateTokens("x".repeat(est.characters)) + 300, outputUnits: Math.max(200, estimateTokens("x".repeat(est.characters)) * 2), metadata: { operation: est.operation } }
-    : { eventType: "TRANSLATION_CHARACTER", provider: meterProvider(prov, "translate"), service: "translate", model: meterModel(prov, prov === "google" ? "v2" : null, "translate"), quantity: Math.ceil(est.characters * 1.25), metadata: { operation: est.operation } });
-  if (!hold.ok) return hold;
-  try {
-    const { value, usage } = await collectUsage(fn);
-    if (!usage.length) { await meter.release(hold); return { ok: true, value, event: null }; }
-    const kind = usage[0].kind === "chat" ? "chat" : "translate";
-    const spec = usageToSpec(usage, { kind });
-    const event = await meter.settle(hold, { ...spec, eventType: kind === "chat" ? "AI_REQUEST" : "TRANSLATION_CHARACTER", metadata: { operation: est.operation, ...spec.metadata } });
-    return { ok: true, value, event };
-  } catch (e) {
-    await meter.release(hold).catch(() => {});
-    throw e;
-  }
+  return meteredCore(runDeps, meter, ctx, {
+    operation: est.operation, kind: "translate", platformIsLlm: isChat,
+    reserve: () => (isChat
+      ? { eventType: "AI_REQUEST", provider: "openai-compatible", service: "chat", model: aiModelName(), inputUnits: estimateTokens("x".repeat(est.characters)) + 300, outputUnits: Math.max(200, estimateTokens("x".repeat(est.characters)) * 2), metadata: { operation: est.operation } }
+      : { eventType: "TRANSLATION_CHARACTER", provider: meterProvider(prov, "translate"), service: "translate", model: meterModel(prov, prov === "google" ? "v2" : null, "translate"), quantity: Math.ceil(est.characters * 1.25), metadata: { operation: est.operation } }),
+  }, fn);
 }
 
 /** The HTTP shape of a refusal: 402 when the balance is short, 423 when the project is read-only or suspended. */

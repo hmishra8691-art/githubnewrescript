@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Meter, MemoryMeterStore, type MeterContext } from "@rescript/billing";
-import { currentAiScope, reportUsage, type ChatScope, type SttScope } from "@rescript/ai";
+import { currentAiScope, reportUsage, type ChatScope, type SttScope, type TranslateScope } from "@rescript/ai";
 import { meteredCore, type RunDeps } from "./meterRun.ts";
 import { setAiSettingsLoader } from "./aiPolicy.ts";
 import type { Resolution } from "./byok/resolve.ts";
@@ -250,4 +250,64 @@ test("a speech call that resolves a chat connection (or the reverse) is a progra
   const { meter } = mk();
   await assert.rejects(() => meteredCore(deps(userRes()), meter, ctx(), sttOpts, async () => 1), /resolved a chat connection/);
   await assert.rejects(() => meteredCore(deps(sttRes()), meter, ctx(), opts, async () => 1), /resolved a stt connection/);
+});
+
+/* ---------------------------------------------------------------- translation (Phase D) */
+
+const trSpec = () => ({ eventType: "TRANSLATION_CHARACTER", provider: "google", service: "translate", model: "v2", quantity: 500, metadata: { operation: "translate:en->de" } });
+const trScope = (over: Partial<TranslateScope> = {}): TranslateScope => ({ source: "user", provider: "deepl", base: "https://api.deepl.com/v2", key: "DEEPL-USERKEY-0123456789", model: "v2", protocol: "deepl", fallbacks: [], ...over });
+const trRes = (over: Partial<TranslateScope> = {}): Resolution => ({ kind: "user", source: "user", scopeKind: "translate", scope: trScope(over), credentialId: "c", settingUpdatedAt: "", skippedFallbacks: [] });
+const trOpts = { operation: "translate:en->de", kind: "translate" as const, reserve: trSpec };
+
+test("translation on the user's own service: their translate scope, no wallet, characters recorded at zero charge with the provider that served them", async () => {
+  const { meter, store } = mk();
+  let seen: TranslateScope | undefined;
+  const r = await meteredCore(deps(trRes()), meter, ctx(), trOpts, async () => {
+    seen = currentAiScope()?.translate;
+    reportUsage({ kind: "translate", provider: "deepl", model: "v2", characters: 420, requests: 1, estimated: true, source: "user", providerId: "deepl", usedFallback: false });
+    return "done";
+  });
+  assert.ok(r.ok && r.value === "done");
+  assert.equal(seen?.key, "DEEPL-USERKEY-0123456789"); assert.equal(currentAiScope(), undefined);
+  assert.equal((await walletOf(meter)).balance, 10);
+  const e = store.usage[0]!;
+  assert.equal(e.eventType, "AI_REQUEST_BYOK"); assert.equal(e.customerCharge, 0); assert.equal(e.unit, "character"); assert.equal(Number(e.quantity), 420); assert.equal(e.provider, "deepl");
+  assert.equal(JSON.stringify(e).includes("USERKEY"), false);
+});
+
+test("translation: the user's service failing over to the platform's backstop settles ONLY the platform's characters, as the platform's; the user's own stay free", async () => {
+  const { meter, store } = mk();
+  const r = await meteredCore(deps(trRes({ fallbacks: [{ provider: "platform", base: "", key: "", model: "platform", platform: true }] })), meter, ctx(), trOpts, async () => {
+    reportUsage({ kind: "translate", provider: "deepl", model: "v2", characters: 100, requests: 1, estimated: true, source: "user", providerId: "deepl" });
+    reportUsage({ kind: "translate", provider: "google", model: "v2", characters: 300, requests: 1, estimated: false, source: "platform", providerId: "platform", usedFallback: true });
+    return 1;
+  });
+  assert.ok(r.ok);
+  const platform = store.usage.filter((e) => e.eventType === "TRANSLATION_CHARACTER"), own = store.usage.filter((e) => e.eventType === "AI_REQUEST_BYOK");
+  assert.equal(platform.length, 1); assert.equal(Number(platform[0].quantity), 300); assert.equal(platform[0].metadata.source, "platform_fallback"); assert.ok(platform[0].customerCharge >= 0);
+  assert.equal(own.length, 1); assert.equal(Number(own[0].quantity), 100); assert.equal(own[0].customerCharge, 0);
+});
+
+test("translation: a project running Internal still translates with a service, but a language model (the platform's or the user's) is held to the switch before anything is reserved", async () => {
+  setAiSettingsLoader(async () => ({ mode: "internal", disabled: [] }));
+  try {
+    const a = mk();
+    const svc = await meteredCore(deps(trRes()), a.meter, ctx(), trOpts, async () => { reportUsage({ kind: "translate", provider: "deepl", model: "v2", characters: 5, requests: 1, estimated: true, source: "user" }); return "ok"; });
+    assert.ok(svc.ok, "a translation service is not a language model");
+    const b = mk();
+    const plat = await meteredCore(deps({ kind: "platform", reason: "default" }), b.meter, ctx(), { ...trOpts, platformIsLlm: true }, async () => "never");
+    assert.equal(plat.ok, false); assert.equal((plat as { reason: string }).reason, "ai_off"); assert.equal(b.store.reservations.size, 0);
+    const c = mk();
+    const own = await meteredCore(deps(userRes()), c.meter, ctx(), trOpts, async () => "never");
+    assert.equal(own.ok, false, "'My AI model' is a chat connection: the language-model switch applies"); assert.equal((own as { reason: string }).reason, "ai_off");
+    const d = mk();
+    const plain = await meteredCore(deps({ kind: "platform", reason: "default" }), d.meter, ctx(), trOpts, async () => { reportUsage({ kind: "translate", provider: "google", model: "v2", characters: 50, requests: 1, estimated: false }); return "ok"; });
+    assert.ok(plain.ok, "the platform's translation service also still runs in an Internal project");
+  } finally { setAiSettingsLoader(async () => OPEN); }
+});
+
+test("a speech resolution handed to a translation call is a programming error, never a silent use of the wrong provider", async () => {
+  const { meter } = mk();
+  const stt: Resolution = { kind: "user", source: "user", scopeKind: "stt", scope: { source: "user", provider: "openai-stt", base: "https://x", key: "k", model: "whisper-1", fallbacks: [] } as SttScope, credentialId: "c", settingUpdatedAt: "", skippedFallbacks: [] };
+  await assert.rejects(() => meteredCore(deps(stt), meter, ctx(), trOpts, async () => 1), /resolved a stt connection/);
 });

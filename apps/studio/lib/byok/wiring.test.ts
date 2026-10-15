@@ -131,3 +131,31 @@ test("the speech provider that transcribed is recorded with the transcript, neve
   assert.match(route, /provider: ready\.via === "platform"/);
   assert.match(readFileSync(new URL("../../../../packages/media/src/runner.ts", import.meta.url), "utf8"), /provider: result\.provider \?\? deps\.provider \?\? null/);
 });
+
+/* ---------------------------------------------------------------- translation (Phase D) */
+
+test("translation operations map to the Translation setting; the copilot's translation steps stay Intelligent Mode", () => {
+  for (const op of ["translate", "translate:en->de", "translate:en->zh-TW"]) assert.equal(featureOf(op), "translation", op);
+  for (const op of ["copilot_translate", "copilot_set_translations"]) assert.equal(featureOf(op), "intelligent", op);
+  assert.equal(featureOf("translation_status"), "additional", "only the translate operation itself is the translation setting");
+});
+
+test("no translation route asks the platform's provider directly: the gate resolves whose provider first (project → user → platform), and the memory route needs no provider at all", () => {
+  const gate = read("lib/translationGate.ts");
+  assert.match(gate, /connectionFor\(/, "the gate asks the one resolver");
+  assert.ok(gate.indexOf("connectionFor(") < gate.indexOf('via: "platform", adapter: platform, platform, user, resolution'), "before it offers the platform's adapter to a signed-in user");
+  assert.match(gate, /export async function requireTranslationSession[\s\S]*requireUser\(req\)/, "the session step is the guard");
+  assert.match(gate, /resolution\.kind === "refused"/, "a refusal is an answer, not a fall-through to the platform");
+  for (const f of ["app/api/ai/translate/route.ts", "app/api/translation/languages/route.ts", "app/api/translation/memory/route.ts"]) assert.equal(/translationAdapter\(/.test(read(f)), false, `${f} does not pick a provider itself`);
+  const tr = read("app/api/ai/translate/route.ts");
+  assert.ok(tr.indexOf("requireTranslationSession(req)") < tr.indexOf("req.json()") && tr.indexOf("req.json()") < tr.indexOf("session.resolve(body?.surveyId)"), "authenticate first; then the project named in the body decides whose provider");
+  assert.match(tr, /adapter: gate\.adapter/, "the manager is handed the adapter the gate chose");
+  assert.match(read("app/api/translation/languages/route.ts"), /requireTranslationCaller\(req, req\.nextUrl\.searchParams\.get\("surveyId"\)\)/);
+  assert.match(read("app/api/translation/memory/route.ts"), /requireTranslationUser/);
+});
+
+test("the translation cache is keyed by the provider that wrote it: an own-provider result is never filed as the platform's", () => {
+  const core = read("../../packages/ai/src/translation.ts");
+  assert.match(core, /const CACHE_ID/, "a service's identity is its own (google, deepl, azure, llm-own)");
+  assert.match(core, /\["google", "llm", "fake", "none", "deepl", "azure", "llm-own"\]/, "an approved human wording is remembered for every provider");
+});

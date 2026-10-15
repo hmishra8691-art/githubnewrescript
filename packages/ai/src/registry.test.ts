@@ -7,8 +7,8 @@ test("the catalog: every entry is complete, fixed providers have https bases, on
   const ids = new Set<string>();
   for (const p of PROVIDERS) {
     assert.ok(!ids.has(p.id), `duplicate ${p.id}`); ids.add(p.id);
-    assert.ok(p.label && p.capabilities.includes(p.kind === "stt" ? "stt" : "chat"), p.id);
-    if (p.customBase) assert.equal(p.base, null, p.id); else assert.match(p.base!, /^https:\/\/[a-z0-9.-]+(\/[\w./-]*)?$/, p.id);
+    assert.ok(p.label && p.capabilities.includes(p.kind === "stt" ? "stt" : p.kind === "translate" ? "translate" : "chat"), p.id);
+    if (p.customBase || p.protocol === "chat-reuse") assert.equal(p.base, null, p.id); else assert.match(p.base!, /^https:\/\/[a-z0-9.-]+(\/[\w./-]*)?$/, p.id);
     assert.ok(!p.base?.endsWith("/"), `${p.id}: no trailing slash`);
     for (const f of p.fields) { assert.ok(f.header && f.pattern.test(f.example.replace("…", "abc123")), `${p.id}.${f.id}`); }
   }
@@ -17,6 +17,8 @@ test("the catalog: every entry is complete, fixed providers have https bases, on
   const pub = JSON.stringify(publicCatalog("chat"));
   assert.ok(!/function|=>|RegExp/.test(pub)); assert.deepEqual(publicCatalog("stt").map((p) => p.id), ["openai-stt", "groq-stt", "openai-compatible-stt", "google-stt"], "a speech entry exists only with its adapter and its tests (stt.providers.test.ts)");
   assert.ok(!publicCatalog("chat").some((p) => p.kind !== "chat"), "the chat catalog holds no speech provider");
+  assert.deepEqual(publicCatalog("translate").map((p) => p.id), ["google-translate", "deepl", "deepl-free", "azure-translator", "llm"], "a translation entry exists only with its protocol and its tests (translate.providers.test.ts)");
+  assert.ok(!publicCatalog("chat").concat(publicCatalog("stt")).some((p) => p.kind === "translate"));
 });
 
 test("validation: a fixed provider's address is the registry's whatever was sent; a custom one must pass the endpoint guard; identifiers have a shape", () => {

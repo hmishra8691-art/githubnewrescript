@@ -84,9 +84,30 @@ export interface SttScope extends SttTarget {
   language?: string;
 }
 
+/** one translation service a request can go to (Google Cloud Translation, DeepL, Azure Translator) */
+export interface TranslateTarget {
+  /** registry id: google-translate, deepl, deepl-free, azure-translator (`platform` for the installation's own) */
+  provider: string;
+  base: string;
+  key: string;
+  /** the service's API version label — part of the connection's identity, never user-typed */
+  model: string;
+  headers?: Record<string, string>;
+  platform?: boolean;
+  label?: string;
+  protocol?: "google-v2" | "deepl" | "azure-v3";
+}
+export interface TranslateScope extends TranslateTarget {
+  source: ConnectionSource;
+  fallbacks: TranslateTarget[];
+}
+
+export type ScopeKind = "chat" | "stt" | "translate";
+
 export interface AiScope {
   chat?: ChatScope;
   stt?: SttScope;
+  translate?: TranslateScope;
   /** the operator allowed private endpoints in the SERVER environment (never a user input) */
   allowPrivate?: boolean;
 }
@@ -112,13 +133,13 @@ export function identityOf(t: { provider: string; base: string; key: string; mod
 }
 
 /** "platform" outside a scope, else the connection's identity — include it in every cache and in-flight key */
-export function aiIdentity(kind: "chat" | "stt" = "chat"): string {
+export function aiIdentity(kind: ScopeKind = "chat"): string {
   const s = store.getStore()?.[kind];
   return s ? `${kind}:${s.source}:${identityOf(s)}` : "platform";
 }
 
 /** are we inside a user's connection (chat or stt)? — the guard, the header rules and the fallback rules all key on this */
-export function scopedProvider(kind: "chat" | "stt" = "chat"): boolean {
+export function scopedProvider(kind: ScopeKind = "chat"): boolean {
   const s = store.getStore()?.[kind];
   return !!s && s.source !== "platform";
 }
@@ -127,13 +148,13 @@ export function scopedProvider(kind: "chat" | "stt" = "chat"): boolean {
  * `fetch` for the provider this call is going to: the installation's, through
  * the platform `fetch`; a user's, through the endpoint guard.
  */
-export function aiFetch(kind: "chat" | "stt", url: string, init: RequestInit): Promise<Response> {
+export function aiFetch(kind: ScopeKind, url: string, init: RequestInit): Promise<Response> {
   if (scopedProvider(kind)) return guardedFetch(url, init, { allowPrivate: store.getStore()?.allowPrivate });
   return fetch(url, init);
 }
 
 /** a connection's secret-free summary: safe to log and to return */
-export function describeScope(kind: "chat" | "stt" = "chat"): { source: ConnectionSource; provider: string; model: string; label?: string } | null {
+export function describeScope(kind: ScopeKind = "chat"): { source: ConnectionSource; provider: string; model: string; label?: string } | null {
   const s = store.getStore()?.[kind];
   return s ? { source: s.source, provider: s.provider, model: s.model, ...(s.label ? { label: s.label } : {}) } : null;
 }

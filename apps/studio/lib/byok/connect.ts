@@ -81,3 +81,10 @@ export async function sttPrecheck(user: Pick<AuthedUser, "userId" | "customerId"
 export function inConnection<T>(scope: ChatScope, fn: () => Promise<T>): Promise<T> {
   return withAiScope({ chat: scope, allowPrivate: allowPrivateFrom() }, fn);
 }
+
+/** run `fn` inside whatever connection a resolution chose — a user's chat, speech or translation connection; untouched for the platform */
+export function inResolution<T>(r: Resolution, fn: () => Promise<T>): Promise<T> {
+  if (r.kind !== "user") return fn();
+  const allowPrivate = allowPrivateFrom();
+  return withAiScope(r.scopeKind === "stt" ? { stt: r.scope, allowPrivate } : r.scopeKind === "translate" ? { translate: r.scope, allowPrivate } : { chat: r.scope, allowPrivate }, fn);
+}

@@ -18,13 +18,19 @@ import type { AiFeature } from "./store.ts";
  *                           respondents' or interviewees' audio — those run in
  *                           the runtime and interview apps, which stay
  *                           platform-managed.
- *   Translation             its own gate (Phase D)
+ *   Translation             `translate` / `translate:src->tgt`: the Translation
+ *                           Manager's strings, by a translation service (Google,
+ *                           DeepL, Azure) on the person's own key, or by their AI
+ *                           model (the connection saved under Other AI features)
  */
 export const STT_OPERATIONS = ["intelligent_voice", "transcribe_question"] as const;
 export const isSttOperation = (operation: string): boolean => (STT_OPERATIONS as readonly string[]).includes(operation);
 
+export const isTranslateOperation = (operation: string): boolean => operation === "translate" || operation.startsWith("translate:");
+
 export function featureOf(operation: string): AiFeature {
   if (isSttOperation(operation)) return "stt";
+  if (isTranslateOperation(operation)) return "translation";
   /* the step that reads a spoken instruction in English is part of Intelligent Mode, though it names itself after the voice route */
   if (operation === "intelligent_voice_normalise") return "intelligent";
   return operation.startsWith("copilot_") ? "intelligent" : "additional";

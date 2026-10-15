@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-  classifyResponse, discoverModels, guardedFetch, headersFor, isProviderError, platformSttTarget, platformTarget, providerById, publicCatalog, redact, sameKeyFamily, suggestionsFor, validateConnection,
-  type ConnectionConfig, type ConnectionInput, type FieldErrors, type ProviderErrorKind, type ProviderKind,
+  classifyResponse, discoverModels, guardedFetch, headersFor, isProviderError, platformSttTarget, platformTarget, platformTranslateTarget, PROTOCOLS, providerById, publicCatalog, redact, sameKeyFamily, suggestionsFor, validateConnection,
+  type ConnectionConfig, type ConnectionInput, type FieldErrors, type ProviderErrorKind, type ProviderKind, type TranslateTarget,
 } from "@rescript/ai";
 import { maskSecret, openSecret, sealSecret, vaultStatus, VaultError } from "./vault.ts";
 import { allowPrivateFrom, providerKindOf, SUPPORTED_FEATURES } from "./resolve.ts";
@@ -75,8 +75,11 @@ export async function overview(userId: string, d: Deps) {
     platformFallbackAvailable: !!platformTarget(env),
     /** the speech-to-text backstop is its own question: the platform may chat and not transcribe */
     platformSttFallbackAvailable: !!platformSttTarget(env),
+    /** and so is the translation one: the platform may chat and have no translation provider */
+    platformTranslateFallbackAvailable: !!platformTranslateTarget(),
     catalog: publicCatalog("chat"),
     sttCatalog: publicCatalog("stt"),
+    translateCatalog: publicCatalog("translate"),
     credentials: creds.map(viewOf),
     features: FEATURES.map((feature) => {
       const s = by.get(feature);
@@ -167,6 +170,18 @@ export async function saveSetting(userId: string, input: SaveInput, d: Deps): Pr
   if (!checked.ok) return fail(422, "invalid_config", "Some settings need attention.", checked.errors);
   const config = checked.config;
 
+  /*
+   * TRANSLATION BY "MY AI MODEL": no key of its own — it is the chat connection saved under "Other AI features" (its key, model and fallbacks).
+   * So that must itself be the user's own provider, or this could never be used (and would be refused at use, never answered by the platform).
+   */
+  if (kind === "translate" && providerById(config.provider)?.protocol === "chat-reuse") {
+    const chat = await d.store.getSetting(userId, "additional");
+    if (chat?.mode !== "user") return fail(422, "chat_required", "“My AI model” translates with the connection saved under “Other AI features”. Set that to your own provider first, or choose a translation service.");
+    if (Array.isArray(input.fallbacks) && input.fallbacks.length) return fail(422, "invalid_fallback", "“My AI model” uses the fallbacks of your “Other AI features” connection; list fallbacks there, or choose a translation service.");
+    await d.store.putSetting({ userId, feature, mode: "user", config, credentialId: null, fallbacks: [], allowPlatformFallback: false, lastTest: null, updatedAt: now });
+    return { ok: true, feature, mode: "user", provider: config.provider, model: config.model, credentialSaved: false };
+  }
+
   /* the credential: a new/replacement key typed now, or one already saved (and then it must be this user's and this provider's) */
   let credentialId = typeof input.credentialId === "string" ? input.credentialId : null;
   let credentialSaved = false;
@@ -192,6 +207,7 @@ export async function saveSetting(userId: string, input: SaveInput, d: Deps): Pr
     const fc = typeof f?.credentialId === "string" ? await d.store.getCredential(userId, f.credentialId) : null;
     if (!fc) return fail(422, "invalid_fallback", "A fallback provider's saved key was not found.");
     const fv = configFor(kind, f.config, env);
+    if (fv.ok && providerById(fv.config.provider)?.protocol === "chat-reuse") return fail(422, "invalid_fallback", "“My AI model” cannot be listed as a fallback — it has no key of its own. Choose a translation service.");
     if (!fv.ok) return fail(422, "invalid_fallback", `A fallback provider's settings need attention: ${Object.values(fv.errors)[0]}`, fv.errors);
     if (!sameKeyFamily(fc.provider, fv.config.provider)) return fail(422, "provider_mismatch", "A fallback's saved key belongs to a different provider than the one selected.");
     if (fc.id === credentialId && fv.config.model === config.model) return fail(422, "invalid_fallback", "A fallback must differ from the primary connection.");
@@ -269,6 +285,12 @@ export async function testConnection(userId: string, input: TestInput, d: Deps):
   const checked = configFor(kind, input.config, env);
   if (!checked.ok) return fail(422, "invalid_config", "Some settings need attention.", checked.errors);
   const config = checked.config, def = providerById(config.provider)!;
+  /* "My AI model" has no key to test: it is the chat connection, and that is what is tested */
+  if (def.protocol === "chat-reuse") {
+    const chat = await d.store.getSetting(userId, "additional");
+    if (chat?.mode !== "user" || !chat.credentialId) return fail(422, "chat_required", "“My AI model” translates with the connection saved under “Other AI features”. Set that to your own provider first.");
+    return testConnection(userId, { feature: "additional", config: chat.config, credentialId: chat.credentialId }, d);
+  }
   const secret = await secretFor(userId, input, config.provider, d);
   if (!secret.ok) return secret;
 
@@ -295,9 +317,39 @@ export async function testConnection(userId: string, input: TestInput, d: Deps):
       return { status: r.status, headers: r.headers, text: await r.text() };
     } finally { clearTimeout(t); }
   };
+  /* translation: two characters, translated the way the Studio translates a batch — the cheapest request that proves address, key, region and endpoint (their provider bills it) */
+  const askTranslate = async () => {
+    const proto = PROTOCOLS[def.protocol as keyof typeof PROTOCOLS];
+    const target: TranslateTarget = { provider: def.id, base: config.base, key: secret.key, model: config.model, headers: headersFor(def, config.extra), protocol: proto.id };
+    const req = proto.request(target, ["OK"], proto.codes({ sourceLanguage: "en", targetLanguage: "es" }));
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 20_000);
+    try {
+      const r = await fetcher(req.url, { ...req.init, signal: ctrl.signal }, { allowPrivate: allowPrivateFrom(env), maxResponseBytes: 1024 * 1024 });
+      return { status: r.status, headers: r.headers, text: await r.text(), proto };
+    } finally { clearTimeout(t); }
+  };
   let record: TestRecord & { jsonMode?: boolean };
   const at = new Date((d.now ?? Date.now)()).toISOString();
   try {
+    if (kind === "translate") {
+      const a = await askTranslate();
+      let body: unknown = null; try { body = JSON.parse(a.text); } catch { /* not json */ }
+      if (a.status >= 200 && a.status < 300 && typeof a.proto.parse(body)?.[0] === "string") record = { at, ok: true, code: "ok", message: "The connection works: a two-character test string was translated.", latencyMs: (d.now ?? Date.now)() - started };
+      else if (a.status >= 200 && a.status < 300) record = { at, ok: false, code: "unexpected", message: "The provider answered, but not in a format the Studio reads. Check that this is the right provider.", latencyMs: (d.now ?? Date.now)() - started };
+      else {
+        const code = a.proto.classify(a.status, body);
+        const kindOf: Record<string, ProviderErrorKind> = { auth: "auth", quota: "quota_exhausted", rate_limit: "rate_limited", unsupported_language: "bad_request", invalid: "bad_request", network: "network", timeout: "timeout", unavailable: "server", unconfigured: "auth" };
+        const s = SAY[kindOf[code] ?? "bad_request"];
+        record = { at, ok: false, code: s.code, message: code === "auth" ? `${s.message}${a.proto.authHint ?? ""}` : s.message, latencyMs: (d.now ?? Date.now)() - started };
+      }
+      const { jsonMode: _j, ...stored } = record;
+      if (secret.credential) await d.store.updateCredential(userId, secret.credential.id, { lastTest: stored }).catch(() => undefined);
+      if (typeof input.feature === "string" && isFeature(input.feature)) {
+        const st = await d.store.getSetting(userId, input.feature);
+        if (st && st.mode === "user" && st.credentialId === secret.credential?.id) await d.store.putSetting({ ...st, lastTest: stored }).catch(() => undefined);
+      }
+      return { ok: true, result: { ...record, model: config.model, provider: config.provider } };
+    }
     const a = kind === "stt" ? await askStt() : await ask({});
     if (kind === "stt" && def.protocol === "google-stt" && a.status === 400 && /API key not valid|API_KEY_INVALID/i.test(a.text)) a.status = 401; /* Google answers a bad key with 400 */
     if (a.status >= 200 && a.status < 300) {
@@ -337,6 +389,8 @@ export async function modelsFor(userId: string, input: { provider?: unknown; bas
   if (d.workspaceAllows === false) return fail(403, "byok_blocked", "Your workspace administrator has turned off user-managed AI providers.");
   const def = typeof input.provider === "string" ? providerById(input.provider) : undefined;
   if (!def) return fail(422, "invalid_provider", "Choose a provider from the list.", { provider: "Choose a provider from the list." });
+  /* a translation service has no model to choose */
+  if (def.kind === "translate") return { ok: true as const, discovered: false, reason: "unsupported" as const, message: `${def.label} has no model to choose.`, models: [], suggestions: [] };
   /* models are listed before a model is chosen: validate the address and identifiers with a placeholder model */
   const checked = configFor(def.kind, { provider: def.id, base: input.base, model: "placeholder", extra: input.extra }, env);
   if (!checked.ok) { const { model: _m, ...rest } = checked.errors; if (Object.keys(rest).length) return fail(422, "invalid_config", "Some settings need attention.", rest as FieldErrors); }

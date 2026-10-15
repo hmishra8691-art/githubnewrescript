@@ -22,11 +22,11 @@ import { redact } from "./provider.js";
 export type Capability = "chat" | "json_schema" | "json_object" | "embeddings" | "vision" | "stt" | "tts" | "translate";
 export type ProviderKind = "chat" | "stt" | "translate";
 /** the wire protocol an adapter speaks */
-export type Protocol = "openai-chat" | "openai-stt" | "google-stt";
+export type Protocol = "openai-chat" | "openai-stt" | "google-stt" | "google-v2" | "deepl" | "azure-v3" | "chat-reuse";
 
 export interface ProviderField {
   /** the key in the stored configuration */
-  id: "organizationId" | "projectId" | "workspaceId";
+  id: "organizationId" | "projectId" | "workspaceId" | "region";
   label: string;
   help: string;
   required: boolean;
@@ -165,7 +165,7 @@ export const STT_PROVIDERS: ProviderDef[] = [
     notes: "Any service that serves POST /audio/transcriptions at a public https address — a hosted gateway or your own Whisper server. The connection test checks it.",
   }),
   stt({
-    id: "google-stt", label: "Google Cloud Speech-to-Text", protocol: "google-stt", base: "https://speech.googleapis.com/v1", docsUrl: "https://console.cloud.google.com/apis/credentials",
+    id: "google-stt", label: "Google Cloud Speech-to-Text", protocol: "google-stt", family: "google-cloud", base: "https://speech.googleapis.com/v1", docsUrl: "https://console.cloud.google.com/apis/credentials",
     discovery: null, limits: { maxSeconds: 60, maxBytes: 10 * MB },
     hints: [
       { id: "latest_long", label: "Latest (long-form)", capabilities: ["stt"] },
@@ -176,6 +176,46 @@ export const STT_PROVIDERS: ProviderDef[] = [
   }),
 ];
 PROVIDERS.push(...STT_PROVIDERS);
+
+const tr = (o: Partial<ProviderDef> & Pick<ProviderDef, "id" | "label" | "protocol" | "base" | "docsUrl">): ProviderDef => ({
+  kind: "translate", capabilities: ["translate"], customBase: false, discovery: null, fields: [], hints: [], ...o,
+});
+
+/**
+ * TRANSLATION PROVIDERS. Dedicated services (a key, a fixed address, no model to
+ * choose — the hint is the API version) plus "My AI model", which has no key of
+ * its own: it is the chat connection saved for the other AI features, asked to
+ * translate. A service's key is only ever used with that service's family.
+ */
+export const TRANSLATE_PROVIDERS: ProviderDef[] = [
+  tr({
+    id: "google-translate", label: "Google Cloud Translation", protocol: "google-v2", family: "google-cloud", base: "https://translation.googleapis.com/language/translate/v2", docsUrl: "https://console.cloud.google.com/apis/credentials",
+    hints: [{ id: "v2", label: "Cloud Translation (Basic, v2)", capabilities: ["translate"] }],
+    notes: "Use a Google Cloud API key with the Cloud Translation API enabled. The same key can serve Cloud Speech-to-Text if that API is enabled too.",
+  }),
+  tr({
+    id: "deepl", label: "DeepL API Pro", protocol: "deepl", family: "deepl", base: "https://api.deepl.com/v2", docsUrl: "https://www.deepl.com/your-account/keys",
+    hints: [{ id: "v2", label: "DeepL API v2", capabilities: ["translate"] }],
+    notes: "For a DeepL API Pro key. A key that ends in :fx belongs to DeepL API Free — choose that one instead.",
+  }),
+  tr({
+    id: "deepl-free", label: "DeepL API Free", protocol: "deepl", family: "deepl", base: "https://api-free.deepl.com/v2", docsUrl: "https://www.deepl.com/your-account/keys",
+    hints: [{ id: "v2", label: "DeepL API v2", capabilities: ["translate"] }],
+    notes: "For a DeepL API Free key (it ends in :fx).",
+  }),
+  tr({
+    id: "azure-translator", label: "Microsoft Azure Translator", protocol: "azure-v3", base: "https://api.cognitive.microsofttranslator.com", docsUrl: "https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub",
+    fields: [{ id: "region", label: "Resource region", help: "Required when the Translator resource is regional (most are), for example westeurope. Leave empty for a global resource.", required: false, header: "Ocp-Apim-Subscription-Region", pattern: /^[A-Za-z0-9-]{3,40}$/, example: "westeurope" }],
+    hints: [{ id: "3.0", label: "Translator v3", capabilities: ["translate"] }],
+    notes: "Use a key of an Azure AI Translator (or multi-service) resource; add its region.",
+  }),
+  tr({
+    id: "llm", label: "My AI model", protocol: "chat-reuse", base: null,
+    docsUrl: "", hints: [{ id: "chat", label: "Your chat model", capabilities: ["translate"] }],
+    notes: "Translate with the language model saved under “Other AI features” (its key, model and fallbacks). Good for tone and context; a dedicated translation service is faster and cheaper for large surveys.",
+  }),
+];
+PROVIDERS.push(...TRANSLATE_PROVIDERS);
 
 export const providerById = (id: string): ProviderDef | undefined => PROVIDERS.find((p) => p.id === id);
 export const providersOf = (kind: ProviderKind): ProviderDef[] => PROVIDERS.filter((p) => p.kind === kind);
@@ -224,14 +264,15 @@ export function validateConnection(kind: ProviderKind, input: ConnectionInput, o
     const chk = validateEndpoint(String(input.base ?? ""), { allowPrivate: opts.allowPrivate });
     if (!chk.ok) errors.base = chk.message; else base = chk.base;
   }
-  const model = typeof input.model === "string" ? input.model.trim() : "";
+  /* a translation service has no model to choose: its API version is fixed by the registry, whatever was sent */
+  const model = kind === "translate" ? def.hints[0]?.id ?? "default" : typeof input.model === "string" ? input.model.trim() : "";
   if (!model) errors.model = "Choose or enter a model."; else if (!MODEL_ID.test(model)) errors.model = "That model name has characters a model id never contains.";
   const optionalModel = (k: "modelSmall" | "embeddingsModel" | "visionModel") => {
     const v = typeof input[k] === "string" ? (input[k] as string).trim() : "";
     if (v && !MODEL_ID.test(v)) errors[k] = "That model name has characters a model id never contains.";
     return v || undefined;
   };
-  const modelSmall = optionalModel("modelSmall"), embeddingsModel = optionalModel("embeddingsModel"), visionModel = optionalModel("visionModel");
+  const modelSmall = kind !== "translate" ? optionalModel("modelSmall") : undefined, embeddingsModel = kind !== "translate" ? optionalModel("embeddingsModel") : undefined, visionModel = kind !== "translate" ? optionalModel("visionModel") : undefined;
   let language: string | undefined;
   if (kind === "stt" && typeof input.language === "string" && input.language.trim()) {
     const l = input.language.trim();

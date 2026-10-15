@@ -58,7 +58,7 @@ test("user-managed never silently becomes platform: every unusable state is a re
   const mismatch = new MemoryAiStore(); await seed(mismatch, ALICE, { id: CRED1, key: "sk-x-12345678", provider: "anthropic", config: { provider: "openai", base: "", model: "gpt-4.1", extra: {} } });
   assert.equal(await code({}, env, mismatch), "invalid_config", "a key saved for Anthropic is never sent to OpenAI");
   const tr = new MemoryAiStore(); await seed(tr, ALICE, { id: CRED1, key: "sk-x-12345678", feature: "translation" as never, config: { provider: "openai", base: "", model: "x", extra: {} } });
-  assert.equal(await code({ feature: "translation" as never }, env, tr), "unsupported_feature", "translation arrives in its own phase");
+  assert.equal(await code({ feature: "translation" as never }, env, tr), "invalid_config", "a chat provider saved for translation is not a translation provider");
   assert.equal(await code({ need: ["embeddings"] as never }, env, await mk()), "user", "openai supports embeddings");
 });
 
@@ -144,4 +144,68 @@ test("STT platform backstop: the installation's speech provider, only when the u
   /* a platform whose chat provider has no speech endpoint offers no speech backstop */
   const anthropicOnly = await resolveConnection({ userId: ALICE, feature: "stt", store: await mk(true), env: { ...env, AI_API_URL: "https://api.anthropic.com/v1", AI_API_KEY: "k" } });
   assert.equal(anthropicOnly.kind === "user" && anthropicOnly.scope.fallbacks.length, 0);
+});
+
+/* ---------------------------------------------------------------- translation (Phase D) */
+
+test("translation: a saved Google / DeepL / Azure connection resolves to a translate scope — registry address, their key, region header — and only that", async () => {
+  const store = new MemoryAiStore();
+  await seed(store, ALICE, { id: CRED1, provider: "azure-translator", key: "AZUREKEY-ALICE-0123456789", feature: "translation", config: { provider: "azure-translator", base: "", model: "3.0", extra: { region: "westeurope" } } });
+  const r = await resolveConnection({ userId: ALICE, feature: "translation", store, env });
+  assert.equal(r.kind, "user"); if (r.kind !== "user" || r.scopeKind !== "translate") return assert.fail("a translate scope");
+  assert.equal(r.scope.key, "AZUREKEY-ALICE-0123456789"); assert.equal(r.scope.base, "https://api.cognitive.microsofttranslator.com");
+  assert.equal(r.scope.protocol, "azure-v3"); assert.deepEqual(r.scope.headers, { "ocp-apim-subscription-region": "westeurope" });
+  assert.equal(r.scope.source, "user"); assert.deepEqual(r.scope.fallbacks, []);
+  assert.equal((await resolveConnection({ userId: BOB, feature: "translation", store, env })).kind, "platform", "Bob never gets Alice's");
+});
+
+test("translation: one Google Cloud key serves Speech-to-Text and Translation; a Gemini key and another vendor's key never do", async () => {
+  const store = new MemoryAiStore();
+  await seed(store, ALICE, { id: CRED1, provider: "google-stt", key: "AIza-ALICE-CLOUD-KEY-0123456789", feature: "translation", config: { provider: "google-translate", base: "", model: "v2", extra: {} } });
+  assert.equal((await resolveConnection({ userId: ALICE, feature: "translation", store, env })).kind, "user", "same vendor family");
+  const bad = new MemoryAiStore();
+  await seed(bad, ALICE, { id: CRED1, provider: "google-gemini", key: "AIza-ALICE-GEMINI-KEY-0123456789", feature: "translation", config: { provider: "google-translate", base: "", model: "v2", extra: {} } });
+  const r = await resolveConnection({ userId: ALICE, feature: "translation", store: bad, env });
+  assert.equal(r.kind, "refused"); assert.equal((r as { code: string }).code, "invalid_config");
+});
+
+test("translation: fallbacks are the user's listed services, in order; the platform's own provider only when they allowed it — and a project choosing 'user' for a user with none is a refusal, not the platform", async () => {
+  const store = new MemoryAiStore();
+  process.env.GOOGLE_TRANSLATE_API_KEY = "PLATFORM-GKEY";
+  try {
+    await seed(store, ALICE, { id: CRED1, provider: "deepl", key: "DEEPL-ALICE-0123456789:fx", feature: "translation", config: { provider: "deepl-free", base: "", model: "v2", extra: {} }, allowPlatformFallback: true });
+    const { sealed, keyId } = sealSecret("AZ-KEY-FALLBACK-0123456789", { userId: ALICE, credentialId: CRED2 }, env);
+    await store.createCredential({ id: CRED2, userId: ALICE, provider: "azure-translator", label: null, sealed, mask: "x", keyId, createdAt: new Date().toISOString(), rotatedAt: null, lastUsedAt: null, lastTest: null });
+    const s = (await store.getSetting(ALICE, "translation"))!;
+    await store.putSetting({ ...s, fallbacks: [{ credentialId: CRED2, config: { provider: "azure-translator", base: "", model: "3.0", extra: {} } as never }] });
+    const r = await resolveConnection({ userId: ALICE, feature: "translation", store, env });
+    assert.ok(r.kind === "user" && r.scopeKind === "translate");
+    if (r.kind === "user" && r.scopeKind === "translate") assert.deepEqual(r.scope.fallbacks.map((f) => f.platform ? "platform" : f.provider), ["azure-translator", "platform"]);
+    /* the platform without a provider offers no backstop at all */
+    delete process.env.GOOGLE_TRANSLATE_API_KEY;
+    const r2 = await resolveConnection({ userId: ALICE, feature: "translation", store, env });
+    if (r2.kind === "user" && r2.scopeKind === "translate") assert.deepEqual(r2.scope.fallbacks.map((f) => f.provider), ["azure-translator"]);
+  } finally { delete process.env.GOOGLE_TRANSLATE_API_KEY; }
+  const none = await resolveConnection({ userId: BOB, feature: "translation", store: new MemoryAiStore(), env, project: { mode: "user" } });
+  assert.equal(none.kind, "refused"); assert.equal((none as { code: string }).code, "no_connection"); assert.match((none as { message: string }).message, /translation/);
+});
+
+test("translation by 'My AI model' resolves to the CHAT connection of Other AI features (their key, model, fallbacks); if that is not their own provider it is a refusal, never the platform's model", async () => {
+  const store = new MemoryAiStore();
+  await seed(store, ALICE, { id: CRED1, provider: "openai", key: "sk-proj-ALICECHATKEYALICECHATKEY", model: "gpt-4.1", feature: "additional" });
+  const tr = { userId: ALICE, feature: "translation" as const, mode: "user" as const, config: { provider: "llm", base: "", model: "chat", extra: {} } as never, credentialId: null, fallbacks: [], allowPlatformFallback: false, lastTest: null, updatedAt: new Date().toISOString() };
+  await store.putSetting(tr);
+  const r = await resolveConnection({ userId: ALICE, feature: "translation", store, env });
+  assert.ok(r.kind === "user" && r.scopeKind === "chat", "a chat scope");
+  if (r.kind === "user") assert.equal((r.scope as { key: string }).key, "sk-proj-ALICECHATKEYALICECHATKEY");
+  await store.putSetting({ ...(await store.getSetting(ALICE, "additional"))!, mode: "platform" });
+  const refused = await resolveConnection({ userId: ALICE, feature: "translation", store, env });
+  assert.equal(refused.kind, "refused"); assert.equal((refused as { code: string }).code, "no_connection"); assert.match((refused as { message: string }).message, /Other AI features/);
+  /* and it is never accepted as a fallback service */
+  const only = new MemoryAiStore();
+  await seed(only, ALICE, { id: CRED1, provider: "deepl", key: "DEEPL-ALICE-0123456789:fx", feature: "translation", config: { provider: "deepl-free", base: "", model: "v2", extra: {} } });
+  const s = (await only.getSetting(ALICE, "translation"))!;
+  await only.putSetting({ ...s, fallbacks: [{ credentialId: CRED1, config: { provider: "llm", base: "", model: "chat", extra: {} } as never }] });
+  const f = await resolveConnection({ userId: ALICE, feature: "translation", store: only, env });
+  assert.ok(f.kind === "user" && f.scope.fallbacks.length === 0 && f.skippedFallbacks.length === 1, "the unusable fallback is skipped and reported");
 });

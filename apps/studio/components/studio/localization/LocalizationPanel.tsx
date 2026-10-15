@@ -4,7 +4,7 @@ import type { Condition, LanguageConfig } from "@rescript/schema";
 import { LANGUAGE_LIBRARY, LANGUAGE_STATUSES, LANGUAGE_ROUTING_MODES, languageInfo } from "@rescript/schema";
 import { lintLocalization, lintLanguage, languageName, languageLocale, languageDirection, searchLanguages, translationRows, applyTranslationRows, languageReady, type LanguageReport, type LocalizationIssue } from "@rescript/engine";
 import { csvRow } from "@rescript/exporters";
-import { useLocalization, useEditorName, useProviderStatus, downloadBlob, PROVIDER_NAMES } from "./shared";
+import { useLocalization, useEditorName, useProviderStatus, downloadBlob, PROVIDER_NAMES, withSurvey } from "./shared";
 import { TranslationEditor } from "./TranslationEditor";
 import { GlossaryEditor } from "./GlossaryEditor";
 import { AudioStudio } from "./AudioStudio";
@@ -102,7 +102,7 @@ function Languages({ reports, onTranslate, onQa }: { reports: LanguageReport[]; 
   const [providerLangs, setProviderLangs] = React.useState<{ code: string; name: string; nativeName: string; supported: boolean; source: string }[] | null>(null);
   React.useEffect(() => {
     if (!adding || providerLangs) return;
-    fetch("/api/translation/languages", { cache: "no-store" }).then(async (r) => { if (!r.ok) return; const j = await r.json() as { languages?: typeof providerLangs }; setProviderLangs(j.languages ?? []); }).catch(() => {});
+    fetch(withSurvey("/api/translation/languages", s.surveyDbId), { cache: "no-store" }).then(async (r) => { if (!r.ok) return; const j = await r.json() as { languages?: typeof providerLangs }; setProviderLangs(j.languages ?? []); }).catch(() => {});
   }, [adding, providerLangs]);
   const supportedByProvider = (code: string) => providerLangs?.find((l) => l.code === code)?.supported;
   const results = searchLanguages(query).filter((l) => !existing.has(l.code));
@@ -421,14 +421,14 @@ function ImportExport() {
  * translation memory is consulted before the provider.
  */
 function ProviderSettings() {
-  const { loc, setLoc } = useLocalization();
+  const { s, loc, setLoc } = useLocalization();
   const { status, loading, reload } = useProviderStatus();
   const [probe, setProbe] = React.useState<string | null>(null);
   const [probing, setProbing] = React.useState(false);
   const test = async () => {
     setProbing(true); setProbe(null);
     try {
-      const r = await fetch("/api/translation/languages", { cache: "no-store" });
+      const r = await fetch(withSurvey("/api/translation/languages", s.surveyDbId), { cache: "no-store" });
       const j = await r.json().catch(() => ({})) as { languages?: { supported: boolean; source: string }[]; error?: string };
       if (!r.ok) { setProbe(j.error ?? `The provider could not be reached (${r.status}).`); return; }
       const supported = (j.languages ?? []).filter((l) => l.supported).length;

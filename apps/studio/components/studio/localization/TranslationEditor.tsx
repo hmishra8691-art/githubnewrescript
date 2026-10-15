@@ -222,7 +222,7 @@ export function TranslationEditor({ focusKey, onFocused }: { focusKey?: string |
         </button>
       </div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 6 }} data-testid="loc-provider-line">
-        {provider.status ? (provider.status.provider.connected ? <>Provider: <strong>{provider.status.provider.name}</strong> · cache: {provider.status.cache.backend}{loc.cache === false ? " (off for this survey)" : ""}</> : <span style={{ color: "#b45309" }}>No translation provider is configured on this Studio — Settings tab explains what to set. You can still translate by hand or import a file.</span>) : "…"}
+        {provider.status ? (provider.status.provider.connected ? <>Provider: <strong>{provider.status.provider.name}</strong>{provider.status.provider.via === "user" ? " · yours" : ""} · cache: {provider.status.cache.backend}{loc.cache === false ? " (off for this survey)" : ""}</> : provider.status.provider.refused ? <span style={{ color: "#b45309" }}>{provider.status.provider.refused.message} You can still translate by hand or import a file.</span> : <span style={{ color: "#b45309" }}>No translation provider is configured on this Studio — Settings tab explains what to set. You can still translate by hand or import a file.</span>) : "…"}
       </div>
       {Object.entries(progress).length > 0 && (
         <div className="row" style={{ flexWrap: "wrap", gap: 10, marginBottom: 8 }} data-testid="loc-progress">

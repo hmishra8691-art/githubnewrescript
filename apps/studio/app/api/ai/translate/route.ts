@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { translateWithCache } from "@rescript/ai";
-import { requireTranslationCaller } from "@/lib/translationGate";
+import { requireTranslationSession } from "@/lib/translationGate";
 import { cachesFor } from "@/lib/translationCache";
 import { billingProjectFor, meteredTranslation, refusalResponse } from "@/lib/metering";
 
@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
  *              error?: { code, message, retryable } }
  *
  * The cache (memory, then the customer's database rows) answers first; the
- * configured adapter — Google Cloud Translation, or the AI model — gets the
+ * provider — the person's own translation service (or AI model) when they chose
+ * one, else the platform's Google Cloud Translation or AI model — gets the
  * rest; results are cached. Only the caller's element KEYS and TEXT travel:
  * ids, codes and logic stay in the Studio. A string whose placeholders or
  * HTML came back damaged is absent from `translations` rather than stored
@@ -25,10 +26,13 @@ export const dynamic = "force-dynamic";
  * records each translation into the survey's `localization` as "ai".
  */
 export async function POST(req: NextRequest) {
-  const gate = await requireTranslationCaller(req);
-  if (!gate.ok) return gate.response;
+  const session = await requireTranslationSession(req);
+  if (!session.ok) return session.response;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
+  /* whose provider runs this — the project's choice, else the user's own, else the platform's — is decided from the project the body names, before anything is reserved */
+  const gate = await session.resolve(body?.surveyId);
+  if (!gate.ok) return gate.response;
   const items = Array.isArray(body?.items) ? body.items.filter((i: any) => i && typeof i.key === "string" && typeof i.text === "string" && i.text.length <= 8000).slice(0, 100) : [];
   const sourceLanguage = typeof body?.sourceLanguage === "string" ? body.sourceLanguage.slice(0, 12) : "en";
   const targetLanguage = typeof body?.targetLanguage === "string" ? body.targetLanguage.trim().slice(0, 12) : "";
@@ -41,7 +45,7 @@ export async function POST(req: NextRequest) {
   const billing = await billingProjectFor(gate.user, body?.surveyId);
   if ("response" in billing) return billing.response;
   const characters = items.reduce((n: number, i: { text: string }) => n + i.text.length, 0);
-  const metered = await meteredTranslation(billing.meter, billing.ctx, { characters, providerId: gate.adapter.id, operation: `translate:${sourceLanguage}->${targetLanguage}` }, () => translateWithCache(items, {
+  const metered = await meteredTranslation(billing.meter, billing.ctx, { characters, providerId: (gate.platform ?? gate.adapter).id, operation: `translate:${sourceLanguage}->${targetLanguage}` }, () => translateWithCache(items, {
     sourceLanguage, targetLanguage,
     locale: typeof body?.locale === "string" ? body.locale.slice(0, 20) : undefined,
     glossary: Array.isArray(body?.glossary) ? body.glossary.filter((g: any) => g && typeof g.source === "string" && typeof g.target === "string").slice(0, 500) : undefined,

@@ -77,6 +77,7 @@ const walk = (dir: string): string[] => readdirSync(dir).flatMap((n) => {
 const PROVIDER = /\b(completeJson|synthesizeSpeech|embedTexts|ocrImage|rephraseForSpeech|translateBatch|classify|sentiment|writeProbe)\(/;
 /** files that reach a provider without a project's language-model switch, with the reason — each is a decision, not an oversight */
 const EXEMPT: Record<string, string> = {
+  "lib/byok/service.ts": "Settings → Test Connection: one tiny probe of the person's OWN provider, run only when they press the button and billed by that provider — no platform model, no wallet",
   "app/api/surveys/[id]/media/transcript/route.ts": "speech-to-text of respondent audio: the data-collection media pipeline, billed as speech and not a language model; the project's AI switch governs Intelligent mode",
 };
 
@@ -105,7 +106,11 @@ test("the metering core asks the switch BEFORE it resolves whose AI or reserves 
   const metering = readFileSync(join(ROOT, "lib/metering.ts"), "utf8");
   assert.match(metering.slice(metering.indexOf("export async function meteredAi"), metering.indexOf("export async function meteredTts")), /meteredCore\(/, "meteredAi walks the core");
   const tr = metering.slice(metering.indexOf("export async function meteredTranslation"));
-  assert.ok(tr.indexOf("aiAllowed(") > 0 && tr.indexOf("aiAllowed(") < tr.indexOf("meter.reserve("), "a translation by the language model asks too");
+  assert.match(tr, /meteredCore\(/, "a translation walks the core too — no hand-made reservation of its own");
+  assert.equal(/meter\.reserve\(/.test(tr), false);
+  /* a dedicated translation service is not a language model (a project running Internal still translates with one); when the MODEL is what translates — the platform's or the person's own — the full switch applies before anything is reserved */
+  const lm = body.indexOf('o.kind === "translate" &&');
+  assert.ok(lm > 0 && body.indexOf("aiAllowed(", lm) > lm && body.indexOf("aiAllowed(", lm) < body.indexOf("meter.reserve("), "a translation by a language model asks the full switch before it reserves");
 });
 
 test("the speech sites that used to reserve by hand now walk the same door, so the switch is asked for them too", () => {
