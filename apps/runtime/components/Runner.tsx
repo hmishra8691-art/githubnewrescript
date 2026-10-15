@@ -66,6 +66,7 @@ import {
   popupsOnNext,
   markPopupSeen,
   unmarkPopupSeen,
+  migrateLegacyCustomCode,
 } from "@rescript/engine";
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
@@ -384,8 +385,16 @@ export function Runner(props: RunnerProps) {
   );
 }
 
-function RunnerInner({ definition: sourceDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
+function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
+  /*
+   * THE ONE SCRIPT PIPELINE. A survey saved before "Custom code" was folded
+   * into Styles, animations & scripts still carries `customJs` on questions
+   * and in Branding. Moving it into the pipeline here — at the one place every
+   * interview, preview and test run passes through — means a published survey
+   * keeps running its code without anyone having to open and re-save it.
+   */
+  const sourceDef = React.useMemo(() => migrateLegacyCustomCode(loadedDef).def, [loadedDef]);
   /**
    * THE RESPONDENT'S LANGUAGE — a layer over the definition, never a copy.
    *
@@ -831,22 +840,6 @@ function RunnerInner({ definition: sourceDef, mode, session: initialSession, ses
     }
     const r = runScripts(def, state, "on_load");
     setLogs(r.logs);
-    /*
-     * The survey's own script, from Branding → custom JavaScript. It was
-     * stored, edited and never executed. It runs once per session, after
-     * on_load scripts, with no arguments — it is page-level glue (a pixel, a
-     * class on the shell, a listener), and anything that touches the response
-     * belongs in a real script with a ctx.
-     */
-    if (def.branding.customJs) {
-      try {
-        // eslint-disable-next-line no-new-func
-        new Function(def.branding.customJs)();
-      } catch (e) {
-        console.error("[rescript:script] survey custom JS", e);
-        if (mode !== "live") setLogs((l) => [...l, `[survey JS] ERROR: ${e instanceof Error ? e.message : String(e)}`]);
-      }
-    }
     /*
      * A PREVIEW RESUMES TOO — "when the page is refreshed, the survey should
      * resume from the user's last position instead of restarting from the

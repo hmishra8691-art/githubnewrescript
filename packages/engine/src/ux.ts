@@ -1,3 +1,4 @@
+import { guardScriptLoops, selectorGuesses } from "./uxScriptGuard.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
@@ -665,8 +666,10 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /** what a sandboxed script can call — and nothing else */
 export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
-const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "document", "window", "parent", "top", "opener", "frames", "globalThis", "self", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
-const LOOP_KEYWORDS = ["while", "for", "do"];
+/** names that are refused wherever they appear */
+const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
+/** names that are only a problem on their own (`top` is a global; `el.style.top` is a style property) */
+const FORBIDDEN_WHEN_BARE = ["parent", "top", "frames", "self"];
 export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete"] as const;
 /** the behaviour-event spellings a script may use for the same thing (the effects form says page_enter, select_option…) */
 export const UX_SCRIPT_EVENT_ALIASES: Record<string, (typeof UX_SCRIPT_EVENTS)[number]> = { page_enter: "page", page_load: "page", load: "page", appear: "page", enter: "page", page_complete: "complete", select_option: "select", deselect_option: "deselect" };
@@ -704,17 +707,19 @@ export interface ScriptCheck { errors: string[]; warnings: string[] }
 export function validateUxScript(code: string, def: SurveyDefinition): ScriptCheck {
   const errors: string[] = [], warnings: string[] = [];
   if (!code.trim()) return { errors: ["the script is empty"], warnings };
-  if (code.length > 8000) errors.push("the script is longer than 8,000 characters");
+  if (code.length > 20000) errors.push("the script is longer than 20,000 characters");
   const { bare, strings } = lexJs(code);
   if (/`[^`]*\$\{/.test(code)) warnings.push("template literals with ${…} are allowed, but a target must be a plain string");
-  for (const w of LOOP_KEYWORDS) if (new RegExp(`(^|[^\\w$.])${w}(?![\\w$])`).test(bare)) errors.push(`“${w}” loops are not allowed in survey scripts — use the api (targets like "Q5.options" address every option at once)`);
-  for (const id of FORBIDDEN_IDENTIFIERS) if (new RegExp(`(^|[^\\w$])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they can only use the rs api`);
+  errors.push(...guardScriptLoops(code).errors);
+  for (const id of FORBIDDEN_IDENTIFIERS) if (new RegExp(`(^|[^\\w$])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document`);
+  for (const id of FORBIDDEN_WHEN_BARE) if (new RegExp(`(^|[^\\w$.])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document`);
+  warnings.push(...selectorGuesses(code));
   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
   // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting
   const FILLS = new Set(["setAnswer", "setValue", "setDefault", "fill", "prefill", "answer"]);
-  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*value\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
+  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*(value|checked|selectedIndex|selected)\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
   for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name) && !FILLS.has(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
-  if (!usedApi.length) warnings.push("the script never calls the rs api, so it cannot change anything");
+  if (!usedApi.length && !/(^|[^\w$.])document(?![\w$])/.test(bare)) warnings.push("the script uses neither the rs api nor the document, so it cannot change anything");
   const firstString = (at: number) => { const s = strings.find((x) => x.start >= at && /^\s*\(\s*$/.test(bare.slice(at, x.start))); return s?.value; };
   const seenListen = new Set<string>();
   for (const u of usedApi) {
@@ -877,7 +882,7 @@ export function uxContextFor(def: SurveyDefinition, questionId: string): string[
   for (const a of ux.animations.filter((x) => mine(x.target))) lines.push(`animation ${a.id} “${a.label}” ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}`);
   for (const b of ux.behaviors.filter((x) => mine(x.target) || x.effects.some((e) => e.target && mine(e.target)))) lines.push(`behaviour ${b.id} “${b.label}” ${b.script ? `script (${b.script.length} chars)` : `on ${b.on}${b.options?.length ? ` ${b.options.join(",")}` : ""} → ${b.effects.map((e) => e.do).join(", ")}`}`);
   if (q.customCss) lines.push(`its own custom CSS: ${q.customCss.slice(0, 300)}`);
-  if (q.customJs) lines.push(`its own custom JS (${q.customJs.length} chars, unsandboxed — edited by hand only)`);
+  if (q.customJs) lines.push(q.type === "custom_component" ? `its component JS (${q.customJs.length} chars — it IS the component; change it with set_custom_code)` : `custom JS (${q.customJs.length} chars) not yet moved into a script — it runs once it is`);
   return lines;
 }
 

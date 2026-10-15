@@ -242,7 +242,10 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
   if (b.script !== undefined) {
     return (
       <div className="ux-fields">
-        <label className="f"><span>Script — runs sandboxed; it can only use the rs api (rs.listen, rs.addClass, rs.animate, rs.setStyle, rs.showMessage…)</span>
+        {b.source && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 4px" }} data-testid="ux-script-moved">
+          Moved here from {b.source === "branding_custom_js" ? "Branding → custom JavaScript" : b.source === "question_custom_js" ? "this question’s Custom code" : "Intelligent mode’s custom code"} — your code is inside, unchanged. It now runs in the same sandbox as every other script.
+        </p>}
+        <label className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
           <textarea className="ta code" style={{ minHeight: 110 }} value={b.script} disabled={readOnly} spellCheck={false}
             onChange={(e) => onChange({ ...b, script: e.target.value })} onBlur={onBlur} data-testid="ux-script" /></label>
         <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />

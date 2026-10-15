@@ -145,19 +145,14 @@ const boardShape = (pv, scope) => pv.evaluate((sc) => {
   console.log("✔ question text HTML + CSS: saved whole, scoped in the editor and the preview, 8 × 8 like the block; duplicate keeps it");
 }
 
-/* ------------------------------------------- the Custom code panel (R2) */
+/* ------------------------------------- no separate Custom code panel (R2) */
 {
   const q = await h.createFromPicker("numeric", "numeric.open");
   await openQ(q.id);
-  const prop = await page.$('[data-testid="custom-html-moved"]');
-  if (!prop) {
-    // the section is collapsed: open it
-    await page.click('text=Custom code').catch(() => {});
-    await page.waitForTimeout(250);
-  }
-  assert.ok(await page.$('[data-testid="custom-html-moved"]'), "Custom HTML (above the input) is replaced by a note pointing to the text / instruction");
+  assert.equal(await page.$('[data-testid="custom-html-moved"]'), null, "there is no Custom code panel any more");
+  assert.equal(await page.$('[data-testid="psec-head-custom-code"]'), null, "JavaScript lives in Styles, animations & scripts only");
   assert.equal(await page.$('[data-testid="component-html"]'), null, "only a Custom Component has a template field");
-  console.log("✔ Custom code: no separate Custom HTML for ordinary questions");
+  console.log("✔ no Custom code panel and no separate Custom HTML for ordinary questions");
 }
 
 /* ================================================ EMBEDDED DATA — URL (R1) */

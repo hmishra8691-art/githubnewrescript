@@ -2642,39 +2642,6 @@ function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
   return { ...p, q: { ...p.q, settings: { ...p.q.settings, ...media } } };
 }
 
-/**
- * A question's own script, for every question type.
- *
- * `customJs` ran only for `custom_component`; on any other type it was saved,
- * shown in the properties panel and silently discarded. It now runs against
- * the rendered card for whatever question carries it, with the same small api
- * the custom component gets — read the answer, write the answer — so a
- * programmer can attach behaviour to an ordinary question without inventing a
- * component around it.
- */
-function QuestionScript(p: QRProps) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const valueRef = React.useRef(p.value);
-  valueRef.current = p.value;
-  React.useEffect(() => {
-    const el = ref.current?.parentElement;
-    if (!el || !p.q.customJs) return;
-    try {
-      // eslint-disable-next-line no-new-func
-      const fn = new Function("el", "api", p.q.customJs);
-      fn(el, {
-        getValue: () => valueRef.current,
-        setValue: (v: unknown) => p.onChange(v),
-        question: { id: p.q.id, code: p.q.code, type: p.q.type },
-      });
-    } catch (e) {
-      console.error(`[rescript:script] question ${p.q.code}`, e);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.q.id]);
-  return <div ref={ref} hidden data-testid="rs-question-script" />;
-}
-
 /* ------------------------------------------------------------------ shell */
 export function QuestionRenderer(props: QRProps) {
   /*
@@ -2876,7 +2843,6 @@ export function QuestionRenderer(props: QRProps) {
         <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
       )}
       {body}
-      {p.q.customJs && p.q.type !== "custom_component" && <QuestionScript {...p} />}
       {/* announced when it appears, and named by the question that owns it */}
       {p.q.settings.validationPosition !== "above" && (
         <ValidationBlock id={`${p.q.id}__err`} errors={p.errors} />

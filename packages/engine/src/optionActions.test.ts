@@ -373,18 +373,35 @@ test("remove_hypothesis by label, number or text: the label is dropped from the 
   assert.equal(refuse(def, { op: "remove_hypothesis", hypothesis: 1 }), "the research design has no hypotheses");
 });
 
-test("set_custom_code: new code is plain; replacing or removing existing code is destructive; nothing to change is refused", () => {
+test("set_custom_code: CSS is plain; JavaScript becomes a script in Styles, animations & scripts; replacing or removing is destructive; nothing to change is refused", () => {
   const def = survey();
   const r = run(def, { op: "set_custom_code", target: "Q7", css: ".q7 { color: red }" });
   assert.equal(r.description, "Q7: custom CSS (18 characters)");
   assert.equal(r.destructive, undefined);
   assert.equal(q(def, "Q7").customCss, ".q7 { color: red }");
-  const r2 = run(def, { op: "set_custom_code", target: "Q8", js: "console.log(2)", css: "" });
-  assert.equal(r2.description, "Q8: custom JS (14 characters)", "an empty css string means remove — and there was none, so nothing is said about it");
-  assert.equal(r2.destructive, "replaces the custom JS of Q8 (14 characters)");
-  const r3 = run(def, { op: "set_custom_code", target: "Q8", js: null });
-  assert.equal(r3.description, "Q8: custom JS removed");
-  assert.equal(r3.destructive, "removes the custom JS of Q8 (14 characters)");
+  // JavaScript is a script behaviour (the one script pipeline) — never question.customJs
+  const js = `rs.listen("select", "self", () => rs.animate("self", "pop"));`;
+  const r1 = run(def, { op: "set_custom_code", target: "Q9", js });
+  assert.equal(r1.description, "Q9: script (1 line) in Styles, animations & scripts");
+  assert.equal(r1.destructive, undefined);
+  assert.equal(q(def, "Q9").customJs, undefined);
+  const mine = () => (def.ux?.behaviors ?? []).filter((b) => b.source === "copilot_custom_code");
+  assert.equal(mine().length, 1); assert.equal(mine()[0].script, js); assert.equal(mine()[0].target.questionId, "q5");
+  // writing again replaces the same behaviour (no duplicate) and says so
+  const js2 = `rs.listen("select", "self", () => rs.animate("self", "shake"));`;
+  const r2 = run(def, { op: "set_custom_code", target: "Q9", js: js2, css: "" });
+  assert.equal(r2.destructive, `replaces the script of Q9 (${js.length} characters)`);
+  assert.equal(mine().length, 1); assert.equal(mine()[0].script, js2);
+  // a script the gate refuses is refused, with the reason
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q9", js: `fetch("https://x")` }), /fetch is not available/);
+  assert.equal(mine()[0].script, js2, "a refused script leaves the existing one alone");
+  const r3 = run(def, { op: "set_custom_code", target: "Q9", js: null });
+  assert.equal(r3.description, "Q9: script removed");
+  assert.match(r3.destructive ?? "", /^removes the script/);
+  assert.equal(mine().length, 0);
+  assert.equal(refuse(def, { op: "set_custom_code", target: "Q9", js: null }), "the custom code of Q9 is already as asked");
+  // an old customJs still on the question is superseded, not left to run twice
+  const r4 = run(def, { op: "set_custom_code", target: "Q8", js });
+  assert.match(r4.destructive ?? "", /replaces the old custom JavaScript of Q8 \(14 characters\)/);
   assert.equal(q(def, "Q8").customJs, undefined);
-  assert.equal(refuse(def, { op: "set_custom_code", target: "Q8", js: null }), "the custom code of Q8 is already as asked");
 });

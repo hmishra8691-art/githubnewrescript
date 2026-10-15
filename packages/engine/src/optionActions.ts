@@ -1,4 +1,5 @@
-import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition } from "@rescript/schema";
+import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
+import { resolveUxTarget, validateUxItem } from "./ux.js";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -720,16 +721,53 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
     case "set_custom_code": {
       const q = questionOrFail(env, a.target);
       const changed: string[] = [], lossy: string[] = [];
-      const edit = (key: "customJs" | "customCss", next: string | null | undefined, word: string) => {
+      const editCss = (next: string | null | undefined) => {
         if (next === undefined) return;
-        const had = q[key];
-        if (next === null) { if (had !== undefined) { delete q[key]; changed.push(`${word} removed`); lossy.push(`removes the ${word} of ${q.code} (${had.length} characters)`); } return; }
+        const had = q.customCss;
+        if (next === null) { if (had !== undefined) { delete q.customCss; changed.push("custom CSS removed"); lossy.push(`removes the custom CSS of ${q.code} (${had.length} characters)`); } return; }
         if (had === next) return;
-        q[key] = next; changed.push(`${word} (${next.length} characters)`);
-        if (had !== undefined) lossy.push(`replaces the ${word} of ${q.code} (${had.length} characters)`);
+        q.customCss = next; changed.push(`custom CSS (${next.length} characters)`);
+        if (had !== undefined) lossy.push(`replaces the custom CSS of ${q.code} (${had.length} characters)`);
       };
-      edit("customJs", a.js, "custom JS");
-      edit("customCss", a.css, "custom CSS");
+      /*
+       * JAVASCRIPT IS A SCRIPT, in Styles, animations & scripts — the one place
+       * survey JavaScript runs. It used to be written to `question.customJs`,
+       * which ran through a different engine than the scripts the same model
+       * writes with create_behavior, so code that worked as one did nothing as
+       * the other. Now both are the same thing, checked by the same gate
+       * (named targets, no network, bounded loops, selectors that exist), and a
+       * script the gate refuses is refused here, with the reason.
+       *
+       * A Custom Component is the exception: its JavaScript is the component.
+       */
+      if (a.js !== undefined && q.type === "custom_component") {
+        const had = q.customJs;
+        if (a.js === null) { if (had !== undefined) { delete q.customJs; changed.push("component JS removed"); lossy.push(`removes the component script of ${q.code} (${had.length} characters)`); } }
+        else if (had !== a.js) { q.customJs = a.js; changed.push(`component JS (${a.js.length} characters)`); if (had !== undefined) lossy.push(`replaces the component script of ${q.code} (${had.length} characters)`); }
+      } else if (a.js !== undefined) {
+        const ux = (def.ux ??= { styles: [], animations: [], behaviors: [] });
+        const mine = (b: UxBehavior) => b.source === "copilot_custom_code" && b.target.questionId === q.id;
+        const had = ux.behaviors.find(mine);
+        /* an un-migrated legacy field on this question is superseded by what is written here (it would otherwise run as well) */
+        if (q.customJs !== undefined) { lossy.push(`${a.js === null ? "removes" : "replaces"} the old custom JavaScript of ${q.code} (${q.customJs.length} characters)`); delete q.customJs; changed.push("old custom JavaScript moved"); }
+        if (a.js === null) {
+          if (had) { ux.behaviors.splice(ux.behaviors.indexOf(had), 1); changed.push("script removed"); lossy.push(`removes the script “${had.label}” of ${q.code} (${(had.script ?? "").length} characters)`); }
+        } else {
+          const target = resolveUxTarget(def, String(q.code));
+          if (typeof target === "string") fail(target);
+          const next: UxBehavior = { id: had?.id ?? env.ids("uxb"), label: `${q.code} script`, target: target as UxTarget, effects: [], script: a.js, source: "copilot_custom_code", createdAt: had?.createdAt ?? env.now };
+          const v = validateUxItem(def, "behavior", next);
+          if (v.errors.length) fail(v.errors.map((e) => e.replace(/^“[^”]*”: /, "")).join("; "));
+          warnings.push(...v.warnings.map((w) => w.replace(/^“[^”]*”: /, "")));
+          if (had?.script === a.js) { /* unchanged */ }
+          else {
+            if (had) ux.behaviors[ux.behaviors.indexOf(had)] = next; else ux.behaviors.push(next);
+            changed.push(`script (${a.js.split("\n").length} line${a.js.split("\n").length === 1 ? "" : "s"}) in Styles, animations & scripts`);
+            if (had?.script) lossy.push(`replaces the script of ${q.code} (${had.script.length} characters)`);
+          }
+        }
+      }
+      editCss(a.css);
       if (!changed.length) fail(`the custom code of ${q.code} is already as asked`);
       return { description: `${q.code}: ${changed.join(", ")}`, ...(lossy.length ? { destructive: lossy.join("; ") } : {}), warnings, touched: [q.id] };
     }

@@ -404,7 +404,8 @@ test("the diff sees what option-level actions write — a mask, a recode, a flag
     [{ op: "update_option", target: "PLAT", option: "TikTok", other: true } as never, /option flags/],
     [{ op: "update_option", target: "PLAT", option: "TikTok", visibleIf: "AGE > 20" } as never, /option display conditions/],
     [{ op: "update_option", target: "PLAT", option: "TikTok", value: "TT" } as never, /option values/],
-    [{ op: "set_custom_code", target: "PLAT", js: "console.log(1)", css: ".x{}" } as never, /custom JavaScript, custom CSS/],
+    [{ op: "set_custom_code", target: "PLAT", js: `rs.listen("select", "self", () => rs.animate("self", "pop"));`, css: ".x{}" } as never, /custom CSS/],
+    [{ op: "set_custom_code", target: "PLAT", js: `rs.listen("select", "self", () => rs.animate("self", "pop"));` } as never, /Add behaviour/],
   ];
   for (const [a, field] of cases) {
     const r = applySurveyActions(base, [a], { ids });

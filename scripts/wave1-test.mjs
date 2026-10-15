@@ -105,16 +105,25 @@ await load();
 
 console.log("\nTHE INERT FEATURES, IN A LIVE INTERVIEW");
 
+/*
+ * Custom JavaScript is no longer a field of its own: a survey that has it is
+ * moved into Styles, animations & scripts on load (the one script pipeline),
+ * where it runs in the sandboxed frame against a mirror of the page.
+ */
+await page.waitForFunction(() => document.documentElement.getAttribute("data-survey-js") === "ran", null, { timeout: 8000 })
+  .catch(() => {});
 assert.equal(await page.getAttribute("html", "data-survey-js"), "ran",
   "the survey's own custom JavaScript never ran");
-ok("survey-level custom JavaScript executes (§21)");
+ok("survey-level custom JavaScript (moved into the script pipeline) executes (§21)");
 
 const img = await page.getAttribute('[data-testid="rs-qmedia"] img', "src");
 assert.equal(img, "https://cdn.example.com/uk/hero.png",
   `the stimulus URL was not piped — got ${img}`);
 ok("a piped stimulus resolves per respondent, from a url parameter (§12, §11)");
 
-assert.ok(await page.$('[data-qid="q_note"] [data-testid="rs-question-script"]'));
+assert.equal(await page.$('[data-testid="rs-question-script"]'), null, "the old second script engine is not rendered any more");
+await page.waitForFunction(() => document.querySelector('[data-qid="q_note"]')?.getAttribute("data-question-js") === "ran", null, { timeout: 8000 })
+  .catch(() => {});
 assert.equal(
   await page.getAttribute('[data-qid="q_note"]', "data-question-js"), "ran",
   "a question's own customJs did not run on an ordinary question type",

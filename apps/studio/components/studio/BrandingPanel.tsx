@@ -643,7 +643,7 @@ export function BrandingPanel() {
       <h3 className="sec">Styles, animations &amp; scripts (survey-wide)</h3>
       <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
 
-      <h3 className="sec">Header / footer / custom code</h3>
+      <h3 className="sec">Header / footer / custom CSS</h3>
       <label className="f"><span>Header HTML</span>
         <textarea className="ta code" style={{ minHeight: 60 }} value={b.headerHtml ?? ""}
           onChange={(e) => set((x) => { x.headerHtml = e.target.value || undefined; })} /></label>
@@ -653,9 +653,12 @@ export function BrandingPanel() {
       <label className="f"><span>Custom CSS (survey-wide)</span>
         <textarea className="ta code" value={b.customCss ?? ""}
           onChange={(e) => set((x) => { x.customCss = e.target.value || undefined; })} /></label>
-      <label className="f"><span>Custom JS (survey-wide, runs in runtime)</span>
-        <textarea className="ta code" value={b.customJs ?? ""}
-          onChange={(e) => set((x) => { x.customJs = e.target.value || undefined; })} /></label>
+      {/*
+        * Survey-wide JavaScript is a script in the list above — the same
+        * sandboxed pipeline as everything else. The old "Custom JS" box that
+        * lived here ran through a second engine; a survey that had one was
+        * moved into the list on load.
+        */}
     </div>
   );
 }

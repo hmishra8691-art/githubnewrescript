@@ -1,6 +1,6 @@
 # Custom code
 
-Four surfaces take code: HTML in questions and blocks, per-question CSS and JavaScript, survey scripts with an event and an API, and the UX layer — styles, animations and behaviours with a sandboxed script API. They differ in power and in what they can reach; this page says which to use.
+Four surfaces take code: HTML in questions and blocks, per-question CSS, survey scripts with an event and an API, and the UX layer — styles, animations and **scripts**. There is exactly one place survey JavaScript lives: a script in the UX layer (Properties → **Styles, animations & scripts**). The old per-question and branding "Custom JavaScript" fields are gone — a saved survey that had one is moved there on load, unchanged. This page says which surface to use.
 
 ## HTML
 
@@ -8,7 +8,7 @@ An `html` question (`content.html`) is a block of text or HTML with no answer. A
 
 A `custom_component` question renders `customHtml` (piped) and runs `customJs` against it — see below.
 
-## Per-question CSS and JavaScript
+## Per-question CSS, and component code
 
 ```json
 { "id": "q_slider", "code": "Q8", "variableName": "MOOD", "type": "custom_component", "text": "How do you feel today?",
@@ -17,9 +17,17 @@ A `custom_component` question renders `customHtml` (piped) and runs `customJs` a
   "customCss": ".mood button.on { outline: 3px solid #2563eb; }" }
 ```
 
-`customJs` runs as `new Function("el", "api", code)`: `el` is the container (`customHtml` rendered, for a custom component; the question card for any other type) and `api` is `{ getValue(), setValue(v) }` — plus `api.question = { id, code, type }` on ordinary questions. Whatever `setValue` is given is the stored answer. `customCss` is injected as a `<style>` inside the question card and is **not scoped** (a rule in it applies to the whole page): prefix your selectors with the card's attribute, `[data-qid="q_slider"] .mood button { … }`, to keep them to the question. In Intelligent mode: "set the custom code of Q8 to …" (`set_custom_code`).
+`customCss` is injected as a `<style>` inside the question card and is **not scoped** (a rule in it applies to the whole page): prefix your selectors with the card's attribute, `[data-qid="q_slider"] .mood button { … }`, to keep them to the question. It lives in Properties → Styles, animations & scripts → Custom CSS.
 
-This code runs with full access to the page. Use it for a component the platform has no variant for; for look and behaviour, prefer the UX layer below, which is sandboxed and reviewable.
+A **Custom Component** (`type: "custom_component"`) is the one question type whose `customJs` is not a script attached to something: it *is* the component. It runs as `new Function("el", "api", code)` against its own `customHtml`: `el` is the container and `api` is `{ getValue(), setValue(v) }`; whatever `setValue` is given is the stored answer. That code runs with full access to the page, so use it only for an answer control the platform has no variant for. Everything else — a look, a reaction, a counter, a nudge — is a script (below). In Properties it has its own "Component code" section.
+
+### Moved from the old Custom code
+
+Surveys saved before the consolidation are migrated on load (and idempotently — a second load changes nothing):
+
+- a question's `customJs` becomes a script on that question (`source: "question_custom_js"`), wrapped so `el` is still the question card and `api.getValue()` still reads the answer. `api.setValue` cannot be kept (scripts never write answers — use a default value or a punch rule) and logs why when called;
+- `branding.customJs` becomes a survey-level script (`source: "branding_custom_js"`);
+- code the script sandbox will not run as written (it calls `fetch`, touches `window`, writes an answer…) is **still moved, never dropped or run unsandboxed**; its script shows the reason in Properties and the browser console names it at run time. Code over 20,000 characters stays in its original field and is listed as blocked.
 
 ## Survey scripts
 
@@ -63,7 +71,26 @@ Declarations are checked against the CSS property grammar and a ban-list (no `be
                { "do": "focus", "target": { "kind": "question", "questionId": "q_pref", "part": "other_text" } }] }
 ```
 
-A behaviour's `script` runs in a sandboxed iframe (`sandbox="allow-scripts"`, no network, no DOM) as `new Function("rs", code)` with a frozen `rs`: `rs.listen(event, target | "self", fn)`, `rs.getAnswer(code)`, `rs.getQuestion(code)`, `rs.getBlock()`, `rs.getPage()`, `rs.addClass`, `rs.removeClass`, `rs.toggleClass`, `rs.animate`, `rs.setStyle`, `rs.clearStyle`, `rs.show`, `rs.hide`, `rs.showMessage`, `rs.hideMessage`, `rs.scrollTo`, `rs.focus` (each takes a target first), `rs.after(ms, fn)`, `rs.log(...)`. Events: `answer, change, select, deselect, click, hover, page, complete` (with aliases such as `page_enter` → `page`, `select_option` → `select`). The script cannot set answers, loop, or reach `document`, `window`, `fetch` or `eval`; those are refused when it is saved, and commands are rate-limited.
+A behaviour's `script` is the survey's JavaScript. It runs in one sandboxed iframe per script (`sandbox="allow-scripts"`, opaque origin, no network, no storage) against **two things**:
+
+1. the frozen `rs` api: `rs.listen(event, target | "self", fn)`, `rs.getAnswer(code)`, `rs.getQuestion(code)`, `rs.getBlock()`, `rs.getPage()`, `rs.addClass`, `rs.removeClass`, `rs.toggleClass`, `rs.animate`, `rs.setStyle`, `rs.clearStyle`, `rs.show`, `rs.hide`, `rs.showMessage`, `rs.hideMessage`, `rs.scrollTo`, `rs.focus` (each takes a target first), `rs.after(ms, fn)`, `rs.log(...)`. Events: `answer, change, select, deselect, click, hover, page, complete` (with aliases such as `page_enter` → `page`, `select_option` → `select`);
+2. **the page's own DOM** — a live mirror of the page the script is for: `document.querySelector` / `querySelectorAll` / `closest` / `matches`, `classList`, `style`, `dataset`, `getAttribute` / `setAttribute`, `textContent`, `MutationObserver` and `addEventListener` on any element or on `document` all behave as written. Real clicks, input, change, focus and key events are forwarded to the listeners a script registered, **once per event**.
+
+`rs.listen` and the DOM api coexist in the same script; they do not double-fire.
+
+Use the real hooks — a selector that matches nothing is logged to the console with the one to use: the Next/Submit button is `[data-testid="rs-next"]`, Back `[data-testid="rs-back"]`, a question's card `[data-qid="<question id>"]`, an option `[data-rs-el="option"]`, the navigation row `.rs-nav`, the progress bar `.rs-progress-fill`. (`.next-button`, `#next` and `.question` do not exist.)
+
+**Lifecycle.** A script runs when the page it is for is shown, after its elements exist, and again after every Next/Back that shows that page. Handlers and changes survive React re-rendering the survey (the mirror keeps node identity; the host re-applies a script's classes and attributes). When the page is left, a click on Next that was already on its way is handled once, then the frame is removed and **everything the script changed is put back** — so scripts do not accumulate across navigation. A script on the survey runs on every page; on a question, on the page that shows it.
+
+**What it may change** (every change is checked by the host, not trusted): add and remove class names (never the survey's own `rs-…` ones), set inline styles through the CSS declaration gate, set `hidden`, `disabled`, `title`, `role`, `tabindex`, `aria-*` and `data-*` attributes, and create plain elements of its own (`div`, `span`, `p`, `button`, headings, lists…) that it can later change or remove.
+
+**What it may not** — and the reason is logged: set an answer (`.value`, `.checked`, `dispatchEvent` on a form control — set a default value or a punch rule instead), rewrite text the survey drew (create your own element, or `rs.showMessage`), create `<script>`, `<iframe>`, `<link>`, `<style>` or event-handler attributes, change `href`/`src`, reach `window`, `fetch`, `XMLHttpRequest`, `localStorage`, `eval`, `Function`, `constructor`, bare `parent` / `top` / `self`, or read `document.cookie`. `preventDefault()` has no effect (the event has already happened: use validation to stop a page being left). Layout measurements (`offsetWidth`, `getBoundingClientRect`) read as 0 — the mirror has no layout. Commands are rate-limited (200 a second).
+
+**Loops are bounded, not banned.** `for`, `while`, `do…while`, `for…of` are fine when their body has braces (`for (const el of document.querySelectorAll(…)) { … }`); every loop counts its iterations and a loop that passes 100,000 in one go is stopped with an error naming the script (the rest of the survey is unaffected). A loop without braces (`while (x) y();`) is refused when saved, with the fix.
+
+**Errors say where they came from.** A script that fails the gate (`not run: …`), throws, runs away, or is refused a change logs `[rescript:script] <script name> (<question>): <reason>` to the browser console and to the preview's inspector; in the Studio editor the same checks run as you type, with the warnings (a selector that matches nothing, a handler registered twice, a script that touches neither `rs` nor `document`).
+
+Intelligent mode writes scripts through the same gate: `create_behavior` with a `script`, or `set_custom_code` with `js` (which creates or replaces that question's script; `css` still edits Custom CSS). A script the gate refuses is refused on the proposal card with the reason.
 
 ```js
 rs.listen("answer", "Q5", ({ value }) => {
@@ -76,8 +103,8 @@ The engine reviews the UX layer (`reviewUx`): a target that names nothing, a dec
 
 ## Branding code
 
-`branding.headerHtml` and `footerHtml` wrap every page; `branding.customCss` styles the whole survey; `branding.customJs` runs once per session with full page access. Theme colours, typography, layout, buttons and voice settings are structured fields (`branding.colors`, `typography`, `layout`, `buttons`, `voice`) — Intelligent mode edits them with `set_theme` ("change the theme to dark blue", "use a warmer palette like this logo").
+`branding.headerHtml` and `footerHtml` wrap every page; `branding.customCss` styles the whole survey; survey JavaScript is a survey-level script in the UX layer (a saved `branding.customJs` was moved there on load). Theme colours, typography, layout, buttons and voice settings are structured fields (`branding.colors`, `typography`, `layout`, `buttons`, `voice`) — Intelligent mode edits them with `set_theme` ("change the theme to dark blue", "use a warmer palette like this logo").
 
 ## Which surface to use
 
-For a look or a behaviour a researcher will want to review and a translator will not need to touch: the UX layer. For a component the platform has no variant for: `custom_component` with `customHtml` / `customJs`. For data derived at a point in the flow: a calculation or a punch before a script. For a check across several questions at submit: a `custom_script` validation rule or a page script with `error(...)`.
+For a look or a behaviour a researcher will want to review and a translator will not need to touch: the UX layer. For JavaScript of any kind — listening to the Next button, counting clicks, reacting to an answer — a script in the UX layer. For a component the platform has no variant for: `custom_component` with `customHtml` / `customJs`. For data derived at a point in the flow: a calculation or a punch before a script. For a check across several questions at submit: a `custom_script` validation rule or a page script with `error(...)`.

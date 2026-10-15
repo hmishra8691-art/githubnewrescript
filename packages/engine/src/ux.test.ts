@@ -183,25 +183,34 @@ test("the UX-only guard refuses structure, and every bad item is refused with it
   assert.equal(free.structureUnchanged, false); assert.equal(free.uxOnly, false);
 });
 
-test("scripts: the rs api only — no loops, no network, no page, targets that exist", () => {
+test("scripts: the rs api and the page's own DOM — bounded loops, no network, no window, targets that exist", () => {
   const d = base();
   const ok = validateUxScript(`rs.listen("select", "Q3", (e) => { if (e.value == 99) rs.showMessage("Q3", "Which one?"); else rs.hideMessage("Q3"); });
     rs.listen("answer", "Q1", () => rs.animate("next", "pulse"));
     const a = rs.getAnswer("Q1"); // "for" in a comment and "while" in a string are fine: "while"`, d);
   assert.deepEqual(ok.errors, []); assert.deepEqual(ok.warnings, []);
-  const bad = validateUxScript(`for (;;) {} while (true) {} fetch("https://x"); document.cookie; window.parent.postMessage(1); rs.explode("Q3"); rs.addClass("Q9", "x"); rs.getAnswer("Q77"); rs.listen("tap", "Q3", () => 1);`, d);
+  // the DOM is available: querySelector, addEventListener, loops with braces
+  const dom = validateUxScript(`const next = document.querySelector('[data-testid="rs-next"]');
+    next.addEventListener("click", () => rs.animate("next", "pulse"));
+    for (const el of document.querySelectorAll("[data-qid]")) { el.classList.add("seen"); }`, d);
+  assert.deepEqual(dom.errors, [], dom.errors.join("\n")); assert.deepEqual(dom.warnings, []);
+  const bad = validateUxScript(`for (;;) rs.hideMessage("Q3"); fetch("https://x"); document.cookie; window.parent.postMessage(1); rs.explode("Q3"); rs.addClass("Q9", "x"); rs.getAnswer("Q77"); rs.listen("tap", "Q3", () => 1);`, d);
   const e = bad.errors.join("\n");
-  for (const re of [/“for” loops/, /“while” loops/, /fetch is not available/, /document is not available/, /window is not available/, /postMessage is not available/, /rs.explode is not part/, /rs.addClass\("Q9"/, /rs.getAnswer\("Q77"\)/, /rs.listen\("tap"\)/]) assert.match(e, re);
+  for (const re of [/braces/, /fetch is not available/, /cookie/, /window is not available/, /postMessage is not available/, /rs.explode is not part/, /rs.addClass\("Q9"/, /rs.getAnswer\("Q77"\)/, /rs.listen\("tap"\)/]) assert.match(e, re);
   assert.match(validateUxScript(`rs.addClass("Q3", "x"`, d).errors.join(" "), /does not parse/);
   const dup = validateUxScript(`rs.listen("select", "Q3", () => {}); rs.listen("select", "Q3", () => {});`, d);
   assert.match(dup.warnings.join(" "), /registered twice/);
-  assert.match(validateUxScript(`const x = 1;`, d).warnings.join(" "), /never calls the rs api/);
+  assert.match(validateUxScript(`const x = 1;`, d).warnings.join(" "), /neither the rs api nor the document/);
   assert.match(validateUxScript(`(()=>{}).constructor("return this")()`, d).errors.join(" "), /constructor is not available/);
+  // answers are the respondent's: a script cannot write them
+  assert.match(validateUxScript(`document.querySelector("input").value = "x";`, d).errors.join(" "), /answer/i);
   // a script behaviour through the action layer
   const r = ux(d, [{ op: "create_behavior", label: "Other message", target: "Q3", script: `rs.listen("select", "self", (e) => rs.showMessage("self", "Thanks"));` }]);
   assert.deepEqual(r.errors, []);
   const r2 = ux(d, [{ op: "create_behavior", label: "Loop", target: "Q3", script: `while(1){}` }]);
-  assert.match(r2.errors.join(" "), /loops are not allowed/);
+  assert.deepEqual(r2.errors, [], "a braced loop is allowed — the runtime bounds it");
+  const r3 = ux(d, [{ op: "create_behavior", label: "Loop", target: "Q3", script: `while(1) rs.hideMessage("self");` }]);
+  assert.match(r3.errors.join(" "), /braces/);
   assert.equal(lexJs(`a("x\\"y") // c`).strings[0].value, 'x"y');
 });
 

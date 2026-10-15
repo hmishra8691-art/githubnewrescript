@@ -67,6 +67,8 @@ export * from "./questionCreate.js";
 export * from "./surveyActions.js";
 export * from "./surveyReview.js";
 export * from "./ux.js";
+export * from "./uxScriptGuard.js";
+export * from "./legacyScripts.js";
 export * from "./uxActions.js";
 export * from "./optionCodes.js";
 export * from "./theme.js";

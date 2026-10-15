@@ -7,7 +7,7 @@ The definition is one JSON object validated by a schema (`@rescript/schema`, `Su
 | Field | What it holds |
 |---|---|
 | `meta` | `id`, `code` (e.g. `SURVEY_001`), `title`, `description?`, `version` (`"1.0"`), `status` (`draft` \| `testing` \| `live` \| `closed`), `createdAt?`, `updatedAt?`, `schemaVersion` (1) |
-| `branding` | theme and look: `themeId`, `logoUrl`, `colors{…}`, `typography{…}`, `layout{…}`, `buttons{style, nextLabel, backLabel, submitLabel, showBack}`, `voice{readAloud, dictation, lang}`, `responsive{tablet, mobile}`, `headerHtml`, `footerHtml`, `customCss`, `customJs` |
+| `branding` | theme and look: `themeId`, `logoUrl`, `colors{…}`, `typography{…}`, `layout{…}`, `buttons{style, nextLabel, backLabel, submitLabel, showBack}`, `voice{readAloud, dictation, lang}`, `responsive{tablet, mobile}`, `headerHtml`, `footerHtml`, `customCss`, `customJs` (legacy — moved into `ux` as a survey script on load) |
 | `questions` | the questions, in no particular order — the flow decides where they are asked |
 | `flow` | the order of the survey: blocks, pages, sections, branches, randomizers, loops, embedded-data nodes, quota checks, redirects and ends |
 | `displayRules` | named show/hide rules on any target (question, page, section, block, option, row, column) |
@@ -82,7 +82,7 @@ A calculation runs at its trigger (`on_change`, `on_page_submit`, `on_complete`)
 
 ## Scripts, UX, localization, quotas, research
 
-Each has its own page: [Custom code](custom-code) for `scripts`, `ux`, `branding.customJs`; [Localization and quotas](localization-and-quotas) for `localization` and `quotas`; [The Research Engine](research-engine) for `research`.
+Each has its own page: [Custom code](custom-code) for `scripts` and `ux` (a legacy `branding.customJs` is migrated into `ux`); [Localization and quotas](localization-and-quotas) for `localization` and `quotas`; [The Research Engine](research-engine) for `research`.
 
 ## Validating a definition
 

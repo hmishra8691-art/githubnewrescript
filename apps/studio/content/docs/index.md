@@ -15,7 +15,7 @@ Everything here is grounded in the platform's own code. The three reference page
 - **[Logic and expressions](logic)** — conditions in text and in JSON, display and skip logic, validation rules, calculations and their functions, named expressions, set expressions and option masks, auto-punch (`IF … THEN SET …`), count conditions.
 - **[Logic reference](logic-reference)** — every operator spelling, every calculation function, every piping property and format, the UX script API, the analysis vocabulary. *Generated.*
 - **[Piping, lists and loops](piping-and-lists)** — `{{tokens}}`, carry-forward, option logic and list operations, randomization, List Fill, loops.
-- **[Custom code](custom-code)** — HTML blocks, per-question HTML/CSS/JS, survey scripts and their API, the UX layer (styles, animations, behaviours) and its sandboxed `rs` API, branding code, what is sanitised.
+- **[Custom code](custom-code)** — HTML blocks, per-question CSS, survey scripts and their API, the UX layer (styles, animations, behaviours and the one script pipeline: the `rs` API plus the page's DOM, sandboxed), branding code, what is sanitised.
 
 ## Intelligent mode and the Research Engine
 

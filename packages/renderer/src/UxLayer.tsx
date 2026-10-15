@@ -4,8 +4,10 @@ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
-  uxGuardHolds, createResponseState, type ResponseState,
+  uxGuardHolds, createResponseState, guardScriptLoops, type ResponseState,
 } from "@rescript/engine";
+import { DomBridge } from "./uxDom";
+import { uxSandboxDoc } from "./uxSandbox";
 
 /**
  * THE UX LAYER — the runtime half of the survey's styles, animations and
@@ -129,33 +131,19 @@ function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget, 
 
 /* ------------------------------------------------------------ the sandbox */
 
-const SANDBOX_DOC = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'"></head><body><script>
-(function () {
-  var handlers = [], answers = {}, meta = { questions: {} }, host = window.parent, ALIASES = ${JSON.stringify(UX_SCRIPT_EVENT_ALIASES)};
-  function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
-  var rs = {
-    listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } ev = ALIASES[ev] || ev; handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
-    getAnswer: function (code) { return answers[code]; },
-    getQuestion: function (code) { return meta.questions[code] || null; },
-    getBlock: function () { return meta.block || null; },
-    getPage: function () { return meta.page || null; },
-    after: function (ms, fn) { setTimeout(function () { try { fn(); } catch (e) { send("error", [String(e && e.message || e)]); } }, Math.max(0, Math.min(60000, Number(ms) || 0))); },
-    log: function () { send("log", Array.prototype.map.call(arguments, String)); }
-  };
-  ["addClass","removeClass","toggleClass","animate","setStyle","clearStyle","show","hide","showMessage","hideMessage","scrollTo","focus"].forEach(function (n) { rs[n] = function () { send(n, Array.prototype.slice.call(arguments, 0, 3)); }; });
-  window.addEventListener("message", function (e) {
-    if (e.source !== host) return;
-    var m = e.data; if (!m || m.__rsux !== 1) return;
-    if (m.type === "init") { answers = m.answers || {}; meta = m.meta || meta; try { (new Function("rs", m.code))(Object.freeze(rs)); } catch (err) { send("error", [String(err && err.message || err)]); } }
-    else if (m.type === "answers") { answers = m.answers || {}; }
-    else if (m.type === "event") { handlers.forEach(function (h) { if (h.ev === m.ev && (h.target === m.target || (h.target === "self" && m.self))) { try { h.fn(m.payload); } catch (err) { send("error", [String(err && err.message || err)]); } } }); }
-  });
-  send("ready", []);
-})();
-</script></body></html>`;
+const SANDBOX_DOC = uxSandboxDoc({ aliases: UX_SCRIPT_EVENT_ALIASES });
 const COMMANDS_PER_SECOND = 200;
+/** how long a frame outlives its page, so a click on Next that was already sent to it is handled once */
+const SCRIPT_GRACE_MS = 150;
+/**
+ * pages that are closing but not yet undone. A new page's script must start from
+ * the survey as it is, not from the previous page's script's changes (two pages'
+ * scripts often touch the same element — the body, the Next button), so the new
+ * frame's first act is to finish whatever the old ones were still holding.
+ */
+const closing = new Set<() => void>();
 
-interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dispose(): void }
+interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dom: DomBridge; started: boolean; dispose(): void; close(): void }
 
 function plainText(s: string) { return s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); }
 
@@ -291,13 +279,27 @@ export function UxLayer(p: UxLayerProps) {
     const hosts: ScriptHost[] = [];
     for (const b of withScript) {
       /*
+       * One reporter for everything a script says. The Studio's preview and a
+       * test interview show it in the inspector; EVERY mode also writes
+       * errors and refusals to the browser console, because a script that
+       * fails in a live survey used to fail silently and the programmer had
+       * nothing to open.
+       */
+      const where = `${b.label}${b.target.questionId ? ` (${byCode.get(b.target.questionId) ?? ""})` : ""}`;
+      const report = (text: string, level: "log" | "warn" | "error" = "log") => {
+        log.current?.(`[ux script “${b.label}”] ${level === "error" ? "ERROR: " : ""}${text}`);
+        if (level === "error") console.error(`[rescript:script] ${where}: ${text}`);
+        else if (level === "warn") console.warn(`[rescript:script] ${where}: ${text}`);
+      };
+      /*
        * Validated again here, not only when it was proposed: a definition can
        * be edited by hand or arrive from an import. A loop could hang the
        * frame — and a sandboxed frame may share the page's thread — so a
        * script that does not pass the gate never runs.
        */
       const check = validateUxScript(b.script!, def);
-      if (check.errors.length) { log.current?.(`[ux script “${b.label}”] not run: ${check.errors.join("; ")}`); continue; }
+      if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn"); continue; }
+      for (const w of check.warnings) report(`note: ${w}`, "warn");
       const frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts");
       frame.setAttribute("aria-hidden", "true");
@@ -305,12 +307,14 @@ export function UxLayer(p: UxLayerProps) {
       frame.setAttribute("data-rs-ux-sandbox", b.id);
       frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
       frame.srcdoc = SANDBOX_DOC;
-      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dispose: () => { window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); } };
+      const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
+      const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post });
+      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
       const resolve = (spec: unknown): UxTarget | null => {
         if (spec === "self" || spec == null) return b.target;
         const t = resolveUxTarget(def, spec, look);
-        if (typeof t === "string") { log.current?.(`[ux script “${b.label}”] ${t}`); return null; }
+        if (typeof t === "string") { report(`${t}`); return null; }
         return t;
       };
       const effect = (e: UxEffect, t: UxTarget | null) => { if (t) host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id)); };
@@ -320,14 +324,20 @@ export function UxLayer(p: UxLayerProps) {
         if (!m || m.__rsux !== 1 || typeof m.cmd !== "string") return;
         const now = Date.now();
         if (now - windowStart > 1000) { windowStart = now; count = 0; }
-        if (++count > COMMANDS_PER_SECOND) { log.current?.(`[ux script “${b.label}”] stopped: more than ${COMMANDS_PER_SECOND} commands a second`); host.dispose(); return; }
+        if (++count > COMMANDS_PER_SECOND) { report(`stopped: more than ${COMMANDS_PER_SECOND} commands a second`, "warn"); host.dispose(); return; }
         const a = Array.isArray(m.args) ? m.args : [];
         const str = (x: unknown) => (typeof x === "string" ? x : x == null ? "" : String(x)).slice(0, 600);
         switch (m.cmd) {
           case "ready": {
+            host.started = true;
+            for (const f of Array.from(closing)) f();
             const questions: Record<string, unknown> = {};
             for (const q of def.questions) questions[String(q.code)] = { code: String(q.code), type: q.type, text: plainText(q.text ?? ""), options: (q.options ?? []).map((o) => ({ code: String(o.code), label: plainText(o.label) })) };
-            frame.contentWindow?.postMessage({ __rsux: 1, type: "init", code: b.script, answers: answersByCode(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } }, "*");
+            const tree = dom.tree();
+            dom.primed(tree);
+            // loops are bounded, not banned: every loop body counts its iterations (see guardScriptLoops)
+            post({ type: "init", code: guardScriptLoops(b.script!).code, tree, answers: answersByCode(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } });
+            dom.watch((t) => post({ type: "sync", tree: t }));
             frame.contentWindow?.postMessage({ __rsux: 1, type: "event", ev: "page", target: "self", self: true, payload: {} }, "*");
             break;
           }
@@ -335,8 +345,8 @@ export function UxLayer(p: UxLayerProps) {
           case "addClass": effect({ do: "add_class", className: str(a[1]) }, resolve(a[0])); break;
           case "removeClass": effect({ do: "remove_class", className: str(a[1]) }, resolve(a[0])); break;
           case "toggleClass": effect({ do: "toggle_class", className: str(a[1]) }, resolve(a[0])); break;
-          case "animate": { const preset = str(a[1]); const opts = (a[2] && typeof a[2] === "object" ? a[2] : {}) as { duration?: number }; if (UX_PRESET_FRAMES[preset as keyof typeof UX_PRESET_FRAMES]) effect({ do: "animate", preset: preset as never, durationMs: Math.max(50, Math.min(10000, Number(opts.duration) || 450)) }, resolve(a[0])); else log.current?.(`[ux script “${b.label}”] “${preset}” is not a preset`); break; }
-          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style); if (c.errors.length) log.current?.(`[ux script “${b.label}”] ${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
+          case "animate": { const preset = str(a[1]); const opts = (a[2] && typeof a[2] === "object" ? a[2] : {}) as { duration?: number }; if (UX_PRESET_FRAMES[preset as keyof typeof UX_PRESET_FRAMES]) effect({ do: "animate", preset: preset as never, durationMs: Math.max(50, Math.min(10000, Number(opts.duration) || 450)) }, resolve(a[0])); else report(`“${preset}” is not a preset`); break; }
+          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style); if (c.errors.length) report(`${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
           case "clearStyle": { const t = resolve(a[0]); if (t) for (const el of uxElements(root, t)) { for (const k of setByUx.get(el) ?? []) el.style.removeProperty(k); setByUx.delete(el); } break; }
           case "show": effect({ do: "show" }, resolve(a[0])); break;
           case "hide": effect({ do: "hide" }, resolve(a[0])); break;
@@ -344,8 +354,11 @@ export function UxLayer(p: UxLayerProps) {
           case "hideMessage": effect({ do: "hide_message" }, resolve(a[0])); break;
           case "scrollTo": effect({ do: "scroll_into_view" }, resolve(a[0])); break;
           case "focus": effect({ do: "focus" }, resolve(a[0])); break;
-          case "log": log.current?.(`[ux script “${b.label}”] ${a.map(str).join(" ")}`); break;
-          case "error": log.current?.(`[ux script “${b.label}”] ERROR: ${str(a[0])}`); break;
+          case "log": report(`${a.map(str).join(" ")}`); break;
+          case "ops": dom.apply(a[0]); break;
+          case "want": dom.want(str(a[0])); break;
+          case "resync": dom.resync((t) => post({ type: "sync", tree: t }), true); break;
+          case "error": report(str(a[0]), "error"); break;
           default: break;
         }
       }
@@ -368,7 +381,8 @@ export function UxLayer(p: UxLayerProps) {
       hosts.push(host);
     }
     scripts.current = hosts;
-    return () => { for (const h of hosts) { h.dispose(); for (const u of h.undo) u.run(); } scripts.current = []; };
+    // leaving the page: what was already handed to a script is handled, then everything it changed is put back
+    return () => { for (const h of hosts) h.close(); scripts.current = []; };
   }, [p.pageKey, uxSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* the page-complete event for scripts */

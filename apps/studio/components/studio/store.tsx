@@ -2,7 +2,7 @@
 import React from "react";
 import type { Question } from "@rescript/schema";
 import { SurveyDefinition } from "@rescript/schema";
-import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds } from "@rescript/engine";
+import { normaliseQuestionOrder, canonicalizeSurveyConditions, ensureElementIds, migrateLegacyCustomCode } from "@rescript/engine";
 import { serialRunner, isOwnWrite, rememberSent } from "@/lib/draftSave";
 import { codesFrozenBy } from "@/lib/responseSummary";
 
@@ -227,7 +227,12 @@ export function StudioProvider({
   revision?: number | null;
   children: React.ReactNode;
 }) {
-  const [def, setDef] = React.useState<SurveyDefinition>(initial);
+  /*
+   * A survey saved with the old Custom code fields opens with that JavaScript
+   * already in Styles, animations & scripts — the one place it runs — so the
+   * editor never shows a field that no longer exists, or a script twice.
+   */
+  const [def, setDef] = React.useState<SurveyDefinition>(() => migrateLegacyCustomCode(initial).def);
   const [dirty, setDirty] = React.useState(!!draftSavedAt);
   const [saveState, setSaveStateRaw] = React.useState<SaveState>(
     draftSavedAt ? { kind: "clean", savedAt: draftSavedAt } : { kind: "clean", savedAt: null },
@@ -273,9 +278,11 @@ export function StudioProvider({
    * when it happens.
    */
   const withOptionCodes = (d: SurveyDefinition): SurveyDefinition => {
-    const r = canonicalizeSurveyConditions(d);
-    if (!r.changes.length) return d;
-    showToast(`Logic tidied — ${r.changes.slice(0, 2).join("; ")}${r.changes.length > 2 ? ` (+${r.changes.length - 2} more)` : ""}.`);
+    const legacy = migrateLegacyCustomCode(d);
+    const r = canonicalizeSurveyConditions(legacy.def);
+    const changes = [...legacy.changes, ...r.changes];
+    if (!changes.length) return d;
+    showToast(`Logic tidied — ${changes.slice(0, 2).join("; ")}${changes.length > 2 ? ` (+${changes.length - 2} more)` : ""}.`);
     return r.def;
   };
   const showToast = React.useCallback((msg: string, kind: "ok" | "err" = "ok") => {
@@ -831,8 +838,8 @@ export function StudioProvider({
   React.useEffect(() => {
     if (readOnly || repairedOnLoad.current) return;
     repairedOnLoad.current = true;
-    if (!canonicalizeSurveyConditions(latest.current).changes.length) return;
-    value.labelNextEdit("Use option codes in logic");
+    if (!canonicalizeSurveyConditions(latest.current).changes.length && !migrateLegacyCustomCode(initial).changes.length) return;
+    value.labelNextEdit("Tidy logic and scripts");
     value.update(() => { /* withOptionCodes does the work */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readOnly]);

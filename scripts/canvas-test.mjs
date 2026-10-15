@@ -142,7 +142,7 @@ assert.ok(await page.$('.opt-row'), "the existing option editor is what a questi
 ok("a question opens in Standard mode with the existing programming UI intact");
 
 const stdSections = await page.$eval(".rightpanel", (e) => e.textContent);
-for (const s of ["Display logic", "Skip logic", "Randomization", "Validation rules", "Custom code"]) {
+for (const s of ["Display logic", "Skip logic", "Randomization", "Validation rules", "Styles, animations & scripts"]) {
   assert.ok(stdSections.includes(s), `${s} is still offered`);
 }
 ok("every question-level programming section is still reachable (§18, §28)");

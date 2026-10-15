@@ -223,7 +223,7 @@ await loadDef(FIXTURE);
   /*
    * HTML above Q3's answers is part of Q3's INSTRUCTION since October 2026
    * (one place for a question's content) — so it is shown in the instruction
-   * editor, and the Custom code panel no longer has a separate HTML box.
+   * editor, and there is no separate HTML box any more.
    */
   {
     const d = await readDef();
@@ -231,8 +231,8 @@ await loadDef(FIXTURE);
     assert.match(q3.instruction ?? "", /<p class="note">Pick the closest\.<\/p>$/, `the note is in Q3's instruction: ${q3.instruction}`);
     assert.equal(q3.customHtml, undefined);
     await goTab("Questions"); await selectCard("Q3");
-    await openSection("custom-code");
-    assert.ok(await page.$('[data-testid="custom-html-moved"]'), "the Custom code panel points to the text / instruction");
+    await openSection("ux");
+    assert.equal(await page.$('[data-testid="component-html"]'), null, "only a Custom Component has an HTML template field");
   }
   ok("10–11: CSS, JavaScript and HTML created by Intelligent mode appear in Question Studio → Properties (the same configuration)");
   // 12: edit by hand

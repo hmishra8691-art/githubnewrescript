@@ -87,7 +87,7 @@ export function actionCategories(a: SurveyAction): Set<ChangeCategory> | null {
     case "add_skip": case "clear_skips": return new Set(["Skip logic"]);
     case "set_validation": return new Set(["Validation", "Required"]);
     case "add_punch": case "remove_punches": return new Set(["Punching"]);
-    case "set_custom_code": return new Set(["Custom code"]);
+    case "set_custom_code": return new Set(["Custom code", "Behaviour"]); // CSS stays custom code; JavaScript is a script behaviour
     case "move_question": return new Set(["Placement"]);
     case "page_break": return new Set(["Page break"]);
     default: return null;

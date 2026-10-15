@@ -1514,43 +1514,41 @@ export function PropertiesPanel() {
         * gate; nothing here is a second copy.
         */}
       {showSec("Styles, animations & scripts") && (
-      <CollapsibleSection id="ux" title="Styles, animations & scripts" active={uxItemsFor(s.def, { kind: "question", questionId: q.id }).length > 0}>
+      <CollapsibleSection id="ux" title="Styles, animations & scripts"
+        active={uxItemsFor(s.def, { kind: "question", questionId: q.id }).length > 0 || !!q.customCss}>
         <UxItemsEditor scope={{ kind: "question", questionId: q.id }}
-          intro="Scoped to this question (and its options). Created here or by Intelligent mode — the same settings, applied in preview and the live survey." />
+          intro="Scoped to this question (and its options). Created here or by Intelligent mode — the same settings, applied in preview and the live survey. Scripts here are the only place survey JavaScript lives: they can read the page with document.querySelector, listen for events and change classes and styles." />
+        {/*
+          * CUSTOM CSS stays, as plain CSS, because it has nothing to conflict
+          * with. JavaScript does not: it used to have a field of its own here
+          * ("Custom JavaScript"), run by a second engine. It is a script in
+          * the list above now; a survey that had one was moved there on load.
+          */}
+        <label className="f" style={{ marginTop: 10 }}><span>Custom CSS (advanced — applies inside this question)</span>
+          <textarea className="ta code" style={{ minHeight: 60 }} value={q.customCss ?? ""} data-testid="custom-css"
+            onChange={(e) => patch({ customCss: e.target.value || undefined })} /></label>
       </CollapsibleSection>
       )}
 
-      {showSec("Custom code") && (
-      <CollapsibleSection id="custom-code" title="Custom code"
-        active={!!q.customJs || !!q.customCss || (q.type === "custom_component" && !!q.customHtml)}>
-      <label className="f"><span>Custom JavaScript (question scope)</span>
-        <textarea className="ta code" style={{ minHeight: 90 }} value={q.customJs ?? ""}
-          placeholder="// runs via the script host; use get()/set()/setCalc()…"
-          onChange={(e) => patch({ customJs: e.target.value || undefined })} /></label>
-      <label className="f"><span>Custom CSS</span>
-        <textarea className="ta code" style={{ minHeight: 60 }} value={q.customCss ?? ""}
-          onChange={(e) => patch({ customCss: e.target.value || undefined })} /></label>
-      {/*
-        * "CUSTOM HTML (ABOVE THE INPUT)" IS GONE (October 2026 review): it was
-        * a second, separately authored copy of the question's content — and
-        * on a Text / HTML block, the same field as its "HTML content". HTML
-        * above the answers is written in the question text or the
-        * instruction; older values were moved there on load. Only a Custom
-        * Component keeps a template of its own, which its script drives.
-        */}
-      {q.type === "custom_component" ? (
+      {q.type === "custom_component" && showSec("Component code") && (
+      <CollapsibleSection id="component-code" title="Component code" active={!!q.customJs || !!q.customHtml}>
+        <p className="muted" style={{ fontSize: 12.5 }}>
+          A Custom Component is the one question type whose JavaScript IS the question: it receives the component element and the answer, so it can read and write its own answer. Everything else uses scripts in Styles, animations &amp; scripts.
+        </p>
         <label className="f"><span>Component HTML (the template your script drives)</span>
           <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""} data-testid="component-html"
             onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
-      ) : (
-        <p className="muted" style={{ fontSize: 12.5 }} data-testid="custom-html-moved">
-          HTML shown with this question is written in the question text or the instruction (HTML tab) — with its own &lt;style&gt;, scoped to this question.
-        </p>
+        <label className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v))</span>
+          <textarea className="ta code" style={{ minHeight: 90 }} value={q.customJs ?? ""} data-testid="component-js"
+            onChange={(e) => patch({ customJs: e.target.value || undefined })} /></label>
+      </CollapsibleSection>
       )}
 
-      <label className="f"><span>Programmer notes</span>
-        <textarea className="ta" value={q.notes ?? ""}
-          onChange={(e) => patch({ notes: e.target.value || undefined })} /></label>
+      {showSec("Notes") && (
+      <CollapsibleSection id="notes" title="Notes" active={!!q.notes}>
+        <label className="f"><span>Programmer notes</span>
+          <textarea className="ta" value={q.notes ?? ""} data-testid="programmer-notes"
+            onChange={(e) => patch({ notes: e.target.value || undefined })} /></label>
       </CollapsibleSection>
       )}
     </div>

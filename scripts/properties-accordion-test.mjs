@@ -95,7 +95,7 @@ await page.waitForSelector('[data-testid="psec-head-display-logic"]');
 assert.equal(await isOpen("display-logic"), true, "Display logic already holds a rule — open by default");
 assert.equal(await isOpen("auto-punch"), true, "Auto punch already holds a rule — open by default");
 for (const id of ["skip-logic", "carry-forward", "randomization", "masking",
-  "list-logic", "list-operations", "validation-rules", "state", "custom-code"]) {
+  "list-logic", "list-operations", "validation-rules", "state", "ux"]) {
   assert.equal(await isOpen(id), false, `${id} has nothing configured — collapsed by default`);
 }
 console.log("✔ §39: only sections that already carry configuration open by default; every empty section starts collapsed");
@@ -126,17 +126,17 @@ assert.equal(afterPunches, beforePunches, "…and reopening it doesn't touch the
 console.log("✔ §45: expand/collapse is a UI preference — the survey's auto-punch rule survives collapse and reopen byte for byte");
 
 /* preserved values across collapse/reopen, for a section with live editing */
-await toggle("custom-code");
-await page.fill('[data-testid="psec-body-custom-code"] textarea.code', "// marker-xyz");
+await toggle("ux");
+await page.fill('[data-testid="psec-body-ux"] [data-testid="custom-css"]', "/* marker-xyz */");
 await page.waitForTimeout(300);
-assert.equal((await readDef()).questions[1].customJs, "// marker-xyz", "typed value saved");
-await toggle("custom-code"); // collapse
-await toggle("custom-code"); // reopen
-const restored = await page.inputValue('[data-testid="psec-body-custom-code"] textarea.code');
-assert.equal(restored, "// marker-xyz", "the typed value is still there after a round trip through collapsed");
+assert.equal((await readDef()).questions[1].customCss, "/* marker-xyz */", "typed value saved");
+await toggle("ux"); // collapse
+await toggle("ux"); // reopen
+const restored = await page.inputValue('[data-testid="psec-body-ux"] [data-testid="custom-css"]');
+assert.equal(restored, "/* marker-xyz */", "the typed value is still there after a round trip through collapsed");
 console.log("✔ a value typed into a section survives that section being collapsed and reopened");
 
-/* now that Custom code has content, note it starts CLOSED until reselected — but
+/* now that Custom CSS has content, note it starts CLOSED until reselected — but
  * the ACTIVE dot should mark it as configured even while collapsed elsewhere. */
 await goTab("Questions");
 await page.waitForSelector(".qcard");
@@ -145,10 +145,10 @@ await freshCards[0].click(); // Q1
 await page.waitForTimeout(150);
 freshCards = await page.$$(".qcard");
 await freshCards[freshCards.length - 1].click(); // back to Q2 — remounts the panel
-await page.waitForSelector('[data-testid="psec-head-custom-code"]');
-assert.ok(await page.$('[data-testid="psec-active-custom-code"]'),
-  "Custom code is marked configured (●) now that it holds content");
-assert.ok(await page.getAttribute('[data-testid="psec-active-custom-code"]', "aria-label"),
+await page.waitForSelector('[data-testid="psec-head-ux"]');
+assert.ok(await page.$('[data-testid="psec-active-ux"]'),
+  "Styles, animations & scripts is marked configured (●) now that it holds content");
+assert.ok(await page.getAttribute('[data-testid="psec-active-ux"]', "aria-label"),
   "the configured marker carries a text label, not color alone (§40 accessibility)");
 console.log("✔ §40: a configured section is marked with a non-color-only indicator, visible even before it is opened");
 

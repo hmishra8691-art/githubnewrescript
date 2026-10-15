@@ -127,8 +127,18 @@ export const UxBehavior = z.object({
   options: z.array(z.string()).max(50).optional(),
   /** …then these */
   effects: z.array(UxEffect).max(20).default([]),
-  /** or a script, run sandboxed against the `rs` api only */
-  script: z.string().max(8000).optional(),
+  /**
+   * or a script, run in the sandboxed frame — the ONE place survey JavaScript
+   * runs. It sees the `rs` api and a mirrored `document` of the survey (see
+   * the renderer's UxLayer); nothing else.
+   */
+  script: z.string().max(20000).optional(),
+  /**
+   * Where a script came from when it was not written here: "question_custom_js"
+   * / "branding_custom_js" are the old Custom code fields, moved into this
+   * pipeline by `migrateLegacyCustomCode` so they keep running.
+   */
+  source: z.enum(["question_custom_js", "branding_custom_js", "copilot_custom_code"]).optional(),
   once: z.boolean().optional(),
   /**
    * …and only while this holds. A behaviour used to be one event and a list of
