@@ -27,6 +27,7 @@ export * from "./optionsPaste.js";
 export * from "./dependencies.js";
 export * from "./dependencyIndex.js";
 export * from "./renumber.js";
+export * from "./recode.js";
 export * from "./questionCount.js";
 export * from "./lintLogic.js";
 export * from "./qualityCheck.js";

@@ -239,6 +239,23 @@ function exprReadsTarget(e: unknown, targetId: string): boolean {
 }
 
 /**
+ * Does this expression read ANY question? A punch source that reads none —
+ * the simple form, `{ kind: "codes", codes: ["B"] }` on the question being
+ * filled — is evaluated in that question's own namespace (`evaluateSetExpr`
+ * with `target: q`), so its literals are the filled question's codes and move
+ * with them. Left alone, "SELECT Q2.B when …" kept punching the code B used
+ * to be, which is exactly what `update_option` already corrected.
+ */
+function exprReadsAnyQuestion(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const n = e as Record<string, unknown>;
+  if (n.kind === "ref") return true;
+  if (n.kind === "complement") return exprReadsAnyQuestion(n.of);
+  if (n.kind === "op") return exprReadsAnyQuestion(n.left) || exprReadsAnyQuestion(n.right);
+  return false;
+}
+
+/**
  * Rewrite the literal `codes` nodes of a set expression.
  *
  * `inTargetNamespace` is the caller's answer to the one question this cannot
@@ -406,7 +423,8 @@ function rewriteQuestion(q: Question, ctx: Ctx): Question {
   if ((q as any).punches?.length) {
     (out as any).punches = (q as any).punches.map((p: any) => {
       const readsTarget = exprReadsTarget(p.source, ctx.targetId);
-      const sourceInTarget = readsTarget && ctx.scope === "options";
+      /* literals are the target's codes when the source reads the target — or reads no question at all and sits on the target (see exprReadsAnyQuestion) */
+      const sourceInTarget = (readsTarget || (optionsMoved && !exprReadsAnyQuestion(p.source))) && ctx.scope === "options";
       const next = { ...p, source: rewriteSetExpr(p.source, ctx, sourceInTarget) };
       if (p.mapping?.length) {
         next.mapping = p.mapping.map((m: any) => ({

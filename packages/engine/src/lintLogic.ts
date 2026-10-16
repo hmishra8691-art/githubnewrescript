@@ -25,7 +25,7 @@ import { MAX_CONDITION_DEPTH } from "./evaluate.js";
 import { LOOP_BUILTIN_REFS, getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
 import { registerBareNameResolver } from "./piping.js";
-import { describeCycle, detectLogicCycles, orderIndex } from "./dependencies.js";
+import { describeCycle, detectLogicCycles, orderIndex, unknownCalculationNames } from "./dependencies.js";
 import { MAX_LOOP_DEPTH, MAX_LOOP_PRODUCT, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
 import { buildVariableDictionary } from "./variables.js";
@@ -343,7 +343,8 @@ function lintCondition(
       // deleted option codes
       if (!isOptionValueRef(c.value) && (src.options?.length ?? 0) > 0) {
         const codes = optionCodes(src);
-        const values = Array.isArray(c.value) ? c.value : [c.value];
+        /* a right-hand question (`Q1 = Q6`) is compared by value at runtime, not against the code list */
+        const values = (Array.isArray(c.value) ? c.value : [c.value]).filter((v) => !isQuestionValueRef(v));
         const codeBased =
           ["selected", "notSelected", "eq", "ne", "in", "notIn", "contains", "notContains"].includes(
             operator,
@@ -352,8 +353,15 @@ function lintCondition(
           for (const v of values) {
             if (v === "" || v === null || v === undefined) continue;
             if (!codes.has(String(v))) {
+              /*
+               * An ERROR, not a warning: a rule comparing with a code the
+               * question no longer has can never be true, so whatever it
+               * guards is silently never shown, never skipped, never counted
+               * into its quota. The code was renamed or deleted without the
+               * rule following it (the recode path now does that).
+               */
               ctx.push({
-                level: "warning",
+                level: "error",
                 path,
                 message: `${src.code} has no option coded “${v}” — it may have been renamed or deleted.`,
               });
@@ -1132,6 +1140,10 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   issues.push(...lintSurveyLevelConditions(def, order));
   issues.push(...lintLoops(def));
   issues.push(...lintStructure(def));
+  /* a calculation reading a name nothing defines is null for every respondent, silently — an error, like a pipe from nowhere */
+  for (const u of unknownCalculationNames(def)) {
+    issues.push({ level: "error", questionCode: "Calc", path: `calculations[${u.index}].expression`, message: u.message });
+  }
   try {
     for (const cycle of detectLogicCycles(def)) {
       issues.push({

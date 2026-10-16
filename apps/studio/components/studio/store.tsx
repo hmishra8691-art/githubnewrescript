@@ -277,10 +277,34 @@ export function StudioProvider({
    * leave a `Q3 = "Yes"` behind that never matches a respondent. Said once,
    * when it happens.
    */
+  /** the unresolved-code problems the last edit was told about, so the same set is not toasted twice */
+  const lastUnresolved = React.useRef("");
+  const unresolvedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const withOptionCodes = (d: SurveyDefinition): SurveyDefinition => {
     const legacy = migrateLegacyCustomCode(d);
     const r = canonicalizeSurveyConditions(legacy.def);
     const changes = [...legacy.changes, ...r.changes];
+    /*
+     * WHAT COULD NOT BE RESOLVED IS SAID TOO. A rule comparing with a code the
+     * question no longer has (`Q1 = 2` after Blue became 20 by some path that
+     * did not retarget it, or after Blue was deleted) can never be true, and
+     * the only sign of it was a lint on another tab. Said once per distinct
+     * set of problems — not on every keystroke while the set stays the same,
+     * and not again when it has already been said for the previous edit.
+     */
+    const unresolvedKey = r.unresolved.join("\n");
+    if (unresolvedTimer.current) { clearTimeout(unresolvedTimer.current); unresolvedTimer.current = null; }
+    if (!unresolvedKey) lastUnresolved.current = "";
+    else if (unresolvedKey !== lastUnresolved.current) {
+      /* held for a moment: a code being typed ("2" → "20") is unresolved between keystrokes and resolved again when the field is left */
+      const list = r.unresolved;
+      unresolvedTimer.current = setTimeout(() => {
+        unresolvedTimer.current = null;
+        lastUnresolved.current = unresolvedKey;
+        const more = list.length > 2 ? ` (+${list.length - 2} more)` : "";
+        showToast(`Logic refers to codes that do not exist — ${list.slice(0, 2).join("; ")}${more}. See Logic › Check.`, "err");
+      }, 800);
+    }
     if (!changes.length) return d;
     showToast(`Logic tidied — ${changes.slice(0, 2).join("; ")}${changes.length > 2 ? ` (+${changes.length - 2} more)` : ""}.`);
     return r.def;

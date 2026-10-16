@@ -80,7 +80,7 @@ export const BLOCK_COMMANDS = {
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
 import {
-  FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes,
+  FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
@@ -233,13 +233,20 @@ const OPTION_WINDOW = 40;
 const SCALAR_TEXT_TYPES = ["open_text", "long_text"];
 
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
-  enableLogic = false, questionId, onAfterDelete, countLimit, addLabel = "+ option" }: {
+  enableLogic = false, questionId, onAfterDelete, onCodeCommit, countLimit, addLabel = "+ option" }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean; metaFields?: MetaField[];
   /** per-option logic + piping controls (reqs §1–4, §21) */
   enableLogic?: boolean; questionId?: string;
   /** called after a removal so the owner can re-sequence codes */
   onAfterDelete?(): void;
+  /**
+   * CALLED WHEN A CODE FIELD IS LEFT (blur or Enter) with the code the field
+   * held when focus entered and the code it holds now, so the owner can
+   * retarget every reference — not on each keystroke, since a code being
+   * typed passes through values ("2" → "" → "20") nothing should follow.
+   */
+  onCodeCommit?(from: string, to: string): void;
   /**
    * HOW MANY ENTRIES THIS QUESTION'S INTERACTION CAN CARRY (variant
    * `optionCount`). A Tinder deck draws two edges and a four-direction deck
@@ -304,6 +311,14 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
 
   const set = (i: number, patch: Partial<Option>) =>
     onChange(options.map((o, j) => (j === i ? { ...o, ...patch } : o)));
+  /* the code a code field held when focus entered — one field has focus at a time */
+  const codeAtFocus = React.useRef<string | null>(null);
+  const commitCode = (e: React.FocusEvent<HTMLInputElement> | React.KeyboardEvent<HTMLInputElement>) => {
+    const from = codeAtFocus.current;
+    codeAtFocus.current = null;
+    const to = e.currentTarget.value;
+    if (from != null && from !== to) onCodeCommit?.(from, to);
+  };
 
   /**
    * New codes are `max(existing) + 1`. Using the list LENGTH — as this did —
@@ -426,6 +441,10 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
           <input className="input code-input" value={String(o.code)} data-testid="option-code"
             disabled={frozen}
             onChange={(e) => set(i, { code: e.target.value })}
+            /* references follow the code once the edit is done — see onCodeCommit */
+            onFocus={(e) => { codeAtFocus.current = e.currentTarget.value; }}
+            onBlur={commitCode}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
             title={frozen
               ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
               : "code"} />
@@ -814,14 +833,22 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
  * every row gets its own label, field type, required flag, placeholder and
  * min/max validation — no predefined label restrictions.
  */
-function FieldRowsEditor({ q, patch, patchSettings }: {
+function FieldRowsEditor({ q, patch, patchSettings, onCodeCommit }: {
   q: Question;
   patch(p: Partial<Question>): void;
   patchSettings(p: Partial<Question["settings"]>): void;
+  /** a row code was edited and the field left: `from` → `to`, so references can follow (see OptionRows) */
+  onCodeCommit?(from: string, to: string): void;
 }) {
   const rows = q.rows;
   /* a field row's code is its variable suffix — same freeze, same reason */
   const frozen = useStudio().codesFrozen;
+  const codeAtFocus = React.useRef<string | null>(null);
+  const commitCode = (e: React.FocusEvent<HTMLInputElement>) => {
+    const from = codeAtFocus.current;
+    codeAtFocus.current = null;
+    if (from != null && from !== e.currentTarget.value) onCodeCommit?.(from, e.currentTarget.value);
+  };
   /*
    * WHAT THIS VARIANT'S FIELDS MAY BE.
    *
@@ -962,7 +989,10 @@ function FieldRowsEditor({ q, patch, patchSettings }: {
                 title={frozen
                   ? "Codes are frozen once this survey has live responses — moving a code would rewrite what a respondent said"
                   : "row code / variable suffix"}
-                onChange={(e) => setRow(i, { code: e.target.value })} />
+                onChange={(e) => setRow(i, { code: e.target.value })}
+                onFocus={(e) => { codeAtFocus.current = e.currentTarget.value; }}
+                onBlur={commitCode}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }} />
               <InlineRichText className="grow" placeholder="Field label, e.g. Email Address" testId="field-label"
                 value={r.label} onChange={(label) => setRow(i, { label })} />
               {fieldSpec?.range ? (
@@ -1171,11 +1201,16 @@ export function QuestionEditor({ q }: { q: Question }) {
   const s = useStudio();
   const mode = useCanvas()?.mode ?? "standard";
   const pendingResequenceNote = React.useRef<number | null>(null);
+  /* what a hand-edited code did to the rest of the survey — said once the edit has landed, like the re-sequence note */
+  const pendingRecodeNote = React.useRef<{ msg: string; kind: "ok" | "err" } | null>(null);
   React.useEffect(() => {
     const n = pendingResequenceNote.current;
-    if (n == null) return;
-    pendingResequenceNote.current = null;
-    s.toast(n > 0 ? `Codes re-sequenced — ${n} logic reference${n === 1 ? "" : "s"} updated` : "Codes re-sequenced");
+    if (n != null) {
+      pendingResequenceNote.current = null;
+      s.toast(n > 0 ? `Codes re-sequenced — ${n} logic reference${n === 1 ? "" : "s"} updated` : "Codes re-sequenced");
+    }
+    const r = pendingRecodeNote.current;
+    if (r) { pendingRecodeNote.current = null; s.toast(r.msg, r.kind); }
   });
   const plugin = questionTypeRegistry.get(q.type);
   const feats = plugin?.features ?? {};
@@ -1312,6 +1347,29 @@ export function QuestionEditor({ q }: { q: Question }) {
     });
   };
 
+  /**
+   * A CODE TYPED BY HAND RETARGETS EVERYTHING THAT NAMED IT (LOGIC-01).
+   *
+   * The code input writes each keystroke into the option; this runs when the
+   * field is left, with the code it held before, and repoints every
+   * reference through the engine's one recode path — display and skip logic,
+   * quota cells, masks, punches, randomisation groups, grid cells, row pipes
+   * — exactly as the Intelligent-Mode `update_option` action does. A rule
+   * that read "show when Q1 = 2" used to keep reading 2 after Blue became
+   * 20, and the question it guarded silently stopped appearing.
+   */
+  const recode = (scope: "options" | "rows", from: string, to: string) => {
+    if (s.codesFrozen || from === to) return;
+    s.update((d) => {
+      const r = scope === "options" ? recodeOptionCode(d, q.id, from, to) : recodeRowCode(d, q.id, from, to);
+      if (r.problem) { pendingRecodeNote.current = { msg: `Code ${from} → ${to}: ${r.problem} — logic still refers to ${from}`, kind: "err" }; return; }
+      Object.assign(d, r.def);
+      const what = scope === "options" ? "Option" : "Row";
+      const review = r.needsReview.length ? `; check calculation${r.needsReview.length === 1 ? "" : "s"} ${r.needsReview.map((c) => c.label).join(", ")}` : "";
+      pendingRecodeNote.current = { msg: `${what} code ${from} → ${to} — ${r.updated} reference${r.updated === 1 ? "" : "s"} updated${review}`, kind: "ok" };
+    });
+  };
+
   /*
    * THE LAYOUT CONTROL — beside the option list normally, or its own block
    * after the variant's settings (`builder.layoutLast`), where the review
@@ -1374,6 +1432,7 @@ export function QuestionEditor({ q }: { q: Question }) {
             addLabel={builder.rowsAddLabel}
             flagChoices={allowedRowFlagsFor(q.type, q.variant)}
             onAfterDelete={() => resequence("rows")}
+            onCodeCommit={(from, to) => recode("rows", from, to)}
             /* a row's picture lives in `meta.image` (Image Categorization) — edited with the same upload / choose control an option's image uses */
             showImage={!!builder.rowsImages}
             options={q.rows.map((r) => ({
@@ -1571,6 +1630,7 @@ export function QuestionEditor({ q }: { q: Question }) {
           <OptionRows options={q.options} onChange={(options) => patch({ options })}
             countLimit={variantDef?.optionCount}
             onAfterDelete={() => resequence("options")}
+            onCodeCommit={(from, to) => recode("options", from, to)}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
             /*
               * `drawsOptionImages` as well as the capability. The capability
@@ -1684,7 +1744,7 @@ export function QuestionEditor({ q }: { q: Question }) {
       )}
 
       {(q.type === "numeric_list" || q.type === "text_list" || q.type === "repeating_group") && !builder.hide?.includes("fields") && (
-        <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} />
+        <FieldRowsEditor q={q} patch={patch} patchSettings={patchSettings} onCodeCommit={(from, to) => recode("rows", from, to)} />
       )}
 
       {/*

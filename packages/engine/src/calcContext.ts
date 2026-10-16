@@ -44,6 +44,8 @@ const LOOP_ALIASES: Record<string, string> = {
   CURRENT_ITEM: "label", CURRENT_ITEM_LABEL: "label", CURRENT_ITEM_CODE: "code",
   LOOP_INDEX: "index", LOOP_COUNT: "count", LOOP_FIRST: "first", LOOP_LAST: "last", LOOP_DEPTH: "depth",
 };
+/** the bare loop names an expression inside an iteration can read — for the linter, which has no iteration to ask */
+export const LOOP_ALIAS_NAMES: readonly string[] = Object.keys(LOOP_ALIASES);
 
 /** A name as seen from inside an iteration, or `undefined` when the name is not the loop's to answer. */
 export function loopScopedName(def: SurveyDefinition, state: ResponseState, loop: LoopContext, n: string): unknown {
@@ -72,6 +74,36 @@ export function loopScopedName(def: SurveyDefinition, state: ResponseState, loop
 
 /** the prefix that says "this is embedded data" — `ed.LOWCAL_1`, `embedded.LOWCAL_1` */
 const EMBEDDED_PREFIX = /^(?:ed|embedded)\./i;
+
+/**
+ * A QUESTION CODE IS A NAME TOO — `Q7`, not only `N`.
+ *
+ * The flat map is keyed by VARIABLE names, and in most surveys a question's
+ * code and its variable name are the same string, so `Q7 > 3` worked — until
+ * somebody renamed the variable, after which `Q7` resolved to nothing and
+ * the calculation quietly produced null (`Q7 + 1` = 1, `Q7 > 3` = false),
+ * with no calc error and no lint. The condition language resolves a question
+ * by code, variable name or id, and its expression editor rewrites `Q7` to
+ * `N` before the calc engine sees it; a calculation typed into the
+ * Calculations tab or sent by `create_calculation` got no such rewrite.
+ *
+ * So a name the flat map does not hold is read the way that rewrite would
+ * read it: the question it names, under its primary variable (`Q7` → `N`),
+ * and a suffixed spelling under the same suffix (`Q1_2` → `COLOR_2`,
+ * `QM_svc` → `SAT_svc`). The head is tried at every underscore because a
+ * code may itself contain one. `undefined` means "not a question's name".
+ */
+export function questionCodeAlias(def: SurveyDefinition, name: string, has: (flatName: string) => boolean): string | undefined {
+  const whole = getQuestionByCodeOrVar(def, name);
+  if (whole) return has(whole.variableName) ? whole.variableName : undefined;
+  for (let i = name.indexOf("_"); i > 0; i = name.indexOf("_", i + 1)) {
+    const q = getQuestionByCodeOrVar(def, name.slice(0, i));
+    if (!q) continue;
+    const alias = `${q.variableName}${name.slice(i)}`;
+    if (has(alias)) return alias;
+  }
+  return undefined;
+}
 
 export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop?: LoopContext | null): CalcOptions {
   const flat = flattenVariables(def, state);
@@ -106,6 +138,9 @@ export function calcOptionsFor(def: SurveyDefinition, state: ResponseState, loop
       if (n in state.calculated) return state.calculated[n];
       if (n in embedded) return (embedded as Record<string, unknown>)[n];
       if (EMBEDDED_PREFIX.test(n)) return (embedded as Record<string, unknown>)[storedName(n.replace(EMBEDDED_PREFIX, ""))];
+      /* a question CODE (`Q7` for the variable N, `Q1_2` for COLOR_2) — see questionCodeAlias */
+      const alias = questionCodeAlias(def, n, (k) => k in flat);
+      if (alias !== undefined) return flat[alias];
       /*
        * A NAMED EXPRESSION, as 1 (holds) or 0 — `IS_HIGH_VALUE * 10`,
        * `if(rule.ELIGIBLE, 1, 0)`. Calculations could not read one, so a

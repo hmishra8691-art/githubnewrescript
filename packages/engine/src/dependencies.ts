@@ -13,6 +13,9 @@ import { pipeTokensIn } from "./pipingTokens.js";
 import { referencedNames, embeddedCatalog } from "./embedded.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { findNamedExpression } from "./namedExpressions.js";
+import { buildVariableDictionary } from "./variables.js";
+import { LOOP_ALIAS_NAMES, questionCodeAlias } from "./calcContext.js";
+import { loopNodes } from "./loopModel.js";
 
 /**
  * Dependency tracking (reqs §27, §31–32).
@@ -641,6 +644,72 @@ export function calculationOrderProblems(def: SurveyDefinition): string[] {
   return out;
 }
 
+/**
+ * A NAME NOTHING IN THE SURVEY ANSWERS TO.
+ *
+ * The calc engine returns null for a name it cannot resolve and says nothing
+ * — `Q7 + 1` was 1 and `Q7 > 3` was false, for as long as the variable was
+ * called N and nobody noticed. The runtime now reads a question code the way
+ * the expression editor rewrites it (see `questionCodeAlias`), so the names
+ * that still resolve to nothing are the ones that are genuinely wrong: a
+ * typo, a variable renamed after the calculation was written, a question
+ * that was deleted. Those are reported here, by calculation, against
+ * everything a name can legitimately be:
+ *
+ *   · a variable of the dictionary (`COLOR_2`, `SAT_svc`, `LOOP_BRAND_COUNT`, `LISTFILL_X_1`)
+ *   · a question's code, variable name or id, or a code-spelled suffix (`Q1_2`)
+ *   · another calculation, an embedded field (`ed.X` is checked separately),
+ *     a named expression (`rule.X` or bare), a declared variable override
+ *   · a loop's own names (`loop.index`, `CURRENT_ITEM`, `<loopVar>.label`)
+ *   · a wildcard (`Q1_*`), which the live map resolves
+ */
+export interface UnknownCalculationName {
+  calculationId: string;
+  targetVariable: string;
+  /** index in `def.calculations` */
+  index: number;
+  name: string;
+  message: string;
+}
+
+export function unknownCalculationNames(def: SurveyDefinition): UnknownCalculationName[] {
+  const calcs = def.calculations ?? [];
+  if (!calcs.length) return [];
+  const dict = new Set(buildVariableDictionary(def).map((v) => v.name));
+  const targets = new Set(calcs.map((c) => c.targetVariable));
+  const embedded = new Set(embeddedCatalog(def).map((e) => e.name));
+  const declared = new Set((def.variables ?? []).map((v) => v.name));
+  const loopVars = new Set(loopNodes(def).map(({ node }) => node.loopVar).filter((v): v is string => typeof v === "string" && !!v));
+  const aliases = new Set(LOOP_ALIAS_NAMES);
+  const known = (name: string): boolean => {
+    if (name.includes("*")) return true;
+    if (/^(?:ed|embedded)\./i.test(name)) return true;
+    if (aliases.has(name)) return true;
+    const dot = name.indexOf(".");
+    if (dot > 0) {
+      const head = name.slice(0, dot);
+      if (head === "loop" || head === "CURRENT_ITEM" || loopVars.has(head)) return true;
+      if (head === "rule") return !!findNamedExpression(def, name.slice(dot + 1));
+      return known(head);
+    }
+    if (dict.has(name) || targets.has(name) || embedded.has(name) || declared.has(name) || loopVars.has(name)) return true;
+    if (getQuestionByCodeOrVar(def, name)) return true;
+    if (questionCodeAlias(def, name, (k) => dict.has(k)) !== undefined) return true;
+    return !!findNamedExpression(def, name);
+  };
+  const out: UnknownCalculationName[] = [];
+  calcs.forEach((c, index) => {
+    for (const name of new Set(referencedNames(c.expression ?? ""))) {
+      if (known(name)) continue;
+      out.push({
+        calculationId: c.id, targetVariable: c.targetVariable, index, name,
+        message: `Calculation ${c.targetVariable} reads “${name}”, which is not a variable, question code or embedded field of this survey — it is empty for every respondent.`,
+      });
+    }
+  });
+  return out;
+}
+
 /** Everything wrong with this survey's calculations, in one list (§46). */
 export function lintCalculations(def: SurveyDefinition): string[] {
   const out: string[] = [];
@@ -651,6 +720,7 @@ export function lintCalculations(def: SurveyDefinition): string[] {
     );
   }
   out.push(...calculationOrderProblems(def));
+  out.push(...unknownCalculationNames(def).map((u) => u.message));
   out.push(...embeddedReferenceProblems(def));
   // AI-derived calculations have their own shape rules (aiFunctions.ts); they
   // are calculations, so their problems belong in this list, not a second one.
