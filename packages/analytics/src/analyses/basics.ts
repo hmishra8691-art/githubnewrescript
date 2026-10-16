@@ -2,7 +2,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartData, ChartType, ResultTa
 import { categoricalColumn, categoriesOf, itemLabelOf, labelOf, numericColumn, scaleCodes, segmentDatasets, weights, type Dataset } from "../dataset.js";
 import { boxShares, describe, frequencies } from "../stats/descriptive.js";
 import { proportionCI } from "../stats/tests.js";
-import { fmtNum, fmtPct, makeResult, opt, pct, round } from "./common.js";
+import { answeredN, fmtNum, fmtPct, makeResult, opt, pct, round } from "./common.js";
 
 /* ============================================================ descriptive */
 
@@ -107,13 +107,15 @@ export function descriptive(def: AnalysisDefinition, ds: Dataset, totalCases: nu
       recommended.splice(0, recommended.length, "bar_stacked_100", "diverging_likert", "heatmap", "mean_ci");
     }
   }
+  /* a segment's n is the respondents IN the segment who ANSWERED — the base its chart is a share of (audit ANALYTICS-03) */
   const segs = segmentDatasets(ds, def.segments).map(({ segment, data }) => {
     const v = def.variables[0];
     const meta = ds.byName.get(v);
     if (!meta) return { name: segment.name, n: data.cases.length, chart: {} };
-    if (meta.role === "numeric") { const d = describe(numericColumn(data, v), weights(data)); return { name: segment.name, n: data.cases.length, chart: { categories: [labelOf(ds, v)], series: [{ name: "Mean", values: [round(d.mean)] }] } }; }
+    const n = answeredN(data, [v]).n;
+    if (meta.role === "numeric") { const d = describe(numericColumn(data, v), weights(data)); return { name: segment.name, n, chart: { categories: [labelOf(ds, v)], series: [{ name: "Mean", values: [round(d.mean)] }] } }; }
     const f = frequencies(categoricalColumn(data, v), weights(data), categoriesOf(ds, v));
-    return { name: segment.name, n: data.cases.length, chart: { categories: f.rows.map((r) => r.label), series: [{ name: segment.name, values: f.rows.map((r) => pct(r.validPct)) }], valueFormat: "pct" as const } };
+    return { name: segment.name, n, chart: { categories: f.rows.map((r) => r.label), series: [{ name: segment.name, values: f.rows.map((r) => pct(r.validPct)) }], valueFormat: "pct" as const } };
   });
   return makeResult(def, ds, { tables, chart, insights, warnings, recommendedCharts: [...new Set(recommended)], segments: segs.length ? segs : undefined, totalCases });
 }
@@ -162,11 +164,12 @@ export function topbox(def: AnalysisDefinition, ds: Dataset, totalCases: number)
   const ranked = rows.map((r, i) => ({ label: categories[i], top: r[`top${primary}`] as number | null })).filter((r) => r.top != null).sort((a, b) => b.top! - a.top!);
   if (ranked.length) insights.push(`Highest top-${primary}-box: ${ranked[0].label} (${fmtPct(ranked[0].top, 1)})${ranked.length > 1 ? `; lowest: ${ranked[ranked.length - 1].label} (${fmtPct(ranked[ranked.length - 1].top, 1)})` : ""}.`);
   const segs = segmentDatasets(ds, def.segments).map(({ segment, data }) => ({
-    name: segment.name, n: data.cases.length,
+    name: segment.name, n: answeredN(data, def.variables).n,
     chart: { categories, series: [{ name: `Top ${primary} box`, values: def.variables.filter((v) => scaleCodes(ds, v).length >= 2).map((v) => pct(boxShares(numericColumn(data, v), weights(data), scaleCodes(ds, v), boxes)[`top${primary}`])) }], valueFormat: "pct" as const },
   }));
+  /* the table's base is the answered base the header prints — one base per screen and per xlsx sheet (audit ANALYTICS-02) */
   return makeResult(def, ds, {
-    tables: [{ id: "topbox", title: "Top / bottom box", columns, rows, base: { n: ds.cases.length } }],
+    tables: [{ id: "topbox", title: "Top / bottom box", columns, rows, base: answeredN(ds, def.variables) }],
     chart: { categories, series: [{ name: `Top ${primary} box`, values: topSeries }, { name: `Bottom ${primary} box`, values: bottomSeries }, { name: "Mean", values: meanSeries, meta: { axis: "secondary" } }], valueFormat: "pct" },
     insights, warnings, recommendedCharts: ["bar_horizontal", "diverging_likert", "bar_grouped", "lollipop", "dot_plot"], segments: segs.length ? segs : undefined, totalCases,
   });
@@ -199,7 +202,7 @@ export function ranking(def: AnalysisDefinition, ds: Dataset, totalCases: number
   rows.sort((a, b) => ((a.mean as number) ?? 99) - ((b.mean as number) ?? 99));
   const insights = rows.length ? [`“${rows[0].item}” ranks highest on average (mean rank ${fmtNum(rows[0].mean as number, 2)}, ranked first by ${fmtPct(rows[0].first as number, 1)}); “${rows[rows.length - 1].item}” ranks lowest.`] : [];
   return makeResult(def, ds, {
-    tables: [{ id: "ranking", title: "Ranking summary", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean rank", type: "number", decimals: 2 }, { key: "first", label: "Ranked 1st %", type: "pct", decimals: 1 }, { key: "top3", label: "Top 3 %", type: "pct", decimals: 1 }, { key: "last", label: "Ranked last %", type: "pct", decimals: 1 }, { key: "score", label: "Rank score", type: "number", decimals: 2 }], rows, base: { n: ds.cases.length }, notes: ["Rank score: Borda count (first place = number of items points), averaged."] },
+    tables: [{ id: "ranking", title: "Ranking summary", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean rank", type: "number", decimals: 2 }, { key: "first", label: "Ranked 1st %", type: "pct", decimals: 1 }, { key: "top3", label: "Top 3 %", type: "pct", decimals: 1 }, { key: "last", label: "Ranked last %", type: "pct", decimals: 1 }, { key: "score", label: "Rank score", type: "number", decimals: 2 }], rows, base: answeredN(ds, vars), notes: ["Rank score: Borda count (first place = number of items points), averaged."] },
       { id: "ranking_dist", title: "Rank distribution (%)", columns: [{ key: "item", label: "Item" }, ...Array.from({ length: nItems }, (_, i) => ({ key: `r${i + 1}`, label: `Rank ${i + 1}`, type: "pct" as const, decimals: 1 }))], rows: vars.map((v, i) => ({ item: itemLabelOf(ds, v), ...Object.fromEntries(dist[i].map((s, j) => [`r${j + 1}`, pct(s)])) })) }],
     chart: { categories: rows.map((r) => r.item as string), series: [{ name: "Mean rank", values: rows.map((r) => r.mean as number | null) }, { name: "Ranked 1st %", values: rows.map((r) => r.first as number | null) }], matrix: { rows: vars.map((v) => itemLabelOf(ds, v)), columns: Array.from({ length: nItems }, (_, i) => `Rank ${i + 1}`), values: dist.map((d) => d.map((x) => pct(x))) } },
     insights, recommendedCharts: ["ranking_bar", "bar_stacked_100", "rank_heatmap", "bar_horizontal", "bump"], variablesUsed: vars, totalCases,
@@ -222,7 +225,7 @@ export function allocation(def: AnalysisDefinition, ds: Dataset, totalCases: num
   const sorted = [...rows].sort((a, b) => (b.mean ?? 0) - (a.mean ?? 0));
   const insights = sorted.length ? [`“${sorted[0].item}” receives the largest average allocation (${fmtNum(sorted[0].mean, 1)}, ${fmtPct(sorted[0].share, 1)} of the total)${sorted.length > 1 ? `; “${sorted[sorted.length - 1].item}” the smallest (${fmtNum(sorted[sorted.length - 1].mean, 1)})` : ""}.`] : [];
   return makeResult(def, ds, {
-    tables: [{ id: "allocation", title: "Allocation summary", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean", type: "number", decimals: 1 }, { key: "median", label: "Median", type: "number", decimals: 1 }, { key: "sd", label: "SD", type: "number", decimals: 1 }, { key: "share", label: "Share of total %", type: "pct", decimals: 1 }, { key: "nonZero", label: "Allocated > 0 %", type: "pct", decimals: 1 }, { key: "min", label: "Min", type: "number" }, { key: "max", label: "Max", type: "number" }], rows, base: { n: ds.cases.length } }],
+    tables: [{ id: "allocation", title: "Allocation summary", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean", type: "number", decimals: 1 }, { key: "median", label: "Median", type: "number", decimals: 1 }, { key: "sd", label: "SD", type: "number", decimals: 1 }, { key: "share", label: "Share of total %", type: "pct", decimals: 1 }, { key: "nonZero", label: "Allocated > 0 %", type: "pct", decimals: 1 }, { key: "min", label: "Min", type: "number" }, { key: "max", label: "Max", type: "number" }], rows, base: answeredN(ds, vars) }],
     chart: { categories: rows.map((r) => r.item), series: [{ name: "Mean allocation", values: rows.map((r) => r.mean) }], valueFormat: "number" },
     insights, recommendedCharts: ["bar_horizontal", "donut", "bar_stacked_100", "box_plot", "treemap"], variablesUsed: vars, totalCases,
   });

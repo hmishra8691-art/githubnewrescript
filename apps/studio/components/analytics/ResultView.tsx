@@ -6,6 +6,7 @@ import { CHART_CATALOG, CHART_FAMILIES, chartsAvailable, isOwnPicture } from "@r
 import { Chart } from "./charts/Chart";
 import { ProTable, tableToTsv, type TableFormatting } from "./ProTable";
 import { downloadBlob } from "./api";
+import { BaseCaption, scopeText } from "./BaseCaption";
 
 /**
  * RESULT + CHART WORKBENCH (§9, §10, §29, §30, §31). Shows the tables an
@@ -253,7 +254,11 @@ export function ResultView(p: ResultViewProps) {
       <div className="ax-result-head">
         <div>
           <div className="ax-result-title">{r.name}</div>
-          <div className="muted" style={{ fontSize: 13 }} data-testid="ax-base">n = {r.base.n}{r.base.weightedN !== r.base.n ? ` · weighted n = ${r.base.weightedN}` : ""} · {r.base.filtered} of {r.base.total} responses in scope · computed {new Date(r.computedAt).toLocaleTimeString()}</div>
+          {/* the base and its scope on one line (audit OR-03): n, who answered, how many were in scope and why — never a bare number */}
+          <div className="row" style={{ gap: 6, alignItems: "baseline", flexWrap: "wrap" }}>
+            <BaseCaption result={r} segment={segIdx != null ? r.segments?.[segIdx] ?? null : null} style={{ fontSize: 13 }} />
+            <span className="muted" style={{ fontSize: 12.5 }}>· computed {new Date(r.computedAt).toLocaleTimeString()}</span>
+          </div>
         </div>
         <span className="grow" />
         {p.actions}
@@ -306,7 +311,7 @@ export function ResultView(p: ResultViewProps) {
           {r.tables.map((t) => (
             <div key={t.id} className="card ax-table-card">
               <div className="ax-table-card-head"><div className="card-title">{t.title}</div><span className="grow" /><button type="button" className="btn small ghost" onClick={() => copy(t)} title="Copy as tab-separated text for a spreadsheet">{copied === t.id ? "Copied" : "Copy"}</button></div>
-              <ProTable table={t} formatting={f} />
+              <ProTable table={t} formatting={f} scope={scopeText(r)} />
             </div>
           ))}
           {!r.tables.length && <div className="ax-empty"><div className="ax-empty-t">No tables</div><div className="ax-empty-d">This analysis produced charts and statistics but no table.</div></div>}

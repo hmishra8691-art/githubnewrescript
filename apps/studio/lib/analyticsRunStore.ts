@@ -1,4 +1,4 @@
-import type { AnalysisRun, DatasetSpec } from "@rescript/analytics";
+import type { AnalysisRun, DatasetSpec, RunScope } from "@rescript/analytics";
 import type { compactRun } from "@rescript/analytics";
 
 /**
@@ -15,7 +15,15 @@ import type { compactRun } from "@rescript/analytics";
  * way, and the Studio shows what the database kept.
  */
 export type CompactRun = ReturnType<typeof compactRun>;
-export type StoredRun = CompactRun & { id: string; surveyVersion?: string | null; dataset?: DatasetSpec | null };
+/**
+ * The run's `dataset` column is its dataset spec — and, since the 2026-10-16
+ * audit (OR-03), the scope the run was computed on beside it (`scope`:
+ * statuses, quality rule, n in scope / n total, the weightings and filters
+ * its items used). Additive: a run stored before carries no `scope`, and
+ * every reader treats it as optional. No migration — the column is jsonb.
+ */
+export type StoredDataset = DatasetSpec & { scope?: RunScope };
+export type StoredRun = CompactRun & { id: string; surveyVersion?: string | null; dataset?: StoredDataset | null };
 
 export interface RunInsertDb {
   from(table: "analytics_runs"): {
@@ -34,7 +42,7 @@ export function runFromRow(r: Record<string, unknown>): StoredRun {
     ...(r.kpis ? { kpis: r.kpis as AnalysisRun["kpis"] } : {}),
     ...(r.since ? { since: r.since as AnalysisRun["since"] } : {}),
     surveyVersion: (r.survey_version as string | null) ?? null,
-    dataset: (r.dataset as DatasetSpec | null) ?? null,
+    dataset: (r.dataset as StoredDataset | null) ?? null,
   };
 }
 
@@ -52,9 +60,10 @@ export const missingColumn = (message: string): boolean => /column|schema cache/
  * predates migration 0048. The returned run carries the fields either way,
  * because the caller just computed them.
  */
-export async function insertRun(db: RunInsertDb, surveyId: string, compact: CompactRun, spec: DatasetSpec, meta: { surveyVersion: string | null; userId: string | null }): Promise<{ stored: StoredRun | null; error?: string; withoutExtras?: boolean }> {
+export async function insertRun(db: RunInsertDb, surveyId: string, compact: CompactRun, spec: DatasetSpec, meta: { surveyVersion: string | null; userId: string | null; /** what the run was computed on (audit OR-03) — stored inside the `dataset` JSON */ scope?: RunScope | null }): Promise<{ stored: StoredRun | null; error?: string; withoutExtras?: boolean }> {
+  const dataset: StoredDataset = meta.scope ? { ...spec, scope: meta.scope } : spec;
   const row = {
-    survey_id: surveyId, trigger: compact.trigger, environment: compact.environment, n: compact.n, dataset: spec, computed_at: compact.computedAt,
+    survey_id: surveyId, trigger: compact.trigger, environment: compact.environment, n: compact.n, dataset, computed_at: compact.computedAt,
     findings: compact.findings, verdicts: compact.verdicts, items: compact.items, warnings: compact.warnings, survey_version: meta.surveyVersion, created_by: meta.userId,
   };
   const extras = { corrections: compact.corrections ?? null, advice: compact.advice ?? null, discoveries: compact.discoveries ?? null };

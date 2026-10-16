@@ -57,7 +57,7 @@ function setup(plan = true, completes = 120) {
 }
 
 /** a runner that computes nothing: one run item per planned (non-excluded) item, stored like the real one */
-const deps = (opts: { fail?: string[] } = {}): PlanDeps => ({
+const deps = (opts: { fail?: string[]; /** items the run refuses with `error` set (audit ANALYTICS-05/06) */ refuse?: string[] } = {}): PlanDeps => ({
   latestRun: async (db, surveyId, environment) => {
     const rows = (db as unknown as FakeDb).tables.analytics_runs.filter((r) => r.survey_id === surveyId && (!environment || r.environment === environment)).sort((a, b) => String(b.computed_at).localeCompare(String(a.computed_at)));
     const r = rows[0]; if (!r) return null;
@@ -70,7 +70,7 @@ const deps = (opts: { fail?: string[] } = {}): PlanDeps => ({
     const items = plannedAnalyses(ctx.def, spec).filter((p) => !o.exclude?.has(String(p.definition.options?.planned)));
     const run: AnalysisRun = {
       computedAt: stamp(), trigger: o.trigger ?? "manual", environment: spec.environment, n,
-      items: items.map((p) => ({ definition: p.definition, result: { tables: [], chart: {}, tests: [], insights: [], warnings: opts.fail?.includes(String(p.definition.options?.planned)) ? ["The analysis could not be computed: boom"] : [], recommendedCharts: ["bar_vertical"], computedAt: "", definitionHash: "", variablesUsed: [] } as never, findings: [], chart: p.definition.kind === "crosstab" ? "bar_grouped" : "bar_vertical", source: p.source, priority: p.priority, hypotheses: p.hypotheses })),
+      items: items.map((p) => ({ definition: p.definition, result: { tables: [], chart: {}, tests: [], insights: [], warnings: opts.fail?.includes(String(p.definition.options?.planned)) ? ["The analysis could not be computed: boom"] : [], recommendedCharts: ["bar_vertical"], computedAt: "", definitionHash: "", variablesUsed: [] } as never, findings: [], chart: p.definition.kind === "crosstab" ? "bar_grouped" : "bar_vertical", source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(opts.refuse?.includes(String(p.definition.options?.planned)) ? { error: { code: "unknown_variable" as const, message: "Not run — GHOST is not in this survey's data." } } : {}) })),
       findings: [], verdicts: [{ label: "H1", text: "Trust raises intent", verdict: "untested", reason: "no test ran", findings: [], analyses: 0 }, { label: "H2", text: "Country changes intent", verdict: "untested", reason: "no test ran", findings: [], analyses: 0 }], warnings: [],
     };
     if (o.skipEmpty && n === 0) return { run, stored: null };
@@ -240,6 +240,11 @@ test("a failed computation is reported per item; a concurrent apply is refused; 
   assert.match(r.summary!.items.find((i) => i.id === "t_1")!.reason!, /could not be computed/);
   assert.equal(r.summary!.counts.failed, 1);
   assert.ok(db.tables.analytics_plan_applies.every((a) => a.status !== "running" && a.finished_at), "the lock row is finished");
+
+  /* an item the run refused (audit ANALYTICS-05/06) carries `error`, and the apply reports it as failed with that very reason */
+  const refused = await applyPlan(setup().as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps({ refuse: ["t_1"] }));
+  assert.equal(refused.summary!.items.find((i) => i.id === "t_1")!.status, "failed");
+  assert.equal(refused.summary!.items.find((i) => i.id === "t_1")!.reason, "Not run — GHOST is not in this survey's data.");
 
   /* concurrent: a running row refuses the second apply */
   db.tables.analytics_plan_applies.push({ id: uuid(), survey_id: SURVEY, status: "running", started_at: stamp(), environment: "LIVE", dataset: LIVE });

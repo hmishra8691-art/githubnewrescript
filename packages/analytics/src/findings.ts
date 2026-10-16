@@ -4,13 +4,14 @@ import { hypothesisLabel } from "@rescript/schema";
 import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec, ResultProvenance } from "./types.js";
 import type { Dataset } from "./dataset.js";
 import type { TestResult } from "./stats/tests.js";
-import { runAnalysis } from "./analyses/index.js";
+import { failedResult, runAnalysis } from "./analyses/index.js";
 import { MIN_BASE } from "./analyses/common.js";
 import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
 import { withPlannedVariables } from "./plannedVariables.js";
+import { validateAnalysis } from "./planCheck.js";
 import { describeSince, kpiSnapshot, type KpiSnapshot, type WaveComparison } from "./waves.js";
-import { buildAnalysisFramework, parseHypothesis, structuredHypotheses } from "@rescript/engine";
+import { buildAnalysisFramework, isNonQuestionVariable, parseHypothesis, structuredHypotheses } from "@rescript/engine";
 import { adjustP, pairwiseComparisons, CORRECTION_WORDS, type CorrectionMethod, type PairwiseResult } from "./posthoc.js";
 import { adviseAnalysis, adviceSummary, type DataAdvice } from "./dataAdvice.js";
 import { synthesize, type Discoveries } from "./synthesis.js";
@@ -82,6 +83,8 @@ export interface RunItem {
   adaptedFrom?: string;
   /** what the result was computed from and how long it took — kept when the run is stored, though the result itself is not (audit S-14) */
   provenance?: Omit<ResultProvenance, "definition">;
+  /** the item was not run, or could not be computed: the result's error, kept on the stored (compact) run so the plan can show it (audit ANALYTICS-05/06) */
+  error?: AnalysisResult["error"];
 }
 /** one family of tests corrected together (Phase 4) */
 export interface CorrectionFamily { family: string; tests: number; /** findings significant before and after */ before: number; after: number; lost: string[] }
@@ -563,6 +566,12 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   adapt?: boolean;
   /** look beyond the plan — segment discovery, anomalies, wave trends (Phase 4); on by default */
   discover?: boolean;
+  /**
+   * the dataset an item runs on when it is not the run's own (audit ANALYTICS-07): a plan run used to build one
+   * dataset from the FIRST item's weighting and run every item on it, so a weighting on any other item was ignored.
+   * The caller builds one dataset per distinct weighting and hands them out here; `undefined` means the run's dataset.
+   */
+  datasetFor?: (item: PlannedAnalysis) => Dataset | undefined;
 } = {}): AnalysisRun {
   /*
    * The plan's derived variables and segments first, as columns of this run's
@@ -576,25 +585,53 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const planned = opts.items ?? plannedAnalyses(def, dataset.spec, { primaries: opts.primaries ?? false, plan });
   const method: CorrectionMethod | "none" = opts.correction ?? "holm";
   const corrMethod: CorrectionMethod = method === "none" ? "holm" : method;
+  /* another dataset (another weighting) gets the plan's variables too; the same object is prepared once */
+  const prepared2 = new Map<Dataset, Dataset>([[input, dataset]]);
+  const datasetOf = (p: PlannedAnalysis): Dataset => {
+    const d = opts.datasetFor?.(p);
+    if (!d || d === input) return dataset;
+    let ready = prepared2.get(d);
+    if (!ready) { ready = withPlannedVariables(def, d, plan).dataset; prepared2.set(d, ready); }
+    return ready;
+  };
   const runOne = (p: PlannedAnalysis, adaptedFrom?: string): RunItem => {
-    const result = runAnalysis(p.definition, dataset);
-    const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => dataset.byName.get(v)?.label ?? v });
-    const chart = result.advice?.type ?? adviseChart(p.definition, result, [...dataset.byName.values()]).type ?? recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
+    const ds = datasetOf(p);
+    const result = runAnalysis(p.definition, ds);
+    const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => ds.byName.get(v)?.label ?? v });
+    const chart = result.advice?.type ?? adviseChart(p.definition, result, [...ds.byName.values()]).type ?? recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
     /* which pairs differ, when a significant comparison had three or more groups (Phase 4) */
-    if (p.definition.kind === "test" && dataset.cases.length >= MIN_BASE) {
+    if (p.definition.kind === "test" && ds.cases.length >= MIN_BASE) {
       const [y, g] = p.definition.variables;
       const groups = result.tables.find((t) => t.id === "groups")?.rows.length ?? 0;
       const f = findings.find((x) => x.kind === "difference" && /anova|kruskal/.test(x.evidence.test ?? ""));
       if (f && y && g && groups >= 3) {
-        const pw = pairwiseComparisons(dataset, y, g, { method: corrMethod, nonparametric: /kruskal/.test(f.evidence.test ?? "") });
+        const pw = pairwiseComparisons(ds, y, g, { method: corrMethod, nonparametric: /kruskal/.test(f.evidence.test ?? "") });
         f.evidence.pairwise = pw;
         f.detail = `${f.detail ? `${f.detail} ` : ""}${pw.summary}`;
       }
     }
-    const advice = adviseAnalysis(p.definition, dataset);
-    return { definition: p.definition, result, findings, ...(result.provenance ? { provenance: stripDefinition(result.provenance) } : {}), ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(advice.ok ? {} : { advice }), ...(adaptedFrom ? { adaptedFrom } : {}) };
+    const advice = adviseAnalysis(p.definition, ds);
+    return { definition: p.definition, result, findings, ...(result.provenance ? { provenance: stripDefinition(result.provenance) } : {}), ...(chart ? { chart } : {}), source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(advice.ok ? {} : { advice }), ...(adaptedFrom ? { adaptedFrom } : {}), ...(result.error ? { error: result.error } : {}) };
   };
-  const items: RunItem[] = planned.map((p) => runOne(p));
+  /*
+   * ITEMS THE DATA CANNOT RUN ARE NOT RUN (audit ANALYTICS-05/06). An item naming a variable the dataset does not
+   * have (a question code the plan did not resolve, a variable the survey lost) used to run anyway: an empty result,
+   * base 0, a dictionary warning merged into the run's caveats and no error on the item. It is now kept in the run
+   * with `error` set and no numbers, and the run says in one caveat which items were left out and why — the same
+   * check the plan review applies before the apply (`validateAnalysis`), against the columns this dataset really has.
+   */
+  const notRun: { name: string; reason: string }[] = [];
+  /* a design task (conjoint, MaxDiff) is read through its question, not a column; the plan's own names are columns by now */
+  const knownBesidesColumns = (name: string): boolean => def.questions.some((q) => q.variableName === name) || isNonQuestionVariable(def, name, plan);
+  const items: RunItem[] = planned.map((p) => {
+    const issues = validateAnalysis(p.definition, [...datasetOf(p).byName.values()], knownBesidesColumns).filter((i) => i.severity === "error");
+    if (!issues.length) return runOne(p);
+    const dead = issues.find((i) => i.code === "unknown_variable");
+    const reason = issues.map((i) => i.message).join(" ");
+    notRun.push({ name: p.definition.name, reason });
+    const result = failedResult(p.definition.name, p.definition.kind, `Not run — ${reason}`, dead ? "unknown_variable" : "not_computable");
+    return { definition: p.definition, result, findings: [], source: p.source, priority: p.priority, hypotheses: p.hypotheses, error: result.error };
+  });
   /* the recommended method beside the planned one, when asked (Phase 4) */
   if (opts.adapt) {
     for (const it of [...items]) {
@@ -610,7 +647,11 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const verdicts = hypothesisVerdicts(def, items).map((v) => { const corrected = corrections ? correctedVerdict(v) : undefined; return corrected ? { ...v, corrected } : v; });
   const advice = items.map((it) => it.advice).filter((a): a is DataAdvice => !!a);
   const discoveries = opts.discover === false ? undefined : synthesize(def, dataset, { method: corrMethod });
-  const warnings = [...new Set([...prepared.warnings, ...items.flatMap((it) => it.result.warnings)])];
+  const warnings = [...new Set([
+    ...prepared.warnings,
+    ...(notRun.length ? [`${notRun.length === 1 ? "1 planned analysis was" : `${notRun.length} planned analyses were`} not run: ${notRun.slice(0, 4).map((x) => `“${x.name}” (${x.reason.replace(/\.$/, "")})`).join("; ")}${notRun.length > 4 ? ` and ${notRun.length - 4} more` : ""}.`] : []),
+    ...items.filter((it) => !it.error).flatMap((it) => it.result.warnings),
+  ])];
   const kpis = kpiSnapshot(def, dataset);
   return { computedAt: opts.now ?? new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: dataset.spec.environment, n: dataset.cases.length, items, findings, verdicts, warnings,
     ...(corrections ? { corrections } : {}), ...(advice.length ? { advice } : {}), ...(discoveries ? { discoveries } : {}), ...(kpis.length ? { kpis } : {}) };

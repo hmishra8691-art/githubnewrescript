@@ -4,7 +4,7 @@ import { boxShares, describe, frequencies } from "../stats/descriptive.js";
 import { correlate } from "../stats/correlation.js";
 import { proportionCI, proportionTest, type TestResult } from "../stats/tests.js";
 import { ols } from "../stats/regression.js";
-import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
+import { answeredN, fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
 
 /* ============================================================ NPS */
@@ -154,7 +154,7 @@ export function csat(def: AnalysisDefinition, ds: Dataset, totalCases: number): 
     ? `CSAT for ${primary.item}: ${fmtPct(primary.score, 0)} satisfied (top-2 box); mean ${fmtNum(primary.mean, 2)} (index ${fmtNum(primary.index, 0)}/100, n = ${primary.n}).`
     : `CES for ${primary.item}: mean ${fmtNum(primary.mean, 2)} (index ${fmtNum(primary.index, 0)}/100, n = ${primary.n})${primary.score != null ? `; ${fmtPct(primary.score, 0)} found it easy (${boxName(firstCodes).toLowerCase()} box${lowIsEasy ? ", low effort" : ""})` : ""}.`];
   if (rows.length > 1) { const s = [...rows].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)); insights.push(`Highest: ${s[0].item} (${fmtPct(s[0].score, 0)}); lowest: ${s[s.length - 1].item} (${fmtPct(s[s.length - 1].score, 0)}).`); }
-  const tables: ResultTable[] = [{ id: "csat", title: kind === "csat" ? "Customer satisfaction" : "Customer effort", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "score", label: kind === "csat" ? "Satisfied % (top 2)" : `Easy % (${boxName(firstCodes).toLowerCase()})`, type: "pct", decimals: 1 }, { key: "top1", label: "Top box %", type: "pct", decimals: 1 }, { key: "bottom2", label: "Bottom 2 %", type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "index", label: "Index (0–100)", type: "number", decimals: 0 }], rows: rows.map(({ ci, ...r }) => r), base: { n: ds.cases.length } }];
+  const tables: ResultTable[] = [{ id: "csat", title: kind === "csat" ? "Customer satisfaction" : "Customer effort", columns: [{ key: "item", label: "Item" }, { key: "n", label: "n", type: "count" }, { key: "score", label: kind === "csat" ? "Satisfied % (top 2)" : `Easy % (${boxName(firstCodes).toLowerCase()})`, type: "pct", decimals: 1 }, { key: "top1", label: "Top box %", type: "pct", decimals: 1 }, { key: "bottom2", label: "Bottom 2 %", type: "pct", decimals: 1 }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "index", label: "Index (0–100)", type: "number", decimals: 0 }], rows: rows.map(({ ci, ...r }) => r), base: answeredN(ds, vars) }];
   const by = opt(def, "by", def.columns?.[0] ?? null) as string | null;
   const segRows: { name: string; n: number; chart: ChartData }[] = [];
   if (by && ds.byName.has(by)) {

@@ -3,12 +3,11 @@
 [info] SPEND warnings: ["This analysis is based on only 15 respondents (fewer than 30) — read with caution."]
 [info] SAT role: scale
 [info] crosstab tests: [{"test":"chi_square","stat":0,"p":1,"df":4,"detail":{"n":25,"cellsWithExpectedBelow5":10,"assumptionMet":false,"pMethod":"asymptotic","rowVariable":"SAT","columnVariable":"GENDER"}}]
-[info] segment n = 15; cases in segment 15, SAT valid among females = 10; warnings: ["This analysis is based on only 25 respondents (fewer than 30) — read with caution.","Segment Females (n = 15) has fewer than 30 respondents — read with caution."]
-[info] csat tables: [{"id":"csat","base":{"n":30},"rows":[{"item":"Satisfaction","n":25,"mean":3,"index":50,"score":40,"top1":20,"bottom2":40}]}] base: {"total":30,"filtered":30,"n":25,"weightedN":25,"label":"All respondents"}
+[info] segment n = 10; cases in segment 15, SAT valid among females = 10; warnings: ["This analysis is based on only 25 respondents (fewer than 30) — read with caution.","Segment Females (n = 10) has fewer than 30 respondents — read with caution."]
+[info] csat tables: [{"id":"csat","base":{"n":25,"weightedN":25},"rows":[{"item":"Satisfaction","n":25,"mean":3,"index":50,"score":40,"top1":20,"bottom2":40}]}] base: {"total":30,"filtered":30,"n":25,"weightedN":25,"label":"All respondents"}
 [info] test runner tests: [{"test":"t_welch","stat":-0.30618621784789724,"p":0.7617280256440131,"df":28}] warnings: []
 
-PASS 83  MISMATCH 1
-MISMATCH segmentDatasets: segment Females n (should be answered base 10) — got 15 expected 10
+PASS 84  MISMATCH 0
 ok buildDataset: cases (complete only by default) = 30
 ok buildDataset: total (all rows before exclusions) = 40
 ok descriptive/frequencies: GENDER base n = 30
@@ -77,6 +76,7 @@ ok crosstab(display-logic rows): SPEND Total base = 15
 ok filterDataset+frequencies: SAT among males valid n = 15
 ok filterDataset/makeResult: base.filtered = 15
 ok filterDataset/makeResult: base.total = 30
+ok segmentDatasets: segment Females n (should be answered base 10) = 10
 ok crosstab-vs-test chi_square: same statistic = 0
 ok crosstab-vs-test chi_square: same df = 4
 ok buildDataset(statuses): cases with partials = 40
@@ -89,6 +89,6 @@ ok describe(weighted): AGE weighted mean = 34.33
 ok crosstab(weighted): Weighted base Male = 30
 ok crosstab(weighted): Base (n) Male unweighted = 15
 ok topbox/boxShares: SAT top2 % = 40
-ok topbox: table base n (cases, not answered!) = 30
+ok topbox: table base n (answered — ANALYTICS-02 fixed 2026-10-16; was 30 = all cases) = 25
 ok topbox/makeResult: result.base.n = 25
 ok statisticalTest/independentT: Welch t statistic = 0.30618621784789724

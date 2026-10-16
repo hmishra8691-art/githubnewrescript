@@ -195,7 +195,8 @@ await open();
 await page.click('[data-testid="ax-place-findings"]');
 await page.waitForSelector('[data-testid="ax-finding"]');
 assert.deepEqual(await page.$$eval('[data-testid="ax-finding"]', (es) => es.map((e) => e.getAttribute("data-strength"))), ["strong", "moderate", "weak"]);
-assert.match(await text('[data-testid="ax-findings-basis"]'), /400 responses · 2 analyses/);
+/* the run's base says its scope (audit OR-03): "n = 400 completes in scope (LIVE)" — older runs without a recorded scope still name the environment */
+assert.match(await text('[data-testid="ax-findings-basis"]'), /n = 400 (of \d+ )?completes in scope \(LIVE[^)]*\) · 2 analyses/);
 assert.deepEqual(await page.$$eval('[data-testid="ax-verdict-word"]', (es) => es.map((e) => e.textContent)), ["Supported", "Mixed"]);
 ok("the run's findings come strongest first with their base, and each hypothesis shows the verdict it reached");
 await page.click('[data-testid="ax-finding"]:first-child [data-testid="ax-finding-open"]');

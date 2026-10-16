@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Condition, SurveyDefinition } from "@rescript/schema";
 import {
   buildDataset, runAnalysis, variableMetadata, recommendCharts, adviseChart, DEFAULT_THEME,
-  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf,
+  unionVariableMetadata, definitionResolver, reviewAgainstSaved, surveyKnownNames, plannedAnalyses, runPlan, compactRun, compareRuns, nextMilestone, reportFromRun, withPlannedVariables, plannedHash, plannedIdOf, inputHashOf, runScopeOf,
   type ChartAdvice, type AnalysisDefinition, type AnalysisResult, type AnalyticsRow, type Dataset, type DatasetSpec, type ReportTheme, type SegmentDef, type VariableMeta, type AnalysisRun, type PlannedAnalysis, type ReportDefinition,
 } from "@rescript/analytics";
 import type { VersionedDefinition } from "@rescript/engine";
@@ -427,14 +427,28 @@ export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: Load
     return mine ? { ...p, definition: { ...(mine.definition as AnalysisDefinition), id: String(mine.id), dataset: spec } } : p;
   });
   if (!items.length) return { run: { computedAt: new Date().toISOString(), trigger: opts.trigger ?? "manual", environment: spec.environment, n: 0, items: [], findings: [], verdicts: [], warnings: [] }, stored: null, error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first." };
-  const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, dataset: spec });
-  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual" });
+  /*
+   * ONE DATASET PER WEIGHTING (audit ANALYTICS-07). The run's own dataset is unweighted — the run's n, discoveries
+   * and KPIs describe the respondents, not a weighting scheme — and each item that carries a weighting runs on the
+   * dataset built for exactly that weighting. It used to be built once from the FIRST item's weighting, so a weighting
+   * on any later item was silently ignored and the first item's applied to every other.
+   */
+  const ds = await buildFor(db, surveyId, ctx, { ...items[0].definition, weighting: null, dataset: spec });
+  const weightedSets = new Map<string, Dataset>();
+  for (const it of items) {
+    if (!it.definition.weighting) continue;
+    const key = stableStringify(it.definition.weighting);
+    if (!weightedSets.has(key)) weightedSets.set(key, await buildFor(db, surveyId, ctx, { ...it.definition, dataset: spec }));
+  }
+  const datasetFor = (p: PlannedAnalysis): Dataset | undefined => (p.definition.weighting ? weightedSets.get(stableStringify(p.definition.weighting)) : undefined);
+  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual", ...(weightedSets.size ? { datasetFor } : {}) });
   if (opts.skipEmpty && run.n === 0) return { run, stored: null };
   /* Phase 8: what moved since the previous comparable run — same environment, same dataset kind — is attached to the run before it is stored */
   const prev = await previousRun(db, surveyId, spec, run.computedAt);
   if (prev) run.since = compareRuns({ ...run }, prev);
   /* Phase 4: the corrections, the data advice and the discoveries go in the columns migration 0048 adds — a database without them still keeps the run */
-  const ins = await insertRun(db as unknown as RunInsertDb, surveyId, compactRun(run), spec, { surveyVersion: ctx.version ?? null, userId: opts.userId ?? null });
+  /* what the run was computed on — environment, statuses, quality rule, n in scope of n total, the items' weightings and filters — goes with it (audit OR-03) */
+  const ins = await insertRun(db as unknown as RunInsertDb, surveyId, compactRun(run), spec, { surveyVersion: ctx.version ?? null, userId: opts.userId ?? null, scope: runScopeOf(ds, items) });
   if (!ins.stored) return { run, stored: null, error: ins.error };
   return { run, stored: ins.stored };
 }

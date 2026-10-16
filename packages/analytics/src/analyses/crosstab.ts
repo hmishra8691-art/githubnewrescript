@@ -512,11 +512,40 @@ export function crosstab(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     }
   }
   if (lowCols.size) warnings.push(lowColumnsWarning([...lowCols.values()]));
+  /*
+   * THE HEADER n IS THE TOTAL COLUMN'S BASE (audit ANALYTICS-13). Without layers that is the first table's base. With a
+   * layer variable the tables are one per layer, so the header counts the respondents who fall in SOME layer and would
+   * sit in that first table's Total column: answered the layer variable with a known category, answered a column
+   * variable with a known code, answered the first row variable (unless the base is "all"), and carry a positive weight.
+   * It used to be left undefined, and `makeResult` then counted everyone who answered ANY of the variables — a header n
+   * larger than any Total column on the screen.
+   */
+  const layeredBase = (): { n: number; weightedN: number } => {
+    const inLayer = new Set(layers.flatMap((l) => l.ds.cases));
+    const colKeys = new Set(columnsFor(colVars).map((c) => c.key).filter((k) => k !== "__total"));
+    const keyOf = (cv: string, code: string) => (colVars.length > 1 ? `${cv}::${code}` : code);
+    const colVals = colVars.map((cv) => categoricalColumn(ds, cv));
+    const rv0 = rowVars[0];
+    const rMeta = ds.byName.get(rv0);
+    const rowAnswered = rMeta?.role === "numeric" && !rMeta.categories ? numericColumn(ds, rv0).map((x) => x != null) : categoricalColumn(ds, rv0).map((x) => x != null && !(Array.isArray(x) && !x.length));
+    let n = 0, w = 0;
+    ds.cases.forEach((c, i) => {
+      if (!inLayer.has(c)) return;
+      const wt = ds.weighted ? c.weight : 1;
+      if (!(wt > 0)) return;
+      const inColumn = colVars.some((cv, k) => { const cc = colVals[k][i]; if (cc == null) return false; return (Array.isArray(cc) ? cc : [cc]).some((code) => colKeys.has(keyOf(cv, code))); });
+      if (!inColumn) return;
+      if (baseMode !== "all" && !rowAnswered[i]) return;
+      n++; w += wt;
+    });
+    return { n, weightedN: round(w, 1) ?? n };
+  };
+  const headerBase = layerVar ? layeredBase() : { n: tables[0]?.base?.n, weightedN: tables[0]?.base?.weightedN };
   return makeResult(def, ds, {
     tables, chart, tests, insights, warnings: [...new Set(warnings)],
     recommendedCharts: ["bar_grouped", "bar_stacked_100", "heatmap_crosstab", "bar_horizontal", "table"],
     variablesUsed: [...rowVars, ...colVars, ...(layerVar ? [layerVar] : [])], totalCases,
-    validN: layerVar ? undefined : tables[0]?.base?.n,
+    validN: headerBase.n, ...(ds.weighted && headerBase.weightedN != null ? { validWeightedN: headerBase.weightedN } : {}),
   });
 }
 

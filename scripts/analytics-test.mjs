@@ -268,7 +268,8 @@ await shot("03-filters");
 await page.click('[data-testid="ax-run"]');
 await page.waitForSelector('[data-testid="ax-result"]');
 const base = await text('[data-testid="ax-base"]');
-assert.match(base, /n = \d+ · \d+ of 400 responses in scope/);
+/* the base caption (audit OR-03): the answered n, who answered, the in-scope count and the scope in words — the filter is named */
+assert.match(base, /n = \d+ · answered .+ · \d+ of 400 completes in scope \(filter: [^;]*25[^;]*; LIVE; (all responses|clean dataset)\)/);
 const n = Number(/n = (\d+)/.exec(base)[1]);
 assert.ok(n > 200 && n < 400, `filter reduced the base to ${n}`);
 ok(`analysis runs server-side and reports its base honestly (${base})`);

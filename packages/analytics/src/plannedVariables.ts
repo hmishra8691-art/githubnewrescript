@@ -3,6 +3,7 @@ import { buildAnalysisFramework, evaluateExpression, segmentVariableName } from 
 import type { Case, Dataset, VariableMeta } from "./dataset.js";
 import { scaleCodes } from "./dataset.js";
 import { MIN_BASE } from "./analyses/common.js";
+import { planVariableName } from "./planBridge.js";
 
 /**
  * THE PLAN'S OWN VARIABLES, COMPUTED BEFORE THE PLAN RUNS.
@@ -76,7 +77,9 @@ function selections(ds: Dataset, c: Case, name: string): number | null {
   return 1;
 }
 
-function compute(ds: Dataset, d: PlannedDerived, warnings: string[]): { values: (number | string | null)[]; meta: Omit<VariableMeta, "name"> } | null {
+function compute(ds: Dataset, planned: PlannedDerived, warnings: string[]): { values: (number | string | null)[]; meta: Omit<VariableMeta, "name"> } | null {
+  /* sources named by question code are read as the variable (audit ANALYTICS-05); a code with no variable stays as written and is reported missing */
+  const d: PlannedDerived = { ...planned, from: planned.from.map((f) => (ds.byName.has(f) ? f : planVariableName(ds.def, f))) };
   const sources = d.from.flatMap((f) => (d.kind === "count" || d.kind === "flag" || d.kind === "recode" || d.kind === "index" ? [f] : numericSources(ds, f)));
   const missing = d.from.filter((f) => !ds.byName.has(f) && !numericSources(ds, f).length);
   if (missing.length && d.kind !== "recode" && d.kind !== "index") { warnings.push(`${d.name}: not computed — ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not in the data.`); return null; }
@@ -141,8 +144,10 @@ function labelValue(ds: Dataset, name: string, v: unknown): string | null {
   return cat?.label ?? String(v);
 }
 
-function segmentColumn(ds: Dataset, s: PlannedSegment, warnings: string[]): { name: string; values: (string | null)[]; meta: Omit<VariableMeta, "name"> } | null {
-  const name = segmentVariableName(s);
+function segmentColumn(ds: Dataset, planned: PlannedSegment, warnings: string[]): { name: string; values: (string | null)[]; meta: Omit<VariableMeta, "name"> } | null {
+  const name = segmentVariableName(planned);
+  /* a segment "by Q1" means by the variable Q1 is the code of (audit ANALYTICS-05) */
+  const s: PlannedSegment = { ...planned, by: planned.by.map((v) => planVariableName(ds.def, v)) };
   const absent = s.by.filter((v) => !ds.byName.has(v));
   if (absent.length) { warnings.push(`Segment “${s.name}”: not computed — ${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the data.`); return null; }
   const multi = s.by.filter((v) => ds.byName.get(v)?.role === "multi");

@@ -278,7 +278,7 @@ check("crosstab(weighted)", "Base (n) Male unweighted", row(t, (x) => x.row === 
 r = A.runAnalysis(D("topbox", ["SAT"]), ds);
 t = r.tables[0];
 check("topbox/boxShares", "SAT top2 %", t.rows[0].top2, ((exp.satCounts[4] + exp.satCounts[5]) / exp.satN) * 100, 0.05);
-check("topbox", "table base n (cases, not answered!)", t.base.n, 30);
+check("topbox", "table base n (answered — ANALYTICS-02 fixed 2026-10-16; was 30 = all cases)", t.base.n, exp.satN);
 check("topbox/makeResult", "result.base.n", r.base.n, exp.satN);
 
 // NPS-like: csat on SAT? skip. Statistical test: t-test AGE by GENDER

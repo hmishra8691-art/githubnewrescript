@@ -151,7 +151,11 @@ export async function planPayload(db: SupabaseClient, surveyId: string, ctx: Loa
     items, variables, overview, hypotheses,
     /* objective → hypothesis → item → result → claim, with every broken link named */
     trace: plan ? planTrace(def, items, run) : null,
-    run: run ? { id: run.id, computedAt: run.computedAt, trigger: run.trigger, environment: run.environment, n: run.n, items: run.items.length, findings: run.findings, verdicts: run.verdicts, warnings: run.warnings, discoveries: run.discoveries ?? null, kpis: run.kpis ?? null, since: run.since ?? null, timing: runTiming(run) } : null,
+    run: run ? { id: run.id, computedAt: run.computedAt, trigger: run.trigger, environment: run.environment, n: run.n, items: run.items.length, findings: run.findings, verdicts: run.verdicts, warnings: run.warnings, discoveries: run.discoveries ?? null, kpis: run.kpis ?? null, since: run.since ?? null, timing: runTiming(run),
+      /* what the run was computed on (audit OR-03): recorded with the run; null for runs stored before it was */
+      scope: run.dataset?.scope ?? null,
+      /* planned items the run refused, with the reason (audit ANALYTICS-05/06) */
+      notRun: run.items.filter((it) => it.error).map((it) => ({ name: it.definition.name, planned: plannedIdOf(it.definition), error: it.error! })) } : null,
     apply: apply ? { ...apply, current: !!apply.planHash && apply.planHash === hash && (apply.status === "applied" || apply.status === "partial" || apply.status === "no_data") } : null,
     applyAvailable: applied.available,
     /* the run's data was gathered before responses arrived or after a new wave: say so */
@@ -394,7 +398,8 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
       for (const it of r.run.items) {
         const id = plannedIdOf(it.definition); if (!id || it.adaptedFrom) continue;
         const cur = results.get(id); if (!cur) continue;
-        const failed = n === 0 ? null : failedResult(it.result.warnings);
+        /* an item the run refused (a variable the dataset does not have, audit ANALYTICS-05/06) carries `error`; the others are read from their warnings */
+        const failed = n === 0 ? null : (it.error?.message ?? it.result.error?.message ?? failedResult(it.result.warnings));
         results.set(id, failed ? { ...cur, status: "failed", reason: failed } : n === 0 ? { ...cur, status: "pending_data" } : { ...cur, status: "run" });
       }
       if (n === 0) warnings.push(dataset.dataset === "clean" ? "No complete responses pass the quality engine, so nothing was computed." : "No complete responses in the chosen dataset, so nothing was computed.");

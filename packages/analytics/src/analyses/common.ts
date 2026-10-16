@@ -37,6 +37,20 @@ export function baseOf(ds: Dataset, total: number, filtered: number, label = "Al
   return { total, filtered, n: validN ?? ds.cases.length, weightedN: ds.weighted ? (round(validWeightedN ?? weightedN(ds), 1) ?? ds.cases.length) : (validN ?? ds.cases.length), label };
 }
 
+/**
+ * ONE BASE PER SCREEN (audit ANALYTICS-02/03). The respondents who answered at least one of `vars` — the same number
+ * `makeResult` prints in the result header — for a table footer or a segment, so a topbox table no longer says
+ * "Base: n = 30" under a header that says "n = 25". Falls back to the case count when none of the names is a
+ * dataset variable (nothing is knowable about who answered).
+ */
+export function answeredN(ds: Dataset, vars: string[]): { n: number; weightedN: number } {
+  const answered = answeredCases(ds, vars);
+  if (!answered) return { n: ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length };
+  let n = 0, w = 0;
+  answered.forEach((a, i) => { if (a) { n++; w += ds.weighted ? ds.cases[i].weight : 1; } });
+  return { n, weightedN: round(w, 1) ?? n };
+}
+
 export function lowBaseWarning(n: number, what = "This analysis"): string | null {
   if (n === 0) return `${what} has no respondents in the selected data.`;
   if (n < MIN_BASE) return `${what} is based on only ${n} respondents (fewer than ${MIN_BASE}) — read with caution.`;
@@ -80,7 +94,7 @@ const UNWEIGHTED_WORDS: Record<string, string> = { test: "test", correlation: "c
 export function makeResult(
   def: AnalysisDefinition,
   ds: Dataset,
-  parts: { tables: ResultTable[]; chart: ChartData; tests?: TestResult[]; insights?: string[]; warnings?: string[]; recommendedCharts: ChartType[]; segments?: AnalysisResult["segments"]; variablesUsed?: string[]; baseLabel?: string; totalCases: number; validN?: number },
+  parts: { tables: ResultTable[]; chart: ChartData; tests?: TestResult[]; insights?: string[]; warnings?: string[]; recommendedCharts: ChartType[]; segments?: AnalysisResult["segments"]; variablesUsed?: string[]; baseLabel?: string; totalCases: number; validN?: number; validWeightedN?: number },
 ): AnalysisResult {
   const warnings = [...(parts.warnings ?? [])];
   /*
@@ -90,7 +104,7 @@ export function makeResult(
    */
   const answered = parts.validN == null ? answeredCases(ds, parts.variablesUsed ?? def.variables) : null;
   const validN = parts.validN ?? (answered ? answered.filter(Boolean).length : undefined);
-  const validWeightedN = answered && ds.weighted ? ds.cases.reduce((t, c, i) => t + (answered[i] ? c.weight : 0), 0) : undefined;
+  const validWeightedN = parts.validWeightedN ?? (answered && ds.weighted ? ds.cases.reduce((t, c, i) => t + (answered[i] ? c.weight : 0), 0) : undefined);
   const lb = lowBaseWarning(validN ?? ds.cases.length);
   if (lb) warnings.unshift(lb);
   const sb = segmentBases(parts.segments, Math.max(0, Number(def.options?.minBase ?? 0) || 0));

@@ -39,3 +39,4 @@ export * from "./planCheck.js";
 export * from "./reportBuilder.js";
 export * from "./analyticsIntent.js";
 export * from "./storyHtml.js";
+export * from "./baseCaption.js";

@@ -36,12 +36,26 @@ const METHOD_KIND: Record<AnalysisMethod, AnalysisKind> = {
 const TEST_NAME: Partial<Record<AnalysisMethod, string>> = { chi_square: "chi_square", t_test: "t_independent", anova: "anova_one_way", mann_whitney: "mann_whitney", kruskal_wallis: "kruskal_wallis" };
 const words = (m: string) => m.replace(/_/g, " ");
 
+/**
+ * A plan name as the dataset knows it (audit ANALYTICS-05). The plan is written by people and models who say "Q6" as
+ * readily as "SAT"; the dataset's columns are variable names only. A question CODE becomes its variable name here,
+ * unless a variable of that exact name exists (then the name wins); anything else is passed through unchanged, so a
+ * name that is neither is caught by the plan review rather than run as "not in this survey's dictionary".
+ */
+export function planVariableName(def: SurveyDefinition | undefined, name: string): string {
+  if (!def || !name) return name;
+  if (def.questions.some((q) => q.variableName === name)) return name;
+  const byCode = def.questions.find((q) => String(q.code) === name);
+  return byCode?.variableName || name;
+}
+
 /** One planned crosstab as a crosstab analysis. */
 export function crosstabDefinition(x: PlannedCrosstab, dataset: DatasetSpec, def?: SurveyDefinition): AnalysisDefinition {
   const label = (v: string) => def?.questions.find((q) => q.variableName === v || q.code === v)?.code ?? v;
+  const rows = x.rows.map((v) => planVariableName(def, v)), columns = x.columns.map((v) => planVariableName(def, v));
   return {
     name: x.reason ?? `${x.rows.map(label).join(", ")} by ${x.columns.map(label).join(", ")}`,
-    kind: "crosstab", dataset, variables: [...x.rows, ...x.columns], rows: x.rows, columns: x.columns,
+    kind: "crosstab", dataset, variables: [...rows, ...columns], rows, columns,
     measure: x.measure ?? "pct_col",
     options: { layout: x.columns.length > 1 ? "banner" : "separate", significance: true, planned: x.id, ...(x.hypotheses.length ? { hypotheses: x.hypotheses } : {}) },
     ...(x.reason ? { notes: x.reason } : {}),
@@ -49,10 +63,12 @@ export function crosstabDefinition(x: PlannedCrosstab, dataset: DatasetSpec, def
 }
 
 /** One planned test as the analysis that runs it — variables in the order each runner expects. */
-export function testDefinition(t: PlannedTest, dataset: DatasetSpec): AnalysisDefinition {
+export function testDefinition(planned: PlannedTest, dataset: DatasetSpec, def?: SurveyDefinition): AnalysisDefinition {
+  const r = (v: string | undefined) => (v ? planVariableName(def, v) : v);
+  const t: PlannedTest = { ...planned, variables: planned.variables.map((v) => planVariableName(def, v)), ...(planned.outcome ? { outcome: r(planned.outcome) } : {}), ...(planned.groupBy ? { groupBy: r(planned.groupBy) } : {}), ...(planned.moderator ? { moderator: r(planned.moderator) } : {}), ...(planned.mediator ? { mediator: r(planned.mediator) } : {}) };
   const kind = METHOD_KIND[t.method];
   const base = { dataset, options: { planned: t.id, ...(t.hypotheses.length ? { hypotheses: t.hypotheses } : {}) } as Record<string, unknown>, ...(t.reason ? { notes: t.reason } : {}) };
-  const name = t.reason ?? `${words(t.method)}${t.outcome ? ` — ${t.outcome}` : ""}`;
+  const name = t.reason ?? `${words(t.method)}${planned.outcome ? ` — ${planned.outcome}` : ""}`;
   switch (kind) {
     case "test": {
       // the runner reads [measured, grouping]: the outcome first, then the group or the second variable
@@ -83,7 +99,7 @@ export function plannedAnalyses(def: SurveyDefinition, dataset: DatasetSpec, opt
   const plan = opts.plan ?? def.research?.analysisPlan ?? buildAnalysisFramework(def);
   const out: PlannedAnalysis[] = [];
   for (const x of plan.crosstabs) out.push({ definition: crosstabDefinition(x, dataset, def), source: { kind: "crosstab", id: x.id }, priority: x.priority, hypotheses: x.hypotheses, ...(x.reason ? { reason: x.reason } : {}) });
-  for (const t of plan.tests) out.push({ definition: testDefinition(t, dataset), source: { kind: "test", id: t.id }, priority: t.priority, hypotheses: t.hypotheses, ...(t.reason ? { reason: t.reason } : {}) });
+  for (const t of plan.tests) out.push({ definition: testDefinition(t, dataset, def), source: { kind: "test", id: t.id }, priority: t.priority, hypotheses: t.hypotheses, ...(t.reason ? { reason: t.reason } : {}) });
   if (opts.primaries) {
     for (const q of def.questions) {
       if (["html", "custom_component", "media_timeline"].includes(q.type)) continue;

@@ -210,7 +210,7 @@ export interface AnalysisResult {
   /** what this result was computed from, and how long it took (audit S-14) — set by `runAnalysis` */
   provenance?: ResultProvenance;
   /** set when the analysis could not be computed at all — a stable code and a sentence a researcher can act on, never a raw exception */
-  error?: { code: "unknown_kind" | "not_computable" | "no_data"; message: string };
+  error?: { code: "unknown_kind" | "not_computable" | "no_data" | "unknown_variable"; message: string };
 }
 
 /* ------------------------------------------------------------ charts */

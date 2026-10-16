@@ -49,7 +49,9 @@ function heatStyle(v: unknown, max: number): React.CSSProperties | undefined {
   return { background: `rgba(79, 70, 229, ${(0.04 + t * 0.32).toFixed(3)})`, color: t > 0.7 ? "#1e1b4b" : undefined };
 }
 
-export function ProTable({ table, formatting, testId = "ax-table", maxHeight }: { table?: Table; formatting?: TableFormatting; testId?: string; maxHeight?: number }) {
+export function ProTable({ table, formatting, testId = "ax-table", maxHeight, scope }: { table?: Table; formatting?: TableFormatting; testId?: string; maxHeight?: number;
+  /** the result's base caption (audit OR-03) — printed with the table's own base so the footer says what its n is a count of; a table whose base differs from the result's keeps its own n in front */
+  scope?: string }) {
   const f = formatting ?? {};
   const [sort, setSort] = React.useState<{ key: string; dir: "asc" | "desc" } | null>(null);
   const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set());
@@ -177,9 +179,9 @@ export function ProTable({ table, formatting, testId = "ax-table", maxHeight }: 
           </tbody>
         </table>
       </div>
-      {(table.base || table.notes?.length) && (
+      {(table.base || table.notes?.length || scope) && (
         <div className="ax-table-notes">
-          {table.base ? `Base: n = ${table.base.n}${table.base.weightedN != null && table.base.weightedN !== table.base.n ? ` · weighted n = ${table.base.weightedN}` : ""}${table.base.label ? ` · ${table.base.label}` : ""}` : ""}
+          {table.base ? <div data-testid="ax-table-base">{`Base: n = ${table.base.n}${table.base.weightedN != null && table.base.weightedN !== table.base.n ? ` · weighted n = ${table.base.weightedN}` : ""}${table.base.label ? ` · ${table.base.label}` : ""}`}{scope ? ` · ${scope}` : ""}</div> : scope ? <div data-testid="ax-table-base">{scope}</div> : null}
           {table.notes?.map((n, i) => <div key={i}>{n}</div>)}
         </div>
       )}

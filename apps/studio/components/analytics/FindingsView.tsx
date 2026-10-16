@@ -4,6 +4,7 @@ import type { DatasetSpec } from "@rescript/analytics";
 import { dedupeFindings } from "@rescript/analytics";
 import { AxApi, type PlanPayload, type Row } from "./api";
 import type { WsTab } from "./navigation";
+import { RunBaseCaption } from "./BaseCaption";
 
 /**
  * FINDINGS — what matters, and is it reliable? (Phase 5)
@@ -36,7 +37,7 @@ export function FindingsView({ api, dataset, analyses, onOpenAnalysis, onTab }: 
     <div className="ax-panel" data-testid="ax-findings">
       <div className="row" style={{ gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
         <h3 style={{ margin: 0 }}>Findings</h3>
-        {run && <span className="muted" style={{ fontSize: 13 }} data-testid="ax-findings-basis">from the plan run of {new Date(run.computedAt).toLocaleDateString()} · {run.n.toLocaleString()} responses · {run.items} analyses</span>}
+        {run && <span className="muted" style={{ fontSize: 13 }} data-testid="ax-findings-basis">from the plan run of {new Date(run.computedAt).toLocaleDateString()} · <RunBaseCaption run={run} scope={run.scope ?? null} style={{ fontSize: 13 }} /> · {run.items} analyses</span>}
         <span className="grow" />
         <button className="btn small" onClick={() => onTab("themes")} data-testid="ax-findings-themes">Open-text themes</button>
       </div>

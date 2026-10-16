@@ -89,3 +89,20 @@ test("the previous run is the latest before this one on the same dataset kind �
   assert.deepEqual(prev.since, { summary: "s" });
   assert.equal(pickPrevious([row("r0", "2026-09-01T00:00:00Z", null)], "all")!.id, "r0", "a run stored without a dataset spec counts as 'all'");
 });
+
+/*
+ * THE RUN RECORDS ITS SCOPE (audit 2026-10-16, OR-03 "the base of 20"): what
+ * it was computed on goes inside the jsonb `dataset` column beside the spec —
+ * additive, no migration — and a run stored before carries none.
+ */
+test("the scope is stored inside the dataset JSON beside the spec, and read back; a run without one reads as before", async () => {
+  const scope = { environment: "LIVE" as const, dataset: "clean" as const, statuses: ["complete"], nInScope: 20, nTotal: 84, weightings: [{ variable: "WT" }], filteredItems: ["SAT by region"] };
+  const { db, inserts } = stub([{ data: {} }]);
+  const r = await insertRun(db, "s1", compact(), { environment: "LIVE", dataset: "clean" }, { surveyVersion: null, userId: null, scope });
+  assert.deepEqual(inserts[0].dataset, { environment: "LIVE", dataset: "clean", scope });
+  assert.deepEqual(r.stored!.dataset?.scope, scope);
+  assert.equal(r.stored!.dataset?.dataset, "clean", "the spec's own fields are untouched, so the previous-run match by dataset kind still works");
+  const old = runFromRow({ id: "r0", computed_at: "2026-10-01T00:00:00Z", trigger: "manual", environment: "LIVE", n: 5, dataset: { environment: "LIVE", dataset: "all" } });
+  assert.equal(old.dataset?.scope, undefined);
+  assert.equal(pickPrevious([{ id: "r0", computed_at: "x", trigger: "manual", environment: "LIVE", n: 5, dataset: { environment: "LIVE", dataset: "clean", scope } }], "clean")?.id, "r0");
+});

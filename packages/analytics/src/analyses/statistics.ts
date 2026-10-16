@@ -457,7 +457,7 @@ export function segmentation(def: AnalysisDefinition, ds: Dataset, totalCases: n
   const segs = segmentDatasets(ds, def.segments);
   if (!segs.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["Add at least one segment to compare."], recommendedCharts: ["segment_comparison"], totalCases });
   const alpha = opt(def, "alpha", 0.05) as number;
-  const tables: ResultTable[] = [{ id: "sizes", title: "Segment sizes", columns: [{ key: "s", label: "Segment" }, { key: "n", label: "n", type: "count" }, { key: "wn", label: "Weighted n", type: "number", decimals: 1 }, { key: "pct", label: "% of base", type: "pct", decimals: 1 }], rows: segs.map(({ segment, data }) => ({ s: segment.name, n: data.cases.length, wn: round(weightedN(data), 1), pct: pct(ds.cases.length ? (data.cases.length / ds.cases.length) * 100 : 0) })), base: { n: ds.cases.length } }];
+  const tables: ResultTable[] = [{ id: "sizes", title: "Segment sizes", columns: [{ key: "s", label: "Segment" }, { key: "n", label: "n", type: "count" }, { key: "wn", label: "Weighted n", type: "number", decimals: 1 }, { key: "pct", label: "% of base", type: "pct", decimals: 1 }], rows: segs.map(({ segment, data }) => ({ s: segment.name, n: data.cases.length, wn: round(weightedN(data), 1), pct: pct(ds.cases.length ? (data.cases.length / ds.cases.length) * 100 : 0) })), base: { n: ds.cases.length, weightedN: round(weightedN(ds), 1) ?? ds.cases.length, label: "respondents in the selected data, whether or not they answered the profiled variables" } }];
   const tests: TestResult[] = [];
   const insights: string[] = [];
   const chartSeries: NonNullable<ChartData["series"]> = segs.map(({ segment }) => ({ name: segment.name, values: [] as (number | null)[] }));
