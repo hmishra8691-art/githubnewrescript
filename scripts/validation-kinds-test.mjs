@@ -15,6 +15,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { sendPreview } from "./lib/preview.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -132,8 +133,7 @@ assert.match(dtHint ?? "", /T09:00/, `the bound hint shows a date-time (${dtHint
 await card.locator('[data-testid="validation-value"]').fill("2026-10-16T10:00");
 await page.waitForTimeout(250);
 assert.equal((await readDef()).questions[2].validation.find((v) => v.kind === "date_min").value, "2026-10-16T10:00");
-assert.ok(await page.$('[data-testid="datetime-input"]'), "the canvas draws the Date & Time input");
-console.log("✔ QT-12: a Date & Time question offers date bounds (with a time) and draws one date-and-time input");
+console.log("✔ QT-12: a Date & Time question offers date bounds (with a time)");
 
 /* ========================================= QT-12: Duration — bounds in seconds */
 
@@ -147,8 +147,18 @@ assert.equal((await readDef()).questions[3].settings.durationParts, "hm");
 await openSection("validation-rules");
 card = await addRule("max_value");
 assert.match((await card.locator('[data-testid="validation-value"]').getAttribute("placeholder")) ?? "", /seconds/);
-assert.ok(await page.$('[data-testid="duration-input"][data-parts="hm"]'), "the canvas draws hours and minutes");
-console.log("✔ QT-12: a Duration question says its bounds are seconds, chooses its parts, and draws the h/min input");
+console.log("✔ QT-12: a Duration question says its bounds are seconds and chooses its parts");
+
+// the respondent's side: the runtime preview draws one date-and-time input and the hours/minutes input
+{
+  const def = await readDef();
+  const rt = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+  await rt.goto(`${process.env.RUNTIME_URL ?? "http://localhost:3001"}/preview`, { waitUntil: "networkidle" });
+  await sendPreview(rt, { definition: def }, { selector: '[data-qid="q3"] [data-testid="datetime-input"]' });
+  assert.ok(await rt.$('[data-qid="q4"] [data-testid="duration-input"][data-parts="hm"]'), "the runtime draws hours and minutes");
+  await rt.close();
+}
+console.log("✔ QT-12: the runtime draws the Date & Time input and the h/min Duration input");
 
 await page.screenshot({ path: "/tmp/st-validation-kinds.png", fullPage: false });
 await browser.close();

@@ -72,7 +72,7 @@ console.log("\nRUNTIME-09 — default matrix");
   await page.close();
 }
 
-for (const variant of ["likert", "ratingmatrix"]) {
+for (const variant of ["matrix.likert", "matrix.rating"]) {
   console.log(`\nRUNTIME-09 — ${variant} (role=radio)`);
   const { page, errs } = await open(base([grid("q1", "matrix_single", { variant })]), '[data-qid="q1"] [role="radio"]');
   const sel = (row, col) => `[data-qid="q1"] [role="radio"][aria-label="${row}: ${col}"]`;
@@ -108,7 +108,7 @@ for (const variant of ["likert", "ratingmatrix"]) {
 
 console.log("\nRUNTIME-09 — starmatrix");
 {
-  const { page, errs } = await open(base([{ id: "q1", code: "Q1", variableName: "Q1", type: "matrix_numeric", variant: "starmatrix", text: "Stars", rows, settings: { minValue: 1, maxValue: 5 } }]), '[data-qid="q1"] [role="radio"]');
+  const { page, errs } = await open(base([{ id: "q1", code: "Q1", variableName: "Q1", type: "matrix_numeric", variant: "matrix.star_matrix", text: "Stars", rows, settings: { minValue: 1, maxValue: 5 } }]), '[data-qid="q1"] [role="radio"]');
   await page.focus('[data-qid="q1"] [aria-label="Price: 1 of 5"]');
   await page.keyboard.press("ArrowRight");
   assert.equal(await page.$eval('[data-qid="q1"] [aria-label="Price: 2 of 5"]', (e) => e.getAttribute("aria-checked")), "true");

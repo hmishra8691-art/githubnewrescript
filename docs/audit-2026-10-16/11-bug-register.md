@@ -288,3 +288,43 @@ Fixed in commits `cee520c` (analytics), `3a89be8` (methods), `6627cf6` (cleaning
 | QT-05/06/07 | FIXED | one email validator, "no format known" notice, URL scheme check |
 | ARCH-09/10/11/12 | FIXED | see commit `2d8b154` |
 | SCHEMA-02/05 | FIXED (unverified on Postgres) | migration files only; no Postgres in the sandbox to execute them |
+
+---
+
+## P3 batch — fix status (2026-10-16)
+
+Commits `f48e59c` (logic/editor), `26c67c1` (question types/AI), `c4e058b` (runtime), `ddd2529` (data/SQL), `5306bc1` (architecture). Items already closed by the P2 batch (OR-04/05/06, QT-05/06/07, AI-08, LOGIC-11, METHOD-14/15, DOC-10/11/13, ANALYTICS-03/06/07/13, SCHEMA-02, RUNTIME-08, ARCH-09/11/12) are not repeated. Migrations 0056–0059 are parse-checked and re-runnable but **unexecuted** (no Postgres in the sandbox); `docs/MIGRATION-UNDO-NOTES.md` has the undo SQL.
+
+| ID | Status | What changed |
+|---|---|---|
+| OR-07 | FIXED | chip collapses to the question when both row and column selects are shown (full reference in the tooltip) |
+| LOGIC-05 | FIXED | error lint for backward, same-page, missing and target-less skips (loops/randomizers exempt) |
+| LOGIC-07 | FIXED | `Q5.spend` column-only composite references parse and round-trip (`$any` disambiguates) |
+| LOGIC-08 | FIXED | third segment resolves by label; `C` accepts non-numeric codes |
+| LOGIC-09 | FIXED | per-row grid `C<n>` resolves against the scale |
+| LOGIC-15 | FIXED (engine) | per-row option targets labelled "scale point (column)"; LogicPanel kind select still reads "Option" |
+| LOGIC-16 | FIXED | legacy double-spelled grid rules normalised before narration |
+| AI-10 | FIXED | unquoted-label hint names the label and shows the quoted and coded forms |
+| METHOD-13 | FIXED | `acbc_task` in lint, graph, simulator, import, review; registry-completeness test |
+| QT-08 | FIXED | AI accepts `custom_expression`/`custom_script`/`pattern`/`otherFormat`, refusing what cannot run; Studio surface checked by `validation-kinds-test.mjs` |
+| QT-10 | FIXED | every registered type has an action name (except `custom_component`) |
+| QT-12 | FIXED | `datetime.datetime` and `numeric.duration` variants; dangling `"datetime"` removed; wall-clock bounds |
+| AI-09 | FIXED | plan review warns when a multi-row grid is a single-score outcome/grouping |
+| RUNTIME-06 | FIXED | Back saves the position; resume prefers the cached position |
+| RUNTIME-07 | FIXED | `abandoned` status (0056) + hourly Studio cron; save answers 410 for an expired session. Per-survey window reads `deployment.partialExpiryDays` (no schema field yet); Studio filters do not list `abandoned` yet |
+| RUNTIME-09 | FIXED | names, `scope`, row headers, roving arrow keys on Likert/Rating/Star; slider and dropdown-multi matrices not covered |
+| RUNTIME-10 | PARTIAL | three documented breakpoints (480/640/1024); 420/440/520/560/900 left as is |
+| RUNTIME-11 | FIXED | definition served only for an active deployment of a running survey |
+| SCHEMA-03 | FIXED | forward-only policy + undo SQL |
+| SCHEMA-07 | FIXED | cells recorded on completion (0057) and released/restored with `deleted_at`; earlier completes still need a recount |
+| SCHEMA-08 | DECIDED | `design_files` kept, commented as unused |
+| SCHEMA-09 | FIXED | `rescript_housekeeping()` (0058) + weekly cron |
+| DOC-09 | FIXED | 41 `SYSTEM_*` variables exported with `system=1` |
+| CLEAN-12 | FIXED | timing pattern compares in ms with rounding slack and a variance floor |
+| ANALYTICS-11 | FIXED | stamp cache bounded at 500 (LRU) |
+| ARCH-03 | FIXED | `dependency-boundaries.mjs` (8 rules, self-test) in `audit:code`; engine env read removed |
+| ARCH-06 | FIXED | fixtures excluded from the packed build; boundary test |
+| ARCH-08 | FIXED | one quota membership helper (live + recount); SQL/TS question-count sync test |
+| ARCH-13 | FIXED | `rescript_cut_version` (0059), route falls back before the migration; pre-0003 branch removed |
+
+Not taken in this batch: QT-14 and ARCH-07 (large refactors on the roadmap), SCHEMA-11 (RLS consolidation needs a database to verify), AI-07 and ANALYTICS-09 (by design / implemented).
