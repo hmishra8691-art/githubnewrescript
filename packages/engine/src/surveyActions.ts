@@ -21,6 +21,7 @@ import { newResearchBlockers, researchStrict } from "./researchBlockers.js";
 import { applyLocalizationAction, coerceLocalizationAction, describeLocalizationAction, isLocalizationOp, localizationRank, outdateTranslations, LOCALIZATION_ACTION_OPS, type LocalizationAction } from "./localizationActions.js";
 import { languageName, pruneOrphanedTranslations, movedTranslationKeys } from "./localization.js";
 import { applyQuotaAction, coerceQuotaAction, describeQuotaAction, isQuotaOp, quotaDiff, containsQuestion, endIndex, QUOTA_ACTION_OPS, type QuotaAction } from "./quotaActions.js";
+import { applyListFillAction, coerceListFillAction, describeListFillAction, isListFillOp, listFillDiff, LIST_FILL_ACTION_OPS, type ListFillAction } from "./listFillActions.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
@@ -115,6 +116,8 @@ export type SurveyAction =
   /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
   | LocalizationAction
   | QuotaAction
+  /* List Fills — see listFillActions.ts; they write def.listFills and the destinations' masks */
+  | ListFillAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
   | OptionAction;
 
@@ -124,7 +127,7 @@ export const SURVEY_ACTION_OPS = [
   "create_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
-  ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS,
+  ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS,
   ...OPTION_ACTION_OPS,
 ] as const;
 
@@ -364,6 +367,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (lc !== null) return lc;
       const qa = op ? coerceQuotaAction(op, o) : null;
       if (qa !== null) return qa;
+      const lfa = op ? coerceListFillAction(op, o) : null;
+      if (lfa !== null) return lfa;
       const oa = op ? coerceOptionAction(op, o) : null;
       if (oa !== null) return oa;
       return op ? `unknown action “${op}”` : "an action needs an op";
@@ -418,8 +423,13 @@ type PageNode = Extract<FlowNode, { type: "page" }>;
  * `uxOnly`: the request was about the look and behaviour only ("don't change
  * the logic, only improve the UI") — every structural action is refused, and
  * the outcome proves the structure did not change.
+ *
+ * `uxOnlyInferred`: look-only was inferred from the request's words, not said. Validation is then
+ * still allowed — stopping a respondent (an age limit, a format) is the question's validation, never
+ * a script, and the UX guide tells the model so; refusing it left the request half done (2026-10-16
+ * 21:23: "popup when the age is 18+" → the min-18 validation refused, the popup kept).
  */
-export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean } = {}): ApplyActionsOutcome {
+export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
   const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
@@ -427,12 +437,12 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
   // …and the analysis framework names questions and constructs: after both
   // …and translations name the question texts as they will be: last of all
-  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) ? 0.5 : 0);
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
     ctx.def = def;
-    if (opts.uxOnly && !isUxOp(a.op)) {
+    if (opts.uxOnly && !isUxOp(a.op) && !(opts.uxOnlyInferred && a.op === "set_validation")) {
       results.push({ index, op: a.op, ok: false, description: describeAction(a), error: "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them", touched: [] });
       return;
     }
@@ -953,6 +963,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
+      // the List Fills: def.listFills and the masks of their destinations; every question, item and code resolved here
+      if (isListFillOp(a.op)) {
+        const r = applyListFillAction(def, a as ListFillAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // the languages: def.localization only; every target resolved, every translation checked against its source
       if (isLocalizationOp(a.op)) {
         const r = applyLocalizationAction(def, a as LocalizationAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids, now: ctx.now });
@@ -1384,7 +1400,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1553,6 +1569,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     embeddedAdded.length ? `Add embedded ${embeddedAdded.join(", ")}` : "",
     calculationsAdded.length ? `Add calculation${calculationsAdded.length === 1 ? "" : "s"} ${calculationsAdded.join(", ")}` : "",
     ...quotaDiff(before, after),
+    ...listFillDiff(before, after),
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",

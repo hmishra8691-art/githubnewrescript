@@ -88,6 +88,12 @@ export interface DomBridgeOptions {
   owner: UxTarget;
   log: (line: string) => void;
   post: (message: Record<string, unknown>) => void;
+  /**
+   * The survey is drawn inside another page (the Studio's preview). What a script adds to
+   * document.body — a popup, an overlay — then goes into the survey's shell instead, so it can never
+   * cover or block the page around it. In the respondent's survey the body IS the survey page.
+   */
+  contain?: boolean;
 }
 
 export class DomBridge {
@@ -261,7 +267,8 @@ export class DomBridge {
     n.childNodes.forEach((k) => this.unregister(k));
   }
   private create(op: Extract<DomOp, { o: "create" }>) {
-    const parent = this.node(op.p);
+    let parent = this.node(op.p);
+    if (this.o.contain && parent === document.body) parent = this.o.root;
     if (!(parent instanceof Element) || !this.inside(parent) || parent === document.documentElement) return;
     if (this.tops.size >= 200) { this.say("a script created more than 200 elements — the rest were ignored"); return; }
     const n = this.build(op.tree, true); if (!n) return;

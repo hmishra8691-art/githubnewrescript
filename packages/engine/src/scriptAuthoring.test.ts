@@ -165,3 +165,80 @@ test("what IS refused, each on its own", () => {
   one(`function go() { if (!document.querySelector('[data-qid="q3"]')) return setTimeout(() => go(), 100); } go();`, /go\(\) waits for an element/);
   one(`document.querySelector('input[name="AGE_SCR"]').focus();`, /the answer box of Q3 is \[data-qid="q3"\] input/);
 });
+
+/* ---------------------------------------------------------------------------------------------
+ * P0-2 (2026-10-16 21:23 / 21:25, production operations log): what the model wrote AFTER the first
+ * fix, and why some of it was refused or would not have worked.
+ * ------------------------------------------------------------------------------------------- */
+import { questionHooks } from "./ux.js";
+const popupSurvey = () => SurveyDefinition.parse({
+  meta: { id: "cgp", code: "CGP", title: "Voters", version: "1" },
+  questions: [
+    { id: "q_consent", code: "Q1", variableName: "CONSENT_INFO", type: "single_select", text: "Welcome", options: [{ code: 1, label: "Continue" }] },
+    { id: "q_cit", code: "Q2", variableName: "CITIZEN", type: "single_select", text: "Citizen?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
+    { id: "q_age", code: "Q3", variableName: "AGE_SCR", type: "numeric", text: "Age?" },
+  ],
+  flow: [{ type: "page", id: "p1", questionIds: ["q_consent"] }, { type: "page", id: "p2", questionIds: ["q_cit"] }, { type: "page", id: "p3", questionIds: ["q_age"] }, { type: "end", id: "e", status: "complete" }],
+});
+const OVERLAY = `(function(){
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;opacity:0;transition:opacity 0.3s ease;';
+  var msg = document.createElement('div'); msg.textContent = 'You are eligible to proceed!';
+  overlay.appendChild(msg); document.body.appendChild(overlay);
+  rs.after(30, function(){ overlay.style.opacity = '1'; });
+  rs.after(2200, function(){ overlay.style.opacity = '0'; rs.after(350, function(){ if (overlay.parentElement) overlay.parentElement.removeChild(overlay); }); });
+})();`;
+
+test("21:25 — a script with on/options (\"run this when option 1 is selected\") is written the supported way, not refused", () => {
+  const r = applySurveyActions(popupSurvey(), [
+    { op: "create_behavior", label: "Q2 Eligible Popup on Yes", target: "Q2", on: "select_option", options: ["1"], script: OVERLAY },
+    { op: "create_behavior", label: "Q1 Welcome Popup", target: "Q1", on: "appear", script: OVERLAY.replace("You are eligible to proceed!", "Welcome Americans!") },
+  ] as never);
+  assert.deepEqual(r.results.map((x) => x.ok), [true, true], r.errors.join("; "));
+  const [q2, q1] = r.def.ux!.behaviors;
+  assert.equal(q2!.on, undefined); assert.equal(q2!.options, undefined);
+  assert.ok(q2!.script!.startsWith(`rs.listen("select", "self", function (e) {\n  if (["1"].indexOf(String(e.option)) < 0) return;\n`), q2!.script);
+  assert.ok(q2!.script!.includes("You are eligible to proceed!"));
+  assert.equal(q1!.script, OVERLAY.replace("You are eligible to proceed!", "Welcome Americans!"), "appear: the script runs when the page opens, as written");
+  assert.deepEqual(validateUxScript(q2!.script!, r.def).errors, [], "the wrapped script passes the runtime gate");
+  // the same on update_behavior
+  const u = applySurveyActions(r.def, [{ op: "update_behavior", id: q1!.id, on: "deselect_option", options: ["1"], script: "rs.hideMessage('self');" }] as never);
+  assert.equal(u.results[0]!.ok, true, u.errors.join("; "));
+  assert.match(u.def.ux!.behaviors[1]!.script!, /^rs\.listen\("deselect", "self"/);
+  // options on an event that has none, and an unknown event, are refused with the reason
+  assert.match(applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "x", target: "Q2", on: "hover", options: ["1"], script: OVERLAY }] as never).errors.join(" "), /options apply to select_option/);
+});
+
+test("21:23 — the age popup (overlay on document.body, inline transitions) is accepted; <style> in document.head and inline keyframes are not", () => {
+  const ok = applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "Q3 popup", target: "Q3", script: `var box = document.querySelector('[data-qid="q_age"] input');\nfunction show(){ if (parseInt(box.value, 10) >= 18) { ${OVERLAY} } }\nbox.addEventListener('input', show);` }] as never);
+  assert.equal(ok.results[0]!.ok, true, ok.errors.join("; "));
+  const head = scriptAuthoringProblems(`var s = document.createElement('style'); s.textContent = '@keyframes rsFadeIn{from{opacity:0}to{opacity:1}}'; document.head.appendChild(s); var o = document.createElement('div'); o.style.cssText = 'animation:rsFadeIn 0.35s ease'; document.body.appendChild(o);`, popupSurvey());
+  assert.ok(head.some((e) => /cannot add a <style> element/.test(e) && /create_animation/.test(e)), head.join("\n"));
+  assert.ok(head.some((e) => /inline animation “rsFadeIn” names keyframes the survey does not have/.test(e)), head.join("\n"));
+  assert.deepEqual(scriptAuthoringProblems(`var o = document.createElement('div'); o.style.animation = 'rs-ux-pulse 0.6s'; document.body.appendChild(o);`, popupSurvey()), [], "the survey's own keyframes are fine");
+});
+
+test("a selector must name what is in this survey: the id, not the code; an option code that exists", () => {
+  const d = popupSurvey();
+  const byCode = scriptAuthoringProblems(`document.querySelector('[data-qid="Q3"] input').addEventListener('input', function(){});`, d);
+  assert.match(byCode.join(" "), /\[data-qid="Q3"\] names Q3 by its code — a card carries the question's id: \[data-qid="q_age"\]/);
+  assert.match(scriptAuthoringProblems(`document.querySelector('[data-qid="AGE_SCR"]').classList.add('x');`, d).join(" "), /by its variable name/);
+  assert.match(scriptAuthoringProblems(`document.querySelector('[data-qid="q_cit"] [data-rs-el="option"][data-rs-id="9"]').classList.add('x');`, d).join(" "), /Q2 has no option coded “9” \(options: 1, 2\)/);
+  assert.deepEqual(scriptAuthoringProblems(`document.querySelector('[data-qid="q_cit"] [data-rs-el="option"][data-rs-id="1"]').classList.add('x');`, d), []);
+});
+
+test("a script with a “when” is refused where it is written (scripts run whenever their page opens) and only warned about in the editor", () => {
+  const r = applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "guarded", target: "Q3", script: "rs.showMessage('self', 'hi');", when: "Q2 = 1" }] as never);
+  assert.equal(r.results[0]!.ok, false);
+  assert.match(r.errors.join(" "), /a “when” condition does not apply to a script/);
+});
+
+test("questionHooks: what a script can name on the page, per question", () => {
+  const d = popupSurvey();
+  assert.deepEqual(questionHooks(d, d.questions[1]!), [
+    'card [data-qid="q_cit"]',
+    'option [data-qid="q_cit"] [data-rs-el="option"][data-rs-id="<code>"] (1 Yes, 2 No); in a handler, rs.listen("select", "Q2", (e) => e.option) gives the code',
+    "on page 2 of 3 (a script on Q2 starts when that page opens and is undone when it is left)",
+  ]);
+  assert.match(questionHooks(d, d.questions[2]!).join(" · "), /answer box \[data-qid="q_age"\] input/);
+});

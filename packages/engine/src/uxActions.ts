@@ -268,6 +268,33 @@ function find<T extends { id: string; label: string }>(list: T[], id: string, en
   const r = id.toLowerCase();
   return list.find((x) => x.id === (viaRef ?? id)) ?? list.find((x) => x.id.toLowerCase() === r) ?? list.find((x) => x.label.trim().toLowerCase() === r) ?? fail(`there is no ${what} “${id}”`);
 }
+/**
+ * A SCRIPT THAT RUNS ON AN EVENT. A behaviour is either effects on an event or a script (the script
+ * listens for what it needs). Models naturally write both — {"on":"select_option","options":["1"],
+ * "script":"…"} — and that used to be refused ("has both a script and effects"), costing a repair
+ * call that failed the same way (2026-10-16 21:25, two paid calls, nothing applied). The intent is
+ * unambiguous, so the engine writes it the supported way: the script inside the matching
+ * rs.listen, filtered to the named options. What is stored is ordinary script — visible and
+ * editable in Styles, animations & scripts — and runs through the same sandbox and gate.
+ */
+const SCRIPT_EVENT: Record<string, string | null> = {
+  appear: null, page_enter: null, page: null, load: null,
+  select_option: "select", select: "select", deselect_option: "deselect", deselect: "deselect",
+  answer: "answer", change: "change", click: "click", hover: "hover",
+  page_complete: "complete", block_complete: "complete", complete: "complete",
+};
+export function scriptOnEvent(script: string, on: string | undefined, options: string[] | undefined): { script: string } {
+  const key = String(on ?? (options?.length ? "select_option" : "")).toLowerCase();
+  if (!(key in SCRIPT_EVENT)) fail(`a script cannot run on “${on}” — events: ${Object.keys(SCRIPT_EVENT).join(", ")}`);
+  const ev = SCRIPT_EVENT[key];
+  if (!ev) return { script };
+  const codes = (options ?? []).map((o) => String(o));
+  if (codes.length && ev !== "select" && ev !== "deselect") fail(`options apply to select_option / deselect_option, not ${on}`);
+  const filter = codes.length ? `  if (${JSON.stringify(codes)}.indexOf(String(e.option)) < 0) return;\n` : "";
+  const body = script.split("\n").map((l) => `  ${l}`).join("\n");
+  return { script: `rs.listen("${ev}", "self", function (e) {\n${filter}${body}\n});` };
+}
+
 function gate(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior): string[] {
   // an action WRITES the item (Intelligent Mode, the theme assistant): the authoring checks apply
   const v = validateUxItem(def, kind, item, { authoring: true });
@@ -401,6 +428,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       return { description: `Remove ${what}`, destructive: `Removes the ${what}`, warnings: [], touched: [] };
     }
     case "create_behavior": {
+      if (a.script && (a.on || a.options?.length) && !a.effects?.length) a = { ...a, ...scriptOnEvent(a.script, a.on, a.options), on: undefined, options: undefined };
       const t = resolveTarget(def, a.target, env);
       const b: UxBehavior = { id: env.ids("uxb"), label: a.label, target: t, ...(a.on ? { on: oneOf(UX_EVENTS, a.on === "select" ? "select_option" : a.on === "deselect" ? "deselect_option" : a.on === "complete" ? "page_complete" : a.on, "event")! } : {}), ...(a.options?.length ? { options: optionCodes(def, t, a.options) } : {}), effects: a.effects ? buildEffects(def, a.effects, env) : [], ...(a.script ? { script: a.script } : {}), ...(a.once ? { once: true } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
       const warnings = gate(def, "behavior", b);
@@ -416,7 +444,12 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       if (a.on) next.on = oneOf(UX_EVENTS, a.on, "event")!;
       if (a.options) next.options = optionCodes(def, next.target, a.options);
       if (a.effects) next.effects = buildEffects(def, a.effects, env);
-      if (a.script !== undefined) { next.script = a.script; if (a.script) { delete next.on; next.effects = []; } }
+      if (a.script !== undefined) {
+        // "run this when option 1 is selected": the event and options wrap the script, as on create
+        const ev = a.script && (a.on || a.options?.length) && !a.effects?.length ? scriptOnEvent(a.script, a.on, a.options) : null;
+        next.script = ev ? ev.script : a.script;
+        if (a.script) { delete next.on; delete next.options; next.effects = []; }
+      }
       if (a.once !== undefined) next.once = a.once;
       if (a.when === null) delete next.when;
       else if (a.when) next.when = parseGuard(def, a.when);

@@ -18,10 +18,11 @@ import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, repairPrompt, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
+import { listFillIntent } from "@/lib/copilot/listFillGuide";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -149,12 +150,15 @@ export async function POST(req: NextRequest) {
   const selectedId = typeof body.selectedId === "string" ? body.selectedId : null;
   // a request about the look and behaviour gets the UX guide, the theme and the UX of the questions it names
   const uxTurn = cls.ux || mode === "ux";
+  // look-only inferred from the words (not said, not the theme assistant): validation stays allowed — here and in the browser's replay
+  const uxOnlyInferred = cls.uxOnly && !themeScope && !lookOnlySaid(message);
   // the analysis framework: a request about it, or a generation (the design arrives with its analysis)
   const analysisTurn = analysisIntent(message) || mode === "generate";
   // languages: the translation guide, and the named questions' elements with their existing translations
   const translationTurn = translationIntent(message);
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
+  const listFillTurn = listFillIntent(message);
   const quotaCounts = body.quotaCounts && typeof body.quotaCounts === "object" ? body.quotaCounts as Record<string, Record<string, number>> : null;
   // findings: what the data showed — the latest analysis run the Studio sent, answered from its numbers
   const findingsTurn = findingsIntent(message);
@@ -189,7 +193,7 @@ export async function POST(req: NextRequest) {
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly,
-    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn,
+    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
   });
@@ -391,7 +395,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, reply: null, message: failure.message, failure, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
-  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly }) : null;
+  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
   /*
    * ONE REPAIR. The model sometimes proposes something the Studio refuses — a
    * script reaching for the page, an event that does not exist, an option that
@@ -399,10 +403,13 @@ export async function POST(req: NextRequest) {
    * refusals go back to the model once, with its answer, and it corrects
    * them. The corrected answer is used only if the Studio accepts more of it.
    */
-  let repair: { refused: string[]; fixed: boolean; uxGuide?: boolean } | undefined;
+  let repair: { refused: string[]; fixed: boolean; uxGuide?: boolean; skipped?: "policy" } | undefined;
   // the failed actions, each "what it was: why" — the first entries of errors, in order
   const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
-  if (applied && refused.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
+  // a refusal the model cannot change (said look-only, the enforced research design) is not worth a paid call
+  const repairable = refused.filter((r) => !policyRefusal(r));
+  if (applied && refused.length && !repairable.length) repair = { refused, fixed: false, skipped: "policy" };
+  if (applied && repairable.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
     const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
     const repairPromptText = rp.text;
     // what was refused, for whoever reads the server log: the request did not reach the guide, or the model ignored it
@@ -416,11 +423,17 @@ export async function POST(req: NextRequest) {
         const raw2 = fakes[1] ?? m.value;
         const c2 = coerceCopilotReply(raw2);
         const r2 = c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2;
-        const a2 = r2 && r2.actions.length ? applySurveyActions(def, r2.actions, { uxOnly: cls.uxOnly }) : null;
+        /*
+         * TARGETED: the model returns only the corrections; the accepted actions are kept as they were
+         * (not regenerated, not paid for twice). A model that repeats an accepted action keeps it once.
+         */
+        const kept = applied.results.filter((x) => x.ok).map((x) => reply!.actions[x.index]!).filter(Boolean);
+        const merged = r2 ? mergeRepair(kept, r2.actions) : [];
+        const a2 = r2 && merged.length ? applySurveyActions(def, merged, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
         const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
         if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
-          reply = r2; applied = a2;
-          if (!fakes.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
+          reply = { ...r2, actions: merged }; applied = a2;
+          if (!fakes.length && !kept.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
           repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok), uxGuide: rp.addedUxGuide };
         } else repair = { refused, fixed: false, uxGuide: rp.addedUxGuide };
       }
@@ -453,7 +466,7 @@ export async function POST(req: NextRequest) {
           const raw3 = nextFake ?? m.value;
           const c3 = coerceCopilotReply(raw3);
           const r3 = c3 && themeImageUrl ? { ...c3, actions: withThemeImage(c3.actions, themeImageUrl) } : c3;
-          const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly }) : null;
+          const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
           if (r3 && a3?.valid) {
             const cov3 = coverageReport(a3.def);
             const better = cov3.ok || cov3.unmeasured.length + cov3.unconnected.length < coverage.unmeasured.length + coverage.unconnected.length;
@@ -472,6 +485,13 @@ export async function POST(req: NextRequest) {
     src.passages = src.passages.filter((p) => passages[p]);
     if (src.support === "document" && !src.passages.length) src.support = "recommendation";
   }
+  /*
+   * THE MEMORY TELLS THE TRUTH. The model writes its running memory before the Studio has judged its
+   * actions, so a refused action used to be remembered as done ("Q3 validation: min 18" after the
+   * validation was refused) and the next turn built on it. What was refused is appended in the
+   * Studio's words.
+   */
+  if (reply && applied && typeof reply.memory === "string") reply = { ...reply, memory: memoryWithRefusals(reply.memory, applied.results) };
   return NextResponse.json({
     ok: true, reply,
     ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}), ...(planPending.length ? { planPending, partial: true } : {}) } : {}),
@@ -479,7 +499,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

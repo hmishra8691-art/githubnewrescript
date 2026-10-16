@@ -245,7 +245,8 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
       var cr = createdRoot(p);
       if (cr) { replaced.add(cr); return; }
       for (var c = p.firstChild; c; c = c.nextSibling) {
-        if (c.__i == null && c.__c == null) {
+        // the frame's own bootstrap <script> lives in <body>: never something a survey script added
+        if (c.__i == null && c.__c == null && c.nodeName !== "SCRIPT") {
           var before = null; for (var s = c.nextSibling; s; s = s.nextSibling) if (s.__i != null) { before = s.__i; break; }
           var tree = ser(c, true);
           if (tree && p.__i != null) ops.push({ o: "create", c: c.__c, p: p.__i, b: before, tree: tree });

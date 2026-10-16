@@ -173,6 +173,22 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
     const why = [...new Set(foreign.map((f, i) => f!.use(parts[i], def)))].join("; ");
     errors.push(`the selector “${s.value}” matches nothing on a survey page (${why})${q ? ` — the answer box of ${q.code} is ${answerHook(q)}, its card [data-qid="${q.id}"]` : ""}`);
   }
+  // 1b. the ids and codes a selector names must exist in this survey (the model writes the code where the id belongs)
+  for (const s of strings) {
+    for (const m of s.value.matchAll(/data-qid\s*=\s*["']?([^"'\]\s]+)/g)) {
+      const id = m[1];
+      if (def.questions.some((q) => q.id === id)) continue;
+      const byName = def.questions.find((q) => q.code === id || q.variableName === id);
+      errors.push(byName ? `[data-qid="${id}"] names ${byName.code} by its ${byName.code === id ? "code" : "variable name"} — a card carries the question's id: [data-qid="${byName.id}"]` : `[data-qid="${id}"] — there is no question with the id “${id}” (the ids are in the outline)`);
+    }
+    const qid = /data-qid\s*=\s*["']?([^"'\]\s]+)/.exec(s.value)?.[1];
+    const q = qid ? def.questions.find((x) => x.id === qid) as (AuthoringDef["questions"][number] & { options?: { code: unknown }[]; rows?: { code: unknown }[] }) | undefined : undefined;
+    if (!q) continue;
+    for (const m of s.value.matchAll(/data-rs-el\s*=\s*["']?(option|row)["']?\s*\]\s*\[\s*data-rs-id\s*=\s*["']?([^"'\]]+)/g)) {
+      const list = (m[1] === "option" ? q.options : q.rows) ?? [];
+      if (!list.some((o) => String(o.code) === m[2])) errors.push(`${q.code} has no ${m[1]} coded “${m[2]}” (${m[1]}s: ${list.slice(0, 12).map((o) => String(o.code)).join(", ") || "none"})`);
+    }
+  }
   if (errors.length) errors[errors.length - 1] += `. The survey's real hooks: Next [data-testid="rs-next"], Back [data-testid="rs-back"], a question's card [data-qid="<question id>"] (the ids are in the outline), its answer box [data-qid="<id>"] input, an option [data-rs-el="option"]`;
   // 2. disabling or hiding the Next / Back button
   const navRef = /rs-next|rs-back|rs-nav|next|back|submit|continue|prev/i;
@@ -183,6 +199,21 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
   const directNav = strings.some((s) => /rs-next|rs-back|rs-nav/.test(s.value) && /^\s*\)\s*\.\s*(disabled|hidden)\s*=(?!=)/.test(bare.slice(s.end, s.end + 30)));
   if (disables.length || setAttrNav || directNav) {
     errors.push("a script cannot disable or hide the Next / Back button — if the script stopped half-way the respondent would be stranded, so the survey keeps the button working and it would only LOOK disabled. To stop a respondent continuing (an age limit, an eligibility rule, a required format), give the question validation with its message — set_validation, e.g. {\"kind\":\"min_value\",\"value\":18,\"message\":\"You must be 18 or above to participate.\"}: the survey then refuses Next, shows the message, and the server checks it again. A script may still show your own messages and change Next's classes and styles");
+  }
+  // 3b. CSS and code are not elements a script makes: <style>/<link>/<script> and document.head are dropped by the sandbox, so
+  //     keyframes defined that way never exist and an animation that names them silently does nothing
+  const makes = strings.filter((x) => /createElement\s*\(\s*$/.test(bare.slice(Math.max(0, x.start - 20), x.start)) && /^(style|link|script|iframe|object|embed|meta|base)$/i.test(x.value.trim()));
+  if (makes.length || /\bdocument\s*\.\s*head\b/.test(bare)) {
+    errors.push(`a script cannot add ${makes.length ? `a <${makes[0].value.trim().toLowerCase()}> element` : "to document.head"} — the survey drops it, so CSS or keyframes added that way never apply. For CSS use create_style (scoped to the question; @keyframes allowed there); for motion use create_animation (presets: fade-in, fade-up, pop, pulse, shake, bounce, glow…) or rs.animate(target, preset); a script may still set inline styles and transitions on its own elements (el.style.transition / el.style.opacity)`);
+  }
+  // 3c. an inline animation that names keyframes nobody defined
+  for (const m of code.matchAll(/animation(?:-name)?\s*:\s*([A-Za-z_][\w-]*)/g)) {
+    const name = m[1];
+    if (/^(none|inherit|initial|unset)$/i.test(name) || /^rs-ux-/.test(name)) continue;
+    if (!/@keyframes/.test(code) || makes.length || /document\s*\.\s*head/.test(code)) {
+      errors.push(`the inline animation “${name}” names keyframes the survey does not have, so nothing moves — use rs.animate(target, "fade-in"|"pop"|"pulse"…) or create_animation, or animate with transitions (set el.style.transition, then change opacity/transform after rs.after(30, …))`);
+      break;
+    }
   }
   // 3. waiting for an element by calling itself on a timer
   for (const fn of bare.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g)) {

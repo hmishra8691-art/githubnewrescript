@@ -39,9 +39,9 @@ export function UxPreview({ after, before, scope }: { after: SurveyDefinition; b
       </div>
       <div className={`cp-ux-stage${device !== "desktop" ? ` rs-viewport ${device}` : ""}`}>
         {b.responsive && <style dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, '[data-testid="cp-ux-shell"]') }} />}
-        <div key={`${side}-${replay}`} ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b)}`} style={{ ...(brandingVars(b) as React.CSSProperties), padding: "12px 14px 18px" }}
+        <div key={`${side}-${replay}`} ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b)}`} style={{ ...(brandingVars(b) as React.CSSProperties), padding: "12px 14px 18px", transform: "translateZ(0)" /* a script's fixed popup is placed in this preview, not over the Studio */ }}
           data-rs-ux={def.meta.id} data-rs-block={scope.blockId} data-rs-page={scope.pageId} data-testid="cp-ux-shell">
-          <UxLayer def={def} rootRef={shellRef} values={values} allValues={values} shown={questions.map((q) => q.id)} pageKey={`${side}-${replay}`} blockId={scope.blockId} pageId={scope.pageId} pageIndex={1} />
+          <UxLayer contained def={def} rootRef={shellRef} values={values} allValues={values} shown={questions.map((q) => q.id)} pageKey={`${side}-${replay}`} blockId={scope.blockId} pageId={scope.pageId} pageIndex={1} />
           {scope.chrome && b.layout.progressBar !== "none" && <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${Object.keys(values).length ? 60 : 35}%` }} /></div>}
           <div id="rs-questions">
             {questions.map((q) => (

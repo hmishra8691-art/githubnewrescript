@@ -52,6 +52,8 @@ export interface UxLayerProps {
   pageId?: string;
   pageIndex?: number;
   onLog?: (line: string) => void;
+  /** drawn inside another page (the Studio's preview): what scripts add to the body stays in the shell */
+  contained?: boolean;
 }
 
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -308,7 +310,7 @@ export function UxLayer(p: UxLayerProps) {
       frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
       frame.srcdoc = SANDBOX_DOC;
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
-      const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post });
+      const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
       const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
       const resolve = (spec: unknown): UxTarget | null => {

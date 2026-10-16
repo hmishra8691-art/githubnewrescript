@@ -1,5 +1,6 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
+import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 
 /**
  * THE COPILOT'S CONTRACT WITH THE MODEL.
@@ -361,7 +362,7 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
  * request that says "don't change the logic" / "only the UI" is look-only
  * whatever else it names.
  */
-export function uxIntent(text: string): { ux: boolean; only: boolean } {
+export function uxIntent(text: string): { ux: boolean; only: boolean; said?: boolean } {
   const t = text.toLowerCase();
   // strong: only ever about the look and behaviour; weak: usually is, but can be a topic ("mobile banking", "credit cards")
   const strong = /\b(?:themes?|branding|default (?:value|answer)s?|pre-?fill(?:ed|s)?|pre-?populate[ds]?|dark (?:mode|theme)|light theme|colou?r scheme|palette|background image|custom html|html|look like this|css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
@@ -383,7 +384,7 @@ export function uxIntent(text: string): { ux: boolean; only: boolean } {
   // stopping the respondent is validation (structure), so such a request is never look-only
   const stops = /\b(?:disabl|block|prevent|stop|lock)\w*\b.{0,30}\b(?:next|proceed|continu|submit)\w*|\b(?:next|submit|continue)\b.{0,30}\b(?:disabl|block|lock)\w*|\b(?:can(?:not|'t)|not be able to|shouldn'?t|should not|unable to|not allowed to|until)\b.{0,40}\b(?:proceed|continue|go (?:on|ahead|next|forward)|move (?:on|ahead|next|forward)|next)\b/.test(stripped);
   // a request in another script cannot be read for "only the look": it is never look-only
-  return { ux: true, only: !intl && (negated || (strong && !structural && !stops)) };
+  return { ux: true, only: !intl && (negated || (strong && !structural && !stops)), ...(negated ? { said: true } : {}) };
 }
 
 /**
@@ -392,12 +393,37 @@ export function uxIntent(text: string): { ux: boolean; only: boolean } {
  * guide (the request did not read as one) — the guide itself, so the correction uses the
  * survey's real page hooks and api instead of guessing them a second time.
  */
+/**
+ * A refusal no model answer can change: the researcher said the request is look-only, or the research
+ * design is enforced. Asking the model again would only spend the researcher's credits.
+ */
+export const policyRefusal = (reason: string): boolean => /this request is about the look and behaviour only|Blocked by the research design \(enforced\)/.test(reason);
+
+/** the refused actions' corrections joined to the accepted ones — an action the model repeated is kept once */
+export function mergeRepair<T>(accepted: T[], corrected: T[]): T[] {
+  const seen = new Set(accepted.map((a) => JSON.stringify(a)));
+  return [...accepted, ...corrected.filter((a) => !seen.has(JSON.stringify(a)))];
+}
+
 export const UX_ACTION_OP = /^(?:create|update|remove)_(?:style|animation|behavior)$|^attach_behavior_to_|^create_responsive_rule$|^set_custom_(?:code|html)$|^set_theme$/;
 export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[] }): { text: string; addedUxGuide: boolean } {
   const addedUxGuide = !input.uxGuideSent && input.ops.some((op) => UX_ACTION_OP.test(op));
-  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer in the same JSON shape with ONLY the corrected replacements for the refused actions — the accepted ones are kept as they are, do not repeat them. Correct each refused action using only the actions, events and rs api described above, or leave it out and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
   return { text, addedUxGuide };
 }
+
+/** the model's running memory, with what the Studio refused appended in the Studio's words (a refused action is never remembered as done) */
+export function memoryWithRefusals(memory: string, results: { ok: boolean; description: string; error?: string }[]): string {
+  const notDone = results.filter((x) => !x.ok).map((x) => `${x.description}${x.error ? ` (${x.error.slice(0, 120)})` : ""}`);
+  return notDone.length ? `${memory} — NOT APPLIED (refused by the Studio): ${notDone.join("; ")}`.slice(0, 1000) : memory;
+}
+
+/**
+ * Did the researcher SAY the request is look-only ("don't change the logic", "only the UI")? Then
+ * every structural action is refused. When look-only was only inferred from the words, validation
+ * stays allowed (see applySurveyActions' `uxOnlyInferred`).
+ */
+export const lookOnlySaid = (text: string): boolean => !!uxIntent(text).said;
 
 export interface TurnMemory { memory?: string; history: { role: "user" | "copilot"; text: string }[] }
 
@@ -422,6 +448,7 @@ export function copilotUserPrompt(input: {
   /** the request is about languages: the translation guide goes with it */
   translation?: boolean;
   quota?: boolean;
+  listFill?: boolean;
   findings?: boolean;
 }): string {
   const parts: string[] = [];
@@ -436,8 +463,9 @@ export function copilotUserPrompt(input: {
   if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
   if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
   if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
+  if (input.listFill) parts.push(COPILOT_LIST_FILL_GUIDE);
   if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
-  if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, validation, blocks, punch rules, variables) will be refused. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
+  if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, blocks, punch rules, variables) will be refused — validation that stops the respondent (an age limit, a format) is the one exception, unless the researcher said not to change anything. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);
   parts.push(`Request type (a hint, not a rule): ${input.mode}`);

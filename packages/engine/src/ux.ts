@@ -801,6 +801,8 @@ export function validateUxItem(def: SurveyDefinition, kind: "style" | "animation
       // an authoring problem already said as a selector guess is said once, in its stronger form
       const guessed = new Set(authoring.length ? selectorGuesses(b.script) : []);
       warnings.push(...c.warnings.filter((w) => !guessed.has(w)).map((e) => `“${b.label}”: ${e}`));
+      // a script runs whenever its page opens: a "when" guard is not applied to it (styles, animations and effects honour it)
+      if (b.when) authoring.push("a “when” condition does not apply to a script — it runs whenever its page opens; check the answer inside the script instead (rs.listen(\"answer\", \"Q3\", (e) => { if (Number(e.value) >= 18) … }) or rs.getAnswer(\"Q3\")), or use effects (show_message, animate…) with “when”");
       (opts.authoring ? errors : warnings).push(...authoring.map((e) => `“${b.label}”: ${e}`));
     } else {
       if (!b.on) errors.push(`“${b.label}” needs an event (on) or a script`);
@@ -883,6 +885,31 @@ export function reviewUx(def: SurveyDefinition): UxFinding[] {
 }
 
 /** what the copilot is shown for a question it is asked to style or diagnose */
+/**
+ * The question as a script sees it on the survey page — the real selectors for its card, answer box,
+ * options (by code), rows and cells, and the page it is on. Sent with every look-and-behaviour turn
+ * for the questions the request is about, so a generated script names what is there instead of
+ * guessing (the same facts `scriptAuthoringProblems` checks a script against).
+ */
+export function questionHooks(def: SurveyDefinition, q: SurveyDefinition["questions"][number]): string[] {
+  const card = `[data-qid="${q.id}"]`;
+  const out = [`card ${card}`];
+  const opts = (q.options ?? []).slice(0, 12);
+  const rows = (q.rows ?? []).slice(0, 8);
+  if (rows.length) {
+    out.push(`row ${card} [data-rs-el="row"][data-rs-id="<row code>"] (${rows.map((r) => `${r.code} ${String(r.label).replace(/<[^>]*>/g, "").slice(0, 24)}`).join(", ")}${(q.rows ?? []).length > 8 ? ", …" : ""})`);
+    if (opts.length) out.push(`scale point / answer ${card} [data-rs-el="cell"][data-rs-id="<row code>::<scale code>"] (scale ${opts.map((o) => `${o.code} ${String(o.label).replace(/<[^>]*>/g, "").slice(0, 18)}`).join(", ")})`);
+  } else if (opts.length) {
+    out.push(`option ${card} [data-rs-el="option"][data-rs-id="<code>"] (${opts.map((o) => `${o.code} ${String(o.label).replace(/<[^>]*>/g, "").slice(0, 24)}`).join(", ")}${(q.options ?? []).length > 12 ? ", …" : ""}); in a handler, rs.listen("select", "${q.code}", (e) => e.option) gives the code`);
+  } else if (["numeric", "open_text", "long_text", "date", "slider"].includes(q.type)) {
+    out.push(`answer box ${card} ${q.type === "long_text" ? "textarea" : "input"} (read box.value in an "input" listener, or rs.listen("answer", "${q.code}", (e) => e.value))`);
+  }
+  const pages = listPages(def.flow as unknown[]);
+  const at = pages.findIndex((p) => (p.node as { questionIds?: string[] }).questionIds?.includes(q.id));
+  if (at >= 0) out.push(`on page ${at + 1} of ${pages.length} (a script on ${q.code} starts when that page opens and is undone when it is left)`);
+  return out;
+}
+
 export function uxContextFor(def: SurveyDefinition, questionId: string): string[] {
   const q = def.questions.find((x) => x.id === questionId);
   if (!q) return [];
@@ -890,6 +917,7 @@ export function uxContextFor(def: SurveyDefinition, questionId: string): string[
   const lines: string[] = [];
   const s = q.settings;
   lines.push(`layout: ${s.optionOrientation === "horizontal" ? "horizontal" : `${layoutColumns(q, resolveVariant(q.variant)?.renderer)} column${layoutColumns(q, resolveVariant(q.variant)?.renderer) === 1 ? "" : "s"}`}${q.options?.length ? `, ${q.options.length} options` : ""}${q.options?.some((o) => o.flags?.includes("other_specify")) ? ", has Other" : ""}`);
+  lines.push(`page hooks (scripts): ${questionHooks(def, q).join(" · ")}`);
   const mine = (t: UxTarget) => t.questionId === q.id || (!t.questionId && ["question", "option"].includes(t.kind));
   for (const st of ux.styles.filter((x) => mine(x.target))) lines.push(`style ${st.id} “${st.label}” on ${describeUxTarget(def, st.target)}: ${st.rules.map((r) => `${[r.state, r.media, r.selector].filter(Boolean).join(" ") || "base"} {${Object.entries(r.declarations).map(([k, v]) => `${k}:${v}`).join("; ")}}`).join(" · ")}${st.css ? ` + css ${st.css.length} chars` : ""}`);
   for (const a of ux.animations.filter((x) => mine(x.target))) lines.push(`animation ${a.id} “${a.label}” ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}`);

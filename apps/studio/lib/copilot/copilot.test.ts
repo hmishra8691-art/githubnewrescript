@@ -5,6 +5,7 @@ import { applySurveyActions } from "@rescript/engine";
 import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research";
 import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, findingsIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_FINDINGS_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
+import { COPILOT_LIST_FILL_GUIDE, listFillIntent } from "./listFillGuide.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
 const empty = () => SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "Skincare" }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }], deployment: { clientSlug: "c", studySlug: "s" } });
@@ -188,7 +189,7 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE;
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE + COPILOT_LIST_FILL_GUIDE;
   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);
@@ -503,4 +504,83 @@ test("P0: a refused script goes back with the UX guide when the first prompt wen
   assert.equal(b.addedUxGuide, false, "not twice");
   assert.ok(!b.text.includes(COPILOT_UX_GUIDE));
   assert.equal(repairPrompt({ ...base, uxGuideSent: false, ops: ["add_question"] }).addedUxGuide, false, "only for look-and-behaviour actions");
+});
+
+test("List Fill requests: recognised in English, Hinglish and Hindi, and given the List Fill guide only then", () => {
+  const yes = [
+    "Q37 is a grid of 10 smartphone brands × familiarity. The brands rated Somewhat familiar, Familiar or Very familiar should be shown in Q38. If more than 5 qualify, randomly assign 4. Apple must always be shown and on top.",
+    "set up a list fill from Q5 into Q6",
+    "use least fill to pick 2 brands for the deep dive",
+    "carry forward 3 of the selected brands to Q9",
+    "randomly select 2 brands from Q4 for the follow-up",
+    "pick 3 at random from the brands they use",
+    "agar 5 se zyada brands qualify karein to randomly 4 assign karo, Apple ko priority do",
+    "Q37 में जिन ब्रांड्स को 3 से 5 रेटिंग मिली, उनमें से रैंडमली 4 ब्रांड Q38 में असाइन करें",
+    "लिस्ट फिल बनाओ Q5 से",
+    "Apple को प्राथमिकता दें",
+  ];
+  for (const m of yes) assert.ok(listFillIntent(m), m);
+  const no = ["make Q7 a 5-point scale", "randomize the options of Q5", "show Q10 only to people who chose Apple in Q5", "add a question about income", "set up quotas: 500 completes, 50/50 gender", "translate Q5 into Hindi"];
+  for (const m of no) assert.ok(!listFillIntent(m), m);
+  const base = { outline: "(survey)", surveyLanguage: "English", mode: "edit" as const };
+  assert.ok(copilotUserPrompt({ ...base, message: yes[0], listFill: true }).includes("LIST FILL GUIDE"));
+  assert.ok(!copilotUserPrompt({ ...base, message: "make Q7 a 5-point scale" }).includes("LIST FILL GUIDE"));
+});
+
+test("the List Fill guide's worked example is the production case, and the engine applies it as written", () => {
+  const line = COPILOT_LIST_FILL_GUIDE.split("\n").find((l) => l.startsWith('{"op":"create_list_fill"'))!;
+  assert.ok(line, "the guide carries a create_list_fill example");
+  const brands = ["Apple", "Samsung", "Xiaomi", "OnePlus", "Vivo", "Oppo", "Realme", "Motorola", "Nokia", "Google"];
+  const def = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "t", version: "1" }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }] });
+  const reply = coerceCopilotReply({ reply: "List Fill", actions: [
+    { op: "create_question", type: "grid", code: "Q37", text: "How familiar are you with each brand?", rows: brands, scale: { points: 5, labels: ["Never heard of", "Heard of", "Somewhat familiar", "Familiar", "Very familiar"] } },
+    { op: "create_question", type: "ranking", code: "Q38", text: "Rank these brands", options: brands, newPage: true },
+    JSON.parse(line),
+  ] });
+  assert.ok(reply);
+  const out = applySurveyActions(def, reply!.actions as never);
+  assert.deepEqual(out.errors, []);
+  assert.equal(out.def.listFills.length, 1);
+  assert.match(out.results[2].description, /from Q37 rows rated 3–5 .* 4 items .* Apple first when eligible/);
+  for (const w of ["MASK", "LOOP", "allIfAtMost", "always", "whenUnused", "update_list_fill", "remove_list_fill", "LATER PAGE"]) assert.ok(COPILOT_LIST_FILL_GUIDE.includes(w), w);
+});
+
+import { memoryWithRefusals, lookOnlySaid } from "./prompt.ts";
+test("P0-2: look-only is explicit — the 21:23 request keeps its validation; a refused action is never remembered as done", () => {
+  const FIELD = "Q3 pe mujhe javascript lagana hai, agar age ki value 18 ke upar dalta hu to wahan pe automatic popup hokar aana chahiye ki you are eligible voter";
+  const field = classifyRequest(FIELD, 27, 0);
+  assert.equal(field.ux, true);
+  assert.equal(lookOnlySaid(FIELD), false, "look-only is only inferred here, so the model's set_validation goes through");
+  assert.equal(lookOnlySaid("Make the options look like cards, but don't change the question wording or the logic"), true, "said explicitly: every structural action is refused");
+  // the engine side: inferred look-only lets validation through, said look-only does not
+  const d = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "t", version: "1" }, questions: [{ id: "q_age", code: "Q3", variableName: "AGE_SCR", type: "numeric", text: "Age?" }], flow: [{ type: "page", id: "p1", questionIds: ["q_age"] }, { type: "end", id: "e", status: "complete" }] });
+  const v = [{ op: "set_validation", target: "Q3", rules: [{ kind: "min_value", value: 18, message: "18+" }] }] as never;
+  assert.equal(applySurveyActions(d, v, { uxOnly: true, uxOnlyInferred: true }).results[0]!.ok, true);
+  assert.equal(applySurveyActions(d, v, { uxOnly: true }).results[0]!.ok, false);
+  assert.equal(applySurveyActions(d, [{ op: "update_question", target: "Q3", text: "x" }] as never, { uxOnly: true, uxOnlyInferred: true }).results[0]!.ok, false, "other structure stays refused");
+  const mem = memoryWithRefusals("Q3 validation: integer, min 18.", [{ ok: true, description: "Change behaviour Q3 script" }, { ok: false, description: "Set the validation of Q3", error: "this request is about the look and behaviour only" }]);
+  assert.match(mem, /NOT APPLIED \(refused by the Studio\): Set the validation of Q3 \(this request is about the look/);
+  assert.equal(memoryWithRefusals("all good", [{ ok: true, description: "x" }]), "all good");
+});
+
+test("P0-2: a UX turn tells the model the focused question's real hooks", () => {
+  const d = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "t", version: "1" }, questions: [
+    { id: "q_cit", code: "Q2", variableName: "CITIZEN", type: "single_select", text: "Citizen?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }] },
+    { id: "q_age", code: "Q3", variableName: "AGE_SCR", type: "numeric", text: "Age?" },
+  ], flow: [{ type: "page", id: "p1", questionIds: ["q_cit"] }, { type: "page", id: "p2", questionIds: ["q_age"] }, { type: "end", id: "e", status: "complete" }] });
+  const o = copilotOutline(d, { ux: true, focusIds: ["q_cit", "q_age"] });
+  assert.match(o, /option \[data-qid="q_cit"\] \[data-rs-el="option"\]\[data-rs-id="<code>"\] \(1 Yes, 2 No\)/);
+  assert.match(o, /answer box \[data-qid="q_age"\] input/);
+  assert.match(o, /on page 2 of 2/);
+});
+
+import { policyRefusal, mergeRepair } from "./prompt.ts";
+test("P0-2: cost — no repair call for a refusal no answer can change; a repair returns only corrections, merged once", () => {
+  assert.equal(policyRefusal("Set the validation of Q3: this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them"), true);
+  assert.equal(policyRefusal("Blocked by the research design (enforced): H1 has no question."), true);
+  assert.equal(policyRefusal("Behaviour “x”: the selector “.sd-question” matches nothing on a survey page"), false, "a script the model can correct is repairable");
+  const a = { op: "set_validation", target: "Q3" }, b = { op: "create_behavior", label: "x" }, c = { op: "create_behavior", label: "y" };
+  assert.deepEqual(mergeRepair([a, b], [c]), [a, b, c]);
+  assert.deepEqual(mergeRepair([a, b], [{ ...b }, c]), [a, b, c], "an accepted action the model repeated is kept once");
+  assert.match(repairPrompt({ prompt: "P", raw: {}, refused: ["r"], total: 2, uxGuideSent: true, ops: ["create_behavior"] }).text, /ONLY the corrected replacements for the refused actions/);
 });
