@@ -4,6 +4,8 @@ import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, diffSurveys, type SurveyAction } from "./surveyActions.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { runQualityCheck } from "./qualityCheck.js";
+import { createResponseState } from "./state.js";
+import { blockingErrors, validateQuestion } from "./validate.js";
 
 /**
  * THE COPILOT'S ACTION LAYER: the model writes actions, this turns them into
@@ -491,4 +493,44 @@ test("what a change does to the analysis plan is said at the change: a retyped g
   /* a change that leaves the plan as sound as it was says nothing about it */
   const plain = applySurveyActions(def, [{ op: "update_question", target: "Q2", required: true }], { ids });
   assert.ok(!plain.warnings.some((w) => /^Analysis plan: /.test(w)), plain.warnings.join("\n"));
+});
+
+/*
+ * QT-01 / AI-01 / AI-02 / QT-09 (audit 2026-10-16): the variant's intrinsic
+ * rules survive whatever validation the model attaches; messages are kept;
+ * bounds reach the settings the builder and the input read.
+ */
+test("create_question keeps the variant's intrinsic rule when the model adds its own validation, and mirrors bounds", () => {
+  const r = applySurveyActions(empty(), [
+    { op: "create_block", ref: "B", title: "Screening" },
+    { op: "create_question", ref: "AGE", type: "integer", text: "How old are you?", required: true, validation: [{ kind: "min_value", value: 18 }, { kind: "max_value", value: 99, message: "We only interview people under 100." }] },
+    { op: "create_question", ref: "EMAIL", type: "email", text: "Your email?", validation: [{ kind: "required" }, { kind: "max_length", value: 120 }] },
+    { op: "create_question", ref: "PHONE", type: "phone", text: "Your phone?", validation: [{ kind: "required" }] },
+  ] as SurveyAction[], { ids, now: "2026-10-16T00:00:00Z" });
+  assert.deepEqual(r.errors, [], r.errors.join("\n"));
+  const q = (code: string) => r.def.questions.find((x) => x.variableName === code)!;
+  const kinds = (code: string) => q(code).validation.map((v) => v.kind);
+  assert.ok(kinds("AGE").includes("integer"), `integer kept: ${kinds("AGE")}`);
+  assert.ok(kinds("AGE").includes("min_value") && kinds("AGE").includes("max_value"));
+  assert.equal(q("AGE").validation.find((v) => v.kind === "max_value")!.message, "We only interview people under 100.", "AI-02: the message survives");
+  assert.equal(q("AGE").settings.minValue, 18); assert.equal(q("AGE").settings.maxValue, 99);
+  assert.ok(kinds("EMAIL").includes("email"), `email kept: ${kinds("EMAIL")}`);
+  assert.ok(kinds("PHONE").includes("phone"), `phone kept: ${kinds("PHONE")}`);
+  // the engine then refuses what the type refuses
+  const st = createResponseState(r.def, { sessionId: "s", seed: 1 });
+  const reject = (code: string, v: unknown) => blockingErrors(validateQuestion(r.def, q(code), v as never, { def: r.def, state: st })).map((e) => e.message);
+  assert.match(reject("AGE", "25.5").join(" "), /whole number/);
+  assert.match(reject("AGE", "abc").join(" "), /number/);
+  assert.match(reject("AGE", "1e2").join(" "), /number/);
+  assert.deepEqual(reject("AGE", " 42 "), []);
+  assert.match(reject("EMAIL", "not-an-email").join(" "), /email/i);
+  // set_validation replaces the authored rules but still keeps the intrinsic one
+  const r2 = applySurveyActions(r.def, [{ op: "set_validation", target: "AGE", rules: [{ kind: "min_value", value: 21 }] }] as SurveyAction[], { ids });
+  assert.deepEqual(r2.errors, []);
+  const after = r2.def.questions.find((x) => x.variableName === "AGE")!;
+  assert.deepEqual(after.validation.map((v) => v.kind).sort(), ["integer", "min_value"]);
+  assert.equal(after.settings.minValue, 21);
+  // spelling the intrinsic kind yourself does not duplicate it
+  const r3 = applySurveyActions(r.def, [{ op: "set_validation", target: "AGE", rules: [{ kind: "integer" }, { kind: "max_value", value: 80 }] }] as SurveyAction[], { ids });
+  assert.equal(r3.def.questions.find((x) => x.variableName === "AGE")!.validation.filter((v) => v.kind === "integer").length, 1);
 });

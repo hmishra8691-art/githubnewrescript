@@ -101,6 +101,7 @@ export const UI_STRINGS: { id: string; en: string; hint: string }[] = [
   { id: "date_weekday", en: "That day of the week is not available — please choose another date.", hint: "validation" },
   { id: "decimal_places", en: "Please use at most {n} decimal places.", hint: "validation, numeric" },
   { id: "whole_number", en: "Please enter a whole number.", hint: "validation, numeric" },
+  { id: "not_a_number", en: "Please enter a number.", hint: "validation, numeric" },
   { id: "number_positive", en: "Please enter zero or a positive number.", hint: "validation, numeric" },
   { id: "number_negative", en: "Please enter zero or a negative number.", hint: "validation, numeric" },
   { id: "upload_type", en: "Invalid file type. Please upload {wanted}.", hint: "validation, file upload" },

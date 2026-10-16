@@ -550,6 +550,22 @@ export function validateQuestion(
     }
   }
 
+  /*
+   * IS IT A NUMBER AT ALL (audit 2026-10-16, QT-03). Every bound below
+   * compares `Number(value)`, and NaN compares false with everything, so
+   * "abc" sailed past min/max; "1e2" parsed as 100. The browser's number
+   * field rarely lets either through, but a posted or resumed payload can,
+   * and the server replay now checks what the browser checked. A numeric
+   * answer is a plain decimal: optional sign, digits, optional fraction —
+   * no exponent, no hex, no whitespace inside.
+   */
+  if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
+    const text = typeof value === "number" ? String(value) : String(value).trim();
+    if (!/^[-+]?(\d+\.?\d*|\.\d+)$/.test(text)) {
+      push(uiText(ctx.ui, "not_a_number"));
+      return errors; // the bounds below would only repeat the complaint against NaN
+    }
+  }
   // bounds from settings
   if (!isEmpty(value) && (q.type === "numeric" || q.type === "slider" || q.type === "nps")) {
     /*

@@ -47,7 +47,7 @@ test("the page being filled in is not validated yet; a page already passed is", 
 });
 
 test("out-of-range, wrong-type and decimal answers on a passed page are refused with the engine's own message", () => {
-  for (const [v, re] of [["999", /at most 99/], ["25.5", /whole number/], ["abc", /whole number/], ["", /required/]] as const) {
+  for (const [v, re] of [["999", /at most 99/], ["25.5", /whole number/], ["abc", /enter a number/], ["", /required/]] as const) {
     const r = check({ answers: { q_age: v }, stepIndex: 1 });
     assert.equal(r.ok, false, v); assert.match(r.hard[0].message, re);
   }

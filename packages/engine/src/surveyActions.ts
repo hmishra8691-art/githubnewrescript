@@ -550,7 +550,8 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
        * unconditional one, and a condition rule became one that checks nothing.
        */
       if (a.validation?.some((r) => r.when || r.check)) {
-        q.validation = validationFromSpecs(ctx, a.validation, (i) => `${q.id}_v${i + 1}`);
+        q.validation = mergeValidation(q.validation ?? [], validationFromSpecs(ctx, a.validation, (i) => `${q.id}_v${i + 1}`));
+        mirrorBounds(q);
       }
       const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
       if (block) ctx.lastBlock = block.id;
@@ -698,7 +699,8 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     case "set_validation": {
       const q = resolveQuestion(ctx, a.target);
       const had = q.validation?.length ?? 0;
-      q.validation = validationFromSpecs(ctx, a.rules, () => ctx.ids("val"));
+      q.validation = mergeValidation(q.validation ?? [], validationFromSpecs(ctx, a.rules, () => ctx.ids("val")), { replace: true });
+      mirrorBounds(q);
       return { description: `${q.code} validation: ${a.rules.map((r) => `${r.kind.replace(/_/g, " ")}${r.value !== undefined ? ` ${r.value}` : ""}`).join(", ") || "none"}`, destructive: had ? `Replaces the ${had} validation rule${had === 1 ? "" : "s"} of ${q.code}` : undefined, touched: [q.id] };
     }
     case "page_break": {
@@ -1097,6 +1099,38 @@ function namingFor(def: SurveyDefinition, code?: string, variable?: string): { c
 }
 
 /** Validation rules from the action's specs — the gate and the check through the same condition gate as everything else. */
+/**
+ * A QUESTION'S TYPE RULES ARE NOT THE MODEL'S TO DROP (audit 2026-10-16,
+ * QT-01 / AI-01). `createQuestionFromVariant` seeds what a variant means —
+ * `text.email` → an `email` rule, `numeric.integer` → an `integer` rule —
+ * and this layer used to REPLACE that list with whatever the action carried,
+ * so "an integer age between 18 and 100" became a decimal-accepting numeric
+ * the moment the model added the bounds. The intrinsic kinds survive unless
+ * the action spells the same kind itself; everything else the action says is
+ * taken as given. `set_validation` replaces the authored rules (that is what
+ * it is for) but still keeps the intrinsic ones.
+ */
+const INTRINSIC_KINDS = new Set(["email", "phone", "url", "zip", "integer"]);
+function mergeValidation(preset: ValidationRule[], supplied: ValidationRule[], opts: { replace?: boolean } = {}): ValidationRule[] {
+  const suppliedKinds = new Set(supplied.map((r) => r.kind));
+  const kept = preset.filter((r) => !suppliedKinds.has(r.kind) && (INTRINSIC_KINDS.has(r.kind) || !opts.replace));
+  return [...kept, ...supplied];
+}
+
+/**
+ * The builder's Range fields and the number input's own min/max read
+ * `settings.minValue/maxValue`; the model writes `min_value/max_value`
+ * rules. One truth, mirrored (QT-09): the rule is what validates, the
+ * setting is what the editor and the input show.
+ */
+function mirrorBounds(q: Question): void {
+  if (!(q.type === "numeric" || q.type === "slider")) return;
+  const num = (k: string) => { const r = q.validation.find((v) => v.kind === k && !v.when); const n = r ? Number(r.value) : NaN; return Number.isFinite(n) ? n : undefined; };
+  const min = num("min_value"), max = num("max_value");
+  if (min !== undefined) q.settings.minValue = min;
+  if (max !== undefined) q.settings.maxValue = max;
+}
+
 function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: number) => string): ValidationRule[] {
   const def = ctx.def;
   return specs.map((r, i) => ({
@@ -1124,7 +1158,14 @@ function shapeQuestion(def: SurveyDefinition, q: Question, a: Extract<SurveyActi
   if (a.rows?.length) q.rows = a.rows.map((label, i) => ({ code: `r${i + 1}`, label, flags: [], validation: [], required: false })) as never;
   if (matrix && !a.rows?.length) fail(`a matrix question needs rows (the statements or items it rates)`);
   if (a.randomize) q.randomization = { enabled: true, scope: matrix ? "rows" : "options", method: "shuffle" } as never;
-  if (a.validation?.length) q.validation = a.validation.map((r, i) => ({ id: `${q.id}_v${i + 1}`, kind: r.kind, ...(r.value !== undefined ? { value: r.value } : {}) })) as never;
+  if (a.validation?.length) {
+    q.validation = mergeValidation(q.validation ?? [], a.validation.map((r, i) => ({
+      id: `${q.id}_v${i + 1}`, kind: r.kind,
+      ...(r.value !== undefined ? { value: r.value } : {}),
+      ...(r.message ? { message: r.message } : {}),
+    })) as ValidationRule[]);
+    mirrorBounds(q);
+  }
   const choice = /select|dropdown|matrix|ranking/.test(q.type) && q.type !== "nps";
   if (choice && !q.options?.length) fail(`${a.type} question “${plain(a.text, 40)}” needs options`);
 }
