@@ -390,8 +390,12 @@ await loadDef(buildMasterDemoSurvey("sandbox"));
   const rules = q(after, "Q3").validation;
   assert.deepEqual(rules.filter((r) => /_value$/.test(r.kind)).map((r) => [r.kind, r.value]), [["min_value", 18], ["max_value", 99]]);
   assert.equal(rules.find((r) => r.kind === "integer")?.message, "Please enter a whole number of years.", "the existing whole-number rule stays, message and all");
-  assert.deepEqual({ ...q(after, "Q3"), validation: undefined }, { ...q3, validation: undefined }, "nothing else on Q3 changed");
-  ok("Apply writes min/max onto Q3's validation — the same rules the Validation panel writes");
+  // QT-09 (audit 2026-10-16): the bounds the rules hold are mirrored onto the settings the builder's Range fields and the
+  // number input read — one truth, so the Range box shows 99 the moment the rule says 99
+  assert.equal(q(after, "Q3").settings.minValue, 18); assert.equal(q(after, "Q3").settings.maxValue, 99);
+  const strip = (x) => ({ ...x, validation: undefined, settings: { ...x.settings, minValue: undefined, maxValue: undefined } });
+  assert.deepEqual(strip(q(after, "Q3")), strip(q3), "nothing else on Q3 changed");
+  ok("Apply writes min/max onto Q3's validation — the same rules the Validation panel writes — and mirrors them onto the settings");
   // the Studio panel shows them; the same survey
   await switchMode(page, "studio");
   await page.waitForSelector('[data-testid="questions-panel"]');
