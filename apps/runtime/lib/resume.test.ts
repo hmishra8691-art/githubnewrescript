@@ -1,0 +1,66 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { cachePending, clearPending, readPending, mergeResumeSnapshot, type PendingAnswers } from "./resume.ts";
+
+/* a minimal localStorage, so the browser-only cache can run under node */
+function installStorage(): Map<string, string> {
+  const m = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => (m.has(k) ? m.get(k)! : null),
+    setItem: (k: string, v: string) => { m.set(k, String(v)); },
+    removeItem: (k: string) => { m.delete(k); },
+  };
+  (globalThis as unknown as { window: unknown }).window = { localStorage: storage, sessionStorage: storage };
+  return m;
+}
+
+const pending = (stepIndex: number, answers: Record<string, unknown> = {}): PendingAnswers =>
+  ({ answers, calculated: {}, embedded: {}, flags: [], stepIndex, at: 1 });
+
+/* RUNTIME-06: after Back, the locally cached position is LOWER than the server's — and it must win */
+test("a cached step lower than the saved one wins (Back, then reload before the save landed)", () => {
+  const saved = { answers: { Q1: 1, Q2: 2, Q3: 3 }, calculated: {}, embedded: {}, flags: [], stepIndex: 6 };
+  const r = mergeResumeSnapshot(saved, pending(2));
+  assert.equal(r.stepIndex, 2);
+  assert.deepEqual(r.answers, { Q1: 1, Q2: 2, Q3: 3 }, "answers to later pages are kept, not discarded");
+});
+
+test("a cached step higher than the saved one still wins (Next, save failed)", () => {
+  const r = mergeResumeSnapshot({ answers: { Q1: 1 }, stepIndex: 2 }, pending(4, { Q2: "x" }));
+  assert.equal(r.stepIndex, 4);
+  assert.deepEqual(r.answers, { Q1: 1, Q2: "x" });
+});
+
+test("a corrupt cached step falls back to the server's", () => {
+  const p = { ...pending(0), stepIndex: -3 };
+  assert.equal(mergeResumeSnapshot({ answers: {}, stepIndex: 5 }, p).stepIndex, 5);
+  const q = { ...pending(0), stepIndex: Number.NaN };
+  assert.equal(mergeResumeSnapshot({ answers: {}, stepIndex: 5 }, q).stepIndex, 5);
+  assert.equal(mergeResumeSnapshot(null, q).stepIndex, 0);
+});
+
+test("cached answers override saved ones; no saved row is fine", () => {
+  const r = mergeResumeSnapshot(undefined, pending(3, { Q1: "new" }));
+  assert.deepEqual(r, { answers: { Q1: "new" }, calculated: {}, embedded: {}, flags: [], stepIndex: 3 });
+});
+
+test("an acknowledgement clears only the snapshot its own save carried", async () => {
+  installStorage();
+  const sid = "session-abcdefghijklmnop";
+  const first = cachePending(sid, { answers: { Q1: 1 }, calculated: {}, embedded: {}, flags: [], stepIndex: 4 });
+  await new Promise((r) => setTimeout(r, 3));
+  const second = cachePending(sid, { answers: { Q1: 1 }, calculated: {}, embedded: {}, flags: [], stepIndex: 2 });
+  assert.notEqual(first, second);
+  clearPending(sid, first); // the older save acknowledged late
+  assert.equal(readPending(sid)?.stepIndex, 2, "the Back snapshot survives the stale ack");
+  clearPending(sid, second);
+  assert.equal(readPending(sid), null);
+});
+
+test("clearPending without a stamp still clears unconditionally", () => {
+  installStorage();
+  const sid = "session-abcdefghijklmnop";
+  cachePending(sid, { answers: {}, calculated: {}, embedded: {}, flags: [], stepIndex: 1 });
+  clearPending(sid);
+  assert.equal(readPending(sid), null);
+});

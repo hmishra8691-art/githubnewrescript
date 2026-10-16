@@ -38,6 +38,61 @@ export function useChoice(p: QRProps, multi: boolean, options: Option[]) {
 }
 
 /** Keyboard activation for a clickable non-button element. */
+/**
+ * ARROW KEYS INSIDE A GROUP OF role="radio" BUTTONS (RUNTIME-09).
+ *
+ * A native `<input type="radio">` group gets arrow-key navigation from the
+ * browser; a `<button role="radio">` gets nothing, so a Likert, Rating or
+ * Star grid could only be reached by tabbing through every single cell. This
+ * is the WAI-ARIA radio-group pattern: ← / ↑ previous, → / ↓ next (wrapping),
+ * Home / End first / last — and moving SELECTS, exactly as a native group
+ * does. Pure, so the index rule is the same everywhere.
+ */
+export function nextRadioIndex(key: string, current: number, count: number): number | null {
+  if (count <= 0) return null;
+  const from = current < 0 ? -1 : current;
+  switch (key) {
+    case "ArrowRight": case "ArrowDown": return from < 0 ? 0 : (from + 1) % count;
+    case "ArrowLeft": case "ArrowUp": return from < 0 ? count - 1 : (from - 1 + count) % count;
+    case "Home": return 0;
+    case "End": return count - 1;
+    default: return null;
+  }
+}
+
+/**
+ * The keydown handler for one radio of a group. The group is the nearest
+ * element carrying `data-rs-radiogroup` (a table row keeps its row semantics
+ * this way — wrapping cells in role="radiogroup" would break the table) or
+ * `role="radiogroup"`; the radios are its enabled `[role="radio"]` buttons.
+ * The target is focused and clicked, so selection runs through the same
+ * handler a tap does.
+ */
+export function radioGroupKeyDown(e: React.KeyboardEvent<HTMLElement>): void {
+  const self = e.currentTarget;
+  const group = self.closest<HTMLElement>("[data-rs-radiogroup], [role='radiogroup']");
+  if (!group) return;
+  const radios = Array.from(group.querySelectorAll<HTMLElement>("[role='radio']"))
+    .filter((el) => !(el as HTMLButtonElement).disabled);
+  const at = nextRadioIndex(e.key, radios.indexOf(self), radios.length);
+  if (at === null) return;
+  e.preventDefault();
+  const target = radios[at];
+  if (!target || target === self) return;
+  target.focus();
+  /* moving selects, as in a native group — but never toggles the current answer off */
+  if (target.getAttribute("aria-checked") !== "true") target.click();
+}
+
+/**
+ * Roving tabindex for a radio group: the checked radio (or the first when
+ * none is) is the group's one Tab stop, so Tab moves between ROWS and the
+ * arrows move within one.
+ */
+export function rovingTabIndex(index: number, checkedIndex: number): 0 | -1 {
+  return index === (checkedIndex >= 0 ? checkedIndex : 0) ? 0 : -1;
+}
+
 export function activate(fn: () => void) {
   return (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {

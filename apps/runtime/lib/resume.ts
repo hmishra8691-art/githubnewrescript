@@ -131,10 +131,12 @@ export interface PendingAnswers {
  * acknowledged". Keyed by session id, so it can only ever be replayed onto
  * the response it came from.
  */
-export function cachePending(sessionId: string, p: Omit<PendingAnswers, "at">): void {
+export function cachePending(sessionId: string, p: Omit<PendingAnswers, "at">): number {
+  const at = Date.now();
   try {
-    window.localStorage.setItem(CACHE_KEY(sessionId), JSON.stringify({ ...p, at: Date.now() }));
+    window.localStorage.setItem(CACHE_KEY(sessionId), JSON.stringify({ ...p, at }));
   } catch { /* storage full or blocked — the in-memory retry still applies */ }
+  return at;
 }
 
 export function readPending(sessionId: string): PendingAnswers | null {
@@ -146,8 +148,46 @@ export function readPending(sessionId: string): PendingAnswers | null {
   } catch { return null; }
 }
 
-export function clearPending(sessionId: string): void {
-  try { window.localStorage.removeItem(CACHE_KEY(sessionId)); } catch { /* ignore */ }
+/**
+ * Drop the cache once the server has the work. With `at` (the stamp
+ * `cachePending` returned for the snapshot that save carried) only THAT
+ * snapshot is dropped: a Back and a Next in quick succession put two saves in
+ * flight, and the earlier one's acknowledgement must not erase the later
+ * snapshot whose own save may still fail (RUNTIME-06).
+ */
+export function clearPending(sessionId: string, at?: number): void {
+  try {
+    if (at !== undefined) {
+      const cur = readPending(sessionId);
+      if (cur && cur.at !== at) return;
+    }
+    window.localStorage.removeItem(CACHE_KEY(sessionId));
+  } catch { /* ignore */ }
+}
+
+/**
+ * The position and answers to resume with, given what the server saved and
+ * what this browser cached but never got acknowledged (RUNTIME-06).
+ *
+ * The cache is by construction NEWER than the server row — it is cleared the
+ * moment a save is acknowledged — so its step wins outright. It used to be
+ * `Math.max(pending, saved)`, which is right only while a respondent only
+ * ever moves forward: after Back, the cached step is LOWER than the saved
+ * one, and the max put a reloading respondent further along than the page
+ * they had gone back to.
+ */
+export function mergeResumeSnapshot(
+  saved: { answers?: Record<string, unknown>; calculated?: Record<string, unknown>; embedded?: Record<string, unknown>; flags?: unknown[]; stepIndex?: number } | null | undefined,
+  pending: PendingAnswers,
+): { answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } {
+  const step = Number.isInteger(pending.stepIndex) && pending.stepIndex >= 0 ? pending.stepIndex : (saved?.stepIndex ?? 0);
+  return {
+    answers: { ...(saved?.answers ?? {}), ...pending.answers },
+    calculated: { ...(saved?.calculated ?? {}), ...pending.calculated },
+    embedded: { ...(saved?.embedded ?? {}), ...pending.embedded },
+    flags: pending.flags ?? saved?.flags ?? [],
+    stepIndex: step,
+  };
 }
 
 /* ------------------------------------------------------------ preview resume

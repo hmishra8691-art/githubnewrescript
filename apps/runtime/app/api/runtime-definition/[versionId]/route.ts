@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
+import { definitionAccess, isVersionId, DENY_CACHE_CONTROL, type DeploymentRow } from "@/lib/definitionAccess";
 
 /**
  * THE CACHEABLE HALF OF THE RESPONDENT RUNTIME (P0-1: Fast Origin Transfer).
@@ -29,12 +30,36 @@ import { getCachedVersionDefinition } from "@rescript/quality/server";
  * the moment the programmer typed another character. Only the immutable,
  * published VERSION path is served this way.
  */
+/*
+ * RUNTIME-11 (audit 2026-10-16): "immutable forever" was true of the CONTENT
+ * but not of whether it may be served. A version is now served only while an
+ * active LIVE deployment pins it and its survey is not paused/closed/archived
+ * (the same conditions the live page checks), with a bounded edge cache — see
+ * lib/definitionAccess.ts. Everything else is a private, uncached 404.
+ */
 export async function GET(_req: NextRequest, { params }: { params: { versionId: string } }) {
-  if (!/^[0-9a-f-]{36}$/i.test(params.versionId)) {
-    return NextResponse.json({ error: "not found" }, { status: 404, headers: { "cache-control": "no-store" } });
-  }
+  const notFound = (cacheControl: string) =>
+    NextResponse.json({ error: "not found" }, { status: 404, headers: { "cache-control": cacheControl } });
+  if (!isVersionId(params.versionId)) return notFound(DENY_CACHE_CONTROL);
 
   const db = supabaseAdmin();
+  const { data: deps, error: depErr } = await db
+    .from("deployments")
+    .select("version_id, mode, active, survey_id")
+    .eq("version_id", params.versionId)
+    .eq("active", true);
+  if (depErr) return notFound(DENY_CACHE_CONTROL);
+  const surveyId = (deps ?? [])[0]?.survey_id as string | undefined;
+  const { data: survey } = surveyId
+    ? await db.from("surveys").select("status").eq("id", surveyId).maybeSingle()
+    : { data: null };
+  const access = definitionAccess({
+    versionId: params.versionId,
+    deployments: (deps ?? []) as DeploymentRow[],
+    surveyStatus: (survey?.status as string | undefined) ?? null,
+  });
+  if (!access.serve) return notFound(access.cacheControl);
+
   const definition = await getCachedVersionDefinition(db, params.versionId);
   if (!definition) {
     // Not "unknown forever" — a version id that doesn't resolve today could
@@ -44,6 +69,6 @@ export async function GET(_req: NextRequest, { params }: { params: { versionId: 
   }
 
   return NextResponse.json(definition, {
-    headers: { "cache-control": "public, max-age=31536000, immutable" },
+    headers: { "cache-control": access.cacheControl },
   });
 }

@@ -1531,8 +1531,8 @@ export function Matrix(p: QRProps) {
     <>
       <th className="rowlabel"></th>
       {type === "matrix_numeric" || type === "matrix_text" || type === "matrix_dropdown"
-        ? <th>{view.columns[0]?.label ?? "Answer"}</th>
-        : colOpts.map((o) => <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))} dangerouslySetInnerHTML={{ __html: o.label }} />)}
+        ? <th scope="col">{view.columns[0]?.label ?? "Answer"}</th>
+        : colOpts.map((o) => <th key={String(o.code)} scope="col" {...(repeat ? {} : anchor("column", o.code))} dangerouslySetInnerHTML={{ __html: o.label }} />)}
     </>
   );
   const every = headerEveryFor(p, view.rows.length);
@@ -1563,7 +1563,8 @@ export function Matrix(p: QRProps) {
               <React.Fragment key={rc}>
               <RepeatedHeaderRow index={ri} every={every} count={view.rows.length}>{headCells(true)}</RepeatedHeaderRow>
               <tr {...anchor("row", rc)}>
-                <td className="rowlabel" {...anchor("row", rc)}><RowLabel {...p} row={row} /></td>
+                {/* RUNTIME-09: a td (not th) so the cell keeps its look; role="rowheader" gives it th scope="row" semantics */}
+                <td className="rowlabel" role="rowheader" {...anchor("row", rc)}><RowLabel {...p} row={row} /></td>
                 {type === "matrix_single" &&
                   colOpts.map((o) => (
                     <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
@@ -1594,6 +1595,7 @@ export function Matrix(p: QRProps) {
                 {type === "matrix_numeric" && (
                   <td>
                     <NumberField className="rs-input"
+                      ariaLabel={`${plainLabel(row.label)}: ${plainLabel(view.columns[0]?.label ?? "Answer")}`}
                       value={rowVal}
                       onChange={(n) => setRow(rc, n)} />
                   </td>
@@ -1601,6 +1603,7 @@ export function Matrix(p: QRProps) {
                 {type === "matrix_text" && (
                   <td>
                     <input className="rs-input" type="text"
+                      aria-label={`${plainLabel(row.label)}: ${plainLabel(view.columns[0]?.label ?? "Answer")}`}
                       value={rowVal == null ? "" : String(rowVal)}
                       onChange={(e) => setRow(rc, e.target.value)} />
                   </td>
@@ -1608,6 +1611,7 @@ export function Matrix(p: QRProps) {
                 {type === "matrix_dropdown" && (
                   <td>
                     <select className="rs-select" value={rowVal == null ? "" : String(rowVal)}
+                      aria-label={`${plainLabel(row.label)}: ${plainLabel(view.columns[0]?.label ?? "Answer")}`}
                       onChange={(e) => setRow(rc, e.target.value || null)}>
                       <option value="">—</option>
                       {colOpts.map((o) => (
@@ -1763,7 +1767,7 @@ export function Composite(p: QRProps) {
     <>
       <th className="rowlabel"></th>
       {view.columns.map((c) => (
-        <th key={c.id} {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
+        <th key={c.id} scope="col" {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
           dangerouslySetInnerHTML={{ __html: c.label }} />
       ))}
     </>
@@ -1780,7 +1784,7 @@ export function Composite(p: QRProps) {
             <React.Fragment key={String(row.code)}>
             <RepeatedHeaderRow index={ri} every={every} count={view.rows.length}>{headCells(true)}</RepeatedHeaderRow>
             <tr {...anchor("row", row.code)}>
-              <td className="rowlabel"><RowLabel {...p} row={row} /></td>
+              <td className="rowlabel" role="rowheader"><RowLabel {...p} row={row} /></td>
               {view.columns.map((c) => (
                 <td key={c.id} {...cellAnchor(String(row.code), c.id)}>
                   <CompositeCell col={c} p={p}
@@ -2428,7 +2432,7 @@ export function SemanticDifferential(p: QRProps) {
   const headCells = (repeat: boolean) => (
     <>
       <th className="rowlabel" />
-      {view.options.map((o) => <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))} className="rs-semantic-head" dangerouslySetInnerHTML={{ __html: o.label }} />)}
+      {view.options.map((o) => <th key={String(o.code)} scope="col" {...(repeat ? {} : anchor("column", o.code))} className="rs-semantic-head" dangerouslySetInnerHTML={{ __html: o.label }} />)}
       <th className="rowlabel" />
     </>
   );
@@ -2451,6 +2455,7 @@ export function SemanticDifferential(p: QRProps) {
                   <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
                     <label style={{ display: "block", cursor: "pointer", padding: 2 }} title={o.label.replace(/<[^>]*>/g, "")}>
                       <input type="radio" name={`${p.q.id}_${rc}`}
+                        aria-label={`${[left, right].filter(Boolean).map((x) => String(x).replace(/<[^>]*>/g, "")).join(" – ") || row.label.replace(/<[^>]*>/g, "")}: ${o.label.replace(/<[^>]*>/g, "")}`}
                         checked={String(vals[rc]) === String(o.code)}
                         onChange={() => setRow(rc, o.code)} />
                     </label>

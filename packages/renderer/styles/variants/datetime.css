@@ -72,7 +72,7 @@
 .rs-my-field .rs-select { min-width: 130px; max-width: 100%; }
 .rs-my-value { font-weight: 600; padding-bottom: 10px; }
 
-@media (max-width: 460px) {
+@media (max-width: 480px) { /* bp: phone (was 460px, RUNTIME-10) */
   .rs-cal { max-width: 100%; }
   .rs-monthyear { gap: 10px; }
   .rs-my-field { flex: 1 1 120px; }

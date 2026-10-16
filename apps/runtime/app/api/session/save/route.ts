@@ -41,6 +41,13 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
   if (!existing) return NextResponse.json({ error: "unknown session" }, { status: 404 });
   if (existing.deleted_at) return NextResponse.json({ error: "this response was deleted by the survey owner" }, { status: 410 });
+  /*
+   * RUNTIME-07: a session the expire-partials sweep closed is NOT "already
+   * finalized" — answering ok would tell a respondent whose tab sat open past
+   * the survey's window that work was saved when it was dropped. Say so.
+   */
+  if (existing.status === "abandoned")
+    return NextResponse.json({ error: "This survey session expired after a long period of inactivity. Please reload the page to start again.", code: "session_expired" }, { status: 410 });
   if (existing.status !== "in_progress")
     return NextResponse.json({ ok: true, note: "session already finalized", environment: existing.is_test ? "TEST" : "LIVE", respondentCode: existing.respondent_code ?? null });
 
@@ -152,8 +159,13 @@ export async function POST(req: NextRequest) {
       } as unknown as ResponseState;
       const cells = quotaIncrements(def, state);
       if (cells.length) {
-        const { error: qErr } = await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells, p_test: !!existing.is_test });
-        if (qErr && !existing.is_test) await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells });
+        // SCHEMA-07 (0057): record the cells on the row and count them once, so a soft delete can release them.
+        // Before 0057 is applied the function is missing: fall back to the plain increment.
+        const { error: cErr } = await db.rpc("rescript_count_quota_cells", { p_survey: existing.survey_id, p_session: sessionId, p_cells: cells, p_test: !!existing.is_test });
+        if (cErr) {
+          const { error: qErr } = await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells, p_test: !!existing.is_test });
+          if (qErr && !existing.is_test) await db.rpc("increment_quota_counts", { p_survey_id: existing.survey_id, p_cells: cells });
+        }
       }
     }
     /*

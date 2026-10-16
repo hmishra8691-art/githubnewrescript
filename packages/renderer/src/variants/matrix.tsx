@@ -5,7 +5,7 @@ import { effectiveQuestion, ratingLabelMode } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { NumberField, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
-import { useOptions, useRows, activate, usePointerDrag, dropTargetAt } from "./shared";
+import { useOptions, useRows, activate, usePointerDrag, dropTargetAt, radioGroupKeyDown, rovingTabIndex } from "./shared";
 import { anchor, cellAnchor } from "../authoring";
 
 /**
@@ -70,17 +70,20 @@ export function StarMatrix(p: QRProps) {
         const val = vals[rc] == null ? 0 : Number(vals[rc]);
         const shown = hover?.row === rc ? hover.n : val;
         const plain = row.label.replace(/<[^>]*>/g, "");
+        const checkedAt = scale.indexOf(val);
         return (
           <div key={rc} className={`rs-starmatrix-row ${val ? "rated" : ""}`} data-row={rc} {...anchor("row", rc)}>
             <span className="rs-starmatrix-label"><RowLabel {...p} row={row} /></span>
             <span className="rs-starmatrix-stars" role="radiogroup" aria-label={plain}
               onMouseLeave={() => setHover(null)}>
-              {scale.map((n) => (
+              {scale.map((n, i) => (
                 <button key={n} type="button"
                   className={n <= shown ? "on" : ""}
                   data-star={n}
                   role="radio"
                   aria-checked={val === n}
+                  tabIndex={rovingTabIndex(i, checkedAt)}
+                  onKeyDown={radioGroupKeyDown}
                   aria-label={`${plain}: ${n} of ${max}`}
                   disabled={p.q.settings.readOnly}
                   onMouseEnter={() => setHover({ row: rc, n })}
@@ -153,10 +156,10 @@ export function SumMatrix(p: QRProps) {
     <>
       <th className="rowlabel" />
       {columns.map((c) => (
-        <th key={c.id} {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
+        <th key={c.id} scope="col" {...(repeat ? {} : anchor("column", c.id))} style={c.width ? { width: c.width } : undefined}
           dangerouslySetInnerHTML={{ __html: c.label }} />
       ))}
-      <th className="rs-summatrix-th-total">Total</th>
+      <th className="rs-summatrix-th-total" scope="col">Total</th>
     </>
   );
   const every = headerEveryFor(p, rows.length);
@@ -176,7 +179,7 @@ export function SumMatrix(p: QRProps) {
               <React.Fragment key={rc}>
               <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{headCells(true)}</RepeatedHeaderRow>
               <tr data-row={rc} {...anchor("row", rc)}>
-                <td className="rowlabel"><RowLabel {...p} row={row} /></td>
+                <td className="rowlabel" role="rowheader"><RowLabel {...p} row={row} /></td>
                 {columns.map((c) => (
                   <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}>
                     <NumberField className="rs-input" min={c.min ?? 0} max={c.max}
@@ -362,7 +365,7 @@ export function LikertMatrix(p: QRProps) {
     <>
       <th className="rowlabel" />
       {opts.map((o, i) => (
-        <th key={String(o.code)} {...(repeat ? {} : anchor("column", o.code))}
+        <th key={String(o.code)} scope="col" {...(repeat ? {} : anchor("column", o.code))}
           className={`rs-likert-head p${Math.round((i / Math.max(1, opts.length - 1)) * 100)}`}>
           <span dangerouslySetInnerHTML={{ __html: o.label }} />
         </th>
@@ -384,10 +387,11 @@ export function LikertMatrix(p: QRProps) {
               return (
                 <React.Fragment key={rc}>
                 <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{likertHead(true)}</RepeatedHeaderRow>
-                <tr {...anchor("row", rc)}>
-                  <td className="rowlabel"><RowLabel {...p} row={row} /></td>
+                <tr {...anchor("row", rc)} data-rs-radiogroup="">
+                  <td className="rowlabel" role="rowheader"><RowLabel {...p} row={row} /></td>
                   {opts.map((o, i) => {
                     const on = String(vals[rc]) === String(o.code);
+                    const checkedAt = opts.findIndex((x) => String(vals[rc]) === String(x.code));
                     /* 0…100 across the scale — the CSS grades the band from it */
                     const pos = Math.round((i / Math.max(1, opts.length - 1)) * 100);
                     return (
@@ -396,6 +400,8 @@ export function LikertMatrix(p: QRProps) {
                           className={`rs-likert-band${on ? " on" : ""}`}
                           style={{ ["--p" as string]: String(pos) }}
                           role="radio" aria-checked={on}
+                          tabIndex={rovingTabIndex(i, checkedAt)}
+                          onKeyDown={radioGroupKeyDown}
                           disabled={p.q.settings.readOnly}
                           aria-label={`${row.label.replace(/<[^>]*>/g, "")}: ${o.label.replace(/<[^>]*>/g, "")}`}
                           onClick={() => set(rc, o.code)}>
@@ -475,16 +481,19 @@ export function RatingMatrix(p: QRProps) {
               return (
                 <React.Fragment key={rc}>
                   <RepeatedHeaderRow index={ri} every={every} count={rows.length}>{head(true)}</RepeatedHeaderRow>
-                  <tr className="rs-ratingmatrix-row" {...anchor("row", rc)}>
-                    <td className="rowlabel"><span className="rs-ratingmatrix-label"><RowLabel {...p} row={row} /></span></td>
-                    {opts.map((o) => {
+                  <tr className="rs-ratingmatrix-row" {...anchor("row", rc)} data-rs-radiogroup="">
+                    <td className="rowlabel" role="rowheader"><span className="rs-ratingmatrix-label"><RowLabel {...p} row={row} /></span></td>
+                    {opts.map((o, i) => {
                       const on = String(vals[rc]) === String(o.code);
+                      const checkedAt = opts.findIndex((x) => String(vals[rc]) === String(x.code));
                       return (
                         <td key={String(o.code)} className="rs-ratingmatrix-cell">
                           <button type="button"
                             className={`rs-ratingmatrix-pt${on ? " on" : ""}`}
                             {...cellAnchor(rc, o.code)}
                             role="radio" aria-checked={on}
+                            tabIndex={rovingTabIndex(i, checkedAt)}
+                            onKeyDown={radioGroupKeyDown}
                             disabled={p.q.settings.readOnly}
                             aria-label={`${plain(row.label)}: ${plain(o.label)}`}
                             onClick={() => set(rc, o.code)}>

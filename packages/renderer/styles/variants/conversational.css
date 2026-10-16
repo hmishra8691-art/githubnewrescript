@@ -52,7 +52,7 @@
 }
 .rs-chat-done { margin-top: 8px; font-size: 0.85em; color: var(--rs-subtle); }
 
-@media (max-width: 460px) {
+@media (max-width: 480px) { /* bp: phone (was 460px, RUNTIME-10) */
   .rs-chat-log { padding: 10px; }
   .rs-chat-bubble { max-width: 88%; }
   .rs-chat-send { padding: 10px 14px; }

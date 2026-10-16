@@ -69,7 +69,7 @@
   color: var(--rs-subtle);
 }
 
-@media (max-width: 460px) {
+@media (max-width: 480px) { /* bp: phone (was 460px, RUNTIME-10) */
   .rs-iat-cats { gap: 6px; }
   .rs-iat-cat { font-size: 0.86em; padding: 8px 4px; }
   .rs-iat-stim { font-size: 1.3em; }

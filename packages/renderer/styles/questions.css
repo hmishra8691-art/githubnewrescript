@@ -34,6 +34,25 @@
    which the Branding config overrides per survey.
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   BREAKPOINT TOKENS (RUNTIME-10, audit 2026-10-16). A custom property cannot
+   appear in a media query and `@custom-media` is not in any shipping browser,
+   so the tokens are documented constants — write one of these three values
+   in a new `@media` and nothing else:
+
+     phone    @media (max-width: 480px)    one column, stacked grids (OR-02)
+     tablet   @media (max-width: 640px)    narrow-window reflow of multi-column choices
+     desktop  @media (min-width: 1024px)   wide-screen extras
+
+   Existing queries within ~20px of a token were moved onto it (460 → 480 in
+   conversational/datetime/experimental). These were LEFT, because moving them
+   would change a layout by 40px or more and needs a browser pass first:
+     420 (numeric, swipe), 440 (choice grid single-column step, questions.css),
+     520 (slider, form, image, media, list, matrix, upload, hotspot, questions.css),
+     560 (dragdrop, choice, ranking, gamified, swipe, matrix, carousel,
+          comparison, card, questions.css), 900 (media).
+   ---------------------------------------------------------------------------- */
+
 /* Rescript runtime — themable via CSS variables set from Branding config */
 :root {
   --rs-primary: #2563eb;

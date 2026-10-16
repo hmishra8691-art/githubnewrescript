@@ -75,7 +75,7 @@ import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, width
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
-  cachePreviewState, readPreviewState, clearPreviewState,
+  cachePreviewState, readPreviewState, clearPreviewState, mergeResumeSnapshot,
 } from "@/lib/resume";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import type { ResponseTelemetry } from "@rescript/quality";
@@ -493,13 +493,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
          */
         const pending = readPending(j.session.sessionId);
         if (pending) {
-          savedRef.current = {
-            answers: { ...(j.saved?.answers ?? {}), ...pending.answers },
-            calculated: { ...(j.saved?.calculated ?? {}), ...pending.calculated },
-            embedded: { ...(j.saved?.embedded ?? {}), ...pending.embedded },
-            flags: (pending.flags ?? j.saved?.flags ?? []) as never[],
-            stepIndex: Math.max(pending.stepIndex ?? 0, j.saved?.stepIndex ?? 0),
-          };
+          // the cached step wins outright — after Back it is LOWER than the saved one (RUNTIME-06)
+          savedRef.current = mergeResumeSnapshot(j.saved, pending);
           setResumed(true);
           setRecovered(true);
         }
@@ -1291,6 +1286,46 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     window.scrollTo({ top: 0 });
   };
 
+  /**
+   * Record where the respondent now is — after Next AND after Back.
+   *
+   * Cache first, then save, then clear.
+   *
+   * "The next save carries everything" was true only while the tab
+   * stayed open: a respondent who lost connection and reloaded lost the
+   * page. The cache is written before the attempt and removed when the
+   * server acknowledges, so what survives a reload is exactly the work
+   * the server has not got.
+   *
+   * RUNTIME-06: Back used to save nothing, so a reload after Back resumed at
+   * the furthest page saved rather than the page the respondent had gone back
+   * to. Back now checkpoints too; the server replay validates only the pages
+   * before the (lower) step, so it accepts this save — answers on the pages
+   * after it are logged as soft `not_asked`, never refused.
+   */
+  const checkpoint = () => {
+    if (!state) return;
+    const snapshot = {
+      answers: state.answers as Record<string, unknown>,
+      calculated: state.calculated as Record<string, unknown>,
+      embedded: state.embedded as Record<string, unknown>,
+      flags: state.flags,
+      stepIndex: state.stepIndex,
+    };
+    let stamp: number | undefined;
+    if (session && mode !== "preview") {
+      stamp = cachePending(session.sessionId, snapshot);
+    } else if (mode === "preview") {
+      /* the preview's own position, so a refresh comes back here rather
+         than to page one — see cachePreviewState */
+      cachePreviewState(previewStateId, snapshot);
+    }
+    void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
+      if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }
+      console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
+    });
+  };
+
   /** Leave the current page: telemetry, advance, and everything that follows. */
   const leavePage = async () => {
     if (!pageStep) return;
@@ -1351,33 +1386,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       }
     } else {
       notePage(nav.steps, nav.stepIndex, "next");
-      /*
-       * Cache first, then save, then clear.
-       *
-       * "The next save carries everything" was true only while the tab
-       * stayed open: a respondent who lost connection and reloaded lost the
-       * page. The cache is written before the attempt and removed when the
-       * server acknowledges, so what survives a reload is exactly the work
-       * the server has not got.
-       */
-      const snapshot = {
-        answers: state.answers as Record<string, unknown>,
-        calculated: state.calculated as Record<string, unknown>,
-        embedded: state.embedded as Record<string, unknown>,
-        flags: state.flags,
-        stepIndex: state.stepIndex,
-      };
-      if (session && mode !== "preview") {
-        cachePending(session.sessionId, snapshot);
-      } else if (mode === "preview") {
-        /* the preview's own position, so a refresh comes back here rather
-           than to page one — see cachePreviewState */
-        cachePreviewState(previewStateId, snapshot);
-      }
-      void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
-        if (o.ok) { if (session) clearPending(session.sessionId); return; }
-        console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
-      });
+      checkpoint();
       window.scrollTo({ top: 0 });
     }
     force();
@@ -1409,6 +1418,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       return;
     }
     notePage(nav.steps, nav.stepIndex, "back");
+    // RUNTIME-06: persist the position Back landed on, so a reload resumes here
+    checkpoint();
     setErrors([]);
     // conversational: arriving on the previous page from the right means its LAST question
     const prev = nav.steps[nav.stepIndex];
