@@ -399,9 +399,11 @@ test("the anchor variable is declared only when the design is anchored", () => {
     flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],
   });
   const names = (anchored: boolean) => buildVariableDictionary(build(anchored)).map((v) => v.name);
-  assert.ok(names(true).includes("MD_ANCHOR"), names(true).join(", "));
-  assert.ok(!names(false).includes("MD_ANCHOR"));
+  // METHOD-04: one anchor column per task (the old single MD_ANCHOR was declared and never filled)
+  assert.ok(names(true).includes("MD_T1_ANCHOR"), names(true).join(", "));
+  assert.ok(!names(true).includes("MD_ANCHOR"));
+  assert.ok(!names(false).includes("MD_T1_ANCHOR"));
   /* and the codes are the three the renderer offers */
-  const v = buildVariableDictionary(build(true)).find((x) => x.name === "MD_ANCHOR")!;
+  const v = buildVariableDictionary(build(true)).find((x) => x.name === "MD_T1_ANCHOR")!;
   assert.deepEqual(v.valueCodes, ["all", "some", "none"]);
 });

@@ -33,6 +33,7 @@
  */
 import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { mulberry32, subSeed } from "@rescript/engine";
+import { POOR_RATIO } from "./diagnostics.js";
 
 export interface MenuItem {
   /** shown to the respondent */
@@ -84,7 +85,7 @@ function normalize(config: MenuConfig): Normalized {
     noneOption: config.noneOption ?? true,
     minSelections: config.minSelections ?? 0,
     maxSelections: config.maxSelections ?? 0,
-    currency: config.currency ?? detectCurrency(items),
+    currency: config.currency?.trim() || detectCurrency(items),
   };
 }
 
@@ -228,9 +229,51 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
       requiredItems: c.items.filter((i) => i.required).map((i) => i.name),
       priceFrequencies: Object.fromEntries(c.items.map((it) => [it.name, Object.fromEntries(counts.get(it.name)!)])),
     };
+    // METHOD-05: price points per item shown equally often (the one-way balance this design promises)
+    const warnings: string[] = [];
+    const priceRatio: Record<string, number | null> = {};
+    for (const it of c.items) {
+      const v = [...counts.get(it.name)!.values()];
+      const mn = Math.min(...v); const mx = Math.max(...v);
+      priceRatio[it.name] = mn === 0 ? null : Math.round((mx / mn) * 100) / 100;
+      if (mn === 0 && c.tasks * c.versions >= it.levels.length) warnings.push(`A price point of "${it.name}" is never shown — add tasks.`);
+      else if (mn > 0 && mx / mn > POOR_RATIO) warnings.push(`Price points of "${it.name}" are shown unequally often (max/min ${priceRatio[it.name]}).`);
+    }
+    summary.diagnostics = { method: "price_balance", priceRatio, balanced: warnings.length === 0, warnings };
+    if (warnings.length) summary.warnings = warnings;
     return { columns, rows, summary };
   },
 };
+
+/**
+ * METHOD-15: the currency symbol of a menu design.
+ *
+ * Read from what the generator stored (`file.summary.currency`), then the
+ * configuration, then — for a design generated before the summary was kept —
+ * from the price labels the rows themselves carry, so every menu shows its
+ * currency whether or not it was ever re-generated.
+ */
+export function menuCurrency(design: {
+  config?: Record<string, unknown>;
+  file?: { rows?: Record<string, unknown>[]; summary?: Record<string, unknown> };
+}): string {
+  const cfg = design.config?.currency;
+  if (typeof cfg === "string" && cfg.trim()) return cfg.trim();
+  const stored = design.file?.summary?.currency;
+  if (typeof stored === "string" && stored.trim()) return stored.trim();
+  for (const r of design.file?.rows ?? []) {
+    const m = String(r.price ?? "").trim().match(/^([^\d\s.,-]+)/);
+    if (m) return m[1];
+  }
+  return "";
+}
+
+/** A bundle total as the respondent reads it — "$27", "₹1,299.50" — in the menu's own currency. */
+export function formatMenuAmount(amount: number, currency: string, samplePrice = ""): string {
+  const decimals = /\.\d/.test(samplePrice) ? 2 : 0;
+  const s = amount.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: 2 });
+  return currency ? `${currency}${s}` : s;
+}
 
 /** The menu for one task of one version, in item order, from design rows. */
 export function menuTaskItems(rows: Record<string, unknown>[], version: string, task: string) {

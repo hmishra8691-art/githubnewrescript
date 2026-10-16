@@ -222,7 +222,7 @@ function GeneratorForm({ kind, existing, onDone }: {
     }
   };
 
-  const attach = (file: { columns: string[]; rows: Record<string, unknown>[] }) => {
+  const attach = (file: { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> }) => {
     s.update((d) => {
       if (existing) {
         const i = d.designs.findIndex((x) => x.id === existing.id);
@@ -230,13 +230,13 @@ function GeneratorForm({ kind, existing, onDone }: {
           d.designs[i] = {
             ...d.designs[i], name, seed, config,
             version: d.designs[i].version + 1,
-            file: { format: "json", columns: file.columns, rows: file.rows, generatedAt: new Date().toISOString() },
+            file: { format: "json", columns: file.columns, rows: file.rows, ...(file.summary ? { summary: file.summary } : {}), generatedAt: new Date().toISOString() },
           };
         }
       } else {
         d.designs.push({
           id: uid("design"), kind, name, version: 1, seed, config,
-          file: { format: "json", columns: file.columns, rows: file.rows, generatedAt: new Date().toISOString() },
+          file: { format: "json", columns: file.columns, rows: file.rows, ...(file.summary ? { summary: file.summary } : {}), generatedAt: new Date().toISOString() },
         });
       }
     });

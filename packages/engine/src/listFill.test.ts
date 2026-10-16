@@ -4,9 +4,12 @@ import { SurveyDefinition } from "@rescript/schema";
 import {
   decideListFill, listFillCandidates, listFillStatus, listFillVariables,
   listFillVariableNames, remainingCapacity, allocationStatus, simulateListFill,
+  pendingListFills, applyListFillDestinations, listFillHiddenDestinations, listFillSourceSettled,
   type ListFillCounts,
 } from "./listFill.js";
 import type { ResponseState } from "./state.js";
+import { visibleQuestions } from "./flow.js";
+import "./listFillSettled.js";
 
 /**
  * The List Fill engine's contract.
@@ -548,4 +551,90 @@ test("a simulation is reproducible: same configuration and seed, same outcome", 
   const def = withListFill(priorityFill([{ code: "A" }, { code: "B" }, { code: "C" }], { method: "random" }));
   const run = () => simulateListFill({ def, listFill: def.listFills[0], state: stateWith({ q1: ["A", "B", "C"] }), draws: 50, seed: 5 }).picks.flat().join(",");
   assert.equal(run(), run(), "a researcher can rerun a simulation and get the same answer");
+});
+
+/* ------------------------------------------------------------ METHOD-09: empty source */
+
+const emptySourceDef = () => SurveyDefinition.parse({
+  ...base,
+  questions: [
+    base.questions[0],
+    { id: "q2", code: "Q2", variableName: "RATE1", type: "single_select", text: "How do you rate {{LISTFILL_Q1_1}}?", options: [{ code: "x", label: "x" }] },
+    { id: "q3", code: "Q3", variableName: "RATE2", type: "single_select", text: "And {{LISTFILL_Q1_2}}?", options: [{ code: "x", label: "x" }] },
+  ],
+  flow: [
+    { type: "page", id: "p1", questionIds: ["q1"] },
+    { type: "page", id: "p2", questionIds: ["q2", "q3"] },
+    { type: "end", id: "e", status: "complete" },
+  ],
+  listFills: [{
+    ...priorityFill([{ code: "A", priority: 1 }, { code: "B", priority: 2 }], { count: { kind: "fixed", n: 2 } }),
+    destinations: [
+      { questionId: "q2", write: "answer", whenUnused: "hide" },
+      { questionId: "q3", write: "answer", whenUnused: "hide" },
+    ],
+  }],
+});
+
+test("METHOD-09: a List Fill whose source is empty runs once the source page is submitted, and hides its whenUnused destinations", () => {
+  const def = emptySourceDef();
+  const lf = def.listFills[0];
+  const st = stateWith({ q1: [] });
+  st.stepIndex = 0; // submitting the page that carries Q1
+  assert.deepEqual(pendingListFills(def, st).map((l) => l.id), ["lf1"], "an empty list is due, not skipped");
+  const res = decideListFill({ def, listFill: lf, state: st });
+  assert.equal(res.items.length, 0);
+  Object.assign(st.calculated, listFillVariables(lf, res));
+  applyListFillDestinations(lf, res, st);
+  assert.equal(st.calculated.LISTFILL_Q1_COUNT, 0);
+  assert.deepEqual([...listFillHiddenDestinations(def, st)].sort(), ["q2", "q3"]);
+  st.stepIndex = 1;
+  assert.deepEqual(visibleQuestions(def, { kind: "page", id: "p2", questionIds: ["q2", "q3"] } as never, st).map((q) => q.id), [],
+    "no question on the page keeps unresolved piping");
+  assert.deepEqual(pendingListFills(def, st), [], "and it does not run twice");
+});
+
+test("METHOD-09: the same holds when the empty multi-select left no answer entry at all", () => {
+  const def = emptySourceDef();
+  const st = stateWith({}); // an unanswered optional multi-select stores nothing
+  st.stepIndex = 0;
+  assert.deepEqual(pendingListFills(def, st).map((l) => l.id), ["lf1"]);
+});
+
+test("METHOD-09: an empty source is NOT run before its page is reached", () => {
+  const def = SurveyDefinition.parse({
+    ...JSON.parse(JSON.stringify(emptySourceDef())),
+    flow: [
+      { type: "page", id: "p0", questionIds: ["q2"] },
+      { type: "page", id: "p1", questionIds: ["q1"] },
+      { type: "page", id: "p2", questionIds: ["q3"] },
+      { type: "end", id: "e", status: "complete" },
+    ],
+  });
+  const st = stateWith({});
+  st.stepIndex = 0;
+  assert.deepEqual(pendingListFills(def, st), [], "Q1 is on step 1; at step 0 it has not been asked");
+  assert.equal(listFillSourceSettled(def, def.listFills[0], st), false);
+  st.stepIndex = 1;
+  assert.deepEqual(pendingListFills(def, st).map((l) => l.id), ["lf1"]);
+});
+
+test("METHOD-09: a list that ran with 1 of 2 still hides only the unfilled destination", () => {
+  const def = emptySourceDef();
+  const lf = def.listFills[0];
+  const st = stateWith({ q1: ["A"] });
+  const res = decideListFill({ def, listFill: lf, state: st });
+  Object.assign(st.calculated, listFillVariables(lf, res));
+  applyListFillDestinations(lf, res, st);
+  assert.deepEqual([...listFillHiddenDestinations(def, st)], ["q3"]);
+});
+
+test("METHOD-09: assumeSourcesSettled lets the server run a list the client says is due", () => {
+  const def = emptySourceDef();
+  const st = stateWith({});
+  st.stepIndex = 0; // the server rebuilds state with no position
+  assert.equal(pendingListFills(def, { ...st, stepIndex: 0 }).length, 1);
+  const noPos = SurveyDefinition.parse({ ...JSON.parse(JSON.stringify(def)), flow: [{ type: "page", id: "p0", questionIds: ["q2"] }, { type: "page", id: "p1", questionIds: ["q1", "q3"] }, { type: "end", id: "e", status: "complete" }] });
+  assert.deepEqual(pendingListFills(noPos, st), []);
+  assert.deepEqual(pendingListFills(noPos, st, { assumeSourcesSettled: true }).map((l) => l.id), ["lf1"]);
 });

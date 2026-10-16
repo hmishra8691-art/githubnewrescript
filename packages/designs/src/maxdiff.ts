@@ -312,10 +312,39 @@ export const maxdiffPlugin: DesignGeneratorPlugin<MaxDiffConfig> = {
      */
     const neverShown = c.items.filter((_, i) => showCounts[i] === 0);
 
+    /*
+     * METHOD-05: how evenly the items were shown and paired. A pair that never
+     * shares a screen cannot be compared directly; warn only when the design is
+     * big enough that it should have happened by now (express designs, which
+     * show a subset on purpose, are reported through `neverShown` instead).
+     */
+    const shows = showCounts.filter((x) => x > 0);
+    const showRatio = shows.length ? Math.round((Math.max(...shows) / Math.min(...shows)) * 100) / 100 : null;
+    const pairShows = c.versions * c.tasks * ((c.itemsPerTask * (c.itemsPerTask - 1)) / 2);
+    const expectedPerPair = totalPairs > 0 ? pairShows / totalPairs : 0;
+    const warnings: string[] = [];
+    if (neverShown.length) warnings.push(`${neverShown.length} item${neverShown.length === 1 ? " is" : "s are"} never shown to anyone: ${neverShown.join(", ")}.`);
+    if (!c.itemsPerVersion && pairMin === 0 && expectedPerPair >= 2) {
+      warnings.push(`Some pairs of items never appear together although each pair is expected about ${Math.round(expectedPerPair * 10) / 10} times — add tasks or versions.`);
+    }
+    if (showRatio !== null && showRatio > 1.5 && Math.max(...shows) - Math.min(...shows) > 1 && !c.itemsPerVersion) {
+      warnings.push(`Items are shown unequally often (max/min ${showRatio}).`);
+    }
+    const diagnostics = {
+      method: "item_and_pair_balance" as const,
+      itemShowRatio: showRatio,
+      expectedPerPair: Math.round(expectedPerPair * 10) / 10,
+      pairsNeverTogether: pairCounts.size < totalPairs ? totalPairs - pairCounts.size : 0,
+      balanced: warnings.length === 0,
+      warnings,
+    };
+
     return {
       columns,
       rows,
       summary: {
+        diagnostics,
+        ...(warnings.length ? { warnings } : {}),
         itemShowCounts,
         meanShowsPerItem:
           (c.versions * c.tasks * c.itemsPerTask) / Math.max(n, 1),

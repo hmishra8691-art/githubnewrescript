@@ -18,6 +18,7 @@ export * from "./custom.js";
 export * from "./menu.js";
 export * from "./acbc.js";
 export * from "./export.js";
+export * from "./diagnostics.js";
 
 /** Register all built-in design generators (idempotent). */
 export function registerBuiltinDesignGenerators(): void {

@@ -363,6 +363,25 @@ const stateOf = (pv) => pv.evaluate(() => {
 }
 
 {
+  // METHOD-09: a respondent who selects nothing still runs the list (count 0), so a
+  // `whenUnused: hide` destination disappears instead of showing "How satisfied are you with ?"
+  const def = baseDef([LF({
+    destinations: [{ questionId: "q2", write: "answer", whenUnused: "hide" }],
+  })]);
+  const pv = await runPreview(def);
+  await h.next(pv); // Q1 is optional: nothing selected
+  await pv.waitForSelector('[data-qid="q3"]');
+  const q2 = await pv.$('[data-qid="q2"]');
+  assert.equal(q2, null, "the destination of an empty List Fill is not on the page");
+  const st = await stateOf(pv);
+  assert.equal(st.calculated.LISTFILL_Q1_COUNT, 0, "the empty list ran and recorded a count of zero");
+  const text = await pv.evaluate(() => document.body.innerText);
+  assert.doesNotMatch(text, /satisfied are you with\s*\?/, "no question text with unresolved piping");
+  ok("an empty source still runs, and a whenUnused:hide destination is hidden (METHOD-09)");
+  await pv.close();
+}
+
+{
   // a repeat block iterating over the allocated items (§20)
   const def = baseDef(
     [LF({ selection: { ...LF().selection, count: { kind: "fixed", n: 2 } }, destinations: [] })],

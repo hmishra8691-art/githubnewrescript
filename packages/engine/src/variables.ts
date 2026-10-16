@@ -422,6 +422,15 @@ export function questionVariables(
           if (q.type === "maxdiff_task") {
             push({ name: `${q.variableName}_T${t}_BEST`, label: `${q.code} — task ${t} best (item index)`, dataType: "numeric" });
             push({ name: `${q.variableName}_T${t}_WORST`, label: `${q.code} — task ${t} worst (item index)`, dataType: "numeric" });
+            // METHOD-04: one anchor column per task (all / some / none) when the design is anchored
+            if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {
+              push({ name: `${q.variableName}_T${t}_ANCHOR`, label: `${q.code} — task ${t} anchor (all / some / none important)`, dataType: "text",
+                valueCodes: ["all", "some", "none"],
+                notes: "The dual-response follow-up asked after this set. Places the utility scale's zero point." });
+            }
+            // METHOD-14: what the respondent actually saw, top to bottom (the design's own `position` is re-shuffled per respondent)
+            push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — task ${t} shown order (item indices, top to bottom)`, dataType: "text",
+              notes: "Item indices in the order this respondent saw them, joined by '|'. Use it to test position effects." });
           } else if (design?.kind === "menu") {
             const items = v1.filter((r) => String(r.task) === t).sort((a, b) => Number(a.item) - Number(b.item));
             for (const it of items) {
@@ -434,18 +443,6 @@ export function questionVariables(
             push({ name: `${q.variableName}_T${t}`, label: `${q.code} — task ${t} choice (alternative)`, dataType: "numeric",
               notes: "The alternative number chosen; the None option, when offered, is alternatives + 1" });
           }
-        }
-      }
-      if (q.type === "maxdiff_task") {
-        const design = designs?.find((d) => d.id === q.settings.designRef);
-        if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {
-          push({
-            name: `${q.variableName}_ANCHOR`,
-            label: `${q.code} — anchor (all / some / none important)`,
-            dataType: "text",
-            valueCodes: ["all", "some", "none"],
-            notes: "The dual-response follow-up asked after each set, one column per task at export. Places the utility scale's zero point.",
-          });
         }
       }
       break;

@@ -52,7 +52,7 @@ test("CBC: one column per task, declared from the design, filled with the altern
 test("MaxDiff: best and worst per task", () => {
   const d = def("maxdiff");
   const names = buildVariableDictionary(d).filter((v) => v.questionId === "q1").map((v) => v.name);
-  assert.deepEqual(names, ["TASKS_TASKS", "TASKS_VERSION", "TASKS_T1_BEST", "TASKS_T1_WORST", "TASKS_T2_BEST", "TASKS_T2_WORST"]);
+  assert.deepEqual(names, ["TASKS_TASKS", "TASKS_VERSION", "TASKS_T1_BEST", "TASKS_T1_WORST", "TASKS_T1_ORDER", "TASKS_T2_BEST", "TASKS_T2_WORST", "TASKS_T2_ORDER"]);
   const state = createResponseState(d, { seed: 3 });
   setAnswer(d, state, "q1", { "1": { best: "2", worst: "5" }, "2": { best: "3" } });
   const flat = flattenVariables(d, state);

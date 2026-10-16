@@ -11,6 +11,7 @@
  */
 import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { mulberry32, subSeed } from "@rescript/engine";
+import { twoWayBalance } from "./diagnostics.js";
 
 export interface ConjointAttribute {
   name: string;
@@ -459,6 +460,19 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       balanceScores[attr.name] = min === 0 ? Infinity : max / min;
     }
 
+    /*
+     * METHOD-05: two-way balance over the concepts respondents are estimated
+     * from (holdouts and the None row are not). A cell a prohibition makes
+     * impossible is not counted as unbalanced.
+     */
+    const estimationProfiles = rows
+      .filter((r) => Number(r.is_holdout) !== 1 && Number(r.none_option) !== 1)
+      .map((r) => Object.fromEntries(c.attributes.map((a) => [a.name, String(r[a.name])])));
+    const possible = legalPool
+      ? (a: string, la: string, b: string, lb: string) => legalPool.some((p) => p[a] === la && p[b] === lb)
+      : undefined;
+    const diagnostics = twoWayBalance(c.attributes, estimationProfiles, possible);
+
     return {
       columns,
       rows,
@@ -471,6 +485,8 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       summary: {
         levelFrequencies,
         balanceScores,
+        diagnostics,
+        ...(diagnostics.warnings.length ? { warnings: diagnostics.warnings } : {}),
         ...(c.prohibitions.length
           ? {
             prohibitions: c.prohibitions.length,

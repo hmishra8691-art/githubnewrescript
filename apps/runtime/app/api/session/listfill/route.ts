@@ -81,7 +81,8 @@ export async function POST(req: NextRequest) {
   // ones the definition agrees are actually ready. A client asking for a list
   // whose source is empty, whose condition fails, or which has already
   // allocated gets nothing — the server decides readiness too.
-  const ready = pendingListFills(def, state);
+  // the rebuilt state has stepIndex 0 and cannot tell the source page was passed; the client only asks after it was
+  const ready = pendingListFills(def, state, { assumeSourcesSettled: true });
   const requested = Array.isArray(listFillIds) && listFillIds.length
     ? ready.filter((lf) => listFillIds.includes(lf.id))
     : ready;

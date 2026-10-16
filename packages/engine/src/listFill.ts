@@ -920,14 +920,70 @@ export function listFillHiddenDestinations(def: SurveyDefinition, state: Respons
  * allocation — the atomic allocator would refuse to double-claim anyway, but
  * not asking is better than being refused.
  */
-export function pendingListFills(def: SurveyDefinition, state: ResponseState): ListFill[] {
+export function pendingListFills(
+  def: SurveyDefinition,
+  state: ResponseState,
+  opts: { assumeSourcesSettled?: boolean } = {},
+): ListFill[] {
   const ctx: EvalContext = { def, state };
   return def.listFills.filter((lf) => {
     if (!lf.enabled) return false;
     if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] != null) return false;
     if (lf.runWhen && !evaluateCondition(lf.runWhen, ctx)) return false;
-    return listFillCandidates(def, lf, state, ctx).length > 0;
+    if (listFillCandidates(def, lf, state, ctx).length > 0) return true;
+    /*
+     * METHOD-09: an EMPTY source still runs once the source has been settled
+     * (the respondent was asked and picked nothing). The result is count 0,
+     * which is what lets `whenUnused` hide the destinations instead of
+     * leaving "How do you rate {{LISTFILL_Q1_1}}?" on screen unresolved.
+     */
+    return opts.assumeSourcesSettled === true || listFillSourceSettled(def, lf, state);
   });
+}
+
+type StepLocator = (def: SurveyDefinition, state: ResponseState, questionId: string) => number;
+let stepLocator: StepLocator | null = null;
+/** Called once by `listFillSettled.ts`; the engine's entry point imports it. */
+export function registerListFillStepLocator(fn: StepLocator): void {
+  stepLocator = fn;
+}
+
+/**
+ * Has the source of this List Fill finished being decided, so that "empty"
+ * means empty rather than "not asked yet"?
+ *
+ *   question     it holds an answer entry (an explicit empty one counts), or the
+ *                page that carries it is the current page or an earlier one
+ *                (List Fill runs as that page is submitted)
+ *   calculation / embedded / script   the variable exists
+ *   listFill     the other list has already run
+ *   static       never empty in practice; empty means nothing will ever arrive
+ */
+export function listFillSourceSettled(def: SurveyDefinition, lf: ListFill, state: ResponseState): boolean {
+  const src = lf.source;
+  switch (src.kind) {
+    case "question": {
+      if (src.questionId in state.answers) return true;
+      // where the source's page sits in the compiled flow — supplied by `listFillSettled.ts`
+      // (flow.ts imports this module, so it cannot import flow.ts back)
+      if (!stepLocator) return false;
+      try {
+        const at = stepLocator(def, state, src.questionId);
+        return at >= 0 && at <= state.stepIndex;
+      } catch {
+        return false;
+      }
+    }
+    case "calculation": return src.ref in state.calculated;
+    case "embedded": return src.ref in state.embedded;
+    case "script": return src.scriptId in state.calculated;
+    case "listFill": {
+      const other = def.listFills.find((x) => x.id === src.listFillId);
+      return !!other && state.calculated[`LISTFILL_${nameOf(other).toUpperCase()}_COUNT`] != null;
+    }
+    case "static": return true;
+    default: return false;
+  }
 }
 
 /* ------------------------------------------------------------ words */

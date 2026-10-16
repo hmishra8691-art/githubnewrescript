@@ -3,7 +3,7 @@ import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns }
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { otherBoxCodes, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
 import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefix, type LoopFlowNode } from "./loopModel.js";
-import { designFor, designVersionFor } from "./designVersion.js";
+import { designFor, designVersionFor, shuffleAlternatives } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
 import { isAcbcAnswer } from "./acbc.js";
 
@@ -93,7 +93,7 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
       if (placed.has(key)) continue;
       // legacy fallback for loop answers whose loop variables are absent
       const loopSuffix = key.includes("@") ? `_${key.split("@").slice(1).join("_")}` : "";
-      if (q.type === "conjoint_task" || q.type === "maxdiff_task") flattenTasks(def, q, value, `${q.variableName}${loopSuffix}`, out);
+      if (q.type === "conjoint_task" || q.type === "maxdiff_task") flattenTasks(def, q, value, `${q.variableName}${loopSuffix}`, out, state.seed);
       else flattenQuestion(q, value, `${q.variableName}${loopSuffix}`, out, opts);
     }
     /*
@@ -169,7 +169,7 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
  * design rows of the version this respondent answered, so a bundle total is
  * computed from the prices they actually saw.
  */
-function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varName: string, out: FlatVars): void {
+function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varName: string, out: FlatVars, seed?: number): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const design = def.designs.find((d) => d.id === q.settings.designRef);
   const vals = value as Record<string, unknown>;
@@ -183,6 +183,19 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
       const bw = v as { best?: unknown; worst?: unknown };
       if (bw.best != null) out[`${varName}_T${task}_BEST`] = Number(bw.best);
       if (bw.worst != null) out[`${varName}_T${task}_WORST`] = Number(bw.worst);
+      // METHOD-04: the anchor answer (all / some / none) — one column per task
+      const anchor = (v as { anchor?: unknown }).anchor;
+      if (anchor != null && anchor !== "") out[`${varName}_T${task}_ANCHOR`] = String(anchor);
+      // METHOD-14: the order this respondent saw the items in. The renderer rolls it from
+      // (seed, question, task) via shuffleAlternatives, so it is recomputed, not stored.
+      if (seed !== undefined) {
+        const shown = shuffleAlternatives(
+          rows.filter((r) => String(r.version ?? "1") === version && String(r.task) === task),
+          seed,
+          `${q.id}:${task}`,
+        );
+        if (shown.length) out[`${varName}_T${task}_ORDER`] = shown.map((r, i) => String(r.item_index ?? i)).join("|");
+      }
     } else if (isMenu) {
       const chosen = Array.isArray(v) ? v.map(String) : [];
       const items = rows.filter((r) => String(r.version ?? "1") === version && String(r.task) === task);

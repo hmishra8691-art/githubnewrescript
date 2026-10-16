@@ -175,3 +175,32 @@ test("navigation prunes on arrival, and a hidden question's answer is left exact
   pruneHiddenSelections(def, visibleQuestions(def, page, st), { def, state: st });
   assert.deepEqual(st.answers.q1, ["A", "B"], "…and while Q1 itself is hidden it is not pruned either");
 });
+
+test("METHOD-09: a destination of an empty List Fill is explained as hidden by the list, not left to show unresolved piping", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "t", version: "1" },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "BR", type: "multi_select", text: "Brands", options: [opt("A", "Apple"), opt("B", "Beta")] },
+      { id: "q2", code: "Q2", variableName: "RATE", type: "single_select", text: "How do you rate {{LISTFILL_BR_1}}?", options: [opt("x", "x")] },
+    ],
+    listFills: [{
+      id: "lf1", name: "BR", enabled: true,
+      source: { kind: "question", questionId: "q1", take: "selected" },
+      selection: { count: { kind: "fixed", n: 1 }, method: "highest_priority" },
+      tracking: { sampleLevel: true },
+      options: [{ code: "A", priority: 1 }, { code: "B", priority: 2 }],
+      destinations: [{ questionId: "q2", write: "answer", whenUnused: "hide" }],
+    }],
+    flow: [{ type: "page", id: "p1", questionIds: ["q1"] }, { type: "page", id: "p2", questionIds: ["q2"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const state = createResponseState(def, { seed: 1 });
+  state.stepIndex = 1;
+  const page = compileFlow(def, state)[1] as Extract<ReturnType<typeof compileFlow>[number], { kind: "page" }>;
+  // before the fill has run nothing is "unused"
+  assert.equal(explainVisibility(def, page, state)[0].visible, true);
+  // an empty fill records count 0 → the destination is hidden, and says why
+  state.calculated.LISTFILL_BR_COUNT = 0;
+  const [v] = explainVisibility(def, page, state);
+  assert.equal(v.visible, false);
+  assert.match(v.reason ?? "", /list fill/i);
+});
