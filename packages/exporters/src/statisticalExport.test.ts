@@ -1,9 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   responsesToCSV,
   responsesToSav,
+  buildSav,
   responsesToXpt,
   responsesToSasSyntax,
   buildResponseMatrix,
@@ -60,13 +65,26 @@ interface SavRead {
   valueLabels: Record<string, Record<string, string>>;
   missing: Record<string, number[]>;
   cases: Record<string, unknown>[];
+  /** declared string widths, in BYTES, keyed by real name (numeric variables are absent) */
+  widths: Record<string, number>;
+  fileLabel: string;
+  /** the name in the 7/20 encoding record, if one was written */
+  encoding?: string;
+  /** the character code in the 7/3 integer-info record, if one was written */
+  codePage?: number;
 }
 
 function readSav(buf: Buffer): SavRead {
   let p = 0;
   const i32 = () => { const v = buf.readInt32LE(p); p += 4; return v; };
   const f64 = () => { const v = buf.readDoubleLE(p); p += 8; return v; };
-  const str = (n: number) => { const s = buf.toString("latin1", p, p + n); p += n; return s; };
+  /*
+   * Text is decoded as UTF-8 — the encoding the file declares (asserted
+   * below). `n` counts BYTES, as every length in the format does; a decoder
+   * that counted characters would read the wrong number of bytes and lose
+   * its place after the first non-ASCII label.
+   */
+  const str = (n: number) => { const s = buf.toString("utf8", p, p + n); p += n; return s; };
 
   assert.equal(str(4), "$FL2", "SPSS magic");
   p += 60;                       // product name
@@ -77,7 +95,9 @@ function readSav(buf: Buffer): SavRead {
   i32();                         // weight index
   const ncases = i32();
   f64();                         // bias
-  p += 9 + 8 + 64 + 3;           // date, time, file label, padding
+  p += 9 + 8;                    // date, time
+  const fileLabel = str(64).trimEnd();
+  p += 3;                        // padding
 
   /*
    * A variable wider than 8 bytes is stored as a head record plus one
@@ -89,7 +109,7 @@ function readSav(buf: Buffer): SavRead {
   const names: string[] = [];
   const labels: Record<string, string> = {};
   const missing: Record<string, number[]> = {};
-  const widths: number[] = [];
+  const declaredWidths: number[] = [];
   const slotOwner: (string | null)[] = [];
 
   let rec = i32();
@@ -105,7 +125,7 @@ function readSav(buf: Buffer): SavRead {
     } else {
       slotOwner.push(name);
       names.push(name);
-      widths.push(type);
+      declaredWidths.push(type);
       if (hasLabel) {
         const len = i32();
         labels[name] = str(len).trimEnd();
@@ -122,6 +142,8 @@ function readSav(buf: Buffer): SavRead {
 
   const valueLabels: Record<string, Record<string, string>> = {};
   const longNames: Record<string, string> = {};
+  let encoding: string | undefined;
+  let codePage: number | undefined;
   while (rec !== 999) {
     if (rec === 3) {
       const n = i32();
@@ -163,6 +185,18 @@ function readSav(buf: Buffer): SavRead {
           const eq = entry.indexOf("=");
           if (eq > 0) longNames[entry.slice(0, eq)] = entry.slice(eq + 1);
         }
+      } else if (subtype === 20) {
+        // the character-encoding record: `count` bytes naming the encoding
+        assert.equal(size, 1, "the encoding record is a byte string");
+        encoding = str(count);
+      } else if (subtype === 3) {
+        // integer info: eight int32s, the last of which is the code page
+        assert.equal(size, 4); assert.equal(count, 8);
+        const ints: number[] = [];
+        for (let k = 0; k < 8; k++) ints.push(i32());
+        assert.equal(ints[4], 1, "floating-point representation must be IEEE");
+        assert.equal(ints[6], 2, "endianness in 7/3 must agree with the layout code (little)");
+        codePage = ints[7];
       } else {
         p += size * count;
       }
@@ -180,13 +214,19 @@ function readSav(buf: Buffer): SavRead {
   for (let c = 0; c < ncases; c++) {
     const row: Record<string, unknown> = {};
     names.forEach((name, vi) => {
-      const w = widths[vi];
+      const w = declaredWidths[vi];
       if (w === 0) {
         const v = f64();
         row[name] = v === -Number.MAX_VALUE ? null : v;
       } else {
+        // the cell fills whole 8-byte blocks, but the value is the first
+        // `w` BYTES of it — a slice of the decoded string would cut by
+        // characters and read past the width on any non-ASCII text
         const octets = Math.ceil(w / 8) * 8;
-        row[name] = str(octets).slice(0, w).trimEnd();
+        const cell = buf.subarray(p, p + w);
+        p += octets;
+        assert.ok(isWholeUtf8(cell), `${name}: cell ends inside a multi-byte sequence`);
+        row[name] = cell.toString("utf8").trimEnd();
       }
     });
     cases.push(row);
@@ -195,6 +235,8 @@ function readSav(buf: Buffer): SavRead {
   const resolve = (n: string) => longNames[n] ?? n;
   const remap = <T,>(o: Record<string, T>): Record<string, T> =>
     Object.fromEntries(Object.entries(o).map(([k, v]) => [resolve(k), v]));
+  const widths: Record<string, number> = {};
+  names.forEach((n, i) => { if (declaredWidths[i] > 0) widths[resolve(n)] = declaredWidths[i]; });
   return {
     shortNames: names,
     names: names.map(resolve),
@@ -202,7 +244,18 @@ function readSav(buf: Buffer): SavRead {
     valueLabels: remap(valueLabels),
     missing: remap(missing),
     cases: cases.map(remap),
+    widths,
+    fileLabel,
+    encoding,
+    codePage,
   };
+}
+
+/** True when `b` holds only complete UTF-8 sequences (so nothing was cut mid-character). */
+function isWholeUtf8(b: Buffer): boolean {
+  // Buffer#toString replaces a broken sequence with U+FFFD; a buffer that
+  // decodes and re-encodes to itself contains none
+  return Buffer.from(b.toString("utf8"), "utf8").equals(b);
 }
 
 /* ------------------------------------------------------------ a tiny .xpt reader */
@@ -350,6 +403,168 @@ test("SPSS: names longer than eight characters survive via the long-name map", (
   assert.ok(sav.names.includes("SURVEY_VERSION"));
   assert.ok(sav.names.includes("START_TIME"));
   for (const n of sav.names) assert.doesNotMatch(n, /[\s=]/, `"${n}" looks like a merged map entry`);
+});
+
+/* ------------------------------------------- SPSS: UTF-8 (audit DOC-06) */
+
+/**
+ * Text in the scripts the language library advertises. Every one of these
+ * came back from the writer as a run of spaces before DOC-06 was fixed.
+ */
+const MULTILINGUAL = {
+  hi: "मुझे यह कार पसंद है",
+  zh: "我喜欢这辆车",
+  ar: "أحب هذه السيارة",
+  ru: "Мне нравится машина",
+  de: "Straße Größe",
+  fr: "J'aime la voiture — très bien… «oui»",
+} as const;
+
+test("SPSS: the file declares UTF-8 in both the encoding record and the integer-info code page", () => {
+  const sav = readSav(responsesToSav(makeSurvey(), states));
+  assert.equal(sav.encoding, "UTF-8", "record 7/20 must name the encoding");
+  assert.equal(sav.codePage, 65001, "record 7/3 character code must be UTF-8 (65001) for readers that pre-date 7/20");
+});
+
+test("SPSS: UTF-8 round trip for Devanagari/CJK/Arabic/Cyrillic labels and cells", () => {
+  const def = makeSurvey();
+  const multilingual: ResponseStateLike[] = Object.values(MULTILINGUAL).map((text, i) => ({
+    ...states[0],
+    sessionId: `sess_u${i}`,
+    respondentId: `u${i}`,
+    answers: { ...(states[0].answers as object), q_open: text } as any,
+  }));
+  const sav = readSav(responsesToSav(def, multilingual));
+  Object.values(MULTILINGUAL).forEach((text, i) => {
+    assert.equal(sav.cases[i].COMMENT, text, `cell ${i} must hold the text as typed`);
+  });
+});
+
+test("SPSS: variable labels, value labels and the file label keep their script", () => {
+  const buf = buildSav({
+    variables: [
+      { name: "Q6", label: "क्यों? (Why?)", type: "string", stringWidth: 120 },
+      { name: "Q1", label: "Marque — 品牌", type: "numeric", valueLabels: { "1": "Citroën", "2": "Škoda", "3": "丰田", "4": "Мне" } },
+    ],
+    rows: [{ Q6: MULTILINGUAL.ar, Q1: 3 }],
+    fileLabel: "Étude — 研究",
+  });
+  const sav = readSav(buf);
+  assert.equal(sav.fileLabel, "Étude — 研究");
+  assert.equal(sav.labels.Q6, "क्यों? (Why?)");
+  assert.equal(sav.labels.Q1, "Marque — 品牌");
+  assert.deepEqual(sav.valueLabels.Q1, { "1": "Citroën", "2": "Škoda", "3": "丰田", "4": "Мне" });
+  assert.equal(sav.cases[0].Q6, MULTILINGUAL.ar);
+});
+
+test("SPSS: string widths are bytes, and a text column is sized by its longest UTF-8 value", () => {
+  /*
+   * A .sav string variable's width is a byte count. `responsesToSav` sizes
+   * each text column by the longest value it holds, so the width must be
+   * the UTF-8 byte length of the Hindi answer — 19 characters, 49 bytes — or
+   * the cell would be cut after a third of the text.
+   */
+  const def = makeSurvey();
+  const hindi: ResponseStateLike[] = [{
+    ...states[0],
+    answers: { ...(states[0].answers as object), q_open: MULTILINGUAL.hi } as any,
+  }];
+  const buf = responsesToSav(def, hindi);
+  const sav = readSav(buf);
+  const bytes = Buffer.byteLength(MULTILINGUAL.hi, "utf8");
+  assert.ok(bytes > MULTILINGUAL.hi.length, "the fixture must be multi-byte for this test to mean anything");
+  assert.equal(sav.widths.COMMENT, bytes, "width must be the UTF-8 byte length, not the character count");
+  assert.equal(sav.cases[0].COMMENT, MULTILINGUAL.hi);
+  // and the raw bytes are there: the file contains the UTF-8 encoding of the answer
+  assert.ok(buf.includes(Buffer.from(MULTILINGUAL.hi, "utf8")), "the UTF-8 bytes of the answer must be in the file");
+});
+
+test("SPSS: text wider than its variable is cut between characters, never inside one", () => {
+  /*
+   * Width 10 and a 3-byte-per-character script: 10 bytes is three characters
+   * and a third of a fourth. Writing the first ten bytes would leave a lead
+   * byte with no continuation, which SPSS shows as a replacement character.
+   */
+  const buf = buildSav({
+    variables: [
+      { name: "Q", label: "Short", type: "string", stringWidth: 10 },
+      { name: "N", label: "Numeric after it", type: "numeric" },
+    ],
+    rows: [{ Q: MULTILINGUAL.zh, N: 7 }],
+  });
+  const sav = readSav(buf);   // the reader asserts every cell is whole UTF-8
+  assert.equal(sav.widths.Q, 10);
+  assert.equal(sav.cases[0].Q, "我喜欢", "three whole characters, the fourth dropped");
+  assert.equal(sav.cases[0].N, 7, "the cut must not shift the numeric that follows");
+});
+
+test("SPSS: a variable label too long for the record is cut at a character boundary", () => {
+  const label = "मुझे यह कार पसंद है — ".repeat(10);   // well past 255 bytes
+  const sav = readSav(buildSav({
+    variables: [{ name: "Q", label, type: "numeric", valueLabels: { "1": "क्यों? ".repeat(30) } }],
+    rows: [{ Q: 1 }],
+  }));
+  assert.ok(Buffer.byteLength(sav.labels.Q, "utf8") <= 255, "variable label is at most 255 bytes");
+  assert.ok(label.startsWith(sav.labels.Q), "and is a prefix of the original, not mojibake");
+  const valueLabel = sav.valueLabels.Q["1"];
+  assert.ok(Buffer.byteLength(valueLabel, "utf8") <= 120, "value label is at most 120 bytes");
+  assert.ok("क्यों? ".repeat(30).startsWith(valueLabel));
+});
+
+test("SPSS: only the NAME is transliterated; the label beside it keeps its accents", () => {
+  const taken = new Set<string>();
+  assert.equal(spssName("Größe", taken), "GROSSE", "ß becomes ss rather than a hole in the name");
+  assert.equal(spssName("Café", taken), "CAFE");
+  assert.equal(spssName("丰田", taken), "V__", "a name with no ASCII letters still becomes a legal one");
+  const sav = readSav(buildSav({
+    variables: [{ name: "Größe", label: "Größe", type: "numeric" }],
+    rows: [{ "Größe": 1 }],
+  }));
+  assert.deepEqual(sav.names, ["GROSSE"]);
+  assert.equal(sav.labels.GROSSE, "Größe");
+  assert.equal(sav.cases[0].GROSSE, 1, "the row is still found under the original name");
+});
+
+/**
+ * The same file read by ReadStat (pyreadstat), which shares nothing with the
+ * writer or the decoder above. Skipped, not failed, where Python is absent:
+ * `scripts/verify-statistical-exports.mjs` is the full version of this check.
+ */
+const pyreadstat = spawnSync("python3", ["-c", "import pyreadstat"], { encoding: "utf8" }).status === 0;
+test("SPSS: pyreadstat reads the multilingual file back with encoding UTF-8", { skip: !pyreadstat && "python3 with pyreadstat is not installed" }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "rescript-sav-utf8-"));
+  const rows = Object.values(MULTILINGUAL).map((text) => ({ Q6: text, Q1: 2 }));
+  writeFileSync(join(dir, "u.sav"), buildSav({
+    variables: [
+      { name: "Q6", label: "क्यों? (Why?)", type: "string", stringWidth: 120 },
+      { name: "Q1", label: "Marque", type: "numeric", valueLabels: { "1": "Citroën", "2": "Škoda", "3": "丰田" } },
+    ],
+    rows,
+    fileLabel: "Étude — 研究",
+  }));
+  writeFileSync(join(dir, "expected.json"), JSON.stringify({ cells: rows.map((r) => r.Q6) }));
+  writeFileSync(join(dir, "read.py"), `
+import json, pyreadstat
+df, meta = pyreadstat.read_sav(${JSON.stringify(join(dir, "u.sav"))})
+exp = json.load(open(${JSON.stringify(join(dir, "expected.json"))}))
+print(json.dumps({
+  "encoding": meta.file_encoding,
+  "fileLabel": meta.file_label,
+  "labels": meta.column_labels,
+  "valueLabels": {k: {str(int(c)): l for c, l in v.items()} for k, v in meta.variable_value_labels.items()},
+  "cells": list(df["Q6"]),
+  "cellsMatch": list(df["Q6"]) == exp["cells"],
+}, ensure_ascii=False))
+`);
+  const run = spawnSync("python3", ["-I", join(dir, "read.py")], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  assert.equal(out.encoding, "UTF-8");
+  assert.equal(out.fileLabel, "Étude — 研究");
+  assert.deepEqual(out.labels, ["क्यों? (Why?)", "Marque"]);
+  assert.deepEqual(out.valueLabels, { Q1: { "1": "Citroën", "2": "Škoda", "3": "丰田" } });
+  assert.deepEqual(out.cells, Object.values(MULTILINGUAL));
+  assert.equal(out.cellsMatch, true);
 });
 
 test("SAS transport: numbers round-trip through IBM hex float", () => {

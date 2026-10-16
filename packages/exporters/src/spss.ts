@@ -14,15 +14,29 @@ import type { VariableDef } from "@rescript/schema";
  * documented and a dependency that writes it is not one this repo carries.
  * Uncompressed costs file size and buys a writer that is simple enough to be
  * obviously correct. The output is checked against ReadStat (via pyreadstat),
- * an independent implementation, in `spss.verify.test.ts`.
+ * an independent implementation, in `scripts/verify-statistical-exports.mjs`
+ * and in the `SPSS: UTF-8` tests of `statisticalExport.test.ts`.
+ *
+ * TEXT IS UTF-8. The file declares it twice, the way SPSS itself does: the
+ * integer-info record (7/3) carries character code 65001 and the encoding
+ * record (7/20) carries the name "UTF-8". Every label, value label, file
+ * label and string cell is then written as UTF-8 bytes. A .sav is byte-
+ * oriented — a string variable's WIDTH is a count of bytes, not characters —
+ * so widths come from `Buffer.byteLength` and any truncation happens at a
+ * code-point boundary, never inside a multi-byte sequence. Only the 8-byte
+ * short names in the base variable records are transliterated to ASCII,
+ * because SPSS's name rules are ASCII rules; the real name rides in 7/13.
  *
  * Record types written here:
- *   1   file header
- *   2   one per variable (plus a continuation per extra 8 bytes of a string)
- *   3/4 value labels, and the variables they apply to
+ *   1    file header
+ *   2    one per variable (plus a continuation per extra 8 bytes of a string)
+ *   3/4  value labels, and the variables they apply to
+ *   7/3  integer info: version, IEEE floats, little-endian, code page 65001
+ *   7/4  floating-point info: the sysmis / highest / lowest doubles
  *   7/13 the long-name map, since a base record's name is 8 bytes
  *   7/11 measurement level, column width and alignment
- *   999 dictionary termination, then the case data
+ *   7/20 character encoding: "UTF-8"
+ *   999  dictionary termination, then the case data
  */
 
 export interface SavVariable {
@@ -53,29 +67,77 @@ class ByteSink {
   push(b: Buffer) { this.chunks.push(b); }
   int32(n: number) { const b = Buffer.alloc(4); b.writeInt32LE(n | 0, 0); this.push(b); }
   double(n: number) { const b = Buffer.alloc(8); b.writeDoubleLE(n, 0); this.push(b); }
-  /** ASCII, padded with spaces or truncated to exactly `len` */
+  /**
+   * UTF-8, padded with spaces to exactly `len` bytes. Text that does not fit
+   * is cut at a code-point boundary: a field is read back as a whole, and a
+   * half sequence at its end would turn the last character into mojibake.
+   */
   fixed(s: string, len: number) {
     const b = Buffer.alloc(len, 0x20);
-    Buffer.from(ascii(s), "latin1").copy(b, 0, 0, Math.min(len, Buffer.byteLength(ascii(s), "latin1")));
+    utf8(s, len).copy(b, 0);
     this.push(b);
   }
+  /** raw ASCII, for the magic number and structural padding */
   bytes(s: string) { this.push(Buffer.from(s, "latin1")); }
   done(): Buffer { return Buffer.concat(this.chunks); }
 }
 
 /**
- * SPSS system files are byte-oriented and this writer declares no code page,
- * so anything outside ASCII is transliterated rather than written as bytes a
- * reader would mis-decode. A label that came back as mojibake would be worse
- * than one that lost its accents.
+ * `s` as UTF-8, no longer than `maxBytes`, cut only between code points.
+ *
+ * Control characters are replaced by spaces, as the old ASCII sanitiser did:
+ * a stray newline inside a label or a cell is not something SPSS displays,
+ * and a NUL would end the field early in some readers.
+ */
+function utf8(s: string, maxBytes: number): Buffer {
+  const clean = (s ?? "").replace(/[\x00-\x1f\x7f]/g, " ");
+  const b = Buffer.from(clean, "utf8");
+  if (b.length <= maxBytes) return b;
+  // walk back from the cut to the start of the sequence that straddles it:
+  // continuation bytes are 10xxxxxx, so the first byte that is not one is
+  // where the straddling character began
+  let end = maxBytes;
+  while (end > 0 && (b[end] & 0xc0) === 0x80) end--;
+  return b.subarray(0, end);
+}
+
+/** The decoded text of `utf8(s, maxBytes)`, for places that need a string back. */
+function clip(s: string, maxBytes: number): string {
+  return utf8(s, maxBytes).toString("utf8");
+}
+
+/**
+ * Transliteration to ASCII, used ONLY for variable names. SPSS's name rules
+ * are ASCII rules, so a name has to be mangled whatever the file's encoding;
+ * the label next to it keeps the original text. Letters that `NFD` cannot
+ * decompose are mapped by hand so "Größe" becomes GROSSE rather than GRO_E.
  */
 function ascii(s: string): string {
   return (s ?? "")
+    .replace(/ß/g, "ss").replace(/ẞ/g, "SS")
+    .replace(/æ/g, "ae").replace(/Æ/g, "AE")
+    .replace(/œ/g, "oe").replace(/Œ/g, "OE")
+    .replace(/ø/g, "o").replace(/Ø/g, "O")
+    .replace(/ł/g, "l").replace(/Ł/g, "L")
+    .replace(/đ/g, "d").replace(/Đ/g, "D")
+    .replace(/þ/g, "th").replace(/Þ/g, "Th")
     .normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .replace(/[–—]/g, "-").replace(/…/g, "...")
     .replace(/[^\x20-\x7e]/g, " ");
 }
+
+/**
+ * Field limits, in BYTES. SPSS reads a variable label of up to 255 bytes and
+ * a value label of up to 120; longer ones are refused or cut by the reader,
+ * which is worse than cutting them here at a character boundary.
+ */
+const MAX_VARIABLE_LABEL = 255;
+const MAX_VALUE_LABEL = 120;
+const MAX_FILE_LABEL = 64;
+/** the widest a plain string variable can be; the base record's type field holds the width */
+const MAX_STRING_WIDTH = 255;
+const UTF8_CODE_PAGE = 65001;
 
 /* ------------------------------------------------------------ names */
 
@@ -122,7 +184,9 @@ export function buildSav(input: SavInput): Buffer {
   const shortTaken = new Set<string>();
   const vars = input.variables.map((v) => {
     const long = spssName(v.name, taken);
-    const width = v.type === "string" ? Math.min(255, Math.max(1, v.stringWidth ?? 255)) : 0;
+    // `stringWidth` is in bytes, as the format counts; a caller that measured
+    // characters under-allocates for anything outside ASCII
+    const width = v.type === "string" ? Math.min(MAX_STRING_WIDTH, Math.max(1, v.stringWidth ?? MAX_STRING_WIDTH)) : 0;
     return { ...v, long, short: shortName(long, shortTaken), width };
   });
 
@@ -139,7 +203,7 @@ export function buildSav(input: SavInput): Buffer {
   w.double(100);                    // compression bias, conventionally 100
   w.fixed(creationDate(), 9);
   w.fixed(creationTime(), 8);
-  w.fixed(input.fileLabel ?? "", 64);
+  w.fixed(input.fileLabel ?? "", MAX_FILE_LABEL);
   w.bytes("\0\0\0");                // padding
 
   /* ---- record 2 per variable ---- */
@@ -168,29 +232,45 @@ export function buildSav(input: SavInput): Buffer {
       } else {
         w.fixed(code, 8);
       }
-      const text = ascii(label).slice(0, 120);
-      const len = Buffer.byteLength(text, "latin1");
+      const text = utf8(label, MAX_VALUE_LABEL);
+      const len = text.length;      // one length BYTE, so the cap above is what keeps it in range
       w.push(Buffer.from([len]));
       // the label is padded so that the length byte plus the text fills a
       // multiple of 8 bytes
       const pad = (8 - ((len + 1) % 8)) % 8;
-      w.fixed(text, len + pad);
+      w.push(text);
+      w.fixed("", pad);
     }
     w.int32(4);
     w.int32(1);
     w.int32(vars.indexOf(v) + 1 + precedingContinuations(vars, v)); // 1-based dictionary index
   }
 
+  /* ---- record 7/3: integer info — this is where the code page is declared ---- */
+  w.int32(7); w.int32(3); w.int32(4); w.int32(8);
+  w.int32(1); w.int32(0); w.int32(0);   // version major / minor / revision
+  w.int32(-1);                          // machine code: no particular one
+  w.int32(1);                           // floating-point representation: IEEE 754
+  w.int32(1);                           // compression code: 1 is the only documented value
+  w.int32(2);                           // endianness: 2 = little
+  w.int32(UTF8_CODE_PAGE);              // character code: 65001 = UTF-8
+
+  /* ---- record 7/4: floating-point info ---- */
+  w.int32(7); w.int32(4); w.int32(8); w.int32(3);
+  w.double(SYSMIS);                     // system-missing
+  w.double(Number.MAX_VALUE);           // highest
+  w.double(SYSMIS);                     // lowest — SPSS writes -MAX here, the same bits as sysmis
+
   /* ---- record 7/13: the real names ---- */
   const longMap = vars.filter((v) => v.short !== v.long).map((v) => `${v.short}=${v.long}`).join("\t");
   if (longMap) {
     w.int32(7); w.int32(13); w.int32(1);
     /*
-     * NOT through `ascii()`. The entries are separated by a TAB, and the
-     * sanitiser replaces every control character with a space — which turned
-     * the whole map into one entry and gave the first variable a name made of
-     * the second one's mapping. The names are already ASCII by construction
-     * (`spssName`), so there is nothing here left to sanitise.
+     * NOT through `fixed()`, which replaces every control character with a
+     * space. The entries are separated by a TAB, and an earlier version of
+     * this writer sanitised the map, which turned it into one entry and gave
+     * the first variable a name made of the second one's mapping. The names
+     * are ASCII by construction (`spssName`), so there is nothing to clean.
      */
     const b = Buffer.from(longMap, "latin1");
     w.int32(b.length); w.push(b);
@@ -204,6 +284,14 @@ export function buildSav(input: SavInput): Buffer {
     w.int32(v.type === "string" ? 1 : 3); // left for text, right for numbers
   }
 
+  /*
+   * ---- record 7/20: character encoding ----
+   * The name, as SPSS 16+ writes it. Readers that pre-date this record fall
+   * back on the 7/3 code page above; both say the same thing.
+   */
+  w.int32(7); w.int32(20); w.int32(1); w.int32(5);
+  w.bytes("UTF-8");
+
   /* ---- record 999: end of dictionary ---- */
   w.int32(999); w.int32(0);
 
@@ -215,7 +303,10 @@ export function buildSav(input: SavInput): Buffer {
         const n = toNumber(raw);
         w.double(n == null ? SYSMIS : n);
       } else {
-        const s = ascii(raw == null ? "" : String(raw));
+        // the cell occupies the variable's whole 8-byte blocks, but only
+        // `width` bytes of it are the value — a reader stops there, so the
+        // text is cut to the width, not to the padded size
+        const s = clip(raw == null ? "" : String(raw), v.width);
         const blocks = Math.ceil(v.width / 8);
         w.fixed(s, blocks * 8);
       }
@@ -225,7 +316,7 @@ export function buildSav(input: SavInput): Buffer {
 }
 
 function writeVariableRecord(w: ByteSink, v: { long: string; short: string; label: string; type: string; width: number; missingValues?: (number | string)[] }): void {
-  const label = ascii(v.label ?? "").slice(0, 120);
+  const label = utf8(v.label ?? "", MAX_VARIABLE_LABEL);
   const hasLabel = label.length > 0 ? 1 : 0;
   /*
    * Only DISCRETE missing values are written (up to the three SPSS allows for
@@ -235,22 +326,22 @@ function writeVariableRecord(w: ByteSink, v: { long: string; short: string; labe
    */
   const missing = (v.missingValues ?? []).slice(0, 3);
   w.int32(2);
-  w.int32(v.type === "string" ? Math.min(255, v.width) : 0);
+  w.int32(v.type === "string" ? Math.min(MAX_STRING_WIDTH, v.width) : 0);
   w.int32(hasLabel);
   w.int32(missing.length);
   // print and write formats: 5 = F (numeric), 1 = A (string), packed as
   // (type << 16) | (width << 8) | decimals
   const fmt = v.type === "string"
-    ? (1 << 16) | (Math.min(255, v.width) << 8)
+    ? (1 << 16) | (Math.min(MAX_STRING_WIDTH, v.width) << 8)
     : (5 << 16) | (8 << 8);
   w.int32(fmt);
   w.int32(fmt);
   w.fixed(v.short, 8);
   if (hasLabel) {
-    const b = Buffer.from(label, "latin1");
-    w.int32(b.length);
-    const pad = (4 - (b.length % 4)) % 4;
-    w.fixed(label, b.length + pad);
+    w.int32(label.length);        // in bytes, which is what a reader allocates
+    const pad = (4 - (label.length % 4)) % 4;
+    w.push(label);
+    w.fixed("", pad);
   }
   for (const m of missing) {
     if (v.type === "string") w.fixed(String(m), 8);
