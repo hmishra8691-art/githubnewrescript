@@ -32,6 +32,8 @@ begin
   return new;
 end $$;
 
-drop trigger if exists profiles_guard on public.profiles;
-create trigger profiles_guard before update on public.profiles
+create or replace trigger profiles_guard before update on public.profiles
   for each row execute function public.rescript_profiles_guard();
+
+-- trigger function only: not callable over RPC (applied separately as 0055b on rescript-survey-platform)
+revoke all on function public.rescript_profiles_guard() from public, anon, authenticated;

@@ -29,13 +29,11 @@
 -- PostgREST reports the function missing, so the app keeps working on a
 -- database where this migration has not been applied yet.
 --
--- Re-runnable: drop-if-exists + create, comment, revoke.
--- NOT EXECUTED in the audit sandbox (no Postgres there).
+-- Re-runnable: create or replace, comment, revoke.
+-- Applied to rescript-survey-platform on 2026-10-16.
 -- ============================================================================
 
-drop function if exists public.rescript_cut_version(uuid, text, jsonb, text, text, uuid, bigint, text);
-
-create function public.rescript_cut_version(
+create or replace function public.rescript_cut_version(
   p_survey_id uuid,
   p_version text,
   p_definition jsonb,

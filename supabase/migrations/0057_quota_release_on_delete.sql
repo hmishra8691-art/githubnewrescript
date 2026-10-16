@@ -24,7 +24,7 @@
 -- (apps/runtime/app/api/session/save/route.ts), falling back to the old call when this migration is not
 -- applied yet. Until then the trigger is inert (no row has quota_cells) and behaviour is unchanged.
 --
--- Re-runnable. Undo: docs/MIGRATION-UNDO-NOTES.md. UNEXECUTED when written (no Postgres in the sandbox).
+-- Re-runnable. Undo: docs/MIGRATION-UNDO-NOTES.md. Applied to rescript-survey-platform on 2026-10-16.
 
 alter table public.responses add column if not exists quota_cells jsonb;
 comment on column public.responses.quota_cells is
@@ -93,8 +93,7 @@ begin
   return new;
 end $$;
 
-drop trigger if exists responses_release_quota on public.responses;
-create trigger responses_release_quota
+create or replace trigger responses_release_quota
   after update of deleted_at or delete on public.responses
   for each row execute function public.rescript_release_quota_on_delete();
 

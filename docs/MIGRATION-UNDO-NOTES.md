@@ -125,9 +125,25 @@ comment on table public.design_files is null;
 
 Also remove `/api/cron/housekeeping` from `apps/studio/vercel.json`. If you leave it, the route answers `skipped` while the function is missing. To change retention without removing the sweep, pass arguments: `rescript_housekeeping(p_login_days, p_share_access_days, p_telemetry_days, p_batch)`. The defaults are 90 / 180 / 180 / 50 000.
 
-### 0059 — engineer A
+### 0059 — atomic version cut
 
-The undo notes for 0059 belong to that migration's author.
+```sql
+drop function if exists public.rescript_cut_version(uuid, text, jsonb, text, text, uuid, bigint, text);
+```
+
+Safe at any time: the versions route detects the missing function and falls back to insert + `rescript_finalize_version`.
+
+## Applied status (rescript-survey-platform, 2026-10-16)
+
+| Migration | Status |
+|---|---|
+| 0055 profiles self-update columns | applied |
+| 0056 abandoned status | applied |
+| 0057 quota release on delete | applied |
+| 0058 housekeeping | **pending** — apply from the Supabase SQL editor (its function body contains `DELETE`, which the agent tool holds for a confirmation that did not arrive) |
+| 0059 atomic version cut | applied |
+
+0055, 0057 and 0059 use `create or replace trigger` / `create or replace function` instead of `drop … if exists` + `create`; the effect is the same and they stay re-runnable.
 
 ## Decision: `design_files` is kept (SCHEMA-08)
 
