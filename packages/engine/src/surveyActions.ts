@@ -10,6 +10,7 @@ import { addEmbeddedField, wrapInLoop } from "./structureOps.js";
 import { parseLogicExpression, formatCondition } from "./logicExpression.js";
 import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
+import { applySemantic, inferSemantic, SEMANTICS, type Semantic } from "./semanticValidation.js";
 import { runQualityCheck } from "./qualityCheck.js";
 import { questionOrder, conditionRefs } from "./dependencies.js";
 import { applyUxAction, coerceUxAction, isUxOp, UX_ACTION_OPS, type UxAction } from "./uxActions.js";
@@ -85,7 +86,7 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[] }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string }
@@ -160,6 +161,7 @@ const VALIDATION_KINDS = new Set([EXACT_SELECTIONS, "required", "min_value", "ma
 /* ------------------------------------------------------------ the gate */
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+const semanticIn = (v: unknown): Semantic | "none" | undefined => { const t = str(v)?.toLowerCase().replace(/[\s-]+/g, "_"); if (!t) return undefined; if (t === "none") return "none"; const alias: Record<string, Semantic> = { percentage: "percent", money: "currency", amount: "currency", zip: "postal", zipcode: "postal", postcode: "postal", telephone: "phone", website: "url", quantity: "count", number_of: "count" }; const sem = (SEMANTICS as string[]).includes(t) ? (t as Semantic) : alias[t]; return sem; };
 /** expression text, or a structured condition tree (cloned — nothing of the model's object is kept by reference) */
 const condIn = (v: unknown): CondInput | undefined =>
   typeof v === "string" ? str(v) : isConditionNode(v) ? (JSON.parse(JSON.stringify(v)) as Condition) : undefined;
@@ -236,6 +238,7 @@ function coerceOne(item: unknown): SurveyAction | string {
         ...(options(o.options) ? { options: options(o.options) } : {}), ...(strs(o.rows) ? { rows: strs(o.rows) } : {}), ...(scale(o.scale) ? { scale: scale(o.scale) } : {}),
         ...(bool(o.required) !== undefined ? { required: bool(o.required) } : {}), ...(bool(o.randomize) ? { randomize: true } : {}),
         ...(str(o.instruction) ? { instruction: str(o.instruction)!.slice(0, 600) } : {}), ...(validations(o.validation)?.length ? { validation: validations(o.validation) } : {}),
+        ...(semanticIn(o.semantic) ? { semantic: semanticIn(o.semantic) } : {}),
       };
     }
     case "update_question": {
@@ -530,6 +533,16 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (a.instruction) q.instruction = a.instruction;
       if (a.required !== undefined) q.required = a.required;
       shapeQuestion(def, q, a);
+      /*
+       * WHAT THE ANSWER IS (QT-02). The action may say it ("semantic":"age"),
+       * the variant may imply it (text.email), or the wording may make it
+       * plain ("How old are you?"); in each case the registry adds the rules
+       * and input settings the meaning carries — a whole, non-negative number
+       * for an age — and leaves every bound the action gave untouched. "none"
+       * keeps the registry out of a question it would otherwise tag.
+       */
+      const sem = a.semantic ?? inferSemantic(q);
+      const semApplied = applySemantic(q, sem);
       // place it
       const { pageId, index } = placement(ctx, a.block, a.after);
       def.questions.push(q);
@@ -555,7 +568,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       }
       const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
       if (block) ctx.lastBlock = block.id;
-      return { description: `Created ${q.code} (${typeLabel(q)})${block?.title ? ` in “${block.title}”` : ""}: ${plain(q.text, 70)}`, touched: [q.id] };
+      return { description: `Created ${q.code} (${typeLabel(q)})${block?.title ? ` in “${block.title}”` : ""}: ${plain(q.text, 70)}${semApplied.applied && semApplied.added.length ? ` — validated as ${sem} (${semApplied.added.join(", ")})` : ""}`, touched: [q.id] };
     }
     case "update_question": {
       let q = resolveQuestion(ctx, a.target);
@@ -1114,7 +1127,7 @@ const INTRINSIC_KINDS = new Set(["email", "phone", "url", "zip", "integer"]);
 function mergeValidation(preset: ValidationRule[], supplied: ValidationRule[], opts: { replace?: boolean } = {}): ValidationRule[] {
   const suppliedKinds = new Set(supplied.map((r) => r.kind));
   const kept = preset.filter((r) => !suppliedKinds.has(r.kind) && (INTRINSIC_KINDS.has(r.kind) || !opts.replace));
-  return [...kept, ...supplied];
+  return [...supplied, ...kept]; // what the action said first, what the type implies after
 }
 
 /**

@@ -705,7 +705,8 @@ export function NumberField({
       }}
       onChange={(e) => {
         const t = e.target.value;
-        if (t !== "" && !/^-?\d*\.?\d*(e-?\d*)?$/i.test(t)) return; // reject letters, keep the caret
+        // reject letters, keep the caret; a whole-number field takes digits only (no "1e2" — QT-02)
+        if (t !== "" && !(decimals === 0 ? /^-?\d*$/ : /^-?\d*\.?\d*(e-?\d*)?$/i).test(t)) return;
         /*
          * A minus sign where the scale starts at zero or above. Currency and
          * Quantity seed `minValue: 0` precisely because a negative price or a

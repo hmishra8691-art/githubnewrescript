@@ -1261,6 +1261,17 @@ const QuestionObject = z.object({
        */
       decimalPlaces: z.number().int().min(0).max(10).optional(),
       numberSign: z.enum(["any", "positive", "negative"]).optional(),
+      /**
+       * WHAT THE ANSWER IS (audit 2026-10-16, QT-02): age, a year, a count, a
+       * percentage, an amount of money, an email address, a phone number, a
+       * postal code, a URL. The semantic validation registry
+       * (`@rescript/engine` semanticValidation.ts) turns the tag into the
+       * rules and input settings the type implies — a whole number that is
+       * not negative for an age — so neither the model nor the programmer
+       * has to spell them, and the bounds stay the author's. Optional and
+       * additive: a question without it is exactly what it was.
+       */
+      semantic: z.enum(["age", "year", "count", "percent", "currency", "email", "phone", "postal", "url", "none"]).optional(),
 
       /**
        * DATE PICKER: what the field starts with, and how a date is written.

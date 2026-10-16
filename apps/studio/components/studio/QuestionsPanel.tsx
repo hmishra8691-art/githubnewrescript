@@ -96,6 +96,7 @@ import {
   addQuestion, duplicateQuestion, removeQuestion, moveQuestionBy, cloneQuestion,
   layoutColumns, MAX_LAYOUT_COLUMNS,
   rowOtherBoxSupported,
+  applySemantic, inferSemantic, SEMANTICS, SEMANTIC_SPECS,
 } from "@rescript/engine"; // also registers builtin question types
 import { optionLogicHasEffect, isEmptyConditionTree } from "@rescript/schema";
 import { useStudio, uid } from "./store";
@@ -1874,6 +1875,37 @@ export function QuestionEditor({ q }: { q: Question }) {
         * a question with no variant keeps the full set it always had, and a
         * question that already carries a setting keeps the control for it.
         */}
+      {/*
+        * TREAT AS (audit 2026-10-16, QT-02): what the answer IS. The semantic
+        * registry turns the tag into the rules and settings the meaning
+        * carries — an age is a whole, non-negative number — and leaves the
+        * bounds to the author. Shown for numeric and text questions; "nothing
+        * in particular" stops the registry from re-tagging a question whose
+        * wording looks like one of these.
+        */}
+      {(q.type === "numeric" || q.type === "slider" || q.type === "open_text") && (
+        <label className="f" style={{ width: 260 }}><span>Treat the answer as</span>
+          <select className="select" data-testid="semantic"
+            value={q.settings.semantic ?? (inferSemantic(q) ? `~${inferSemantic(q)}` : "")}
+            onChange={(e) => {
+              const v = e.target.value.replace(/^~/, "");
+              const next = JSON.parse(JSON.stringify(q)) as Question;
+              const r = applySemantic(next, (v || "none") as never);
+              if (r.reason) { s.toast(r.reason, "err"); return; }
+              patch({ validation: next.validation, settings: next.settings });
+              if (r.added.length) s.toast(`Validated as ${SEMANTIC_SPECS[v as keyof typeof SEMANTIC_SPECS]?.label ?? v}: ${r.added.join(", ")}`);
+            }}>
+            <option value="">— choose —</option>
+            {SEMANTICS.filter((k) => SEMANTIC_SPECS[k].types.includes(q.type)).map((k) => (
+              <option key={k} value={k}>{SEMANTIC_SPECS[k].label}</option>
+            ))}
+            {SEMANTICS.filter((k) => SEMANTIC_SPECS[k].types.includes(q.type)).map((k) => (
+              <option key={`~${k}`} value={`~${k}`} hidden>{SEMANTIC_SPECS[k].label} (suggested — click to apply)</option>
+            ))}
+            <option value="none">nothing in particular</option>
+          </select></label>
+      )}
+
       {numberControls.any && (
         <div className="row" data-testid="number-controls" style={{ flexWrap: "wrap" }}>
           {numberControls.format && (
