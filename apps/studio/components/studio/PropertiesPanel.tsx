@@ -37,7 +37,7 @@ export function validationKindsFor(qtype: string): ValidationRule["kind"][] {
     return ["required", "min_value", "max_value", "integer", "custom_expression", "condition"];
   if (qtype === "allocation")
     return ["required", "sum_equals", "sum_max", "sum_min", "custom_expression", "condition"];
-  if (["date", "datetime"].includes(qtype))
+  if (qtype === "date") // (a date-and-time is the `datetime.datetime` variant of `date`, not a type)
     return ["required", "date_min", "date_max", "custom_expression", "custom_script", "condition"];
   if (["single_select", "dropdown", "time", "ranking", "image_ranking"].includes(qtype))
     return ["required", "custom_expression", "custom_script", "condition"];
@@ -268,7 +268,19 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
     qVariant?.validations,
     validationKindsFor(q.type),
   ) as ValidationRule["kind"][];
+  /*
+   * A date is bounded by date on every presentation of it — Date Picker,
+   * Calendar, Month/Year, Date & Time (audit 2026-10-16, QT-12). The variants
+   * declare only "required", which hid the two rules the engine has always
+   * checked on a date answer.
+   */
+  if (q.type === "date") allowed.push("date_min", "date_max");
   const kinds = VALIDATION_KINDS.filter((k) => allowed.includes(k.value));
+  /* a bound in the unit the answer is stored in */
+  const hintFor = (kind: ValidationRule["kind"]): string =>
+    qVariant?.id === "numeric.duration" && (kind === "min_value" || kind === "max_value") ? "seconds — 3600 = 1 h"
+      : qVariant?.id === "datetime.datetime" && (kind === "date_min" || kind === "date_max") ? "2026-01-01 or 2026-01-01T09:00"
+        : VALUE_HINT[kind] ?? "";
   return (
     <div>
       {q.validation.map((v, i) => {
@@ -309,7 +321,7 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                   inputMode={kind.numeric ? "numeric" : undefined}
                   min={kind.numeric ? 0 : undefined}
                   value={String(v.value ?? "")}
-                  placeholder={VALUE_HINT[v.kind] ?? ""}
+                  placeholder={hintFor(v.kind)}
                   data-testid="validation-value"
                   onChange={(e) => patch({
                     /*

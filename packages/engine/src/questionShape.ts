@@ -767,8 +767,9 @@ export function migrateQuestionType(
     /* `target.validations` is resolved rather than taken on trust, so this
        runs on the paths that pass a bare base type too — `staleFields` among
        them, which is the one whose whole job is to find rules like these */
+    /* a date keeps its date bounds on every presentation of a date (QT-12) — the Studio offers them there */
     const kinds = target.validations && judge
-      ? allowedValidationKinds(target.validations, target.validations)
+      ? [...allowedValidationKinds(target.validations, target.validations), ...(target.baseType === "date" ? ["date_min", "date_max"] : [])]
       : null;
     const survivors = kinds ? before.filter((r) => kinds.includes(r.kind)) : before;
     if (survivors.length !== before.length) {

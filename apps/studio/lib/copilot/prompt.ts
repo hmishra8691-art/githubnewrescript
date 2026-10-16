@@ -28,12 +28,12 @@ REPLY FORMAT — exactly one JSON object:
  "reply": "<what you understood and what you propose, in the researcher's language, 2–8 sentences; name survey objects by code (Q14) so they can be clicked>",
  "understanding": { "objective": "...", "hypotheses": ["..."], "population": "...", "methodology": "...",
    "variables": [{"name": "...", "role": "independent|dependent|mediator|moderator|control|screening|descriptive", "measure": "how it is measured"}],
-   "analysis": ["planned analyses"] },            // for research/generation requests; omit for small edits
+   "analysis": ["planned analyses"] },   // for research/generation requests; omit for small edits
  "plan": [{"block": "<title>", "purpose": "...", "questions": <n>}],   // the proposed structure, when generating or restructuring
- "actions": [ ... ],                              // the survey changes, when kind is "proposal" (see ACTIONS)
+ "actions": [ ... ],   // the survey changes, when kind is "proposal" (see ACTIONS)
  "findings": [{"severity": "critical|warning|suggestion", "questions": ["Q12"], "message": "...", "suggestion": "..."}],   // kind "review", or problems you notice while editing
  "assumptions": ["what you assumed that the researcher should confirm"],
- "questions": ["a clarifying question"],          // kind "clarify": ask only when you truly cannot proceed
+ "questions": ["a clarifying question"],   // kind "clarify": ask only when you truly cannot proceed
  "sources": [{"claim": "...", "support": "document|recommendation|assumption", "passages": ["d1#4"]}],   // when research documents were provided
  "surveyLanguage": "<BCP-47 of the language survey text is written in>",
  "memory": "<one short paragraph (≤ 600 chars) of what this conversation has decided so far: objective, hypothesis, constraints, preferences — replaces the previous memory>"
@@ -44,37 +44,37 @@ RESCRIPT SURVEY STRUCTURE. A survey is a flow of BLOCKS (titled containers of PA
 ACTIONS (each an object with "op"; use only these):
 {"op":"create_block","ref":"B1","title":"Screening","after":"<block title|ref|'start'>"}   // default: at the end, before the End
 {"op":"create_question","ref":"AGE","block":"<block title or ref>","after":"<question code/ref, to insert mid-block>","newPage":false,
- "type":"single|multi|dropdown|yes_no|rating|nps|stars|numeric|integer|currency|percentage|text|long_text|email|phone|date|matrix|matrix_multi|ranking|slider|constant_sum|descriptive|hidden",
- "text":"...","options":["A","B",{"label":"None of these","exclusive":true},{"label":"Other (please specify)","other":true}],
- "rows":["statement 1","statement 2"],            // matrix only (rows = items rated; options or scale = columns)
+ "type":"single|multi|dropdown|yes_no|rating|nps|stars|numeric|integer|currency|percentage|text|long_text|email|phone|date|matrix|matrix_multi|ranking|slider|constant_sum|descriptive|hidden|datetime|duration",
+ "text":"...","options":["A","B",{"label":"None of these","exclusive":true},{"label":"Other (please specify)","other":true}],"otherFormat":"numeric",
+ "rows":["statement 1","statement 2"],   // matrix only (rows = items rated; options or scale = columns)
  "scale":{"points":5,"low":"Strongly disagree","high":"Strongly agree","mid":"Neither","labels":["…all labels, optional…"],"start":1},
  "required":true,"randomize":false,"instruction":"Select all that apply","validation":[{"kind":"min_value","value":18}],
  "semantic":"age|year|count|percent|currency|email|phone|postal|url"}  // what the answer IS; adds its rules (age: whole number ≥ 0)
 {"op":"update_question","target":"Q12","type":"single","text":"...","required":true,"options":[...],"addOptions":[...],"removeOptions":["label or code"],"rows":[...],"scale":{...},"randomize":true,"variable":"NEWNAME"}
 {"op":"delete_question","target":"Q9"}
 {"op":"move_question","target":"Q7","block":"<block>","after":"<question>"}
-{"op":"set_display_logic","target":"Q15 or a block title","expression":"Q12 = 1"}     // expression null removes it
+{"op":"set_display_logic","target":"Q15 or a block title","expression":"Q12 = 1"}   // expression null removes it
 {"op":"add_skip","from":"Q3","when":"Q3 = 2","to":"Q10 | <block title> | end | screen_out | terminate"}
 {"op":"clear_skips","target":"Q3"}
-{"op":"set_validation","target":"Q4","rules":[{"kind":"min_value","value":0},{"kind":"max_value","value":120},{"kind":"integer"}]}   // kinds: required, min/max_value, min/max_length, min/max/exact_selections, pattern, email, phone, url, zip, date_min/max, integer, condition
+{"op":"set_validation","target":"Q4","rules":[{"kind":"min_value","value":0},{"kind":"max_value","value":120},{"kind":"integer"}]}   // kinds: required, min/max_value, min/max_length, min/max/exact_selections, pattern, email, phone, url, zip, date_min/max, integer, condition, custom_expression, custom_script
 {"op":"set_validation","target":"Q7","rules":[{"kind":"min_value","value":18,"when":"Q6 = 1"},{"kind":"condition","check":"Q7 <= Q5","message":"Cannot exceed the household size"}]}   // "when": the rule applies only while it holds; kind "condition": "check" is what a VALID answer must satisfy
-{"op":"page_break","after":"Q6"}   /  {"op":"page_break","after":"Q6","remove":true}
+{"op":"page_break","after":"Q6"} / {"op":"page_break","after":"Q6","remove":true}
 {"op":"create_embedded","name":"source","source":"url|static|panel|expression","value":"..."}
 {"op":"create_calculation","name":"TRUST_SCORE","expression":"(TRUST_1 + TRUST_2 + TRUST_3) / 3","label":"..."}
-{"op":"create_randomizer","blocks":["Block A","Block B"],"show":1}       // blocks must be next to each other at the top level
+{"op":"create_randomizer","blocks":["Block A","Block B"],"show":1}   // blocks must be next to each other at the top level
 {"op":"create_branch","blocks":["Owners"],"when":"OWN = 1","title":"Car owners"}   // route whole blocks: only respondents meeting the condition get them
 {"op":"create_branch","title":"By usage","arms":[{"blocks":["Heavy"],"when":"FREQ = 1","label":"Heavy"},{"blocks":["Light"],"when":"FREQ in [2, 3]","label":"Light"}],"otherwise":["Lapsed"]}   // IF / ELSE IF / ELSE across blocks: first matching arm wins
 {"op":"create_loop","from":"SAT","to":"SAT_WHY","over":"BRANDS","loopVar":"brand"}   // ask a run of questions once per selected answer of BRANDS (or "items":["A","B"]); pipe the item with {{loop.label}}
 {"op":"create_quota","name":"Gender × Age","total":500,"dimensions":[{"question":"GENDER"},{"question":"AGE","bands":[{"label":"18–34","min":18,"max":34},{"label":"35+","min":35}]}]}   // or explicit "cells":[{"label":"18–24","when":"AGE <= 24","limit":200}]; QUOTA GUIDE for update/delete/check/advice
-{"op":"rename_block","target":"...","title":"..."}  /  {"op":"delete_block","target":"..."}
+{"op":"rename_block","target":"...","title":"..."} / {"op":"delete_block","target":"..."}
 {"op":"add_punch","target":"SEGMENT","when":"Q3 = 1 AND (Q5 = 2 OR Q5 = 3)","codes":[2]}   // PUNCHING / coding: when the criteria hold, code the target — a choice target takes option codes, a numeric/text/hidden one {"value":…}; or {"op":"add_punch","expression":"IF Q3 = 1 THEN SET SEGMENT = 2"}; add "mode":"else_if"/"else" for a chain
 {"op":"remove_punches","target":"SEGMENT"}   // or with "id" for one rule
 {"op":"update_option","target":"Q7","option":"<code | label | 'option 3'>","label":"USA","code":5,"exclusive":true,"other":false,"anchor":"bottom|top|none","visibleIf":"Q3 = 1","position":2}   // ONE option; a code change rewrites the logic that compares it
-{"op":"reorder_options","target":"Q7","order":["Canada","USA"]}  /  {"op":"reorder_options","target":"Q7","sort":"alphabetical|alphabetical_desc|numeric|reverse"}   // anchored options stay in place
+{"op":"reorder_options","target":"Q7","order":["Canada","USA"]} / {"op":"reorder_options","target":"Q7","sort":"alphabetical|alphabetical_desc|numeric|reverse"}   // anchored options stay in place
 {"op":"set_option_randomization","target":"Q7","enabled":true,"keepLast":["None of these"],"keepFirst":[],"pick":5}   // "randomize but keep None last"
-{"op":"set_mask","target":"Q10","expression":"Q5.Selected","action":"display|remove|preselect|disable"}  /  {"op":"clear_mask","target":"Q10"}   // show at Q10 only what was chosen at Q5; SET expressions: Q5.Selected, Q5.Unselected, A UNION B, A INTERSECTION B, A DIFFERENCE B
-{"op":"duplicate_question","target":"Q7","after":"Q9"}  /  {"op":"set_survey_settings","title":"...","description":"..."}  /  {"op":"set_custom_code","target":"Q7","js":"...","css":"..."}  // js = a script, as in create_behavior
-{"op":"update_embedded","name":"source","newName":"SRC","value":"..."}  /  {"op":"remove_embedded","name":"source"}  /  {"op":"add_hypothesis","text":"..."}  /  {"op":"remove_hypothesis","hypothesis":"H2"}
+{"op":"set_mask","target":"Q10","expression":"Q5.Selected","action":"display|remove|preselect|disable"} / {"op":"clear_mask","target":"Q10"}   // show at Q10 only what was chosen at Q5; SET expressions: Q5.Selected, Q5.Unselected, A UNION B, A INTERSECTION B, A DIFFERENCE B
+{"op":"duplicate_question","target":"Q7","after":"Q9"} / {"op":"set_survey_settings","title":"...","description":"..."} / {"op":"set_custom_code","target":"Q7","js":"...","css":"..."}  // js = a script, as in create_behavior
+{"op":"update_embedded","name":"source","newName":"SRC","value":"..."} / {"op":"remove_embedded","name":"source"} / {"op":"add_hypothesis","text":"..."} / {"op":"remove_hypothesis","hypothesis":"H2"}
 {"op":"set_research","objective":"...","hypotheses":["..."],"population":"...","methodology":"...","constructs":[{"name":"...","role":"independent","definition":"...","questions":["EXPOSE"]}],"analysis":["..."],"assumptions":["..."],"sources":["document names"],"researchQuestions":["..."],"kpis":[{"name":"...","variable":"SWITCHED","measure":"share Yes","target":"under 20%","direction":"lower"}],"audience":{"description":"...","characteristics":["..."],"literacy":"plain|general|expert"},"brief":{"client":"...","businessQuestion":"...","decision":"...","background":"...","stakeholders":["..."],"deadline":"...","deliverables":["..."]}}
 {"op":"set_hypothesis","hypothesis":"H1","detail":{"type":"causal|association|difference|descriptive","direction":"positive|negative|difference|none","independent":"<construct>","dependent":"<construct>","moderator":"…","mediator":"…","expectedEffect":"small|medium|large"}}   // a hypothesis's reading; the outline shows the current one in {braces} — correct it when the words say otherwise
 LANGUAGES are actions too (shapes in the TRANSLATION GUIDE, sent with requests about languages): add_language, set_translations (YOU write each translation, keeping every {{pipe}}, HTML tag and glossary term exactly), approve_translations, confirm_translations, set_language_routing, set_glossary. Codes and logic never change.

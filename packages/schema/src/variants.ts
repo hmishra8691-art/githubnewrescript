@@ -975,6 +975,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { minValue: 0, stepper: true, step: 1, unitLabel: "items" }, validation: [{ kind: "integer" }] },
     presetOf: "numeric.open",
   }),
+  /*
+   * HOW LONG (audit 2026-10-16, QT-12): one duration, typed as hours, minutes
+   * and seconds, stored as whole SECONDS on a numeric question — so it sums,
+   * averages, bands and exports like any number, and min/max (in seconds)
+   * are the numeric bounds every other numeric question has.
+   */
+  stable(F.numeric, "duration", "Duration", "How long — hours, minutes and seconds, stored as seconds.", {
+    baseType: "numeric", renderer: "duration", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    defaults: { settings: { minValue: 0, durationParts: "hms" } },
+  }),
   stable(F.numeric, "slider", "Number Slider", "Numeric input as a slider.", {
     baseType: "slider", responseModel: "numeric",
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
@@ -2316,6 +2327,15 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   }),
   stable(F.datetime, "time", "Time Picker", "Single time of day.", {
     baseType: "time", responseModel: "text", validations: ["required"],
+  }),
+  /*
+   * DATE AND TIME TOGETHER (audit 2026-10-16, QT-12). A `date` stored as an
+   * ISO local date-time, "YYYY-MM-DDTHH:MM" — the respondent's wall clock,
+   * like the two pickers above — so date bounds, logic and exports read it
+   * as the date answer it is. `minDate` / `maxDate` may carry a time.
+   */
+  stable(F.datetime, "datetime", "Date & Time Picker", "One moment: a date and a time of day, stored together.", {
+    baseType: "date", renderer: "datetime", responseModel: "text", validations: ["required"],
   }),
   /*
    * DATE/TIME RANGE (October 2026 review): "rename Date Range to Date/Time

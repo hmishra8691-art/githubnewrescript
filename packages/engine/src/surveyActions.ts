@@ -8,6 +8,7 @@ import { listBlocks, listPages } from "./blocks.js";
 import { splitPageAfter, joinPageAfter } from "./pageBreaks.js";
 import { addEmbeddedField, wrapInLoop } from "./structureOps.js";
 import { parseLogicExpression, formatCondition } from "./logicExpression.js";
+import { validateExpression } from "./calc.js";
 import { migrateQuestionType } from "./questionShape.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { applySemantic, inferSemantic, SEMANTICS, type Semantic } from "./semanticValidation.js";
@@ -87,8 +88,8 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
-  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none" }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -148,6 +149,32 @@ export const ACTION_TYPES: Record<string, string> = {
   hidden: "calculated.hidden", hidden_variable: "calculated.hidden",
   file_upload: "upload.file", upload: "upload.file",
   maxdiff: "maxdiff.best_worst",
+  /*
+   * EVERY REGISTERED TYPE HAS A NAME (audit 2026-10-16, QT-10). The registry's
+   * own type names (`questionTypes.ts`) are names too — a model that read one
+   * in an outline or an export can say it back — plus the everyday words for
+   * the types the list above never covered. `custom_component` is the one
+   * exception: it has no stable variant, only a registered plugin renderer.
+   */
+  html: "content.html",
+  multi_dropdown: "multi_select.dropdown", multi_select_dropdown: "multi_select.dropdown",
+  quantity: "numeric.quantity", duration: "numeric.duration", time_spent: "numeric.duration",
+  numeric_list: "list.numeric_list", numeric_range: "numeric.numeric_range", number_range: "numeric.numeric_range",
+  text_list: "list.text_list", form_fields: "list.text_list", address: "text.address", full_name: "text.name", contact_form: "form.contact",
+  datetime: "datetime.datetime", date_time: "datetime.datetime", date_range: "datetime.date_range", calendar: "datetime.calendar", appointment: "datetime.calendar", month_year: "datetime.month_year",
+  matrix_dropdown: "matrix.dropdown", dropdown_matrix: "matrix.dropdown", composite: "matrix.mixed", mixed_matrix: "matrix.mixed", slider_matrix: "matrix.slider_matrix",
+  custom_table: "list.editable_table", editable_table: "list.editable_table",
+  image_select: "single_select.image", image_choice: "single_select.image", image_multi_select: "multi_select.image", image_ranking: "ranking.image",
+  hotspot: "hotspot.click", heatmap: "hotspot.click", annotation: "image.annotation", image_annotation: "image.annotation",
+  media_timeline: "media.video_timeline", video_timeline: "media.video_timeline",
+  calculated: "calculated.value", calculation: "calculated.value", embedded_data: "content.embedded", embedded: "content.embedded",
+  conjoint_task: "conjoint.cbc", conjoint: "conjoint.cbc", cbc: "conjoint.cbc", maxdiff_task: "maxdiff.best_worst", best_worst: "maxdiff.best_worst",
+  acbc_task: "conjoint.acbc", acbc: "conjoint.acbc",
+  repeating_group: "form.repeating", repeating_form: "form.repeating", dynamic_list: "list.dynamic_list",
+  experiment: "experimental.ab", ab_test: "experimental.ab",
+  geo: "location.pin", location: "location.pin", map_pin: "location.pin", address_search: "location.address", radius: "location.radius",
+  video_interview: "qualitative.video_interview",
+  signature: "upload.signature", audio: "media.audio_recording", voice: "media.audio_recording", photo: "upload.photo",
 };
 export function variantForActionType(type: string): string | null {
   const t = type.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -157,7 +184,21 @@ export function variantForActionType(type: string): string | null {
 
 /** "exactly N selections" is said as one rule and stored as the two the engine checks */
 const EXACT_SELECTIONS = "exact_selections";
-const VALIDATION_KINDS = new Set([EXACT_SELECTIONS, "required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer", "condition"]);
+/*
+ * `custom_expression` and `custom_script` joined in the 2026-10-16 audit
+ * (QT-08): the Studio offers both on every question (UNIVERSAL_VALIDATIONS)
+ * and the engine checks both, but this gate dropped them without a word, so
+ * the model could describe a rule it could never set.
+ */
+const VALIDATION_KINDS = new Set([EXACT_SELECTIONS, "required", "min_value", "max_value", "min_length", "max_length", "min_selections", "max_selections", "sum_equals", "sum_max", "sum_min", "pattern", "email", "phone", "url", "zip", "date_min", "date_max", "integer", "condition", "custom_expression", "custom_script"]);
+/** What an "Other (specify)" box accepts — `settings.otherSpecifyFormat`. */
+export type OtherFormat = "text" | "numeric" | "alphanumeric";
+const otherFormatIn = (v: unknown): OtherFormat | "none" | undefined => {
+  const t = str(v)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (!t) return undefined;
+  const alias: Record<string, OtherFormat | "none"> = { text: "text", letters: "text", letters_only: "text", numeric: "numeric", number: "numeric", numbers: "numeric", alphanumeric: "alphanumeric", letters_and_numbers: "alphanumeric", none: "none", any: "none" };
+  return alias[t];
+};
 
 /* ------------------------------------------------------------ the gate */
 
@@ -240,6 +281,7 @@ function coerceOne(item: unknown): SurveyAction | string {
         ...(bool(o.required) !== undefined ? { required: bool(o.required) } : {}), ...(bool(o.randomize) ? { randomize: true } : {}),
         ...(str(o.instruction) ? { instruction: str(o.instruction)!.slice(0, 600) } : {}), ...(validations(o.validation)?.length ? { validation: validations(o.validation) } : {}),
         ...(semanticIn(o.semantic) ? { semantic: semanticIn(o.semantic) } : {}),
+        ...(((f) => (f && f !== "none" ? { otherFormat: f } : {}))(otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat))),
       };
     }
     case "update_question": {
@@ -257,6 +299,7 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (strs(o.rows)) a.rows = strs(o.rows);
       if (scale(o.scale)) a.scale = scale(o.scale);
       if (bool(o.randomize) !== undefined) a.randomize = bool(o.randomize);
+      if (otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat)) a.otherFormat = otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat);
       return Object.keys(a).length > 2 ? a : "update_question changes nothing";
     }
     case "delete_question": { const target = str(o.target); return target ? { op, target } : "delete_question needs a target"; }
@@ -533,7 +576,9 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       q.text = pipeRefs(ctx, a.text);
       if (a.instruction) q.instruction = a.instruction;
       if (a.required !== undefined) q.required = a.required;
+      checkRuleValues(def, a.validation);
       shapeQuestion(def, q, a);
+      const otherNote = a.otherFormat ? setOtherFormat(q, a.otherFormat) : "";
       /*
        * WHAT THE ANSWER IS (QT-02). The action may say it ("semantic":"age"),
        * the variant may imply it (text.email), or the wording may make it
@@ -569,7 +614,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       }
       const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
       if (block) ctx.lastBlock = block.id;
-      return { description: `Created ${q.code} (${typeLabel(q)})${block?.title ? ` in “${block.title}”` : ""}: ${plain(q.text, 70)}${semApplied.applied && semApplied.added.length ? ` — validated as ${sem} (${semApplied.added.join(", ")})` : ""}`, touched: [q.id] };
+      return { description: `Created ${q.code} (${typeLabel(q)})${block?.title ? ` in “${block.title}”` : ""}: ${plain(q.text, 70)}${semApplied.applied && semApplied.added.length ? ` — validated as ${sem} (${semApplied.added.join(", ")})` : ""}${otherNote ? ` — ${otherNote}` : ""}`, touched: [q.id] };
     }
     case "update_question": {
       let q = resolveQuestion(ctx, a.target);
@@ -650,6 +695,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         q.randomization = { ...(q.randomization ?? {}), enabled: a.randomize, scope: q.rows?.length && /matrix/.test(q.type) ? "rows" : "options", method: "shuffle" } as never;
         what.push(a.randomize ? "randomized" : "not randomized");
       }
+      if (a.otherFormat) what.push(setOtherFormat(q, a.otherFormat));
       if (!what.length) fail(`nothing to change on ${q.code}`);
       for (const r of renames) {
         // applyRename works on a copy; the copy's contents become this definition's, so every reference the batch holds stays valid
@@ -713,6 +759,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     case "set_validation": {
       const q = resolveQuestion(ctx, a.target);
       const had = q.validation?.length ?? 0;
+      checkRuleValues(def, a.rules);
       q.validation = mergeValidation(q.validation ?? [], validationFromSpecs(ctx, a.rules, () => ctx.ids("val")), { replace: true });
       mirrorBounds(q);
       return { description: `${q.code} validation: ${a.rules.map((r) => `${r.kind.replace(/_/g, " ")}${r.value !== undefined ? ` ${r.value}` : ""}`).join(", ") || "none"}`, destructive: had ? `Replaces the ${had} validation rule${had === 1 ? "" : "s"} of ${q.code}` : undefined, touched: [q.id] };
@@ -1127,6 +1174,39 @@ function namingFor(def: SurveyDefinition, code?: string, variable?: string): { c
  * taken as given. `set_validation` replaces the authored rules (that is what
  * it is for) but still keeps the intrinsic ones.
  */
+/*
+ * A RULE THE ENGINE CANNOT RUN IS REFUSED HERE, NOT FOUND IN FIELD (QT-08).
+ * A pattern that does not compile fails closed (every answer rejected), a
+ * script rule naming no script passes everything, and an expression that does
+ * not parse is skipped — each one silent at interview time. The model is told
+ * now, with the reason, and the rest of its batch still applies.
+ */
+function checkRuleValues(def: SurveyDefinition, specs: ValidationSpec[] | undefined): void {
+  for (const r of specs ?? []) {
+    const v = r.value === undefined ? "" : String(r.value);
+    if (r.kind === "pattern") {
+      if (!v) fail("a pattern rule needs the regular expression as its value");
+      try { new RegExp(v); } catch { fail(`the pattern ${v} is not a valid regular expression`); }
+    } else if (r.kind === "custom_script") {
+      if (!v) fail("a custom_script rule needs the name of a script as its value");
+      if (!(def.scripts ?? []).some((s) => s.id === v || s.name === v)) fail(`there is no script named “${v}” in the survey's scripts — the researcher adds it there first; the rule then names it`);
+    } else if (r.kind === "custom_expression") {
+      if (!v) fail("a custom_expression rule needs an expression as its value (it reads the answer as value)");
+      const problem = validateExpression(v);
+      if (problem) fail(`the expression ${v} does not parse: ${problem}`);
+    }
+  }
+}
+
+/** The "Other (specify)" box's format, on a question that has such a box. */
+function setOtherFormat(q: Question, f: OtherFormat | "none"): string {
+  if (f === "none") { delete q.settings.otherSpecifyFormat; return "Other box accepts any text"; }
+  const hasBox = [...(q.options ?? []), ...(q.rows ?? [])].some((o) => (o.flags as string[] | undefined)?.includes("other_specify"));
+  if (!hasBox) fail(`${q.code} has no “Other (specify)” option, so there is no box for the ${f} format to check — add one with "other": true`);
+  q.settings.otherSpecifyFormat = f;
+  return `Other box accepts ${f === "text" ? "letters only" : f === "numeric" ? "a number only" : "letters and numbers only"}`;
+}
+
 const INTRINSIC_KINDS = new Set(["email", "phone", "url", "zip", "integer"]);
 function mergeValidation(preset: ValidationRule[], supplied: ValidationRule[], opts: { replace?: boolean } = {}): ValidationRule[] {
   const suppliedKinds = new Set(supplied.map((r) => r.kind));

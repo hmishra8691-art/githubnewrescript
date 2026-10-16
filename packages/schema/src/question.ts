@@ -1292,6 +1292,14 @@ const QuestionObject = z.object({
       defaultTime: z.string().optional(),
       timeFormat: z.enum(["12", "24"]).optional(),
       showSeconds: z.boolean().optional(),
+      /**
+       * DURATION (`numeric.duration`, audit 2026-10-16 QT-12): the parts the
+       * respondent types — hours/minutes/seconds (default), hours/minutes, or
+       * minutes/seconds. The answer is always stored as whole SECONDS, and
+       * `minValue` / `maxValue` are seconds too, so it sums and exports as a
+       * number whatever the parts.
+       */
+      durationParts: z.enum(["hms", "hm", "ms"]).optional(),
 
       /**
        * FILE UPLOAD: which kinds of file, how many, how big. `acceptTypes`

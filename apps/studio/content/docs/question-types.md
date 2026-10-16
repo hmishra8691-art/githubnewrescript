@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-170 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+172 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -123,6 +123,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `numeric.currency` | Currency | `numeric` | numeric_bounds, currency_symbol | required, min_value, max_value, integer, custom_expression | preset of numeric.open |
 | `numeric.percentage` | Percentage | `numeric` | numeric_bounds, currency_symbol | required, min_value, max_value, integer, custom_expression | preset of numeric.open |
 | `numeric.quantity` | Quantity | `numeric` | numeric_bounds, currency_symbol | required, min_value, max_value, integer, custom_expression | preset of numeric.open |
+| `numeric.duration` | Duration | `numeric` | numeric_bounds | required, min_value, max_value, integer, custom_expression | renderer duration |
 | `numeric.slider` | Number Slider | `slider` | numeric_bounds, scale_labels | required, min_value, max_value, integer, custom_expression | retired → slider.single |
 | `numeric.percentage_slider` | Percentage Slider | `slider` | numeric_bounds, scale_labels | required, min_value, max_value, integer, custom_expression | retired → slider.single |
 | `numeric.numeric_range` | Numeric Range | `numeric_list` | fields, numeric_bounds | required | renderer numrange |
@@ -304,6 +305,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 |---|---|---|---|---|---|
 | `datetime.date` | Date Picker | `date` | — | required | — |
 | `datetime.time` | Time Picker | `time` | — | required | — |
+| `datetime.datetime` | Date & Time Picker | `date` | — | required | renderer datetime |
 | `datetime.date_range` | Date/Time Range | `text_list` | fields | required | preset of list.text_list |
 | `datetime.calendar` | Calendar / Appointment Selection | `date` | — | required | renderer calendar |
 | `datetime.month_year` | Month / Year Picker | `date` | — | required | renderer monthyear |

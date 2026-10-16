@@ -20,6 +20,7 @@ import { isEmptyAnswer } from "./answers.js";
 import { escapeHtml, sanitizeHtml } from "./html.js";
 import { validationBounds } from "./scale.js";
 import { checkPhone, checkPostal, checkUrl, isValidEmail, phoneCountryFor } from "./formats.js";
+import { formatDuration, parseLocalDateTime } from "./dateFormat.js";
 import { uploadAccept, uploadTypeAllowed } from "./uploadTypes.js";
 import { bucketProblems, hasBucketRules } from "./bucketRules.js";
 import { unfinishedClips } from "./videos.js";
@@ -157,20 +158,50 @@ function hasNoAnswerableItems(q: Question, ctx: EvalContext): boolean {
 }
 
 /** An ISO date, or the name of something in scope that holds one. */
-function dateBound(raw: unknown, ctx: EvalContext): number | null {
+function dateBound(raw: unknown, ctx: EvalContext, opts: { endOfDay?: boolean } = {}): number | null {
   if (raw == null || raw === "") return null;
-  const direct = Date.parse(String(raw));
-  if (!Number.isNaN(direct)) return direct;
-  const flat = flattenVariables(ctx.def, ctx.state);
-  const resolved = flat[String(raw)];
-  if (resolved == null) return null;
-  const t = Date.parse(String(resolved));
+  let text: unknown = raw;
+  let t = asDate(raw);
+  if (t == null) {
+    const flat = flattenVariables(ctx.def, ctx.state);
+    text = flat[String(raw)];
+    if (text == null) return null;
+    t = asDate(text);
+  }
+  /*
+   * An upper bound written as a bare day ("on or before 2026-12-31") covers
+   * that whole day: a Date & Time answer at 10:00 on the 31st is inside it.
+   * A date-only answer is midnight, so it compares exactly as it always did.
+   */
+  if (t != null && opts.endOfDay && /^\d{4}-\d{2}-\d{2}$/.test(String(text).trim())) return t + 86_399_999;
+  return t;
+}
+
+/*
+ * A zone-less "YYYY-MM-DDTHH:MM" (the Date & Time picker, a calendar slot) is
+ * the respondent's wall clock. `Date.parse` reads it as LOCAL time but a
+ * date-only bound as UTC midnight, so the same answer passed or failed a
+ * bound depending on the server's zone. Both are read as naive UTC now (QT-12).
+ */
+function asDate(value: unknown): number | null {
+  const local = parseLocalDateTime(value);
+  if (local) return local.ms;
+  const t = Date.parse(String(value));
   return Number.isNaN(t) ? null : t;
 }
 
-function asDate(value: unknown): number | null {
-  const t = Date.parse(String(value));
-  return Number.isNaN(t) ? null : t;
+/** A bound for a message: the date, and the time when it has one. */
+function boundText(ms: number): string {
+  const iso = new Date(ms).toISOString();
+  return iso.slice(11, 16) === "00:00" ? iso.slice(0, 10) : `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+}
+
+/** The Duration variant stores seconds; its messages speak hours and minutes. */
+function isDurationQuestion(q: Pick<Question, "variant"> | undefined | null): boolean {
+  return !!q && resolveVariant(q.variant ?? undefined)?.id === "numeric.duration";
+}
+function numberText(q: Question | undefined | null, n: unknown): string {
+  return isDurationQuestion(q) ? formatDuration(n, q!.settings.durationParts) : String(n);
 }
 
 /*
@@ -225,11 +256,11 @@ export function checkScalarRules(
         break;
       case "min_value":
         if (!isEmpty(value) && Number(value) < Number(rule.value))
-          fail(ruleError(rule, `Value must be at least ${rule.value}.`));
+          fail(ruleError(rule, `Value must be at least ${numberText(ctx.question, rule.value)}.`));
         break;
       case "max_value":
         if (!isEmpty(value) && Number(value) > Number(rule.value))
-          fail(ruleError(rule, `Value must be at most ${rule.value}.`));
+          fail(ruleError(rule, `Value must be at most ${numberText(ctx.question, rule.value)}.`));
         break;
       case "min_length":
         if (!isEmpty(value) && String(value).length < Number(rule.value))
@@ -310,14 +341,14 @@ export function checkScalarRules(
         const bound = dateBound(rule.value, ctx);
         const got = isEmpty(value) ? null : asDate(value);
         if (bound != null && got != null && got < bound)
-          fail(ruleError(rule, `Please choose a date on or after ${new Date(bound).toISOString().slice(0, 10)}.`));
+          fail(ruleError(rule, `Please choose a date on or after ${boundText(bound)}.`));
         break;
       }
       case "date_max": {
-        const bound = dateBound(rule.value, ctx);
+        const bound = dateBound(rule.value, ctx, { endOfDay: true });
         const got = isEmpty(value) ? null : asDate(value);
         if (bound != null && got != null && got > bound)
-          fail(ruleError(rule, `Please choose a date on or before ${new Date(bound).toISOString().slice(0, 10)}.`));
+          fail(ruleError(rule, `Please choose a date on or before ${boundText(dateBound(rule.value, ctx)!)}.`));
         break;
       }
       case "integer":
@@ -577,10 +608,11 @@ export function validateQuestion(
      * actually drawn, not against the impossible one it holds.
      */
     const bounds = validationBounds(q);
+    // a Duration's bounds are seconds, and are said as "1 h 30 min" (QT-12)
     if (bounds.min != null && Number(value) < bounds.min)
-      push(uiText(ctx.ui, "min_value", { min: bounds.min }));
+      push(uiText(ctx.ui, "min_value", { min: numberText(q, bounds.min) }));
     if (bounds.max != null && Number(value) > bounds.max)
-      push(uiText(ctx.ui, "max_value", { max: bounds.max }));
+      push(uiText(ctx.ui, "max_value", { max: numberText(q, bounds.max) }));
     /*
      * FORMAT AND SIGN (October 2026 review: "decimal/whole-number settings,
      * positive/negative number options"). Whole numbers are the `integer`
@@ -610,14 +642,25 @@ export function validateQuestion(
    * an out-of-range date that every later calculation then trusted. The
    * renderer still narrows what is easy to pick; this is what makes it true.
    */
-  if (!isEmpty(value) && (q.type === "date" || q.type === "datetime")) {
+  /*
+   * (This tested `q.type === "datetime"` too — a type that never existed. A
+   * date and a time together is the `datetime.datetime` VARIANT of `date`
+   * (QT-12), so it is checked here as the date it is, and must be one whole
+   * "YYYY-MM-DDTHH:MM": a date with no time, or a time with no date, is half
+   * an answer to "when?".)
+   */
+  if (!isEmpty(value) && q.type === "date") {
+    if (resolveVariant(q.variant)?.id === "datetime.datetime" && !parseLocalDateTime(value)) {
+      push(uiText(ctx.ui, "datetime_invalid", undefined, "Please enter a date and a time."));
+      return errors;
+    }
     const got = asDate(value);
     const lo = dateBound(q.settings.minDate, ctx);
-    const hi = dateBound(q.settings.maxDate, ctx);
+    const hi = dateBound(q.settings.maxDate, ctx, { endOfDay: true });
     if (got != null && lo != null && got < lo)
-      push(uiText(ctx.ui, "date_min", { date: new Date(lo).toISOString().slice(0, 10) }));
+      push(uiText(ctx.ui, "date_min", { date: boundText(lo) }));
     if (got != null && hi != null && got > hi)
-      push(uiText(ctx.ui, "date_max", { date: new Date(hi).toISOString().slice(0, 10) }));
+      push(uiText(ctx.ui, "date_max", { date: boundText(dateBound(q.settings.maxDate, ctx)!) }));
     const blocked = q.settings.disabledWeekdays;
     if (got != null && blocked?.length && blocked.includes(new Date(got).getUTCDay()))
       push(uiText(ctx.ui, "date_weekday"));

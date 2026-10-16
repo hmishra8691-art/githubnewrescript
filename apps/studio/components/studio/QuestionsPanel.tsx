@@ -1286,7 +1286,10 @@ export function QuestionEditor({ q }: { q: Question }) {
       ? ["Minimum stars", "Maximum stars"]
       : variantDef?.renderer === "emoji"
         ? ["Minimum faces", "Maximum faces"]
-        : ["Min", "Max"];
+        /* a Duration stores seconds, and its bounds are seconds too (QT-12) */
+        : variantDef?.renderer === "duration"
+          ? ["Min (seconds)", "Max (seconds)"]
+          : ["Min", "Max"];
   /* what this variant's scale may be, and what it will actually be drawn as */
   const scaleLimit = variantDef?.scale;
   const scaleShown = effectiveScale(q, { min: scaleLimit?.min ?? 0, max: scaleLimit?.max ?? 10 });
@@ -1813,6 +1816,15 @@ export function QuestionEditor({ q }: { q: Question }) {
               min={scaleLimit?.min} max={scaleLimit?.max}
               value={q.settings.maxValue ?? ""}
               onChange={(e) => patchSettings({ maxValue: e.target.value === "" ? undefined : Number(e.target.value) })} /></label>
+          {variantDef?.renderer === "duration" && (
+            <label className="f"><span>Entered as</span>
+              <select className="select" data-testid="duration-parts" value={q.settings.durationParts ?? "hms"}
+                onChange={(e) => patchSettings({ durationParts: e.target.value as "hms" | "hm" | "ms" })}>
+                <option value="hms">hours, minutes, seconds</option>
+                <option value="hm">hours and minutes</option>
+                <option value="ms">minutes and seconds</option>
+              </select></label>
+          )}
           </>)}
           {/*
             * The message the review asked for. `min`/`max` on a number input

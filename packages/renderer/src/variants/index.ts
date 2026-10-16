@@ -19,6 +19,7 @@ import "./comparison";
 import "./allocation";
 import "./hotspot";
 import "./datetime";
+import "./datetimeScalar";
 import "./upload";
 import "./form";
 import "./dynamic";

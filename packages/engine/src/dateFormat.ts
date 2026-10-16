@@ -143,3 +143,95 @@ export function initialTimeValue(settings: { defaultTimeMode?: string; defaultTi
   if (settings.defaultTimeMode === "custom" && /^\d{1,2}:\d{2}(:\d{2})?$/.test(settings.defaultTime ?? "")) return settings.defaultTime!;
   return null;
 }
+
+/* ------------------------------------------------ date-time and duration (QT-12) */
+
+const LOCAL_DT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * A DATE AND A TIME, as the `datetime.datetime` variant stores it: an ISO
+ * local date-time, "YYYY-MM-DDTHH:MM" (or with seconds), no zone — the
+ * respondent's wall clock, exactly like the date and time pickers store
+ * theirs. Null when the text is not one, or names a day or hour that does
+ * not exist ("2026-02-30T10:00", "…T25:00").
+ */
+export function parseLocalDateTime(stored: unknown): { date: string; time: string; ms: number } | null {
+  const m = LOCAL_DT.exec(String(stored ?? "").trim());
+  if (!m) return null;
+  const [y, mo, d, h, mi, s] = [m[1], m[2], m[3], m[4], m[5], m[6] ?? "00"].map(Number);
+  if (!realDay(y, mo, d) || h > 23 || mi > 59 || s > 59) return null;
+  // compared as a naive wall-clock instant, the same footing a date-only bound ("2026-01-01" = UTC midnight) stands on
+  return { date: `${m[1]}-${m[2]}-${m[3]}`, time: `${m[4]}:${m[5]}${m[6] ? `:${m[6]}` : ""}`, ms: Date.UTC(y, mo - 1, d, h, mi, s) };
+}
+export function isLocalDateTime(stored: unknown): boolean {
+  return parseLocalDateTime(stored) != null;
+}
+
+/** A stored date-time for display, in the question's date and time formats; "" when it is not one. */
+export function formatDateTimeAs(stored: unknown, fmt: DateFormat | undefined, opts: { hour12?: boolean; seconds?: boolean } = {}): string {
+  const p = parseLocalDateTime(stored);
+  return p ? `${formatDateAs(p.date, fmt)} ${formatTimeAs(p.time, opts)}` : "";
+}
+
+/** Which parts a duration is entered in: hours-minutes-seconds, hours-minutes, minutes-seconds. */
+export type DurationParts = "hms" | "hm" | "ms";
+
+/**
+ * A DURATION IN SECONDS, split into the parts the respondent types. The
+ * leading part carries the overflow — 2 h 30 min entered as minutes and
+ * seconds is 150 min 0 s — so nothing is lost by the choice of parts.
+ */
+export function splitDuration(seconds: unknown, parts: DurationParts = "hms"): { h: number; m: number; s: number } | null {
+  if (seconds == null || seconds === "") return null;
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const total = Math.round(n);
+  if (parts === "ms") return { h: 0, m: Math.floor(total / 60), s: total % 60 };
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (parts === "hm") return { h, m: m + Math.round((total % 60) / 60), s: 0 };
+  return { h, m, s: total % 60 };
+}
+
+/** The parts back to seconds; null when every part is empty. */
+export function joinDuration(h: number | null | undefined, m: number | null | undefined, s: number | null | undefined): number | null {
+  if (h == null && m == null && s == null) return null;
+  return Math.max(0, Math.round((h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0)));
+}
+
+/** A duration for people: "1 h 30 min", "45 s", "0 s". Seconds are whole. */
+export function formatDuration(seconds: unknown, parts: DurationParts = "hms"): string {
+  const d = splitDuration(seconds, parts);
+  if (!d) return "";
+  const out: string[] = [];
+  if (d.h) out.push(`${d.h} h`);
+  if (d.m) out.push(`${d.m} min`);
+  if (d.s) out.push(`${d.s} s`);
+  return out.length ? out.join(" ") : parts === "hm" ? "0 min" : "0 s";
+}
+
+/**
+ * Typed text to seconds — what a pasted or posted duration may look like:
+ * "5400", "1:30:00", "90:00" (min:sec), "1h 30m", "1 h 30 min 15 s", "45s".
+ * A bare number is seconds, the unit the answer is stored in. Null when the
+ * text is not a duration.
+ */
+export function parseDuration(text: unknown): number | null {
+  const t = String(text ?? "").trim().toLowerCase();
+  if (!t) return null;
+  if (/^\d+(\.\d+)?$/.test(t)) return Math.round(Number(t));
+  const clock = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(t);
+  if (clock) {
+    const [a, b, c] = [Number(clock[1]), Number(clock[2]), clock[3] == null ? null : Number(clock[3])];
+    if (b > 59 || (c != null && c > 59)) return null;
+    return c == null ? a * 60 + b : a * 3600 + b * 60 + c;
+  }
+  const re = /(\d+(?:\.\d+)?)\s*(h|hrs?|hours?|m|mins?|minutes?|s|secs?|seconds?)(?![a-z])/g;
+  let total = 0, seen = 0, used = "";
+  for (let m = re.exec(t); m; m = re.exec(t)) {
+    const unit = m[2][0];
+    total += Number(m[1]) * (unit === "h" ? 3600 : unit === "m" ? 60 : 1);
+    seen++; used += m[0];
+  }
+  return seen && used.replace(/\s/g, "") === t.replace(/[\s,]/g, "") ? Math.round(total) : null;
+}

@@ -27,8 +27,8 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
-  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none" }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -193,5 +193,31 @@ export const ACTION_TYPES: Record<string, string> = {
   hidden: "calculated.hidden", hidden_variable: "calculated.hidden",
   file_upload: "upload.file", upload: "upload.file",
   maxdiff: "maxdiff.best_worst",
+  /*
+   * EVERY REGISTERED TYPE HAS A NAME (audit 2026-10-16, QT-10). The registry's
+   * own type names (`questionTypes.ts`) are names too — a model that read one
+   * in an outline or an export can say it back — plus the everyday words for
+   * the types the list above never covered. `custom_component` is the one
+   * exception: it has no stable variant, only a registered plugin renderer.
+   */
+  html: "content.html",
+  multi_dropdown: "multi_select.dropdown", multi_select_dropdown: "multi_select.dropdown",
+  quantity: "numeric.quantity", duration: "numeric.duration", time_spent: "numeric.duration",
+  numeric_list: "list.numeric_list", numeric_range: "numeric.numeric_range", number_range: "numeric.numeric_range",
+  text_list: "list.text_list", form_fields: "list.text_list", address: "text.address", full_name: "text.name", contact_form: "form.contact",
+  datetime: "datetime.datetime", date_time: "datetime.datetime", date_range: "datetime.date_range", calendar: "datetime.calendar", appointment: "datetime.calendar", month_year: "datetime.month_year",
+  matrix_dropdown: "matrix.dropdown", dropdown_matrix: "matrix.dropdown", composite: "matrix.mixed", mixed_matrix: "matrix.mixed", slider_matrix: "matrix.slider_matrix",
+  custom_table: "list.editable_table", editable_table: "list.editable_table",
+  image_select: "single_select.image", image_choice: "single_select.image", image_multi_select: "multi_select.image", image_ranking: "ranking.image",
+  hotspot: "hotspot.click", heatmap: "hotspot.click", annotation: "image.annotation", image_annotation: "image.annotation",
+  media_timeline: "media.video_timeline", video_timeline: "media.video_timeline",
+  calculated: "calculated.value", calculation: "calculated.value", embedded_data: "content.embedded", embedded: "content.embedded",
+  conjoint_task: "conjoint.cbc", conjoint: "conjoint.cbc", cbc: "conjoint.cbc", maxdiff_task: "maxdiff.best_worst", best_worst: "maxdiff.best_worst",
+  acbc_task: "conjoint.acbc", acbc: "conjoint.acbc",
+  repeating_group: "form.repeating", repeating_form: "form.repeating", dynamic_list: "list.dynamic_list",
+  experiment: "experimental.ab", ab_test: "experimental.ab",
+  geo: "location.pin", location: "location.pin", map_pin: "location.pin", address_search: "location.address", radius: "location.radius",
+  video_interview: "qualitative.video_interview",
+  signature: "upload.signature", audio: "media.audio_recording", voice: "media.audio_recording", photo: "upload.photo",
 };
 ```

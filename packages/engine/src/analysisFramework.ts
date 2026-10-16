@@ -641,6 +641,17 @@ export function derivedProblems(def: SurveyDefinition, plan: AnalysisPlan): Deri
   return out;
 }
 
+/** Tests that read their outcome (and grouping) as ONE variable. */
+const ONE_VARIABLE_METHODS = new Map<string, string>([
+  ["t_test", "a t-test"], ["anova", "an ANOVA"], ["mann_whitney", "a Mann-Whitney test"], ["kruskal_wallis", "a Kruskal-Wallis test"],
+  ["chi_square", "a chi-square"], ["regression", "a regression"], ["logistic_regression", "a logistic regression"],
+]);
+/** How many row variables a grid question stores — 0 for anything that is not a grid. */
+function gridRowCount(q: Pick<Question, "type" | "rows">): number {
+  const grid = /^matrix_/.test(q.type) || q.type === "composite" || q.type === "custom_table";
+  return grid ? (q.rows?.length ?? 0) : 0;
+}
+
 export function reviewAnalysisPlan(def: SurveyDefinition): AnalysisPlanIssue[] {
   const out: AnalysisPlanIssue[] = [];
   const plan = def.research?.analysisPlan;
@@ -662,6 +673,16 @@ export function reviewAnalysisPlan(def: SurveyDefinition): AnalysisPlanIssue[] {
       const outcome = t.outcome ? resolve(def, t.outcome) : undefined;
       const ol = outcome ? measurementOf(outcome) : undefined;
       const group = t.groupBy ? resolve(def, t.groupBy) : undefined;
+      /*
+       * A GRID IS SEVERAL VARIABLES (audit 2026-10-16, AI-09). A 4-row matrix
+       * planned as a t-test's outcome reads as "ordinal" one level down and
+       * passed every check below, though the run has four scores, not one.
+       */
+      for (const [role, gq] of [["outcome", outcome], ["groupBy", group]] as const) {
+        const n = gq ? gridRowCount(gq) : 0;
+        const method = ONE_VARIABLE_METHODS.get(t.method);
+        if (gq && n > 1 && method) out.push({ level: "warning", message: `${gq.code} is a ${n}-row grid; ${method} needs one ${role === "outcome" && t.method !== "chi_square" && t.method !== "logistic_regression" ? "score" : "variable"} — pick a row or build an index.`, questionIds: [gq.id], suggestion: `Name one row of ${gq.code}, or add a mean-score index over its rows and test that.` });
+      }
       if ((t.method === "t_test" || t.method === "anova" || t.method === "mann_whitney" || t.method === "kruskal_wallis") && ol && !isScaleLike(ol)) out.push({ level: "warning", message: `A ${t.method.replace(/_/g, " ")} compares means, but ${outcome!.code} is ${ol} — use a chi-square, or treat it as a scale deliberately.`, questionIds: [outcome!.id] });
       if (t.method === "t_test" && group && (group.options?.length ?? 0) > 2) out.push({ level: "warning", message: `A t-test compares two groups, but ${group.code} has ${group.options.length} — use ANOVA.`, questionIds: [group.id] });
       if (t.method === "anova" && group && (group.options?.length ?? 0) === 2) out.push({ level: "suggestion", message: `${group.code} has two groups — a t-test says the same thing more simply than ANOVA.`, questionIds: [group.id] });
