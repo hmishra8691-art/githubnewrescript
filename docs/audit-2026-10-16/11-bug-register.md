@@ -250,3 +250,41 @@ Code-verified only (no executed proof in this audit; treat as "consistent with c
 4. **Methodology wiring is hand-threaded through ~12 touch points** → METHOD-02/06/13, QT-14, ANALYTICS plan routing. A per-method capability object + registry-completeness test.
 5. **Dataset scope not stated** → OR-03, ANALYTICS-02/03/13. A single base-caption component.
 6. **No semantic layer on questions** → QT-02, QT-11, CLEAN-01 (demographic/geo rules need it), DOC-03 (variable coding). One `semantic` tag drives validation, geo hierarchy, cleaning rules and SAP variable tables.
+
+---
+
+## P2 batch — fix status (2026-10-16)
+
+Fixed in commits `cee520c` (analytics), `3a89be8` (methods), `6627cf6` (cleaning + data exports), `bdd5ec8` (research documents), `71ae05a` (Intelligent Mode), `5b9f1ce` (runtime + editor), `2d8b154` (hygiene + SQL). Each ships with tests; unit totals after the batch: engine 1,911 · analytics 490 · exporters 127 · quality 58 · designs 55 · templates 107 · access 99 · Studio lib 525; Studio and runtime typecheck clean.
+
+| ID | Status | What changed |
+|---|---|---|
+| ANALYTICS-02/03 | FIXED | answered base in topbox/ranking/allocation/CSAT tables and in segment n; controlled dataset 83/84 → 84/84 |
+| ANALYTICS-05/06 | FIXED | plan codes resolve to variables; unresolvable or blocked items are not run and carry an `unknown_variable` error shown in the run caveat |
+| ANALYTICS-07 | FIXED | weighting per plan item (one dataset per distinct weighting) |
+| ANALYTICS-13 | FIXED | crosstab with layers computes `validN` |
+| OR-03 / ANALYTICS-04 | FIXED (surface) | base caption on every result surface; run scope recorded in `analytics_runs.dataset.scope`. The original "base of 20" screen itself remains unreproducible from stored data |
+| METHOD-09 | FIXED | empty List Fill source records count 0 and applies `whenUnused`; live route settles sources server-side. Not covered: a source on a branch the respondent never takes |
+| METHOD-04/14 | FIXED | `VAR_T<n>_ANCHOR` and `VAR_T<n>_ORDER` columns |
+| METHOD-05 | PARTIAL | two-way balance + persisted `summary.diagnostics`/`warnings`; D-efficiency not implemented |
+| METHOD-15 | FIXED | menu currency stored and used |
+| CLEAN-03 | FIXED | quality on by default (`QualityConfig.enabled` defaults true); explicit `enabled:false` stays off |
+| CLEAN-06/07 | FIXED | deleted rows excluded; recompute paged by keyset, count reported |
+| CLEAN-09 | FIXED (deviation) | later arrival carries the exclusion flag; the first arrival stays CLEAN with the pair as evidence (marking it REVIEW would have removed both from the clean dataset) |
+| DOC-08 / CLEAN-08 | FIXED | status/quality/environment columns in `.sav/.xpt/.dta/SAS` |
+| DOC-10 | FIXED | `bom=1` on CSV export |
+| DOC-13 | FIXED | stamp has time, revision (when known) and a definition hash (browser-safe SHA-256) |
+| DOC-04 | FIXED | cleaning-plan .docx + `GET /quality/plan` |
+| DOC-02 | FIXED | sampling design, screening, timeline, ethics; derived plan labelled |
+| DOC-03 | PARTIAL | SAP .docx + additive plan fields (alpha, correction, weighting, missing data, sample size, software). `alpha`/`weighting`/`missingData` are recorded but not yet executed by `runPlan` |
+| DOC-11 | FIXED | Documents panel with six buttons |
+| AI-03/05/08 | FIXED | relabel on `set_research`; memory persisted with operations; repair carries the schema |
+| AI-04 | FIXED | refusals mapped to researcher sentences; browser proof by interception in `copilot-errors-test.mjs` (a real expired session is still unverified) |
+| AI-06 | FIXED (AI path) | `set_custom_code.css` goes through the scoping gate; the manual Properties field still stores raw CSS |
+| OR-01/02/04/05/06 | FIXED | unknown-type error lint + `rs-unsupported` card; matrix stacks ≤480 px (≤7 columns) else sticky label + scroll hint; picker/operator/group fixes |
+| LOGIC-02 | FIXED | `renameQuestionCode` (rewrites pipes, `{{expr:}}`, calcs, named expressions; scripts reported); a code that is also the variable name is left alone because it still resolves |
+| LOGIC-04/11 | FIXED | visited-page stack for Back; `on_submit` runs only after validation passes |
+| RUNTIME-08 | FIXED | scripts cannot hide/disable Next/Back |
+| QT-05/06/07 | FIXED | one email validator, "no format known" notice, URL scheme check |
+| ARCH-09/10/11/12 | FIXED | see commit `2d8b154` |
+| SCHEMA-02/05 | FIXED (unverified on Postgres) | migration files only; no Postgres in the sandbox to execute them |

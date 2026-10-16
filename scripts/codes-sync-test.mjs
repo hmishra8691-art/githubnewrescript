@@ -378,7 +378,7 @@ await loadDef(FIXTURE);
   q(def, "q4").text = "You said {{Q3.label}} ({{Q3}}); next year {{expr: Q3 + 1}}";
   def.calculations = [{ id: "c1", label: "Twice", targetVariable: "TWICE", expression: "Q3 * 2", trigger: "on_page_submit", enabled: true }];
   await loadDef(def);
-  await goTab("Questions");
+  await studioMode();
   await page.waitForSelector('[data-testid="qcard"][data-qid="q3"]');
   await page.click('[data-testid="qcard"][data-qid="q3"]');
   await page.waitForSelector('[data-testid="question-code"]');
@@ -395,12 +395,13 @@ await loadDef(FIXTURE);
   ok("LOGIC-02: renaming a question code rewrites the {{pipes}}, {{expr:}} and calculation that used it, and says so in a toast");
 
   // a code that is already another name is refused and the old one restored
-  await goTab("Questions");
+  await studioMode();
+  await page.waitForSelector('[data-testid="qcard"][data-qid="q3"]');
   await page.click('[data-testid="qcard"][data-qid="q3"]');
   await page.waitForSelector('[data-testid="question-code"]');
   await page.fill('[data-testid="question-code"]', "Q5");
   await page.press('[data-testid="question-code"]', "Enter");
-  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /already the code of Q5/.test(t.textContent ?? "")), null, { timeout: 8000 });
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /Q5 is already the code of another question — the code stays Q3b/.test(t.textContent ?? "")), null, { timeout: 8000 });
   assert.equal(await page.inputValue('[data-testid="question-code"]'), "Q3b", "the clash is refused; the code stays");
   ok("LOGIC-02: a code another question already has is refused with the reason, and the previous code is restored");
 }

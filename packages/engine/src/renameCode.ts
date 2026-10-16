@@ -126,6 +126,8 @@ export function renameQuestionCode(def: SurveyDefinition, oldCode: string, newCo
 
   const holder = def.questions.find((q) => q.code === from);
   const already = !holder ? def.questions.filter((q) => q.code === to) : [];
+  // typed by hand, the field has already written the new code into the question: two questions now answer to it
+  if (!holder && already.length > 1) return noop(def, `${to} is already the code of another question`);
   const target = holder ?? (already.length === 1 ? already[0] : undefined);
   if (!target) return noop(def, `there is no question coded ${from}`);
 

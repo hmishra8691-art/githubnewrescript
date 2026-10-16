@@ -82,6 +82,9 @@ assert.equal(d.quality.customRules[0].when.children[0].source.kind, "calculation
 console.log("✔ Survey settings → Quality checks: toggle, strictness, bands, rule override, telemetry, custom rule all persist in def.quality");
 
 /* ------------------------------------------------ 1b. save status, saved-rule display, layout */
+// (readDef above left on the JSON tab, where the settings panel is hidden: come back to it)
+await h.goTab("Survey Settings");
+await page.waitForSelector('[data-testid="quality-save-state"]');
 // the settings panel states the draft's save state beside the controls (the sandbox has no database row)
 assert.match(await page.textContent('[data-testid="quality-save-state"]'), /Sandbox/);
 // a custom rule over calc.SYSTEM_* displays as that metric, not as the "pick a question" placeholder

@@ -94,3 +94,10 @@ test("logic typed after the rename resolves the new code", () => {
   const r = renameQuestionCode(survey(), "Q1", "Q1b");
   assert.ok(parseLogicExpression(r.def, "Q1b = 2").condition);
 });
+
+test("typed by hand onto a code another question already has: refused, with the real reason", () => {
+  const def = survey();
+  def.questions[0]!.code = "Q2"; // the field wrote the keystrokes into the question; now two questions answer to Q2
+  const r = renameQuestionCode(def, "Q1", "Q2");
+  assert.match(r.problem ?? "", /Q2 is already the code of another question/);
+});

@@ -310,14 +310,17 @@ ok("fixture loaded: hypotheses, constructs, a KPI, a screener, two questions tha
     assert.ok((await b.getAttribute("title")).length > 20, `${t} says why`);
   }
   // the proposal, the analysis plan and the questionnaire download as files, and the route's one-line summary is toasted
-  for (const [t, name] of [["proposal_docx", /research-proposal\.docx$/], ["sap_docx", /analysis-plan\.docx$/], ["questionnaire_docx", /\.docx$/]]) {
+  for (const [t, name] of [["proposal_docx", /research-proposal\.docx$/], ["sap_docx", /analysis-plan\.docx$/]]) {
     const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), page.click(`${DOCS} [data-testid="doc-${t}"]`)]);
     assert.match(dl.suggestedFilename(), name, `${t} downloads ${dl.suggestedFilename()}`);
     const path = await dl.path();
     const { readFileSync } = await import("node:fs");
     assert.equal(readFileSync(path).subarray(0, 2).toString("latin1"), "PK", `${t} is a zip (docx)`);
   }
-  ok("the Documents panel: six buttons under the research design; the findings and the cleaning plan are disabled with a reason in the sandbox; the proposal, the analysis plan and the questionnaire download as .docx files");
+  // the questionnaire export is the Export dialog's own route, which needs a signed-in session: here the button must reach it
+  const [qres] = await Promise.all([page.waitForResponse((r) => /\/export\/survey$/.test(r.url()), { timeout: 30000 }), page.click(`${DOCS} [data-testid="doc-questionnaire_docx"]`)]);
+  assert.ok([200, 401].includes(qres.status()), `the questionnaire button calls the export route (${qres.status()})`);
+  ok("the Documents panel: six buttons under the research design; the findings and the cleaning plan are disabled with a reason in the sandbox; the proposal and the analysis plan download as .docx files; the questionnaire button reaches the export route");
 }
 
 assert.deepEqual(errors, [], `no console errors:\n${errors.join("\n")}`);
