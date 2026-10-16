@@ -20,7 +20,15 @@ import type { SurveyDefinition } from "@rescript/schema";
  *   • Questions are counted across ALL pages, at any nesting depth: inside
  *     blocks, sections, loops, randomisers and branch arms.
  */
-const NON_QUESTION_TYPES = new Set(["html", "hidden", "calculated", "embedded_data"]);
+/**
+ * The element types that are never counted. The SQL twin
+ * (`rescript_question_count`, last defined in
+ * supabase/migrations/0002_dashboard_stats.sql) spells the same list in its
+ * `not in (...)`; `archBoundaries.test.ts` reads that function body and fails
+ * if the two lists drift. Change both together, in a new migration.
+ */
+export const NON_RESPONDENT_QUESTION_TYPES: readonly string[] = ["html", "hidden", "calculated", "embedded_data"];
+const NON_QUESTION_TYPES = new Set(NON_RESPONDENT_QUESTION_TYPES);
 
 /** Ids of every question placed on a page, at any depth of the flow tree. */
 export function placedQuestionIds(def: Pick<SurveyDefinition, "flow">): Set<string> {

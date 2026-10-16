@@ -18,6 +18,13 @@
       "default": "./dist/story/index.js"
     }
   },
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/fixture.js",
+    "!dist/**/fixture.d.ts"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

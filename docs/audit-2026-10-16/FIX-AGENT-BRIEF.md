@@ -1,6 +1,6 @@
-# Fix-agent brief (P2 batch, 2026-10-16)
+# Fix-agent brief (P2 and P3 batches, 2026-10-16)
 
-Repo: /home/claude/rescript at the commit after the P0 + P1 batches (`git log --oneline -12`). Read your register cards in `docs/audit-2026-10-16/11-bug-register.md` and the matching `raw/<area>.md` rows before touching code; the repro scripts under `docs/audit-2026-10-16/repro/` are yours to re-run.
+Repo: /home/claude/rescript at the commit after the P0, P1 (and P2) batches (`git log --oneline -12`). Read your register cards in `docs/audit-2026-10-16/11-bug-register.md` and the matching `raw/<area>.md` rows before touching code; the repro scripts under `docs/audit-2026-10-16/repro/` are yours to re-run.
 
 Rules (same as the P1 batch):
 1. **Own only the files named in your task.** Five other engineers are editing the repo at the same time. Use surgical Edit-tool changes; never rewrite a whole file; never `git add`/`git commit`/`git stash`/`git checkout` anything — the orchestrator commits. If a build shows a transient error in a file you did not touch, wait 20 s and retry once; if it persists, report it and carry on with what you can.

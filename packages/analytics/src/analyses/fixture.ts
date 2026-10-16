@@ -1,3 +1,11 @@
+/*
+ * TEST SUPPORT — not part of @rescript/analytics' surface (ARCH-06).
+ * Imported only by *.test.ts files (here, in apps/studio/lib and in
+ * packages/reportvideo, by the compiled path dist/<dir>/fixture.js) and by the
+ * browser scripts. It may import devDependencies (@rescript/designs) because
+ * package.json "files" keeps every dist fixture.* out of the packed build, and
+ * fixtureBoundary.test.ts fails if non-test analytics code imports it.
+ */
 /** Shared synthetic fixture: a survey with planted structure plus generated responses. */
 import { SurveyDefinition } from "@rescript/schema";
 import { conjointPlugin, maxdiffPlugin } from "@rescript/designs";

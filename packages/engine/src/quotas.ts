@@ -112,3 +112,31 @@ export function quotaIncrements(
   }
   return inc;
 }
+
+/**
+ * Quota counts recomputed from a set of respondents — the batch form of
+ * `quotaIncrements`, and the ONLY loop that turns respondents into cell
+ * counts. The runtime increments one completion at a time with
+ * `quotaIncrements`; the Studio's recount (`apps/studio/lib/quotaRecount.ts`)
+ * feeds stored rows through `rowToState` into this. Both therefore decide
+ * membership with `matchingCells` → `evaluateCondition`, so a recount can
+ * never disagree with live counting about which cell a respondent fills.
+ *
+ * `into` accumulates across calls (the recount pages through responses).
+ * Returns the number of respondents counted in this call.
+ */
+export function tallyQuotaCells(
+  def: SurveyDefinition,
+  states: Iterable<ResponseState>,
+  into: QuotaCounts,
+): number {
+  let n = 0;
+  for (const state of states) {
+    n++;
+    for (const { quotaId, cellId } of quotaIncrements(def, state)) {
+      const byCell = (into[quotaId] ??= {});
+      byCell[cellId] = (byCell[cellId] ?? 0) + 1;
+    }
+  }
+  return n;
+}

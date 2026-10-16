@@ -118,6 +118,13 @@ export interface InterpretContext {
   selectedOption?: string | number | null;
   /** a multi-selection of questions: "these questions" (falls back to `selectedId`) */
   selectedIds?: string[] | null;
+  /**
+   * Trace sink for the interpreter (which recogniser answered, the semantic
+   * readings, a swallowed exception's stack). Off by default; the engine reads
+   * no environment, so a host that wants the old `RESCRIPT_NL_DEBUG` trace
+   * passes `console.error` here when its own env flag is set.
+   */
+  debug?: ((line: string) => void) | null;
 }
 
 /** what the Studio produces for an output request (Phase 5) */
@@ -2878,7 +2885,7 @@ function interpret(r: Run): Interpretation {
   for (const rec of RECOGNISERS) {
     const out = rec(r);
     if (!out) continue;
-    if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] ${rec.name} → ${out.kind}`);
+    r.ctx.debug?.(`[nl] ${rec.name} → ${out.kind}`);
     /* a recogniser that hands on to the model, or that could not find the object it was given, lets the semantic tier try first (Phase 7) */
     if (r.depth === 0 && rec !== deferred && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
       const sem = semantic(r);
@@ -2919,7 +2926,7 @@ function semantic(r: Run): Interpretation | null {
     /* a reading the model would finish, with what the engine offers instead (a standard item): kept as the answer when nothing deterministic reads */
     else if (it.kind === "model" && it.fallback && !offered) offered = it;
   }
-  if (process.env.RESCRIPT_NL_DEBUG) console.error(`[nl] semantic: ${reading.candidates.map((c) => `${c.text} (${c.score})`).join(" | ")} → ${verified.length} verified`);
+  r.ctx.debug?.(`[nl] semantic: ${reading.candidates.map((c) => `${c.text} (${c.score})`).join(" | ")} → ${verified.length} verified`);
   if (!verified.length) {
     if (offered) return offered;
     if (reading.objects.length === 1 && reading.candidates.length === 0) {
@@ -2958,7 +2965,7 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
     if (whole) return withFallback({ def, text: clean, ctx, depth: 0 }, whole);
     return parts.length > 1 ? compound(def, clean, parts, ctx) : interpret({ def, text: clean, ctx, depth: 0 });
   } catch (e) {
-    if (process.env.RESCRIPT_NL_DEBUG) console.error((e as Error).stack);
+    ctx.debug?.(String((e as Error).stack ?? e));
     return { kind: "model", category: null, reason: `the interpreter could not read this (${(e as Error).message}) — the language model takes it`, detected: [] };
   }
 }

@@ -4,6 +4,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import { buildVariableDictionary, nextVersion, normaliseQuestionOrder } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
 import { publishGate, gateRefusal } from "@/lib/publishGate";
+import { decideCut, isVersionCollision } from "@/lib/versionCut";
 
 export const dynamic = "force-dynamic";
 
@@ -121,16 +122,63 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let version = nextVersion(taken, body.version ? String(body.version) : undefined);
   def.meta.version = version;
 
-  // Retry on the unique constraint, in case a concurrent save took the number.
-  // Matching on the constraint NAME rather than on the words in the message —
-  // a driver that phrases "duplicate" differently used to turn a recoverable
-  // collision into a 500 and silently drop the programmer's edit.
-  const isVersionCollision = (msg?: string) =>
-    !!msg && (/duplicate/i.test(msg) || /survey_versions_survey_id_version_key/i.test(msg) ||
-              /unique constraint/i.test(msg) || /23505/.test(msg));
+  const staleRefusal = (revision: number | null) => NextResponse.json({
+    error:
+      "This survey was changed elsewhere while your version was being written, so no version was cut. " +
+      "Reload to pick up the newer work.",
+    conflict: true,
+    revision,
+  }, { status: 409 });
 
+  /*
+   * ARCH-13 — ONE TRANSACTION. `rescript_cut_version` (migration 0059) locks
+   * the survey, checks the revision, inserts the snapshot and points the
+   * survey at it (draft cleared, title updated, revision bumped) as a unit:
+   * a lost race writes nothing, so there is no orphan to delete. A version
+   * number another cut took comes back as `version_taken` and the next
+   * number is tried. Only when the function is missing (0059 not applied)
+   * does the route fall through to the two-step path below.
+   */
   let ver: { id: string; version: string } | null = null;
-  for (let attempt = 0; attempt < 5 && !ver; attempt++) {
+  let newRevision: number | null = null;
+  let legacy = false;
+  for (let attempt = 0; attempt < 5 && !ver && !legacy; attempt++) {
+    const cut = decideCut(await db.rpc("rescript_cut_version", {
+      p_survey_id: params.id,
+      p_version: version,
+      p_definition: def,
+      p_label: body.label ?? null,
+      p_notes: body.notes ?? null,
+      p_created_by: gate.user.userId,
+      p_base_revision: baseRevision ?? -1,
+      p_title: def.meta.title,
+    }));
+    if (cut.kind === "legacy") { legacy = true; break; }
+    if (cut.kind === "cut") {
+      ver = { id: cut.versionId, version: cut.version };
+      newRevision = cut.revision;
+      console.info("[rescript:version] cut", JSON.stringify({ surveyId: params.id, versionId: ver.id, version, baseRevision, newRevision, questions: def.questions.length, atomic: true }));
+      break;
+    }
+    if (cut.kind === "conflict") {
+      console.warn("[rescript:version] REFUSED stale cut (race)", JSON.stringify({ surveyId: params.id, baseRevision, serverRevision: cut.revision }));
+      return staleRefusal(cut.revision);
+    }
+    if (cut.kind === "not_found") return NextResponse.json({ error: "survey not found" }, { status: 404 });
+    if (cut.kind === "error") return NextResponse.json({ error: cut.message }, { status: 500 });
+    // version_taken: a concurrent cut took the number
+    if (attempt === 4) return NextResponse.json({ error: "save failed: no free version number" }, { status: 500 });
+    taken.push(version);
+    version = nextVersion(taken);
+    def.meta.version = version;
+  }
+
+  /*
+   * THE TWO-STEP PATH — only for a database without 0059: insert, then
+   * `rescript_finalize_version` (0004) under the revision guard, deleting the
+   * orphan snapshot if the guard refuses.
+   */
+  for (let attempt = 0; legacy && attempt < 5 && !ver; attempt++) {
     const { data, error } = await db
       .from("survey_versions")
       .insert({
@@ -158,6 +206,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   if (!ver) return NextResponse.json({ error: "save failed" }, { status: 500 });
 
+  if (legacy) {
+
   /**
    * Point the survey at the version just written, and CHECK IT.
    *
@@ -180,7 +230,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
    * Cutting a version is explicit intent, so it forces past the revision
    * guard (-1) rather than failing on a draft written moments earlier.
    */
-  let newRevision: number | null = null;
   const rpc = await db.rpc("rescript_finalize_version", {
     p_survey_id: params.id,
     p_version_id: ver.id,
@@ -198,19 +247,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       await db.from("survey_versions").delete().eq("id", ver.id);
       const { data: cur } = await db.from("surveys").select("revision").eq("id", params.id).maybeSingle();
       console.warn("[rescript:version] REFUSED stale cut (race)", JSON.stringify({ surveyId: params.id, baseRevision, serverRevision: cur?.revision ?? null, discardedVersion: version }));
-      return NextResponse.json({
-        error:
-          "This survey was changed elsewhere while your version was being written, so no version was cut. " +
-          "Reload to pick up the newer work.",
-        conflict: true,
-        revision: cur?.revision ?? null,
-      }, { status: 409 });
+      return staleRefusal(cur?.revision ?? null);
     }
     newRevision = row?.revision ?? null;
     console.info("[rescript:version] cut", JSON.stringify({ surveyId: params.id, versionId: ver.id, version, baseRevision, newRevision, questions: def.questions.length }));
     await db.from("surveys").update({ title: def.meta.title }).eq("id", params.id);
   }
 
+  // finalize unavailable too (pre-0004): point the survey at the version directly.
+  // The pre-0003 retry without the draft columns is gone (ARCH-13) — 0003+ is required.
   const { error: pointerError } = newRevision !== null
     ? { error: null }
     : await db
@@ -226,22 +271,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .eq("id", params.id);
 
   if (pointerError) {
-    // Retry without the draft columns — they only exist after migration 0003,
-    // and a missing column must not cost the programmer their save.
-    const { error: retryError } = await db
-      .from("surveys")
-      .update({ current_version_id: ver.id, title: def.meta.title })
-      .eq("id", params.id);
-    if (retryError) {
-      return NextResponse.json(
-        {
-          error: `Version ${ver.version} was written but the survey could not be pointed at it: ${retryError.message}`,
-          versionId: ver.id,
-          version: ver.version,
-        },
-        { status: 500 },
-      );
-    }
+    return NextResponse.json(
+      {
+        error: `Version ${ver.version} was written but the survey could not be pointed at it: ${pointerError.message}`,
+        versionId: ver.id,
+        version: ver.version,
+      },
+      { status: 500 },
+    );
+  }
   }
   await audit({
     action: "version.created", userId: gate.user.userId, sessionId: gate.user.sessionId,

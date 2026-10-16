@@ -1,7 +1,7 @@
 import "server-only";
 import type { SurveyDefinition } from "@rescript/schema";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { matchesResponseCondition } from "@rescript/engine";
+import { rowToState, tallyQuotaCells, type ResponseRow } from "@rescript/engine";
 import { loadQualityDefinition } from "./qualityDef";
 
 /**
@@ -18,9 +18,10 @@ import { loadQualityDefinition } from "./qualityDef";
  * Per environment, always: `is_test` is part of the counter's key, so a test
  * run can never make a live quota look full.
  *
- * The cells are decided by the SAME condition evaluator the runtime routes
- * with (`matchesResponseCondition` → `evaluateCondition`), which is why
- * "Generate quota from current data" and the live counting agree.
+ * The cells are decided by the SAME helper the runtime counts with
+ * (`tallyQuotaCells` → `quotaIncrements` → `matchingCells` →
+ * `evaluateCondition`, over `rowToState`), which is why a recount, "Generate
+ * quota from current data" and the live counting agree.
  */
 
 export interface QuotaRecountResult {
@@ -66,16 +67,8 @@ export async function recountQuotas(
         .range(start, start + CHUNK - 1);
       if (error) throw new Error(error.message);
       const chunk = data ?? [];
-      for (const row of chunk) {
-        responses++;
-        for (const quota of definition.quotas) {
-          for (const cell of quota.cells) {
-            if (!matchesResponseCondition(definition, cell.when, row as never)) continue;
-            counts[quota.id] = counts[quota.id] ?? {};
-            counts[quota.id][cell.id] = (counts[quota.id][cell.id] ?? 0) + 1;
-          }
-        }
-      }
+      const def0 = definition;
+      responses += tallyQuotaCells(def0, chunk.map((row) => rowToState(def0, row as ResponseRow)), counts);
       if (chunk.length < CHUNK) break;
     }
     for (const [quotaId, byCell] of Object.entries(counts)) {

@@ -12,7 +12,7 @@
     "verify": "pnpm typecheck && pnpm test && pnpm audit:code",
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:all": "pnpm verify && pnpm verify:browser",
-    "audit:code": "node scripts/auth-guard-audit.mjs",
+    "audit:code": "node scripts/auth-guard-audit.mjs && node scripts/dependency-boundaries.mjs --self-test && node scripts/dependency-boundaries.mjs",
     "pretest": "pnpm -r --filter \"./packages/*\" build"
   },
   "packageManager": "pnpm@10.28.0",
