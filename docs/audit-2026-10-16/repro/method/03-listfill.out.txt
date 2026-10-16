@@ -1,0 +1,33 @@
+## 1. Priority / cap sequence (A 150 > B 75 > C 50 > random D/E)
+  open: → A | preference A>B>C>D>E
+  A 149: → A | preference A>B>C>D>E
+  A 150: → B | preference B>C>D>E
+  A150 B75: → C | preference C>D>E
+  A150 B75 C50: → D | preference D>E
+## 2. fallback spread over 500 seeds (D/E only): {"E":242,"D":258}
+  deterministic for same seed: true
+## 3. dedup: source [A,A,B,B] → ["A","A","B","B"] (candidates not deduped) → decide: A,B
+## 4. empty source (respondent selected nothing)
+  pendingListFills: (none — list never runs)
+  unusedListFillDestinations: []
+  listFillHiddenDestinations: []
+  visibleQuestions: q2,q3 → q2/q3 (whenUnused=hide) still shown: true
+  contrast — list ran with 1 of 2 allocated: hidden = ["q3"] visible: q2
+## 5. fillToCount=false, fallback=none, count 2, only A under priority (B,C,D,E unprioritised)
+  engine items: A,B | requestedCount 2 | preference sent to DB: [{"code":"A"},{"code":"B"},{"code":"C"}] | p_count = 2
+  → rescript_allocate_listfill loops p_count slots over the whole preference (0007_list_fill.sql:174-204), so LIVE/TEST would grant 2 items where the engine decided 2
+  confirmListFill(decided, ['A','B']) → items A,B | reason: Allocated 2: A, B. Highest-priority eligible option with remaining capacity.
+## 6. count kind 'expression'
+  resolveListFillCount with calculated={} → 0
+  resolveListFillCount with calculated={'min(2, Q1_COUNT)': 2} → 2 (reads state.calculated[<expression text>]; nothing in the engine or runtime evaluates it)
+## 7. variables: {"LISTFILL_Q1_COUNT":2,"LISTFILL_Q1_1":"Apple","LISTFILL_Q1_1_CODE":"A","LISTFILL_Q1_1_POSITION":1,"LISTFILL_Q1_2":"Beta","LISTFILL_Q1_2_CODE":"B","LISTFILL_Q1_2_POSITION":2,"LISTFILL_Q1_CODES":"A,B","LISTFILL_Q1_LABELS":"Apple, Beta"}
+  dictionary LISTFILL_* columns: LISTFILL_Q1_COUNT,LISTFILL_Q1_1,LISTFILL_Q1_1_CODE,LISTFILL_Q1_1_POSITION,LISTFILL_Q1_CODES,LISTFILL_Q1_LABELS
+## 8. destinations written: {"q2":"A","q3":"B"}
+## 9. simulate 100 from A149/B75/C20: {"A":150,"B":75,"C":50,"E":38,"D":31} empty 0
+## 10. take=all, nothing answered yet → pending: lf1
+## 11. hard quota full on A → items: B | A rejected: quota_full
+## 12. selection settings the engine does not act on
+  afterMaximum='stop', A at max → items: B (doc: 'stop — allocate nothing rather than substitute')
+  afterMaximum='random_fallback', A at max → items: B (always B = next priority)
+  fallback none+fillToCount=false vs random_eligible: identical result on 300 of 300 seeds (the 'random D/E' comes from the unprioritised band + equalPriority, not from `fallback`)
+  allowDuplicates=true, count 3, candidates A,B → items: A,B (never duplicates; payload carries no allowDuplicates flag either)

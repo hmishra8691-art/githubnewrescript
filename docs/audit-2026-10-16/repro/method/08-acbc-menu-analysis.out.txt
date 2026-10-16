@@ -1,0 +1,8 @@
+ACBC transcripts complete: 60 of 60
+ACBC columns in dataset: ACBC_BYO_Brand,ACBC_BYO_Price,ACBC_BYO_Size,ACBC_WINNER_Brand,ACBC_WINNER_Price,ACBC_WINNER_Size,ACBC_UNACCEPTABLE,ACBC_MUSTHAVE,ACBC_SCREENED,ACBC_ACCEPTED,ACBC_ROUNDS,ACBC_JSON
+MENU columns in dataset: MENU_TASKS,MENU_VERSION,MENU_T1_1,MENU_T1_2,MENU_T1_3,MENU_T1_NONE,MENU_T1_TOTAL,MENU_T2_1,MENU_T2_2,MENU_T2_3,MENU_T2_NONE,MENU_T2_TOTAL,MENU_T3_1,MENU_T3_2,MENU_T3_3,MENU_T3_NONE,MENU_T3_TOTAL,MENU_T4_1,MENU_T4_2,MENU_T4_3,MENU_T4_NONE,MENU_T4_TOTAL
+runAnalysis(conjoint, ACBC) → tables 0, error null, warnings ["Only 0 choice tasks answered — too few to estimate 14 parameters."]
+runAnalysis(conjoint, MENU) → tables 0, error null, warnings ["Only 0 choice tasks answered — too few to estimate 14 parameters."]
+runAnalysis(descriptive, ACBC_WINNER_Brand) → tables 0, error null, warnings ["Q1 — tournament winner: Brand (acbc_task) has no descriptive summary — use the dedicated analysis for this question type."]
+runAnalysis(descriptive, MENU_T1_2) → tables 0, error null, warnings ["Q2 — task 1: Storage chosen (conjoint_task) has no descriptive summary — use the dedicated analysis for this question type."]
+primaryMethodsFor: {"acbc":["conjoint_utilities"],"menu":["conjoint_utilities"]}

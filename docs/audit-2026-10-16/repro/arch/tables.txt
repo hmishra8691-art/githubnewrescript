@@ -1,0 +1,188 @@
+# TABLE USAGE (app: ops)
+access_settings: studio[select,upsert]
+analytics_analyses: studio[insert,select,update]
+analytics_analysis_versions: studio[insert]
+analytics_charts: studio[insert,select,update]
+analytics_exports: studio[insert]
+analytics_plan_applies: studio[insert,select,update]
+analytics_report_templates: studio[insert,select,update]
+analytics_report_versions: studio[insert,select]
+analytics_reports: studio[insert,select,update]
+analytics_result_cache: studio[delete,insert,select]
+analytics_runs: studio[insert,select]
+analytics_segments: studio[select]
+analytics_share_access: studio[select]
+analytics_shares: studio[select,update]
+analytics_story_renders: studio[insert,select,update]
+analytics_story_reports: studio[insert,select,update]
+analytics_story_segments: studio[insert,select,update]
+analytics_story_themes: studio[insert,select]
+analytics_story_versions: studio[insert,select]
+analytics_themes: studio[select]
+audit_logs: studio[insert,select]
+billing_config: pkg:billing[select,upsert]
+billing_events: pkg:billing[select,upsert]
+billing_rates: pkg:billing[delete,select,upsert]
+copilot_chunks: studio[insert,select]
+copilot_documents: studio[delete,insert,select]
+credit_requests: pkg:billing[insert,select,update]
+credit_transfers: pkg:billing[select]
+customers: interviews[select]; studio[select,update]
+data_export_presets: studio[insert,select,update]
+deployments: runtime[select]; studio[insert,select,update]
+interview_analysis: interviews[delete,select,upsert]
+interview_deletions: interviews[insert,select]
+interview_evidence: interviews[delete,insert,select]
+interview_jobs: interviews[insert,update]
+interview_media: interviews[insert,select,update]
+interview_media_participants: interviews[update]
+interview_people: interviews[insert,select,update]
+interview_pools: interviews[delete,insert,select,update]
+interview_project_members: interviews[select]
+interview_projects: interviews[insert,select,update]; studio[select]
+interview_questions: interviews[insert,select,update]
+interview_requirements: interviews[delete,insert,select,update]
+interview_responses: interviews[select,update,upsert]
+interview_reviews: interviews[select,upsert]
+interview_telemetry: interviews[delete,insert,select]
+interview_transcripts: interviews[delete,select,update,upsert]
+interviews: interviews[insert,select,update]
+listfill_counts: runtime[select]; studio[select]
+login_attempts: studio[delete,insert]
+mail_deliveries: studio[insert,select]
+media_deletions: pkg:media[insert]
+media_deliveries: pkg:media[insert,select,update]; studio[select]
+media_objects: pkg:media[delete,insert,select,update]; runtime[select]; studio[select]
+media_transcripts: pkg:media[insert,select,update]
+notifications: studio[insert,select,update]
+password_resets: studio[insert,select,update]
+profiles: interviews[select]; studio[select,update]
+project_comments: studio[insert,select,update]
+project_edit_locks: studio[select]
+project_invitations: studio[insert,select,update]
+project_members: studio[delete,insert,select,update,upsert]
+project_presence: studio[delete]
+project_spending: pkg:billing[select]
+project_wallets: pkg:billing[select,update]
+quality_profiles: studio[delete,select,upsert]
+quota_counts: runtime[select]; studio[select]
+respondents: pkg:quality[select]; runtime[insert,select,update]; studio[delete,insert,select,update]
+response_edits: studio[select]
+response_reviews: studio[insert,select]
+responses: pkg:quality[select,update]; runtime[insert,select,update]; studio[select,update]
+sample_sources: studio[delete,insert,select,update]
+survey_test_cases: studio[delete,insert,select,update]
+survey_test_runs: studio[insert,select]
+survey_versions: pkg:quality[select]; runtime[select]; studio[delete,insert,select]
+surveys: pkg:quality[select]; runtime[select]; studio[?,delete,insert,select,update]
+themes: studio[delete,insert,select,update]
+translation_cache: studio[select,upsert]
+usage_events: pkg:billing[select]
+user_ai_credentials: studio[delete,insert,select,update]
+user_ai_settings: studio[delete,select,update,upsert]
+user_sessions: studio[select,update]
+wallet_ledger: pkg:billing[select]
+
+# RPC USAGE
+increment_quota_counts: runtime(1 files)
+rescript_accept_invitation: studio(1 files)
+rescript_access_policy: studio(1 files)
+rescript_acquire_lock: studio(2 files)
+rescript_active_sessions: studio(1 files)
+rescript_allocate_listfill: runtime(1 files)
+rescript_auth_issue_handoff: studio(1 files)
+rescript_auth_redeem_handoff: interviews(1 files)
+rescript_billing_credit: pkg:billing(1 files)
+rescript_billing_expire_reservations: pkg:billing(1 files)
+rescript_billing_record: pkg:billing(1 files)
+rescript_billing_release: pkg:billing(1 files)
+rescript_billing_reserve: pkg:billing(1 files)
+rescript_billing_set_subject_spending: pkg:billing(1 files)
+rescript_billing_settle: pkg:billing(1 files)
+rescript_billing_subject_spending_for: pkg:billing(1 files)
+rescript_billing_transfer: pkg:billing(1 files)
+rescript_billing_user_wallet_for: pkg:billing(1 files)
+rescript_billing_wallet_for: pkg:billing(1 files)
+rescript_claim_invitations: studio(2 files)
+rescript_claim_media_delivery: pkg:media(1 files)
+rescript_claim_transcription: pkg:media(1 files)
+rescript_delete_project: studio(1 files)
+rescript_end_session: studio(4 files)
+rescript_expire_locks: studio(1 files)
+rescript_field_positions: studio(1 files)
+rescript_field_pulse: studio(1 files)
+rescript_field_timeline: studio(1 files)
+rescript_finalize_version: studio(2 files)
+rescript_force_release_lock: studio(2 files)
+rescript_heartbeat_lock: studio(2 files)
+rescript_import_responses: studio(1 files)
+rescript_interview_abandoned_uploads: interviews(1 files)
+rescript_interview_claim_job: interviews(1 files)
+rescript_interview_customers: interviews(1 files)
+rescript_interview_finish_job: interviews(1 files)
+rescript_interview_map_speaker: interviews(1 files)
+rescript_interview_media_for: interviews(1 files)
+rescript_interview_recording_participants: interviews(2 files)
+rescript_interview_retention_due: interviews(1 files)
+rescript_interview_set_participants: interviews(1 files)
+rescript_interview_storage_bytes: interviews(2 files)
+rescript_lock_for: studio(1 files)
+rescript_login: studio(2 files)
+rescript_login_failures: studio(1 files)
+rescript_media_deliveries_due: pkg:media(1 files)
+rescript_media_deliveries_expiring: pkg:media(1 files)
+rescript_media_delivery_status: studio(1 files)
+rescript_media_usage: studio(1 files)
+rescript_my_projects: studio(6 files)
+rescript_project_access: studio(1 files)
+rescript_project_config: studio(1 files)
+rescript_project_members: studio(3 files)
+rescript_project_presence: studio(1 files)
+rescript_project_role: studio(1 files)
+rescript_purge_telemetry: studio(1 files)
+rescript_record_share_access: studio(1 files)
+rescript_recount_listfill: studio(1 files)
+rescript_release_lock: studio(1 files)
+rescript_replace_quota_counts: studio(1 files)
+rescript_resolve_share: studio(1 files)
+rescript_resolve_share_variants: studio(1 files)
+rescript_respondent_stats: studio(1 files)
+rescript_save_draft: studio(2 files)
+rescript_set_answer_transcript: pkg:media(1 files)
+rescript_source_stats: studio(1 files)
+rescript_test_suite: studio(1 files)
+rescript_touch_presence: studio(1 files)
+rescript_touch_session: interviews(1 files); studio(1 files)
+rescript_update_response: studio(1 files)
+survey_dashboard_stats: studio(1 files)
+
+## responses
+studio ['apps/studio/app/api/copilot/workflow/route.ts', 'apps/studio/app/api/cron/media-delivery/route.ts', 'apps/studio/app/api/surveys/[id]/data/[responseId]/route.ts', 'apps/studio/app/api/surveys/[id]/data/delete/route.ts', 'apps/studio/app/api/surveys/[id]/data/import/route.ts', 'apps/studio/app/api/surveys/[id]/quality/[sessionId]/route.ts', 'apps/studio/app/api/surveys/[id]/quality/route.ts', 'apps/studio/app/api/surveys/[id]/responses/route.ts', 'apps/studio/lib/analysisPlanCore.ts', 'apps/studio/lib/analytics.ts', 'apps/studio/lib/dashboard.ts', 'apps/studio/lib/metering.ts', 'apps/studio/lib/quotaRecount.ts', 'apps/studio/lib/responseData.ts', 'apps/studio/lib/storyEngine.ts', 'apps/studio/lib/surveyUploads.ts']
+runtime ['apps/runtime/app/api/session/listfill/route.ts', 'apps/runtime/app/api/session/save/route.ts', 'apps/runtime/app/api/session/start/route.ts', 'apps/runtime/lib/aiSession.ts', 'apps/runtime/lib/session.ts']
+pkg:quality ['packages/quality/src/server.ts']
+
+## respondents
+studio ['apps/studio/app/api/surveys/[id]/respondents/links/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/send/route.ts']
+runtime ['apps/runtime/app/api/session/save/route.ts', 'apps/runtime/lib/session.ts']
+pkg:quality ['packages/quality/src/server.ts']
+
+## survey_versions
+studio ['apps/studio/app/api/surveys/[id]/clone/route.ts', 'apps/studio/app/api/surveys/[id]/deploy/route.ts', 'apps/studio/app/api/surveys/[id]/export/xlsx/route.ts', 'apps/studio/app/api/surveys/[id]/qr/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/links/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/send/route.ts', 'apps/studio/app/api/surveys/[id]/responses/route.ts', 'apps/studio/app/api/surveys/[id]/route.ts', 'apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts', 'apps/studio/app/api/surveys/[id]/versions/route.ts', 'apps/studio/app/api/surveys/route.ts', 'apps/studio/app/studio/[id]/page.tsx', 'apps/studio/lib/analytics.ts', 'apps/studio/lib/dashboard.ts', 'apps/studio/lib/exportVersions.ts', 'apps/studio/lib/qualityDef.ts']
+runtime ['apps/runtime/lib/deployment.ts']
+pkg:quality ['packages/quality/src/server.ts']
+
+## deployments
+studio ['apps/studio/app/api/surveys/[id]/deploy/route.ts', 'apps/studio/app/api/surveys/[id]/overview/route.ts', 'apps/studio/app/api/surveys/[id]/publish/route.ts', 'apps/studio/app/api/surveys/[id]/qr/route.ts', 'apps/studio/app/api/surveys/[id]/quality/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/links/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/send/route.ts', 'apps/studio/app/api/surveys/[id]/route.ts']
+runtime ['apps/runtime/lib/deployment.ts']
+
+## surveys
+studio ['apps/studio/app/api/admin/billing/credit/route.ts', 'apps/studio/app/api/admin/billing/lookup/route.ts', 'apps/studio/app/api/admin/billing/requests/route.ts', 'apps/studio/app/api/admin/billing/transfer/route.ts', 'apps/studio/app/api/admin/billing/wallets/route.ts', 'apps/studio/app/api/billing/transfer/route.ts', 'apps/studio/app/api/briefs/route.ts', 'apps/studio/app/api/copilot/output/route.ts', 'apps/studio/app/api/copilot/workflow/route.ts', 'apps/studio/app/api/cron/analysis-runs/route.ts', 'apps/studio/app/api/cron/media-delivery/route.ts', 'apps/studio/app/api/notifications/route.ts', 'apps/studio/app/api/profile/route.ts', 'apps/studio/app/api/share/[token]/route.ts', 'apps/studio/app/api/surveys/[id]/ai-source/route.ts', 'apps/studio/app/api/surveys/[id]/clone/route.ts', 'apps/studio/app/api/surveys/[id]/config/route.ts', 'apps/studio/app/api/surveys/[id]/diagnostics/route.ts', 'apps/studio/app/api/surveys/[id]/draft/route.ts', 'apps/studio/app/api/surveys/[id]/export/xlsx/route.ts', 'apps/studio/app/api/surveys/[id]/fieldwork/route.ts', 'apps/studio/app/api/surveys/[id]/media/deliveries/route.ts', 'apps/studio/app/api/surveys/[id]/overview/route.ts', 'apps/studio/app/api/surveys/[id]/qr/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/links/route.ts', 'apps/studio/app/api/surveys/[id]/respondents/send/route.ts', 'apps/studio/app/api/surveys/[id]/responses/route.ts', 'apps/studio/app/api/surveys/[id]/route.ts', 'apps/studio/app/api/surveys/[id]/share/route.ts', 'apps/studio/app/api/surveys/[id]/transfer/route.ts', 'apps/studio/app/api/surveys/[id]/versions/[versionId]/route.ts', 'apps/studio/app/api/surveys/[id]/versions/route.ts', 'apps/studio/app/api/surveys/route.ts', 'apps/studio/app/studio/[id]/page.tsx', 'apps/studio/lib/aiPolicy.ts', 'apps/studio/lib/analysisPlanCore.ts', 'apps/studio/lib/analytics.ts', 'apps/studio/lib/guard.ts', 'apps/studio/lib/qualityDef.ts', 'apps/studio/lib/storyService.ts']
+runtime ['apps/runtime/app/api/media/[...path]/route.ts', 'apps/runtime/app/api/session/build-stamp/route.ts', 'apps/runtime/app/api/session/start/route.ts', 'apps/runtime/lib/deployment.ts']
+pkg:quality ['packages/quality/src/server.ts']
+
+## quota_counts
+studio ['apps/studio/app/api/surveys/[id]/overview/route.ts', 'apps/studio/app/api/surveys/[id]/quotas/route.ts']
+runtime ['apps/runtime/lib/session.ts']
+
+## analytics_result_cache
+studio ['apps/studio/lib/resultCache.ts']

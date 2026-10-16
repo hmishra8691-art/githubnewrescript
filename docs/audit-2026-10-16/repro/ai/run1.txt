@@ -1,0 +1,114 @@
+
+=== 1. coerceSurveyActions ===
+raw 29 → accepted 29, rejected 0
+
+=== 2. applySurveyActions on an empty survey ===
+valid=true ok=28/29 errors=1 warnings=0 destructive=0
+  ok  #0 set_research: Research design: objective, 2 hypotheses, 3 constructs, 1 KPI, population, brief (client, business question, decision)
+  ok  #1 create_block: Created block “Screening”
+  ok  #2 create_question: Created Q1 (numeric) in “Screening”: How old are you?
+  ok  #3 create_question: Created Q2 (single select) in “Screening”: Which of these describes you?
+  ok  #4 create_question: Created Q3 (single select) in “Screening”: How often do you drink coffee?
+  ok  #5 add_skip: After Q3, when Q3 in [4, 5], go to out of the survey (screened)
+  ok  #6 add_skip: After Q1, when Q1 < 18 OR Q1 > 65, go to out of the survey (screened)
+  ok  #7 create_block: Created block “Awareness”
+  ok  #8 create_question: Created Q4 (long text) in “Awareness”: Which coffee brands come to mind first? Please list as many as you ca…
+  ok  #9 create_question: Created Q5 (multi select) in “Awareness”: Which of these coffee brands have you heard of?
+  ok  #10 create_question: Created Q6 (single select) in “Awareness”: Have you seen or heard any advertising for Brand A in the last 3 mont…
+  ok  #11 set_display_logic: Q6 shown only when Q5.O1
+  ok  #12 create_block: Created block “Consideration and preference”
+  ok  #13 create_question: Created Q7 (matrix single) in “Consideration and preference”: How likely are you to consider buying each of these brands next time?
+  ok  #14 set_display_logic: Q7 shown only when Q5 not selected 99
+  ok  #15 create_question: Created Q8 (single select) in “Consideration and preference”: Which ONE brand do you prefer?
+  ok  #16 set_mask: Show at Q8 only the options Q5.Selected
+  ok  #17 create_question: Created Q9 (nps) in “Consideration and preference”: How likely are you to recommend Brand A to a friend?
+  ERR #18 set_display_logic: the condition “PREF = Brand A” does not parse: “Brand” is not a question, variable or option of Q8 in this survey — did you mean Brand A?
+  ok  #19 create_block: Created block “About you”
+  ok  #20 create_question: Created Q10 (open text) in “About you”: If you would like to join our panel, enter your email address
+  ok  #21 create_question: Created Q11 (dropdown) in “About you”: Where do you live?
+  ok  #22 create_quota: Quota “Gender × Age” of 500: Male × 18–34 ≤ 84, Male × 35–54 ≤ 84, Male × 55–65 ≤ 83, Female × 18–34 ≤ 83, Female × 35–54 ≤ 83, Female × 55–65 ≤ 83
+  ok  #23 set_question_analysis: Q7 analysis: role dependent, tabulated by AGE, GENDER, serves H1, H2
+  ok  #24 set_question_analysis: Q6 analysis: role independent, serves H1
+  ok  #25 set_question_analysis: Q8 analysis: role dependent, tabulated by AGE, serves H2
+  ok  #26 set_question_analysis: Q1 analysis: role segmentation
+  ok  #27 propose_analysis_plan: Analysis plan: 5 crosstabs, 4 tests, 1 derived variable, 2 segments
+  ok  #28 add_analysis_test: Planned chi square on CONSIDER with AD_RECALL
+errors:
+  - Show NPS_A only when PREF = Brand A: the condition “PREF = Brand A” does not parse: “Brand” is not a question, variable or option of Q8 in this survey — did you mean Brand A?
+warnings:
+destructive:
+
+=== 3. validation attached ===
+  AGE (Q1, numeric/numeric.open) required=true validation=[{"id":"q_3_v1","kind":"min_value","value":18},{"id":"q_3_v2","kind":"max_value","value":99},{"id":"q_3_v3","kind":"integer"}]
+  EMAIL (Q10, open_text/text.email) required=false validation=[{"id":"q_20_v1","kind":"max_length","value":120}]
+  UNAIDED (Q4, long_text/text.multi_line) required=true validation=[{"id":"q_10_v1","kind":"min_length","value":2}]
+  CONSIDER (Q7, matrix_single/matrix.single) required=true validation=[]
+
+=== 4. runtime validation of bad answers ===
+  AGE = 17 → error: Value must be at least 18.
+  AGE = 25.5 → error: Please enter a whole number.
+  AGE = "abc" → error: Please enter a whole number.
+  AGE = 130 → error: Value must be at most 99.
+  EMAIL = "not-an-email" → ACCEPTED (no error)
+  EMAIL = "a@b.co" → ACCEPTED (no error)
+
+=== 5. where the brief / hypotheses / plan live ===
+  research.brief: {"client":"Brand A","businessQuestion":"Is the Q3 campaign lifting consideration?","decision":"Continue or re-plan Q4 media spend","stakeholders":[],"deliverables":[]}
+  research.hypotheses: ["H1: Advertising recall increases brand consideration","H2: Younger drinkers prefer Brand A more than older drinkers"]
+  research.hypothesisDetails: [{},{}]
+  research.constructs: [{"name":"Ad recall","questionIds":["q_12"]},{"name":"Consideration","questionIds":["q_15"]},{"name":"Preference","questionIds":["q_16"]}]
+  research.kpis: [{"name":"Unaided awareness","variable":"UNAIDED","measure":"share mentioning Brand A"}]
+  question.analysis tags: [["AGE","segmentation",[]],["AD_RECALL","independent",["H1"]],["CONSIDER","dependent",["H1","H2"]],["PREF","dependent",["H2"]]]
+  analysisPlan: source=engine crosstabs=5 tests=5 derived=1
+    test t_135fcf34: t_test outcome=CONSIDER vars= groupBy=AD_RECALL H=H1,H2
+    test t_497732ce: regression outcome=CONSIDER vars=AD_RECALL groupBy= H=H1,H2
+    test t_afcdf4b9: chi_square outcome=PREF vars=AD_RECALL groupBy= H=H2
+    test t_b3c23c27: nps outcome=undefined vars=NPS_A groupBy= H=
+    test test_30: chi_square outcome=CONSIDER vars=AD_RECALL groupBy= H=H1
+    xtab xt_930e4c7b: CONSIDER by GENDER+REGION H=H2
+    xtab xt_d6d8e9dd: PREF by GENDER+REGION H=H2
+    xtab xt_e18347d3: CONSIDER by AD_RECALL H=H1,H2
+    xtab xt_e87a4a25: PREF by AD_RECALL H=H2
+    xtab xt_faa777f4: REGION by GENDER H=
+
+=== 6. coverageReport (the generation gate) ===
+  ok=true summary=every hypothesis measured (H1, H2); every question serves the design or the sample
+  unmeasured=[] unconnected=[]
+
+=== 7. reviewSurvey + quality check on the result ===
+  warning: 32 of 56 answer combinations fall outside every cell of “Gender × Age” (Male × 17; Male × 66; Female × 17; Female × 66; …) — those respondents are never counted or stopped by it.
+  suggestion: “Consideration” (the dependent variable) is measured by a single item.
+  suggestion: “Preference” (the dependent variable) is measured by a single item.
+  suggestion: Q4 is a required open end — required open ends invite junk answers.
+  quality errors: 0
+
+=== 8. quotas / flow ===
+  quotas: [{"name":"Gender × Age","cells":[["Male × 18–34",84],["Male × 35–54",84],["Male × 55–65",83],["Female × 18–34",83],["Female × 35–54",83],["Female × 55–65",83]]}]
+  flow top-level: ["block:Screening","quota_check","block:Awareness","block:Consideration and preference","block:About you","end"]
+  display logic: [["AD_RECALL","{\"type\":\"rule\",\"source\":{\"kind\":\"question\",\"ref\":\"q_11\"},\"operator\":\"selected\",\"value\":1}"],["CONSIDER","{\"type\":\"rule\",\"source\":{\"kind\":\"question\",\"ref\":\"q_11\"},\"operator\":\"notSelected\",\"value\":99}"]]
+
+=== 9. follow-up edit: set_research replaces hypotheses in a new order — do H-tags follow? ===
+  valid=true errors=[] warnings=["Analysis plan: H2 (“H1: Advertising recall increases brand consideration”) is tagged on an item that does not read what it is about. Remove H2 from the item, or make it read both sides of the hypothesis.","Analysis plan: H3 (“H3: Heavy drinkers are more loyal”) names no construct and no question is tagged with it, so nothing in the survey tests it. Name its constructs in the research design, or tag the questions that measure it with H3."]
+  hypotheses now: ["H2: Younger drinkers prefer Br","H1: Advertising recall increas","H3: Heavy drinkers are more lo"]
+  AD_RECALL tags now: ["H1"] (was H1 = ad recall → consideration; H1 is now the age hypothesis)
+  plan test tags now: [["t_test","CONSIDER",["H1","H2"]],["regression","CONSIDER",["H1","H2"]],["chi_square","PREF",["H2"]],["nps",null,[]],["chi_square","CONSIDER",["H1"]]]
+  coverage after: H3 has no question that measures it
+
+=== 10. follow-up edit: set_validation on EMAIL to add a required rule — is the email rule kept? ===
+  result: Q10 validation: required destructive=["Replaces the 1 validation rule of Q10"] validation=[{"id":"val_31","kind":"required"}]
+
+=== 11. free-form code paths: create_behavior script and set_custom_code js ===
+  ERR create_behavior: fetch is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document
+  ok  create_behavior: Behaviour “ok” on Q9: a sandboxed script (1 line)
+  ok  set_custom_code: Q8: script (1 line) in Styles, animations & scripts
+  ok  set_custom_code: Q8: custom CSS (38 characters)
+
+=== 12. a partial reply: 25 actions with the matrix's rows missing and a dangling reference ===
+  valid=true ok=2/6
+  ok  create_block: Created block “B”
+  ok  create_question: Created Q1 (single select) in “B”: A?
+  ERR create_question: a matrix question needs rows (the statements or items it rates)
+  ERR set_display_logic: there is no question “M”
+  ERR add_skip: the skip target “NOT_THERE” is not a question, a block, the end or a screen-out
+  ERR set_question_analysis: there is no question “M”
+  warnings: []

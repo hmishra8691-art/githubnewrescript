@@ -1,0 +1,46 @@
+
+[baseline] answer Q1="2" QM={"svc":"2"}
+  Q2 rule: Q1 = 2  -> visible=true   stored value="2"
+  Q3 rule: QM.svc.C2  -> visible=true   stored src={"kind":"question","ref":"qm","rowCode":"svc","columnId":"2"}
+  quota cell when: "2"  calc expr: Q1 == 2  pipe text: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+  lint hits: none
+
+=== 1) raw option code edit 2 -> 20 (Studio path); canonicalize changes: [] unresolved: [
+  'Q1 has no option “2” — conditions compare option CODES (1 = Red, 20 = Blue, 3 = Green)'
+]
+
+[after raw recode] answer Q1="20" QM={"svc":"2"}
+  Q2 rule: Q1 = 2  -> visible=false   stored value="2"
+  Q3 rule: QM.svc.C2  -> visible=true   stored src={"kind":"question","ref":"qm","rowCode":"svc","columnId":"2"}
+  quota cell when: "2"  calc expr: Q1 == 2  pipe text: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+  lint hits: warning: Q1 has no option coded “2” — it may have been renamed or deleted. || warning: quota “Blue quota”: Q1 has no option coded “2” — it may have been renamed or deleted.
+
+=== 2) applyOptionAction update_option code 2->20: Q1 option 2 “Blue”: code 2 → 20 | recodes option “Blue” of Q1 from 2 to 20 — 2 conditions updated
+
+[after action recode] answer Q1="20" QM={"svc":"2"}
+  Q2 rule: Q1 = 20  -> visible=true   stored value="20"
+  Q3 rule: QM.svc.C2  -> visible=true   stored src={"kind":"question","ref":"qm","rowCode":"svc","columnId":"2"}
+  quota cell when: "20"  calc expr: Q1 == 2  pipe text: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+  lint hits: none
+
+=== 3) raw ROW code edit svc -> service; changes: [] unresolved: []
+
+[after raw row recode] answer Q1="2" QM={"service":"2"}
+  Q2 rule: Q1 = 2  -> visible=true   stored value="2"
+  Q3 rule: QM.svc.C2  -> visible=false   stored src={"kind":"question","ref":"qm","rowCode":"svc","columnId":"2"}
+  quota cell when: "2"  calc expr: Q1 == 2  pipe text: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+  lint hits: warning: QM has no row “svc”.
+
+=== 4) raw option delete (Blue); changes: [] unresolved: [
+  'Q1 has no option “2” — conditions compare option CODES (1 = Red, 3 = Green)'
+]
+  lint: warning: Q2 Q1 has no option coded “2” — it may have been renamed or deleted. || warning:  quota “Blue quota”: Q1 has no option coded “2” — it may have been renamed or deleted. || error: Q6 Q6 is not on any page, so no respondent can ever be asked it. Move it into a block or delete it.
+
+=== 5) referencesTo(q1): cleared@survey.questions[4].mask Q4 — option masking | cleared@survey.questions[2].displayLogic Q2 — display logic | unplaced@survey.flow[0].questionIds the survey | removed@survey.quotas[0].cells “Blue quota” — a quota | cleared@survey.questions[5].text Q5 — the text
+  pruned: cleared@survey.questions[4].mask | cleared@survey.questions[2].displayLogic | unplaced@survey.flow[0].questionIds | removed@survey.quotas[0].cells | cleared@survey.questions[5].text
+  Q2 displayLogic after prune: undefined  Q4 mask: undefined  quota cell: []  calc: 1  pipe: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+
+=== 6) raw question code rename Q1 -> Q1B; changes: [] unresolved: []
+  Q2 rule: Q1B = Q6  stored: {"type":"rule","source":{"kind":"question","ref":"q1"},"operator":"eq","value":{"$question":"Q6"}}
+  calc expr still: Q1 == 2  pipe text: You said {{Q1}} / {{Q1.label}} / {{COLOR}}
+  lint: warning: Q1B has no option coded “[object Object]” — it may have been renamed or deleted. || error: Pipes from “Q1”, which does not exist. || error: Pipes from “Q1”, which does not exist. || error: Q6 is not on any page, so no respondent can ever be asked it. Move it into a block or delete it.

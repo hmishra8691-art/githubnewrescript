@@ -1,0 +1,29 @@
+## 4-version designs; respondents per CBC version: {"1":150,"2":150,"3":150,"4":150}
+flatten writes version columns: CBC_VERSION=2 MD_VERSION=1 | CBC_T1=2 MD_T1_BEST=6 MD_T1_WORST=3
+
+## Conjoint (aggregate MNL) part-worths vs planted:
+  Price/$10: est 1.206  planted 1.2
+  Price/$30: est -1.217  planted -1.2
+  Price/$20: est 0.012  planted 0
+  Brand/Beta: est -0.408  planted -0.4
+  Brand/Alpha: est 0.408  planted 0.4
+  Warranty/1 year: est -0.19  planted -0.2
+  Warranty/2 years: est 0.19  planted 0.2
+importance order: Price 67% > Brand 22.5% > Warranty 10.5%
+fit: ["Respondents=600","Choice tasks=4800","Log-likelihood=-4122.29","Null log-likelihood=-6654.21","McFadden R²=0.38","In-sample hit rate=68.1%","“None” chosen=4.3%","Converged=yes"]
+warnings: []
+Price monotone decreasing recovered: true | Alpha>Beta: true | 2y>1y: true
+
+## MaxDiff (aggregate MNL best + reversed worst) vs planted order Battery>Camera>Screen>Price>Speed>Design:
+  rank 1 Battery: shown 3600 best 1684 worst 55 B-W% 45.3 utility 1.24 share 32.1
+  rank 2 Camera: shown 3600 best 1026 worst 237 B-W% 21.9 utility 0.703 share 24.1
+  rank 3 Screen: shown 3600 best 707 worst 408 B-W% 8.3 utility 0.208 share 17.4
+  rank 4 Price: shown 3600 best 431 worst 608 B-W% -4.9 utility -0.263 share 12.2
+  rank 5 Speed: shown 3600 best 215 worst 893 B-W% -18.8 utility -0.672 share 8.7
+  rank 6 Design: shown 3600 best 88 worst 1527 B-W% -40 utility -1.218 share 5.4
+recovered order: Battery > Camera > Screen > Price > Speed > Design
+order correct: true
+fit: ["Respondents=600","Choices modelled=7879","McFadden R²=0.178","Hit rate=53.4%","Converged=yes"]
+warnings: []
+base: {"n":600,"label":"600 respondents, 7879 choices"}
+sum(shown) = 21600 (expected 600*9*4 = 21600 if every respondent's tasks are matched to the items they actually saw)

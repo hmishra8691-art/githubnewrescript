@@ -1,0 +1,94 @@
+[info] multi validPct sum = 185.2% (respondent base; mentions base would be 100%; mentions=50)
+[info] ITEMS_b role: scale
+[info] SPEND warnings: ["This analysis is based on only 15 respondents (fewer than 30) — read with caution."]
+[info] SAT role: scale
+[info] crosstab tests: [{"test":"chi_square","stat":0,"p":1,"df":4,"detail":{"n":25,"cellsWithExpectedBelow5":10,"assumptionMet":false,"pMethod":"asymptotic","rowVariable":"SAT","columnVariable":"GENDER"}}]
+[info] segment n = 15; cases in segment 15, SAT valid among females = 10; warnings: ["This analysis is based on only 25 respondents (fewer than 30) — read with caution.","Segment Females (n = 15) has fewer than 30 respondents — read with caution."]
+[info] csat tables: [{"id":"csat","base":{"n":30},"rows":[{"item":"Satisfaction","n":25,"mean":3,"index":50,"score":40,"top1":20,"bottom2":40}]}] base: {"total":30,"filtered":30,"n":25,"weightedN":25,"label":"All respondents"}
+[info] test runner tests: [{"test":"t_welch","stat":-0.30618621784789724,"p":0.7617280256440131,"df":28}] warnings: []
+
+PASS 83  MISMATCH 1
+MISMATCH segmentDatasets: segment Females n (should be answered base 10) — got 15 expected 10
+ok buildDataset: cases (complete only by default) = 30
+ok buildDataset: total (all rows before exclusions) = 40
+ok descriptive/frequencies: GENDER base n = 30
+ok descriptive/frequencies: GENDER Male count = 15
+ok descriptive/frequencies: GENDER Male validPct = 50
+ok makeResult: GENDER result.base.n = 30
+ok descriptive/frequencies(multi): AWARE base n = respondents with >=1 pick = 27
+ok descriptive/frequencies(multi): AWARE Alpha count = 27
+ok descriptive/frequencies(multi): AWARE Beta validPct (respondent base) = 55.6
+ok descriptive/frequencies(multi): AWARE Missing count (empty arrays) = 3
+ok makeResult: AWARE result.base.n = 27
+ok descriptive/describe: AGE valid n = 30
+ok descriptive/describe: AGE mean = 34.5
+ok descriptive/describe: AGE sd = 8.8
+ok descriptive/describe(matrix row): ITEMS_b valid n = 26
+ok descriptive/describe(matrix row): ITEMS_b missing = 4
+ok descriptive/describe(matrix row): ITEMS_b mean = 2.92
+ok makeResult: ITEMS_b result.base.n = 26
+ok descriptive/describe(display-logic): SPEND valid n (asked males only) = 15
+ok descriptive/describe(display-logic): SPEND missing (= not asked, 15) = 15
+ok descriptive/describe(display-logic): SPEND mean = 114
+ok makeResult: SPEND result.base.n = 15
+ok descriptive/frequencies: SAT base n (valid) = 25
+ok descriptive/frequencies: SAT missing = 5
+ok descriptive/frequencies: SAT code 1 validPct = 20
+ok descriptive/frequencies: SAT code 2 validPct = 20
+ok descriptive/frequencies: SAT code 3 validPct = 20
+ok descriptive/frequencies: SAT code 4 validPct = 20
+ok descriptive/frequencies: SAT code 5 validPct = 20
+ok descriptive/frequencies: SAT code 1 pct of total (base 30) = 16.7
+ok crosstab: SAT×GENDER Total base = 25
+ok crosstab: SAT×GENDER Male base = 15
+ok crosstab: SAT×GENDER Female base = 10
+ok crosstab: SAT=1 col% Male = 20
+ok crosstab: SAT=1 n Male = 3
+ok crosstab: SAT=1 col% Female = 20
+ok crosstab: SAT=2 col% Male = 20
+ok crosstab: SAT=2 n Male = 3
+ok crosstab: SAT=2 col% Female = 20
+ok crosstab: SAT=3 col% Male = 20
+ok crosstab: SAT=3 n Male = 3
+ok crosstab: SAT=3 col% Female = 20
+ok crosstab: SAT=4 col% Male = 20
+ok crosstab: SAT=4 n Male = 3
+ok crosstab: SAT=4 col% Female = 20
+ok crosstab: SAT=5 col% Male = 20
+ok crosstab: SAT=5 n Male = 3
+ok crosstab: SAT=5 col% Female = 20
+ok crosstab/makeResult: result.base.n = total column base = 25
+ok crosstab/chiSquare: chi-square test present = 1
+ok crosstab(pct_row): SAT=1 row% Male = 60
+ok crosstab(pct_row): SAT=1 row% Total = 100
+ok crosstab(base=all): Total base = everyone who answered GENDER = 30
+ok crosstab(base=all): No answer n Total = 5
+ok crosstab(multi rows): AWARE×GENDER Male base (respondents) = 15
+ok crosstab(multi rows): AWARE Alpha col% Male = 100
+ok crosstab(multi rows): AWARE Beta col% Male = 100
+ok crosstab(multi rows): no chi-square for multi rows = 0
+ok crosstab(mean rows): AGE mean Male = 34
+ok crosstab(mean rows): AGE mean Female = 35
+ok crosstab(mean rows): AGE n Male = 15
+ok crosstab(mean rows)/anova: ANOVA present = 1
+ok crosstab(display-logic rows): SPEND Female base = 0
+ok crosstab(display-logic rows): SPEND Male base = 15
+ok crosstab(display-logic rows): SPEND Total base = 15
+ok filterDataset+frequencies: SAT among males valid n = 15
+ok filterDataset/makeResult: base.filtered = 15
+ok filterDataset/makeResult: base.total = 30
+ok crosstab-vs-test chi_square: same statistic = 0
+ok crosstab-vs-test chi_square: same df = 4
+ok buildDataset(statuses): cases with partials = 40
+ok describe(partials): AGE valid n incl partials = 35
+ok describe(partials): AGE mean incl partials = 37
+ok frequencies(weighted): SAT code 1 weighted validPct = 20
+ok frequencies(weighted): SAT weighted base = 40
+ok frequencies(weighted): SAT unweighted base n = 25
+ok describe(weighted): AGE weighted mean = 34.33
+ok crosstab(weighted): Weighted base Male = 30
+ok crosstab(weighted): Base (n) Male unweighted = 15
+ok topbox/boxShares: SAT top2 % = 40
+ok topbox: table base n (cases, not answered!) = 30
+ok topbox/makeResult: result.base.n = 25
+ok statisticalTest/independentT: Welch t statistic = 0.30618621784789724

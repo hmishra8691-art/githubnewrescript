@@ -1,0 +1,183 @@
+strictness=standard enabled rules=59 minPeers=30 bands={"review":20,"suspicious":40,"highlySuspicious":60,"critical":80}
+responses=30
+
+== Per respondent ==
+s000  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s001  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s002  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s003  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s004  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s005  valid                              verdict=FLAGGED class=HIGHLY_SUSPICIOUS risk= 65 quality= 90  flags=[matrix.signature_match, openend.duplicate, duplicate.answers, duplicate.multi_signal]
+s006  valid                              verdict=FLAGGED class=HIGHLY_SUSPICIOUS risk= 61 quality= 90  flags=[matrix.signature_match, openend.duplicate, duplicate.answers, duplicate.multi_signal]
+s007  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s008  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s009  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s010  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s011  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s012  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s013  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s014  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s015  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s016  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s017  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s018  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s019  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s020  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s021  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s022  valid                              verdict=PASS    class=CLEAN             risk=  0 quality=100  flags=[]
+s023  speeder                            verdict=FLAGGED class=SUSPICIOUS        risk= 53 quality=  0  flags=[timing.overall_speeding, timing.page_speeding, timing.question_speeding, timing.matrix_speeding, timing.openend_speeding, timing.reading_time, timing.short_dwell, screener.fast]
+s024  speeder                            verdict=FLAGGED class=SUSPICIOUS        risk= 53 quality=  0  flags=[timing.overall_speeding, timing.page_speeding, timing.question_speeding, timing.matrix_speeding, timing.openend_speeding, timing.reading_time, timing.short_dwell, screener.fast]
+s025  speeder                            verdict=FLAGGED class=SUSPICIOUS        risk= 52 quality=  8  flags=[timing.overall_speeding, timing.page_speeding, timing.question_speeding, timing.matrix_speeding, timing.openend_speeding, timing.reading_time, screener.fast]
+s026  straight-liner                     verdict=REVIEW  class=REVIEW            risk= 24 quality= 55  flags=[matrix.straightline, matrix.reverse_straightline]
+s027  straight-liner                     verdict=REVIEW  class=REVIEW            risk= 24 quality= 43  flags=[matrix.straightline, matrix.reverse_straightline, matrix.midpoint(info)]
+s028  duplicate (of s005, same device+IP) verdict=FLAGGED class=HIGHLY_SUSPICIOUS risk= 65 quality= 90  flags=[matrix.signature_match, openend.duplicate, duplicate.answers, duplicate.multi_signal]
+s029  duplicate (of s006, answers only)  verdict=FLAGGED class=HIGHLY_SUSPICIOUS risk= 61 quality= 90  flags=[matrix.signature_match, openend.duplicate, duplicate.answers, duplicate.multi_signal]
+
+== Per rule: who it flagged and the reason text ==
+
+matrix.signature_match  (4 firings): s005[valid], s006[valid], s028[duplicate], s029[duplicate]
+   observed: Q3 identical to 1 other
+   explanation: A grid was answered exactly like another respondent's, row for row.
+   role=classifying strength=strong confidence=1 risk+20 quality-0
+   observed: Q3 identical to 1 other
+   explanation: A grid was answered exactly like another respondent's, row for row.
+   role=classifying strength=strong confidence=0.5 risk+10 quality-0 caveat: a grid this size has a twin by chance in a population this large
+
+openend.duplicate  (4 firings): s005[valid], s006[valid], s028[duplicate], s029[duplicate]
+   observed: Q6 identical to 1 other; Q7 identical to 1 other
+   expected: similarity < 85%
+   explanation: An open-ended answer is the same, or nearly the same, as another respondent's.
+   role=classifying strength=strong confidence=1 risk+25 quality-10
+   observed: Q6 identical to 1 other; Q7 identical to 1 other
+   expected: similarity < 85%
+   explanation: An open-ended answer is the same, or nearly the same, as another respondent's.
+   role=classifying strength=strong confidence=1 risk+25 quality-10
+
+duplicate.answers  (4 firings): s005[valid], s006[valid], s028[duplicate], s029[duplicate]
+   observed: 100% of 21 comparable answers agree with respondent s028 (rarity-weighted 100%)
+   expected: weighted agreement < 93%
+   explanation: Closed-question answers agree with another respondent far beyond what the survey's answer distribution predicts.
+   role=classifying strength=strong confidence=1 risk+29 quality-0
+   observed: 100% of 21 comparable answers agree with respondent s029 (rarity-weighted 100%)
+   expected: weighted agreement < 93%
+   explanation: Closed-question answers agree with another respondent far beyond what the survey's answer distribution predicts.
+   role=classifying strength=strong confidence=1 risk+29 quality-0
+
+duplicate.multi_signal  (4 firings): s005[valid], s006[valid], s028[duplicate], s029[duplicate]
+   observed: 100% answer agreement with s028 plus shared device signature, IP address, 2 identical grids, 2 identical open ends
+   explanation: Similar answers AND a shared device, network, timing or navigation signature — the same person or the same script.
+   role=classifying strength=strong confidence=1 risk+36 quality-0
+   observed: 100% answer agreement with s029 plus shared 2 identical grids, 2 identical open ends
+   explanation: Similar answers AND a shared device, network, timing or navigation signature — the same person or the same script.
+   role=classifying strength=strong confidence=1 risk+36 quality-0
+
+timing.overall_speeding  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: 33s
+   expected: ≥ 1:23 (median of 30 completes 3:28)
+   explanation: Completion time was 84% below the benchmark (median of 30 completes).
+   role=classifying strength=strong confidence=1 risk+35 quality-30
+   observed: 34s
+   expected: ≥ 1:23 (median of 30 completes 3:28)
+   explanation: Completion time was 84% below the benchmark (median of 30 completes).
+   role=classifying strength=strong confidence=1 risk+35 quality-30
+
+timing.page_speeding  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: 8 of 8 pages under 30% of benchmark
+   expected: fewer than 40% of pages
+   explanation: 8 pages were answered in under 30% of their benchmark time.
+   role=classifying strength=moderate confidence=1 risk+15 quality-12
+   observed: 8 of 8 pages under 30% of benchmark
+   expected: fewer than 40% of pages
+   explanation: 8 pages were answered in under 30% of their benchmark time.
+   role=classifying strength=moderate confidence=1 risk+15 quality-12
+
+timing.question_speeding  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: 8 of 8 first answers within 800 ms of the page appearing
+   expected: reaction ≥ 800 ms
+   explanation: 8 questions were answered before the page could have been read.
+   role=classifying strength=moderate confidence=1 risk+12 quality-10
+   observed: 8 of 8 first answers within 800 ms of the page appearing
+   expected: reaction ≥ 800 ms
+   explanation: 8 questions were answered before the page could have been read.
+   role=classifying strength=moderate confidence=1 risk+12 quality-10
+
+timing.matrix_speeding  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: Q3: 2.2s, Q4: 1.9s
+   expected: ≥ 1.2s per row
+   explanation: 2 grids were completed in less time than the rows could be read.
+   role=classifying strength=moderate confidence=1 risk+15 quality-15
+   observed: Q3: 2.5s, Q4: 1.9s
+   expected: ≥ 1.2s per row
+   explanation: 2 grids were completed in less time than the rows could be read.
+   role=classifying strength=moderate confidence=1 risk+15 quality-15
+
+timing.openend_speeding  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: 2 text answers produced faster than 15 characters/second
+   expected: ≤ 15 chars/s when typed
+   explanation: Text appeared faster than a person types — likely pasted or automated.
+   role=classifying strength=moderate confidence=1 risk+15 quality-10
+   observed: 2 text answers produced faster than 15 characters/second
+   expected: ≤ 15 chars/s when typed
+   explanation: Text appeared faster than a person types — likely pasted or automated.
+   role=classifying strength=moderate confidence=1 risk+15 quality-10
+
+timing.reading_time  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: 4 of 6 pages left before their text could be read at 400 wpm
+   expected: fewer than 50% of pages
+   explanation: Pages were left before the words on them could have been read, even at a fast reading speed.
+   role=classifying strength=weak confidence=1 risk+10 quality-10
+   observed: 3 of 6 pages left before their text could be read at 400 wpm
+   expected: fewer than 50% of pages
+   explanation: Pages were left before the words on them could have been read, even at a fast reading speed.
+   role=classifying strength=weak confidence=1 risk+10 quality-10
+
+screener.fast  (3 firings): s023[speeder], s024[speeder], s025[speeder]
+   observed: screener pages in 1s vs benchmark 6s
+   expected: ≥ 30% of benchmark
+   explanation: The screening questions were answered far faster than they can be read.
+   role=classifying strength=weak confidence=1 risk+10 quality-5
+   observed: screener pages in 1s vs benchmark 6s
+   expected: ≥ 30% of benchmark
+   explanation: The screening questions were answered far faster than they can be read.
+   role=classifying strength=weak confidence=1 risk+10 quality-5
+
+timing.short_dwell  (2 firings): s023[speeder], s024[speeder]
+   observed: 3 of 8 pages shown for under 1200 ms
+   expected: fewer than 35% of pages
+   explanation: Pages with real questions were shown for barely a moment.
+   role=classifying strength=moderate confidence=1 risk+12 quality-10
+   observed: 3 of 8 pages shown for under 1200 ms
+   expected: fewer than 35% of pages
+   explanation: Pages with real questions were shown for barely a moment.
+   role=classifying strength=moderate confidence=1 risk+12 quality-10
+
+matrix.straightline  (2 firings): s026[straight-liner], s027[straight-liner]
+   observed: 2 of 2 grids straight-lined (Q3, Q4)
+   expected: fewer than 51% of grids
+   explanation: The same column was chosen for almost every row of the grid.
+   role=classifying strength=moderate confidence=1 risk+15 quality-20
+   observed: 2 of 2 grids straight-lined (Q3, Q4)
+   expected: fewer than 51% of grids
+   explanation: The same column was chosen for almost every row of the grid.
+   role=classifying strength=moderate confidence=1 risk+15 quality-20
+
+matrix.reverse_straightline  (2 firings): s026[straight-liner], s027[straight-liner]
+   observed: 1 grid with reverse-worded rows straight-lined
+   explanation: One column cannot be a sincere answer to both a positively and a negatively worded row.
+   role=classifying strength=moderate confidence=1 risk+20 quality-25
+   observed: 1 grid with reverse-worded rows straight-lined
+   explanation: One column cannot be a sincere answer to both a positively and a negatively worded row.
+   role=classifying strength=moderate confidence=1 risk+20 quality-25
+
+matrix.midpoint  (1 firings): s027[straight-liner]
+   observed: 100% of 11 grid rows on the midpoint
+   expected: ≤ 80%
+   explanation: The neutral scale point was chosen for most rows.
+   role=informational strength=weak confidence=1 risk+5 quality-12
+
+== Summary ==
+valid: 23 planted → 2 FLAGGED, 0 REVIEW, 21 PASS
+speeder: 3 planted → 3 FLAGGED, 0 REVIEW, 0 PASS
+straight-liner: 2 planted → 0 FLAGGED, 2 REVIEW, 0 PASS
+duplicate: 2 planted → 2 FLAGGED, 0 REVIEW, 0 PASS
+clusters: c_c7c05002:s005+s028; c_e4ea69b6:s006+s029

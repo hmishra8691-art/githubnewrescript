@@ -1,0 +1,6 @@
+variantForActionType: {"maxdiff":"maxdiff.best_worst","conjoint":null,"cbc":null,"conjoint.cbc":"conjoint.cbc","acbc":null,"menu":null,"conjoint.acbc":"conjoint.acbc"}
+coerced ops: ["create_question","create_question","create_question"] | rejected: [{"index":3,"reason":"unknown action “create_design”"},{"index":4,"reason":"unknown action “generate_design”"}]
+apply ok: ["def","results","errors","warnings","destructive","refs","valid","uxOnly","structureUnchanged"] errors: ["Create conjoint question “Which would you choose?”: “conjoint” is not a question type the Studio knows"]
+  question Q1 type=maxdiff_task variant=maxdiff.best_worst designRef=(none) options=6
+  question Q2 type=conjoint_task variant=conjoint.cbc designRef=(none) options=0
+designs after apply: 0

@@ -1,0 +1,4 @@
+flat keys: [ 'COLOR', 'N' ]
+safeExpression Q7 + 1: 1  N + 1: 6  Q7 > 3: false  Q1 == 2: false
+calculated: { OUT: false, OUT2: true, OUT3: 1 } errors: undefined
+stored expr source: {"kind":"expr","ref":"N + 1"}

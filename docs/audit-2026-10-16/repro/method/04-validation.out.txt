@@ -1,0 +1,8 @@
+## MaxDiff required validation (2 tasks, required=true)
+  empty: ["This question is required."]
+  task 1 best only: []
+  task 1 best+worst, task 2 untouched: []
+  task 1 best == worst (same item 2): []
+  best is an item NOT in task 1's set (item 9): []
+  complete: []
+  flatten of best==worst: {"MD_VERSION":"1","MD_T1_BEST":2,"MD_T1_WORST":2}

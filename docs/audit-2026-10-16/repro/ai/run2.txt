@@ -1,0 +1,19 @@
+errors: []
+email, no validation given
+   variant=text.email validation=[{"kind":"email"}]
+   probe "nope" → Please enter a valid email address.
+email + required rule
+   variant=text.email validation=[{"id":"q_4_v1","kind":"required"}]
+   probe "nope" → ACCEPTED
+integer, no validation given
+   variant=numeric.integer validation=[{"kind":"integer"}]
+   probe 2.5 → Please enter a whole number.
+integer + min_value 0
+   variant=numeric.integer validation=[{"id":"q_6_v1","kind":"min_value","value":0}]
+   probe 2.5 → ACCEPTED
+phone + max_length
+   variant=text.phone validation=[{"id":"q_7_v1","kind":"max_length","value":20}]
+   probe "abc" → ACCEPTED
+numeric + min_value with when (conditional rule) + message
+   variant=numeric.open validation=[{"id":"q_8_v1","kind":"min_value","value":18,"message":"Must be 18+","when":{"type":"rule","source":{"kind":"question","ref":"q_5"},"operator":"gte","value":1}}]
+   probe 10 → ACCEPTED

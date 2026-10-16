@@ -1,0 +1,751 @@
+tables 92 views 0 funcs 119
+
+## customers (created 0001; touched 0001,0054) RLS: ['0001']
+  cols: id uuid primary; slug text not; name text not; branding jsonb not; created_at timestamptz not; ai_byok_allowed boolean (+0054)
+  POLICY 0001: "customers_read" SELECT :: for select using (id = public.current_customer_id() or public.current_role() = 'platform_admin')
+
+## profiles (created 0001; touched 0001,0008,0034) RLS: ['0001']
+  cols: id uuid primary; customer_id uuid references; email text; full_name text; role text not; created_at timestamptz not; user_code text (+0008); organization text (+0008); job_title text (+0008); status text (+0008); last_login_at timestamptz (+0008); locked_until timestamptz (+0008); updated_at timestamptz (+0008)
+  POLICY 0001: "profiles_self" SELECT :: for select using (id = auth.uid() or public.current_role() = 'platform_admin')
+  POLICY 0001: "profiles_update_self" UPDATE :: for update using (id = auth.uid())
+  POLICY 0008: "profiles_self_read" SELECT TO authenticated :: for select to authenticated using ( id = auth.uid() or public.rescript_is_platform_admin(auth.uid()) or customer_id = (select p.customer_id from public.profiles
+  POLICY 0008: "profiles_self_write" UPDATE TO authenticated :: for update to authenticated using (id = auth.uid() or public.rescript_is_platform_admin(auth.uid())) with check (id = auth.uid() or public.rescript_is_platform_
+  POLICY 0008: DROP "profiles_self_read"
+  POLICY 0008: DROP "profiles_self_write"
+  POLICY 0034: "profiles_self_read" SELECT TO authenticated :: for select to authenticated using ( id = auth.uid() or public.rescript_is_platform_admin(auth.uid()) or customer_id = (select p.customer_id from public.profiles
+  POLICY 0034: DROP "profiles_self_read"
+  INDEX 0008: UNIQUE profiles_user_code_key(user_code)
+  INDEX 0008: UNIQUE profiles_email_lower_key(lower(email))
+  INDEX 0008: profiles_customer_idx(customer_id)
+
+## surveys (created 0001; touched 0001,0002,0003,0004,0008,0015,0029,0031) RLS: ['0001']
+  cols: id uuid primary; customer_id uuid not; code text not; title text not; status text not; current_version_id uuid; created_by uuid references; created_at timestamptz not; updated_at timestamptz not; [unique (customer_id, code)]; draft_definition jsonb (+0003); draft_updated_at timestamptz (+0003); draft_base_version_id uuid (+0003); revision bigint (+0004); owner_id uuid (+0008); locked boolean (+0008); collaboration jsonb (+0008); client_name text (+0015); project_manager text (+0015); fieldwork_from date (+0015); fieldwork_to date (+0015); due_date date (+0015); cost_centre text (+0015); notes text (+0015); settings jsonb (+0015); media_delivery_email text (+0029); media_delivery_enabled boolean (+0029)
+  POLICY 0001: "surveys_tenant" SELECT :: for select using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0001: "surveys_write" ALL :: for all using ( (customer_id = public.current_customer_id() and public.current_role() in ('platform_admin','programmer')) or public.current_role() = 'platform_a
+  POLICY 0008: "surveys_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0008: "surveys_editor_write" UPDATE TO authenticated :: for update to authenticated using (public.rescript_project_role(auth.uid(), id) in ('owner', 'editor', 'programmer')) with check (public.rescript_project_role(a
+  POLICY 0008: DROP "surveys_member_read"
+  POLICY 0008: DROP "surveys_editor_write"
+  INDEX 0003: surveys_draft_updated_idx(id, draft_updated_at desc)
+  INDEX 0008: surveys_owner_idx(owner_id)
+  INDEX 0015: surveys_due_idx(customer_id, due_date) where due_date is not null
+  INDEX 0015: surveys_fieldwork_idx(customer_id, fieldwork_to) where fieldwork_to is not null
+  INDEX 0015: surveys_client_idx(customer_id, lower(client_name)) where client_name is not null
+  TRIGGER 0001: surveys_touch before update for each row execute function public.touch_updated_at()
+  TRIGGER 0031: surveys_forget_spending after delete for each row execute function public.rescript_billing_forget_subject('survey')
+
+## survey_versions (created 0001; touched 0001,0002,0012) RLS: ['0001']
+  cols: id uuid primary; survey_id uuid not; version text not; definition jsonb not; label text; notes text; created_by uuid references; created_at timestamptz not; [unique (survey_id, version)]
+  POLICY 0001: "versions_tenant" SELECT :: for select using ( exists (select 1 from public.surveys s where s.id = survey_id and (s.customer_id = public.current_customer_id() or public.current_role() = 'p
+  POLICY 0001: "versions_write" ALL :: for all using ( exists (select 1 from public.surveys s where s.id = survey_id and s.customer_id = public.current_customer_id() and public.current_role() in ('pl
+  INDEX 0002: survey_versions_survey_idx(survey_id, created_at desc)
+  TRIGGER 0012: survey_versions_immutable before update or delete for each row execute function public.rescript_versions_are_immutable()
+
+## deployments (created 0001; touched 0001) RLS: ['0001']
+  cols: id uuid primary; survey_id uuid not; version_id uuid not; client_slug text not; study_slug text not; mode text not; active boolean not; config jsonb not; created_at timestamptz not; [unique (client_slug, study_slug, mode)]
+  POLICY 0001: "deployments_tenant" SELECT :: for select using ( exists (select 1 from public.surveys s where s.id = survey_id and (s.customer_id = public.current_customer_id() or public.current_role() = 'p
+
+## themes (created 0001; touched 0001) RLS: ['0001']
+  cols: id uuid primary; customer_id uuid references; name text not; branding jsonb not; created_at timestamptz not
+  POLICY 0001: "themes_tenant" ALL :: for all using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+
+## templates (created 0001; touched 0001) RLS: ['0001']
+  cols: id uuid primary; customer_id uuid references; name text not; description text; definition jsonb not; created_at timestamptz not
+  POLICY 0001: "templates_read" SELECT :: for select using (customer_id is null or customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+
+## design_files (created 0001; touched 0001) RLS: ['0001']
+  cols: id uuid primary; survey_id uuid not; kind text not; name text not; version int not; seed bigint; config jsonb not; columns jsonb not; rows jsonb not; summary jsonb; created_by uuid references; created_at timestamptz not; [unique (survey_id, kind, name, version)]
+  POLICY 0001: "design_files_tenant" ALL :: for all using ( exists (select 1 from public.surveys s where s.id = survey_id and (s.customer_id = public.current_customer_id() or public.current_role() = 'plat
+
+## respondents (created 0001; touched 0001,0013) RLS: ['0001']
+  cols: id uuid primary; survey_id uuid not; token text not; email text; external_id text; status text not; embedded jsonb not; invited_at timestamptz not; meta jsonb not; is_test boolean (+0013); name text (+0013); list_name text (+0013); sent_at timestamptz (+0013); updated_at timestamptz (+0013)
+  INDEX 0013: respondents_survey_idx(survey_id, is_test, status)
+  INDEX 0013: respondents_survey_list_idx(survey_id, list_name)
+  INDEX 0013: UNIQUE respondents_survey_external_key(survey_id, is_test, lower(external_id)) where external_id is not null
+  TRIGGER 0013: respondents_touch before update for each row execute function public.rescript_touch_respondent()
+
+## responses (created 0001; touched 0001,0002,0005,0006,0007,0012,0019) RLS: ['0001']
+  cols: id uuid primary; survey_id uuid not; version_id uuid not; session_id text not; respondent_id uuid references; status text not; is_test boolean not; seed bigint not; step_index int not; answers jsonb not; calculated jsonb not; embedded jsonb not; flags jsonb not; user_agent text; started_at timestamptz not; completed_at timestamptz; updated_at timestamptz not; telemetry jsonb (+0005); ip_hash text (+0005); device_hash text (+0005); quality jsonb (+0005); quality_computed_at timestamptz (+0005); review_status text (+0005); review_reason text (+0005); reviewed_by text (+0005); reviewed_at timestamptz (+0005); environment text (+0006); respondent_code text (+0006); revision integer (+0006); source text (+0006); deleted_at timestamptz (+0006); deleted_by text (+0006); deletion_reason text (+0006); last_saved_at timestamptz (+0006); sample_source text (+0012); sample_source_respondent text (+0012)
+  POLICY 0001: "responses_tenant_read" SELECT :: for select using ( exists (select 1 from public.surveys s where s.id = survey_id and (s.customer_id = public.current_customer_id() or public.current_role() = 'p
+  INDEX 0001: responses_survey_idx(survey_id, status)
+  INDEX 0002: responses_survey_test_idx(survey_id, is_test)
+  INDEX 0002: responses_survey_recent_idx(survey_id, started_at desc)
+  INDEX 0005: responses_quality_class_idx(survey_id, (quality->>'classification'))
+  INDEX 0005: responses_review_idx(survey_id, review_status)
+  INDEX 0005: responses_ip_hash_idx(survey_id, ip_hash)
+  INDEX 0005: responses_device_hash_idx(survey_id, device_hash)
+  INDEX 0006: UNIQUE responses_survey_code_key(survey_id, respondent_code)
+  INDEX 0006: responses_survey_env_status_idx(survey_id, is_test, status) where deleted_at is null
+  INDEX 0006: responses_survey_env_started_idx(survey_id, is_test, started_at desc)
+  INDEX 0006: responses_answers_gin(answers jsonb_path_ops)
+  INDEX 0012: responses_survey_source_idx(survey_id, is_test, sample_source) where deleted_at is null
+  INDEX 0019: responses_survey_env_completed_idx(survey_id, is_test, completed_at desc) where completed_at is not null and deleted_at is null
+  TRIGGER 0001: responses_touch before update for each row execute function public.touch_updated_at()
+  TRIGGER 0006: responses_assign_code before insert for each row execute function public.rescript_assign_respondent_code()
+  TRIGGER 0006: responses_bump_revision before update for each row execute function public.rescript_bump_response_revision()
+  TRIGGER 0007: responses_release_listfill after update of deleted_at or delete for each row execute function public.rescript_release_listfill_on_delete()
+
+## quota_counts (created 0001; touched 0001,0006,0010) RLS: ['0001']
+  cols: survey_id uuid not; quota_id text not; cell_id text not; count int not; [primary key (survey_id, quota_id, cell_id)]; is_test boolean (+0006); updated_at timestamptz (+0010)
+  POLICY 0001: "quota_counts_read" SELECT :: for select using ( exists (select 1 from public.surveys s where s.id = survey_id and (s.customer_id = public.current_customer_id() or public.current_role() = 'p
+
+## audit_logs (created 0001; touched 0001,0008) RLS: ['0001']
+  cols: id bigint generated; customer_id uuid references; user_id uuid; action text not; entity text not; entity_id text; detail jsonb not; created_at timestamptz not; survey_id uuid (+0008); session_id uuid (+0008); ip_hash text (+0008)
+  POLICY 0001: "audit_read" SELECT :: for select using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0008: "audit_logs_member_read" SELECT TO authenticated :: for select to authenticated using ( (survey_id is not null and public.rescript_project_role(auth.uid(), survey_id) is not null) or public.rescript_is_platform_a
+  POLICY 0008: DROP "audit_logs_member_read"
+  INDEX 0008: audit_logs_survey_idx(survey_id, created_at desc)
+  INDEX 0008: audit_logs_user_idx(user_id, created_at desc)
+  INDEX 0008: audit_logs_action_idx(action, created_at desc)
+
+## response_reviews (created 0005; touched 0005,0026) RLS: ['0005']
+  cols: id bigint generated; response_id uuid not; survey_id uuid not; decision text not; reason text; decided_by text; decided_at timestamptz not; quality_snapshot jsonb
+  POLICY 0026: "response_reviews_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "response_reviews_service_role_only"
+  INDEX 0005: response_reviews_response_idx(response_id, decided_at desc)
+
+## quality_profiles (created 0005; touched 0005,0026) RLS: ['0005']
+  cols: id uuid primary; customer_id uuid references; name text not; description text; config jsonb not; created_by uuid; created_at timestamptz not; updated_at timestamptz not; [unique (customer_id, name)]
+  POLICY 0026: "quality_profiles_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "quality_profiles_service_role_only"
+  TRIGGER 0005: quality_profiles_touch before update for each row execute function public.touch_updated_at()
+
+## response_counters (created 0006; touched 0006,0026) RLS: ['0006']
+  cols: survey_id uuid not; is_test boolean not; next_n bigint not; [primary key (survey_id, is_test)]
+  POLICY 0026: "response_counters_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "response_counters_service_role_only"
+
+## response_edits (created 0006; touched 0006,0026) RLS: ['0006']
+  cols: id bigint generated; response_id uuid not; survey_id uuid not; respondent_code text; action text not; changes jsonb; reason text; edited_by text not; edited_at timestamptz not; revision_before integer; revision_after integer
+  POLICY 0026: "response_edits_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "response_edits_service_role_only"
+  INDEX 0006: response_edits_response_idx(response_id, edited_at desc)
+  INDEX 0006: response_edits_survey_idx(survey_id, edited_at desc)
+
+## listfill_counts (created 0007; touched 0007,0026) RLS: ['0007']
+  cols: survey_id uuid not; is_test boolean not; list_fill_id text not; option_code text not; /** slots claimed; including sessions still; /** slots whose; updated_at timestamptz not; [primary key (survey_id, is_test, list_fill_id, option_code)]
+  POLICY 0026: "listfill_counts_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "listfill_counts_service_role_only"
+
+## listfill_allocations (created 0007; touched 0007,0026) RLS: ['0007']
+  cols: id uuid primary; survey_id uuid not; session_id text not; is_test boolean not; list_fill_id text not; slot integer not; option_code text not; /** the survey; allocated_at timestamptz not; /** set when; completed_at timestamptz
+  POLICY 0026: "listfill_allocations_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "listfill_allocations_service_role_only"
+  INDEX 0007: UNIQUE listfill_allocations_slot_idx(session_id, list_fill_id, slot)
+  INDEX 0007: listfill_allocations_survey_idx(survey_id, is_test, list_fill_id, option_code) where released_at is null
+  INDEX 0007: listfill_allocations_session_idx(session_id)
+
+## user_sessions (created 0008; touched 0008) RLS: ['0008']
+  cols: id uuid primary; user_id uuid not; status text not; created_at timestamptz not; last_seen_at timestamptz not; expires_at timestamptz; ended_at timestamptz; ended_reason text; revoked_by uuid references; user_agent text; ip_hash text; device_label text
+  POLICY 0008: "user_sessions_own" SELECT TO authenticated :: for select to authenticated using (user_id = auth.uid() or public.rescript_is_platform_admin(auth.uid()))
+  POLICY 0008: DROP "user_sessions_own"
+  INDEX 0008: UNIQUE user_sessions_one_active_key(user_id) where status = 'active'
+  INDEX 0008: user_sessions_user_idx(user_id, created_at desc)
+  INDEX 0008: user_sessions_active_idx(last_seen_at) where status = 'active'
+
+## login_attempts (created 0008; touched 0008,0026) RLS: ['0008']
+  cols: id bigserial primary; identifier text; user_id uuid; ip_hash text; success boolean not; reason text; created_at timestamptz not
+  POLICY 0026: "login_attempts_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "login_attempts_service_role_only"
+  INDEX 0008: login_attempts_identifier_idx(lower(identifier), created_at desc)
+  INDEX 0008: login_attempts_ip_idx(ip_hash, created_at desc)
+
+## project_members (created 0008; touched 0008,0034) RLS: ['0008']
+  cols: survey_id uuid not; user_id uuid not; role text not; added_by uuid references; added_at timestamptz not; updated_at timestamptz not; [primary key (survey_id, user_id)]; revoked_at timestamptz (+0034); revoked_by uuid (+0034)
+  INDEX 0008: project_members_user_idx(user_id)
+  INDEX 0034: project_members_live_idx(survey_id) where revoked_at is null
+
+## project_invitations (created 0008; touched 0008,0017) RLS: ['0008']
+  cols: id uuid primary; survey_id uuid not; email text; user_code text; role text not; token text not; invited_by uuid references; created_at timestamptz not; expires_at timestamptz not; accepted_at timestamptz; accepted_by uuid references; revoked_at timestamptz; token_hash text (+0017)
+  INDEX 0008: UNIQUE project_invitations_token_key(token)
+  INDEX 0008: UNIQUE project_invitations_pending_key(survey_id, lower(email)) where accepted_at is null and revoked_at is null and email is not null
+  INDEX 0008: project_invitations_email_idx(lower(email)) where accepted_at is null
+  INDEX 0017: UNIQUE project_invitations_token_hash_key(token_hash) where token_hash is not null
+  INDEX 0017: project_invitations_live_hash_idx(token_hash) where token_hash is not null and accepted_at is null and revoked_at is null
+
+## project_edit_locks (created 0008; touched 0008) RLS: ['0008']
+  cols: survey_id uuid primary; locked_by_user_id uuid not; locked_by_session_id uuid not; status text not; section text; created_at timestamptz not; last_heartbeat_at timestamptz not; expires_at timestamptz; released_at timestamptz; released_reason text; released_by uuid references
+  INDEX 0008: project_edit_locks_session_idx(locked_by_session_id)
+  INDEX 0008: project_edit_locks_held_idx(last_heartbeat_at) where status = 'held'
+
+## project_presence (created 0008; touched 0008) RLS: ['0008']
+  cols: survey_id uuid not; session_id uuid not; user_id uuid not; first_seen_at timestamptz not; last_seen_at timestamptz not; /** what the; [primary key (survey_id, session_id)]
+  INDEX 0008: project_presence_survey_idx(survey_id, last_seen_at desc)
+  INDEX 0008: project_presence_user_idx(user_id)
+
+## project_comments (created 0008; touched 0008) RLS: ['0008']
+  cols: id uuid primary; survey_id uuid not; author_id uuid not; parent_id uuid references; body text not; /** where the; a panel; a version —; mentions uuid[] not; resolved_at timestamptz; resolved_by uuid references; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  POLICY 0008: "project_comments_write" INSERT TO authenticated :: for insert to authenticated with check ( author_id = auth.uid() and public.rescript_project_role(auth.uid(), survey_id) in ('owner', 'editor', 'programmer', 're
+  POLICY 0008: "project_comments_update" UPDATE TO authenticated :: for update to authenticated using (author_id = auth.uid() or public.rescript_project_role(auth.uid(), survey_id) = 'owner') with check (author_id = auth.uid() o
+  POLICY 0008: DROP "project_comments_write"
+  POLICY 0008: DROP "project_comments_update"
+  INDEX 0008: project_comments_survey_idx(survey_id, created_at desc)
+  INDEX 0008: project_comments_thread_idx(parent_id)
+  INDEX 0008: project_comments_open_idx(survey_id) where resolved_at is null and deleted_at is null
+
+## notifications (created 0008; touched 0008) RLS: ['0008']
+  cols: id bigserial primary; user_id uuid not; survey_id uuid references; action text not; detail jsonb not; created_at timestamptz not; read_at timestamptz
+  POLICY 0008: "notifications_own" SELECT TO authenticated :: for select to authenticated using (user_id = auth.uid())
+  POLICY 0008: "notifications_own_update" UPDATE TO authenticated :: for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid())
+  POLICY 0008: DROP "notifications_own"
+  POLICY 0008: DROP "notifications_own_update"
+  INDEX 0008: notifications_user_idx(user_id, created_at desc)
+  INDEX 0008: notifications_unread_idx(user_id) where read_at is null
+
+## access_settings (created 0008; touched 0008) RLS: ['0008']
+  cols: customer_id uuid primary; policy jsonb not; updated_at timestamptz not; updated_by uuid references
+  POLICY 0008: "access_settings_read" SELECT TO authenticated :: for select to authenticated using ( customer_id = '00000000-0000-0000-0000-000000000000' or customer_id = (select p.customer_id from public.profiles p where p.i
+  POLICY 0008: "access_settings_write" ALL TO authenticated :: for all to authenticated using (public.rescript_is_platform_admin(auth.uid())) with check (public.rescript_is_platform_admin(auth.uid()))
+  POLICY 0008: DROP "access_settings_read"
+  POLICY 0008: DROP "access_settings_write"
+
+## analytics_analyses (created 0011; touched 0011,0041) RLS: None
+  cols: id uuid primary; survey_id uuid not; name text not; kind text not; definition jsonb not; version integer not; folder text; tags text[] not; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz; position integer (+0041)
+  INDEX 0011: analytics_analyses_survey_idx(survey_id, deleted_at)
+  INDEX 0041: analytics_analyses_position_idx(survey_id, position) where deleted_at is null
+
+## analytics_analysis_versions (created 0011; touched 0011) RLS: None
+  cols: id bigint generated; analysis_id uuid not; survey_id uuid not; version integer not; definition jsonb not; summary text; created_by uuid; created_at timestamptz not; [unique (analysis_id, version)]
+
+## analytics_charts (created 0011; touched 0011) RLS: None
+  cols: id uuid primary; survey_id uuid not; analysis_id uuid not; name text not; spec jsonb not; theme_id uuid; style_version integer not; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  INDEX 0011: analytics_charts_survey_idx(survey_id, deleted_at)
+  INDEX 0011: analytics_charts_analysis_idx(analysis_id)
+
+## analytics_segments (created 0011; touched 0011) RLS: None
+  cols: id uuid primary; survey_id uuid not; kind text not; name text not; description text; color text; condition jsonb not; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  INDEX 0011: analytics_segments_survey_idx(survey_id, kind, deleted_at)
+
+## analytics_themes (created 0011; touched 0011) RLS: ['0011']
+  cols: id uuid primary; customer_id uuid references; survey_id uuid references; name text not; theme jsonb not; is_default boolean not; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  POLICY 0011: "analytics_themes_read" SELECT TO authenticated :: for select to authenticated using ( (survey_id is not null and public.rescript_project_role(auth.uid(), survey_id) is not null) or (customer_id is not null and 
+  POLICY 0011: DROP "analytics_themes_read"
+  INDEX 0011: analytics_themes_customer_idx(customer_id, deleted_at)
+
+## analytics_reports (created 0011; touched 0011) RLS: None
+  cols: id uuid primary; survey_id uuid not; kind text not; name text not; definition jsonb not; theme_id uuid references; mode text not; published_version integer; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  INDEX 0011: analytics_reports_survey_idx(survey_id, kind, deleted_at)
+
+## analytics_report_versions (created 0011; touched 0011,0014) RLS: None
+  cols: id bigint generated; report_id uuid not; survey_id uuid not; version integer not; definition jsonb not; theme jsonb; snapshot jsonb not; dataset jsonb; note text; published_by uuid; published_at timestamptz not; [unique (report_id, version)]; variants jsonb (+0014)
+
+## analytics_shares (created 0011; touched 0011) RLS: None
+  cols: id uuid primary; survey_id uuid not; report_id uuid not; token text not; access text not; permission text not; report_version integer; password_hash text; expires_at timestamptz; revoked_at timestamptz; revoked_by uuid; allowed_user_ids uuid[] not; allowed_emails text[] not; label text; view_count integer not; last_viewed_at timestamptz; created_by uuid; created_at timestamptz not
+  INDEX 0011: analytics_shares_report_idx(report_id, revoked_at)
+
+## analytics_share_access (created 0011; touched 0011) RLS: None
+  cols: id bigint generated; share_id uuid not; survey_id uuid not; viewer_user_id uuid; viewer_email text; event text not; ip_hash text; user_agent text; created_at timestamptz not
+  INDEX 0011: analytics_share_access_share_idx(share_id, created_at desc)
+
+## analytics_exports (created 0011; touched 0011) RLS: None
+  cols: id uuid primary; survey_id uuid not; report_id uuid references; analysis_id uuid references; format text not; settings jsonb not; report_version integer; bytes integer; created_by uuid; share_id uuid references; created_at timestamptz not
+
+## sample_sources (created 0012; touched 0012) RLS: ['0012']
+  cols: id uuid primary; survey_id uuid not; code text not; label text not; target_completes integer; cost_per_complete numeric(10, 2); notes text; created_at timestamptz not; created_by uuid references; [constraint sample_sources_code_not_blank check (length(trim(code)) > 0)]; [constraint sample_sources_target_sane check (target_completes is null or target_completes ]
+  POLICY 0012: "sample_sources_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0012: DROP "sample_sources_member_read"
+  INDEX 0012: UNIQUE sample_sources_survey_code_key(survey_id, lower(code))
+  INDEX 0012: sample_sources_survey_idx(survey_id)
+  GRANT 0012: GRANT select TO authenticated
+
+## analytics_report_templates (created 0014; touched 0014) RLS: ['0014']
+  cols: id uuid primary; customer_id uuid not; name text not; description text; /* the shape:; plus optional export; /* * The; kept for provenance; and set null; because deleting the; created_by uuid references; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz; [constraint analytics_report_templates_name_not_blank check (length(trim(name)) > 0)]
+  POLICY 0014: "analytics_report_templates_member_read" SELECT TO authenticated :: for select to authenticated using ( exists ( select 1 from public.surveys s where s.customer_id = analytics_report_templates.customer_id and (public.rescript_pr
+  POLICY 0014: DROP "analytics_report_templates_member_read"
+  INDEX 0014: UNIQUE analytics_report_templates_name_key(customer_id, lower(name)) where deleted_at is null
+  INDEX 0014: analytics_report_templates_customer_idx(customer_id) where deleted_at is null
+  TRIGGER 0014: analytics_report_templates_touch before update for each row execute function public.rescript_touch_report_template()
+  GRANT 0014: GRANT select TO authenticated
+
+## password_resets (created 0016; touched 0016,0026) RLS: ['0016']
+  cols: id uuid primary; user_id uuid not; /* denormalised so; token_hash text not; created_at timestamptz not; expires_at timestamptz not; used_at timestamptz; /* who asked; and who used; used_ip_hash text
+  POLICY 0026: "password_resets_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0026: DROP "password_resets_service_role_only"
+  INDEX 0016: UNIQUE password_resets_token_key(token_hash)
+  INDEX 0016: password_resets_user_idx(user_id, created_at desc)
+
+## mail_deliveries (created 0016; touched 0016,0029) RLS: ['0016']
+  cols: id uuid primary; customer_id uuid references; survey_id uuid references; kind text not; to_email text not; subject text not; provider text; /* the provider's; so a bounce; status text not; /* why it; or the environment; /* * Idempotency.; so * re-running; created_by uuid references; created_at timestamptz not
+  POLICY 0016: "mail_deliveries_member_read" SELECT TO authenticated :: for select to authenticated using ( survey_id is not null and ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_a
+  POLICY 0016: DROP "mail_deliveries_member_read"
+  INDEX 0016: UNIQUE mail_deliveries_dedupe_key(dedupe_key) where dedupe_key is not null and status = 'sent'
+  INDEX 0016: mail_deliveries_survey_idx(survey_id, kind, created_at desc) where survey_id is not null
+  INDEX 0016: mail_deliveries_recipient_idx(lower(to_email), created_at desc)
+  GRANT 0016: GRANT select TO authenticated
+
+## survey_test_cases (created 0018; touched 0018) RLS: ['0018']
+  cols: id uuid primary; survey_id uuid not; name text not; notes text; /* * Disabled; and the alternative; /** * The; embedded data; and the SEED.; option order and; so a case; /** Declared expectations; and what turns; /** * The; which * is; and saying so; /** which definition; baseline_at timestamptz; baseline_by uuid references; created_at timestamptz not; created_by uuid references; updated_at timestamptz not; updated_by uuid references
+  POLICY 0018: "survey_test_cases_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0018: DROP "survey_test_cases_member_read"
+  INDEX 0018: UNIQUE survey_test_cases_name_key(survey_id, lower(name))
+  INDEX 0018: survey_test_cases_survey_idx(survey_id) where enabled
+  TRIGGER 0018: survey_test_cases_touch before update for each row execute function public.rescript_touch_test_case()
+
+## survey_test_runs (created 0018; touched 0018) RLS: ['0018']
+  cols: id uuid primary; survey_id uuid not; test_case_id uuid references; /** * Which; * which has; before publishing. `version_label`; version_label text; /** * One; so a regression; verdict text not; /* the fast; outcome jsonb; /** violated expectations; in the words; /** how it; duration_ms integer; run_at timestamptz not; run_by uuid references
+  POLICY 0018: "survey_test_runs_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0018: DROP "survey_test_runs_member_read"
+  INDEX 0018: survey_test_runs_case_idx(test_case_id, run_at desc)
+  INDEX 0018: survey_test_runs_batch_idx(batch_id)
+  INDEX 0018: survey_test_runs_survey_idx(survey_id, run_at desc)
+
+## translation_cache (created 0022; touched 0022) RLS: ['0022']
+  cols: id uuid primary; customer_id uuid not; cache_key text not; provider text not; source_language text not; target_language text not; source_hash text not; source_text text not; translated_text text not; /* an approved; hits integer not; created_at timestamptz not; updated_at timestamptz not
+  POLICY 0022: "translation_cache_tenant_read" SELECT TO authenticated :: for select to authenticated using ( customer_id = public.current_customer_id() or public.current_role() = 'platform_admin' )
+  POLICY 0022: DROP "translation_cache_tenant_read"
+  INDEX 0022: UNIQUE translation_cache_key_idx(customer_id, cache_key)
+  INDEX 0022: translation_cache_lookup_idx(customer_id, target_language, source_hash)
+
+## billing_config (created 0023; touched 0023) RLS: ['0023']
+  cols: id integer primary; config jsonb not; updated_at timestamptz not; updated_by uuid references
+  POLICY 0023: "billing_config_admin_read" SELECT TO authenticated :: for select to authenticated using (public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "billing_config_admin_read"
+
+## billing_rates (created 0023; touched 0023) RLS: ['0023']
+  cols: id text primary; provider text not; service text not; model text; side text check; unit text not; provider_cost numeric(18,8) not; unit_size numeric(18,2) not; markup_pct numeric(8,3) not; customer_rate numeric(18,8); currency text not; effective_from date; effective_until date; active boolean not; estimated boolean not; note text not; updated_at timestamptz not
+  POLICY 0023: "billing_rates_read" SELECT TO authenticated :: for select to authenticated using (true)
+  POLICY 0023: DROP "billing_rates_read"
+  INDEX 0023: billing_rates_lookup_idx(provider, service, model, side)
+
+## billing_events (created 0023; touched 0023) RLS: ['0023']
+  cols: type text primary; label text not; category text not; unit text not; billable boolean not; rate jsonb; description text not; active boolean not; updated_at timestamptz not
+  POLICY 0023: "billing_events_read" SELECT TO authenticated :: for select to authenticated using (true)
+  POLICY 0023: DROP "billing_events_read"
+
+## project_wallets (created 0023; touched 0023,0024,0025) RLS: ['0023']
+  cols: id uuid primary; customer_id uuid not; /* null =; shared_wallet_id uuid references; currency text not; balance numeric(18,6) not; reserved numeric(18,6) not; total_added numeric(18,6) not; total_used numeric(18,6) not; state text not; overdraft_enabled boolean; overdraft_limit numeric(18,6); created_at timestamptz not; updated_at timestamptz not; user_id uuid (+0024); retired_at timestamptz (+0025)
+  POLICY 0023: "project_wallets_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "project_wallets_tenant_read"
+  INDEX 0023: UNIQUE project_wallets_survey_idx(survey_id) where survey_id is not null
+  INDEX 0023: UNIQUE project_wallets_workspace_idx(customer_id) where survey_id is null
+  INDEX 0023: project_wallets_customer_idx(customer_id)
+  INDEX 0024: UNIQUE project_wallets_user_idx(user_id) where user_id is not null
+  INDEX 0024: UNIQUE project_wallets_workspace_idx(customer_id) where survey_id is null and user_id is null
+
+## usage_reservations (created 0023; touched 0023,0031) RLS: ['0023']
+  cols: id uuid primary; wallet_id uuid not; customer_id uuid not; survey_id uuid; user_id uuid; event_type text not; environment text not; estimated_cost numeric(18,6) not; reserved_amount numeric(18,6) not; status text not; actual_charge numeric(18,6); created_at timestamptz not; expires_at timestamptz not; settled_at timestamptz; subject_kind text (+0031)
+  POLICY 0023: "usage_reservations_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "usage_reservations_tenant_read"
+  INDEX 0023: usage_reservations_open_idx(wallet_id) where status = 'held'
+  INDEX 0023: usage_reservations_expiry_idx(expires_at) where status = 'held'
+
+## usage_events (created 0023; touched 0023,0031,0044) RLS: ['0023']
+  cols: id uuid primary; customer_id uuid not; survey_id uuid; user_id uuid; wallet_id uuid references; event_type text not; category text not; environment text not; provider text; service text; model text; quantity numeric(18,4) not; unit text not; input_units numeric(18,2); output_units numeric(18,2); provider_cost numeric(18,6) not; infra_cost numeric(18,6) not; payment_fee numeric(18,6) not; tax_reserve numeric(18,6) not; customer_charge numeric(18,6) not; gross_profit numeric(18,6) not; net_profit numeric(18,6) not; margin_pct numeric(8,2) not; reservation_id uuid references; adjusts_event_id uuid references; metadata jsonb not; created_at timestamptz not; subject_kind text (+0031); idempotency_key text (+0031); respondent_id uuid (+0044); unit_price numeric (+0044); billing_period_id uuid (+0044)
+  POLICY 0023: "usage_events_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "usage_events_tenant_read"
+  INDEX 0023: usage_events_survey_idx(survey_id, created_at desc)
+  INDEX 0023: usage_events_customer_idx(customer_id, created_at desc)
+  INDEX 0023: usage_events_wallet_idx(wallet_id, created_at desc)
+  INDEX 0023: usage_events_user_idx(user_id, created_at desc)
+  INDEX 0031: usage_events_subject_idx(subject_kind, survey_id, created_at desc)
+  INDEX 0031: UNIQUE usage_events_idempotency_idx(idempotency_key) where idempotency_key is not null
+  INDEX 0044: usage_events_period_idx(billing_period_id) where billing_period_id is not null
+  TRIGGER 0023: usage_events_immutable before update or delete for each row execute function public.rescript_billing_immutable()
+
+## wallet_ledger (created 0023; touched 0023,0024) RLS: ['0023']
+  cols: id bigint generated; wallet_id uuid not; customer_id uuid not; survey_id uuid; kind text not; amount numeric(18,6) not; balance_after numeric(18,6) not; reason text not; note text; usage_event_id uuid references; reference_id bigint; created_by uuid; created_at timestamptz not; expires_at timestamptz; transfer_id uuid (+0024)
+  POLICY 0023: "wallet_ledger_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "wallet_ledger_tenant_read"
+  INDEX 0023: wallet_ledger_wallet_idx(wallet_id, created_at desc)
+  INDEX 0024: wallet_ledger_transfer_idx(transfer_id) where transfer_id is not null
+  TRIGGER 0023: wallet_ledger_immutable before update or delete for each row execute function public.rescript_billing_immutable()
+
+## credit_requests (created 0023; touched 0023) RLS: ['0023']
+  cols: id uuid primary; customer_id uuid not; survey_id uuid references; wallet_id uuid references; user_id uuid not; requested_amount numeric(18,2) not; reason text not; message text; status text not; decided_by uuid references; decided_at timestamptz; decided_amount numeric(18,2); admin_note text; created_at timestamptz not
+  POLICY 0023: "credit_requests_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0023: DROP "credit_requests_tenant_read"
+  INDEX 0023: credit_requests_pending_idx(customer_id, created_at desc) where status = 'pending'
+
+## credit_transfers (created 0024; touched 0024) RLS: ['0024']
+  cols: id uuid primary; code text not; customer_id uuid not; source_wallet_id uuid not; destination_wallet_id uuid not; source_kind text not; destination_kind text not; source_ref uuid; destination_ref uuid; amount numeric(18,6) not; currency text not; reason text; note text; transferred_by uuid; status text not; reversal_of uuid references; reversed_by uuid references; created_at timestamptz not
+  POLICY 0024: "credit_transfers_admin_read" SELECT TO authenticated :: for select to authenticated using (public.current_role() = 'platform_admin')
+  POLICY 0024: DROP "credit_transfers_admin_read"
+  INDEX 0024: credit_transfers_customer_idx(customer_id, created_at desc)
+  INDEX 0024: credit_transfers_source_idx(source_wallet_id, created_at desc)
+  INDEX 0024: credit_transfers_destination_idx(destination_wallet_id, created_at desc)
+  INDEX 0024: credit_transfers_refs_idx(source_ref, destination_ref)
+  TRIGGER 0024: credit_transfers_guard before update or delete for each row execute function public.rescript_billing_transfer_guard()
+
+## project_spending (created 0025; touched 0025,0031) RLS: ['0025']
+  cols: survey_id uuid primary; customer_id uuid not; /* * shared; ever * priority; and flagged as; budget_limit numeric(18,6); /* customer charges; cumulative and never; /* held by; state text not; frozen_at timestamptz; created_at timestamptz not; updated_at timestamptz not; subject_kind text (+0031)
+  POLICY 0025: "project_spending_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.current_role() = 'platform_admin')
+  POLICY 0025: DROP "project_spending_tenant_read"
+  INDEX 0025: project_spending_customer_idx(customer_id)
+  INDEX 0025: project_spending_state_idx(state) where state = 'frozen'
+  INDEX 0031: project_spending_customer_idx(customer_id, subject_kind)
+
+## media_objects (created 0027; touched 0027,0028,0039,0040) RLS: ['0027']
+  cols: id uuid primary; customer_id uuid not; survey_id uuid not; /* * The; not a foreign; * because questions; /* * Respondent; and * `session_id`; session_id text; kind text not; bucket text not; path text not; original_filename text; mime_type text; bytes bigint; duration_seconds numeric(10,2); width integer; height integer; /* * `pending`; and exactly what; error text; uploaded_at timestamptz; created_at timestamptz not; updated_at timestamptz not; [unique (bucket, path)]; answer_key text (+0028); storage_provider text (+0039); multipart_upload_id text (+0039); client_token text (+0039); display_name text (+0040); alt_text text (+0040); sha256 text (+0040); shared boolean (+0040); created_by uuid (+0040)
+  POLICY 0027: "media_objects_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0027: DROP "media_objects_service_role_only"
+  INDEX 0027: media_objects_survey_idx(survey_id, kind)
+  INDEX 0027: media_objects_question_idx(survey_id, question_id)
+  INDEX 0027: media_objects_response_idx(response_id)
+  INDEX 0027: media_objects_session_idx(session_id)
+  INDEX 0027: media_objects_pending_idx(status, created_at) where status = 'pending'
+  INDEX 0039: UNIQUE media_objects_client_token_idx(survey_id, client_token) where client_token is not null and status <> 'failed'
+  INDEX 0040: media_objects_sha256_idx(survey_id, sha256) where sha256 is not null and status = 'stored'
+  INDEX 0040: media_objects_shared_idx(customer_id, kind) where shared and status = 'stored'
+  TRIGGER 0027: media_objects_touch before update for each row execute function public.touch_updated_at()
+
+## media_transcripts (created 0027; touched 0027) RLS: ['0027']
+  cols: id uuid primary; media_id uuid not; survey_id uuid not; /* * The; spelled once; here. * `processing`; attempts integer not; text text; language text; model text; provider text; error text; claimed_at timestamptz; started_at timestamptz; completed_at timestamptz; created_at timestamptz not; updated_at timestamptz not
+  POLICY 0027: "media_transcripts_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0027: DROP "media_transcripts_service_role_only"
+  INDEX 0027: media_transcripts_survey_idx(survey_id, status)
+  INDEX 0027: media_transcripts_open_idx(status, claimed_at) where status in ('waiting','processing','transcribing')
+  TRIGGER 0027: media_transcripts_touch before update for each row execute function public.touch_updated_at()
+
+## media_deliveries (created 0029; touched 0029) RLS: ['0029']
+  cols: id uuid primary; customer_id uuid not; survey_id uuid not; /* * The; however * many; session_id text not; respondent_label text; recipient_email text not; /* * pending; nothing sent yet; whether or not; media_count integer not; total_bytes bigint not; /* [{ mediaId; bucket ; path ; fileName ; kind ; bytes ; questionId ; questionCode ; answerKey }] */; token_hash text; expires_at timestamptz; attempts integer not; /* * WHEN; not arithmetic on; and it is; so any *; a column added; and says so.; error text; provider_id text; claimed_at timestamptz; email_sent_at timestamptz; downloaded_at timestamptz; download_count integer not; deleted_at timestamptz; created_at timestamptz not; updated_at timestamptz not
+  POLICY 0029: "media_deliveries_service_role_only" ALL TO public :: as permissive for all to public using (false) with check (false)
+  POLICY 0029: DROP "media_deliveries_service_role_only"
+  INDEX 0029: UNIQUE media_deliveries_response_key(response_id)
+  INDEX 0029: media_deliveries_due_idx(status, created_at) where status in ('pending', 'processing', 'failed')
+  INDEX 0029: media_deliveries_retry_idx(retry_after) where status = 'failed'
+  INDEX 0029: media_deliveries_expiry_idx(expires_at) where status in ('sent', 'downloaded')
+  INDEX 0029: media_deliveries_survey_idx(survey_id, created_at desc)
+  INDEX 0029: media_deliveries_token_idx(token_hash) where token_hash is not null
+  TRIGGER 0029: media_deliveries_touch before update for each row execute function public.touch_updated_at()
+  GRANT 0029: REVOKE all FROM public, anon, authenticated
+
+## interview_projects (created 0030; touched 0030,0031,0035,0036) RLS: None
+  cols: id uuid primary; customer_id uuid not; /* who pays:; created_by uuid references; /* a short; [unique inside the workspace]; used in links; name text not; description text not; status text not; /* what the; consent_text text not; /* * Everything; as one *; durations ; whether the camera; whether the *; which * is; /* how the; how many from; in what order; /* retention_days integer; /* what the; "transcripts": false; "analysis": false}'::jsonb; /* max_recording_seconds integer; max_storage_bytes bigint check; max_transcription_seconds integer check; max_ai_analyses integer check; archived_at timestamptz; deleted_at timestamptz; created_at timestamptz not; updated_at timestamptz not; [unique (customer_id, code)]; mode text (+0036); category text (+0036); template_key text (+0036); retention_hours integer (+0036)
+  INDEX 0030: interview_projects_customer_idx(customer_id, created_at desc) where deleted_at is null
+  INDEX 0030: interview_projects_owner_idx(owner_id) where deleted_at is null
+  TRIGGER 0030: interview_projects_touch before update for each row execute function public.rescript_interviews_touch()
+  TRIGGER 0031: interview_projects_forget_spending after delete for each row execute function public.rescript_billing_forget_subject('interview')
+
+## interview_project_members (created 0030; touched 0030) RLS: None
+  cols: project_id uuid not; user_id uuid not; role text not; invited_by uuid references; created_at timestamptz not; [primary key (project_id, user_id)]
+  INDEX 0030: interview_project_members_user_idx(user_id)
+
+## interview_pools (created 0030; touched 0030,0035) RLS: None
+  cols: id uuid primary; project_id uuid not; code text not; name text not; /* how many; position integer not; created_at timestamptz not; updated_at timestamptz not; [unique (project_id, code)]; description text (+0035)
+  TRIGGER 0030: interview_pools_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_questions (created 0030; touched 0030,0035,0037) RLS: None
+  cols: id uuid primary; project_id uuid not; pool_id uuid references; code text not; /* hr |; /* how the; prompt text not; /* what the; /* a clip; stored like any; required boolean not; min_seconds integer check; max_seconds integer check; /* how many; /* seconds to; position integer not; archived_at timestamptz; created_at timestamptz not; updated_at timestamptz not; [unique (project_id, code)]; [constraint interview_questions_duration_order check (min_seconds is null or max_seconds is]; options jsonb (+0035); visible_if jsonb (+0035); skip_logic jsonb (+0035); settings jsonb (+0037)
+  INDEX 0030: interview_questions_project_idx(project_id, position) where archived_at is null
+  INDEX 0030: interview_questions_pool_idx(pool_id) where archived_at is null
+  TRIGGER 0030: interview_questions_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_requirements (created 0030; touched 0030,0036) RLS: None
+  cols: id uuid primary; project_id uuid not; code text not; title text not; description text not; /* what "meeting; in the org's; for the analysis; weight numeric(6,2) not; position integer not; created_at timestamptz not; updated_at timestamptz not; [unique (project_id, code)]; category text (+0036)
+  TRIGGER 0030: interview_requirements_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interviews (created 0030; touched 0030,0033) RLS: None
+  cols: id uuid primary; project_id uuid not; customer_id uuid not; /* the candidate; as the company; ever. */ candidate_name; candidate_email text; candidate_reference text; /* * THE; and the migration; when * the; and after that; which is a; kept so a; token_prefix text not; token_issued_at timestamptz not; expires_at timestamptz; status text not; /* TEST sittings; /* * THE; when the interview; and never recomputed; poolId ; position}]` ; in the order; /* the seed; so the selection; not just replayed; consent_given_at timestamptz; consent_text_snapshot text; started_at timestamptz; completed_at timestamptz; processed_at timestamptz; last_seen_at timestamptz; /* what the; for interpreting a; ip_hash text; error text; deleted_at timestamptz; /* set by; created_at timestamptz not; updated_at timestamptz not
+  INDEX 0030: interviews_project_idx(project_id, created_at desc) where deleted_at is null
+  INDEX 0030: interviews_status_idx(status, created_at) where deleted_at is null
+  INDEX 0030: interviews_customer_idx(customer_id) where deleted_at is null
+  INDEX 0030: interviews_retention_idx(completed_at) where deleted_at is null and media_purged_at is null and completed_at is not null
+  TRIGGER 0030: interviews_touch before update for each row execute function public.rescript_interviews_touch()
+  TRIGGER 0033: interviews_mirror_respondent after insert or update of candidate_name, candidate_email for each row execute function public.rescript_interview_mirror_respondent()
+
+## interview_responses (created 0030; touched 0030,0035,0037) RLS: None
+  cols: id uuid primary; interview_id uuid not; project_id uuid not; customer_id uuid not; question_id uuid not; /* where in; status text not; /* a text; or the transcript; duration_seconds numeric(10,2); retries integer not; /* how long; started_at timestamptz; recorded_at timestamptz; stored_at timestamptz; error text; created_at timestamptz not; updated_at timestamptz not; /* one live; answer_value jsonb (+0035); answer_kind text (+0035); prompt_watched_at timestamptz (+0035)
+  INDEX 0030: interview_responses_interview_idx(interview_id, position)
+  INDEX 0030: interview_responses_project_idx(project_id, created_at desc)
+  TRIGGER 0030: interview_responses_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_media (created 0030; touched 0030,0033,0038) RLS: None
+  cols: id uuid primary; customer_id uuid not; project_id uuid not; interview_id uuid references; response_id uuid references; question_id uuid references; kind text not; /* which implementation; storage_key text not; mime_type text; /* what the; never what the; duration_seconds numeric(10,2); width integer; height integer; upload_status text not; processing_status text not; /* set while; so an abandoned; /* the client's; for duplicate protection; error text; uploaded_at timestamptz; deleted_at timestamptz; created_at timestamptz not; updated_at timestamptz not; [unique (storage_provider, storage_key)]; recorded_by uuid (+0033); companion_of uuid (+0038)
+  INDEX 0030: interview_media_interview_idx(interview_id, kind) where deleted_at is null
+  INDEX 0030: interview_media_response_idx(response_id) where deleted_at is null
+  INDEX 0030: interview_media_project_idx(project_id) where deleted_at is null
+  INDEX 0030: interview_media_pending_idx(upload_status, created_at) where upload_status in ('pending', 'uploading')
+  INDEX 0030: UNIQUE interview_media_client_token_idx(response_id, client_token) where client_token is not null and deleted_at is null
+  INDEX 0038: interview_media_companion_idx(companion_of) where companion_of is not null
+  TRIGGER 0030: interview_media_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_transcripts (created 0030; touched 0030,0033) RLS: None
+  cols: id uuid primary; media_id uuid not; interview_id uuid references; project_id uuid not; response_id uuid references; status text not; attempts integer not; text text; /* word or; when the provider; end ; text}] */ segments; language text; provider text; model text; /* what we; so a retry; error text; claimed_at timestamptz; started_at timestamptz; completed_at timestamptz; created_at timestamptz not; updated_at timestamptz not; diarized boolean (+0033); speaker_count integer (+0033)
+  INDEX 0030: interview_transcripts_open_idx(status, claimed_at) where status in ('waiting', 'processing', 'transcribing')
+  INDEX 0030: interview_transcripts_interview_idx(interview_id)
+  TRIGGER 0030: interview_transcripts_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_evidence (created 0030; touched 0030,0038) RLS: None
+  cols: id uuid primary; interview_id uuid not; project_id uuid not; requirement_id uuid not; response_id uuid references; question_id uuid references; verdict text not; /* the analysis's; /* the transcript; never paraphrased */; quote_start_seconds numeric(10,2); quote_end_seconds numeric(10,2); confidence numeric(5,4) check; provider text; model text; created_at timestamptz not; [unique (interview_id, requirement_id, response_id)]; media_id uuid (+0038)
+  INDEX 0030: interview_evidence_interview_idx(interview_id, requirement_id)
+
+## interview_analysis (created 0030; touched 0030,0036) RLS: None
+  cols: id uuid primary; interview_id uuid not; project_id uuid not; status text not; attempts integer not; /* a per-requirement; evidenceCount}} */ summary; /* the analysis's; for a reviewer; provider text; model text; /* the requirement; so a later; error text; claimed_at timestamptz; completed_at timestamptz; created_at timestamptz not; updated_at timestamptz not; score jsonb (+0036)
+  INDEX 0030: UNIQUE interview_analysis_interview_idx(interview_id)
+  TRIGGER 0030: interview_analysis_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_reviews (created 0030; touched 0030) RLS: None
+  cols: id uuid primary; interview_id uuid not; project_id uuid not; reviewer_id uuid not; status text not; /* the reviewer's; notes text not; recommendation text check; completed_at timestamptz; created_at timestamptz not; updated_at timestamptz not; [unique (interview_id, reviewer_id)]
+  TRIGGER 0030: interview_reviews_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_telemetry (created 0030; touched 0030) RLS: None
+  cols: id bigint generated; interview_id uuid not; project_id uuid not; response_id uuid references; question_id uuid references; kind text not; /* whatever the; counts ; permission states */; /* the browser's; which may disagree; created_at timestamptz not
+  INDEX 0030: interview_telemetry_interview_idx(interview_id, created_at)
+  INDEX 0030: interview_telemetry_kind_idx(project_id, kind)
+
+## interview_jobs (created 0030; touched 0030) RLS: None
+  cols: id uuid primary; customer_id uuid not; project_id uuid not; interview_id uuid references; kind text not; /* what the; an interview id; an export id; payload jsonb not; status text not; priority integer not; attempts integer not; max_attempts integer not; /* the next; never derived from; claimed_at timestamptz; started_at timestamptz; completed_at timestamptz; error text; idempotency_key text unique; created_at timestamptz not; updated_at timestamptz not
+  INDEX 0030: interview_jobs_due_idx(kind, priority, run_after) where status in ('queued', 'failed')
+  INDEX 0030: interview_jobs_running_idx(claimed_at) where status = 'running'
+  INDEX 0030: interview_jobs_interview_idx(interview_id, kind)
+  TRIGGER 0030: interview_jobs_touch before update for each row execute function public.rescript_interviews_touch()
+
+## interview_exports (created 0030; touched 0030) RLS: None
+  cols: id uuid primary; customer_id uuid not; project_id uuid not; interview_id uuid references; requested_by uuid references; kind text not; format text not; status text not; media_id uuid references; /* what went; mediaId ; fileName ; bytes}] */ manifest; total_bytes bigint not; /* a share; hashed exactly as; expires_at timestamptz; download_count integer not; downloaded_at timestamptz; error text; created_at timestamptz not; updated_at timestamptz not
+  INDEX 0030: interview_exports_project_idx(project_id, created_at desc)
+  INDEX 0030: interview_exports_token_idx(token_hash) where token_hash is not null
+  TRIGGER 0030: interview_exports_touch before update for each row execute function public.rescript_interviews_touch()
+
+## auth_handoff_codes (created 0032; touched 0032) RLS: ['0032']
+  cols: /* * The; never the code.; a log line; session_id uuid not; user_id uuid not; /* the exact; /* who asked; for reading an; as everywhere else.; expires_at timestamptz not; used_at timestamptz; created_at timestamptz not
+  POLICY 0032: "auth_handoff_codes_service_role_only" ALL :: for all using (false) with check (false)
+  POLICY 0032: DROP "auth_handoff_codes_service_role_only"
+  INDEX 0032: auth_handoff_codes_session_idx(session_id)
+  INDEX 0032: auth_handoff_codes_expiry_idx(expires_at)
+  GRANT 0032: REVOKE all FROM public, anon, authenticated
+
+## interview_people (created 0033; touched 0033) RLS: ['0033']
+  cols: id uuid primary; customer_id uuid not; project_id uuid not; /* * Set; who appear across; /* * THE; WHEN THERE IS; and `display_name` becomes; display_name text not; email text; /* what this; /* * A; created_by uuid references; archived_at timestamptz; created_at timestamptz not; updated_at timestamptz not
+  POLICY 0033: "interview_people_service_role_only" ALL :: for all using (false) with check (false)
+  POLICY 0033: DROP "interview_people_service_role_only"
+  INDEX 0033: UNIQUE interview_people_user_idx(project_id, user_id) where user_id is not null and archived_at is null
+  INDEX 0033: UNIQUE interview_people_email_idx(project_id, lower(btrim(email))) where email is not null and btrim(email) <> '' and archived_at is null
+  INDEX 0033: UNIQUE interview_people_respondent_idx(interview_id) where derived
+  INDEX 0033: interview_people_project_idx(project_id, kind) where archived_at is null
+  TRIGGER 0033: interview_people_touch before update for each row execute function public.rescript_interviews_touch()
+  GRANT 0033: REVOKE all FROM public, anon, authenticated
+
+## interview_media_participants (created 0033; touched 0033) RLS: ['0033']
+  cols: media_id uuid not; person_id uuid not; role text not; /* * THE; LEFT EMPTY ON; * "Speaker 2"; not a fact.; and `confirmed_by` *; which is a; confirmed_by uuid references; confirmed_at timestamptz; created_at timestamptz not; [primary key (media_id, person_id)]
+  POLICY 0033: "interview_media_participants_service_role_only" ALL :: for all using (false) with check (false)
+  POLICY 0033: DROP "interview_media_participants_service_role_only"
+  INDEX 0033: interview_media_participants_person_idx(person_id)
+  INDEX 0033: interview_media_participants_speaker_idx(media_id, speaker_label) where speaker_label is not null
+  GRANT 0033: REVOKE all FROM public, anon, authenticated
+
+## interview_deletions (created 0036; touched 0036) RLS: ['0036']
+  cols: id bigint generated; customer_id uuid not; project_id uuid references; interview_id uuid; media_id uuid; storage_key text; /* media |; /* retention |; bytes bigint; deleted_at timestamptz not; /* null: not; verified_at timestamptz; detail jsonb not
+  INDEX 0036: interview_deletions_customer_idx(customer_id, deleted_at desc)
+  INDEX 0036: interview_deletions_interview_idx(interview_id) where interview_id is not null
+
+## media_deletions (created 0039; touched 0039) RLS: ['0039']
+  cols: id bigint generated; customer_id uuid not; survey_id uuid; media_id uuid; storage_provider text not; bucket text not; path text not; kind text; bytes bigint; /* retention |; deleted_at timestamptz not; /* true: a; detail jsonb not
+  INDEX 0039: media_deletions_customer_idx(customer_id, deleted_at desc)
+  INDEX 0039: media_deletions_survey_idx(survey_id) where survey_id is not null
+
+## data_export_presets (created 0042; touched 0042) RLS: ['0042']
+  cols: id uuid primary; customer_id uuid not; name text not; description text; /* * The; values ; headers ; dataset ; quality ; * includeDictionary; ... }. Held; and a migration; so a row; /* * Provenance; and deleting the; created_by uuid references; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz; [constraint data_export_presets_name_not_blank check (length(trim(name)) > 0)]
+  POLICY 0042: "data_export_presets_member_read" SELECT TO authenticated :: for select to authenticated using ( exists ( select 1 from public.surveys s where s.customer_id = data_export_presets.customer_id and (public.rescript_project_r
+  POLICY 0042: DROP "data_export_presets_member_read"
+  INDEX 0042: UNIQUE data_export_presets_name_key(customer_id, lower(name)) where deleted_at is null
+  INDEX 0042: data_export_presets_customer_idx(customer_id) where deleted_at is null
+  TRIGGER 0042: data_export_presets_touch before update for each row execute function public.rescript_touch_export_preset()
+  GRANT 0042: GRANT select TO authenticated
+
+## billing_periods (created 0044; touched 0044) RLS: ['0044']
+  cols: id uuid primary; customer_id uuid not; starts_at timestamptz not; /* * Exclusive.; ends_at), so two
+  POLICY 0044: "billing_periods_tenant_read" SELECT TO authenticated :: for select to authenticated using (customer_id = public.current_customer_id() or public.rescript_is_platform_admin(auth.uid()))
+  POLICY 0044: DROP "billing_periods_tenant_read"
+  INDEX 0044: UNIQUE billing_periods_one_open(customer_id) where status = 'open'
+  INDEX 0044: billing_periods_customer_idx(customer_id, starts_at desc)
+  GRANT 0044: GRANT select TO authenticated
+
+## copilot_documents (created 0045; touched 0045) RLS: ['0045']
+  cols: id uuid primary; survey_id uuid not; customer_id uuid references; /* the short; name text not; format text not; kind text; pages integer not; chars integer not; ocr_pages integer not; summary jsonb; warnings jsonb not; created_by uuid references; created_at timestamptz not; [constraint copilot_documents_name_not_blank check (length(trim(name)) > 0)]
+  POLICY 0045: "copilot_documents_member_read" SELECT TO authenticated :: for select to authenticated using (public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()))
+  POLICY 0045: DROP "copilot_documents_member_read"
+  INDEX 0045: copilot_documents_survey_idx(survey_id, created_at)
+  INDEX 0045: UNIQUE copilot_documents_ref_key(survey_id, ref)
+  GRANT 0045: GRANT select TO authenticated
+
+## copilot_chunks (created 0045; touched 0045) RLS: ['0045']
+  cols: document_id uuid not; survey_id uuid not; seq integer not; page integer not; heading text; kind text not; text text not; embedding jsonb; [primary key (document_id, seq)]
+  POLICY 0045: "copilot_chunks_member_read" SELECT TO authenticated :: for select to authenticated using (public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()))
+  POLICY 0045: DROP "copilot_chunks_member_read"
+  INDEX 0045: copilot_chunks_survey_idx(survey_id)
+  GRANT 0045: GRANT select TO authenticated
+
+## analytics_runs (created 0046; touched 0046,0048,0049) RLS: ['0046']
+  cols: id uuid primary; survey_id uuid not; trigger text not; environment text not; n integer not; dataset jsonb not; computed_at timestamptz not; findings jsonb not; verdicts jsonb not; items jsonb not; warnings jsonb not; survey_version text; created_by uuid; created_at timestamptz not; corrections jsonb (+0048); advice jsonb (+0048); discoveries jsonb (+0048); kpis jsonb (+0049); since jsonb (+0049)
+  POLICY 0046: "analytics_runs_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0046: DROP "analytics_runs_member_read"
+  INDEX 0046: analytics_runs_survey_idx(survey_id, computed_at desc)
+
+## intelligent_operations (created 0047; touched 0047) RLS: ['0047']
+  cols: id uuid primary; survey_id uuid not; created_by uuid; created_at timestamptz not; updated_at timestamptz not; change_n integer; prompt text not; source text not; intent jsonb not; detected jsonb not; targets text[] not; proposed jsonb not; applied jsonb not; excluded jsonb not; failed jsonb not; warnings jsonb not; engine_ops jsonb not; api_calls jsonb not; before jsonb; after jsonb; status text not; status_detail text; saved_revision integer; [constraint intelligent_operations_prompt_len check (char_length(prompt) <= 4000)]
+  POLICY 0047: "intelligent_operations_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0047: DROP "intelligent_operations_member_read"
+  INDEX 0047: intelligent_operations_survey_idx(survey_id, created_at desc)
+  INDEX 0047: UNIQUE intelligent_operations_change_n_key(survey_id, change_n) where change_n is not null
+  GRANT 0047: GRANT select TO authenticated
+
+## analytics_plan_applies (created 0050; touched 0050,0053) RLS: ['0050']
+  cols: id uuid primary; survey_id uuid not; status text not; environment text not; dataset jsonb not; plan_hash text; plan_updated_at text; survey_revision bigint; survey_version text; run_id uuid references; report_id uuid references; dashboard_id uuid references; summary jsonb not; error text; started_at timestamptz not; finished_at timestamptz; created_by uuid
+  POLICY 0050: "analytics_plan_applies_member_read" SELECT TO authenticated :: for select to authenticated using ( public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()) )
+  POLICY 0050: DROP "analytics_plan_applies_member_read"
+  INDEX 0050: analytics_plan_applies_survey_idx(survey_id, started_at desc)
+  INDEX 0053: UNIQUE analytics_plan_applies_one_running(survey_id) where status = 'running'
+
+## analytics_story_reports (created 0051; touched 0051) RLS: None
+  cols: id uuid primary; survey_id uuid not; title text not; definition jsonb not; version integer not; status text not; outputs jsonb not; "video": true}'::jsonb; options jsonb not; run_id uuid references; environment text not; created_by uuid; updated_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz
+  POLICY 0051: "analytics_story_reports_member_read" SELECT TO authenticated :: for select to authenticated using (public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()))
+  INDEX 0051: analytics_story_reports_survey_idx(survey_id, deleted_at, updated_at desc)
+
+## analytics_story_versions (created 0051; touched 0051) RLS: None
+  cols: id bigint generated; story_id uuid not; version integer not; definition jsonb not; note text; changes jsonb not; created_by uuid; created_at timestamptz not; [unique (story_id, version)]
+  POLICY 0051: "analytics_story_versions_member_read" SELECT TO authenticated :: for select to authenticated using (exists (select 1 from public.analytics_story_reports r where r.id = story_id and (public.rescript_project_role(auth.uid(), r.
+
+## analytics_story_renders (created 0051; touched 0051) RLS: None
+  cols: id uuid primary; story_id uuid not; survey_id uuid not; version integer not; kind text not; status text not; plan_hash text; plan jsonb not; progress jsonb not; qa jsonb; providers jsonb not; estimate jsonb; storage_provider text; bucket text; path text; bytes bigint; error text; attempts integer not; lease_until timestamptz; created_by uuid; created_at timestamptz not; started_at timestamptz; finished_at timestamptz; expires_at timestamptz
+  POLICY 0051: "analytics_story_renders_member_read" SELECT TO authenticated :: for select to authenticated using (public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()))
+  INDEX 0051: analytics_story_renders_story_idx(story_id, created_at desc)
+  INDEX 0051: analytics_story_renders_pending_idx(status, lease_until) where status in ('queued', 'rendering', 'verifying')
+  INDEX 0051: UNIQUE analytics_story_renders_one_active(story_id, kind) where status in ('queued', 'rendering', 'verifying')
+
+## analytics_story_segments (created 0051; touched 0051) RLS: None
+  cols: survey_id uuid not; hash text not; storage_provider text not; bucket text not; path text not; bytes bigint not; seconds numeric not; created_at timestamptz not; [primary key (survey_id, hash)]
+  POLICY 0051: "analytics_story_segments_member_read" SELECT TO authenticated :: for select to authenticated using (public.rescript_project_role(auth.uid(), survey_id) is not null or public.rescript_is_platform_admin(auth.uid()))
+
+## analytics_story_themes (created 0051; touched 0051) RLS: ['0051']
+  cols: id uuid primary; customer_id uuid references; survey_id uuid references; name text not; design jsonb not; brand jsonb not; created_by uuid; created_at timestamptz not; updated_at timestamptz not; deleted_at timestamptz; [check (customer_id is not null or survey_id is not null)]
+  POLICY 0051: "analytics_story_themes_member_read" SELECT TO authenticated :: for select to authenticated using ( (survey_id is not null and public.rescript_project_role(auth.uid(), survey_id) is not null) or (survey_id is null and exists
+  POLICY 0051: DROP "analytics_story_themes_member_read"
+  INDEX 0051: analytics_story_themes_scope_idx(customer_id, survey_id, deleted_at)
+
+## analytics_result_cache (created 0052; touched 0052) RLS: ['0052']
+  cols: survey_id uuid not; input_hash text not; engine_version text not; payload jsonb not; bytes integer not; computed_at timestamptz not; expires_at timestamptz not; [primary key (survey_id, input_hash)]
+  INDEX 0052: analytics_result_cache_expiry_idx(expires_at)
+
+## user_ai_credentials (created 0054; touched 0054) RLS: ['0054', '0054(force)']
+  cols: id uuid primary; user_id uuid not; provider text not; label text; sealed text not; mask text not; key_id text not; created_at timestamptz not; rotated_at timestamptz; last_used_at timestamptz; last_test jsonb
+  INDEX 0054: user_ai_credentials_user_idx(user_id)
+  GRANT 0054: REVOKE all FROM anon, authenticated
+
+## user_ai_settings (created 0054; touched 0054) RLS: ['0054', '0054(force)']
+  cols: user_id uuid not; feature text not; mode text not; config jsonb not; credential_id uuid references; fallbacks jsonb not; allow_platform_fallback boolean not; last_test jsonb; updated_at timestamptz not; [primary key (user_id, feature)]
+  GRANT 0054: REVOKE all FROM anon, authenticated
+
+# VIEWS
+
+# FUNCTIONS
+increment_quota_counts | 0001: (p_survey_id uuid, p_cells jsonb) -> void || 0006: (p_survey_id uuid, p_cells jsonb, p_test boolean default false) -> void || 0010: (p_survey_id uuid, p_cells jsonb, p_test boolean default false) -> void
+current_customer_id | 0001: () -> uuid
+current_role | 0001: () -> text
+touch_updated_at | 0001: () -> trigger
+rescript_question_count | 0002: (def jsonb) -> int
+survey_dashboard_stats | 0002: () -> table || 0006: () -> table
+survey_publish_state | 0003: (p_survey_id uuid) -> table
+rescript_save_draft | 0004: (p_survey_id uuid, p_definition jsonb, p_base_revision bigint, p_base_version_id uuid default null, p_title text default ) -> table
+rescript_finalize_version | 0004: (p_survey_id uuid, p_version_id uuid, p_base_revision bigint) -> table
+rescript_purge_telemetry | 0005: (p_survey_id uuid, p_days int) -> int
+rescript_quality_summary | 0005: (p_survey_id uuid, p_is_test boolean) -> table || 0006: (p_survey_id uuid, p_is_test boolean) -> table
+rescript_next_respondent_code | 0006: (p_survey uuid, p_test boolean) -> text
+rescript_assign_respondent_code | 0006: () -> trigger
+rescript_bump_response_revision | 0006: () -> trigger
+rescript_update_response | 0006: (p_id uuid, p_expected_revision integer, p_answers jsonb, p_calculated jsonb, p_changes jsonb, p_by text, p_reason text) -> table
+rescript_soft_delete_responses | 0006: (p_survey uuid, p_ids uuid[], p_by text, p_reason text) -> integer
+rescript_restore_responses | 0006: (p_survey uuid, p_ids uuid[], p_by text) -> integer
+rescript_purge_responses | 0006: (p_survey uuid, p_ids uuid[], p_by text) -> integer
+rescript_import_responses | 0006: (p_survey uuid, p_version uuid, p_test boolean, p_mode text, p_rows jsonb, p_by text) -> jsonb
+rescript_replace_quota_counts | 0006: (p_survey uuid, p_test boolean, p_cells jsonb) -> integer || 0010: (p_survey uuid, p_test boolean, p_cells jsonb) -> integer
+rescript_claim_listfill_slot | 0007: (p_survey uuid, p_test boolean, p_list_fill text, p_option text, p_max integer, p_use_completed boolean default false) -> integer
+rescript_allocate_listfill | 0007: (p_survey uuid, p_test boolean, p_list_fill text, p_session text, p_preference jsonb, p_count integer default 1, p_use_co) -> table
+rescript_complete_listfill | 0007: (p_survey uuid, p_session text) -> integer
+rescript_release_listfill | 0007: (p_survey uuid, p_session text) -> integer
+rescript_recount_listfill | 0007: (p_survey uuid, p_test boolean) -> integer
+rescript_listfill_status | 0007: (p_survey uuid, p_test boolean) -> table
+rescript_release_listfill_on_delete | 0007: () -> trigger
+rescript_next_user_code | 0008: () -> text
+rescript_on_auth_user_created | 0008: () -> trigger || 0009: () -> trigger
+rescript_expire_sessions | 0008: (p_user uuid, p_stale_seconds integer, p_absolute_seconds integer) -> integer
+rescript_login | 0008: (p_user uuid, p_stale_seconds integer, p_absolute_seconds integer, p_lifetime_seconds integer, p_force boolean default fa) -> table
+rescript_touch_session | 0008: (p_session uuid, p_stale_seconds integer, p_absolute_seconds integer) -> table
+rescript_end_session | 0008: (p_session uuid, p_reason text default 'logout', p_by uuid default null) -> integer || 0009: (p_session uuid, p_reason text default 'logout', p_by uuid default null) -> integer
+rescript_login_failures | 0008: (p_identifier text, p_ip_hash text, p_window_seconds integer) -> table
+rescript_project_role | 0008: (p_user uuid, p_survey uuid) -> text || 0009: (p_user uuid, p_survey uuid) -> text
+rescript_is_platform_admin | 0008: (p_user uuid) -> boolean
+rescript_claim_invitations | 0008: (p_user uuid) -> integer || 0034: (p_user uuid) -> integer
+rescript_acquire_lock | 0008: (p_survey uuid, p_user uuid, p_session uuid, p_stale_seconds integer, p_max_hold_seconds integer, p_section text default ) -> table || 0009: (p_survey uuid, p_user uuid, p_session uuid, p_stale_seconds integer, p_max_hold_seconds integer, p_section text default ) -> table
+rescript_heartbeat_lock | 0008: (p_survey uuid, p_session uuid, p_max_hold_seconds integer, p_section text default null) -> boolean
+rescript_release_lock | 0008: (p_survey uuid, p_session uuid, p_reason text default 'released') -> boolean
+rescript_force_release_lock | 0008: (p_survey uuid, p_by uuid, p_reason text default 'force_released') -> table
+rescript_expire_locks | 0008: (p_stale_seconds integer) -> integer || 0009: (p_stale_seconds integer) -> integer
+rescript_touch_presence | 0008: (p_survey uuid, p_session uuid, p_user uuid, p_activity text default null) -> void
+rescript_project_presence | 0008: (p_survey uuid, p_within_seconds integer) -> table
+rescript_access_policy | 0008: (p_customer uuid) -> jsonb
+rescript_my_projects | 0008: (p_user uuid, p_lock_stale_seconds integer default 180) -> table || 0009: (p_user uuid, p_lock_stale_seconds integer default 180) -> table || 0034: (p_user uuid, p_lock_stale_seconds integer default 180) -> table || 0043: (p_user uuid, p_lock_stale_seconds integer default 180) -> table
+rescript_project_members | 0008: (p_survey uuid, p_present_within_seconds integer default 60) -> table || 0034: (p_survey uuid, p_present_within_seconds integer default 60) -> table
+rescript_active_sessions | 0008: (p_stale_seconds integer default 900) -> table
+rescript_workspace_default_role | 0009: (p_customer uuid) -> text
+rescript_project_access | 0009: (p_user uuid, p_survey uuid) -> table || 0034: (p_user uuid, p_survey uuid) -> table
+rescript_lock_for | 0009: (p_survey uuid) -> table
+rescript_release_session_locks | 0009: (p_session uuid, p_reason text default 'session_ended') -> integer
+rescript_resolve_share | 0011: (p_token text) -> table
+rescript_record_share_access | 0011: (p_share uuid, p_event text, p_user uuid, p_email text, p_ip_hash text, p_agent text) -> void
+rescript_source_stats | 0012: (p_survey uuid, p_is_test boolean) -> table
+rescript_versions_are_immutable | 0012: () -> trigger || 0021: () -> trigger
+rescript_touch_respondent | 0013: () -> trigger
+rescript_respondent_stats | 0013: (p_survey uuid, p_is_test boolean) -> table
+rescript_touch_report_template | 0014: () -> trigger
+rescript_resolve_share_variants | 0014: (p_token text) -> jsonb
+rescript_project_config | 0015: (p_surveys uuid[]) -> table
+rescript_invitation_sends | 0016: (p_survey uuid, p_is_test boolean) -> table
+rescript_accept_invitation | 0017: (p_user uuid, p_token_hash text) -> table
+rescript_touch_test_case | 0018: () -> trigger
+rescript_test_suite | 0018: (p_survey uuid) -> table
+rescript_field_timeline | 0019: (p_survey uuid, p_is_test boolean, p_bucket text, p_from timestamptz, p_to timestamptz, p_tz text default 'UTC') -> table
+rescript_field_pulse | 0019: (p_survey uuid, p_is_test boolean, p_active_seconds integer default 900, p_window_minutes integer default 60) -> table
+rescript_field_positions | 0019: (p_survey uuid, p_is_test boolean, p_active_seconds integer default 900) -> table
+rescript_delete_project | 0020: (p_survey_id uuid) -> boolean
+rescript_billing_immutable | 0023: () -> trigger
+rescript_billing_wallet_for | 0023: (p_customer uuid, p_survey uuid, p_create boolean, p_seed numeric default 0) -> public.project_wallets || 0024: (p_customer uuid, p_survey uuid, p_create boolean, p_seed numeric default 0) -> public.project_wallets || 0025: (p_customer uuid, p_survey uuid, p_create boolean, p_seed numeric default 0) -> public.project_wallets || 0031: (p_customer uuid, p_survey uuid, p_create boolean, p_seed numeric default 0) -> public.project_wallets
+rescript_billing_state | 0023: (p_balance numeric, p_current text, p_read_only_threshold numeric) -> text
+rescript_billing_reserve | 0023: (p_wallet uuid, p_customer uuid, p_survey uuid, p_user uuid, p_event_type text, p_environment text, p_estimated numeric, ) -> jsonb || 0025: (p_wallet uuid, p_customer uuid, p_survey uuid, p_user uuid, p_event_type text, p_environment text, p_estimated numeric, ) -> jsonb || 0031: (p_wallet uuid, p_customer uuid, p_survey uuid, p_user uuid, p_event_type text, p_environment text, p_estimated numeric, ) -> jsonb
+rescript_billing_insert_usage | 0023: (p_event jsonb, p_reservation uuid) -> public.usage_events || 0031: (p_event jsonb, p_reservation uuid) -> public.usage_events
+rescript_billing_settle | 0023: (p_reservation uuid, p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0025: (p_reservation uuid, p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0031: (p_reservation uuid, p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0034: (p_reservation uuid, p_event jsonb, p_read_only_threshold numeric) -> jsonb
+rescript_billing_release | 0023: (p_reservation uuid, p_status text default 'released') -> void || 0025: (p_reservation uuid, p_status text default 'released') -> void || 0031: (p_reservation uuid, p_status text default 'released') -> void
+rescript_billing_record | 0023: (p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0025: (p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0031: (p_event jsonb, p_read_only_threshold numeric) -> jsonb || 0034: (p_event jsonb, p_read_only_threshold numeric) -> jsonb
+rescript_billing_credit | 0023: (p_wallet uuid, p_amount numeric, p_kind text, p_reason text, p_note text, p_by uuid, p_expires timestamptz, p_reference ) -> jsonb
+rescript_billing_expire_reservations | 0023: (p_now timestamptz default now()) -> integer || 0034: (p_now timestamptz default now()) -> integer
+rescript_billing_transfer_guard | 0024: () -> trigger
+rescript_billing_user_wallet_for | 0024: (p_customer uuid, p_user uuid, p_create boolean) -> public.project_wallets
+rescript_billing_transfer | 0024: (p_source uuid, p_destination uuid, p_amount numeric, p_reason text, p_note text, p_by uuid, p_reversal_of uuid, p_read_o) -> jsonb
+rescript_billing_spending_for | 0025: (p_survey uuid, p_customer uuid, p_create boolean default true) -> public.project_spending || 0031: (p_survey uuid, p_customer uuid, p_create boolean default true) -> public.project_spending
+rescript_billing_project_headroom | 0025: (r public.project_spending) -> numeric || 0031: (r public.project_spending) -> numeric
+rescript_billing_project_state | 0025: (r public.project_spending) -> text || 0031: (r public.project_spending) -> text
+rescript_billing_set_spending | 0025: (p_survey uuid, p_customer uuid, p_mode text, p_limit numeric) -> public.project_spending || 0031: (p_survey uuid, p_customer uuid, p_mode text, p_limit numeric) -> public.project_spending
+rescript_billing_sweep_to_owners | 0025: () -> table || 0031: () -> table
+rescript_claim_transcription | 0027: (p_media uuid, p_stale_seconds integer default 180, p_max_attempts integer default 3) -> table || 0039: (p_media uuid, p_stale_seconds integer default 180, p_max_attempts integer default 3) -> table
+rescript_media_for_survey | 0027: (p_survey uuid) -> table
+rescript_set_answer_transcript | 0028: (p_session text, p_answer_key text, p_transcript jsonb) -> boolean
+rescript_unmerged_transcripts | 0028: (p_survey uuid default null) -> table
+rescript_media_deliveries_due | 0029: (p_limit integer default 25, p_window_hours integer default 48) -> table
+rescript_claim_media_delivery | 0029: (p_id uuid, p_stale_seconds integer default 300, p_max_attempts integer default 5) -> table
+rescript_media_deliveries_expiring | 0029: (p_limit integer default 50) -> table || 0039: (p_limit integer default 50) -> table
+rescript_media_delivery_status | 0029: (p_survey uuid) -> table
+rescript_interviews_touch | 0030: () -> trigger
+rescript_interview_claim_job | 0030: (p_kind text, p_stale_seconds integer default 300, p_now timestamptz default now()) -> public.interview_jobs
+rescript_interview_finish_job | 0030: (p_job uuid, p_status text, p_error text default null, p_run_after timestamptz default null) -> public.interview_jobs || 0038: (p_job uuid, p_status text, p_error text default null, p_run_after timestamptz default null) -> public.interview_jobs
+rescript_interview_claim_transcript | 0030: (p_media uuid, p_stale_seconds integer default 300, p_max_attempts integer default 3) -> public.interview_transcripts
+rescript_interview_media_for | 0030: (p_interview uuid) -> table
+rescript_interview_retention_due | 0030: (p_limit integer default 50) -> table || 0036: (p_limit integer default 50) -> table
+rescript_interview_abandoned_uploads | 0030: (p_older_than_minutes integer default 120, p_limit integer default 200) -> table
+rescript_interview_storage_bytes | 0030: (p_project uuid) -> bigint
+rescript_billing_forget_subject | 0031: () -> trigger
+rescript_billing_subject_wallet_for | 0031: (p_customer uuid, p_subject_kind text, p_subject uuid, p_create boolean, p_seed numeric) -> public.project_wallets
+rescript_billing_subject_spending_for | 0031: (p_subject_kind text, p_subject uuid, p_customer uuid, p_create boolean) -> public.project_spending
+rescript_billing_set_subject_spending | 0031: (p_subject_kind text, p_subject uuid, p_customer uuid, p_mode text, p_limit numeric) -> public.project_spending
+rescript_auth_issue_handoff | 0032: (p_code_hash text, p_session uuid, p_user uuid, p_origin text, p_ttl_seconds integer default 60, p_ip_hash text default n) -> timestamptz
+rescript_auth_redeem_handoff | 0032: (p_code_hash text, p_origin text) -> uuid
+rescript_auth_sweep_handoff | 0032: (p_keep_minutes integer default 60) -> integer
+rescript_interview_mirror_respondent | 0033: () -> trigger
+rescript_interview_recording_participants | 0033: (p_media uuid) -> table
+rescript_interview_set_participants | 0033: (p_media uuid, p_people uuid[], p_roles text[], p_actor uuid default null) -> integer
+rescript_interview_map_speaker | 0033: (p_media uuid, p_person uuid, p_label text, p_actor uuid default null) -> boolean
+rescript_interview_person_recordings | 0033: (p_person uuid) -> table
+rescript_interview_customers | 0036: () -> table
+rescript_media_usage | 0040: (p_media uuid) -> table
+rescript_touch_export_preset | 0042: () -> trigger
+rescript_billing_open_period | 0044: (p_customer uuid, p_starts timestamptz default date_trunc('month', now()), p_ends timestamptz default (date_trunc('month') -> uuid
+
+# policies on unknown tables
