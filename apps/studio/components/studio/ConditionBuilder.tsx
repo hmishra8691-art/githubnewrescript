@@ -164,6 +164,13 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
   const gridQ = !rule.source.count && srcQuestion && isCategoricalGrid(srcQuestion) ? srcQuestion : undefined;
   const cellForm = !!gridQ && isCellOperator(rule.operator);
   /*
+   * OR-07: when the row AND the column select are both on screen they already
+   * say which cell this is, so the reference chip shows only the question —
+   * a third spelling of the same row and column on one line is noise.
+   */
+  const bothAxesShown = !rule.source.count && !isDisplayOperator(rule.operator) && axes.isGrid
+    && axes.rows.length > 0 && axes.columns.length > 0 && (!gridQ || cellForm);
+  /*
    * "DISPLAY" asks what the respondent SAW, not what they answered: Source
    * Question + Source Option (a row, on a grid). So it takes no row/column
    * picker of its own — the one value picker below IS the option — and it
@@ -514,8 +521,9 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
       )}
       {/* what the reference reads as, so there is never a doubt which cell it names */}
       {!counting && !displayOp && axes.isGrid && (rule.source.rowCode || rule.source.columnId) && (
-        <span className="chip mono" data-testid="cond-reference" title="the element this condition reads">
-          {describeReference(srcQuestion, rule.source)}
+        <span className="chip mono" data-testid="cond-reference" data-collapsed={bothAxesShown ? "true" : undefined}
+          title={bothAxesShown ? `the element this condition reads: ${describeReference(srcQuestion, rule.source)}` : "the element this condition reads"}>
+          {bothAxesShown ? describeReference(srcQuestion, {}) : describeReference(srcQuestion, rule.source)}
         </span>
       )}
       {gridNorm.conflict && (

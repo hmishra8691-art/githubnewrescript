@@ -178,7 +178,10 @@ const TYPE_WORDS: Record<string, string> = {
   date: "Date", time: "Time", ranking: "Ranking", slider: "Slider", nps: "NPS", matrix_single: "Grid (single)", matrix_multi: "Grid (multiple)",
   matrix_numeric: "Grid (numbers)", matrix_text: "Grid (text)", matrix_dropdown: "Grid (dropdowns)", image_select: "Image choice", allocation: "Constant sum",
   hidden: "Hidden variable", calculated: "Calculated", html: "Text block", upload: "File upload", geo: "Location", maxdiff_task: "MaxDiff", conjoint_task: "Conjoint",
+  acbc_task: "Adaptive conjoint (ACBC)",
 };
+/** does the review have its own word for this type? — the registry-completeness test asks (METHOD-13) */
+export const hasTypeWord = (type: string): boolean => Object.prototype.hasOwnProperty.call(TYPE_WORDS, type);
 /** a question's type as a researcher says it — "Single choice", "Number" — not the storage name */
 export function typeName(q: Pick<Question, "type"> | { type: string } | undefined, fallback = ""): string {
   if (!q) return fallback;

@@ -540,7 +540,8 @@ test("a bare right-hand word that names nothing is refused — with the nearest 
   assert.match(parseLogicExpression(def(), "Q3 > Q99", { strict: true }).errors[0].message, /Q3 is numeric — compare it with a number, not “Q99”/);
   // a near-miss of an option's label on a choice question — the label, quoted when it needs to be
   const brand = parse("Q1 = brandD");
-  assert.equal(brand.errors[0].message, "“brandD” is not a question, variable or option of Q1 in this survey — did you mean Brand A?");
+  /* AI-10: the hint shows the quoted label and the code, so a repair need not guess */
+  assert.equal(brand.errors[0].message, "“brandD” is not a question, variable or option of Q1 in this survey — did you mean Brand A? Write an option label in quotes (Q1 = \"Brand A\") or use its code (Q1 = brandA).");
   assert.equal(brand.errors[0].suggestion, 'Q1 = "Brand A"');
   // what still works: a real question on the right, a reserved word, an option by label (canonicalised), a quoted literal
   assert.deepEqual((tree("Q3 > SCORE") as any).value, "SCORE", "a calculation's name stays what it was");

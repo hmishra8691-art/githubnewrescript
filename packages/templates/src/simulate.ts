@@ -15,7 +15,9 @@ import type { LoopContext, QuotaCounts, ListFillCounts, ValidationError } from "
 import {
   advance, answerKey, applyListFillDestinations, createResponseState, decideListFill, effectiveQuestion, listFillVariables,
   pendingListFills, resolvePiping, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
+  normalizeAcbc, emptyAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament,
 } from "@rescript/engine";
+import type { AcbcConfig, AcbcAnswer } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 
 /**
@@ -135,6 +137,35 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
         for (const t of Object.keys(out)) out[t].anchor = "some";
       }
       return out;
+    }
+    case "acbc_task": {
+      /*
+       * METHOD-13: an ADAPTIVE exercise has no fixed design rows to answer — it
+       * is a stage machine. A headless respondent walks it the same way the
+       * renderer does: BYO = each attribute's first level, accept the first
+       * concept of every screen, decline every rule, take the first concept of
+       * every tournament set — so the answer is complete (`acbcDone`).
+       */
+      const d = def.designs.find((x) => x.id === s.designRef);
+      if (!d || d.kind !== "acbc") return null;
+      const cfg = normalizeAcbc((d.config ?? {}) as AcbcConfig);
+      if (!cfg.attributes.length) return null;
+      const seed = ctx.state.seed;
+      const byo = Object.fromEntries(cfg.attributes.filter((a) => a.levels.length).map((a) => [a.name, a.levels[0]]));
+      let a: AcbcAnswer = submitByo(cfg, emptyAcbcAnswer(), seed, byo);
+      for (let guard = 0; guard < 400 && a.stage !== "done"; guard++) {
+        if (a.stage === "screen") {
+          const screen = a.screens[a.screens.length - 1];
+          const verdicts = Object.fromEntries(screen.concepts.map((c, i) => [c.id, i === 0 ? "yes" : "no"] as const));
+          a = submitScreen(cfg, { ...a, screens: [...a.screens.slice(0, -1), { ...screen, verdicts }] }, seed);
+        } else if (a.stage === "rule") a = answerRule(cfg, a, seed, false);
+        else if (a.stage === "tournament") {
+          const round = a.tournament[a.tournament.length - 1];
+          if (!round?.concepts.length) break;
+          a = chooseInTournament(cfg, a, seed, round.concepts[0].id);
+        } else break;
+      }
+      return a;
     }
     case "repeating_group": return [Object.fromEntries(rows.map((r) => [r, r === "cost" ? 12 : r === "since" ? "2025-01-01" : "Demo"]))];
     case "hotspot": return [{ x: 50, y: 50 }];

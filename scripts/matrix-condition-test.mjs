@@ -260,5 +260,50 @@ ok("runtime: row 1 answered Good shows the dependent question");
   ok("OR-02: at 390 px a 5-point matrix is STACKED (every scale point reachable, labelled); a 9-point one shows a 'scroll sideways' hint");
 }
 
+/* ------------------------------------------------ P3 batch (2026-10-16) */
+{ /* OR-07 — the reference chip does not repeat the row and column the two selects already show */
+  await h.loadDef(fixture());
+  await openLogic();
+  const add3 = await page.$('[data-testid="optional-add"]');
+  if (add3) await add3.click();
+  await page.waitForSelector('[data-testid="logic-builder"]');
+  await page.click('[data-testid="lb-add-condition"]');
+  await page.waitForSelector('[data-testid="lb-row"]');
+  await page.selectOption(".ref-select", { label: "Q1 — Q1" });
+  await settle();
+  await page.selectOption('[data-testid="cond-row"]', "1");
+  await page.selectOption('[data-testid="cond-column"]', "4");
+  await settle();
+  const chip = page.locator('[data-testid="cond-reference"]');
+  assert.equal((await chip.textContent()).trim(), "Q1", "row + column selects both shown: the chip is just the question");
+  assert.equal(await chip.getAttribute("data-collapsed"), "true");
+  assert.match(await chip.getAttribute("title"), /Q1\[Service\]\.Good/, "the full reference is still on hover");
+  /* a comparison hides the column select — the chip names the row again */
+  await page.selectOption('[data-testid="cond-operator"]', "gte");
+  await settle();
+  assert.equal(await page.locator('[data-testid="cond-column"]').count(), 0);
+  assert.equal((await chip.textContent()).trim(), "Q1[Service]", "only the row select is shown: the chip spells the row");
+  assert.equal(await chip.getAttribute("data-collapsed"), null);
+  ok("OR-07: the reference chip collapses to the question when the row AND column selects are both on screen");
+}
+
+{ /* LOGIC-15 — a per-row grid's scale is offered as scale points (columns) in the Display Rules target picker */
+  await h.goTab("Logic");
+  await page.click('button:has-text("+ display rule")');
+  await page.waitForSelector('[data-testid="dr-kind-0"]');
+  await page.selectOption('[data-testid="dr-kind-0"]', "option");
+  await page.waitForTimeout(150);
+  const refs = await page.$$eval('[data-testid="dr-ref-0"] option', (els) => els.map((e) => ({ value: e.value, text: e.textContent.trim() })));
+  const sat = refs.find((o) => o.value === "q_sat");
+  assert.ok(sat && /scale point \(column\)/.test(sat.text), `the grid says what its options are: ${JSON.stringify(sat)}`);
+  const plain = refs.find((o) => o.value === "q_next");
+  assert.ok(plain && !/scale point/.test(plain.text), "an ordinary question's options stay options");
+  await page.selectOption('[data-testid="dr-ref-0"]', "q_sat");
+  await page.waitForTimeout(150);
+  const subs = await page.$$eval('[data-testid="dr-sub-0"] option', (els) => els.map((e) => e.textContent.trim()));
+  assert.equal(subs[1], "scale point 1 — Poor", `items read as scale points: ${subs}`);
+  ok("LOGIC-15: a per-row grid's 'option' targets are labelled scale point (column), as in the Logic Builder");
+}
+
 await h.close();
 console.log(`\nALL MATRIX CONDITION CHECKS PASSED (${passed})`);

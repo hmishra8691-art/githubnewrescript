@@ -2,6 +2,7 @@ import type { SurveyDefinition, DisplayRule, FlowNode } from "@rescript/schema";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition, isVacuousCondition } from "./evaluate.js";
 import { flowNodeIndex } from "./flowTree.js";
+import { isCategoricalGrid } from "./gridCell.js";
 
 /**
  * NAMED DISPLAY RULES, FOR EVERYTHING THEY CLAIM TO TARGET (§6).
@@ -178,6 +179,13 @@ export interface DisplayRuleTarget {
   label: string;
   /** the options / rows / columns this target can be narrowed to */
   items?: { subRef: string; label: string }[];
+  /**
+   * What the items ARE on this question, when that differs from the kind's
+   * own name: a per-row grid's options are its answer scale, so its "option"
+   * target narrows to a "scale point (column)" — the Logic Builder's word for
+   * the same list (LOGIC-15).
+   */
+  itemsLabel?: string;
 }
 
 export function displayRuleTargets(def: SurveyDefinition): DisplayRuleTarget[] {
@@ -188,11 +196,14 @@ export function displayRuleTargets(def: SurveyDefinition): DisplayRuleTarget[] {
     const label = `${q.code}${text ? ` — ${text.slice(0, 48)}` : ""}`;
     out.push({ kind: "question", ref: q.id, label });
     if (q.options?.length) {
+      /* LOGIC-15: on a per-row grid these are the scale points (its columns), and they say so */
+      const scale = isCategoricalGrid(q);
       out.push({
-        kind: "option", ref: q.id, label,
+        kind: "option", ref: q.id, label: scale ? `${label} · scale point (column)` : label,
+        ...(scale ? { itemsLabel: "scale point (column)" } : {}),
         items: q.options.map((o) => ({
           subRef: String(o.code),
-          label: `${o.code} — ${o.label.replace(/<[^>]*>/g, "").slice(0, 40)}`,
+          label: `${scale ? "scale point " : ""}${o.code} — ${o.label.replace(/<[^>]*>/g, "").slice(0, 40)}`,
         })),
       });
     }

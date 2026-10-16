@@ -46,6 +46,14 @@ import { isServerResolvedExpression } from "./aiFunctions.js";
  * deploy a survey whose logic references things that no longer exist.
  */
 
+/**
+ * THE QUESTION TYPES THAT RENDER FROM A DESIGN (`settings.designRef`). One
+ * list for the design-reference lint and the loop warning, so a new choice
+ * task cannot be wired into one and forgotten in the other (METHOD-13: ACBC
+ * was). The registry-completeness test holds it to every `tasks`-model type.
+ */
+export const DESIGN_TASK_TYPES = ["conjoint_task", "maxdiff_task", "acbc_task"] as const;
+
 export interface LogicIssue {
   level: "error" | "warning";
   /** where it was found */
@@ -1056,6 +1064,9 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question, order: Reco
       const where = t.kind === "end" ? "the end" : t.kind === "terminate" ? "a terminate" : t.kind === "url" ? "an external URL" : t.ref ? (ctx.def.questions.find((x) => x.id === t.ref)?.code ?? t.ref) : "its target";
       issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: `skipLogic[${i}].when`, message: `Skip rule ${i + 1} has no condition, so it sends EVERY respondent to ${where}. Add a condition, or remove the rule if it was not meant to apply to everyone.` });
     }
+    /* LOGIC-05: a backward, same-page or missing target is never found at run time */
+    const bad = skipTargetProblem(ctx.def, q, (r.target ?? {}) as { kind?: string; ref?: string }, i);
+    if (bad) issues.push({ level: "error", questionId: q.id, questionCode: q.code, path: `skipLogic[${i}].target`, message: bad });
   });
   (q.validation ?? []).forEach((v, i) => lintCondition(v.when, `validation[${i}].when`, ctx));
   (q.randomization?.rules ?? []).forEach((r, i) =>
@@ -1172,6 +1183,73 @@ function lintSurveyLevelConditions(def: SurveyDefinition, order: Record<string, 
     });
   });
   return issues;
+}
+
+/* ================================================ skip targets (LOGIC-05) */
+
+interface FlowPageAt { index: number; id: string; questionIds: string[]; ancestors: { id: string; type: string; title?: string }[] }
+
+/** every page of the flow in the order the runtime linearises it, with the containers around it */
+function flowPageList(def: SurveyDefinition): FlowPageAt[] {
+  const out: FlowPageAt[] = [];
+  type N = { id?: string; type?: string; title?: string; questionIds?: string[]; children?: N[]; branches?: { children?: N[] }[]; otherwise?: N[] };
+  const walk = (nodes: N[] | undefined, anc: FlowPageAt["ancestors"]): void => {
+    for (const n of nodes ?? []) {
+      if (!n) continue;
+      if (n.type === "page") { out.push({ index: out.length, id: String(n.id ?? ""), questionIds: n.questionIds ?? [], ancestors: anc }); continue; }
+      const next = [...anc, { id: String(n.id ?? ""), type: String(n.type ?? ""), title: n.title }];
+      walk(n.children, next);
+      for (const b of n.branches ?? []) walk(b.children, next);
+      walk(n.otherwise, next);
+    }
+  };
+  walk(def.flow as unknown as N[], []);
+  return out;
+}
+
+/**
+ * A SKIP THAT CANNOT LAND.
+ *
+ * The runtime looks for a skip's target only AFTER the current page; a target
+ * before it, on the same page, or one that does not exist is never found, and
+ * the respondent silently falls through to the next page while the trace says
+ * the skip fired. Pages inside a shared loop or randomizer are left alone —
+ * their order is only decided at run time.
+ */
+export function skipTargetProblem(def: SurveyDefinition, q: Question, target: { kind?: string; ref?: string }, ruleIndex: number): string | null {
+  const kind = target.kind ?? "";
+  if (!["question", "page", "block", "section"].includes(kind)) return null;
+  const pages = flowPageList(def);
+  const from = pages.filter((p) => p.questionIds.includes(q.id));
+  const ref = String(target.ref ?? "");
+  const fallThrough = `skip rule ${ruleIndex + 1} on ${q.code} falls through to the next page`;
+  if (!ref) return `Skip rule ${ruleIndex + 1} on ${q.code} has no target ${kind} — choose where it goes; until then it falls through to the next page.`;
+  let to: FlowPageAt[];
+  let name = ref;
+  if (kind === "question") {
+    const tq = def.questions.find((x) => x.id === ref);
+    if (!tq) return `Skip target ${ref} does not exist — ${fallThrough}. Choose another target.`;
+    name = tq.code;
+    to = pages.filter((p) => p.questionIds.includes(ref));
+    if (!to.length) return `Skip target ${name} is not on any page — ${fallThrough}. Place ${name} on a page after ${q.code}, or choose another target.`;
+  } else if (kind === "page") {
+    to = pages.filter((p) => p.id === ref || p.id.split("@")[0] === ref);
+    if (!to.length) return `Skip target page ${ref} does not exist — ${fallThrough}. Choose another target.`;
+  } else {
+    to = pages.filter((p) => p.ancestors.some((a) => a.id === ref || a.title === ref));
+    const node = pages.flatMap((p) => p.ancestors).find((a) => a.id === ref || a.title === ref);
+    if (node?.title) name = node.title;
+    if (!to.length) return `Skip target ${kind} ${ref} does not exist${node ? " or holds no page" : ""} — ${fallThrough}. Choose another target.`;
+  }
+  if (!from.length) return null; // an unplaced source is never asked; the structure lint says so
+  const reordered = (p: FlowPageAt) => new Set(p.ancestors.filter((a) => a.type === "loop" || a.type === "randomizer").map((a) => a.id));
+  if (from.some((f) => { const s = reordered(f); return to.some((t) => t.ancestors.some((a) => s.has(a.id))); })) return null;
+  const minFrom = Math.min(...from.map((p) => p.index));
+  const maxTo = Math.max(...to.map((p) => p.index));
+  if (maxTo > minFrom) return null;
+  return maxTo === minFrom
+    ? `Skip from ${q.code} goes to ${name} on its own page — skips can only move forward to a later page; this one falls through.`
+    : `Skip from ${q.code} goes back to ${name} — skips can only move forward; this one falls through to the next page.`;
 }
 
 export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
@@ -1389,7 +1467,7 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
   /* --- a design a question renders, that the survey does not have ---- */
   const designIds = new Set((def.designs ?? []).map((d: any) => d.id));
   for (const q of def.questions ?? []) {
-    if (!["conjoint_task", "maxdiff_task"].includes(q.type)) continue;
+    if (!(DESIGN_TASK_TYPES as readonly string[]).includes(q.type)) continue;
     const ref = (q.settings as any)?.designRef;
     if (!ref) {
       issues.push({
@@ -1402,6 +1480,15 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
       issues.push({
         level: "error", questionId: q.id, questionCode: q.code, path: "settings.designRef",
         message: `${q.code} refers to design “${ref}”, which is not in this survey. Generate it again or point the question at an existing design.`,
+      });
+      continue;
+    }
+    /* METHOD-13: the ACBC renderer refuses any design that is not an ACBC one — say so before a respondent sees the error */
+    const kind = (def.designs ?? []).find((d: any) => d.id === ref)?.kind;
+    if (q.type === "acbc_task" && kind && kind !== "acbc") {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "settings.designRef",
+        message: `${q.code} is an adaptive conjoint (ACBC) question but design “${ref}” is a ${kind} design. Create an ACBC design in Design Generators and pick it here.`,
       });
     }
   }
@@ -1606,7 +1693,7 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
            * plain answer, once.
            */
           if (q.probe) push("warning", `${q.code}.probe`, `${q.code} has an AI follow-up and sits inside loop "${n.loopVar}" — follow-ups are counted per respondent, not per iteration, so later iterations get fewer or none.`);
-          if (q.type === "conjoint_task" || q.type === "maxdiff_task") push("warning", `${q.code}.design`, `${q.code} is a design-based task inside loop "${n.loopVar}" — one design version is drawn per respondent and shown in every iteration, and the export carries one ${q.variableName}_VERSION.`);
+          if ((DESIGN_TASK_TYPES as readonly string[]).includes(q.type)) push("warning", `${q.code}.design`, `${q.code} is a design-based task inside loop "${n.loopVar}" — one design version is drawn per respondent and shown in every iteration, and the export carries one ${q.variableName}_VERSION.`);
           if (q.type === "calculated" && q.settings.expression && isServerResolvedExpression(q.settings.expression)) push("warning", `${q.code}.expression`, `${q.code} is an AI-derived variable inside loop "${n.loopVar}" — it is resolved once from the plain answer, not once per iteration.`);
           walkCond(q.displayLogic as Condition | undefined, `${q.code}.displayLogic`);
           for (const text of [q.text, q.instruction ?? ""]) {

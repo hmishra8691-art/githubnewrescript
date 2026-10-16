@@ -105,8 +105,13 @@ const KIND: Record<CanonicalKind, { type: string; variant?: string }> = {
   hotspot: { type: "hotspot", variant: "hotspot.click" },
   conjoint: { type: "conjoint_task", variant: "conjoint.cbc" },
   maxdiff: { type: "maxdiff_task", variant: "maxdiff.best_worst" },
+  /* METHOD-13: an adaptive conjoint carries its attributes, not a design file — it maps like the other choice tasks */
+  acbc: { type: "acbc_task", variant: "conjoint.acbc" },
   unknown: { type: "html", variant: "content.html" },
 };
+
+/** the Rescript type each canonical kind lands on — read by the question-type registry-completeness test (METHOD-13) */
+export const CANONICAL_KIND_TYPES: Readonly<Record<CanonicalKind, { type: string; variant?: string }>> = KIND;
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const safeIdent = (s: string) => { let t = s.trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/_{2,}/g, "_").replace(/^_+|_+$/g, ""); if (!t) t = "V"; if (/^\d/.test(t)) t = `Q${t}`; return t; };
@@ -279,8 +284,8 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     for (const cu of cq.custom) { notes.push(`custom ${cu.language} (${cu.role}) kept, disabled, in Scripts`); scripts.push(scriptFor(cu, id)); }
     if (notes.length) q.notes = `Imported from ${c.source.platform} ${cq.sourceId} (${cq.sourceType}).\n${notes.join("\n")}`;
     if (cq.kind === "hidden" && cq.settings?.sourceKind) q.notes = `${q.notes ?? ""}\nThe source question was a ${String(cq.settings.sourceKind)}; it is hidden from respondents.`.trim();
-    if ((cq.kind === "conjoint" || cq.kind === "maxdiff") && cq.options.length === 0 && cq.rows.length) q.options = cq.rows.map((r) => ({ code: r.code, label: r.label, flags: [] }));
-    if (cq.kind === "conjoint" || cq.kind === "maxdiff") issues.push({ location: cq.sourceId, type: "converted", severity: "high", message: `${cq.variable} is a ${cq.kind === "maxdiff" ? "MaxDiff" : "conjoint"} exercise. Rescript runs these from an experimental design, which the source file does not carry; the items were kept.`, suggestion: "Attach a design in the Designs tab.", autoAttempted: true, refs: [cq.sourceId] });
+    if ((cq.kind === "conjoint" || cq.kind === "maxdiff" || cq.kind === "acbc") && cq.options.length === 0 && cq.rows.length) q.options = cq.rows.map((r) => ({ code: r.code, label: r.label, flags: [] }));
+    if (cq.kind === "conjoint" || cq.kind === "maxdiff" || cq.kind === "acbc") issues.push({ location: cq.sourceId, type: "converted", severity: "high", message: `${cq.variable} is a ${cq.kind === "maxdiff" ? "MaxDiff" : cq.kind === "acbc" ? "adaptive conjoint (ACBC)" : "conjoint"} exercise. Rescript runs these from an experimental design, which the source file does not carry; the items were kept.`, suggestion: "Attach a design in the Designs tab.", autoAttempted: true, refs: [cq.sourceId] });
     built.push(q as unknown as Question);
     confidence.push({ id, code, source: cq.sourceId, level: cq.confidence, notes: cq.notes });
   }

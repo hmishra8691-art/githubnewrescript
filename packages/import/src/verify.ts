@@ -57,7 +57,7 @@ const FAMILY: Record<string, string> = {
   multi: "multi", multi_dropdown: "multi", text: "text", textarea: "text", email: "text", date: "date", time: "time",
   matrix_single: "matrix", matrix_multi: "matrix", matrix_text: "matrix", matrix_numeric: "matrix", matrix_dropdown: "matrix", matrix_mixed: "matrix",
   ranking: "ranking", constant_sum: "allocation", descriptive: "content", hidden: "hidden", calculated: "hidden",
-  file_upload: "upload", signature: "upload", hotspot: "hotspot", conjoint: "task", maxdiff: "task", bucket: "matrix", unknown: "content",
+  file_upload: "upload", signature: "upload", hotspot: "hotspot", conjoint: "task", maxdiff: "task", acbc: "task", bucket: "matrix", unknown: "content",
 };
 const familyOf = (type: string): string => /^matrix|^composite$|^custom_table$/.test(type) ? "matrix" : /^(single_select|dropdown|nps)$/.test(type) ? "single" : /^(multi_select|multi_dropdown)$/.test(type) ? "multi" : /^(open_text|long_text|text_list)$/.test(type) ? "text" : /^(numeric|slider|numeric_list)$/.test(type) ? "numeric" : type === "html" ? "content" : /^(hidden|calculated)$/.test(type) ? "hidden" : type === "upload" ? "upload" : /task$/.test(type) ? "task" : type;
 

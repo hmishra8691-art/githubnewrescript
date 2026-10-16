@@ -1,4 +1,5 @@
-import { isCategoricalGrid } from "./gridCell.js";
+import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
+import { gridScaleOptions } from "./gridAxes.js";
 import type {
   ComparisonOperator,
   Condition,
@@ -112,6 +113,15 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
     return parts.length === 1 ? parts[0] : `(${parts.join(joiner)})`;
   }
 
+  /*
+   * LOGIC-16: a legacy grid rule that spelt its scale point twice (column AND
+   * value) reads as the one cell it means — the form the builder shows and the
+   * evaluator reads — not as "row — OK includes Great".
+   */
+  if (c.source.kind === "question" && !c.source.count) {
+    const n = normalizeGridRule(getQuestionByCodeOrVar(def, c.source.ref), c);
+    if (n.changed) c = n.rule;
+  }
   const { source, operator } = c;
   let subject: string;
   if (source.count) {
@@ -166,8 +176,9 @@ export function conditionSummary(def: SurveyDefinition, c: Condition | undefined
     } else if (source.rowPosition != null) subject += ` ${posWords(source.rowPosition)} row`;
     else if (source.optionPosition != null) subject += ` ${posWords(source.optionPosition)} option`;
     if (source.columnId) {
-      const col = q?.columns.find((x) => x.id === source.columnId);
-      const scale = col ? undefined : q?.options.find((x) => String(x.code) === String(source.columnId));
+      /* LOGIC-09: a categorical grid's `columnId` is a scale code, even when the question also carries a `columns` array */
+      const col = q && isCategoricalGrid(q) ? undefined : q?.columns.find((x) => x.id === source.columnId);
+      const scale = col ? undefined : (q && isCategoricalGrid(q) ? gridScaleOptions(q) : q?.options ?? []).find((x) => String(x.code) === String(source.columnId));
       const colText = stripHtml(col?.label ?? scale?.label ?? source.columnId);
       /*
        * A categorical grid cell has no value of its own — the answer column IS

@@ -32,7 +32,7 @@ export type CanonicalKind =
   | "text" | "textarea" | "numeric" | "date" | "time" | "email"
   | "matrix_single" | "matrix_multi" | "matrix_text" | "matrix_numeric" | "matrix_dropdown" | "matrix_mixed"
   | "ranking" | "slider" | "constant_sum" | "nps" | "stars"
-  | "descriptive" | "hidden" | "calculated" | "file_upload" | "signature" | "hotspot" | "conjoint" | "maxdiff" | "bucket"
+  | "descriptive" | "hidden" | "calculated" | "file_upload" | "signature" | "hotspot" | "conjoint" | "maxdiff" | "acbc" | "bucket"
   | "unknown";
 
 export interface CanonicalOption {

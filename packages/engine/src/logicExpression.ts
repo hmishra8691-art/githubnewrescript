@@ -11,7 +11,7 @@ import { embeddedCatalog } from "./embedded.js";
 import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 import { CODE_OPERATORS, answerKind, canonicalizeCondition, describeOptions, normalizeOptionText, resolveOptionValue, type OptionList } from "./optionCodes.js";
 import { stripVacuous } from "./conditionWalk.js";
-import { gridAxes } from "./gridAxes.js";
+import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 
 /**
  * The logic expression language: text in, canonical tree out, and back again.
@@ -703,6 +703,19 @@ export function parseLogicExpression(
       else source.optionPosition = pos2;
     } else if (segments.length > 1) {
       const grid = isCategoricalGrid(q!);
+      /*
+       * LOGIC-07: `Q5.$any.spend` — a column with NO row, said explicitly: "that
+       * column in any row". The printer uses it only when the short form
+       * (`Q5.spend`) would read as a row or an option of the same name.
+       */
+      if (/^\$any$/i.test(segments[1]) && gridAxes(q!).isGrid) {
+        if (segments.length !== 3) fail(`“${raw}” needs a column after $any — e.g. ${head}.$any.C1`, tok!.pos);
+        const col = resolveColumnOrOption(q!, segments[2]);
+        if (!col || (col.kind === "option" && !grid)) fail(`${head} has no column “${segments[2]}”`, tok!.pos);
+        source.columnId = String(col!.code);
+        if (grid) source.columnCell = true;
+        return { source, question: q!, segments };
+      }
       let second = resolveRowOrOption(q!, segments[1]);
       /*
        * `Q5.C2` — no row named, the scale point alone: "any row answered 2".
@@ -716,6 +729,18 @@ export function parseLogicExpression(
           source.columnId = String(col.code);
           source.columnCell = true;
           second = null;
+          return { source, question: q!, segments };
+        }
+      }
+      /*
+       * LOGIC-07: `Q5.spend` on a composite / custom table — a column and no
+       * row: "that column in any row". The builder authors it and the printer
+       * writes it; it used to be "Q5 has no spend" on the way back in.
+       */
+      if (!second && segments.length === 2 && gridAxes(q!).model === "cells") {
+        const col = resolveColumnOrOption(q!, segments[1]);
+        if (col && col.kind === "column") {
+          source.columnId = String(col.code);
           return { source, question: q!, segments };
         }
       }
@@ -810,10 +835,45 @@ export function parseLogicExpression(
     if (namedVariable(head)) return;
     const options = q ? optionsOf(q) : [];
     if (q && (resolveOptionValue(options, word).kind === "code" || resolveRowOrOption(q, word))) return;
+    /*
+     * AI-10: AN OPTION LABEL WRITTEN WITHOUT QUOTES — `PREF = Brand A`. The
+     * words after this one are the rest of the label. Name the option and the
+     * two ways to write it; "did you mean Brand A?" only repeated the text as
+     * typed, so whoever (or whatever) wrote it had to guess the fix.
+     */
+    const codeText = (c: string | number) => (typeof c === "number" || /^-?\d+(\.\d+)?$/.test(String(c)) || IDENT_SAFE.test(String(c)) ? String(c) : `"${String(c)}"`);
+    const quote = (s: string) => `"${s.replace(/(["\\])/g, "\\$1")}"`;
+    const asWritten = (value: string) => (lhs.operator === "eq" || lhs.operator === "ne" || lhs.operator === "selected" || lhs.operator === "notSelected" ? `${lhsName} ${OPERATOR_SPELLING(lhs.operator === "ne" || lhs.operator === "notSelected" ? "ne" : "eq")} ${value}` : value);
+    if (q) {
+      let span = word;
+      for (let k = 0; k < 8; k++) {
+        const nx = peek(k);
+        if (!nx || (nx.kind !== "ident" && nx.kind !== "number")) break;
+        span = `${span} ${nx.text}`;
+        const hit = options.filter((o) => normalizeOptionText(o.label) === normalizeOptionText(span));
+        if (hit.length === 1) {
+          const label = stripHtmlText(String(hit[0].label)).trim();
+          reject(
+            `“${span}” is the option ${quote(label)} of ${lhsName}, written without quotes — a label with spaces must be quoted (${asWritten(quote(label))}) or replaced by its code (${asWritten(codeText(hit[0].code))}).`,
+            `${src.slice(0, t.pos)}${codeText(hit[0].code)}${src.slice(nx.pos + nx.text.length)}`,
+          );
+        }
+      }
+    }
     // the nearest real name: another question's code or variable, a calculation, an embedded field — then an option's label
     // (not the left-hand question's own names: `Q1 = Q1` is never what was meant)
     const names = [...def.questions.filter((x) => x !== q).flatMap((x) => [String(x.code), x.variableName]), ...(def.calculations ?? []).map((c) => c.targetVariable), ...embeddedCatalog(def).map((e) => e.name)];
-    const near = closestName(word, names) ?? (q ? closestName(word, options.map((o) => String(o.label).replace(/<[^>]*>/g, "").trim()).filter(Boolean)) : null);
+    const nearName = closestName(word, names);
+    const nearLabel = !nearName && q ? closestName(word, options.map((o) => String(o.label).replace(/<[^>]*>/g, "").trim()).filter(Boolean)) : null;
+    if (nearLabel) {
+      /* AI-10: the nearest thing is an OPTION — say so, and show the quoted label and the code that would parse */
+      const opt = options.find((o) => String(o.label).replace(/<[^>]*>/g, "").trim() === nearLabel);
+      reject(
+        `“${word}” is not a question, variable or option of ${lhsName} in this survey — did you mean ${nearLabel}? Write an option label in quotes (${asWritten(quote(nearLabel))})${opt ? ` or use its code (${asWritten(codeText(opt.code))})` : ""}.`,
+        replaceWith(nearLabel),
+      );
+    }
+    const near = nearName;
     if (near) reject(`“${word}” is not a question, variable or option of ${lhsName} in this survey — did you mean ${near}?`, replaceWith(near));
     if (lhs.numeric) {
       if (opts.strict) reject(`${lhsName} is numeric — compare it with a number, not “${word}”`);
@@ -1281,23 +1341,48 @@ export function resolveRowOrOption(q: Question, token: string): Resolved | null 
 
 /** The third segment: a composite column, else a scale option (matrix). */
 export function resolveColumnOrOption(q: Question, token: string): Resolved | null {
-  const byCol = q.columns.find((c) => c.id === token || c.variableStem === token);
+  /*
+   * LOGIC-09: on a categorical (per-row) grid the column axis IS the scale —
+   * whether it is kept in `q.options` or on `columns[0].options`. A `columns`
+   * array such a question carries (a scale holder, or left over from a type
+   * change) is not an axis, so `Q7.R1.C1` must not resolve to column `c1`.
+   */
+  const scaleOnly = isCategoricalGrid(q);
+  const columns = scaleOnly ? [] : (q.columns ?? []);
+  const options = scaleOnly ? gridScaleOptions(q) : (q.options ?? []);
+  const byCol = columns.find((c) => c.id === token || c.variableStem === token);
   if (byCol) return { kind: "column", code: byCol.id };
-  const byOpt = q.options.find((o) => String(o.code) === token);
+  const byOpt = options.find((o) => String(o.code) === token);
   if (byOpt) return { kind: "option", code: byOpt.code };
 
   /* `O`/`A` accepted here as well, so a scale option spelled either way reads */
   const cn = positional(token, "C") ?? positional(token, "O") ?? positional(token, "A");
   if (cn != null) {
     const raw = positionalRaw(token, "C") ?? positionalRaw(token, "O") ?? positionalRaw(token, "A") ?? "";
-    if (q.columns.length) {
-      const byCode = q.columns.find((c) => c.id === raw || c.id === String(cn));
+    if (columns.length) {
+      const byCode = columns.find((c) => c.id === raw || c.id === String(cn));
       if (byCode) return { kind: "column", code: byCode.id };
-      if (q.columns[cn - 1]) return { kind: "column", code: q.columns[cn - 1].id };
+      if (columns[cn - 1]) return { kind: "column", code: columns[cn - 1].id };
     }
-    const byOptCode = q.options.find((o) => String(o.code) === raw) ?? q.options.find((o) => String(o.code) === String(cn));
+    const byOptCode = options.find((o) => String(o.code) === raw) ?? options.find((o) => String(o.code) === String(cn));
     if (byOptCode) return { kind: "option", code: byOptCode.code };
-    if (q.options[cn - 1]) return { kind: "option", code: q.options[cn - 1].code };
+    if (options[cn - 1]) return { kind: "option", code: options[cn - 1].code };
+  }
+  /* LOGIC-08: `C<code>` for a non-numeric code too — `Q2.R1.Ca` is scale point `a` */
+  const pre = /^C(.+)$/.exec(token);
+  if (pre) {
+    const byPrefCol = columns.find((c) => c.id === pre[1]);
+    if (byPrefCol) return { kind: "column", code: byPrefCol.id };
+    const byPrefOpt = options.find((o) => String(o.code) === pre[1]);
+    if (byPrefOpt) return { kind: "option", code: byPrefOpt.code };
+  }
+  /* LOGIC-08: by what it says — `Q1.R1.Great`, `Q5.R1.Spend` — when exactly one says it (as the second segment already does) */
+  const said = normalizeOptionText(token);
+  if (said) {
+    const cols = columns.filter((c) => normalizeOptionText(c.label) === said);
+    if (cols.length === 1) return { kind: "column", code: cols[0].id };
+    const opts = options.filter((o) => normalizeOptionText(o.label) === said);
+    if (opts.length === 1) return { kind: "option", code: opts[0].code };
   }
   return null;
 }
@@ -1410,8 +1495,19 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
     out += `.${posText(source.optionPosition)}`;
   }
   if (source.columnId != null) {
-    const col = q?.columns.find((c) => c.id === source.columnId);
-    out += `.${codeToken(col?.id ?? source.columnId, "C")}`;
+    const col = q && !isCategoricalGrid(q) ? q.columns?.find((c) => c.id === source.columnId) : undefined;
+    const token = codeToken(col?.id ?? source.columnId, "C");
+    /*
+     * LOGIC-07: a column with no row prints as `Q5.spend` — unless that short
+     * form would read back as a row (or another option) of the same name, in
+     * which case the explicit `Q5.$any.spend` keeps the round trip exact.
+     */
+    if (q && source.rowCode == null && source.rowPosition == null && gridAxes(q).isGrid) {
+      const second = resolveRowOrOption(q, token);
+      const model = gridAxes(q).model;
+      if (second && (second.kind === "row" || model === "cells" || String(second.code) !== String(source.columnId))) out += ".$any";
+    }
+    out += `.${token}`;
   }
   return out;
 }

@@ -438,8 +438,10 @@ export function buildLogicFlow(def: SurveyDefinition, opts: LogicGraphOptions = 
 
 /** the badge a question node carries when it is not an ordinary question */
 const QUESTION_TAG: Record<string, string> = {
-  hidden: "hidden", calculated: "calculated", conjoint_task: "conjoint", maxdiff_task: "maxdiff",
+  hidden: "hidden", calculated: "calculated", conjoint_task: "conjoint", maxdiff_task: "maxdiff", acbc_task: "acbc",
 };
+/** METHOD-13: read by the question-type registry-completeness test */
+export const QUESTION_NODE_TAGS: Readonly<Record<string, string>> = QUESTION_TAG;
 
 const END_LABELS: Record<string, string> = {
   complete: "Complete",
