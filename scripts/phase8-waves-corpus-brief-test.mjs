@@ -13,7 +13,7 @@
  *
  *   node scripts/phase8-waves-corpus-brief-test.mjs      (studio on 3000, fake AI provider)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { def as synthDef, synthRows, spec } from "/home/claude/rescript/packages/analytics/dist/analyses/fixture.js";

@@ -21,7 +21,7 @@
  * at those widths, before or after this change. The tablet/mobile assertions
  * below don't just hope that stays true, they check it.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";

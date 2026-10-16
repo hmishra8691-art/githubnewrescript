@@ -4,7 +4,7 @@
  *   node scripts/flow-mode-test.mjs
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey, buildScaleSurvey, MASTER_DEMO_TEST_PATHS } from "../packages/templates/dist/index.js";
 

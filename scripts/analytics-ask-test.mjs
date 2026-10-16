@@ -22,7 +22,7 @@
  *
  * Needs `pnpm dev:studio` (3000).   node scripts/analytics-ask-test.mjs
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { navLabels } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { checkSnapshot, reportAnalysisIds, failedResult, adviseChart, buildDataset, runAnalysis, recommendCharts, DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, BUILT_IN_DASHBOARD_TEMPLATES, applyTemplate, applyDashboardTemplate, dashboardAsTemplate, templateKind, reportPages, draftReport, regenerateScene, storyHtml, gateInterpretation, proposeFromText, parseAskOps, parseUndo, surveyKnownNames } from "../packages/analytics/dist/index.js";

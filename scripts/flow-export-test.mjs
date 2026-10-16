@@ -5,7 +5,7 @@
  * JSON tab, not from the screen) or about a real HTTP response from the
  * export route. Nothing here trusts a rendered label on its own.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

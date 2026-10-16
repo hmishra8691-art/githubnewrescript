@@ -8,7 +8,7 @@
  * how it behaved when the server refused, rather than what the screen showed.
  * A save indicator is not evidence that anything was stored.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

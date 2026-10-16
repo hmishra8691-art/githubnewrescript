@@ -18,7 +18,7 @@
  *  5. a script listening for "page_enter" (the behaviour spelling) runs
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 

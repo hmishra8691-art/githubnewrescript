@@ -19,7 +19,7 @@
  *   node scripts/findings-copilot-test.mjs      (studio on 3000)
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { def as synthDef, synthDataset } from "/home/claude/rescript/packages/analytics/dist/analyses/fixture.js";
 import { runPlan, compactRun } from "/home/claude/rescript/packages/analytics/dist/findings.js";

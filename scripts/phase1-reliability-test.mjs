@@ -12,7 +12,7 @@
  *      and the Analysis tab's coverage reads it.
  *   3. /api/platform reports whether a model is configured.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { openTab, switchMode } from "./lib/nav.mjs";
 

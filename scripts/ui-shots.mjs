@@ -8,7 +8,7 @@
  *
  *   node scripts/ui-shots.mjs [outDir]        (dev servers on 3000 / 3001)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import fs from "node:fs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";

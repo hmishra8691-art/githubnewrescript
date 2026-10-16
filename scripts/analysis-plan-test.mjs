@@ -15,7 +15,7 @@
  * Needs `pnpm dev:studio` (3000).
  *   node --experimental-strip-types --no-warnings scripts/analysis-plan-test.mjs
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";
 import { buildDataset, runPlan, compactRun, runAnalysis, recommendCharts, variableMetadata, plannedAnalyses } from "../packages/analytics/dist/index.js";

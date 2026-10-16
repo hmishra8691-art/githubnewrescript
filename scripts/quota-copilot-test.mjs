@@ -16,7 +16,7 @@
  *   node scripts/quota-copilot-test.mjs      (studio on 3000)
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";

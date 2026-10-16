@@ -23,7 +23,7 @@
  *     proves (22 checks, re-run unmodified as part of this same brief's
  *     verification — not duplicated here)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

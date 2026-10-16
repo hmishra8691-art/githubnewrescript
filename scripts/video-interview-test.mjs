@@ -21,7 +21,7 @@
  *
  * Needs the Studio on :3000 and the runtime on :3001 (AI_API_URL=fake:).
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { openHarness } from "./lib/variantHarness.mjs";
 import { openPreview } from "./lib/preview.mjs";

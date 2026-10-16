@@ -8,7 +8,7 @@
  * looks right on screen fails here. The same component serves question logic
  * and Survey Flow branch logic, and both are exercised.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

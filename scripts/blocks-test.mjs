@@ -6,7 +6,7 @@
  * flow, and that an option can hold several properties at once — the
  * "Other + Exclusive" requirement that a single-value control made impossible.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";

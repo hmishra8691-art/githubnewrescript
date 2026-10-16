@@ -99,6 +99,7 @@ create index if not exists media_objects_response_idx on public.media_objects (r
 create index if not exists media_objects_session_idx  on public.media_objects (session_id);
 create index if not exists media_objects_pending_idx  on public.media_objects (status, created_at) where status = 'pending';
 
+drop trigger if exists media_objects_touch on public.media_objects;
 create trigger media_objects_touch before update on public.media_objects
   for each row execute function public.touch_updated_at();
 
@@ -133,6 +134,7 @@ create index if not exists media_transcripts_survey_idx on public.media_transcri
 create index if not exists media_transcripts_open_idx   on public.media_transcripts (status, claimed_at)
   where status in ('waiting','processing','transcribing');
 
+drop trigger if exists media_transcripts_touch on public.media_transcripts;
 create trigger media_transcripts_touch before update on public.media_transcripts
   for each row execute function public.touch_updated_at();
 

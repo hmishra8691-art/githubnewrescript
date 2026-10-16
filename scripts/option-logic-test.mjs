@@ -11,7 +11,7 @@
  *  - the visual piping picker, its formats, and token chips in the editor
  *  - the option preview / debugger showing why an option is hidden
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

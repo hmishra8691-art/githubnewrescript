@@ -6,7 +6,7 @@
  *  - paste box: numbered/bulleted list import with cleanup
  *  - rich text: bold formatting persisted into the definition (JSON tab)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

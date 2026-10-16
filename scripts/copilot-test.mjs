@@ -12,7 +12,7 @@
  * the change history, undo, the review, the research store and retrieval.
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { docxFixture, pdfFixture, TINY_JPEG } from "../packages/import/dist/fixtures.js";
 

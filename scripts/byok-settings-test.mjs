@@ -24,7 +24,7 @@ import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const ROOT = new URL("..", import.meta.url).pathname;

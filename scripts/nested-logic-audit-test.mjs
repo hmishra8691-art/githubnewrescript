@@ -22,7 +22,7 @@
  *
  *   node scripts/nested-logic-audit-test.mjs      (studio on 3000, runtime on 3001)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 import assert from "node:assert/strict";

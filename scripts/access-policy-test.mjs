@@ -17,7 +17,7 @@
  *
  *   node scripts/access-policy-test.mjs      (studio on 3000)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";

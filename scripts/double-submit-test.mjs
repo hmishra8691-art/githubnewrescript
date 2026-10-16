@@ -14,7 +14,7 @@
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/double-submit-test.mjs
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";

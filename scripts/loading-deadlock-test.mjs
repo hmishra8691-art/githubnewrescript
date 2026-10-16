@@ -32,7 +32,7 @@
  * from here. These cases cover the shapes that produce an unrenderable step
  * and the contract that they are never silent.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
 

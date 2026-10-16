@@ -12,7 +12,7 @@
  * Needs `pnpm dev:studio` (3000).
  *   node --experimental-strip-types --no-warnings scripts/story-report-test.mjs
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";

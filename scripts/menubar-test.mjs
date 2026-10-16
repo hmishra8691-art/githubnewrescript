@@ -5,7 +5,7 @@
  *   node scripts/menubar-test.mjs
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openGroup, navLabels, switchMode, modeMenuClick } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";
 

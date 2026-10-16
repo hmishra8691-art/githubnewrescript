@@ -8,7 +8,7 @@
  *   node scripts/multimodal-foundation-test.mjs
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openGroup, openTab } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";

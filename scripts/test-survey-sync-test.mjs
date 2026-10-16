@@ -19,7 +19,7 @@
  * The runtime half — a test link resolving to the latest saved state and
  * never falling back — is `packages/engine/src/testBuild.test.ts`.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 
 const SURVEY = "11111111-2222-3333-4444-555555555555";

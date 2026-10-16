@@ -2,7 +2,7 @@
   "name": "rescript-platform",
   "private": true,
   "version": "0.1.0",
-  "description": "Rescript — professional survey programming & runtime platform",
+  "description": "Rescript \u2014 professional survey programming & runtime platform",
   "scripts": {
     "build": "pnpm -r --filter './packages/*' build && pnpm --filter @rescript/runtime build && pnpm --filter @rescript/studio build",
     "dev:studio": "pnpm --filter @rescript/studio dev",
@@ -12,10 +12,14 @@
     "verify": "pnpm typecheck && pnpm test && pnpm audit:code",
     "verify:browser": "node scripts/verify-browser.mjs",
     "verify:all": "pnpm verify && pnpm verify:browser",
-    "audit:code": "node scripts/auth-guard-audit.mjs"
+    "audit:code": "node scripts/auth-guard-audit.mjs",
+    "pretest": "pnpm -r --filter \"./packages/*\" build"
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
   }
 }

@@ -20,7 +20,7 @@
  *
  * Needs `pnpm dev:studio` (3000).   node scripts/analytics-navigation-test.mjs
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { buildDataset, runAnalysis, adviseChart, proposeFromText, surveyKnownNames } from "../packages/analytics/dist/index.js";
 import { def, synthRows } from "../packages/analytics/dist/analyses/fixture.js";

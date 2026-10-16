@@ -23,7 +23,7 @@
  *
  *   node scripts/p0-session-test.mjs        (needs the Studio on :3000)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";

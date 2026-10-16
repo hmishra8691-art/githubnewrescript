@@ -6,7 +6,11 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      playwright:
+        specifier: ^1.56.0
+        version: 1.64.1
 
   apps/interviews:
     dependencies:
@@ -122,9 +126,6 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
-      '@rescript/storage':
-        specifier: workspace:*
-        version: link:../../packages/storage
       '@supabase/supabase-js':
         specifier: ^2.45.4
         version: 2.112.4
@@ -345,6 +346,9 @@ importers:
       '@rescript/engine':
         specifier: workspace:*
         version: link:../engine
+      '@rescript/quality':
+        specifier: workspace:*
+        version: link:../quality
       '@rescript/schema':
         specifier: workspace:*
         version: link:../schema
@@ -1227,6 +1231,16 @@ packages:
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
+
+  playwright-core@1.64.1:
+    resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.64.1:
+    resolution: {integrity: sha512-HCrVhHr5QQuwYoswEUGTb7gGp522yflbv/ST8nF4sFWGuLjQCt17Q/EubpGGSNKYn1tsTCPZxqHhHCfVURu7UA==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   pngjs@5.0.0:
     resolution: {integrity: sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==}
@@ -2172,6 +2186,12 @@ snapshots:
   path-is-absolute@1.0.1: {}
 
   picocolors@1.1.1: {}
+
+  playwright-core@1.64.1: {}
+
+  playwright@1.64.1:
+    dependencies:
+      playwright-core: 1.64.1
 
   pngjs@5.0.0: {}
 

@@ -17,7 +17,7 @@
  * Supabase is not available here, so the API responses are fixtures — the
  * page, the cards, the dialogs and the wiring between them are the real thing.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 
 const now = Date.now();

@@ -16,7 +16,7 @@
  * (window.__rescriptCopilotFake); everything after the model is real.
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openPreview } from "./lib/preview.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";

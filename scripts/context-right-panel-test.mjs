@@ -23,7 +23,7 @@
  *     regression this exact fix could reintroduce if the panel were made to
  *     literally unmount instead of just hide.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

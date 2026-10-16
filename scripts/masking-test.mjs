@@ -6,7 +6,7 @@
  * tree it draws, that the two panes agree, and that a respondent actually
  * sees the masked list and the punched answer.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";

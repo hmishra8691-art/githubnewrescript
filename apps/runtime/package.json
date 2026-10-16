@@ -20,8 +20,7 @@
     "next": "^14.2.21",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "server-only": "^0.0.1",
-    "@rescript/storage": "workspace:*"
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

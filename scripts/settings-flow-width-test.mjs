@@ -16,7 +16,7 @@
  * it keeps meaning if those numbers are retuned later, and checks the panels
  * stay usable (no horizontal overflow) at a narrower width too.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

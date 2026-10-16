@@ -11,7 +11,7 @@
  * same key, so "Apple" typed into the first appeared in all three — on screen
  * and in the data.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";

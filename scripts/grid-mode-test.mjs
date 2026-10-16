@@ -9,7 +9,7 @@
  *   node scripts/grid-mode-test.mjs
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { buildMasterDemoSurvey, buildScaleSurvey } from "../packages/templates/dist/index.js";
 

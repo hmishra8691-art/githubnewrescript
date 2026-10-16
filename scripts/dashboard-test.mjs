@@ -7,7 +7,7 @@
  * contributor avatars, relative times, search, sort, status filters,
  * skeleton loading, per-statistic error tolerance and the mobile layout.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 
 const now = Date.now();

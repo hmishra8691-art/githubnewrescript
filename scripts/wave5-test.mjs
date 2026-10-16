@@ -8,7 +8,7 @@
  *
  *   node scripts/wave5-test.mjs      (studio on 3000, runtime on 3001)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";

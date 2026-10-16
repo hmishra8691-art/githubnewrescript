@@ -5,7 +5,7 @@
  * every check here reads the survey JSON — and several of them switch modes
  * and compare, which is the only way to catch the two views drifting apart.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

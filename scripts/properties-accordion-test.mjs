@@ -11,7 +11,7 @@
  * preference, never survey logic — §45), and the search box narrows which
  * sections are offered without touching any of their content.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 

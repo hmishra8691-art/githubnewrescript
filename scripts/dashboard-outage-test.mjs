@@ -21,7 +21,7 @@
  *
  * `/api/surveys` is intercepted, so no Supabase is needed.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 
 const STUDIO = "http://localhost:3000";

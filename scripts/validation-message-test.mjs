@@ -17,7 +17,7 @@
  * two rows whose labels share a prefix took each other's errors. That is
  * asserted here because it is the sort of fix that silently un-fixes itself.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { SurveyDefinition } from "../packages/schema/dist/index.js";
 import { sendPreview } from "./lib/preview.mjs";
 

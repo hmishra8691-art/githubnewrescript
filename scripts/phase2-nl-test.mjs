@@ -14,7 +14,7 @@
  *      one proposal; the built card lists them; setting a plan aside builds
  *      nothing. "Plan first" off: the single reply as before.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { openTab, switchMode } from "./lib/nav.mjs";
 

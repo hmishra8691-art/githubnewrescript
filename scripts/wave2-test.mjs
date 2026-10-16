@@ -8,7 +8,7 @@
  *
  *   node scripts/wave2-test.mjs      (studio on 3000, runtime on 3001)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { buildMasterDemoSurvey } from "../packages/templates/dist/index.js";

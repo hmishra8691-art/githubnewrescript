@@ -14,7 +14,7 @@
  * it not showing?", drag-and-drop, and an unreadable file refused plainly.
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { qsfFixture, docxFixture, DECIPHER_FIXTURE } from "../packages/import/dist/fixtures.js";
 

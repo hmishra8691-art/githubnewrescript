@@ -17,7 +17,7 @@
  *
  *   node scripts/wave1-test.mjs        (runtime dev server on 3001)
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
 
