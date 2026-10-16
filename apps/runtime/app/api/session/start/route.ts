@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
+import { BLOCKING_STATUSES, loadDeployment, loadTestBuild, type LoadedDeployment } from "@/lib/deployment";
 import { createSession } from "@/lib/session";
 import { clientIp } from "@rescript/quality/server";
 import { resolveSampleSource } from "@rescript/engine";
@@ -50,6 +50,25 @@ export async function POST(req: NextRequest) {
   if (!d) return NextResponse.json({ error: "Survey not found" }, { status: 404 });
   const isTest = mode === "test";
   const db = supabaseAdmin();
+
+  /*
+   * RUNTIME-02 (audit 2026-10-16). The live page refuses a paused or closed
+   * survey and asks for the password — but the page is only HTML. This route
+   * is what actually mints a session, and it minted one for anybody who
+   * posted {client, study, mode:"live"}, password or not, closed or not. The
+   * same two gates, applied where the row is created. Test links are the
+   * programmer's own and keep working while a survey is paused.
+   */
+  if (!isTest) {
+    const blocked = BLOCKING_STATUSES[d.surveyStatus];
+    if (blocked) return NextResponse.json({ error: blocked.title, blocked: true }, { status: 403 });
+    const access = d.definition.deployment.access;
+    if (access.mode === "password") {
+      const urlPw = body?.urlParams && typeof body.urlParams === "object" ? body.urlParams.pw : undefined;
+      const given = typeof body?.pw === "string" ? body.pw : typeof urlPw === "string" ? urlPw : "";
+      if (!access.password || given !== access.password) return NextResponse.json({ error: "Password required" }, { status: 403 });
+    }
+  }
 
   /*
    * §23: the supplier this respondent came from. The runner sends the URL

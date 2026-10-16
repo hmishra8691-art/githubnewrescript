@@ -26,11 +26,18 @@ function parseDataset(raw: string | null): DatasetFilter {
 
 /** Response data export (CSV / JSON / XLSX) + summary counts. */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireProject(req, params.id, "responses.read");
+  const format = req.nextUrl.searchParams.get("format") ?? "summary";
+  /*
+   * DOC-07 (audit 2026-10-16). The summary count is a READ; a file that
+   * leaves the platform is an EXPORT, and the role model keeps the two
+   * apart on purpose — a viewer may look at the dashboard and may not walk
+   * off with the dataset. One gate for both meant every viewer could download
+   * CSV/XLSX/SPSS/SAS/Stata/JSON of every response.
+   */
+  const gate = await requireProject(req, params.id, format === "summary" ? "responses.read" : "responses.export");
   if (isFailure(gate)) return gate.response;
 
   const db = supabaseAdmin();
-  const format = req.nextUrl.searchParams.get("format") ?? "summary";
   // include=live|test|all ("test=1" kept for backwards compatibility)
   const include =
     req.nextUrl.searchParams.get("include") ??

@@ -64,6 +64,11 @@ test("a viewer and a test user can read but not comment their way into editing",
   assert.equal(can("test_user", "comment.create"), true, "a tester needs to report what they found");
   assert.equal(can("test_user", "responses.read"), false, "but not to read the collected data");
   assert.equal(can("test_user", "survey.edit"), false);
+  // DOC-07 (audit 2026-10-16): looking at the data and taking the dataset away are two capabilities, and the
+  // download route must gate on the second — a viewer reads the summary and never receives a file
+  assert.equal(can("viewer", "responses.read"), true);
+  assert.equal(can("viewer", "responses.export"), false, "a viewer may not download the dataset");
+  for (const r of ["owner", "editor", "programmer", "reviewer"] as const) assert.equal(can(r, "responses.export"), true, `${r} may export`);
 });
 
 test("no membership is not a weak role — it is no access", () => {
