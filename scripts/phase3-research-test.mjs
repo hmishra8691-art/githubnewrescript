@@ -18,7 +18,7 @@
  *   6. The coverage gate on a generation: a loose answer connected on a
  *      second pass, the card saying so.
  */
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { openTab, switchMode } from "./lib/nav.mjs";
 
@@ -294,6 +294,30 @@ ok("fixture loaded: hypotheses, constructs, a KPI, a screener, two questions tha
   await cancel();
   await page.click('[data-testid="iq-plan-first"] input');
   ok("the coverage gate: the loose answer (an unmeasured hypothesis, a hobby question) goes back once; the connected answer is proposed, the card says so; a second pass no better is not taken");
+}
+
+/* ============================================================ 7. the Documents panel (DOC-11): every document one click from the research design */
+{
+  await loadDef(FIXTURE);
+  await openTab(page, "Survey Settings");
+  await page.waitForSelector(`${RD} [data-testid="research-documents"]`);
+  const DOCS = `${RD} [data-testid="research-documents"]`;
+  for (const t of ["proposal_docx", "sap_docx", "cleaning_plan_docx", "questionnaire_docx", "findings_docx", "findings_pptx"]) assert.ok(await page.$(`${DOCS} [data-testid="doc-${t}"]`), `a button for ${t}`);
+  // the sandbox has no completes and no database: the findings and the cleaning plan say why they are off
+  for (const t of ["findings_docx", "findings_pptx", "cleaning_plan_docx"]) {
+    const b = await page.$(`${DOCS} [data-testid="doc-${t}"]`);
+    assert.equal(await b.isDisabled(), true, `${t} is disabled in the sandbox`);
+    assert.ok((await b.getAttribute("title")).length > 20, `${t} says why`);
+  }
+  // the proposal, the analysis plan and the questionnaire download as files, and the route's one-line summary is toasted
+  for (const [t, name] of [["proposal_docx", /research-proposal\.docx$/], ["sap_docx", /analysis-plan\.docx$/], ["questionnaire_docx", /\.docx$/]]) {
+    const [dl] = await Promise.all([page.waitForEvent("download", { timeout: 30000 }), page.click(`${DOCS} [data-testid="doc-${t}"]`)]);
+    assert.match(dl.suggestedFilename(), name, `${t} downloads ${dl.suggestedFilename()}`);
+    const path = await dl.path();
+    const { readFileSync } = await import("node:fs");
+    assert.equal(readFileSync(path).subarray(0, 2).toString("latin1"), "PK", `${t} is a zip (docx)`);
+  }
+  ok("the Documents panel: six buttons under the research design; the findings and the cleaning plan are disabled with a reason in the sandbox; the proposal, the analysis plan and the questionnaire download as .docx files");
 }
 
 assert.deepEqual(errors, [], `no console errors:\n${errors.join("\n")}`);

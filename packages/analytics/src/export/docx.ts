@@ -1,13 +1,14 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat } from "docx";
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
-import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText } from "@rescript/engine";
+import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText, conditionSummary } from "@rescript/engine";
 import type { AnalysisResult, ResultTable } from "../types.js";
 import type { AnalysisRun, Finding } from "../findings.js";
 import { reportNarrative } from "../findingsReport.js";
 import { deckFromRun, type DeckOptions, type DeckSlide } from "../deck.js";
 import { CORRECTION_WORDS } from "../posthoc.js";
 import { seriesForChart } from "./shared.js";
+import { canonicalJson, hash64 } from "../canonical.js";
 
 /**
  * WORD DOCUMENTS (Research Engine audit, Phase 5) — the two client-ready
@@ -86,6 +87,86 @@ function cover(kind: string, title: string, lines: string[]): Block[] {
   ];
 }
 
+/* ------------------------------------------------------------ design facts (DOC-02 / DOC-03) */
+
+/**
+ * What the definition says about WHO is asked and HOW MANY, read deterministically so the
+ * proposal and the statistical analysis plan print the same facts: the quotas as a sampling
+ * design, the screening and termination logic, the consent the questionnaire carries.
+ * Nothing is invented — what the definition does not say is reported as not defined.
+ */
+export interface QuotaDesignRow { quota: string; mode: string; cell: string; who: string; limit: string; target: string; onFull: string }
+export function samplingDesign(def: SurveyDefinition): QuotaDesignRow[] {
+  const rows: QuotaDesignRow[] = [];
+  for (const q of def.quotas ?? []) {
+    const onFull = q.onFull?.kind === "redirect" ? "redirect" : q.onFull?.kind === "flag" ? "flag" : q.onFull?.kind === "warn" ? "warn" : "close (screen out)";
+    for (const c of q.cells) rows.push({
+      quota: q.name, mode: q.mode === "soft" ? "soft" : "hard", cell: c.label, who: conditionSummary(def, c.when) || "everyone",
+      limit: c.limitType === "percent" ? `${c.limit}%${q.targetTotal ? ` of ${q.targetTotal}` : ""}` : String(c.limit),
+      target: c.target != null ? (c.limitType === "percent" ? `${c.target}%` : String(c.target)) : "—", onFull,
+    });
+  }
+  return rows;
+}
+
+export interface ScreeningRule { where: string; condition: string; outcome: string }
+const OUTCOME_WORDS: Record<string, string> = { screened: "screened out", quota_full: "quota full", terminated: "terminated", complete: "complete" };
+/** every place the survey sends a respondent out before the end: skip rules to a terminate/ending, branches that end, quota checks, failed attention checks */
+export function screeningRules(def: SurveyDefinition): ScreeningRule[] {
+  const out: ScreeningRule[] = [];
+  for (const q of def.questions) {
+    for (const r of q.skipLogic ?? []) {
+      const t = r.target;
+      const ends = t.kind === "terminate" || (t.kind === "end" && t.status && t.status !== "complete");
+      if (ends) out.push({ where: `${q.code} — ${plain(q.text, 70)}`, condition: conditionSummary(def, r.when) || "always", outcome: OUTCOME_WORDS[t.status ?? "terminated"] ?? "terminated" });
+    }
+    if (q.settings?.onFail === "terminate") out.push({ where: `${q.code} — ${plain(q.text, 70)}`, condition: "the attention check is failed", outcome: "terminated" });
+  }
+  const endsOut = (nodes: unknown[]): string | null => {
+    for (const n of nodes as Record<string, unknown>[]) {
+      if (!n || typeof n !== "object") continue;
+      if (n.type === "end" && n.status && n.status !== "complete") return OUTCOME_WORDS[String(n.status)] ?? "terminated";
+      for (const k of ["children", "otherwise"]) if (Array.isArray(n[k])) { const e = endsOut(n[k] as unknown[]); if (e) return e; }
+      if (Array.isArray(n.branches)) for (const b of n.branches as { children?: unknown[] }[]) { const e = endsOut(b.children ?? []); if (e) return e; }
+    }
+    return null;
+  };
+  const walk = (nodes: unknown[]) => {
+    for (const n of nodes as Record<string, unknown>[]) {
+      if (!n || typeof n !== "object") continue;
+      if (n.type === "branch" && Array.isArray(n.branches)) for (const b of n.branches as { label?: string; when: never; children?: unknown[] }[]) { const e = endsOut(b.children ?? []); if (e) out.push({ where: `Flow — ${(n.title as string | undefined) ?? "branch"}${b.label ? ` · ${b.label}` : ""}`, condition: conditionSummary(def, b.when) || "always", outcome: e }); }
+      if (n.type === "quota_check") {
+        const kind = (n.onFull as { kind?: string } | undefined)?.kind ?? "terminate";
+        if (kind !== "continue") out.push({ where: "Flow — quota check", condition: `a quota is full (${((n.quotaIds as string[]) ?? []).map((id) => def.quotas?.find((q) => q.id === id)?.name ?? id).join(", ") || "all quotas"})`, outcome: kind === "redirect" ? "redirected" : kind === "flag" ? "flagged" : "quota full" });
+      }
+      for (const k of ["children", "otherwise"]) if (Array.isArray(n[k])) walk(n[k] as unknown[]);
+      if (Array.isArray(n.branches)) for (const b of n.branches as { children?: unknown[] }[]) walk(b.children ?? []);
+    }
+  };
+  walk(def.flow as unknown[]);
+  return out;
+}
+
+/** the questionnaire's own consent statement (an item whose wording asks for consent), else null */
+export function consentOf(def: SurveyDefinition): { code: string; text: string; options: string[] } | null {
+  for (const q of def.questions) {
+    const text = plain(q.text, 600);
+    if (/\b(?:consent|agree to (?:take part|participate)|willing to participate|privacy (?:notice|policy)|terms and conditions)\b/i.test(text)) return { code: String(q.code), text, options: (q.options ?? []).map((o) => plain(o.label, 60)).filter(Boolean) };
+  }
+  return null;
+}
+
+/** the stamp both documents carry: the survey, its version, and a hash of the definition they were read from (DOC-13) */
+export function definitionStamp(def: SurveyDefinition): { hash: string; text: string } {
+  const { updatedAt: _u, ...meta } = def.meta as Record<string, unknown>;
+  const hash = hash64(canonicalJson({ ...def, meta }));
+  return { hash, text: `Definition ${hash} · survey ${def.meta.code ?? def.meta.id} v${def.meta.version ?? "1.0"}` };
+}
+
+/** the building blocks the sibling documents (the statistical analysis plan) are made of */
+export const docKit = { h1, h2, label, body, lead, muted, bullet, numbered, divider, pageBreak, gridTable, cover, document, plain, fmt, fmtP };
+export type DocBlock = Block;
+
 /* ------------------------------------------------------------ the proposal */
 
 export interface ProposalOptions { client?: string; author?: string; date?: string; title?: string; fieldwork?: { from?: string; to?: string }; deliverables?: string[] }
@@ -156,7 +237,36 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   if (opts.fieldwork?.from || opts.fieldwork?.to) out.push(body(`Fieldwork: ${opts.fieldwork.from ?? "—"} to ${opts.fieldwork.to ?? "—"}.`));
   if (b?.deadline) out.push(body(`Findings due: ${b.deadline}.`));
 
-  out.push(h1(`${n++}. Analysis plan`));
+  /* DOC-02: the sampling design, the screening, the timeline — each from the definition, each saying so when the definition is silent */
+  out.push(h2("Sampling design"));
+  const design = samplingDesign(def);
+  if (!design.length) out.push(muted("No quotas are defined: respondents are taken as they come (natural fall-out), so the sample is not controlled for its composition. Define quotas — or weight the data to known population targets — if the findings are to be read as representative."));
+  else {
+    const hard = (def.quotas ?? []).filter((q) => q.mode !== "soft").length;
+    out.push(body(`Quota sample: ${(def.quotas ?? []).length} quota${(def.quotas ?? []).length === 1 ? "" : "s"} (${hard} hard, ${(def.quotas ?? []).length - hard} soft), ${design.length} cell${design.length === 1 ? "" : "s"}. A hard quota closes a cell once its maximum is reached; the respondent is screened out and the interview is not counted.`));
+    out.push(gridTable(["Quota", "Cell", "Who", "Maximum", "Target", "When full"], design.map((d) => [`${d.quota} (${d.mode})`, d.cell, d.who, d.limit, d.target, d.onFull]), [1900, 1500, 2600, 1000, 900, 1100]));
+  }
+  out.push(h2("Screening and eligibility"));
+  if (r?.population) out.push(body(`Eligible population: ${r.population}.`));
+  const screens = screeningRules(def);
+  const screenerQs = def.questions.filter((q) => inferRole(def, q) === "screening");
+  if (screenerQs.length) out.push(body(`Screener questions: ${screenerQs.map((q) => q.code).join(", ")}.`));
+  if (!screens.length) out.push(muted("No screening or termination logic is programmed: every respondent who starts the survey is treated as eligible. If the population is narrower than the panel, add screener questions that end the interview for those who do not qualify."));
+  else out.push(gridTable(["Where", "When", "What happens"], screens.map((x) => [x.where, x.condition, x.outcome]), [3600, 3600, 1800]));
+  out.push(h2("Timeline"));
+  const tbd = (v?: string) => v ?? "[to be agreed]";
+  out.push(gridTable(["Phase", "Dates", "Notes"], [
+    ["Questionnaire sign-off", "[to be agreed]", "Client approves the questionnaire and the research design"],
+    ["Programming and testing", "[to be agreed]", `${asked.length} questions; test the survey in the preview and a soft launch before the full field`],
+    ["Fieldwork", opts.fieldwork?.from || opts.fieldwork?.to ? `${tbd(opts.fieldwork?.from)} to ${tbd(opts.fieldwork?.to)}` : "[to be agreed]", `${r?.sampleSize ? `Target ${r.sampleSize} completes` : exp ? `Expected ${exp.n} completes` : "Target sample not yet set"}; quality checks run during field`],
+    ["Data cleaning and delivery of data", "[to be agreed]", "After the close of fieldwork: removal of flagged interviews, final dataset"],
+    ["Analysis and findings", b?.deadline ? `by ${b.deadline}` : "[to be agreed]", "Topline at the first readable base, the findings report at target"],
+  ], [2600, 2200, 4200]));
+  if (!(opts.fieldwork?.from || opts.fieldwork?.to) && !b?.deadline) out.push(muted("The survey has no fieldwork dates and the brief no deadline, so the dates above are placeholders to fill in."));
+
+  const savedPlan = !!r?.analysisPlan;
+  out.push(h1(`${n++}. Analysis plan${savedPlan ? "" : " (derived from the design — not yet saved)"}`));
+  if (!savedPlan) out.push(muted("No analysis plan has been saved for this survey. The analyses below were derived by the engine from the questionnaire and the hypotheses; they change when the questionnaire does. Save the plan in the Analysis tab to fix it."));
   const plan = explainPlan(def);
   if (!plan.length) out.push(muted("No analysis follows from the design yet."));
   else out.push(gridTable(["Analysis", "Serves", "Why this method", "Output", "Base"], plan.slice(0, 30).map((x) => [x.title, x.hypotheses.map((h) => h.label).join(", ") || x.objective.slice(0, 40), x.why, x.expectedOutput, `${x.requiredBase.minimum}`]), [2200, 900, 2900, 2200, 800]));
@@ -169,6 +279,23 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
     for (const a of r?.assumptions ?? []) out.push(bullet(a));
     if (r?.sources.length) { out.push(label("Sources")); for (const s of r.sources) out.push(bullet(s)); }
   }
+
+  /* DOC-02: ethics and consent — the questionnaire's own consent statement, else the standard one, labelled as such */
+  out.push(h1(`${n++}. Ethics, consent and data protection`));
+  const consent = consentOf(def);
+  if (consent) {
+    out.push(body(`The questionnaire carries its own consent statement (${consent.code}): “${consent.text}”${consent.options.length ? ` Respondents answer: ${consent.options.join(" / ")}.` : ""}`));
+  } else {
+    out.push(muted("The questionnaire has no consent statement yet; the standard statement below applies and a consent page should be added before fieldwork."));
+  }
+  for (const line of [
+    "Participation is voluntary. Respondents are told who is conducting the research, its subject and the approximate length before they begin, and may stop at any time without giving a reason.",
+    "Answers are confidential and reported only in aggregate; no individual respondent is identified to the client unless they have separately agreed to it.",
+    "Personal data are collected only where the research needs them, stored securely, kept for no longer than the project requires and handled in line with the applicable data-protection law (GDPR where it applies) and the ESOMAR/MRS codes of conduct.",
+    ...(/\b(?:child|children|minor|teen|under\s*1[68]|aged?\s*1[0-7]\b)/i.test(`${r?.population ?? ""} ${r?.audience?.description ?? ""}`) ? ["The population includes minors: verifiable consent from a parent or guardian is obtained before the child is interviewed."] : []),
+  ]) out.push(bullet(line));
+  out.push(divider());
+  out.push(muted(`${definitionStamp(def).text} · generated ${date}`));
   return document(`${title} — research proposal`, `Research proposal for ${def.meta.title}`, out);
 }
 

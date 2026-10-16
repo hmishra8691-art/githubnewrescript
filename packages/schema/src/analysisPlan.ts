@@ -122,6 +122,13 @@ export const PlannedSegment = z.object({
 });
 export type PlannedSegment = z.infer<typeof PlannedSegment>;
 
+/** how the planned tests are corrected for running many of them */
+export const MULTIPLE_COMPARISONS = ["none", "bonferroni", "holm", "bh"] as const;
+export type MultipleComparisons = (typeof MULTIPLE_COMPARISONS)[number];
+/** how missing answers are handled */
+export const MISSING_DATA = ["listwise", "pairwise", "impute_none"] as const;
+export type MissingDataPolicy = (typeof MISSING_DATA)[number];
+
 export const AnalysisPlan = z.object({
   crosstabs: z.array(PlannedCrosstab).default([]),
   tests: z.array(PlannedTest).default([]),
@@ -138,6 +145,28 @@ export const AnalysisPlan = z.object({
   autoRun: z.boolean().optional(),
   /** draft the findings report by itself when the target is reached or the field closes — on unless turned off */
   autoReport: z.boolean().optional(),
+  /*
+   * THE STATISTICAL ANALYSIS PLAN's own decisions (audit DOC-03) — what the
+   * crosstabs and tests above leave open. All optional and additive: a plan
+   * without them is exactly the plan it was; the SAP document prints the
+   * defaults it implies (α = 0.05, no correction stated, listwise missing
+   * data) and says they are defaults, so a client reads what was decided
+   * and what was assumed.
+   */
+  /** the significance level the tests are read at (default 0.05) */
+  alpha: z.number().gt(0).lt(1).optional(),
+  /** how the many planned tests are corrected for multiple comparisons */
+  multipleComparisons: z.enum(MULTIPLE_COMPARISONS).optional(),
+  /** how the sample is weighted for analysis, in words ("rim weights to age × gender × region, capped 0.3–3") */
+  weighting: z.string().optional(),
+  /** how missing answers are handled in the analyses */
+  missingData: z.enum(MISSING_DATA).optional(),
+  /** the sample the analyses are powered for, and why */
+  sampleSize: z.object({ target: z.number().int().positive(), rationale: z.string().optional() }).optional(),
+  /** looks at the data before fieldwork closes, and what is done with them ("topline at 30 completes; no stopping rule") */
+  interimAnalyses: z.string().optional(),
+  /** the software the analyses are run in ("Rescript analytics engine v…", "SPSS 29") */
+  software: z.string().optional(),
 });
 export type AnalysisPlan = z.infer<typeof AnalysisPlan>;
 

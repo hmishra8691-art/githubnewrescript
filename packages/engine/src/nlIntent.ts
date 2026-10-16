@@ -122,7 +122,7 @@ export interface InterpretContext {
 
 /** what the Studio produces for an output request (Phase 5) */
 export interface OutputRequest {
-  type: "proposal_docx" | "findings_docx" | "findings_pptx";
+  type: "proposal_docx" | "sap_docx" | "findings_docx" | "findings_pptx";
   audience: "executive" | "client" | "researcher";
   client?: string;
   /** the words that named the document, for the card */
@@ -2179,6 +2179,8 @@ const outputRequest: Recogniser = (r) => {
   let tail = "";
   const lead = String.raw`^${OUTPUT_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|our\s+|my\s+)?${OUTPUT_MOD}`;
   if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
+  /* the statistical analysis plan as a document (DOC-03): "create the statistical analysis plan", "write the SAP", "draft the analysis framework document" */
+  else if ((m = new RegExp(String.raw`${lead}(?:statistical\s+analysis\s+plan|sap|analysis\s+(?:framework|plan)\s+(?:document|doc|write-?up))(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "sap_docx"; tail = m[1]; }
   else if ((m = new RegExp(String.raw`${lead}(?:findings\s+|results\s+)?(?:presentation|deck|slide\s+deck|slides|powerpoint|pptx)(?:\s+of\s+(?:the\s+)?(?:findings|results))?(.*)$`, "i").exec(t))) { type = "findings_pptx"; tail = m[1]; }
   else if ((m = new RegExp(String.raw`${lead}(?:findings|results|final)\s+report(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?|\s+(?:document|doc))?(.*)$`, "i").exec(t))
     || (m = new RegExp(String.raw`${lead}report\s+(?:showing|of|on|with|summari[sz]ing|presenting|covering)\s+(?:the\s+|our\s+)?(?:key\s+|main\s+|top\s+)?(?:findings|results)(.*)$`, "i").exec(t))
@@ -2198,10 +2200,10 @@ const outputRequest: Recogniser = (r) => {
     else if ((n = /^for\s+(.+)$/i.exec(rest)) && !/\b(?:survey|study|questionnaire|this|that|it|them|us|me)\b/i.test(n[1])) client = unquote(n[1]).slice(0, 80);
     else return null;
   }
-  const words = type === "proposal_docx" ? "the research proposal (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
+  const words = type === "proposal_docx" ? "the research proposal (Word)" : type === "sap_docx" ? "the statistical analysis plan (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
   const hasDesign = !!(r.def.research?.objective || r.def.research?.hypotheses.length);
   if (type === "proposal_docx" && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, "There is nothing to write a proposal from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.", []);
-  return { kind: "output", category: "reporting", understood: `Produce ${words}${client ? ` for ${client}` : ""}${type !== "proposal_docx" ? " from the latest analysis run" : " from the research design"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
+  return { kind: "output", category: "reporting", understood: `Produce ${words}${client ? ` for ${client}` : ""}${type !== "proposal_docx" && type !== "sap_docx" ? " from the latest analysis run" : " from the research design"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
 };
 
 /* ---------------------------------------------------------- data questions (Phase 4) */

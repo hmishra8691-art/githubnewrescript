@@ -863,3 +863,18 @@ test("a condition the engine cannot read goes to the model with what was detecte
   const two = as(say(def, "Show Q15 when Q3 is Male or Q7 is Yes"), "actions");
   assert.match(JSON.stringify(applySurveyActions(def, two.actions).def.questions.find((q) => q.id === "q15")!.displayLogic), /"op":"or"/);
 });
+
+test("DOC-03: 'statistical analysis plan' / 'SAP' / 'analysis framework document' is the SAP document output, built from the design", () => {
+  const def = survey();
+  for (const sentence of ["Create the statistical analysis plan", "write the SAP", "draft the analysis framework document", "generate the statistical analysis plan as a Word document", "prepare a formal statistical analysis plan for Acme"]) {
+    const r = say(def, sentence);
+    assert.equal(r.kind, "output", `${sentence}: ${JSON.stringify(r)}`);
+    if (r.kind !== "output") continue;
+    assert.equal(r.output.type, "sap_docx", sentence);
+    assert.equal(r.output.words, "the statistical analysis plan (Word)");
+    assert.match(r.understood, /^Produce the statistical analysis plan \(Word\)( for Acme)? from the research design\.$/, sentence);
+  }
+  // the proposal and the findings outputs are unchanged
+  const prop = say(def, "Create the client-ready research proposal");
+  assert.equal(prop.kind === "output" && prop.output.type, "proposal_docx");
+});

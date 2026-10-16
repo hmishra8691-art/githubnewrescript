@@ -4,3 +4,4 @@ export * from "./shared.js";
 export * from "./deck.js";
 export * from "./docx.js";
 export * from "./storyPptx.js";
+export * from "./sap.js";

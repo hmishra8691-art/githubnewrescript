@@ -5,7 +5,7 @@ import { keepReply, recordAiRefused, recordAiText, replyFromCache, replyKey } fr
 import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
 import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, claimsBrief, claimsFromRun, claimsHash, promptVersion, redactPrompt, redactRunForModel, hash64, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
-import { buildDeckPptx, buildFindingsDocx, buildProposalDocx } from "@rescript/analytics/export";
+import { buildDeckPptx, buildFindingsDocx, buildProposalDocx, buildSapDocx } from "@rescript/analytics/export";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
@@ -34,7 +34,9 @@ import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
  * narrative, so the browser suites can see the whole path.
  */
 export const dynamic = "force-dynamic";
-const TYPES = new Set(["proposal_docx", "findings_docx", "findings_pptx"]);
+const TYPES = new Set(["proposal_docx", "sap_docx", "findings_docx", "findings_pptx"]);
+/** the documents made from the survey and its research design alone — `project.read`, no data needed */
+const DESIGN_ONLY = new Set(["proposal_docx", "sap_docx"]);
 const AUDIENCES = new Set(["executive", "client", "researcher"]);
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -45,7 +47,7 @@ const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?").slice(0, 900);
 function readOutput(x: unknown): OutputRequest | string {
   const o = (x ?? {}) as Record<string, unknown>;
   const type = typeof o.type === "string" ? o.type : "";
-  if (!TYPES.has(type)) return "the output needs a type (proposal_docx, findings_docx, findings_pptx)";
+  if (!TYPES.has(type)) return "the output needs a type (proposal_docx, sap_docx, findings_docx, findings_pptx)";
   const audience = typeof o.audience === "string" && AUDIENCES.has(o.audience) ? o.audience : "client";
   const client = typeof o.client === "string" && o.client.trim() ? o.client.trim().slice(0, 80) : undefined;
   return { type: type as OutputRequest["type"], audience: audience as OutputRequest["audience"], ...(client ? { client } : {}), words: typeof o.words === "string" ? o.words.slice(0, 120) : type };
@@ -73,7 +75,7 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) return json({ error: "send the survey as it is open in the editor (definition)" }, 400);
     def = parsed.data;
   } else {
-    const ctx = await requireProject(req, surveyId, output.type === "proposal_docx" ? "project.read" : "analytics.export");
+    const ctx = await requireProject(req, surveyId, DESIGN_ONLY.has(output.type) ? "project.read" : "analytics.export");
     if (isFailure(ctx)) return ctx.response;
     loaded = await loadDefinition(db!, surveyId);
     if ("error" in loaded) return json({ error: loaded.error }, loaded.status);
@@ -92,6 +94,12 @@ export async function POST(req: NextRequest) {
     return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-research-proposal.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Research proposal: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${def.research?.analysisPlan ? "the saved analysis plan" : "the design's analysis plan"}`) } });
   }
 
+  if (output.type === "sap_docx") {
+    const buf = await buildSapDocx(def, { client, author, date });
+    const sapPlan = def.research?.analysisPlan;
+    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${safeName(def.meta.title)}-analysis-plan.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Statistical analysis plan: ${sapPlan ? `${sapPlan.tests.length} tests, ${sapPlan.crosstabs.length} crosstabs from the saved plan` : "derived from the design - no analysis plan is saved yet"}`) } });
+  }
+
   /* the findings outputs: a fresh run of the plan on the data */
   let dataset;
   if (sandbox) {
@@ -103,7 +111,8 @@ export async function POST(req: NextRequest) {
     dataset = await buildFor(db!, surveyId, loaded!, { name: "output", kind: "descriptive", dataset: { environment, dataset: body.dataset === "all" ? "all" : "clean" }, variables: [] });
     if (!dataset.cases.length) return json({ error: "No completes in the data yet — the findings outputs need respondents.", code: "no_data" }, 409);
   }
-  const run = runPlan(def, dataset, { trigger: "output" });
+  /* the plan's own multiple-comparison rule (DOC-03) is the run's correction; absent, the runner's default (Holm) stands */
+  const run = runPlan(def, dataset, { trigger: "output", ...(def.research?.analysisPlan?.multipleComparisons ? { correction: def.research.analysisPlan.multipleComparisons } : {}) });
   if (!run.items.length) return json({ error: "Nothing is planned yet — plan the analysis in Intelligent mode (Analysis tab) first.", code: "no_plan" }, 409);
   /* Phase 8: since the last wave — the latest stored run on the same data (the sandbox, with no database, may send the previous run itself) */
   const previous = sandbox

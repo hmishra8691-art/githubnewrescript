@@ -5,6 +5,7 @@ import { applySurveyActions, describeHypothesis, hypothesisCoverage, structuredH
 import { hypothesisLabel } from "@rescript/schema";
 import { useStudio } from "./store";
 import { InlineRichText } from "./RichTextEditor";
+import { ResearchDocuments } from "./ResearchDocuments";
 
 /**
  * THE RESEARCH DESIGN, EDITED BY HAND (Research Engine audit, Phase 1).
@@ -204,6 +205,8 @@ export function ResearchDesignEditor({ compact = false }: { compact?: boolean })
 
       <h4 className="rd-h">Assumptions <span className="muted">· what the design rests on that is not yet confirmed</span></h4>
       <LineList items={r.assumptions} testId="rd-assumption" placeholder="e.g. Respondents can recall their previous brand" onChange={(items) => patch("edit assumptions", (d) => { d.assumptions = items; })} />
+
+      <ResearchDocuments />
     </div>
   );
 }
