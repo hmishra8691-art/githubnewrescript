@@ -5,8 +5,15 @@ import type {
 import type { ResponseState } from "./state.js";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
-import { effectiveQuestion } from "./carryforward.js";
+import { effectiveQuestion, carrySourceOptions, carrySourceRows } from "./carryforward.js";
+import { gridAxes } from "./gridAxes.js";
 import { getQuestion } from "./state.js";
+import type { Question } from "@rescript/schema";
+
+/** A grid whose answer is keyed by row: its rows are the items a List Fill draws from. */
+export function listFillItemsAreRows(q: Question): boolean {
+  return q.rows.length > 0 && gridAxes(q).isGrid;
+}
 import { matchingCells, effectiveLimit } from "./quotas.js";
 import type { QuotaCounts } from "./quotas.js";
 import { mulberry32, subSeed } from "./random.js";
@@ -207,14 +214,40 @@ export function listFillCandidates(
     case "question": {
       const q = getQuestion(def, src.questionId);
       if (!q) return [];
+      /*
+       * A GRID's items are its ROWS (the brands), not its options (the scale).
+       * Reading `q.options` here made `take: "all"` / `"displayed"` of a grid
+       * return scale points, and labelled a selected row "r1" — or worse, a
+       * row coded "1" — with the scale point's label ("Never heard of"). The
+       * same rule `codesFrom` in carryforward.ts already applies.
+       */
+      if (listFillItemsAreRows(q)) {
+        const view = ctx ?? { def, state };
+        const rows = carrySourceRows(q, view);
+        const rowLabel = (code: string) => rows.find((r) => String(r.code) === code)?.label ?? code;
+        if (src.take === "all") return rows.map((r) => ({ code: String(r.code), label: r.label }));
+        if (src.take === "displayed") return effectiveQuestion(q, view).rows.map((r) => ({ code: String(r.code), label: r.label }));
+        // "selected" of a grid = the rows that hold an answer, in the grid's own row order
+        const cells = state.answers[src.questionId];
+        if (!cells || typeof cells !== "object" || Array.isArray(cells)) return asList(cells).map((c) => ({ code: c, label: rowLabel(c) }));
+        const answered = new Set(Object.entries(cells as Record<string, unknown>)
+          .filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && v.length === 0))
+          .map(([k]) => k));
+        return rows.filter((r) => answered.has(String(r.code))).map((r) => ({ code: String(r.code), label: r.label }));
+      }
       if (src.take === "all") {
-        return q.options.map((o) => ({ code: String(o.code), label: o.label }));
+        return carrySourceOptions(q, ctx ?? { def, state }).map((o) => ({ code: String(o.code), label: o.label }));
       }
       if (src.take === "displayed") {
         const view = effectiveQuestion(q, ctx ?? { def, state });
         return view.options.map((o) => ({ code: String(o.code), label: o.label }));
       }
-      return asList(state.answers[src.questionId]).map((c) => ({ code: c, label: labelFor(src.questionId, c) }));
+      // a carry-forward source has no static options: borrow the label from its carried list
+      const carried = q.options.length ? q.options : carrySourceOptions(q, ctx ?? { def, state });
+      return asList(state.answers[src.questionId]).map((c) => ({
+        code: c,
+        label: carried.find((o) => String(o.code) === String(c))?.label ?? labelFor(src.questionId, c),
+      }));
     }
     case "static":
       return src.items.map((i) => ({ code: String(i.code), label: i.label }));
@@ -375,7 +408,7 @@ export function decideListFill(input: ListFillInput): ListFillResult {
   const pool = candidates.filter((c) => (seen.has(c.code) ? false : (seen.add(c.code), true)));
   steps.push(`Candidates from ${describeSource(lf)}: ${pool.length ? pool.map((c) => c.code).join(", ") : "none"}.`);
 
-  const requested = resolveListFillCount(def, lf, state, pool.length);
+  let requested = resolveListFillCount(def, lf, state, pool.length);
   steps.push(`Count required: ${describeCount(lf)} → ${requested}.`);
 
   /* -- 2-4. judge every candidate --------------------------------------- */
@@ -435,6 +468,12 @@ export function decideListFill(input: ListFillInput): ListFillResult {
     if (t.candidate && !t.eligible) steps.push(`${t.code}: rejected — ${explainRejection(t)}.`);
   }
   steps.push(`Eligible with capacity: ${usable.length ? usable.map((t) => t.code).join(", ") : "none"}.`);
+  // "if more than 5 qualify, assign 4": up to `allUpTo` eligible items are all taken
+  const cnt = sel.count;
+  if (cnt.kind === "fixed" && cnt.allUpTo != null && usable.length > 0 && usable.length <= cnt.allUpTo && usable.length !== requested) {
+    steps.push(`${usable.length} eligible — at most ${cnt.allUpTo}, so every one is taken instead of ${requested}.`);
+    requested = usable.length;
+  }
 
   if (!pool.length || requested <= 0 || !usable.length) {
     const t = base();
@@ -805,9 +844,9 @@ export function listFillVariables(lf: ListFill, result: ListFillResult): Record<
 }
 
 /** The variable NAMES a List Fill will produce, for the dictionary and exports. */
-export function listFillVariableNames(lf: ListFill): { name: string; kind: "count" | "label" | "code" | "position" | "summary"; position?: number }[] {
+export function listFillVariableNames(lf: ListFill, def?: SurveyDefinition): { name: string; kind: "count" | "label" | "code" | "position" | "summary"; position?: number }[] {
   const key = `LISTFILL_${nameOf(lf).toUpperCase()}`;
-  const max = maxItems(lf);
+  const max = maxItems(lf, def);
   const out: { name: string; kind: "count" | "label" | "code" | "position" | "summary"; position?: number }[] = [
     { name: `${key}_COUNT`, kind: "count" },
   ];
@@ -826,11 +865,33 @@ export function listFillVariableNames(lf: ListFill): { name: string; kind: "coun
  * columns the dictionary and the exports need. A dynamic count is bounded by
  * the option list, and by the destinations when those are the only outlet.
  */
-export function maxItems(lf: ListFill): number {
+export function maxItems(lf: ListFill, def?: SurveyDefinition): number {
   const c = lf.selection.count;
-  const configured = lf.options.length || lf.destinations.length || 1;
-  if (c.kind === "fixed") return Math.max(1, Math.min(c.n, Math.max(configured, c.n)));
+  if (c.kind === "fixed") return Math.max(1, c.n, c.allUpTo ?? 0);
+  /*
+   * A dynamic count ("all", a question, a calculation) is bounded by what the
+   * source can offer. Without the definition only the configured options and
+   * destinations are known — which for an unconfigured "all" list over ten
+   * brands declared ONE column, so items 2..10 were missing from the
+   * dictionary and their piping tokens linted as unknown.
+   */
+  const fromSource = def ? listFillSourceSize(def, lf) : 0;
+  const configured = Math.max(lf.options.length, fromSource) || lf.destinations.length || 1;
   return Math.max(1, configured);
+}
+
+/** How many items the source could ever offer (0 when that is not knowable from the definition). */
+function listFillSourceSize(def: SurveyDefinition, lf: ListFill): number {
+  const src = lf.source;
+  if (src.kind === "static") return src.items.length;
+  if (src.kind === "listFill") {
+    const other = def.listFills.find((x) => x.id === src.listFillId);
+    return other && other !== lf ? maxItems(other) : 0;
+  }
+  if (src.kind !== "question") return 0;
+  const q = getQuestion(def, src.questionId);
+  if (!q) return 0;
+  return listFillItemsAreRows(q) ? q.rows.length : q.options.length;
 }
 
 /* ------------------------------------------------------------ destinations */
@@ -850,6 +911,19 @@ export function maxItems(lf: ListFill): number {
  */
 export function applyListFillDestinations(lf: ListFill, result: ListFillResult, state: ResponseState): string[] {
   const written: string[] = [];
+  /*
+   * A RE-DECIDED list (see `listFillIsStale`) may be shorter than the one it
+   * replaces. Every caller assigns `listFillVariables` and then calls this, so
+   * this is where the positions the new list no longer fills are cleared —
+   * otherwise `{{LISTFILL_X_4}}` kept piping the old fourth brand.
+   */
+  const key = `LISTFILL_${nameOf(lf).toUpperCase()}_`;
+  const positional = /^(\d+)(_CODE|_POSITION)?$/;
+  for (const k of Object.keys(state.calculated)) {
+    if (!k.startsWith(key)) continue;
+    const m = positional.exec(k.slice(key.length));
+    if (m && Number(m[1]) > result.items.length) delete state.calculated[k];
+  }
   let next = 0;
   for (const dest of lf.destinations) {
     const item = dest.position != null
@@ -928,7 +1002,7 @@ export function pendingListFills(
   const ctx: EvalContext = { def, state };
   return def.listFills.filter((lf) => {
     if (!lf.enabled) return false;
-    if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] != null) return false;
+    if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] != null) return listFillIsStale(def, lf, state);
     if (lf.runWhen && !evaluateCondition(lf.runWhen, ctx)) return false;
     if (listFillCandidates(def, lf, state, ctx).length > 0) return true;
     /*
@@ -939,6 +1013,38 @@ export function pendingListFills(
      */
     return opts.assumeSourcesSettled === true || listFillSourceSettled(def, lf, state);
   });
+}
+
+/**
+ * Has the respondent changed what this list was decided from?
+ *
+ * "Allocate once" is right for a list that claims SAMPLE capacity: the claim
+ * is idempotent in the database and re-deciding would consume a slot twice.
+ * It is wrong for a per-respondent selector ("show the brands rated 3–5,
+ * four of them at random"): a respondent who goes Back and re-rates the
+ * grid was shown the OLD brands on the next page — items they no longer
+ * rate, and none of the ones they now do.
+ *
+ * So a list that does not need the allocator is re-decided against the
+ * current answers. The decision is a pure function of the answers and the
+ * respondent's seed, so an unchanged source reproduces the stored list
+ * exactly (no churn, no reshuffle on a plain Back/Next); only a real change
+ * re-runs it. Lists that consult hard quotas keep "allocate once": their
+ * result depends on counters this check cannot see.
+ */
+export function listFillIsStale(def: SurveyDefinition, lf: ListFill, state: ResponseState): boolean {
+  if (needsAllocation(lf)) return false;
+  if (lf.tracking.respectQuotas && def.quotas.some((q) => q.mode === "hard" && (!lf.tracking.quotaIds.length || lf.tracking.quotaIds.includes(q.id)))) return false;
+  const key = `LISTFILL_${nameOf(lf).toUpperCase()}`;
+  // a list whose `runWhen` no longer holds re-decides to nothing, which is what hides its destinations
+  let fresh: ListFillResult;
+  try {
+    fresh = decideListFill({ def, listFill: lf, state });
+  } catch {
+    return false;
+  }
+  const stored = String(state.calculated[`${key}_CODES`] ?? "");
+  return fresh.items.map((i) => i.code).join(",") !== stored;
 }
 
 type StepLocator = (def: SurveyDefinition, state: ResponseState, questionId: string) => number;
@@ -1004,7 +1110,7 @@ function describeSource(lf: ListFill): string {
 function describeCount(lf: ListFill): string {
   const c = lf.selection.count;
   switch (c.kind) {
-    case "fixed": return String(c.n);
+    case "fixed": return c.allUpTo != null ? `${c.n} (all of them when ${c.allUpTo} or fewer qualify)` : String(c.n);
     case "all": return "all eligible";
     case "question": return `from ${c.questionId}`;
     case "calculation": return `from ${c.ref}`;

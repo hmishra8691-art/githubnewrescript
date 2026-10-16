@@ -7,7 +7,7 @@ import type { ListFill, ListFillMethod } from "@rescript/schema";
 import {
   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
   type ListFillCounts, type ListFillTrace, type ResponseState,
-  stripHtmlText,
+  stripHtmlText, listFillItemsAreRows,
 } from "@rescript/engine";
 
 type Env = "TEST" | "LIVE";
@@ -105,7 +105,8 @@ export function ListFillPanel() {
   const sourceOptions = (lf: ListFill): { code: string; label: string }[] => {
     if (lf.source.kind === "question") {
       const q = s.def.questions.find((x) => x.id === (lf.source as { questionId: string }).questionId);
-      return (q?.options ?? []).map((o) => ({ code: String(o.code), label: o.label }));
+      // a grid's items are its rows (the brands), not its scale points
+      return (q && listFillItemsAreRows(q) ? q.rows : q?.options ?? []).map((o) => ({ code: String(o.code), label: o.label }));
     }
     if (lf.source.kind === "static") return lf.source.items.map((i) => ({ code: String(i.code), label: i.label }));
     return lf.options.map((o) => ({ code: String(o.code), label: o.label ?? String(o.code) }));

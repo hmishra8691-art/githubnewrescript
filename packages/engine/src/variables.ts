@@ -3,7 +3,7 @@ import {
   directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
   possibleLoopItems, type LoopFlowNode,
 } from "./loops.js";
-import { listFillVariableNames } from "./listFill.js";
+import { listFillVariableNames, listFillItemsAreRows } from "./listFill.js";
 import { otherOptions, otherRows, otherColumnFor, rowOtherCode } from "./otherSpecify.js";
 import { fieldDataType } from "./fields.js";
 import { questionAi, voiceOn } from "./aiConversation.js";
@@ -855,13 +855,15 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       : undefined;
     const codes = lf.options.length
       ? lf.options.map((o) => String(o.code))
-      : (source?.options ?? []).map((o) => String(o.code));
+      : (source ? (listFillItemsAreRows(source) ? source.rows : source.options) : []).map((o) => String(o.code));
     const labels: Record<string, string> = {};
     for (const code of codes) {
       const opt = lf.options.find((o) => String(o.code) === code);
-      labels[code] = opt?.label ?? source?.options.find((o) => String(o.code) === code)?.label ?? code;
+      // a grid source's items are its rows: a row coded "1" must not borrow the scale point's label
+      const items = source ? (listFillItemsAreRows(source) ? source.rows : source.options) : [];
+      labels[code] = opt?.label ?? items.find((o) => String(o.code) === code)?.label ?? code;
     }
-    for (const v of listFillVariableNames(lf)) {
+    for (const v of listFillVariableNames(lf, def)) {
       const positional = v.position != null ? ` — item ${v.position}` : "";
       out.push({
         name: v.name,

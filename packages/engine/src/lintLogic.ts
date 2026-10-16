@@ -660,7 +660,7 @@ export function bareNameResolves(def: SurveyDefinition, q: Question | undefined,
   if (embeddedNames(def).has(name)) return true;
   if ((def.variables ?? []).some((v) => v.name === name)) return true;
   for (const lf of def.listFills ?? []) {
-    if (listFillVariableNames(lf).some((v) => v.name === name)) return true;
+    if (listFillVariableNames(lf, def).some((v) => v.name === name)) return true;
   }
   for (const { node } of loopNodes(def)) {
     if (node.loopVar === name && (!q || questionIdsInLoop(node).includes(q.id))) return true;

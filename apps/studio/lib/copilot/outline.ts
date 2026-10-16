@@ -119,6 +119,16 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       }
     }
   } else if (opts.quota) lines.push("Quotas: none yet (create_quota).");
+  /* THE LIST FILLS, named on every turn so update_list_fill / remove_list_fill can address them */
+  if ((def.listFills ?? []).length) {
+    const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
+    lines.push(`List Fills: ${def.listFills.map((l) => {
+      const s = l.source.kind === "question" ? `${code(l.source.questionId)} ${l.source.take}` : l.source.kind;
+      const c = l.selection.count.kind === "fixed" ? `${l.selection.count.n}${l.selection.count.allUpTo ? ` (all when ≤ ${l.selection.count.allUpTo})` : ""}` : l.selection.count.kind;
+      const p = l.options.filter((o) => o.priority != null).sort((a, b) => a.priority! - b.priority!).map((o) => o.label ?? o.code);
+      return `${l.name ?? l.id} [id ${l.id}${l.enabled ? "" : ", off"}] from ${s}, ${c} by ${l.selection.method}${p.length ? `, priority ${p.slice(0, 5).join(" > ")}` : ""}${l.destinations.length ? ` → ${[...new Set(l.destinations.map((d) => code(d.questionId)))].join(", ")}` : ""}`;
+    }).join("; ")}`);
+  }
 
   /*
    * THE FINDINGS, on a findings or analysis turn: the latest analysis run —

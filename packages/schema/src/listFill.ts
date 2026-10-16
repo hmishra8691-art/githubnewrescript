@@ -129,7 +129,16 @@ export type FallbackRule = z.infer<typeof FallbackRule>;
  * respondent.
  */
 export const ListFillCount = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("fixed"), n: z.number().int().min(0).default(1) }),
+  z.object({
+    kind: z.literal("fixed"),
+    n: z.number().int().min(0).default(1),
+    /**
+     * "If more than 5 qualify, assign 4": when at most `allUpTo` items are
+     * eligible, every one of them is taken; above that, `n`. Absent = always
+     * `n` (the historical behaviour).
+     */
+    allUpTo: z.number().int().min(0).optional(),
+  }),
   z.object({ kind: z.literal("all") }),
   z.object({ kind: z.literal("question"), questionId: z.string() }),
   z.object({ kind: z.literal("calculation"), ref: z.string() }),

@@ -18,6 +18,8 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Quotas** (6): `create_quota`, `update_quota`, `add_quota_cells`, `remove_quota_cells`, `delete_quota`, `set_quota_check`
 
+**List Fill** (3): `create_list_fill`, `update_list_fill`, `remove_list_fill`
+
 ## Survey actions
 
 From `packages/engine/src/surveyActions.ts`:
@@ -54,6 +56,8 @@ export type SurveyAction =
   /* languages, translations, glossary and language routing — see localizationActions.ts; they write def.localization and nothing else */
   | LocalizationAction
   | QuotaAction
+  /* List Fills — see listFillActions.ts; they write def.listFills and the destinations' masks */
+  | ListFillAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
   | OptionAction;
 ```

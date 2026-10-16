@@ -638,3 +638,71 @@ test("METHOD-09: assumeSourcesSettled lets the server run a list the client says
   assert.deepEqual(pendingListFills(noPos, st), []);
   assert.deepEqual(pendingListFills(noPos, st, { assumeSourcesSettled: true }).map((l) => l.id), ["lf1"]);
 });
+
+/* ------------------------------------------------------------ P0 2026-10-16: grids, allUpTo, re-deciding */
+
+const gridDef = (listFill: Record<string, unknown>) => SurveyDefinition.parse({
+  meta: { id: "g", code: "G", title: "grid", version: "1" },
+  questions: [
+    {
+      id: "grid", code: "Q37", variableName: "FAM", type: "matrix_single", text: "Familiarity",
+      // rows coded 1..3 on purpose: the same codes as the scale points
+      rows: [{ code: "1", label: "Apple" }, { code: "2", label: "Samsung" }, { code: "3", label: "Nokia" }],
+      options: [{ code: "1", label: "Never heard of" }, { code: "2", label: "Heard of" }, { code: "3", label: "Familiar" }],
+    },
+    { id: "rank", code: "Q38", variableName: "RANK", type: "ranking", text: "Rank", options: [{ code: "1", label: "Apple" }, { code: "2", label: "Samsung" }, { code: "3", label: "Nokia" }] },
+  ],
+  flow: [{ type: "page", id: "p1", questionIds: ["grid"] }, { type: "page", id: "p2", questionIds: ["rank"] }, { type: "end", id: "e", status: "complete" }],
+  listFills: [listFill],
+});
+
+test("a grid source lists its ROWS with the rows' labels — never the scale's (selected, all, displayed)", () => {
+  for (const take of ["selected", "all", "displayed"] as const) {
+    const def = gridDef({ id: "lf", name: "B", source: { kind: "question", questionId: "grid", take }, selection: { count: { kind: "all" } } });
+    const st = stateWith({ grid: { "3": 3, "1": 1, "2": null } });
+    const pool = listFillCandidates(def, def.listFills[0], st);
+    if (take === "selected") assert.deepEqual(pool, [{ code: "1", label: "Apple" }, { code: "3", label: "Nokia" }], "answered rows, in row order, unanswered dropped");
+    else assert.deepEqual(pool.map((p) => p.label), ["Apple", "Samsung", "Nokia"], take);
+  }
+});
+
+test("count allUpTo: up to N eligible are all taken, above that the fixed count", () => {
+  const def = gridDef({
+    id: "lf", name: "B", source: { kind: "question", questionId: "grid", take: "all" },
+    selection: { count: { kind: "fixed", n: 1, allUpTo: 2 }, method: "random" }, tracking: { sampleLevel: false },
+    options: ["1", "2", "3"].map((code) => ({ code, eligibleWhen: { type: "rule", source: { kind: "question", ref: "grid", rowCode: code }, operator: "gte", value: 2 } })),
+  });
+  const lf = def.listFills[0];
+  assert.equal(decideListFill({ def, listFill: lf, state: stateWith({ grid: { "1": 3, "2": 3, "3": 1 } }) }).items.length, 2);
+  assert.equal(decideListFill({ def, listFill: lf, state: stateWith({ grid: { "1": 3, "2": 3, "3": 3 } }) }).items.length, 1);
+  const none = decideListFill({ def, listFill: lf, state: stateWith({ grid: { "1": 1, "2": 1, "3": 1 } }) });
+  assert.equal(none.items.length, 0);
+  assert.notEqual(none.trace.skippedBecause, "count_zero", "nothing eligible is not a zero count");
+});
+
+test("the dictionary declares one column per possible item of an 'all' list (not one)", () => {
+  const def = gridDef({ id: "lf", name: "B", source: { kind: "question", questionId: "grid", take: "all" }, selection: { count: { kind: "all" } } });
+  const names = listFillVariableNames(def.listFills[0], def).map((v) => v.name);
+  assert.ok(names.includes("LISTFILL_B_3_CODE"));
+  assert.ok(!listFillVariableNames(def.listFills[0]).map((v) => v.name).includes("LISTFILL_B_2"), "without the definition only what is configured is known");
+});
+
+test("a per-respondent list is decided again when its source changes, and only then", () => {
+  const def = gridDef({
+    id: "lf", name: "B", source: { kind: "question", questionId: "grid", take: "all" },
+    selection: { count: { kind: "all" }, method: "selection_order" }, tracking: { sampleLevel: false },
+    options: ["1", "2", "3"].map((code) => ({ code, eligibleWhen: { type: "rule", source: { kind: "question", ref: "grid", rowCode: code }, operator: "gte", value: 3 } })),
+  });
+  const lf = def.listFills[0];
+  const st = stateWith({ grid: { "1": 3, "2": 3, "3": 1 } });
+  const run = () => { for (const l of pendingListFills(def, st, { assumeSourcesSettled: true })) { const r = decideListFill({ def, listFill: l, state: st }); Object.assign(st.calculated, listFillVariables(l, r)); applyListFillDestinations(l, r, st); } };
+  run();
+  assert.equal(st.calculated.LISTFILL_B_CODES, "1,2");
+  assert.deepEqual(pendingListFills(def, st, { assumeSourcesSettled: true }), [], "unchanged answers: nothing to do");
+  st.answers.grid = { "1": 1, "2": 1, "3": 3 } as never;
+  assert.deepEqual(pendingListFills(def, st, { assumeSourcesSettled: true }).map((l) => l.id), [lf.id]);
+  run();
+  assert.equal(st.calculated.LISTFILL_B_CODES, "3");
+  assert.equal(st.calculated.LISTFILL_B_1, "Nokia");
+  assert.ok(!("LISTFILL_B_2" in st.calculated) && !("LISTFILL_B_2_CODE" in st.calculated), "the old second item is cleared");
+});

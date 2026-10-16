@@ -765,7 +765,7 @@ export function possibleLoopItems(def: SurveyDefinition, node: LoopFlowNode): { 
       if (!lf) return [];
       // positions, not codes: a List Fill's slot n can hold different items
       // for different respondents, and the declared width is what matters
-      const n = listFillVariableNames(lf).filter((v) => /_\d+_CODE$/.test(v.name)).length;
+      const n = listFillVariableNames(lf, def).filter((v) => /_\d+_CODE$/.test(v.name)).length;
       return Array.from({ length: n }, (_, i) => ({ code: String(i + 1), label: `Slot ${i + 1}` }));
     }
     case "count":
