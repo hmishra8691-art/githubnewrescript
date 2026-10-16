@@ -99,6 +99,7 @@ export async function loadPeers(db: any, surveyId: string, isTest: boolean, excl
     .select(PEER_COLUMNS)
     .eq("survey_id", surveyId)
     .eq("is_test", isTest)
+    .is("deleted_at", null) // a binned (soft-deleted) response is not a peer (CLEAN-06)
     .neq("status", "in_progress")
     .neq("session_id", excludeSessionId)
     .order("started_at", { ascending: false })
@@ -136,23 +137,45 @@ export async function assessAndStore(db: any, def: SurveyDefinition, row: any): 
   return a;
 }
 
+/** Rows fetched per keyset page by the survey-wide recompute. */
+export const RECOMPUTE_PAGE_SIZE = 1000;
+
 /**
- * Recompute every finished response of a survey (after settings change, or
- * to backfill), with final cluster ids. Returns counts by classification.
+ * Recompute every finished, not-deleted response of a survey (after settings
+ * change, or to backfill), with final cluster ids. Returns counts by
+ * classification.
+ *
+ * EVERY row is read: the rows are paged by keyset on the primary key (`id`),
+ * so neither a row cap (`maxPeers` used to cut the recompute at the newest
+ * 3,000, leaving older rows on stale settings without a word) nor a
+ * server-side row limit can drop any. `total` is the number of rows read and
+ * `assessed` the number recomputed — they are equal, and a caller can check
+ * that. Soft-deleted rows are neither re-assessed nor used as peers (CLEAN-06).
  */
-export async function recomputeSurvey(db: any, def: SurveyDefinition, surveyId: string, isTest: boolean): Promise<{ assessed: number; byClass: Record<string, number> }> {
-  const config = resolveConfig(def);
-  const { data, error } = await db
-    .from("responses")
-    .select(RESPONSE_COLUMNS + ", survey_id")
-    .eq("survey_id", surveyId)
-    .eq("is_test", isTest)
-    .neq("status", "in_progress")
-    .order("started_at", { ascending: false })
-    .limit(Math.max(config.maxPeers, 50));
-  if (error) throw new Error(`recomputeSurvey: ${error.message}`);
-  const rows = (data ?? []) as any[];
-  const responses = rows.map(rowToResponse);
+export async function recomputeSurvey(db: any, def: SurveyDefinition, surveyId: string, isTest: boolean, pageSize: number = RECOMPUTE_PAGE_SIZE): Promise<{ assessed: number; total: number; pages: number; byClass: Record<string, number> }> {
+  const rows: any[] = [];
+  let after: string | null = null;
+  let pages = 0;
+  for (;;) {
+    let q = db
+      .from("responses")
+      .select(RESPONSE_COLUMNS + ", survey_id")
+      .eq("survey_id", surveyId)
+      .eq("is_test", isTest)
+      .is("deleted_at", null)
+      .neq("status", "in_progress");
+    if (after !== null) q = q.gt("id", after);
+    const { data, error } = await q.order("id", { ascending: true }).limit(pageSize);
+    if (error) throw new Error(`recomputeSurvey: ${error.message}`);
+    const page = (data ?? []) as any[];
+    if (!page.length) break;
+    pages++;
+    rows.push(...page);
+    after = page[page.length - 1].id as string;
+    if (pages > 10_000) throw new Error("recomputeSurvey: paging did not terminate");
+  }
+  // arrival order, oldest first — a stable order keeps the run deterministic
+  const responses = rows.map(rowToResponse).sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.sessionId.localeCompare(b.sessionId));
   const history = new Map<string, HistoryRecord[]>();
   const sa = assessSurvey(def, responses, history);
   const byClass: Record<string, number> = {};
@@ -161,10 +184,10 @@ export async function recomputeSurvey(db: any, def: SurveyDefinition, surveyId: 
   for (let i = 0; i < entries.length; i += 50) {
     await Promise.all(entries.slice(i, i + 50).map(([sid, a]) => {
       byClass[a.classification] = (byClass[a.classification] ?? 0) + 1;
-      return db.from("responses").update({ quality: a, quality_computed_at: a.computedAt }).eq("session_id", sid);
+      return db.from("responses").update({ quality: a, quality_computed_at: a.computedAt }).eq("survey_id", surveyId).eq("session_id", sid);
     }));
   }
-  return { assessed: entries.length, byClass };
+  return { assessed: entries.length, total: rows.length, pages, byClass };
 }
 
 /**

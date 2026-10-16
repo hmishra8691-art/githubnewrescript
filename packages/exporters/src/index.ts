@@ -18,3 +18,5 @@ export * from "./stata.js";
 export * from "./zip.js";
 export * from "./statisticalExport.js";
 export * from "./spssBases.js";
+export * from "./stamp.js";
+export * from "./cleaningPlan.js";

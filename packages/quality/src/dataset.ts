@@ -355,11 +355,15 @@ export function buildQualityDataset(): QualityDataset {
     /* gibberish in both open ends, fast */
     add("invalid", "gibberish open ends", make(i, { secs: humanPace(i, 0.35), answers: { ...variedAnswers(i), oe: "asdkjh askdjh qwlekj zxmcn", oe2: "kjhsdf lkjsdf qwpeoi" }, tel: telemetry(humanPace(i, 0.35), { latencyMs: 400 }) }));
   }
-  /* duplicate submissions: the same answers, the same device, twice each */
+  /*
+   * duplicate submissions: the same answers, the same device, twice each. By
+   * the arrival-order convention (CLEAN-09) the EARLIER one is the original
+   * and stays in the data — it is valid; only the later copy is invalid.
+   */
   for (let i = 330; i < 336; i++) {
     const answers = variedAnswers(i);
-    add("invalid", "duplicate submission (original)", make(i, { secs: humanPace(i, 0.6), answers, deviceHash: `dev-dup-${i}`, ipHash: `ip-dup-${i}` }));
-    add("invalid", "duplicate submission (copy)", make(i, { secs: humanPace(i, 0.55), answers: { ...answers }, deviceHash: `dev-dup-${i}`, ipHash: `ip-dup-${i}` }));
+    add("valid", "duplicate submission (original)", make(i, { secs: humanPace(i, 0.6), answers, deviceHash: `dev-dup-${i}`, ipHash: `ip-dup-${i}` }));
+    add("invalid", "duplicate submission (copy)", make(i, { secs: humanPace(i, 0.55), answers: { ...answers }, deviceHash: `dev-dup-${i}`, ipHash: `ip-dup-${i}`, startOffsetSec: startOffset(i) + 1800 }));
   }
   for (let i = 340; i < 344; i++) {
     /* browser reports automation */

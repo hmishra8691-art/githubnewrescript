@@ -22,6 +22,9 @@ import {
   responsesToSasBundle,
   variableDictionaryToCSV,
   BUILT_IN_EXPORT_PRESETS,
+  buildExportExtra,
+  CSV_BOM,
+  type QualityExportRow,
   type ResponseStateLike,
 } from "./index.js";
 import { DataExportPreset } from "@rescript/schema";
@@ -1002,4 +1005,96 @@ test("every format still exports the same columns, now including Stata", () => {
   assert.equal(dta.names.length, matrix.names.length, "one Stata variable per column");
   const taken = new Set<string>();
   assert.deepEqual(dta.names, matrix.names.map((n) => stataName(n, taken)));
+});
+
+/* ------------------------------------------- DOC-08 / CLEAN-08: status columns in every statistical file */
+
+const qrow = (i: number, over: Partial<QualityExportRow> & { isTest?: boolean } = {}): QualityExportRow => ({
+  state: { ...states[i], isTest: over.isTest ?? false } as any,
+  quality: over.quality === undefined ? null : over.quality,
+  review: over.review ?? { status: null },
+});
+const qualityRows: QualityExportRow[] = [
+  qrow(0, { quality: { qualityScore: 91, riskScore: 4, classification: "CLEAN" }, review: { status: "KEEP" } }),
+  qrow(1, { isTest: true, quality: { qualityScore: 22, riskScore: 71, classification: "HIGHLY_SUSPICIOUS" }, review: { status: "REMOVE", reason: "bot" } }),
+];
+
+test("buildExportExtra: quality, sample and environment compose in one fixed order; nothing asked for means no extra", () => {
+  assert.equal(buildExportExtra([qrow(0)], {}), undefined);
+  const e = buildExportExtra(qualityRows, { quality: true, environment: true })!;
+  assert.deepEqual(e.columns, ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS", "ENVIRONMENT"]);
+  assert.deepEqual(e.cells(0), ["CLEAN", 91, 4, "KEPT", "LIVE"]);
+  assert.deepEqual(e.cells(1), ["HIGHLY_SUSPICIOUS", 22, 71, "REMOVED", "TEST"]);
+  // marked rows switch the status columns on by themselves for the statistical formats
+  assert.deepEqual(buildExportExtra(qualityRows, { statusWhenMarked: true })!.columns, ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS"]);
+  assert.equal(buildExportExtra([qrow(0)], { statusWhenMarked: true }), undefined, "an unassessed, undecided plain export is unchanged");
+  // supplier columns appear only when a row has a source
+  const withSource = [{ ...qrow(0), state: { ...qrow(0).state, sampleSource: "Panel X", sampleSourceRespondent: "p-9" } }];
+  assert.deepEqual(buildExportExtra(withSource, {})!.columns, ["SAMPLE_SOURCE", "SAMPLE_SOURCE_RESPONDENT"]);
+});
+
+test("CSV, .sav, .xpt and .dta carry the same status columns in the same positions", () => {
+  const def = makeSurvey();
+  const extra = buildExportExtra(qualityRows, { quality: true, environment: true })!;
+  const matrix = buildResponseMatrix(def, states, { extra });
+  const csvHeader = responsesToCSV(def, states, extra).split("\n")[0].split(",");
+  assert.deepEqual(csvHeader, matrix.names);
+  assert.deepEqual(matrix.names.slice(-5), ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS", "ENVIRONMENT"]);
+  assert.equal(readDta(responsesToDta(def, states, { extra })).names.length, matrix.names.length);
+  assert.ok(responsesToSasSyntax(def, states, { extra }).includes("RESPONSE_STATUS"), "the SAS syntax reads the column the CSV carries");
+});
+
+test("pyreadstat reads RESPONSE_STATUS / QUALITY / ENVIRONMENT back from the .sav, .xpt and .dta, with the scores numeric and the blank score missing", { skip: !pyreadstat && "python3 with pyreadstat is not installed" }, () => {
+  const def = makeSurvey();
+  // a third, never-assessed response: its numeric scores must read as missing, not 0 or ""
+  const rows3: QualityExportRow[] = [...qualityRows, qrow(0)];
+  const states3 = [states[0], states[1], { ...states[0], sessionId: "sess_003" }];
+  const extra = buildExportExtra(rows3, { quality: true, environment: true })!;
+  const dir = mkdtempSync(join(tmpdir(), "rescript-status-"));
+  writeFileSync(join(dir, "s.sav"), responsesToSav(def, states3, { extra }));
+  writeFileSync(join(dir, "s.xpt"), responsesToXpt(def, states3, { extra }));
+  writeFileSync(join(dir, "s.dta"), responsesToDta(def, states3, { extra }));
+  writeFileSync(join(dir, "read.py"), `
+import json, math, pyreadstat
+out = {}
+def norm(df, resp, env, qs, rs):
+    f = lambda v: None if (isinstance(v, float) and math.isnan(v)) else v
+    return {"resp": list(df[resp]), "env": list(df[env]), "q": list(df[qs]), "risk": [f(v) for v in df[rs]]}
+d = ${JSON.stringify(dir)}
+df, meta = pyreadstat.read_sav(d + "/s.sav")
+out["sav"] = {"cols": list(df.columns)[-5:], **norm(df, "RESPONSE_STATUS", "ENVIRONMENT", "QUALITY_STATUS", "QUALITY_SCORE")}
+df, meta = pyreadstat.read_xport(d + "/s.xpt")
+cols = list(df.columns)
+out["xpt"] = {"cols": cols[-5:], **norm(df, cols[-2], cols[-1], cols[-5], cols[-4])}
+df, meta = pyreadstat.read_dta(d + "/s.dta")
+out["dta"] = {"cols": list(df.columns)[-5:], **norm(df, "RESPONSE_STATUS", "ENVIRONMENT", "QUALITY_STATUS", "QUALITY_SCORE")}
+print(json.dumps(out))
+`);
+  const run = spawnSync("python3", ["-I", join(dir, "read.py")], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  const out = JSON.parse(run.stdout);
+  for (const fmt of ["sav", "dta"]) {
+    assert.deepEqual(out[fmt].cols, ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS", "ENVIRONMENT"], fmt);
+  }
+  for (const fmt of ["sav", "xpt", "dta"]) {
+    assert.deepEqual(out[fmt].resp.map((v: string) => String(v).trim()), ["KEPT", "REMOVED", "ACTIVE"], `${fmt}: a REMOVED response is marked REMOVED`);
+    assert.deepEqual(out[fmt].env.map((v: string) => String(v).trim()), ["LIVE", "TEST", "LIVE"], `${fmt}: a pilot is marked TEST`);
+    assert.deepEqual(out[fmt].q.map((v: string) => String(v).trim()), ["CLEAN", "HIGHLY_SUSPICIOUS", "UNSCORED"], fmt);
+    assert.deepEqual(out[fmt].risk, [91, 22, null], `${fmt}: quality score numeric, the unassessed one missing`);
+  }
+});
+
+test("CSV: the BOM is opt-in — off by default the first bytes are the header, with bom the file starts with EF BB BF and the text round-trips", () => {
+  const def = makeSurvey();
+  const plain = responsesToCSV(def, states);
+  assert.ok(!plain.startsWith(CSV_BOM));
+  assert.ok(plain.startsWith("RESP_ID,"));
+  const bom = responsesToCSV(def, states, undefined, { bom: true });
+  assert.ok(bom.startsWith(CSV_BOM));
+  assert.equal(bom.slice(1), plain, "the BOM is the only difference");
+  const bytes = Buffer.from(bom, "utf8");
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  // accented and non-Latin text survives the UTF-8 round trip that Excel performs when it sees the mark
+  const accented = [{ ...states[0], answers: { ...states[0].answers, q_open: "Café Škoda 丰田 क्यों" } }];
+  assert.ok(Buffer.from(responsesToCSV(def, accented as any, undefined, { bom: true }), "utf8").toString("utf8").includes("Café Škoda 丰田 क्यों"));
 });

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
+import { QualityConfig } from "@rescript/schema";
 import { __clearVersionDefinitionCacheForTests, assessAndStore, clientIp, deviceHashFrom, getCachedVersionDefinition, hashIdentifier, loadPeers, recomputeSurvey, resolveRunDefinition, rowToPeer, rowToResponse } from "./server.js";
 
 /**
@@ -16,7 +17,8 @@ function fakeDb(tables: Record<string, any[]>) {
     let op = "select";
     let patch: any = null;
     const filters: ((r: any) => boolean)[] = [];
-    const apply = () => rows.filter((r) => filters.every((f) => f(r)));
+    let lim = Infinity; // like PostgREST: filters first, then the limit
+    const apply = () => rows.filter((r) => filters.every((f) => f(r))).slice(0, lim);
     const b: any = {
       /*
        * Real PostgREST projects `col->path` (or `alias:col->path`) onto a
@@ -47,10 +49,12 @@ function fakeDb(tables: Record<string, any[]>) {
       insert(p: any) { calls.push({ table, op: "insert", args: p }); (tables[table] ??= []).push(p); return Promise.resolve({ data: p, error: null }); },
       eq(k: string, v: any) { filters.push((r) => r[k] === v); return b; },
       neq(k: string, v: any) { filters.push((r) => r[k] !== v); return b; },
+      is(k: string, v: any) { filters.push((r) => (r[k] === undefined ? null : r[k]) === v); return b; },
+      gt(k: string, v: any) { filters.push((r) => String(r[k]) > String(v)); return b; },
       in(k: string, vs: any[]) { filters.push((r) => vs.includes(r[k])); return b; },
       not(k: string, _op: string, _v: any) { filters.push((r) => r[k] !== null && r[k] !== undefined); return b; },
       order(k: string, o?: { ascending?: boolean }) { rows = [...rows].sort((a, c) => (String(a[k]) < String(c[k]) ? -1 : 1) * (o?.ascending === false ? -1 : 1)); return b; },
-      limit(n: number) { rows = rows.slice(0, n); return b; },
+      limit(n: number) { lim = n; return b; },
       maybeSingle() { calls.push({ table, op: "select", args: null }); return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
       single() { calls.push({ table, op: "select", args: null }); return Promise.resolve({ data: apply()[0] ?? null, error: null }); },
       then(res: any, rej: any) {
@@ -193,4 +197,48 @@ test("getCachedVersionDefinition: caches per versionId, and a schema failure is 
   const bad1 = await getCachedVersionDefinition(db, "V-bad");
   const bad2 = await getCachedVersionDefinition(db, "V-bad");
   assert.equal(bad1, null); assert.equal(bad2, null);
+});
+
+test("CLEAN-06: soft-deleted responses are not peers and are not re-assessed by a recompute", async () => {
+  const rows = Array.from({ length: 12 }, (_, i) => row(i));
+  rows[3] = row(3, { deleted_at: "2026-10-01T00:00:00Z" });
+  rows[4] = row(4, { deleted_at: "2026-10-01T00:00:00Z" });
+  const db = fakeDb({ responses: rows });
+  const peers = await loadPeers(db, "S1", false, "sess000", 100);
+  assert.ok(!peers.some((p) => p.sessionId === "sess003" || p.sessionId === "sess004"), "binned rows are not peers");
+  assert.equal(peers.length, 9, "12 rows - self - 2 binned");
+  const res = await recomputeSurvey(db, def, "S1", false);
+  assert.equal(res.assessed, 10);
+  assert.equal(res.total, 10);
+  assert.equal(rows[3].quality, null, "a binned row keeps whatever it had — it is not re-assessed");
+  assert.equal(rows[4].quality, null);
+  assert.ok(rows.filter((_, i) => i !== 3 && i !== 4).every((r) => r.quality), "every live row was assessed");
+});
+
+test("CLEAN-07: the recompute pages over every row — a survey larger than maxPeers is fully recomputed, and the count says so", async () => {
+  const small = SurveyDefinition.parse({ ...(def as any), quality: { enabled: true, strictness: "standard", maxPeers: 50 } });
+  assert.equal(small.quality.maxPeers, 50);
+  const rows = Array.from({ length: 130 }, (_, i) => row(i, { answers: { q1: ["a", "b", "c"][i % 3], q2: "b", q3: `Distinct reason ${i} about ${["price", "service", "style", "speed", "colour", "size", "range"][i % 7]} number ${i * 7}.` } }));
+  // some in-progress rows and a test row never count
+  rows.push(row(500, { status: "in_progress" }), row(501, { is_test: true }));
+  const db = fakeDb({ responses: rows });
+  const res = await recomputeSurvey(db, small, "S1", false, 40);
+  assert.equal(res.total, 130, "all 130 finished live rows read (the old cap stopped at maxPeers = 50)");
+  assert.equal(res.assessed, 130);
+  assert.equal(res.pages, 4, "40 + 40 + 40 + 10");
+  assert.equal(Object.values(res.byClass).reduce((a, b) => a + b, 0), 130);
+  const oldest = rows.slice(0, 20);
+  assert.ok(oldest.every((r) => r.quality?.configHash), "the OLDEST rows were recomputed too, not left on stale settings");
+  assert.equal(rows[130].quality, null, "in-progress rows untouched");
+  assert.equal(rows[131].quality, null, "test rows untouched by a live recompute");
+});
+
+test("CLEAN-03: quality is on at standard strictness when the definition says nothing; an explicit enabled:false is kept", () => {
+  const bare = SurveyDefinition.parse({ meta: { id: "n", code: "N", title: "n", version: "1" }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }] });
+  assert.equal(bare.quality.enabled, true);
+  assert.equal(bare.quality.strictness, "standard");
+  assert.equal(QualityConfig.parse({}).enabled, true);
+  assert.equal(QualityConfig.parse({ enabled: false }).enabled, false, "an explicit off survives");
+  const off = SurveyDefinition.parse({ meta: { id: "n", code: "N", title: "n", version: "1" }, quality: { enabled: false }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }] });
+  assert.equal(off.quality.enabled, false);
 });

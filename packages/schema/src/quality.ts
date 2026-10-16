@@ -164,7 +164,14 @@ export const QualityVerdict = z.enum(["PASS", "REVIEW", "FLAGGED"]);
 export type QualityVerdict = z.infer<typeof QualityVerdict>;
 
 export const QualityConfig = z.object({
-  enabled: z.boolean().default(false),
+  /*
+   * On by default (audit CLEAN-03): a survey whose definition carries no
+   * `quality` block — every new survey, every template, every import — is
+   * assessed at "standard" strictness. An explicit `enabled: false` is kept.
+   * Migration-free: stored definitions that already carry a `quality` object
+   * keep exactly what they say.
+   */
+  enabled: z.boolean().default(true),
   strictness: Strictness.default("standard"),
   evidence: EvidenceConfig.default({}),
   /** a saved profile this config was taken from (informational) */

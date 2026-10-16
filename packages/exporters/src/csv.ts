@@ -45,6 +45,13 @@ export function responsesToCSV(
     mediaBaseUrl?: string | null; valueMode?: ValueMode; headerMode?: HeaderMode;
     /** R7: the union dictionary and each row's own definition. Absent = today's behaviour. */
     versioned?: VersionedSource;
+    /**
+     * DOC-10: prefix the UTF-8 byte-order mark. Excel on Windows reads a
+     * BOM-less UTF-8 file as the system code page and shows accented and
+     * non-Latin text as mojibake. Off by default — scripts that read the file
+     * today must not start seeing three extra bytes before the first header.
+     */
+    bom?: boolean;
   } = {},
 ): string {
   const valueMode = opts.valueMode ?? "code";
@@ -79,8 +86,11 @@ export function responsesToCSV(
     ];
     lines.push(csvLine(cells));
   });
-  return lines.join("\n") + "\n";
+  return (opts.bom ? CSV_BOM : "") + lines.join("\n") + "\n";
 }
+
+/** The UTF-8 byte-order mark, as the one character it decodes to. */
+export const CSV_BOM = "﻿";
 
 /** Export the variable dictionary itself as CSV. */
 export function variableDictionaryToCSV(def: SurveyDefinition): string {

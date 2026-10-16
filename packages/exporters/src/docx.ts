@@ -12,6 +12,7 @@ import {
   type ExportFields, type OutlineEntry, type OutlineBlock,
   surveyOutline, plainText, elementSummary,
 } from "./exportConfig.js";
+import { definitionHash, stampLine } from "./stamp.js";
 
 /**
  * The programmed survey as a Word document.
@@ -489,7 +490,7 @@ function elementSection(e: any, def: SurveyDefinition, fields: ExportFields): (P
 export async function exportSurveyDocx(
   def: SurveyDefinition,
   fields: ExportFields,
-  meta: { version?: string; generatedAt?: Date } = {},
+  meta: { version?: string; generatedAt?: Date; revision?: number | string | null } = {},
 ): Promise<Buffer> {
   const entries = surveyOutline(def);
   const children: (Paragraph | Table)[] = [];
@@ -499,9 +500,10 @@ export async function exportSurveyDocx(
     children: [new TextRun({ text: plainText(def.meta.title) || def.meta.code, bold: true, size: 44, color: INK })],
     spacing: { after: 80 },
   }));
-  const stamp = (meta.generatedAt ?? new Date()).toISOString().slice(0, 10);
+  /* DOC-13: time to the minute, the survey row's revision when the caller knows it, and the hash of the definition this was written from */
+  const stamp = stampLine({ at: meta.generatedAt ?? new Date(), revision: meta.revision, hash: definitionHash(def) });
   children.push(muted(
-    `${def.meta.code}${meta.version ? `  ·  version ${meta.version}` : ""}  ·  ${def.questions.length} questions  ·  exported ${stamp}`,
+    `${def.meta.code}${meta.version ? `  ·  version ${meta.version}` : ""}  ·  ${def.questions.length} questions  ·  ${stamp}`,
   ));
   children.push(divider());
 

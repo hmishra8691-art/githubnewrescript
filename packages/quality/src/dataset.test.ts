@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessSurvey } from "./engine.js";
-import { buildEarlyFieldworkDataset, buildQualityDataset, datasetDefinition, summarizeDataset, type DatasetOutcome } from "./dataset.js";
+import { buildEarlyFieldworkDataset, buildQualityDataset, datasetDefinition, summarizeDataset, variedAnswers, type DatasetOutcome } from "./dataset.js";
+import { arrivedBefore } from "./arrival.js";
 import { RULES } from "./catalogue.js";
 
 /**
@@ -30,10 +31,64 @@ function run() {
 const report = run();
 const say = (o: DatasetOutcome) => `${o.sessionId} ${o.persona} → ${o.verdict} (${o.classification}, risk ${o.risk}) ${o.rules.join(" ")} — ${o.because}`;
 
-test("THE POPULATION IS WHAT IT SAYS: 158 valid, 20 borderline, 46 invalid", () => {
-  assert.equal(report.byLabel.valid.n, 158);
+test("THE POPULATION IS WHAT IT SAYS: 164 valid, 20 borderline, 40 invalid (the six originals of the duplicate pairs are valid — CLEAN-09)", () => {
+  assert.equal(report.byLabel.valid.n, 164);
   assert.equal(report.byLabel.borderline.n, 20);
-  assert.equal(report.byLabel.invalid.n, 46);
+  assert.equal(report.byLabel.invalid.n, 40);
+});
+
+test("DUPLICATE PAIRS: the later copy is FLAGGED, the original survives as CLEAN with the duplicate flag kept as evidence", () => {
+  const originals = report.outcomes.filter((o) => o.persona === "duplicate submission (original)");
+  const copies = report.outcomes.filter((o) => o.persona === "duplicate submission (copy)");
+  assert.equal(originals.length, 6);
+  assert.equal(copies.length, 6);
+  for (const o of originals) {
+    assert.equal(o.verdict, "PASS", say(o));
+    assert.equal(o.classification, "CLEAN", say(o));
+    assert.ok(o.rules.some((r) => r.startsWith("duplicate.") && r.includes("(i)")), `the original still records the duplicate, as information: ${say(o)}`);
+  }
+  for (const o of copies) assert.equal(o.verdict, "FLAGGED", say(o));
+});
+
+test("arrivedBefore: strictly earlier by completion, ties broken by session id so exactly one of a pair is the original; unknown order is never 'earlier'", () => {
+  const a = { sessionId: "a", completedAt: "2026-01-01T10:00:00Z", startedAt: "2026-01-01T09:50:00Z" };
+  const b = { sessionId: "b", completedAt: "2026-01-01T10:05:00Z", startedAt: "2026-01-01T09:40:00Z" };
+  assert.equal(arrivedBefore(a, b), true);
+  assert.equal(arrivedBefore(b, a), false);
+  const t1 = { sessionId: "x1", completedAt: "2026-01-01T10:00:00Z" }, t2 = { sessionId: "x2", completedAt: "2026-01-01T10:00:00Z" };
+  assert.equal(arrivedBefore(t1, t2) !== arrivedBefore(t2, t1), true, "a tie still has exactly one earlier");
+  assert.equal(arrivedBefore({ sessionId: "n", completedAt: null, startedAt: null }, a), false);
+  assert.equal(arrivedBefore(a, { sessionId: "n", completedAt: null, startedAt: null }), false);
+  assert.equal(arrivedBefore({ sessionId: "s1", completedAt: null, startedAt: "2026-01-01T09:00:00Z" }, a), true, "falls back to the start time");
+});
+
+test("DUPLICATE PAIR WITH IDENTICAL TIMESTAMPS: exactly one is excluded from the clean set, never both, never neither", () => {
+  const { def, respondents } = buildQualityDataset();
+  const base = respondents.find((r) => r.persona === "duplicate submission (original)")!.response;
+  const answers = variedAnswers(900);
+  const twin = (sessionId: string) => ({ ...base, sessionId, answers: { ...answers }, deviceHash: "dev-tie", ipHash: "ip-tie", telemetry: null });
+  const all = [...respondents.map((r) => r.response), twin("tie-a"), twin("tie-b")];
+  const { bySession } = assessSurvey(def, all, undefined, 1_700_000_000_000 + 3_600_000);
+  const a = bySession.get("tie-a")!, b = bySession.get("tie-b")!;
+  const kept = [a, b].filter((x) => x.classification === "CLEAN");
+  const dropped = [a, b].filter((x) => x.classification !== "CLEAN");
+  assert.equal(kept.length, 1, `one survives: ${a.classification}/${b.classification} ${a.reasons.join("|")} // ${b.reasons.join("|")}`);
+  assert.equal(dropped.length, 1);
+  assert.ok(a.flags.some((f) => f.ruleId.startsWith("duplicate.")) && b.flags.some((f) => f.ruleId.startsWith("duplicate.")), "both still record the duplicate as evidence");
+  assert.equal(kept[0], a, "the lower session id is the original when timestamps tie");
+});
+
+test("a researcher who set the duplicate rules to 'classifying' still keeps the original: arrival order wins over the configured role, but a coordinated ring is flagged whole", () => {
+  const rules = { "duplicate.answers": { role: "classifying" as const }, "duplicate.multi_signal": { role: "classifying" as const }, "openend.duplicate": { role: "classifying" as const }, "matrix.signature_match": { role: "classifying" as const }, "timing.pattern_match": { role: "classifying" as const } };
+  const def = datasetDefinition({ enabled: true, strictness: "standard", rules });
+  const { respondents } = buildQualityDataset();
+  const base = respondents.find((r) => r.persona === "duplicate submission (original)")!.response;
+  const twin = (sessionId: string, completedAt: string) => ({ ...base, sessionId, answers: { ...variedAnswers(901) }, deviceHash: "dev-role", ipHash: "ip-role", telemetry: null, completedAt });
+  const pair = [twin("role-a", "2026-01-02T10:00:00Z"), twin("role-b", "2026-01-02T10:30:00Z")];
+  const { bySession } = assessSurvey(def, [...respondents.map((r) => r.response), ...pair], undefined, 1_700_000_000_000 + 3_600_000);
+  assert.equal(bySession.get("role-a")!.classification, "CLEAN", "the earlier arrival is the original");
+  assert.notEqual(bySession.get("role-b")!.classification, "CLEAN", "the later arrival is the copy");
+  assert.ok(bySession.get("role-a")!.flags.some((f) => f.ruleId.startsWith("duplicate.") && f.role === "informational"));
 });
 
 test("NORMAL RESPONDENTS ARE NOT MARKED BAD: no valid respondent is FLAGGED, and at least 90% simply PASS", () => {

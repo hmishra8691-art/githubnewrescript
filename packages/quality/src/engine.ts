@@ -15,6 +15,7 @@ import { attentionRules, attentionResult, consistencyRules, stateFor } from "./r
 import { openEndRules, openEndHash, openEnds } from "./rules/openEnd.js";
 import { behaviourRules, navigationFingerprint } from "./rules/behaviour.js";
 import { similarityRules, clusterSurvey } from "./similarity.js";
+import { applyArrivalOrder } from "./arrival.js";
 import { categoryScores, classify, CLASS_ORDER, finalizeFlags, qualityScore, reasons, recommendation, riskScore, verdictOf } from "./score.js";
 import { isMatrix } from "./survey.js";
 
@@ -302,6 +303,8 @@ export function assess(input: QualityInput): QualityAssessment {
   }
   const sim = config.enabled ? similarityRules(ctx, sys) : { flags: [], cluster: { clusterId: null, similarityScore: 0, similarSessionIds: [], clusterRisk: 0, size: 1, sharedSignals: [] }, similarityScore: 0, similarIds: [], answerSignature: null };
   drafts.push(...sim.flags);
+  /* CLEAN-09: the earlier of a matching pair is the original — it keeps the evidence, the later copy carries the exclusion */
+  if (config.enabled) drafts.splice(0, drafts.length, ...applyArrivalOrder(drafts, ctx.response, input.peers));
   sys.SYSTEM_ANSWER_SIGNATURE = sim.answerSignature;
   sys.SYSTEM_SIMILARITY_SCORE = sim.similarityScore;
   sys.SYSTEM_SIMILAR_RESPONDENT_IDS = sim.cluster.similarSessionIds;
@@ -389,8 +392,9 @@ export function assessSurvey(def: SurveyDefinition, responses: ResponseRecord[],
   // first pass: system vars for every response (signatures, timings) so peers carry them
   const config = resolveConfig(def);
   const bench0 = computeBenchmarks(def, peers, config.evidence.minPeers);
+  const bySessionId = new Map(responses.map((x) => [x.sessionId, x]));
   for (const p of peers) {
-    const r = responses.find((x) => x.sessionId === p.sessionId)!;
+    const r = bySessionId.get(p.sessionId)!;
     const ctx = makeContext({ def, response: r, peers: [], now }, config, bench0);
     p.system = systemVars(ctx, ctx.telemetry, bench0);
   }

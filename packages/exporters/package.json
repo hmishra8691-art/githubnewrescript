@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@rescript/engine": "workspace:*",
+    "@rescript/quality": "workspace:*",
     "@rescript/schema": "workspace:*",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",

@@ -5,12 +5,14 @@ import { datasetDefinition, variedAnswers } from "/home/claude/rescript/packages
 function fakeDb(tables) {
   const builder = (table) => {
     let rows = tables[table] ?? []; let op = "select"; let patch = null; const filters = [];
-    const apply = () => rows.filter((r) => filters.every((f) => f(r)));
+    let lim = Infinity;
+    const apply = () => rows.filter((r) => filters.every((f) => f(r))).slice(0, lim);
     const b = {
       select() { return b; }, update(p) { op = "update"; patch = p; return b; },
       eq(k, v) { filters.push((r) => r[k] === v); return b; }, neq(k, v) { filters.push((r) => r[k] !== v); return b; },
       is(k, v) { filters.push((r) => r[k] === v || (v === null && r[k] === undefined)); b.usedIs = true; return b; },
-      order() { return b; }, limit(n) { rows = rows.slice(0, n); return b; },
+      gt(k, v) { filters.push((r) => String(r[k]) > String(v)); return b; },
+      order(k) { rows = [...rows].sort((a, c) => (String(a[k]) < String(c[k]) ? -1 : 1)); return b; }, limit(n) { lim = n; return b; },
       then(res, rej) { if (op === "update") { for (const r of apply()) Object.assign(r, patch); return Promise.resolve({ data: apply(), error: null }).then(res, rej); } return Promise.resolve({ data: apply(), error: null }).then(res, rej); },
     };
     return b;

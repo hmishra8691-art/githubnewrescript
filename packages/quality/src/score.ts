@@ -89,7 +89,7 @@ export function finalizeFlags(drafts: FlagDraft[], config: QualityConfig, now: s
       questionIds: [...new Set(d.questionIds ?? [])],
       relatedSessionIds: d.relatedSessionIds?.length ? [...new Set(d.relatedSessionIds)] : undefined,
       at: now,
-      role: roleOf(d.ruleId, config, d),
+      role: d.original ? "informational" : roleOf(d.ruleId, config, d),
       strength: strengthOf(baseRisk),
       confidence,
       caveat: d.caveat,
@@ -260,7 +260,7 @@ export function recommendation(cls: QualityClass, quality: number, verdict?: Qua
  */
 export function reasons(flags: QualityFlag[]): string[] {
   const order = (a: QualityFlag, b: QualityFlag) => (b.riskPoints + b.qualityPenalty) - (a.riskPoints + a.qualityPenalty) || SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity];
-  const line = (f: QualityFlag) => `${f.title}: ${f.observed}${f.expected ? ` (expected ${f.expected})` : ""}${f.confidence < 1 && f.caveat ? ` — ${f.caveat}` : ""}.`;
+  const line = (f: QualityFlag) => `${f.title}: ${f.observed}${f.expected ? ` (expected ${f.expected})` : ""}${(f.confidence < 1 || f.role === "informational") && f.caveat ? ` — ${f.caveat}` : ""}.`;
   const cf = classifying(flags).sort(order).map(line);
   const inf = flags.filter((f) => f.role === "informational").sort(order).map((f) => `${line(f).slice(0, -1)} — noted, does not affect the classification.`);
   return [...cf, ...inf];

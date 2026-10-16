@@ -9,6 +9,7 @@ import { buildZip } from "./zip.js";
 import { variableDictionaryToCSV } from "./csv.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { spssBasesSyntax } from "./spssBases.js";
+import { QUALITY_CSV_COLUMNS, SAMPLE_COLUMNS, ENVIRONMENT_COLUMNS, qualityCsvCells, sampleCells, environmentCells, type DatasetFilter, type QualityExportRow } from "./responseQuality.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -80,7 +81,8 @@ export function buildResponseMatrix(
     for (const name of varNames) row[name] = flat[name];
     if (opts.extra) {
       const cells = opts.extra.cells(i);
-      extraColumns.forEach((c, j) => { row[c] = cells[j]; });
+      /* a blank in a numeric extra (an unscored response) is a missing value, never an empty string */
+      extraColumns.forEach((c, j) => { row[c] = NUMERIC_EXTRA.has(c) && cells[j] === "" ? null : cells[j]; });
     }
     return row;
   });
@@ -146,9 +148,66 @@ function outputName(v: VariableDef | undefined, name: string): string {
   return v?.exportName?.trim() || name;
 }
 
+/**
+ * The columns the platform APPENDS after the variables — the quality verdict,
+ * the researcher's decision, the environment and the sample source. In a
+ * statistical file they are as much part of the dataset as any question: a
+ * `.sav` without RESPONSE_STATUS cannot tell a REMOVED response from an
+ * ACTIVE one, and one without ENVIRONMENT cannot tell a pilot from fieldwork
+ * (DOC-08 / CLEAN-08). The two scores are numeric so they can be averaged and
+ * thresholded; the rest are strings.
+ */
+const EXTRA: { name: string; label: string; numeric: boolean }[] = [
+  { name: "QUALITY_STATUS", label: "Quality classification (CLEAN / REVIEW / SUSPICIOUS / ...)", numeric: false },
+  { name: "QUALITY_SCORE", label: "Quality score, 0-100 (100 is best)", numeric: true },
+  { name: "FRAUD_RISK_SCORE", label: "Fraud risk score, 0-100 (100 is worst)", numeric: true },
+  { name: "RESPONSE_STATUS", label: "Researcher decision: ACTIVE / KEPT / REMOVED / REVIEW_LATER", numeric: false },
+  { name: "SAMPLE_SOURCE", label: "Sample supplier", numeric: false },
+  { name: "SAMPLE_SOURCE_RESPONDENT", label: "Supplier's respondent identifier", numeric: false },
+  { name: "ENVIRONMENT", label: "TEST or LIVE interview", numeric: false },
+];
+
 function systemVariable(name: string): { label: string; numeric: boolean } | undefined {
-  const s = SYSTEM.find((x) => x.name === name);
+  const s = SYSTEM.find((x) => x.name === name) ?? EXTRA.find((x) => x.name === name);
   return s ? { label: s.label, numeric: s.numeric } : undefined;
+}
+
+/** The extra columns the platform appends are the numeric ones where a blank must stay a missing value, not a string. */
+const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name));
+
+/**
+ * The extra columns for one delivery, composed in the one order every format
+ * uses (quality, sample, environment), so the CSV, the .sav, the SAS bundle
+ * and the .dta carry the same columns in the same positions.
+ *
+ * `rows` must be the rows being delivered, in delivery order. Quality /
+ * decision columns are on when asked for (`quality`) or when the file could
+ * otherwise mislead — a dataset that is not the plain "all", any response
+ * with a stored assessment or a researcher decision (`statusWhenMarked`). A
+ * file that mixes TEST and LIVE (`environment`) always says which is which.
+ */
+export function buildExportExtra(
+  rows: QualityExportRow[],
+  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean } = {},
+): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
+  const marked = rows.some((r) => !!r.quality || !!r.review.status);
+  const withQuality = !!opts.quality || (!!opts.statusWhenMarked && (marked || (opts.dataset?.kind ?? "all") !== "all"));
+  const withSample = rows.some((r) => !!r.state.sampleSource);
+  const withEnvironment = !!opts.environment;
+  const columns = [
+    ...(withQuality ? QUALITY_CSV_COLUMNS : []),
+    ...(withSample ? SAMPLE_COLUMNS : []),
+    ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
+  ];
+  if (!columns.length) return undefined;
+  return {
+    columns,
+    cells: (i) => [
+      ...(withQuality ? qualityCsvCells(rows[i]) : []),
+      ...(withSample ? sampleCells(rows[i]) : []),
+      ...(withEnvironment ? environmentCells(rows[i]) : []),
+    ],
+  };
 }
 
 /**

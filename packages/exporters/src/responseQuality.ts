@@ -4,6 +4,7 @@ import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import type { ResponseStateLike } from "./csv.js";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
+import { definitionHash } from "./stamp.js";
 
 /**
  * Response data with the quality assessment — two sheets, as the researcher
@@ -224,6 +225,8 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     ["Strictness", def.quality?.strictness ?? "standard"],
     ["Important", "Every flag is a risk indicator that requires researcher judgement, never proof. Removed responses are retained in the database and can be restored."],
     ["Exported", new Date().toISOString()],
+    /* DOC-13: which questionnaire this file was written against — same hash as the questionnaire document's stamp */
+    ["Definition", `${def.meta.code} v${def.meta.version} · definition #${definitionHash(def)}`],
   ]);
 
   /*

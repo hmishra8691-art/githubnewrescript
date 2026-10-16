@@ -27,8 +27,17 @@ test("an empty project: nothing set up, said plainly; a programmed one with a lo
   const empty = moduleStates(SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "T" }, questions: [], flow: [] }));
   assert.equal(empty.length, 10);
   assert.equal(by(empty, "programming").state, "not_configured");
-  assert.ok(empty.every((m) => m.state === "not_configured"), empty.map((m) => `${m.key}:${m.state}`).join(" "));
-  assert.deepEqual(overviewSummary(empty), { configured: 0, total: 10, attention: [] });
+  /*
+   * CLEAN-03: quality is on by default at standard strictness, so even an
+   * empty project honestly reports the engine as ON — the one module that is
+   * not "nothing set up". Everything else is untouched.
+   */
+  assert.equal(by(empty, "quality").state, "configured");
+  assert.match(by(empty, "quality").detail, /Quality engine on/);
+  assert.ok(empty.filter((m) => m.key !== "quality").every((m) => m.state === "not_configured"), empty.map((m) => `${m.key}:${m.state}`).join(" "));
+  assert.deepEqual(overviewSummary(empty), { configured: 1, total: 10, attention: [] });
+  const off = moduleStates(SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "T" }, quality: { enabled: false }, questions: [], flow: [] }));
+  assert.ok(off.every((m) => m.state === "not_configured"), "an explicit enabled:false is kept: quality is not configured");
 
   const ok = moduleStates(survey());
   assert.equal(by(ok, "programming").state, "configured");

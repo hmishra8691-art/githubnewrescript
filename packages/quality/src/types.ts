@@ -402,6 +402,8 @@ export interface FlagDraft {
   confidence?: number;
   /** why the confidence is below 1 */
   caveat?: string;
+  /** set by the arrival-order convention (CLEAN-09): the earlier of a matching pair — evidence only, whatever the rule's configured role */
+  original?: boolean;
   /** a rule may demote its own firing to informational (e.g. a share rule on a thin population) */
   role?: RuleRole;
 }

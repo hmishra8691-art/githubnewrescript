@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, QUALITY_CSV_COLUMNS, qualityCsvCells, SAMPLE_COLUMNS, sampleCells, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { resolveExportVersions } from "@/lib/exportVersions";
@@ -389,11 +389,21 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * them every analysis the format exists for.
    */
   if (format === "sav" || format === "sas" || format === "dta") {
+    /*
+     * DOC-08 / CLEAN-08. The statistical files used to carry only the
+     * questionnaire's variables: nothing in a .sav said which response the
+     * researcher had REMOVED (`dataset=all`), which were pilot interviews
+     * (`include=all`), or what quality class any of them had. The same extra
+     * columns the CSV carries now travel in every statistical file, appended
+     * after the variables, and the SAS CSV and syntax get the same set so the
+     * three never disagree.
+     */
+    const statExtra = buildExportExtra(kept, { quality: withQuality, statusWhenMarked: true, environment: withEnvironment, dataset });
     const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
       if (withDictionary) {
-        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
+        const buf = responsesToSavBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
             ...versionHeaders,
@@ -402,7 +412,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           },
         });
       }
-      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
+      const buf = responsesToSav(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
           ...versionHeaders,
@@ -413,7 +423,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
     if (format === "dta") {
       if (withDictionary) {
-        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
+        const buf = responsesToDtaBundle(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
         return new NextResponse(new Uint8Array(buf), {
           headers: {
             ...versionHeaders,
@@ -422,7 +432,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           },
         });
       }
-      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource });
+      const buf = responsesToDta(parsed.data, states as any, { mediaBaseUrl, versioned: versionedSource, extra: statExtra });
       return new NextResponse(new Uint8Array(buf), {
         headers: {
           ...versionHeaders,
@@ -437,8 +447,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * the dictionary. The zip carries the CSV and the generated syntax with
      * the full names, labels and PROC FORMAT value labels beside it.
      */
-    const csvForSas = responsesToCSV(parsed.data, states as any, undefined, { mediaBaseUrl, versioned: versionedSource });
-    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary, versioned: versionedSource });
+    const csvForSas = responsesToCSV(parsed.data, states as any, statExtra, { mediaBaseUrl, versioned: versionedSource });
+    const buf = responsesToSasBundle(parsed.data, states as any, { mediaBaseUrl, csv: csvForSas, includeDictionary: withDictionary, versioned: versionedSource, extra: statExtra });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         ...versionHeaders,
@@ -503,26 +513,29 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * columns or nothing — adding the source columns as a second caller would
    * have silently dropped whichever came second.
    */
-  const withSample = kept.some((r) => r.state.sampleSource);
-  const extraColumns = [
-    ...(withQuality ? QUALITY_CSV_COLUMNS : []),
-    ...(withSample ? SAMPLE_COLUMNS : []),
-    ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
-  ];
+  /*
+   * CLEAN-08: a `dataset=all` file that contains responses the researcher
+   * REMOVED must say so — RESPONSE_STATUS goes on automatically whenever it
+   * would otherwise hide a REMOVED row, not only when `quality=1` asks.
+   */
+  const csvExtra = buildExportExtra(kept, {
+    quality: withQuality || (dataset.kind === "all" && kept.some((r) => r.review.status === "REMOVE")),
+    environment: withEnvironment,
+    dataset,
+  });
+  /*
+   * DOC-10. Excel on Windows opens a BOM-less UTF-8 file as the system code
+   * page, so every accented name and every non-Latin open end turns to
+   * mojibake. `bom=1` prefixes the UTF-8 byte-order mark, which is what makes
+   * Excel read it as UTF-8. Off by default: scripts, R, pandas and Stata that
+   * read the file today must not start seeing three extra bytes.
+   */
+  const withBom = req.nextUrl.searchParams.get("bom") === "1";
   const csv = responsesToCSV(
     parsed.data,
     states as any,
-    extraColumns.length
-      ? {
-          columns: extraColumns,
-          cells: (i) => [
-            ...(withQuality ? qualityCsvCells(kept[i]) : []),
-            ...(withSample ? sampleCells(kept[i]) : []),
-            ...(withEnvironment ? environmentCells(kept[i]) : []),
-          ],
-        }
-      : undefined,
-    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode, versioned: versionedSource },
+    csvExtra,
+    { mediaBaseUrl: process.env.STUDIO_PUBLIC_URL ?? null, valueMode, versioned: versionedSource, bom: withBom },
   );
   return new NextResponse(csv, {
     headers: {
