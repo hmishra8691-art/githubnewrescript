@@ -1,4 +1,4 @@
-import { guardScriptLoops, selectorGuesses } from "./uxScriptGuard.js";
+import { guardScriptLoops, scriptAuthoringProblems, selectorGuesses } from "./uxScriptGuard.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
@@ -772,7 +772,13 @@ function targetProblem(def: SurveyDefinition, t: UxTarget): string | null {
 }
 
 /** errors refuse the item; warnings are shown with the proposal */
-export function validateUxItem(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior): { errors: string[]; warnings: string[] } {
+/**
+ * `authoring`: the item is being written (Intelligent Mode's actions), so a script must also pass
+ * `scriptAuthoringProblems` — selectors from other survey tools, disabling Next, polling for an
+ * element are refused with the fix. Elsewhere (the Studio editor, the runtime) they are warnings:
+ * a stored script is never stopped by a rule it was saved before.
+ */
+export function validateUxItem(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior, opts: { authoring?: boolean } = {}): { errors: string[]; warnings: string[] } {
   const errors: string[] = [], warnings: string[] = [];
   const p = targetProblem(def, item.target);
   if (p) errors.push(`“${item.label}”: ${p}`);
@@ -790,7 +796,12 @@ export function validateUxItem(def: SurveyDefinition, kind: "style" | "animation
     if (b.script) {
       if (b.on || b.effects.length) errors.push(`“${b.label}” has both a script and effects — use one`);
       const c = validateUxScript(b.script, def);
-      errors.push(...c.errors.map((e) => `“${b.label}”: ${e}`)); warnings.push(...c.warnings.map((e) => `“${b.label}”: ${e}`));
+      errors.push(...c.errors.map((e) => `“${b.label}”: ${e}`));
+      const authoring = scriptAuthoringProblems(b.script, def);
+      // an authoring problem already said as a selector guess is said once, in its stronger form
+      const guessed = new Set(authoring.length ? selectorGuesses(b.script) : []);
+      warnings.push(...c.warnings.filter((w) => !guessed.has(w)).map((e) => `“${b.label}”: ${e}`));
+      (opts.authoring ? errors : warnings).push(...authoring.map((e) => `“${b.label}”: ${e}`));
     } else {
       if (!b.on) errors.push(`“${b.label}” needs an event (on) or a script`);
       if (!b.effects.length) errors.push(`“${b.label}” has no effects`);

@@ -1,5 +1,6 @@
 import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
 import { resolveUxTarget, validateUxItem, scopeCss } from "./ux.js";
+import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -769,13 +770,13 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
           const target = resolveUxTarget(def, String(q.code));
           if (typeof target === "string") fail(target);
           const next: UxBehavior = { id: had?.id ?? env.ids("uxb"), label: `${q.code} script`, target: target as UxTarget, effects: [], script: a.js, source: "copilot_custom_code", createdAt: had?.createdAt ?? env.now };
-          const v = validateUxItem(def, "behavior", next);
+          const v = validateUxItem(def, "behavior", next, { authoring: true });
           if (v.errors.length) fail(v.errors.map((e) => e.replace(/^“[^”]*”: /, "")).join("; "));
           warnings.push(...v.warnings.map((w) => w.replace(/^“[^”]*”: /, "")));
           if (had?.script === a.js) { /* unchanged */ }
           else {
             if (had) ux.behaviors[ux.behaviors.indexOf(had)] = next; else ux.behaviors.push(next);
-            changed.push(`script (${a.js.split("\n").length} line${a.js.split("\n").length === 1 ? "" : "s"}) in Styles, animations & scripts`);
+            changed.push(`script (${a.js.split("\n").length} line${a.js.split("\n").length === 1 ? "" : "s"}) in Styles, animations & scripts — ${SCRIPT_CHECKED}`);
             if (had?.script) lossy.push(`replaces the script of ${q.code} (${had.script.length} characters)`);
           }
         }

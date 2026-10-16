@@ -70,7 +70,7 @@ test("migration 0059 defines rescript_cut_version with the parameters the route 
   const call = /db\.rpc\("rescript_cut_version", \{([\s\S]*?)\}\)\);/.exec(route);
   assert.ok(call);
   const sent = [...call[1].matchAll(/(p_[a-z_]+):/g)].map((m) => m[1]).sort();
-  const sig = /create function public\.rescript_cut_version\(([\s\S]*?)\)\s*returns/.exec(sql);
+  const sig = /create (?:or replace )?function public\.rescript_cut_version\(([\s\S]*?)\)\s*returns/.exec(sql);
   assert.ok(sig);
   const declared = [...sig[1].matchAll(/(p_[a-z_]+)\s/g)].map((m) => m[1]).sort();
   assert.deepEqual(sent, declared);

@@ -18,7 +18,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, repairPrompt, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
@@ -399,15 +399,18 @@ export async function POST(req: NextRequest) {
    * refusals go back to the model once, with its answer, and it corrects
    * them. The corrected answer is used only if the Studio accepts more of it.
    */
-  let repair: { refused: string[]; fixed: boolean } | undefined;
+  let repair: { refused: string[]; fixed: boolean; uxGuide?: boolean } | undefined;
   // the failed actions, each "what it was: why" — the first entries of errors, in order
   const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
   if (applied && refused.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
-    const repairPrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${refused.length} OF ITS ${reply.actions.length} ACTIONS:\n${refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer again in the same JSON shape. Keep the accepted actions as they were; correct each refused action using only the actions, events and rs api described above, or drop it and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+    const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
+    const repairPromptText = rp.text;
+    // what was refused, for whoever reads the server log: the request did not reach the guide, or the model ignored it
+    console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, refused: refused.map((e) => e.slice(0, 300)) }));
     try {
       const rb = outputBudget("repair");
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
-        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
+      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPromptText, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
+        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPromptText, rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
@@ -418,8 +421,8 @@ export async function POST(req: NextRequest) {
         if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
           reply = r2; applied = a2;
           if (!fakes.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
-          repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok) };
-        } else repair = { refused, fixed: false };
+          repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok), uxGuide: rp.addedUxGuide };
+        } else repair = { refused, fixed: false, uxGuide: rp.addedUxGuide };
       }
     } catch (e) {
       console.warn("[rescript:copilot] repair failed", JSON.stringify({ error: (e as Error).message }));

@@ -2,6 +2,7 @@ import type { Condition, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, Ux
 import { parseLogicExpression } from "./logicExpression.js";
 import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, effectiveResponseModel } from "@rescript/schema";
 import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
+import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { applyThemePatch } from "./theme.js";
 import { defaultAnswerFor } from "./defaultValue.js";
 import { createResponseState } from "./state.js";
@@ -268,7 +269,8 @@ function find<T extends { id: string; label: string }>(list: T[], id: string, en
   return list.find((x) => x.id === (viaRef ?? id)) ?? list.find((x) => x.id.toLowerCase() === r) ?? list.find((x) => x.label.trim().toLowerCase() === r) ?? fail(`there is no ${what} “${id}”`);
 }
 function gate(def: SurveyDefinition, kind: "style" | "animation" | "behavior", item: UxStyle | UxAnimation | UxBehavior): string[] {
-  const v = validateUxItem(def, kind, item);
+  // an action WRITES the item (Intelligent Mode, the theme assistant): the authoring checks apply
+  const v = validateUxItem(def, kind, item, { authoring: true });
   // the action is already named by its label; the item's own "“label”: " prefix would say it twice
   const own = `“${item.label}”: `;
   if (v.errors.length) fail(v.errors.map((e) => (e.startsWith(own) ? e.slice(own.length) : e)).join("; "));
@@ -404,7 +406,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       const warnings = gate(def, "behavior", b);
       ux.behaviors.push(b);
       if (a.ref) env.refs.set(a.ref.toLowerCase(), b.id);
-      return { description: b.script ? `Behaviour “${b.label}” on ${describeUxTarget(def, t)}: a sandboxed script (${b.script.split("\n").length} line${b.script.split("\n").length === 1 ? "" : "s"})` : `Behaviour “${b.label}”: when ${eventWords(b)} on ${describeUxTarget(def, t)} → ${b.effects.map((e) => effectWords(def, e)).join(", ")}`, warnings, touched: t.questionId ? [t.questionId] : [] };
+      return { description: b.script ? `Behaviour “${b.label}” on ${describeUxTarget(def, t)}: a sandboxed script (${b.script.split("\n").length} line${b.script.split("\n").length === 1 ? "" : "s"}) — ${SCRIPT_CHECKED}` : `Behaviour “${b.label}”: when ${eventWords(b)} on ${describeUxTarget(def, t)} → ${b.effects.map((e) => effectWords(def, e)).join(", ")}`, warnings, touched: t.questionId ? [t.questionId] : [] };
     }
     case "update_behavior": {
       const b = find(ux.behaviors, a.id, env, "behaviour");
@@ -420,7 +422,7 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       else if (a.when) next.when = parseGuard(def, a.when);
       const warnings = gate(def, "behavior", next);
       ux.behaviors[ux.behaviors.indexOf(b)] = next;
-      return { description: `Change behaviour “${next.label}”`, warnings, touched: [] };
+      return { description: `Change behaviour “${next.label}”${a.script ? ` — ${SCRIPT_CHECKED}` : ""}`, warnings, touched: [] };
     }
     case "remove_behavior": {
       const b = find(ux.behaviors, a.id, env, "behaviour");

@@ -95,3 +95,111 @@ export function selectorGuesses(code: string): string[] {
   }
   return [...new Set(out)];
 }
+
+/* ------------------------------------------------------------------------------------------------
+ * AUTHORING CHECKS — what a script that is being ADDED must get right (P0, 2026-10-16).
+ *
+ * The runtime gate (`validateUxScript`) decides whether a stored script may run; it stays lenient
+ * so a survey that was saved yesterday keeps running today. These checks are stricter and apply
+ * where a script is being written — Intelligent Mode's create_behavior / update_behavior /
+ * set_custom_code — because each of them describes a script that cannot do what it was written
+ * for on a survey page, while looking perfectly reasonable as code:
+ *
+ *   - every alternative of a selector belongs to some other survey tool (SurveyJS `.sd-…`,
+ *     Qualtrics `#NextButton`, `[data-variable=…]`, `input[name="AGE_SCR"]`): it matches nothing,
+ *     the element is null, and the script either throws or waits for ever;
+ *   - it disables or hides the Next / Back button: the sandbox refuses that (a script that fails
+ *     half-way would strand the respondent), so the button only LOOKS disabled. Stopping a
+ *     respondent is the question's validation — the platform holds Next, says why, and the
+ *     server checks it again;
+ *   - it waits for an element by calling itself on a timer: on a survey page the elements exist
+ *     when the script starts, so the wait only ever ends when the selector is right.
+ *
+ * Seen in the field: a Hindi request for "JavaScript" on AGE_SCR produced exactly this (all
+ * three), was accepted with one warning, and did nothing in the live survey.
+ * ------------------------------------------------------------------------------------------------ */
+
+type AuthoringDef = { questions: { id: string; code: string; variableName?: string; type?: string }[] };
+
+/** selector alternatives that never match on a survey page, with what to use instead */
+const FOREIGN_HOOKS: { test: (part: string, def: AuthoringDef) => boolean; use: (part: string, def: AuthoringDef) => string }[] = [
+  ...UX_DOM_HOOKS.map((h) => ({ test: (p: string) => h.guess.test(p), use: () => `${h.what} is ${h.use}` })),
+  { test: (p) => /\.(?:sd|sv)[-_]|\.sv_[a-z]/i.test(p), use: () => "SurveyJS class names do not exist here" },
+  { test: (p) => /\[\s*aria-label\s*[~|^$*]?=\s*["']?(?:next|back|previous|prev|submit|continue)\b/i.test(p), use: () => 'the Next / Submit button is [data-testid="rs-next"] and Back is [data-testid="rs-back"] (they carry no aria-label)' },
+  { test: (p) => /#(?:NextButton|PreviousButton)\b|\.(?:QuestionBody|QuestionOuter|QuestionText|InputText|ChoiceStructure|Skin)\b/.test(p), use: () => "Qualtrics element names do not exist here" },
+  { test: (p) => /\[\s*data-(?:role|variable|var|name|field|question-id|question-code|qcode)\s*(?:[~|^$*]?=|\])/i.test(p), use: () => "survey elements carry data-qid, data-testid, data-rs-el and data-code, not that attribute" },
+  {
+    // radios are named by the question's id ("q3"), never by its code or variable name
+    test: (p, def) => { const m = /\[\s*name\s*[~|^$*]?=\s*["']?([^"'\]]+)/i.exec(p); return !!m && !def.questions.some((q) => m[1].trim().startsWith(q.id)); },
+    use: () => "answer boxes have no name — use the question's card",
+  },
+];
+
+const cssAlternatives = (sel: string) => {
+  const out: string[] = []; let depth = 0, cur = "", quote: string | null = null;
+  for (const ch of sel) {
+    if (quote) { cur += ch; if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === "[" || ch === "(") depth++;
+    if (ch === "]" || ch === ")") depth--;
+    if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; continue; }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+};
+
+/** the question a selector is trying to reach, by its code or variable name */
+function questionNamedIn(sel: string, def: AuthoringDef) {
+  return def.questions.find((q) => [q.code, q.variableName].filter(Boolean).some((n) => new RegExp(`(^|[^\\w])${String(n).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w]|$)`).test(sel)));
+}
+
+const answerHook = (q: AuthoringDef["questions"][number]) => {
+  const box = ["single_select", "multi_select", "yes_no", "image_select"].includes(q.type ?? "") ? '[data-rs-el="option"]' : "input";
+  return `[data-qid="${q.id}"] ${box}`;
+};
+
+export function scriptAuthoringProblems(code: string, def: AuthoringDef): string[] {
+  const { bare, strings } = lexJs(code);
+  const errors: string[] = [];
+  // 1. selectors from another survey tool
+  for (const s of strings) {
+    if (!/(querySelector(All)?|closest|matches)\s*\(\s*$/.test(bare.slice(Math.max(0, s.start - 40), s.start))) continue;
+    const parts = cssAlternatives(s.value);
+    if (!parts.length) continue;
+    const foreign = parts.map((p) => FOREIGN_HOOKS.find((h) => h.test(p, def)));
+    if (foreign.some((f) => !f)) continue; // one alternative is a real hook: the selector can match
+    const q = questionNamedIn(s.value, def);
+    const why = [...new Set(foreign.map((f, i) => f!.use(parts[i], def)))].join("; ");
+    errors.push(`the selector “${s.value}” matches nothing on a survey page (${why})${q ? ` — the answer box of ${q.code} is ${answerHook(q)}, its card [data-qid="${q.id}"]` : ""}`);
+  }
+  if (errors.length) errors[errors.length - 1] += `. The survey's real hooks: Next [data-testid="rs-next"], Back [data-testid="rs-back"], a question's card [data-qid="<question id>"] (the ids are in the outline), its answer box [data-qid="<id>"] input, an option [data-rs-el="option"]`;
+  // 2. disabling or hiding the Next / Back button
+  const navRef = /rs-next|rs-back|rs-nav|next|back|submit|continue|prev/i;
+  const disables = [...bare.matchAll(/([A-Za-z_$][\w$]*(?:\s*\(\s*\))?)\s*\.\s*(disabled|hidden)\s*=(?!=)\s*([^;\n]*)/g)]
+    .filter((m) => navRef.test(m[1]) && !/^\s*false\b/.test(m[3]));
+  const setAttr = [...bare.matchAll(/([A-Za-z_$][\w$]*(?:\s*\(\s*\))?)\s*\.\s*(?:setAttribute|toggleAttribute)\s*\(/g)].filter((m) => navRef.test(m[1]));
+  const setAttrNav = setAttr.some((m) => { const lit = strings.find((x) => x.start > m.index! && x.start - (m.index! + m[0].length) < 4); return !!lit && /^(disabled|hidden)$/i.test(lit.value); });
+  const directNav = strings.some((s) => /rs-next|rs-back|rs-nav/.test(s.value) && /^\s*\)\s*\.\s*(disabled|hidden)\s*=(?!=)/.test(bare.slice(s.end, s.end + 30)));
+  if (disables.length || setAttrNav || directNav) {
+    errors.push("a script cannot disable or hide the Next / Back button — if the script stopped half-way the respondent would be stranded, so the survey keeps the button working and it would only LOOK disabled. To stop a respondent continuing (an age limit, an eligibility rule, a required format), give the question validation with its message — set_validation, e.g. {\"kind\":\"min_value\",\"value\":18,\"message\":\"You must be 18 or above to participate.\"}: the survey then refuses Next, shows the message, and the server checks it again. A script may still show your own messages and change Next's classes and styles");
+  }
+  // 3. waiting for an element by calling itself on a timer
+  for (const fn of bare.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g)) {
+    const name = fn[1];
+    let depth = 0, i = fn.index! + fn[0].length - 1, end = bare.length;
+    for (; i < bare.length; i++) { if (bare[i] === "{") depth++; else if (bare[i] === "}" && --depth === 0) { end = i; break; } }
+    const body = bare.slice(fn.index!, end);
+    const self = new RegExp(`(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*(?:${name}\\b|function\\s*\\([^)]*\\)\\s*\\{\\s*${name}\\s*\\(|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()|(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*\\d+\\s*,\\s*(?:${name}\\b|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()`);
+    if (self.test(body)) errors.push(`${name}() waits for an element by calling itself on a timer — on a survey page the elements a script names already exist when it starts (one that is never found means its selector is wrong, and the timer would run for ever); for something that appears later use rs.listen or a MutationObserver`);
+  }
+  return [...new Set(errors)];
+}
+
+/**
+ * What the Studio can and cannot say about a generated script before anyone runs it: it was
+ * checked (it parses, uses only the sandbox's api and the survey's real page hooks, and does none
+ * of the things a survey page refuses), but checking is not running. The card says so, so a
+ * generated script is never presented as a tested one.
+ */
+export const SCRIPT_CHECKED = "checked before it was added (it parses, uses the survey's real page hooks and the sandbox's rules); not run yet — try it in Preview";

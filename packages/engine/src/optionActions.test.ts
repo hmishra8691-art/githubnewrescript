@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { SurveyDefinition, type Condition, type FlowNode } from "@rescript/schema";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, resolveOption, OPTION_ACTION_OPS, type OptionAction, type OptionEnv } from "./optionActions.js";
 import { parseLogicExpression } from "./logicExpression.js";
+import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { listPages } from "./blocks.js";
 import { embeddedFieldNames } from "./structureOps.js";
@@ -382,7 +383,7 @@ test("set_custom_code: CSS is plain; JavaScript becomes a script in Styles, anim
   // JavaScript is a script behaviour (the one script pipeline) — never question.customJs
   const js = `rs.listen("select", "self", () => rs.animate("self", "pop"));`;
   const r1 = run(def, { op: "set_custom_code", target: "Q9", js });
-  assert.equal(r1.description, "Q9: script (1 line) in Styles, animations & scripts");
+  assert.equal(r1.description, `Q9: script (1 line) in Styles, animations & scripts — ${SCRIPT_CHECKED}`);
   assert.equal(r1.destructive, undefined);
   assert.equal(q(def, "Q9").customJs, undefined);
   const mine = () => (def.ux?.behaviors ?? []).filter((b) => b.source === "copilot_custom_code");

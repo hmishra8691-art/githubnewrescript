@@ -458,3 +458,49 @@ test("Phase 6: the guides say what the engine now enforces — a multi-select is
   assert.match(COPILOT_TRANSLATION_GUIDE, /in the target language's own script/);
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, "the system prompt itself is unchanged in size");
 });
+
+import { repairPrompt } from "./prompt.ts";
+/**
+ * P0 (2026-10-16): the field request — Hindi, spoken, "JavaScript" written by the speech-to-text as
+ * जावस्यूप — was classified as a plain question, so the UX guide (the page hooks, the sandbox's
+ * api, stopping the respondent with validation) never reached the model.
+ */
+const FIELD_REQUEST = "मुझे ख्योशन 3 पे जावस्यूप लगाना अगर एज एटिन के ऊपर मैं टाइप करता हूँ तो यहाँ पर लिख कर रहा है येस आप एलिजिबल वोटर हैं ऐसा उसके बाद मैं नेक्स बटन क्लिक कर पाँ तब तक नेक्स बटन डिसीबल रहा है जब तक मैं एटिन या उसके ऊपर टाइप ना करूं वैल्यू तो";
+test("P0: a Devanagari request for JavaScript gets the UX guide and is never look-only", () => {
+  const c = classifyRequest(FIELD_REQUEST, 40, 0);
+  assert.equal(c.ux, true, "the guide goes with it");
+  assert.equal(c.uxOnly, false, "validation (stopping the respondent) stays allowed");
+  for (const t of ["Q3 पर जावास्क्रिप्ट लगाओ", "Q5 के नेक्स्ट बटन को एनिमेशन दो", "Q3 par JavaScript lagao, message dikhao"]) assert.equal(classifyRequest(t, 10, 0).ux, true, t);
+  const en = classifyRequest("Add JavaScript to Q3: if the age is 18 or above show 'Yes, you are an eligible voter' and keep the Next button disabled until then", 40, 0);
+  assert.deepEqual([en.ux, en.uxOnly], [true, false], "stopping the respondent is validation, so it is not a look-only request");
+  assert.deepEqual([classifyRequest("Show a warning message when Q7 option 5 is selected", 40, 0).ux], [true]);
+  // unchanged: a pure look request is still look-only, a structural one still is not UX
+  assert.equal(uxIntent("make Q10 look better, add a hover glow").only, true);
+  assert.equal(classifyRequest("Change Q18 to a matrix question", 30, 3).ux, false);
+});
+
+test("P0: the UX guide gives the real answer-box hook and says stopping is validation, never a disabled Next", () => {
+  assert.match(COPILOT_UX_GUIDE, /answer box is \[data-qid="<question id>"\] input/);
+  assert.match(COPILOT_UX_GUIDE, /input\[name="AGE"\]`, `\[data-variable=…\]`, `\.sd-question`/);
+  assert.match(COPILOT_UX_GUIDE, /never hidden \/ disabled on Next or Back/);
+  assert.match(COPILOT_UX_GUIDE, /STOPPING THE RESPONDENT .* is the question's VALIDATION, never a script/);
+  assert.match(COPILOT_UX_GUIDE, /never wait for them with a setTimeout that calls the function again/);
+  // the worked example is valid: one set_validation and one script behaviour that pass the engine's authoring checks
+  const ex = [...COPILOT_UX_GUIDE.matchAll(/^\{"op":"(set_validation|create_behavior)".*\}$/gm)].map((m) => JSON.parse(m[0]));
+  const both = ex.filter((a) => a.target === "Q4");
+  assert.equal(both.length, 2);
+  const def = { meta: { id: "x", code: "X", title: "x", version: "1" }, questions: [{ id: "q4", code: "Q4", variableName: "Q4", type: "numeric", text: "How many?" }], flow: [{ type: "page", id: "p1", questionIds: ["q4"] }, { type: "end", id: "e", status: "complete" }] };
+  const r = applySurveyActions(SurveyDefinition.parse(def), both);
+  assert.deepEqual(r.results.map((x) => x.ok), [true, true], r.errors.join("; "));
+});
+
+test("P0: a refused script goes back with the UX guide when the first prompt went without it", () => {
+  const base = { prompt: "PROMPT", raw: { actions: [] }, refused: ["Set the custom code of Q3: the selector … matches nothing"], total: 1 };
+  const a = repairPrompt({ ...base, uxGuideSent: false, ops: ["set_custom_code"] });
+  assert.equal(a.addedUxGuide, true);
+  assert.ok(a.text.includes(COPILOT_UX_GUIDE) && a.text.includes("THE STUDIO REFUSED 1 OF ITS 1 ACTIONS") && a.text.includes("matches nothing"));
+  const b = repairPrompt({ ...base, uxGuideSent: true, ops: ["create_behavior"] });
+  assert.equal(b.addedUxGuide, false, "not twice");
+  assert.ok(!b.text.includes(COPILOT_UX_GUIDE));
+  assert.equal(repairPrompt({ ...base, uxGuideSent: false, ops: ["add_question"] }).addedUxGuide, false, "only for look-and-behaviour actions");
+});
