@@ -24,8 +24,15 @@ export interface ConditionalLogit {
   hitRate: number;
 }
 
-export function conditionalLogit(sets: ChoiceSet[], p: number, opts: { maxIter?: number; ridge?: number } = {}): ConditionalLogit {
+export function conditionalLogit(allSets: ChoiceSet[], p: number, opts: { maxIter?: number; ridge?: number } = {}): ConditionalLogit {
   const maxIter = opts.maxIter ?? 100, ridge = opts.ridge ?? 1e-3;
+  /*
+   * A set whose chosen index points at no alternative (−1 from a failed
+   * lookup, or past the end) carries no information and used to throw from
+   * inside `evaluate` — one such set took a whole analysis down (METHOD-03).
+   * The callers now report what they skipped; this keeps the model itself safe.
+   */
+  const sets = allSets.filter((s) => Number.isInteger(s.chosen) && s.chosen >= 0 && s.chosen < s.alternatives.length);
   let beta = new Array(p).fill(0);
   let ll = 0, iter = 0, converged = false;
   const util = (x: number[], b: number[]) => x.reduce((t, v, i) => t + v * b[i], 0);

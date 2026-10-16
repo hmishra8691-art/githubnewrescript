@@ -23,6 +23,7 @@ import { checkPhone, checkPostal, checkUrl, phoneCountryFor } from "./formats.js
 import { uploadAccept, uploadTypeAllowed } from "./uploadTypes.js";
 import { bucketProblems, hasBucketRules } from "./bucketRules.js";
 import { unfinishedClips } from "./videos.js";
+import { designRowsFor } from "./designVersion.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -728,6 +729,37 @@ export function validateQuestion(
           if (cfg.maxSelections && picked > cfg.maxSelections) push(`Task ${t}: please pick at most ${cfg.maxSelections} item${cfg.maxSelections === 1 ? "" : "s"}.`);
         }
       }
+    }
+  }
+
+  /*
+   * MaxDiff: `required` means every task of the respondent's design VERSION
+   * has a best and a worst, they are different items, and both are items of
+   * that task's set. The version is derived from the seed exactly as the
+   * renderer derives the rows it shows (designVersion.ts), so a respondent is
+   * only held to the tasks they actually saw. Before this, the block above
+   * covered CBC only and a required MaxDiff accepted best == worst, untouched
+   * tasks and codes outside the set (METHOD-01).
+   */
+  if (q.type === "maxdiff_task" && q.required && !hasNoAnswerableItems(q, ctx)) {
+    const design = def.designs.find((d) => d.id === q.settings.designRef);
+    const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
+    const rows = allRows.length ? designRowsFor(q, allRows, ctx.state.seed) : [];
+    if (rows.length) {
+      const tasks = [...new Set(rows.map((r) => String(r.task)))];
+      const vals = (value ?? {}) as Record<string, unknown>;
+      const taskOf = (t: string) => (vals[t] && typeof vals[t] === "object" ? (vals[t] as { best?: unknown; worst?: unknown }) : {});
+      const itemsOf = (t: string) => new Set(rows.filter((r) => String(r.task) === t).map((r) => String(r.item_index)));
+      const missing = tasks.filter((t) => { const bw = taskOf(t); return isEmpty(bw.best) || isEmpty(bw.worst); });
+      const same = tasks.filter((t) => { const bw = taskOf(t); return !isEmpty(bw.best) && !isEmpty(bw.worst) && String(bw.best) === String(bw.worst); });
+      const outside = tasks.filter((t) => {
+        const bw = taskOf(t), items = itemsOf(t);
+        return (!isEmpty(bw.best) && !items.has(String(bw.best))) || (!isEmpty(bw.worst) && !items.has(String(bw.worst)));
+      });
+      // nothing at all is the generic required message above; a partial answer names what is left
+      if (missing.length && !isEmpty(value)) push(missing.length === 1 ? `Please choose a best and a worst for task ${missing[0]}.` : "Please choose a best and a worst for every task.");
+      if (same.length) push(same.length === 1 ? `Task ${same[0]}: best and worst cannot be the same item.` : "Best and worst cannot be the same item.");
+      if (outside.length) push(outside.length === 1 ? `Task ${outside[0]}: please choose items from this task.` : "Please choose items from each task.");
     }
   }
 

@@ -376,7 +376,8 @@ test("a STANDARD MaxDiff is validated exactly as before", () => {
     designs: [{
       id: "d1", kind: "maxdiff", name: "MD",
       config: { items: ["A", "B", "C", "D"] },
-      file: { format: "json", columns: ["version", "task", "item_index"], rows: [{ version: 1, task: 1, item_index: 1 }] },
+      // two items, so the best/worst below is a valid answer under the required check (METHOD-01)
+      file: { format: "json", columns: ["version", "task", "item_index"], rows: [{ version: 1, task: 1, item_index: 1 }, { version: 1, task: 1, item_index: 2 }] },
     }],
     questions: [{ id: "q_md", code: "Q1", variableName: "MD", type: "maxdiff_task", text: "x", required: true, settings: { designRef: "d1" } }],
     flow: [{ type: "page", id: "p1", questionIds: ["q_md"] }],

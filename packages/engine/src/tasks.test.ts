@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { buildVariableDictionary, flattenVariables, createResponseState, setAnswer, validatePage } from "./index.js";
+import { buildVariableDictionary, flattenVariables, createResponseState, setAnswer, validatePage, designVersionFor } from "./index.js";
 
 /**
  * DESIGN-TASK ANSWERS REACH THE EXPORT — per-task columns for CBC, MaxDiff
@@ -117,4 +117,56 @@ test("CBC validation: required means every task has a choice", () => {
   assert.deepEqual(validatePage(d, [d.questions[0]], ctx).map((e) => e.message), ["Please answer task 2."]);
   state.answers.q1 = { "1": "2", "2": "1" };
   assert.deepEqual(validatePage(d, [d.questions[0]], ctx), []);
+});
+
+/*
+ * METHOD-01: a required MaxDiff used to accept best == worst, half-answered
+ * and untouched tasks, and codes outside the task's set — the required block
+ * covered CBC only. The design above gives task 1 the items 2..5 and task 2
+ * the items 3..6.
+ */
+test("MaxDiff validation: required means every task has a distinct best and worst from its own set", () => {
+  const d = def("maxdiff");
+  const state = createResponseState(d, { seed: 1 });
+  const ctx = { def: d, state, loop: null };
+  const q = d.questions[0];
+  const msgs = () => validatePage(d, [q], ctx).map((e) => e.message);
+  assert.deepEqual(msgs(), ["This question is required."], "nothing at all");
+  state.answers.q1 = { "1": { best: "2" } };
+  assert.deepEqual(msgs(), ["Please choose a best and a worst for every task."], "best only, task 2 untouched");
+  state.answers.q1 = { "1": { best: "2", worst: "3" } };
+  assert.deepEqual(msgs(), ["Please choose a best and a worst for task 2."], "task 2 untouched");
+  state.answers.q1 = { "1": { best: "2", worst: "3" }, "2": { worst: "6" } };
+  assert.deepEqual(msgs(), ["Please choose a best and a worst for task 2."], "task 2 half answered");
+  state.answers.q1 = { "1": { best: "2", worst: "2" }, "2": { best: "3", worst: "6" } };
+  assert.deepEqual(msgs(), ["Task 1: best and worst cannot be the same item."]);
+  state.answers.q1 = { "1": { best: "2", worst: "2" }, "2": { best: "6", worst: "6" } };
+  assert.deepEqual(msgs(), ["Best and worst cannot be the same item."]);
+  state.answers.q1 = { "1": { best: "9", worst: "3" }, "2": { best: "3", worst: "6" } };
+  assert.deepEqual(msgs(), ["Task 1: please choose items from this task."], "item 9 is not in task 1's set");
+  state.answers.q1 = { "1": { best: 2, worst: 3 }, "2": { best: "3", worst: "6" } };
+  assert.deepEqual(msgs(), [], "numeric codes compare as strings");
+  state.answers.q1 = { "1": { best: "2", worst: "3" }, "2": { best: "3", worst: "6" } };
+  assert.deepEqual(msgs(), []);
+});
+
+test("MaxDiff validation: a respondent is held to the tasks of their own design version", () => {
+  const d = def("maxdiff");
+  // version 2 has one task only, with items 7..10; version 1 keeps its two tasks
+  const design = d.designs[0];
+  design.file!.rows = [
+    ...(design.file!.rows as Record<string, unknown>[]),
+    ...[1, 2, 3, 4].map((pos) => ({ version: 2, task: 1, position: pos, item_index: pos + 6, item_label: `Item ${pos + 6}` })),
+  ];
+  const q = d.questions[0];
+  const allRows = design.file!.rows as Record<string, unknown>[];
+  let seed = 1;
+  while (designVersionFor(q, allRows, seed) !== "2") seed++;
+  const state = createResponseState(d, { seed });
+  const ctx = { def: d, state, loop: null };
+  const msgs = () => validatePage(d, [q], ctx).map((e) => e.message);
+  state.answers.q1 = { "1": { best: "7", worst: "10" } };
+  assert.deepEqual(msgs(), [], "one task is the whole of version 2");
+  state.answers.q1 = { "1": { best: "2", worst: "3" } };
+  assert.deepEqual(msgs(), ["Task 1: please choose items from this task."], "version 1's items are not version 2's");
 });

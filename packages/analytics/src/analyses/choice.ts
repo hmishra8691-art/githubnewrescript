@@ -160,6 +160,8 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const sampleStep = Math.max(1, Math.ceil(ds.cases.length / MAX_MODEL_RESPONDENTS));
   const perCase: { ci: number; score: number[] }[] = [];
   let respondents = 0;
+  /* tasks skipped because the answer could not be modelled (METHOD-03) */
+  let sameItem = 0, outsideSet = 0;
   /*
    * ANCHORED (DUAL-RESPONSE) MAXDIFF (§17), AND WHY IT CHANGES THE CODING.
    *
@@ -200,7 +202,8 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   ds.cases.forEach((c, ci) => {
     const ans = c.answers[qid] as Record<string, { best?: string; worst?: string; anchor?: string }> | undefined;
     if (!ans || typeof ans !== "object") return;
-    const version = String(c.answers[`${qid}_version`] ?? "1");
+    /* the block this respondent answered: flatten writes `<VAR>_VERSION` from the seed — the same fallback the conjoint runner uses. Without it every respondent was scored against version 1's item sets (METHOD-02). */
+    const version = String(c.answers[`${qid}_version`] ?? c.vars[`${q?.variableName}_VERSION`] ?? "1");
     const w = ds.weighted ? c.weight : 1;
     const score = new Array(K).fill(0);
     let any = false;
@@ -212,8 +215,18 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
       const alts = altsOf(task, version);
       const ids = alts.map((r) => itemIdx.get(String(r.item_index))!).filter((x) => x != null);
       if (ids.length < 2) continue;
-      for (const i of ids) shown[i] += w;
       const b = bw.best != null ? itemIdx.get(String(bw.best)) : undefined, wo = bw.worst != null ? itemIdx.get(String(bw.worst)) : undefined;
+      /*
+       * A task answered with the same item as best and worst says nothing about
+       * the item and used to take the whole analysis down: the worst set
+       * excluded the best, `chosen` became −1, and the logit threw. It is
+       * skipped and counted (METHOD-03). A code outside the task's set is
+       * likewise skipped and counted rather than silently dropped.
+       */
+      if (b != null && wo != null && b === wo) { sameItem++; continue; }
+      const given = (v: unknown) => v != null && v !== "";
+      if ((given(bw.best) && (b == null || !ids.includes(b))) || (given(bw.worst) && (wo == null || !ids.includes(wo)))) { outsideSet++; continue; }
+      for (const i of ids) shown[i] += w;
       if (b != null && ids.includes(b)) { best[b] += w; score[b] += 1; target.push({ alternatives: ids.map(feat), chosen: ids.indexOf(b), weight: w }); any = true; }
       if (wo != null && ids.includes(wo)) { worst[wo] += w; score[wo] -= 1; const rest = ids.filter((i) => i !== b); if (rest.length >= 2) target.push({ alternatives: rest.map((i) => feat(i).map((v) => -v)), chosen: rest.indexOf(wo), weight: w }); any = true; }
       if (anchored && typeof bw.anchor === "string" && bw.anchor in anchorCounts) {
@@ -296,6 +309,8 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
     insights, warnings: [
       ...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []),
       ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."]),
+      ...(sameItem ? [`${sameItem} task${sameItem === 1 ? "" : "s"} ignored: best and worst were the same item.`] : []),
+      ...(outsideSet ? [`${outsideSet} task${outsideSet === 1 ? "" : "s"} ignored: the best or worst was not an item of that task.`] : []),
       /*
        * An anchored design whose follow-up was never answered would silently
        * produce an absolute-looking scale identified by nothing. Say so.

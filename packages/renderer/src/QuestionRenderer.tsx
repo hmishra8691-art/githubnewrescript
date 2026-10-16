@@ -1849,17 +1849,23 @@ function DesignTasks(p: QRProps) {
                     const altKey = isMaxdiff ? String(alt.item_index ?? i) : String(alt.alt ?? i + 1);
                     if (isMaxdiff) {
                       const cur = (vals[t] ?? {}) as { best?: string; worst?: string };
+                      // an item cannot be both best and worst: the opposite radio is disabled
+                      // for the chosen item, and the engine refuses the pair regardless (METHOD-01)
+                      const isBest = cur.best != null && String(cur.best) === altKey;
+                      const isWorst = cur.worst != null && String(cur.worst) === altKey;
                       return (
                         <tr key={altKey}>
                           <td>
                             <input type="radio" name={`${p.q.id}_${t}_worst`}
-                              checked={cur.worst === altKey}
+                              checked={isWorst}
+                              disabled={isBest}
                               onChange={() => p.onChange({ ...vals, [t]: { ...cur, worst: altKey } })} />
                           </td>
                           <td className="rowlabel">{String(alt.item_label ?? altKey)}</td>
                           <td>
                             <input type="radio" name={`${p.q.id}_${t}_best`}
-                              checked={cur.best === altKey}
+                              checked={isBest}
+                              disabled={isWorst}
                               onChange={() => p.onChange({ ...vals, [t]: { ...cur, best: altKey } })} />
                           </td>
                         </tr>
