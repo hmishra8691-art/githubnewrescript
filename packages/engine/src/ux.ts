@@ -506,7 +506,7 @@ export interface ScopedCss { css: string; errors: string[]; warnings: string[] }
  * rewritten), anything else — @import, @font-face, @page — is refused, as is
  * any selector that names html, body or :root.
  */
-export function scopeCss(def: Pick<SurveyDefinition, "meta">, target: UxTarget, css: string, styleId: string): ScopedCss {
+export function scopeCss(def: Pick<SurveyDefinition, "meta">, target: UxTarget, css: string, styleId: string, opts: { allowScoped?: boolean } = {}): ScopedCss {
   const errors: string[] = [], warnings: string[] = [];
   let nodes: CssNode[];
   try { nodes = parseCss(css); } catch (e) { return { css: "", errors: [`the CSS does not parse: ${(e as Error).message}`], warnings }; }
@@ -527,6 +527,8 @@ export function scopeCss(def: Pick<SurveyDefinition, "meta">, target: UxTarget, 
   };
   const scopeSel = (sel: string): string | null => {
     const parts = splitSelectors(sel).map((s) => {
+      // CSS this gate already scoped (stored, read back by the model, sent again): kept as it is, so long as nothing follows the card but its inside
+      if (opts.allowScoped && s.startsWith(base) && /^\s|^$|^[.#[:>]/.test(s.slice(base.length)) && !/^\s*[+~]/.test(s.slice(base.length)) && !s.includes("&") && !checkRelativeSelector(s.slice(base.length) || ".x")) return s;
       if (/&\s*[+~]/.test(s)) { errors.push(`“${s}” styles elements beside the target, outside it`); return null; }
       const e = checkRelativeSelector(s.replace(/&/g, ".x"));
       if (e) { errors.push(e); return null; }

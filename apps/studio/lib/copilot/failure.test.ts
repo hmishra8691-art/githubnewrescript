@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeFailure, failureFromError, failureFromReplyError, failureFromTransport, isTurnFailure } from "./failure.ts";
+import { describeFailure, failureFromError, failureFromException, failureFromRefusal, failureFromReplyError, failureFromTransport, isTurnFailure } from "./failure.ts";
 
 /* Phase 1: every failure of the model path has a code, a cause and a next step. */
 test("every code has a title, a cause and at least one next step", () => {
@@ -55,7 +55,8 @@ test("a structured ProviderError is read by its kind, with how long to wait", ()
 test("a response that is not the JSON the server always sends is a temporary failure with the work safe, not a refusal", () => {
   assert.equal(failureFromTransport(504).code, "timeout");
   assert.equal(failureFromTransport(502).code, "capacity");
-  assert.equal(failureFromTransport(0).code, "network");
+  assert.equal(failureFromTransport(0).code, "unreachable", "the page never reached the Studio: the server, not the AI service");
+  assert.equal(failureFromTransport(413).code, "too_long");
   for (const st of [0, 502, 503, 504]) assert.doesNotMatch(failureFromTransport(st).title + failureFromTransport(st).message, /refused/i);
 });
 
@@ -85,4 +86,63 @@ test("the provider card tells an administrator where the reason is — the conne
   /* and a provider's credit-balance 400 is no longer read as a malformed request */
   const q = failureFromError({ kind: "quota_exhausted", status: 400, message: "x" });
   assert.equal(q.code, "quota");
+});
+
+/* AI-04: the Studio's own refusals are said as what they are, with a retry — never "the AI service could not process this" */
+test("a route refusal without a failure object is a researcher-readable sentence, not a provider failure", () => {
+  const signedOut = failureFromRefusal(401, { error: "Not signed in.", code: "no_session" })!;
+  assert.equal(signedOut.code, "signed_out");
+  assert.match(signedOut.message, /^You're signed out — sign in and send again\./);
+  assert.equal(failureFromRefusal(401, { error: "Your session is no longer valid.", code: "unknown_session" })!.code, "signed_out");
+  assert.equal(failureFromRefusal(401, null)!.code, "signed_out");
+
+  const key = failureFromRefusal(401, { error: "The AI provider rejected the API key." })!;
+  assert.equal(key.code, "auth");
+  assert.match(key.message, /^The AI provider refused the key — check Settings → AI/);
+
+  const tooLong = failureFromRefusal(400, { error: "the request is too long" })!;
+  assert.equal(tooLong.code, "too_long");
+  assert.match(tooLong.message, /^That request was too long for the model — shorten it or split it\./);
+  assert.equal(failureFromRefusal(413, null)!.code, "too_long");
+
+  const nothing = failureFromRefusal(400, { error: "say what you want" })!;
+  assert.equal(nothing.code, "bad_request");
+  assert.match(nothing.message, /type what you want changed/);
+  const unreadable = failureFromRefusal(400, { error: "send the survey as it is open in the editor (definition)" })!;
+  assert.equal(unreadable.code, "bad_request");
+  assert.match(unreadable.message, /could not read what this page sent/);
+
+  assert.match(failureFromRefusal(423, { error: "This project has been locked by its owner and cannot be changed." })!.message, /locked by its owner/);
+  assert.match(failureFromRefusal(403, { error: "x", code: "account_disabled" })!.message, /account has been disabled/);
+  assert.match(failureFromRefusal(404, { error: "Unknown project." })!.message, /could not be found/);
+  assert.equal(failureFromRefusal(402, { error: "balance" })!.code, "wallet");
+  assert.equal(failureFromRefusal(500, { error: "boom" }), null, "a status it does not know is the caller's");
+  assert.equal(failureFromRefusal(200, null), null);
+
+  for (const f of [signedOut, key, tooLong, nothing, unreadable, failureFromRefusal(423, { error: "x" })!, failureFromRefusal(404, null)!]) {
+    assert.ok(isTurnFailure(f));
+    assert.doesNotMatch(f.title + f.message + f.next.join(" "), /could not process this request|\b(40[0-9]|423)\b|Not signed in|\[object|undefined/i, f.code);
+    assert.ok(f.next.length >= 1);
+  }
+  /* the card shows them with Resume (see CopilotCard KEEPS_WORK): they must all be codes the card knows */
+  for (const c of ["signed_out", "bad_request", "too_long", "unreachable", "refused", "unexpected"] as const) assert.ok(isTurnFailure(describeFailure(c)), c);
+});
+
+test("a provider's context-length refusal reads as too long; an exception in the page never shows raw JavaScript", () => {
+  assert.equal(failureFromError({ kind: "bad_request", message: "the analysis provider refused the request (400) prompt is too long: 215000 tokens > 200000 maximum" }).code, "too_long");
+  assert.equal(failureFromError("the analysis provider refused the request (400) This model's maximum context length is 128000 tokens").code, "too_long");
+  assert.equal(failureFromError("the analysis provider refused the request (400) bad").code, "provider", "other 400s are unchanged");
+
+  const net = failureFromException(new TypeError("Failed to fetch"));
+  assert.equal(net.code, "unreachable");
+  assert.match(net.message, /^Could not reach the server — check your connection and try again\./);
+  assert.equal(net.retryable, true);
+  assert.equal(failureFromException(new TypeError("NetworkError when attempting to fetch resource.")).code, "unreachable");
+  assert.equal(failureFromException(new DOMException("The operation was aborted.", "AbortError")).code, "timeout");
+  const raw = failureFromException(new TypeError("Cannot read properties of undefined (reading 'actions')"));
+  assert.equal(raw.code, "unexpected");
+  assert.doesNotMatch(JSON.stringify({ t: raw.title, m: raw.message, n: raw.next }), /Cannot read|undefined|TypeError|actions/);
+  assert.match(raw.message, /^Something went wrong in the Studio before the AI could answer\./);
+  assert.equal(failureFromException("weird").code, "unexpected");
+  assert.equal(failureFromException(undefined).code, "unexpected");
 });

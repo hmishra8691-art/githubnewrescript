@@ -8,12 +8,12 @@ import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, changeLabel, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
 import {
-  OpsRecorder, saveFailure, observeUndo, reapplyActions, sameSurveyCanonical,
+  OpsRecorder, memoryFromOps, saveFailure, observeUndo, reapplyActions, sameSurveyCanonical,
   type NewOp, type OpUpdate, type SaveView, type Send,
 } from "../../../lib/copilot/history";
 import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../../lib/copilot/operations";
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
-import { describeFailure, failureFromTransport, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
+import { describeFailure, failureFromException, failureFromRefusal, failureFromTransport, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
 import {
   STATUS, MAX_AUTO_RETRIES, MAX_STALLED_ROUNDS, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, waitBeforeRetry,
   type BuiltItem, type Checkpoint, type TurnResponse,
@@ -522,7 +522,7 @@ export function useCopilot(opts: {
         try {
           const r = await fetch("/api/copilot/turn", {
             method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply }))), ...(mode ? { mode } : {}), ...(sentFake ? { fake: sentFake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra, ...(isBuild ? { done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {}), ...(f?.faults ? { faults: f.faults } : {}), ...(f?.budgetMs ? { budgetMs: f.budgetMs } : {}) }),
+            body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply })), memoryFromOps(recorder.list())), ...(mode ? { mode } : {}), ...(sentFake ? { fake: sentFake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra, ...(isBuild ? { done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {}), ...(f?.faults ? { faults: f.faults } : {}), ...(f?.budgetMs ? { budgetMs: f.budgetMs } : {}) }),
           });
           const d = await r.json().catch(() => null) as Record<string, unknown> | null;
           return { status: r.status, ok: r.ok, d };
@@ -591,7 +591,8 @@ export function useCopilot(opts: {
        */
       const failTurn = (d: Record<string, unknown> | null, status: number, fallback: FailureCode) => {
         /* the server's own failure when it sent one; when no JSON came back at all, what the status means (the platform's time limit, a dropped connection) — never a bare "provider refused" */
-        let failure = isTurnFailure(d?.failure) ? d.failure : !d ? failureFromTransport(status) : describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
+        /* the Studio's own refusals (signed out, a request it could not read, a locked project) carry no `failure`: each gets its own sentence, never "the AI service could not process this" (AI-04) */
+        let failure = isTurnFailure(d?.failure) ? d.failure : !d ? failureFromTransport(status) : (status >= 400 ? failureFromRefusal(status, d) : null) ?? describeFailure(fallback, String(d?.error ?? "").slice(0, 200) || undefined);
         if (isBuild) failure = pausedFailure(failure, cp.built.length, total);
         const error = `${failure.message}`;
         /* the work stays saved unless the failure is one no Resume can change (nothing usable, no model, internal mode) */
@@ -640,7 +641,8 @@ export function useCopilot(opts: {
         const built = d.plan as ChangePlan;
         patch.changePlan = { ...built, approved: built.items.map((i) => i.id), ...(Array.isArray(d.planFailures) ? { failures: d.planFailures as { id: string; failure: TurnFailure }[] } : {}) };
       }
-      const intent: OpIntent = { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind };
+      /* the model's running memory and its reply travel in the record, so a reload keeps the thread (AI-05) */
+      const intent: OpIntent = { ...read, mode: String((d.context as { mode?: string } | undefined)?.mode ?? mode ?? ""), kind: reply.kind, ...(reply.memory ? { memory: reply.memory } : {}), ...(reply.reply ? { reply: reply.reply.slice(0, 500) } : {}) };
       const failed = reply.rejected.map((x) => ({ description: "an action the model wrote", reason: x.reason ?? "not in a shape the Studio accepts" }));
       if (reply.actions.length) patch.opKey = recordProposal(text, reply.actions, { source: "model", intent, apiCalls: [call(d)], warnings: failed.map((f) => `Dropped: ${f.reason}`) }, session.openOp);
       else patch.opKey = recordOp({ prompt: text, source: "model", status: reply.kind === "clarify" ? "clarify" : "answered", intent, apiCalls: [call(d)], failed, statusDetail: reply.reply.slice(0, 2000) });
@@ -658,8 +660,11 @@ export function useCopilot(opts: {
       opts.patch(id, patch);
       return "handled";
     } catch (e) {
-      const error = (e as Error).message;
-      opts.patch(id, { status: "failed", error, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "" }, statusDetail: error, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: 0, error }] }) });
+      /* an exception in the page: a sentence and a retry — the raw JavaScript message goes to the console, never to the card */
+      const failure = failureFromException(e);
+      console.warn("[rescript:copilot] turn failed in the page", e);
+      const error = failure.message;
+      opts.patch(id, { status: "failed", error, failure, progress: undefined, opKey: recordOp({ prompt: text, source: "model", status: "failed", intent: { ...read, mode: mode ?? "" }, statusDetail: `${failure.title}: ${failure.message}`, apiCalls: [{ route: "/api/copilot/turn", mode: mode ?? "", charge: 0, error: `${failure.title}: ${failure.message}` }] }) });
       return "handled";
     } finally {
       setBusy(false);

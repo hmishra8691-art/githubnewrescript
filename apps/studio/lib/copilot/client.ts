@@ -154,14 +154,17 @@ export const changeLabel = (n: number | null | undefined) => (n ? `AI Change #${
 
 export interface MemoryTurn { user: string; reply?: CopilotReply | null }
 /** what the next turn is told about this conversation: the model's own running memory, and the last six lines */
-export function memoryFrom(turns: MemoryTurn[]): TurnMemory {
+export function memoryFrom(turns: MemoryTurn[], seed?: TurnMemory): TurnMemory {
+  /* a page that was reloaded has no turns, but the server's records of the earlier ones (`memoryFromOps`) say what was agreed (AI-05) */
+  if (!turns.length) return seed ?? { history: [] };
   const withMemory = [...turns].reverse().find((t) => t.reply?.memory);
   const history: TurnMemory["history"] = [];
   for (const t of turns.slice(-3)) {
     history.push({ role: "user", text: t.user.slice(0, 500) });
     if (t.reply) history.push({ role: "copilot", text: `${t.reply.reply}${t.reply.actions.length ? ` [proposed ${t.reply.actions.length} actions]` : ""}`.slice(0, 500) });
   }
-  return { ...(withMemory?.reply?.memory ? { memory: withMemory.reply.memory } : {}), history };
+  const memory = withMemory?.reply?.memory ?? seed?.memory;
+  return { ...(memory ? { memory } : {}), history };
 }
 
 /* ------------------------------------------------------------ links */

@@ -367,7 +367,7 @@ function PlanCard({ entry, def, onSelect, onExecute, onCancel, onAnswer }: { ent
 }
 
 /** the failures after which the researcher's request (and what was built) is still kept, so Resume means something */
-const KEEPS_WORK = new Set(["capacity", "network", "timeout", "auth", "forbidden", "quota", "not_found", "wallet", "provider", "interrupted", "truncated", "unparseable", "empty"]);
+const KEEPS_WORK = new Set(["capacity", "network", "timeout", "auth", "forbidden", "quota", "not_found", "wallet", "provider", "interrupted", "truncated", "unparseable", "empty", "signed_out", "bad_request", "too_long", "unreachable", "refused", "unexpected"]);
 
 /**
  * WHAT THE GENERATION IS DOING, in plain words: never a spinner without a

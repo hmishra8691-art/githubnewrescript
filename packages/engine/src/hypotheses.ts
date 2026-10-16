@@ -221,3 +221,53 @@ export function describeHypothesis(h: StructuredHypothesis): string {
   const extra = [h.moderator ? `moderated by ${h.moderator}` : "", h.mediator ? `via ${h.mediator}` : "", h.expectedEffect ? `${h.expectedEffect} effect` : ""].filter(Boolean).join(", ");
   return [h.type, sides, extra].filter(Boolean).join(" · ");
 }
+
+/**
+ * Hypotheses are named by POSITION ("H1"), and the questions' analysis tags and
+ * the analysis plan hold those labels. When `set_research` replaces the list,
+ * each OLD hypothesis is found in the NEW list by its text (the leading "H1:"
+ * a model writes into the statement is ignored), and every held label is
+ * turned to the new position — the way `remove_hypothesis` turns labels down.
+ * A statement reworded in place (same position, nothing else claims it) keeps
+ * its label; one that is gone from the list loses it (and is reported).
+ */
+export function relabelHypotheses(def: SurveyDefinition, prev: string[], next: string[]): { moved: string[]; dropped: string[] } {
+  const plain = (t: string) => t.trim().toLowerCase().replace(/\s+/g, " ");
+  const bare = (t: string) => plain(t).replace(/^h\d+\s*[:.)\-–—]\s*/, "");
+  const target: (number | null)[] = prev.map(() => null);
+  const claimed = new Set<number>();
+  for (const pass of [plain, bare]) {
+    prev.forEach((p, i) => {
+      if (target[i] !== null) return;
+      const j = next.findIndex((n, k) => !claimed.has(k) && pass(n) === pass(p));
+      if (j >= 0) { target[i] = j; claimed.add(j); }
+    });
+  }
+  // reworded in place: the same position, and no other old statement now stands there
+  prev.forEach((_, i) => { if (target[i] === null && i < next.length && !claimed.has(i)) { target[i] = i; claimed.add(i); } });
+  const moved: string[] = [], dropped: string[] = [];
+  const changes = prev.some((_, i) => target[i] !== i);
+  if (!changes) return { moved, dropped };
+  prev.forEach((p, i) => { if (target[i] === null) dropped.push(hypothesisLabel(i)); else if (target[i] !== i) moved.push(`${hypothesisLabel(i)}→${hypothesisLabel(target[i]!)}`); });
+  const relabel = (labels: string[] | undefined): string[] | undefined => {
+    if (!labels?.length) return labels;
+    const out: string[] = [];
+    for (const l of labels) {
+      const m = /^H(\d+)$/i.exec(l.trim());
+      const i = m ? Number(m[1]) - 1 : -1;
+      if (i < 0 || i >= prev.length) { out.push(l); continue; }
+      const t = target[i];
+      if (t === null) continue;
+      const nl = hypothesisLabel(t);
+      if (!out.includes(nl)) out.push(nl);
+    }
+    return out;
+  };
+  for (const q of def.questions) if (q.analysis?.hypotheses?.length) q.analysis.hypotheses = relabel(q.analysis.hypotheses)!;
+  const plan = def.research?.analysisPlan;
+  if (plan) {
+    for (const x of plan.crosstabs) x.hypotheses = relabel(x.hypotheses)!;
+    for (const t of plan.tests) t.hypotheses = relabel(t.hypotheses)!;
+  }
+  return { moved, dropped };
+}

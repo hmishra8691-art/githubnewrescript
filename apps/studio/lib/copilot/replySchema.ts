@@ -24,3 +24,14 @@ export const COPILOT_REPLY_SCHEMA = {
     additionalProperties: true,
   } as Record<string, unknown>,
 };
+
+/**
+ * The options of every call that asks the model for the copilot's reply (turn,
+ * item, coverage, and the one REPAIR): the same frame schema, so a provider
+ * without json mode answers an object each time. The repair call omitted it
+ * (AI-08), and on such a provider the corrected answer came back as prose and
+ * was dropped silently.
+ */
+export function replyCallOptions<T extends object>(opts: T): T & { schema: typeof COPILOT_REPLY_SCHEMA } {
+  return { ...opts, schema: COPILOT_REPLY_SCHEMA };
+}

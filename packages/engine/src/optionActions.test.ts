@@ -378,7 +378,7 @@ test("set_custom_code: CSS is plain; JavaScript becomes a script in Styles, anim
   const r = run(def, { op: "set_custom_code", target: "Q7", css: ".q7 { color: red }" });
   assert.equal(r.description, "Q7: custom CSS (18 characters)");
   assert.equal(r.destructive, undefined);
-  assert.equal(q(def, "Q7").customCss, ".q7 { color: red }");
+  assert.equal(q(def, "Q7").customCss, '[data-rs-ux="s"] [data-rs-el="question"][data-rs-id="q3"] .q7{color:red}', "stored scoped to the card (AI-06)");
   // JavaScript is a script behaviour (the one script pipeline) — never question.customJs
   const js = `rs.listen("select", "self", () => rs.animate("self", "pop"));`;
   const r1 = run(def, { op: "set_custom_code", target: "Q9", js });
@@ -404,4 +404,23 @@ test("set_custom_code: CSS is plain; JavaScript becomes a script in Styles, anim
   const r4 = run(def, { op: "set_custom_code", target: "Q8", js });
   assert.match(r4.destructive ?? "", /replaces the old custom JavaScript of Q8 \(14 characters\)/);
   assert.equal(q(def, "Q8").customJs, undefined);
+});
+
+test("set_custom_code css goes through the style gate: scoped to the card, page-wide / unsafe CSS refused with a reason, re-sending the scoped text is accepted (AI-06)", () => {
+  const def = survey();
+  // the repro: a card rule plus a rule that hides the whole page
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: "& { color: red } body { display:none }" }), /custom CSS for Q7 was refused.*reaches outside the survey/);
+  assert.equal(q(def, "Q7").customCss, undefined, "nothing was stored");
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: ":root { --x: 1 } html { overflow: hidden }" }), /was refused/);
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: "@import url(https://evil.example/x.css);" }), /was refused/);
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: ".a { color: red } </style><script>alert(1)</script>" }), /was refused/);
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: "& + .next { display: none }" }), /beside the target/);
+  // `&` is the card; everything else is inside it
+  const r = run(def, { op: "set_custom_code", target: "Q7", css: "& { border: 1px solid red } .rs-opt:hover { color: blue }" });
+  const sel = '[data-rs-ux="s"] [data-rs-el="question"][data-rs-id="q3"]';
+  assert.equal(q(def, "Q7").customCss, `${sel}{border:1px solid red}${sel} .rs-opt:hover{color:blue}`);
+  assert.ok(!/body|html|:root/.test(q(def, "Q7").customCss!));
+  assert.match(r.description, /custom CSS/);
+  // the model reads the stored CSS back and sends it again: unchanged, not double-scoped
+  assert.match(refuse(def, { op: "set_custom_code", target: "Q7", css: q(def, "Q7").customCss! }), /already as asked/);
 });

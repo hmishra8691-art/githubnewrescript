@@ -69,6 +69,8 @@ export const LIMITS = {
   items: 200,
   /** characters in any string inside a list or the intent */
   text: 500,
+  /** the model's running memory of the conversation, kept in the intent (AI-05) — as long as the route's own bound for it */
+  memory: 1000,
   /** each of before / after, as JSON bytes */
   snapshotBytes: 2 * 1024 * 1024,
   /** one proposed action kept for Reapply, as JSON bytes — a bigger one keeps its description only */
@@ -149,7 +151,7 @@ function coerceIntent(v: unknown): OpIntent {
     const key = k.slice(0, 60);
     if (x === null || typeof x === "boolean") out[key] = x;
     else if (typeof x === "number" && Number.isFinite(x)) out[key] = x;
-    else if (typeof x === "string") out[key] = x.slice(0, LIMITS.text);
+    else if (typeof x === "string") out[key] = x.slice(0, key === "memory" ? LIMITS.memory : LIMITS.text);
     // nested values are not an intent's business: dropped
   }
   return out;

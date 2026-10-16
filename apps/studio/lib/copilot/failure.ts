@@ -29,7 +29,13 @@ export type FailureCode =
   | "unusable"         // valid JSON with no reply, actions or findings
   | "engine_unparsed"  // no model, and the engine could not read the sentence
   | "internal_mode"    // the project runs internally: no model is called (Phase 6)
-  | "connection";      // the user chose their own AI provider and it cannot be used (no key, workspace policy, missing capability)
+  | "connection"       // the user chose their own AI provider and it cannot be used (no key, workspace policy, missing capability)
+  | "signed_out"       // the Studio's own route refused: no session (expired, signed out elsewhere)
+  | "bad_request"      // the Studio's own route could not read what the page sent (400)
+  | "too_long"         // the request was larger than the model (or the platform) accepts
+  | "unreachable"      // the page could not reach the Studio's server at all (offline, server restarting)
+  | "refused"          // the Studio's own route refused for its own reason: a locked project, a disabled account, an unknown project
+  | "unexpected";      // an exception in the page itself — never shown as raw JavaScript
 
 export interface TurnFailure {
   code: FailureCode;
@@ -68,6 +74,12 @@ const TITLES: Record<FailureCode, string> = {
   engine_unparsed: "THE ENGINE COULD NOT READ THIS",
   internal_mode: "INTERNAL MODE — NO MODEL CALLED",
   connection: "YOUR AI PROVIDER IS NOT READY",
+  signed_out: "YOU'RE SIGNED OUT",
+  bad_request: "THE STUDIO COULD NOT READ THIS REQUEST",
+  too_long: "THIS REQUEST IS TOO LONG FOR THE MODEL",
+  unreachable: "THE STUDIO COULD NOT BE REACHED",
+  refused: "THE STUDIO DID NOT ALLOW THIS REQUEST",
+  unexpected: "SOMETHING WENT WRONG IN THE STUDIO",
 };
 
 /** the cards for a failure on the USER'S OWN provider: the fix is theirs, in Settings — not "ask your administrator" */
@@ -97,7 +109,7 @@ function ownOverride(f: TurnFailure, own: string): TurnFailure {
 export function describeFailure(code: FailureCode, detail?: string, extra: { retryAfterMs?: number; /** the user's own provider's name, when the failing call was on it */ own?: string } = {}): TurnFailure {
   const f0 = describeCode(code, detail);
   const f = extra.own ? ownOverride(f0, extra.own) : f0;
-  const retryable = code === "capacity" || code === "network" || code === "timeout";
+  const retryable = code === "capacity" || code === "network" || code === "timeout" || code === "unreachable";
   return { ...f, ...(retryable ? { retryable: true } : {}), ...(extra.retryAfterMs ? { retryAfterMs: Math.round(extra.retryAfterMs) } : {}) };
 }
 
@@ -178,6 +190,30 @@ function describeCode(code: FailureCode, detail?: string): TurnFailure {
       return { code, title: TITLES[code], detail: d,
         message: d ?? "The AI provider you chose for this feature cannot be used right now.",
         next: [`Open ${SETTINGS} to fix it — or switch this feature to the platform's AI there.`, "Nothing was sent to a model and nothing was changed."] };
+    case "signed_out":
+      return { code, title: TITLES[code], detail: d,
+        message: "You're signed out — sign in and send again. Your request is kept; nothing was changed.",
+        next: ["Sign in again (open the sign-in page in another tab if you want to keep this one open).", "Then press Resume — nothing needs to be typed again."] };
+    case "bad_request":
+      return { code, title: TITLES[code], detail: d,
+        message: d ?? "The Studio could not read what this page sent — the editor and the server may be out of step. Nothing was changed, and your request is kept.",
+        next: d ? ["Type what you want changed and send it again."] : ["Reload the page, open Intelligent mode again and send it again.", "If it keeps happening, keep a copy of your request and report it — the editor and the server need to be on the same version."] };
+    case "too_long":
+      return { code, title: TITLES[code], detail: d,
+        message: "That request was too long for the model — shorten it or split it. Nothing was changed, and your request is kept.",
+        next: ["Ask for one block or one section of the questionnaire at a time, or shorten the pasted text.", "Or use Plan first, which builds each item with its own, smaller call."] };
+    case "unreachable":
+      return { code, title: TITLES[code], detail: d,
+        message: "Could not reach the server — check your connection and try again. Your request is kept; nothing was changed.",
+        next: ["Check that you are online, then press Resume — nothing needs to be typed again.", "If you are online and it keeps failing, the Studio may be restarting: wait a minute and try again."] };
+    case "refused":
+      return { code, title: TITLES[code], detail: d,
+        message: d ?? "The Studio did not allow this request. Nothing was changed, and your request is kept.",
+        next: ["Check that you still have access to this project and that it is not locked.", "Then press Resume — or ask the project's owner to unlock it."] };
+    case "unexpected":
+      return { code, title: TITLES[code], detail: d,
+        message: "Something went wrong in the Studio before the AI could answer. Nothing was changed, and your request is kept.",
+        next: ["Press Resume to try again — if it keeps happening, reload the page.", "If it is still there after a reload, tell your administrator what you asked for."] };
     case "internal_mode":
       return { code, title: TITLES[code], detail: d,
         message: "This project runs in internal mode: nothing is sent to a language model, so only the engine's own reading is available — instructions that name their objects, the standard items, the research workflow's own steps.",
@@ -192,6 +228,9 @@ const CODE_OF_KIND: Record<string, FailureCode> = {
   auth: "auth", forbidden: "forbidden", quota_exhausted: "quota", not_found: "not_found", bad_request: "provider",
 };
 
+/** how providers say the prompt outgrew the model's context window */
+const TOO_LONG = /too long|too large|context[ _-]?(length|window)|maximum context|too many tokens|exceeds? the (maximum|limit)|prompt is too|input is too|request_too_large/i;
+
 /**
  * A provider exception, read into a card. A `ProviderError` (the ai package's
  * request manager) carries its kind and how long to wait; an older message is
@@ -201,6 +240,7 @@ const CODE_OF_KIND: Record<string, FailureCode> = {
  */
 export function failureFromError(input: string | { message?: string; kind?: string; retryAfterMs?: number; status?: number; detail?: string; name?: string }, opts: { own?: string } = {}): TurnFailure {
   if (input && typeof input === "object" && typeof input.kind === "string" && input.kind in CODE_OF_KIND) {
+    if (input.kind === "bad_request" && TOO_LONG.test(`${input.message ?? ""} ${input.detail ?? ""}`)) return describeFailure("too_long");
     const code = CODE_OF_KIND[input.kind];
     const secs = /within (\d+ seconds)/i.exec(input.message ?? "")?.[1];
     return describeFailure(code, code === "timeout" ? secs : code === "network" ? input.detail : undefined, { retryAfterMs: input.retryAfterMs, ...(opts.own ? { own: opts.own } : {}) });
@@ -209,6 +249,7 @@ export function failureFromError(input: string | { message?: string; kind?: stri
   if (/did not answer within (\d+) seconds/i.test(m)) return describeFailure("timeout", /within (\d+ seconds)/i.exec(m)?.[1]);
   const status = /\((\d{3})\)/.exec(m)?.[1];
   const refused = /refused the request \((\d{3})\)/i.exec(m);
+  if (refused && refused[1] === "400" && TOO_LONG.test(m)) return describeFailure("too_long");
   if (refused) return describeFailure(refused[1] === "401" ? "auth" : refused[1] === "403" ? "forbidden" : refused[1] === "404" ? "not_found" : "provider", undefined, opts.own ? { own: opts.own } : {});
   if (/rate-limiting|is unavailable \(|overloaded/i.test(m) || status === "429") return describeFailure("capacity");
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|socket|ECONNRESET|TLS|certificate|could not reach/i.test(m)) return describeFailure("network", m.slice(0, 160));
@@ -217,7 +258,8 @@ export function failureFromError(input: string | { message?: string; kind?: stri
 
 /** What to show when the server's answer was not the JSON it always sends — the platform cut the request off, or the connection dropped (HTTP status 0 = never answered) */
 export function failureFromTransport(status: number): TurnFailure {
-  if (status === 0) return describeFailure("network");
+  if (status === 0) return describeFailure("unreachable");
+  if (status === 413) return describeFailure("too_long");
   if (status === 408 || status === 504) return describeFailure("timeout", "the request ran past the time the platform allows");
   return describeFailure("capacity");
 }
@@ -233,4 +275,48 @@ export function failureFromReplyError(code: "truncated" | "unparseable" | "empty
 export function isTurnFailure(x: unknown): x is TurnFailure {
   const f = x as TurnFailure | null;
   return !!f && typeof f === "object" && typeof f.code === "string" && f.code in TITLES && typeof f.message === "string" && Array.isArray(f.next);
+}
+
+/**
+ * THE STUDIO'S OWN ROUTE REFUSED (not the provider): a 401 when the session
+ * ended, a 400 when the page's request could not be read, a 423 on a locked
+ * project. These carry only `{error, code}` — no `failure` — and used to reach
+ * the card as "THE AI SERVICE COULD NOT PROCESS THIS REQUEST … tell your
+ * administrator", blaming the provider for a session that expired (AI-04).
+ * Each is now a sentence the researcher can act on, with a retry (Resume).
+ * Null for a status this does not know: the caller's own fallback applies.
+ */
+export function failureFromRefusal(status: number, body?: { error?: unknown; code?: unknown } | null): TurnFailure | null {
+  const text = typeof body?.error === "string" ? body.error : "";
+  const code = typeof body?.code === "string" ? body.code : "";
+  if (status === 401) {
+    if (!code && /api key|provider|credential/i.test(text)) {
+      return { ...describeFailure("auth"), title: "THE AI PROVIDER REFUSED THE KEY", message: "The AI provider refused the key — check Settings → AI, then send again. Your request and anything already generated are saved.", next: [`Open ${SETTINGS} and replace the key, then use Test connection.`, "Then press Resume — nothing needs to be typed again."] };
+    }
+    return describeFailure("signed_out");
+  }
+  if (status === 402) return describeFailure("wallet", text.slice(0, 200) || undefined);
+  if (status === 413) return describeFailure("too_long");
+  if (status === 400) {
+    if (TOO_LONG.test(text)) return describeFailure("too_long");
+    if (/say what you want/i.test(text)) return describeFailure("bad_request", "There was nothing to send — type what you want changed, then send it again.");
+    return describeFailure("bad_request");
+  }
+  if (status === 403) return describeFailure("refused", code === "account_disabled" ? "This account has been disabled — your administrator can re-enable it. Nothing was changed." : code === "not_admin" ? "This needs a platform administrator. Nothing was changed." : undefined);
+  if (status === 404) return describeFailure("refused", "That project could not be found — reload the page or open it again from the project list. Nothing was changed.");
+  if (status === 423) return describeFailure("refused", "This project has been locked by its owner and cannot be changed. Ask the owner to unlock it, then press Resume.");
+  return null;
+}
+
+/**
+ * An exception thrown in the page while a turn was running, as a card — never
+ * the raw JavaScript message ("Cannot read properties of undefined"), which
+ * means nothing to a researcher and was shown under "COULD NOT ANSWER".
+ */
+export function failureFromException(e: unknown): TurnFailure {
+  const m = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  const name = e instanceof Error ? e.name : "";
+  if (name === "AbortError" || /aborted/i.test(m)) return describeFailure("timeout", "the request was cancelled before it finished");
+  if (/failed to fetch|networkerror|load failed|fetch failed|network request failed|ERR_INTERNET|ERR_NETWORK|ECONN/i.test(m)) return describeFailure("unreachable", m.slice(0, 120));
+  return describeFailure("unexpected", m.slice(0, 160) || undefined);
 }

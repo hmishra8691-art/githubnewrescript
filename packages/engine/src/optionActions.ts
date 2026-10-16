@@ -1,5 +1,5 @@
 import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
-import { resolveUxTarget, validateUxItem } from "./ux.js";
+import { resolveUxTarget, validateUxItem, scopeCss } from "./ux.js";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -725,8 +725,21 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
         if (next === undefined) return;
         const had = q.customCss;
         if (next === null) { if (had !== undefined) { delete q.customCss; changed.push("custom CSS removed"); lossy.push(`removes the custom CSS of ${q.code} (${had.length} characters)`); } return; }
+        /*
+         * THE SAME GATE AS A STYLE (create_style): parsed, every selector kept
+         * inside THIS question's card (`&` is the card; html / body / :root and
+         * siblings are refused), every declaration checked, no @import /
+         * @font-face. The card's stylesheet is stored scoped, so the renderer's
+         * unscoped <style> can only ever reach this card — `body{display:none}`
+         * or a `</style>` breakout is refused here, with the reason.
+         */
+        const gated = scopeCss(def, { kind: "question", questionId: q.id } as UxTarget, next, `cc_${q.id}`, { allowScoped: true });
+        if (gated.errors.length) fail(`the custom CSS for ${q.code} was refused — ${gated.errors.slice(0, 3).join("; ")}. Write rules for this question only (use & for the card, or class and element selectors inside it).`);
+        warnings.push(...gated.warnings);
+        const written = next.length;
+        next = gated.css;
         if (had === next) return;
-        q.customCss = next; changed.push(`custom CSS (${next.length} characters)`);
+        q.customCss = next; changed.push(`custom CSS (${written} characters)`);
         if (had !== undefined) lossy.push(`replaces the custom CSS of ${q.code} (${had.length} characters)`);
       };
       /*

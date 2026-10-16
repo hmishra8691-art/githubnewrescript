@@ -30,6 +30,7 @@ import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
 import { parseSetExpression, formatSetExpression } from "./setExpression.js";
 import { withoutPresentation, diffTheme } from "./theme.js";
+import { relabelHypotheses } from "./hypotheses.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -803,6 +804,9 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     case "set_research": {
       const map = (xs: string[] | undefined) => (xs ?? []).map((r) => tryQuestion(ctx, r)?.id).filter((x): x is string => !!x);
       const prev = def.research;
+      // replacing the list re-numbers H1…Hn: question tags and plan items follow their statements (AI-03)
+      const relabelled = a.hypotheses && prev?.hypotheses?.length ? relabelHypotheses(def, prev.hypotheses, a.hypotheses) : { moved: [] as string[], dropped: [] as string[] };
+      if (relabelled.moved.length || relabelled.dropped.length) ctx.uxWarnings.push(`Hypotheses were re-ordered${relabelled.moved.length ? `: ${relabelled.moved.join(", ")} — every question tag and plan item was relabelled to match` : ""}${relabelled.dropped.length ? `; ${relabelled.dropped.join(", ")} ${relabelled.dropped.length === 1 ? "is" : "are"} no longer in the list, so its tags were dropped` : ""}.`);
       def.research = {
         objective: a.objective ?? prev?.objective,
         hypotheses: a.hypotheses ?? prev?.hypotheses ?? [],

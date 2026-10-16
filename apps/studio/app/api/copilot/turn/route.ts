@@ -8,7 +8,7 @@ import { aiReadyFor, connectionFor } from "@/lib/byok/connect";
 import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
-import { COPILOT_REPLY_SCHEMA } from "@/lib/copilot/replySchema";
+import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type CoverageReport } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
@@ -407,7 +407,7 @@ export async function POST(req: NextRequest) {
     try {
       const rb = outputBudget("repair");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPrompt, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
-        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, { timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent })));
+        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPrompt, rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;

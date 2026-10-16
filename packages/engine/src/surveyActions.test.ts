@@ -534,3 +534,37 @@ test("create_question keeps the variant's intrinsic rule when the model adds its
   const r3 = applySurveyActions(r.def, [{ op: "set_validation", target: "AGE", rules: [{ kind: "integer" }, { kind: "max_value", value: 80 }] }] as SurveyAction[], { ids });
   assert.equal(r3.def.questions.find((x) => x.variableName === "AGE")!.validation.filter((v) => v.kind === "integer").length, 1);
 });
+
+test("set_research re-ordering the hypotheses relabels every question tag and plan item (AI-03)", () => {
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "T" },
+    research: { objective: "o", hypotheses: ["H1: Ad recall raises consideration", "H2: Younger drinkers prefer Brand A", "H3: Heavy drinkers are loyal"], constructs: [], analysis: [], assumptions: [], sources: [],
+      analysisPlan: { crosstabs: [{ id: "x1", rows: ["AGE"], columns: ["PREF"], hypotheses: ["H2"] }, { id: "x2", rows: ["RECALL"], columns: ["CONS"], hypotheses: ["H1", "H3"] }], tests: [{ id: "t1", method: "chi_square", outcome: "CONS", variables: ["RECALL"], hypotheses: ["H1"] }] } },
+    questions: [
+      { id: "q1", code: "Q1", variableName: "RECALL", type: "single_select", text: "Recall?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }], analysis: { hypotheses: ["H1"] } },
+      { id: "q2", code: "Q2", variableName: "AGE", type: "numeric", text: "Age?", analysis: { hypotheses: ["H2"] } },
+      { id: "q3", code: "Q3", variableName: "FREQ", type: "numeric", text: "Cups?", analysis: { hypotheses: ["H3", "H1"] } },
+    ],
+    flow: [{ type: "end", id: "e_ok", status: "complete" }],
+    deployment: { clientSlug: "c", studySlug: "s" },
+  } as never);
+  const r = applySurveyActions(def, [{ op: "set_research", hypotheses: ["H2: Younger drinkers prefer Brand A", "H1: Ad recall raises consideration", "H3: Heavy drinkers are loyal"] }] as never);
+  assert.ok(r.valid && r.results[0].ok, JSON.stringify(r.errors));
+  const tags = (c: string) => byCode(r.def, c).analysis?.hypotheses;
+  assert.deepEqual(tags("Q1"), ["H2"], "ad recall is now H2");
+  assert.deepEqual(tags("Q2"), ["H1"], "age is now H1");
+  assert.deepEqual(tags("Q3"), ["H3", "H2"], "H3 stays, H1 became H2");
+  const plan = r.def.research!.analysisPlan!;
+  assert.deepEqual(plan.crosstabs.map((x) => x.hypotheses), [["H1"], ["H2", "H3"]]);
+  assert.deepEqual(plan.tests[0].hypotheses, ["H2"]);
+  assert.ok(r.warnings.some((w) => /H1→H2, H2→H1/.test(w)), r.warnings.join("|"));
+  // the input is never mutated
+  assert.deepEqual(byCode(def, "Q1").analysis?.hypotheses, ["H1"]);
+  // a statement dropped from the list loses its tag; one reworded in place keeps it
+  const d = applySurveyActions(def, [{ op: "set_research", hypotheses: ["H1: Ad recall raises consideration", "H3: Heavy drinkers are loyal"] }] as never);
+  assert.deepEqual(byCode(d.def, "Q2").analysis?.hypotheses, [], "H2 is gone");
+  assert.deepEqual(byCode(d.def, "Q3").analysis?.hypotheses, ["H2", "H1"], "H3 → H2");
+  const w = applySurveyActions(def, [{ op: "set_research", hypotheses: ["Ad recall strongly raises consideration", "H2: Younger drinkers prefer Brand A", "H3: Heavy drinkers are loyal"] }] as never);
+  assert.deepEqual(byCode(w.def, "Q1").analysis?.hypotheses, ["H1"], "reworded in place keeps its label");
+  assert.ok(!w.warnings.some((x) => /re-ordered/.test(x)));
+});

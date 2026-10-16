@@ -181,6 +181,31 @@ export function canRestore(o: ClientOp, all: readonly ClientOp[]): { offered: bo
   return { offered: true, latest: !later };
 }
 
+/* ------------------------------------------------------------ the conversation, read back */
+
+/** what a record must carry for the conversation to be read back from it */
+export type MemoryRecord = Pick<ClientOp, "createdAt" | "prompt" | "source" | "status" | "intent" | "statusDetail" | "proposed">;
+/**
+ * THE CONVERSATION'S MEMORY, FROM THE SERVER'S RECORDS (AI-05). The page's own
+ * turns live in memory and are gone after a reload, so what the researcher and
+ * the model had agreed — the objective, the constraints, "keep it under ten
+ * minutes" — was gone with them, and the next turn was sent `{history: []}`.
+ * Every model turn's record now carries the model's running `memory` and its
+ * reply in its intent; the newest memory, and the last three exchanges, are
+ * read back from them. Failed and refused turns said nothing the model needs.
+ */
+export function memoryFromOps(ops: readonly MemoryRecord[], lastN = 3): { memory?: string; history: { role: "user" | "copilot"; text: string }[] } {
+  const turns = [...ops].filter((o) => o.source === "model" && !["failed", "refused", "cancelled"].includes(o.status)).sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  const memory = [...turns].reverse().map((o) => o.intent?.memory).find((m): m is string => typeof m === "string" && m.trim().length > 0);
+  const history: { role: "user" | "copilot"; text: string }[] = [];
+  for (const o of turns.slice(-lastN)) {
+    const reply = typeof o.intent?.reply === "string" && o.intent.reply ? o.intent.reply : (o.statusDetail ?? "");
+    history.push({ role: "user", text: o.prompt.slice(0, 500) });
+    if (reply || o.proposed.length) history.push({ role: "copilot", text: `${reply}${o.proposed.length ? ` [proposed ${o.proposed.length} actions]` : ""}`.trim().slice(0, 500) });
+  }
+  return { ...(memory ? { memory: memory.slice(0, 1000) } : {}), history };
+}
+
 /* ------------------------------------------------------------ the recorder */
 
 export type Send = (method: "GET" | "POST" | "PATCH", body: Record<string, unknown> | null, query?: Record<string, string>) => Promise<{ status: number; data: Record<string, unknown> | null }>;
