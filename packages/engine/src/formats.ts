@@ -143,6 +143,37 @@ export const phoneFormat = (code?: string) =>
 export const postalFormat = (code?: string) =>
   code ? POSTAL_FORMATS.find((f) => f.code === code) : undefined;
 
+/**
+ * Whether a strict format exists for a country (QT-06). A question that names a
+ * country the platform has no format for quietly gets the loose check; the
+ * Properties panel uses this to say so instead of letting the author believe
+ * the number is being checked against that country.
+ */
+export const hasPhoneFormat = (code?: string): boolean => !!phoneFormat(code);
+export const hasPostalFormat = (code?: string): boolean => !!postalFormat(code);
+
+/**
+ * ONE email validator for every call site (QT-05) — the Email rule on a
+ * question and the Email field type in a form/list used two regexes that
+ * disagreed on `a@b.c` and both accepted `a..b@c.com`. WHATWG-style local part
+ * (no leading, trailing or doubled dot), a dotted domain of valid labels, and
+ * a top-level label of at least two characters. Unicode letters are allowed in
+ * both parts (internationalised addresses are real).
+ */
+const EMAIL_ATOM = "[\\p{L}\\p{N}!#$%&'*+/=?^_`{|}~-]+";
+const EMAIL_LABEL = "[\\p{L}\\p{N}](?:[\\p{L}\\p{N}-]{0,61}[\\p{L}\\p{N}])?";
+const EMAIL_RE = new RegExp(
+  `^${EMAIL_ATOM}(?:\\.${EMAIL_ATOM})*@(?:${EMAIL_LABEL}\\.)+[\\p{L}][\\p{L}\\p{N}-]*[\\p{L}\\p{N}]$`,
+  "u",
+);
+export function isValidEmail(value: string): boolean {
+  const v = value.trim();
+  if (v.length > 254) return false;
+  const at = v.lastIndexOf("@");
+  if (at < 1 || at > 64) return false;
+  return EMAIL_RE.test(v);
+}
+
 /** The loose, region-agnostic phone check — the platform's long-standing default. */
 export function looksLikeAnyPhone(value: string): boolean {
   return /^[+()\-.\s\d]{7,}$/.test(value) && digits(value).length >= 7;
@@ -182,8 +213,17 @@ export function checkPostal(value: string, country?: string): string | null {
 export function checkUrl(value: string): string | null {
   const v = value.trim();
   if (!v) return null;
+  /*
+   * QT-07: a scheme that is not a web scheme is refused, with or without the
+   * "//" — `mailto:a@b.com` used to be read as host `b.com` with a user name,
+   * and `tel:`, `data:` and `javascript:` as hosts too. A colon followed by
+   * digits is a port ("example.com:8080"), not a scheme.
+   */
+  const bare = /^([a-z][a-z0-9+.-]*):(?!\d)/i.exec(v);
+  if (bare && !/^https?$/i.test(bare[1]!)) return "Please enter a web address.";
   try {
     const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`);
+    if (u.username || u.password) return "Please enter a web address.";
     if (u.protocol !== "http:" && u.protocol !== "https:") return "Please enter a web address.";
     if (!u.hostname.includes(".") || u.hostname.endsWith(".")) return "Please enter a valid web address.";
     return null;

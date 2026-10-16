@@ -7,6 +7,7 @@ import type {
   SetExpr,
   SurveyDefinition,
 } from "@rescript/schema";
+import { questionTypeRegistry, BUILTIN_QUESTION_TYPES } from "@rescript/schema";
 import { lintProbeQuestion } from "./probe.js";
 import type { ObjectKey } from "./dependencyIndex.js";
 import {
@@ -111,8 +112,48 @@ export function sourceKindForQuestion(q: Question | undefined): keyof typeof OPE
   }
 }
 
-/** Operators that make sense for a source question (req §7). */
-export function operatorsForQuestion(q: Question | undefined): ComparisonOperator[] {
+/**
+ * How a value choice reads in a picker (OR-04): `3: Agree`, or just `1` when
+ * the code and the label are the same thing — a rating grid's `1: 1 · 2: 2 …`
+ * said everything twice.
+ */
+export function choiceDisplayText(o: { ref: string | number; label: string | number }): string {
+  const ref = String(o.ref), label = String(o.label);
+  return ref === label || !label ? ref : `${ref}: ${label}`;
+}
+
+/**
+ * Which operator family one composite / custom-table COLUMN's cells belong to
+ * (OR-05). A composite grid has no single answer type: each column carries its
+ * own `responseType`, and a rule that names the column should be offered that
+ * column's operators — "ranked first" and "matches" on a numeric column are
+ * how a rule that can never be true gets written.
+ */
+export function sourceKindForColumn(col: { responseType?: string } | undefined): keyof typeof OPERATORS_BY_KIND {
+  switch (col?.responseType) {
+    case "single": case "dropdown": case "checkbox": return "choice";
+    case "multi": case "multi_dropdown": return "list";
+    case "numeric": case "slider": return "numeric";
+    case "date": return "date";
+    case "text": case "longtext": return "text";
+    case "rank": return "ranking";
+    /* time, none, an unknown type: only the operators that mean something for any value */
+    default: return "any";
+  }
+}
+
+/**
+ * Operators that make sense for a source question (req §7). Naming a column of
+ * a composite / custom table narrows them to that column's own type; with no
+ * column ("any column") the question's whole vocabulary stays on offer.
+ */
+export function operatorsForQuestion(q: Question | undefined, columnId?: string | null): ComparisonOperator[] {
+  if (q && columnId && (q.type === "composite" || q.type === "custom_table")) {
+    const col = q.columns?.find((c) => String(c.id) === String(columnId));
+    if (col) {
+      return [...new Set<ComparisonOperator>([...OPERATORS_BY_KIND.any, ...(OPERATORS_BY_KIND[sourceKindForColumn(col)] ?? [])])];
+    }
+  }
   const kind = sourceKindForQuestion(q);
   const set = new Set<ComparisonOperator>([
     ...OPERATORS_BY_KIND.any,
@@ -1173,6 +1214,24 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
  */
 export function lintStructure(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
+
+  /* --- a question type nothing here can run (OR-01) ------------------ */
+  /*
+   * The schema keeps `type` an open string so that plugins can register new
+   * types, which means `constant_sum` or a typo parses cleanly — and the
+   * renderer, having no component for it, fell through to a text box that
+   * collected free text for a question that was meant to be something else.
+   * Checked against the registry (built-ins and any plugin registered by now),
+   * so a survey that cannot run is stopped here, not found by a respondent.
+   */
+  for (const q of def.questions ?? []) {
+    if (!questionTypeRegistry.has(q.type) && !(BUILTIN_QUESTION_TYPES as readonly string[]).includes(q.type)) {
+      issues.push({
+        level: "error", questionId: q.id, questionCode: q.code, path: "type",
+        message: `Unknown question type “${q.type}” — this survey cannot run. Change it to a supported type (Allocation / constant sum is “allocation”).`,
+      });
+    }
+  }
 
   /* --- an embedded-data row nobody has named ------------------------ */
   /*

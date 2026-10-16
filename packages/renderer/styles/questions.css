@@ -236,6 +236,33 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-matrix td.rowlabel, .rs-matrix th.rowlabel { text-align: left; font-weight: 500; min-width: 140px; }
 .rs-matrix input[type="radio"], .rs-matrix input[type="checkbox"] { accent-color: var(--rs-primary); width: 16px; height: 16px; }
 .rs-matrix .rs-input, .rs-matrix .rs-select { max-width: 160px; min-width: 70px; padding: 6px 8px; }
+/* OR-02: a categorical grid cell is a label around the control; the caption only shows when the grid stacks or scrolls */
+.rs-matrix .rs-mcell { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+.rs-matrix .rs-mcap { display: none; }
+.rs-scrollhint { display: none; }
+@media (max-width: 480px) {
+  /* a stacked grid: every row its own block, every control with its own caption */
+  table.rs-matrix-stack, .rs-matrix-stack thead, .rs-matrix-stack tbody, .rs-matrix-stack tr, .rs-matrix-stack td { display: block; width: 100%; }
+  .rs-matrix-stack thead { display: none; }
+  .rs-matrix-stack tr.rs-header-repeat { display: none; }
+  .rs-matrix-stack tr { border: 1px solid var(--rs-border); border-radius: 10px; padding: 8px; margin-bottom: 8px; }
+  .rs-matrix-stack th, .rs-matrix-stack td { border: 0; padding: 4px 2px; text-align: left; }
+  .rs-matrix-stack td.rowlabel { min-width: 0; font-weight: 600; padding: 0 0 6px; }
+  .rs-matrix-stack .rs-mcell { display: flex; justify-content: flex-start; min-height: 38px; width: 100%; }
+  .rs-matrix-stack .rs-mcap { display: inline; }
+  /* a wide grid keeps its columns: say so, and keep the statement in view while the scale scrolls */
+  .rs-table-wrap[data-matrix-scroll="hint"] .rs-scrollhint { display: block; position: sticky; left: 0; font-size: 0.8em; color: var(--rs-subtle); padding: 0 2px 6px; }
+  .rs-table-wrap[data-matrix-scroll="hint"] .rs-matrix td.rowlabel,
+  .rs-table-wrap[data-matrix-scroll="hint"] .rs-matrix th.rowlabel { position: sticky; left: 0; z-index: 1; min-width: 110px; background: var(--rs-surface); }
+}
+/* the same stacking in the preview's Mobile view, which narrows a box rather than the window */
+.rs-viewport.mobile table.rs-matrix-stack, .rs-viewport.mobile .rs-matrix-stack thead, .rs-viewport.mobile .rs-matrix-stack tbody, .rs-viewport.mobile .rs-matrix-stack tr, .rs-viewport.mobile .rs-matrix-stack td { display: block; width: 100%; }
+.rs-viewport.mobile .rs-matrix-stack thead, .rs-viewport.mobile .rs-matrix-stack tr.rs-header-repeat { display: none; }
+.rs-viewport.mobile .rs-matrix-stack tr { border: 1px solid var(--rs-border); border-radius: 10px; padding: 8px; margin-bottom: 8px; }
+.rs-viewport.mobile .rs-matrix-stack td { border: 0; padding: 4px 2px; text-align: left; }
+.rs-viewport.mobile .rs-matrix-stack td.rowlabel { min-width: 0; font-weight: 600; padding: 0 0 6px; }
+.rs-viewport.mobile .rs-matrix-stack .rs-mcell { display: flex; justify-content: flex-start; min-height: 38px; width: 100%; }
+.rs-viewport.mobile .rs-matrix-stack .rs-mcap { display: inline; }
 
 .rs-nps { display: flex; gap: 6px; flex-wrap: wrap; }
 .rs-nps button {
@@ -897,3 +924,6 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-cmd-item.disabled { opacity: .45; cursor: default; }
 .rs-cmd-item input { accent-color: var(--rs-primary); width: 18px; height: 18px; flex: none; }
 .rs-cmd-hint { font-size: .82em; color: var(--rs-subtle, #64748b); padding: 4px 8px; }
+
+/* OR-01: an unknown question type — visible, not a text box */
+.rs-unsupported { border: 1.5px dashed var(--rs-error); background: color-mix(in srgb, var(--rs-error) 6%, var(--rs-surface)); color: var(--rs-error); border-radius: 8px; padding: 12px 16px; font-size: 0.95em; }

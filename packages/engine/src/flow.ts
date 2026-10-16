@@ -512,7 +512,31 @@ export function advance(
     }
   }
 
-  return moveForward(def, state, quotaCounts, idx + 1, triggeredSkips);
+  const result = moveForward(def, state, quotaCounts, idx + 1, triggeredSkips);
+  /*
+   * LOGIC-04: remember the page just left so Back can return to it. Back used
+   * to walk the compiled order, so a respondent who skipped p2 and p3 landed
+   * on p3 when they pressed Back from p4. Page ids (not indexes) because the
+   * flow is recompiled as answers change and indexes shift.
+   */
+  if (leavingPageId && !result.done) {
+    const landed = result.steps[result.stepIndex];
+    if (landed?.kind === "page" && landed.pageId !== leavingPageId) pushVisited(state, leavingPageId);
+  }
+  return result;
+}
+
+const VISITED_KEY = "__visited";
+
+function visitedStack(state: ResponseState): string[] {
+  const v = state.meta?.[VISITED_KEY];
+  return Array.isArray(v) ? (v as string[]) : [];
+}
+
+function pushVisited(state: ResponseState, pageId: string): void {
+  const stack = visitedStack(state);
+  if (stack[stack.length - 1] !== pageId) stack.push(pageId);
+  (state.meta ??= {})[VISITED_KEY] = stack;
 }
 
 /**
@@ -622,6 +646,25 @@ export function goBack(
   quotaCounts: QuotaCounts = {},
 ): NavigationResult {
   const steps = compileFlow(def, state, quotaCounts);
+  /*
+   * The visited-page stack first: Back returns to the page the respondent
+   * actually came from, which is not the previous page in compiled order when
+   * skip logic jumped over some. Entries that no longer exist or have nothing
+   * to show (the answers that made them visible changed) are dropped; an empty
+   * stack — a resumed session, a first page — falls back to compiled order.
+   */
+  const stack = visitedStack(state);
+  const here = steps[state.stepIndex];
+  while (stack.length > 0) {
+    const pageId = stack.pop()!;
+    if (here?.kind === "page" && here.pageId === pageId) continue;
+    const at = steps.findIndex((s) => s.kind === "page" && s.pageId === pageId);
+    const s = at >= 0 ? steps[at] : undefined;
+    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts).length > 0) {
+      state.stepIndex = at;
+      return { steps, stepIndex: at, done: false, triggeredSkips: [], quotaFull: [] };
+    }
+  }
   let idx = Math.min(state.stepIndex, steps.length - 1) - 1;
   while (idx >= 0) {
     const s = steps[idx];
@@ -643,6 +686,7 @@ export function start(
   opts: StartOptions = {},
 ): NavigationResult {
   state.stepIndex = -1;
+  if (state.meta && VISITED_KEY in state.meta) delete state.meta[VISITED_KEY];
   if (opts.startAt) {
     // seeded answers stand for pages already submitted, so the values those
     // submits would have derived (calculations, loop variables) exist too

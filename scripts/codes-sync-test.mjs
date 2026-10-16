@@ -18,7 +18,7 @@
  * everything after the model is real.
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 import { formatCondition } from "../packages/engine/dist/index.js";
@@ -34,9 +34,9 @@ const FIXTURE = {
     { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "How old are you?" },
     { id: "q3", code: "Q3", variableName: "AGREE", type: "single_select", text: "Do you agree?", options: [{ code: 1, label: "Yes" }, { code: 2, label: "No" }, { code: 3, label: "Maybe" }] },
     { id: "q5", code: "Q5", variableName: "BRANDS", type: "multi_select", text: "Which brands?", options: [{ code: 1, label: "Coke" }, { code: 2, label: "Pepsi" }, { code: 99, label: "Other", flags: ["other_specify"] }] },
-    { id: "q4", code: "Q4", variableName: "WHY", type: "text", text: "Why do you agree?" },
+    { id: "q4", code: "Q4", variableName: "WHY", type: "open_text", text: "Why do you agree?" },
     { id: "q6", code: "Q6", variableName: "SEGMENT", type: "single_select", text: "Segment (hidden)", options: [{ code: 1, label: "Fans" }, { code: 2, label: "Others" }], settings: { hidden: true } },
-    { id: "q7", code: "Q7", variableName: "LAST", type: "text", text: "Anything else?" },
+    { id: "q7", code: "Q7", variableName: "LAST", type: "open_text", text: "Anything else?" },
   ],
   flow: [
     { type: "page", id: "p1", title: "One", questionIds: ["q1", "q3", "q5"] },
@@ -370,6 +370,39 @@ await loadDef(FIXTURE);
   assert.equal(formatCondition(fixed, q(fixed, "q7").displayLogic), "Q3 = 3 OR Q5.O2");
   await ctx2.close();
   ok("a survey saved with option TEXT in its logic is repaired on opening: Q3 = 1 / Q3 = 3 OR Q5 selected 2");
+}
+
+/* ------------------------------------------------ LOGIC-02: a question code rename rewrites what spelled it */
+{
+  const def = structuredClone(FIXTURE);
+  q(def, "q4").text = "You said {{Q3.label}} ({{Q3}}); next year {{expr: Q3 + 1}}";
+  def.calculations = [{ id: "c1", label: "Twice", targetVariable: "TWICE", expression: "Q3 * 2", trigger: "on_page_submit", enabled: true }];
+  await loadDef(def);
+  await goTab("Questions");
+  await page.waitForSelector('[data-testid="qcard"][data-qid="q3"]');
+  await page.click('[data-testid="qcard"][data-qid="q3"]');
+  await page.waitForSelector('[data-testid="question-code"]');
+  await page.fill('[data-testid="question-code"]', "Q3b");
+  await page.press('[data-testid="question-code"]', "Enter");                 // commit: the references follow
+  await page.waitForSelector(".toast");
+  assert.match(await page.textContent(".toast"), /Question code Q3 → Q3b — \d+ references? rewritten/);
+  await goTab("JSON");
+  await page.waitForSelector("textarea.code");
+  const after = JSON.parse(await page.$eval("textarea.code", (e) => e.value));
+  assert.equal(q(after, "q3").code, "Q3b");
+  assert.equal(q(after, "q4").text, "You said {{Q3b.label}} ({{Q3b}}); next year {{expr: Q3b + 1}}", "pipes and the expression pipe follow the code");
+  assert.equal(after.calculations[0].expression, "Q3b * 2", "so does the calculation");
+  ok("LOGIC-02: renaming a question code rewrites the {{pipes}}, {{expr:}} and calculation that used it, and says so in a toast");
+
+  // a code that is already another name is refused and the old one restored
+  await goTab("Questions");
+  await page.click('[data-testid="qcard"][data-qid="q3"]');
+  await page.waitForSelector('[data-testid="question-code"]');
+  await page.fill('[data-testid="question-code"]', "Q5");
+  await page.press('[data-testid="question-code"]', "Enter");
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /already the code of Q5/.test(t.textContent ?? "")), null, { timeout: 8000 });
+  assert.equal(await page.inputValue('[data-testid="question-code"]'), "Q3b", "the clash is refused; the code stays");
+  ok("LOGIC-02: a code another question already has is refused with the reason, and the previous code is restored");
 }
 
 assert.deepEqual(pageErrors.filter((e) => !/401|402|422|501|Failed to load resource/.test(e)), [], pageErrors.join("\n"));

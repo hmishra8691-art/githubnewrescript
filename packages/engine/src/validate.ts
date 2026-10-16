@@ -19,7 +19,7 @@ import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnsw
 import { isEmptyAnswer } from "./answers.js";
 import { escapeHtml, sanitizeHtml } from "./html.js";
 import { validationBounds } from "./scale.js";
-import { checkPhone, checkPostal, checkUrl, phoneCountryFor } from "./formats.js";
+import { checkPhone, checkPostal, checkUrl, isValidEmail, phoneCountryFor } from "./formats.js";
 import { uploadAccept, uploadTypeAllowed } from "./uploadTypes.js";
 import { bucketProblems, hasBucketRules } from "./bucketRules.js";
 import { unfinishedClips } from "./videos.js";
@@ -278,7 +278,7 @@ export function checkScalarRules(
         }
         break;
       case "email":
-        if (!isEmpty(value) && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value)))
+        if (!isEmpty(value) && !isValidEmail(String(value)))
           fail(ruleError(rule, "Please enter a valid email address."));
         break;
       /*

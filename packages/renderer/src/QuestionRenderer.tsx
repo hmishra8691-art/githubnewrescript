@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { Question, Option, SurveyDefinition, QuestionColumn, QuestionRow } from "@rescript/schema";
-import { resolveVariant } from "@rescript/schema";
+import { resolveVariant, questionTypeRegistry } from "@rescript/schema";
 import {
   effectiveQuestion,
   resolveQuestionMedia, questionMediaList,
@@ -1517,6 +1517,9 @@ export function RepeatedHeaderRow({ index, every, count, children }: { index: nu
   return <tr className="rs-header-repeat" aria-hidden="true" data-testid="header-repeat">{children}</tr>;
 }
 
+/** A categorical grid with at most this many scale points stacks on a phone (OR-02). */
+export const MATRIX_STACK_MAX = 7;
+
 export function Matrix(p: QRProps) {
   const view = effectiveQuestion(p.q, ctxOf(p));
   const colOpts = view.columns[0]?.options?.length ? view.columns[0].options : view.options;
@@ -1533,9 +1536,22 @@ export function Matrix(p: QRProps) {
     </>
   );
   const every = headerEveryFor(p, view.rows.length);
+  /*
+   * OR-02: on a phone a categorical grid cannot stay a grid — at 390 px the
+   * scale columns past the third were clipped inside `.rs-table-wrap` with
+   * nothing to say they were there. A single/multi-select matrix of up to
+   * MATRIX_STACK_MAX scale points therefore STACKS at <= 480 px (each row a
+   * block, every control carrying its own caption); a wider one keeps the
+   * grid, with a sticky row label and a "scroll" hint instead.
+   */
+  const categorical = type === "matrix_single" || type === "matrix_multi";
+  const stack = categorical && colOpts.length <= MATRIX_STACK_MAX;
+  const plainLabel = (s: string) => s.replace(/<[^>]*>/g, "");
+  const cellLabel = (rowLabel: string, o: Option) => `${plainLabel(rowLabel)}: ${plainLabel(o.label)}`;
   return (
-    <div className="rs-table-wrap">
-      <table className="rs-matrix">
+    <div className="rs-table-wrap" data-matrix-scroll={categorical && !stack ? "hint" : undefined}>
+      {categorical && !stack && <div className="rs-scrollhint" aria-hidden="true" data-testid="matrix-scroll-hint">Scroll sideways to see every option →</div>}
+      <table className={`rs-matrix${stack ? " rs-matrix-stack" : ""}`} data-stack={stack ? "true" : undefined}>
         <thead>
           <tr>{headCells(false)}</tr>
         </thead>
@@ -1551,9 +1567,13 @@ export function Matrix(p: QRProps) {
                 {type === "matrix_single" &&
                   colOpts.map((o) => (
                     <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
-                      <input type="radio" name={`${p.q.id}_${rc}`}
-                        checked={String(rowVal) === String(o.code)}
-                        onChange={() => setRow(rc, o.code)} />
+                      <label className="rs-mcell">
+                        <input type="radio" name={`${p.q.id}_${rc}`}
+                          aria-label={cellLabel(row.label, o)}
+                          checked={String(rowVal) === String(o.code)}
+                          onChange={() => setRow(rc, o.code)} />
+                        <span className="rs-mcap" aria-hidden="true">{plainLabel(o.label)}</span>
+                      </label>
                     </td>
                   ))}
                 {type === "matrix_multi" &&
@@ -1562,8 +1582,12 @@ export function Matrix(p: QRProps) {
                     const on = arr.some((v) => String(v) === String(o.code));
                     return (
                       <td key={String(o.code)} {...cellAnchor(rc, o.code)}>
-                        <input type="checkbox" checked={on}
-                          onChange={() => setRow(rc, toggleMultiValue(arr, o.code, colOpts))} />
+                        <label className="rs-mcell">
+                          <input type="checkbox" checked={on}
+                            aria-label={cellLabel(row.label, o)}
+                            onChange={() => setRow(rc, toggleMultiValue(arr, o.code, colOpts))} />
+                          <span className="rs-mcap" aria-hidden="true">{plainLabel(o.label)}</span>
+                        </label>
                       </td>
                     );
                   })}
@@ -2802,7 +2826,21 @@ export function QuestionRenderer(props: QRProps) {
           <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
         </div>
       );
-    default: body = <TextInput {...p} />;
+    default:
+      /*
+       * OR-01: a type nothing registered (a typo, `constant_sum`, a plugin
+       * that is not loaded) used to fall through to a TEXT BOX, collecting
+       * free text for a question that was meant to be something else. Say so
+       * instead. A registered type with no dedicated component keeps the text
+       * input it has always had.
+       */
+      body = questionTypeRegistry.has(p.q.type)
+        ? <TextInput {...p} />
+        : (
+          <div className="rs-unsupported" role="note" data-testid="rs-unsupported" data-qtype={p.q.type}>
+            This question type is not supported by this version.
+          </div>
+        );
   }
 
   // one place, after every dispatch path — see `rendersOwnOtherBox`

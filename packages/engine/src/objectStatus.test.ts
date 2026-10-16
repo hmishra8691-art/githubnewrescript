@@ -17,8 +17,8 @@ const sound = () =>
     meta: { id: "s", code: "S", title: "T" },
     questions: [
       { id: "q1", code: "Q1", variableName: "AGE", type: "numeric", text: "Age?" },
-      { id: "q2", code: "Q2", variableName: "CITY", type: "text", text: "City?" },
-      { id: "q3", code: "Q3", variableName: "WHY", type: "text", text: "Why?" },
+      { id: "q2", code: "Q2", variableName: "CITY", type: "open_text", text: "City?" },
+      { id: "q3", code: "Q3", variableName: "WHY", type: "open_text", text: "Why?" },
     ],
     flow: [
       { type: "page", id: "p1", questionIds: ["q1", "q2"] },

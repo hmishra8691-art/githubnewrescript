@@ -1155,7 +1155,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      */
     const submitScope = [pageStep.pageId.split("@")[0], ...pageStep.questionIds]; // the page and every question on it
     const validateRes = runScripts(def, state, "on_validate", { scopeRef: submitScope, loop: pageStep.loop });
-    const scriptRes = runScripts(def, state, "on_submit", { scopeRef: submitScope, loop: pageStep.loop });
+    /*
+     * LOGIC-11: on_submit is the work a page does on the way OUT, so it runs
+     * only once the page is valid as far as built-in validation and on_validate
+     * can tell — otherwise a rejected submit fired its side effects (ctx.set,
+     * flags) and fired them again on the retry. Errors an on_submit script
+     * itself raises still block, below.
+     */
+    const blockedEarly = blockingErrors([...errs, ...validateRes.errors.map((e) => ({ questionId: e.questionRef ?? "", message: e.message }))]).length > 0;
+    const scriptRes = blockedEarly
+      ? { logs: [] as string[], errors: [] as typeof validateRes.errors }
+      : runScripts(def, state, "on_submit", { scopeRef: submitScope, loop: pageStep.loop });
     setLogs((l) => [...l, ...validateRes.logs, ...scriptRes.logs]);
     const fromScripts = [...validateRes.errors, ...scriptRes.errors]
       .map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));

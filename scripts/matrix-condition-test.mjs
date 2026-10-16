@@ -186,5 +186,79 @@ await pv2.waitForSelector('[data-qid="q_next"]', { timeout: 8000 });
 await pv2.context().close();
 ok("runtime: row 1 answered Good shows the dependent question");
 
+/* ------------------------------------------------ P2 batch (2026-10-16) */
+{ /* OR-06 / OR-04 / OR-05 — the source picker, the value picker, the operator list for a composite column */
+  const rate = ["1", "2", "3", "4", "5"].map((c) => ({ code: c, label: c, flags: [] }));
+  const col = (id, label, responseType, options = []) => ({ id, label, responseType, variableStem: label.toUpperCase(), options, validation: [], readOnly: false });
+  const def2 = fixture();
+  def2.questions.splice(3, 0,
+    base("q_rate", "Q5", "matrix_single", { options: rate, rows: [row("1", "Speed")] }),
+    base("q_comp", "Q6", "composite", { rows: [row("1", "Item")], columns: [col("c_n", "Spend", "numeric"), col("c_t", "Note", "text")] }),
+  );
+  def2.flow[0].questionIds.push("q_rate", "q_comp");
+  await h.loadDef(def2);
+  await openLogic();
+  const add2 = await page.$('[data-testid="optional-add"]');
+  if (add2) await add2.click();
+  await page.waitForSelector('[data-testid="logic-builder"]');
+  await page.click('[data-testid="lb-add-condition"]');
+  await page.waitForSelector('[data-testid="lb-row"]');
+
+  /* OR-06: the quality scores are one group, and the LAST one */
+  const groups = await page.$$eval(".ref-select optgroup", (g) => g.map((x) => [x.label, x.querySelectorAll("option").length]));
+  const q = groups.find(([l]) => /^Quality scores/.test(l));
+  assert.ok(q && q[1] > 20, `a "Quality scores" group with the SYSTEM_* variables: ${JSON.stringify(groups)}`);
+  assert.equal(groups[groups.length - 1][0], q[0], "…at the end of the list");
+  assert.ok(!groups.some(([l]) => /Quality metrics/.test(l)), "the old inline group is gone");
+  ok("OR-06: the SYSTEM_* quality variables sit in one 'Quality scores' group at the end of the source picker");
+
+  /* OR-04: code == label prints once */
+  await page.selectOption(".ref-select", { label: "Q5 — Q5" });
+  await settle();
+  await page.selectOption('[data-testid="cond-operator"]', "gte");
+  await settle();
+  const vals = await page.$$eval('[data-testid="cond-value"] option', (o) => o.map((x) => x.textContent));
+  assert.deepEqual(vals, ["— value —", "1", "2", "3", "4", "5"], `no "1: 1": ${vals}`);
+  ok("OR-04: a scale whose codes and labels are the same reads 1 · 2 · 3, not 1: 1 · 2: 2 · 3: 3");
+
+  /* OR-05: a composite column offers its own type's operators */
+  await page.selectOption(".ref-select", { label: "Q6 — Q6" });
+  await settle();
+  const allOps = await page.$$eval('[data-testid="cond-operator"] option', (o) => o.map((x) => x.value));
+  await page.selectOption('[data-testid="cond-column"]', "c_n");
+  await settle();
+  const numOps = await page.$$eval('[data-testid="cond-operator"] option', (o) => o.map((x) => x.value));
+  assert.ok(numOps.includes("gt") && numOps.includes("between"), `numeric column compares: ${numOps}`);
+  assert.ok(!numOps.includes("matches") && !numOps.includes("rankedFirst") && !numOps.includes("dateBefore"), `…without regex, rank or date: ${numOps}`);
+  assert.ok(numOps.length < allOps.length / 2, `${numOps.length} operators instead of ${allOps.length}`);
+  await page.selectOption('[data-testid="cond-column"]', "c_t");
+  await settle();
+  const txtOps = await page.$$eval('[data-testid="cond-operator"] option', (o) => o.map((x) => x.value));
+  assert.ok(txtOps.includes("contains") && txtOps.includes("matches") && !txtOps.includes("gt"), `text column: ${txtOps}`);
+  ok("OR-05: a composite column's operator list follows the column's own type (numeric, text)");
+}
+
+{ /* OR-02 — a matrix at 390 px: stacked when <= 7 scale points, a visible hint when wider */
+  const wide = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((c) => ({ code: c, label: `Pt ${c}`, flags: [] }));
+  const pv390 = await h.preview(["q_sat", "q_wide"], (d) => {
+    d.questions.push(base("q_wide", "Q9", "matrix_single", { options: wide, rows: [row("1", "Service quality overall")] }));
+  });
+  await pv390.setViewportSize({ width: 390, height: 800 });
+  await pv390.waitForTimeout(400);
+  const stacked = await pv390.$eval('[data-qid="q_sat"] table', (t) => t.dataset.stack);
+  assert.equal(stacked, "true", "the 5-point matrix stacks");
+  const reach = await pv390.$$eval('[data-qid="q_sat"] tbody tr:first-child input[type="radio"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().right)));
+  assert.equal(reach.length, 5);
+  assert.ok(reach.every((r) => r <= 390), `every one of the 5 scale points is on screen without scrolling sideways: ${reach}`);
+  const caps = await pv390.$$eval('[data-qid="q_sat"] tbody tr:first-child .rs-mcap', (els) => els.map((e) => e.textContent));
+  assert.deepEqual(caps, ["Poor", "Fair", "OK", "Good", "Great"], "each control carries its own caption");
+  await pv390.locator('[data-qid="q_sat"] tbody tr:first-child label.rs-mcell').nth(4).click();   // tap the caption row, not just the dot
+  assert.equal(await pv390.locator('[data-qid="q_sat"] input[name="q_sat_1"]').nth(4).isChecked(), true, "tapping the label answers");
+  assert.equal(await pv390.$eval('[data-qid="q_wide"] table', (t) => t.dataset.stack ?? null), null, "a 9-point matrix keeps its columns…");
+  assert.equal(await pv390.locator('[data-qid="q_wide"] [data-testid="matrix-scroll-hint"]').isVisible(), true, "…and says there is more to the right");
+  await pv390.context().close();
+  ok("OR-02: at 390 px a 5-point matrix is STACKED (every scale point reachable, labelled); a 9-point one shows a 'scroll sideways' hint");
+}
+
 await h.close();
 console.log(`\nALL MATRIX CONDITION CHECKS PASSED (${passed})`);

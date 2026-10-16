@@ -487,6 +487,14 @@ export const DesignReference = z.object({
       rows: z.array(z.record(z.any())).default([]),
       storagePath: z.string().optional(),
       generatedAt: z.string().optional(),
+      /**
+       * What the generator reported about the design it made — level
+       * frequencies, `diagnostics` (two-way balance, METHOD-05), `warnings`
+       * and, for a menu, the `currency` its totals are shown in (METHOD-15).
+       * Optional and additive: a design file without it reads exactly as
+       * before.
+       */
+      summary: z.record(z.any()).optional(),
     })
     .optional(),
 });

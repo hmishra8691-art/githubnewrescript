@@ -80,7 +80,7 @@ export const BLOCK_COMMANDS = {
 const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
 import {
-  FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode,
+  FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode, renameQuestionCode,
   parsePastedOptions, planPaste, optionsToPaste, type PasteMode,
   stripHtmlText, referencesTo, referencesToMany, pruneReferencesToMany,
   PIPE_TOKEN_RE,
@@ -90,6 +90,7 @@ import {
   effectiveScale,
   PHONE_FORMATS,
   POSTAL_FORMATS,
+  hasPhoneFormat, hasPostalFormat,
   CURRENCIES,
   type QuestionReference,
   usedNames,
@@ -1371,6 +1372,39 @@ export function QuestionEditor({ q }: { q: Question }) {
     });
   };
 
+  /**
+   * A QUESTION CODE TYPED BY HAND REPOINTS THE TEXT THAT SPELLED IT (LOGIC-02).
+   *
+   * The input writes each keystroke into the question; this runs when the field
+   * is left, with the code it held on focus. Pipes (`{{Q1.label}}`),
+   * `{{expr:…}}`, calculations, rule expressions and named expressions that
+   * used the old code are rewritten in the same edit — what was rewritten is
+   * said in a toast. A code another question, variable, calculation or embedded
+   * field already answers to is refused and the old code restored, because a
+   * rule naming it would become ambiguous.
+   */
+  const codeAtFocus = React.useRef<string | null>(null);
+  const commitQuestionCode = (to: string) => {
+    const from = codeAtFocus.current;
+    codeAtFocus.current = null;
+    if (from == null || from === to) return;
+    s.update((d) => {
+      const r = renameQuestionCode(d, from, to);
+      if (r.problem) {
+        const i = d.questions.findIndex((x) => x.id === q.id);
+        if (i >= 0) d.questions[i] = { ...d.questions[i], code: from } as Question;
+        pendingRecodeNote.current = { msg: `Code ${from} → ${to || "(empty)"}: ${r.problem} — the code stays ${from}`, kind: "err" };
+        return;
+      }
+      Object.assign(d, r.def);
+      const review = r.needsReview.length ? `; check ${r.needsReview.join(", ")}` : "";
+      const done = r.rewritten.length
+        ? `${r.rewritten.length} reference${r.rewritten.length === 1 ? "" : "s"} rewritten (${r.rewritten.slice(0, 3).join("; ")}${r.rewritten.length > 3 ? "; …" : ""})`
+        : "nothing else needed rewriting";
+      pendingRecodeNote.current = { msg: `Question code ${from} → ${to} — ${done}${review}`, kind: "ok" };
+    });
+  };
+
   /*
    * THE LAYOUT CONTROL — beside the option list normally, or its own block
    * after the variant's settings (`builder.layoutLast`), where the review
@@ -1484,7 +1518,12 @@ export function QuestionEditor({ q }: { q: Question }) {
       <>
       <div className="row" style={{ marginBottom: 12 }}>
         <label className="f" style={{ width: 90, marginBottom: 0 }}><span>Code</span>
-          <input className="input mono" value={q.code} onChange={(e) => patch({ code: e.target.value })} /></label>
+          <input className="input mono" value={q.code} data-testid="question-code"
+            onChange={(e) => patch({ code: e.target.value })}
+            /* the text that spelled the old code follows it once the edit is done — see commitQuestionCode */
+            onFocus={(e) => { codeAtFocus.current = e.currentTarget.value; }}
+            onBlur={(e) => commitQuestionCode(e.currentTarget.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }} /></label>
         <label className="f grow" style={{ marginBottom: 0 }}><span>Variable name</span>
           {/*
             * Renames through the safe path (§44 phase 3), so every rule, pipe
@@ -1849,6 +1888,9 @@ export function QuestionEditor({ q }: { q: Question }) {
                 <option value="">any country (loose check)</option>
                 <option value="pick">respondent chooses from the country-code list</option>
                 {PHONE_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name} (+{f.dial})</option>)}
+                {q.settings.phoneCountry && q.settings.phoneCountry !== "pick" && !hasPhoneFormat(q.settings.phoneCountry) && (
+                  <option value={q.settings.phoneCountry}>{q.settings.phoneCountry} — no format known (loose check)</option>
+                )}
               </select></label>
           )}
           {hasRule("zip") && (
@@ -1858,9 +1900,27 @@ export function QuestionEditor({ q }: { q: Question }) {
                 onChange={(e) => patchSettings({ postalCountry: e.target.value || undefined })}>
                 <option value="">any country (loose check)</option>
                 {POSTAL_FORMATS.map((f) => <option key={f.code} value={f.code}>{f.name}</option>)}
+                {q.settings.postalCountry && !hasPostalFormat(q.settings.postalCountry) && (
+                  <option value={q.settings.postalCountry}>{q.settings.postalCountry} — no format known (loose check)</option>
+                )}
               </select></label>
           )}
         </div>
+      )}
+      {/*
+        * QT-06: a country the platform has no format for used to degrade to the
+        * loose check without a word — the author believed the number was being
+        * checked against that country. Say so, and what applies instead.
+        */}
+      {hasRule("phone") && q.settings.phoneCountry && q.settings.phoneCountry !== "pick" && !hasPhoneFormat(q.settings.phoneCountry) && (
+        <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }} data-testid="no-format-note-phone">
+          No format known for {q.settings.phoneCountry}; a loose check applies (any number of 7 or more digits).
+        </p>
+      )}
+      {hasRule("zip") && q.settings.postalCountry && !hasPostalFormat(q.settings.postalCountry) && (
+        <p className="muted" style={{ fontSize: 12.5, margin: "4px 0 8px" }} data-testid="no-format-note-postal">
+          No format known for {q.settings.postalCountry}; a loose check applies (3 to 10 letters, digits, spaces or dashes).
+        </p>
       )}
 
       {/*

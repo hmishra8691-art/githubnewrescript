@@ -30,7 +30,7 @@ await h.loadDef({
       settings: {},
     },
     {
-      id: "q_why", code: "Q2", variableName: "WHY", type: "text",
+      id: "q_why", code: "Q2", variableName: "WHY", type: "open_text",
       text: "You picked {{GENDER}} — why?",
       displayLogic: {
         type: "group", op: "and",

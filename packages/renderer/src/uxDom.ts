@@ -52,10 +52,22 @@ const MAX_NODES = 6000, MAX_TEXT = 2000, MAX_DEPTH = 60, MAX_OPS = 2000;
 const CREATE_TAGS = new Set(["div", "span", "p", "b", "i", "u", "em", "strong", "small", "sub", "sup", "br", "hr", "ul", "ol", "li", "a", "button", "label", "h1", "h2", "h3", "h4", "h5", "h6", "code", "pre", "blockquote", "section", "header", "footer", "nav", "aside", "mark", "kbd", "abbr"]);
 const TOKEN = /^[A-Za-z_][\w:-]{0,63}$/;
 
-const attrAllowed = (name: string): boolean =>
+/**
+ * RUNTIME-08: the respondent's way forward is not a script's to take away. An
+ * element that IS the Next button or the navigation bar, sits inside it, or
+ * holds it (the page shell) may not be hidden or disabled — a script that did
+ * so left the respondent on a page with no way off it. Classes and inline
+ * styles stay allowed: restyling the button is the point of a UX script.
+ */
+export const isNavTarget = (el: Element): boolean =>
+  !!el.closest('[data-testid="rs-next"], .rs-nav')
+  || !!el.querySelector('[data-testid="rs-next"], .rs-nav');
+
+export const attrAllowed = (name: string, el?: Element | null): boolean =>
+  ((name !== "hidden" && name !== "disabled") || !el || !isNavTarget(el)) && (
   name === "hidden" || name === "disabled" || name === "title" || name === "role" || name === "tabindex"
   || /^aria-[a-z-]{1,40}$/.test(name)
-  || (/^data-[a-z0-9_.:-]{1,60}$/.test(name) && !/^data-(rs-|qid$|testid$)/.test(name));
+  || (/^data-[a-z0-9_.:-]{1,60}$/.test(name) && !/^data-(rs-|qid$|testid$)/.test(name)));
 
 interface Touched {
   /** whether each class token was present before the script first touched it */
@@ -207,7 +219,8 @@ export class DomBridge {
   private att(op: Extract<DomOp, { o: "attr" }>) {
     const el = this.element(op.n); if (!el) return;
     const name = String(op.name).toLowerCase();
-    if (!attrAllowed(name)) { this.say(`a script cannot change “${name}” — it may set hidden, disabled, title, role, tabindex, aria-* and data-* (the answer, links and the survey's own hooks are not its to change)`); return; }
+    if ((name === "hidden" || name === "disabled") && isNavTarget(el)) { this.say(`a script cannot ${name === "hidden" ? "hide" : "disable"} the Next / Back buttons or the navigation bar — the respondent needs them (it may still change their classes and styles)`); return; }
+    if (!attrAllowed(name, el)) { this.say(`a script cannot change “${name}” — it may set hidden, disabled, title, role, tabindex, aria-* and data-* (the answer, links and the survey's own hooks are not its to change)`); return; }
     const r = this.rec(el);
     if (!r.attrPrev.has(name)) r.attrPrev.set(name, el.getAttribute(name));
     const value = op.value == null ? null : String(op.value).slice(0, 600);

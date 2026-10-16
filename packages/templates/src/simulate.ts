@@ -208,7 +208,10 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
     // as the runner does: on_validate first (its purpose is to add errors), then on_submit — for the page and every question on it
     const submitScope = [step.pageId.split("@")[0], ...visible.map((q) => q.id)];
     const validate = runScripts(def, state, "on_validate", { scopeRef: submitScope, loop });
-    const submit = runScripts(def, state, "on_submit", { scopeRef: submitScope, loop });
+    // LOGIC-11: on_submit runs only when built-in validation and on_validate found nothing blocking (its errors still block)
+    const submit = errors.length || validate.errors.length
+      ? { logs: [] as string[], errors: [] as typeof validate.errors }
+      : runScripts(def, state, "on_submit", { scopeRef: submitScope, loop });
     const scripts = { logs: [...validate.logs, ...submit.logs], errors: [...validate.errors, ...submit.errors] };
     out.logs.push(...scripts.logs);
     if (scripts.errors.length) out.scriptErrors.push({ pageId: step.pageId, errors: scripts.errors });

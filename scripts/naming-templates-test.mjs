@@ -20,7 +20,7 @@ const survey = {
       options: [{ code: "1", label: "Yes" }, { code: "2", label: "No" }], settings: {} },
     { id: "q2", code: "Q1", variableName: "BRANDS", type: "multi_select", text: "Which brands?",
       options: [{ code: "1", label: "Alpha" }, { code: "2", label: "Beta" }], settings: {} },
-    { id: "q3", code: "Q2", variableName: "WHY", type: "text",
+    { id: "q3", code: "Q2", variableName: "WHY", type: "open_text",
       text: "You picked {{BRANDS}} — why?",
       displayLogic: { type: "group", op: "and", children: [
         { type: "rule", source: { kind: "question", ref: "SCREENER" }, operator: "eq", value: "1" },

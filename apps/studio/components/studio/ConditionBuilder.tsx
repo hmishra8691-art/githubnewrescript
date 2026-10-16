@@ -9,7 +9,7 @@ import {
   isQuestionValueRef,
 } from "@rescript/schema";
 import {
-  operatorsForQuestion, conditionSummary, embeddedCatalog, authoringQuestionView,
+  operatorsForQuestion, choiceDisplayText, conditionSummary, embeddedCatalog, authoringQuestionView,
   gridAxes, authoringValueChoicesFor, describeReference,
   isCategoricalGrid, normalizeGridRule, gridCellOperators, isCellOperator, isDisplayOperator, withGridOperator,
   type LogicPath,
@@ -196,7 +196,8 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
       : gridQ
         ? gridCellOperators(gridQ)
         : rule.source.kind === "question" && q
-          ? operatorsForQuestion(q)
+          /* OR-05: a composite column takes its own column type's operators, not the whole vocabulary */
+          ? operatorsForQuestion(q, rule.source.columnId)
           : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
   /* a stored `=` on a grid still evaluates — it is not "stale", it is just not offered for new rules */
   const legacyAllowed = !!gridQ && !!q && operatorsForQuestion(q).includes(rule.operator);
@@ -377,14 +378,6 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
               )))}
           </optgroup>
         )}
-        {/* the quality engine's SYSTEM_* metrics — what custom quality rules
-            test; without this group a saved `calc.SYSTEM_DURATION_RATIO` rule
-            displayed as "— pick a question —" and looked unsaved */}
-        <optgroup label="Quality metrics (calc.SYSTEM_*)">
-          {SYSTEM_VARIABLE_HELP.map((v) => (
-            <option key={v.name} value={`calculation:${v.name}`} title={v.hint}>{v.name}</option>
-          ))}
-        </optgroup>
         {/*
           * A function call (SUM/AVG/MIN/MAX/…) gets its OWN full editor below
           * (`ExprEditor`) — this option is only what the closed select shows,
@@ -441,6 +434,17 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             ))}
           </optgroup>
         ))}
+        {/* the quality engine's SYSTEM_* metrics — what custom quality rules
+            test; without this group a saved `calc.SYSTEM_DURATION_RATIO` rule
+            displayed as "— pick a question —" and looked unsaved.
+            OR-06: LAST, under its own heading — about forty-five of them used
+            to sit between the calculations and the loop items, in the middle of
+            the list a programmer scans for a question. */}
+        <optgroup label="Quality scores (SYSTEM_*)" data-testid="quality-scores-group">
+          {SYSTEM_VARIABLE_HELP.map((v) => (
+            <option key={v.name} value={`calculation:${v.name}`} title={v.hint}>{v.name}</option>
+          ))}
+        </optgroup>
       </select>
       {/*
         * THE COUNT TOGGLE, on the rule itself.
@@ -488,7 +492,17 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
           {/* on a categorical grid the column is the ANSWER and belongs to "is / is not"; a comparison has a value instead */}
           {axes.columns.length > 0 && (!gridQ || cellForm) && (
             <select className="select" data-testid="cond-column" value={rule.source.columnId ?? ""}
-              onChange={(e) => setSource({ columnId: e.target.value || undefined })}
+              onChange={(e) => {
+                const columnId = e.target.value || undefined;
+                /* OR-05: another column is another type — keep the operator when it still fits, else take that column's first */
+                if (!gridQ && q && !counting) {
+                  const fits = operatorsForQuestion(q, columnId);
+                  if (!fits.includes(rule.operator)) {
+                    return onChange({ ...rule, source: { ...rule.source, columnId }, operator: fits.find((o) => o === "eq") ?? fits[0] ?? rule.operator, value: undefined, value2: undefined });
+                  }
+                }
+                setSource({ columnId });
+              }}
               title={axes.columnMeaning === "option_code"
                 ? "The columns of this grid are its answer scale. Naming one asks about any row with that answer."
                 : "Naming a column asks about that column's cell."}>
@@ -591,7 +605,7 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             onChange={(e) => onChange({ ...rule, value: e.target.value === "" ? undefined : e.target.value })}>
             <option value="">{gridQ ? "— any row (the question) —" : "— the question itself —"}</option>
             {displayChoices.map((o) => (
-              <option key={o.ref} value={o.ref}>{o.ref}: {o.label}</option>
+              <option key={o.ref} value={o.ref}>{choiceDisplayText(o)}</option>
             ))}
           </select>
         ) : valueChoices.length > 0 && !listOps && rule.operator !== "matches" ? (
@@ -602,7 +616,7 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             onChange={(e) => onChange({ ...rule, value: e.target.value })}>
             <option value="">— value —</option>
             {valueChoices.map((o) => (
-              <option key={o.ref} value={o.ref}>{o.ref}: {o.label}</option>
+              <option key={o.ref} value={o.ref}>{choiceDisplayText(o)}</option>
             ))}
           </select>
         ) : (

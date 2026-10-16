@@ -1,5 +1,5 @@
 import type { FieldType } from "@rescript/schema";
-import { checkPhone, phoneCountryFor, checkPostal, checkUrl, affixFor } from "./formats.js";
+import { checkPhone, phoneCountryFor, checkPostal, checkUrl, affixFor, isValidEmail } from "./formats.js";
 
 /**
  * Field-type primitives for form-style list questions (req §4–5).
@@ -74,7 +74,6 @@ export function fieldDataType(t: FieldType | undefined): "text" | "numeric" | "d
   }
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 
 /**
@@ -96,7 +95,7 @@ export function validateFieldValue(
   const s = String(value).trim();
   switch (t) {
     case "email":
-      return EMAIL_RE.test(s) ? null : "Please enter a valid email address.";
+      return isValidEmail(s) ? null : "Please enter a valid email address.";
     case "phone":
       /* the configured country; with the code list ("pick"), the one the respondent's "+code" names */
       return checkPhone(s, phoneCountryFor(settings?.phoneCountry, s));

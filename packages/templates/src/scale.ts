@@ -59,12 +59,12 @@ export function buildScaleSurvey(n = 600, surveyId = `scale-${n}`): SurveyDefini
       else if (kind === 1) Object.assign(q, { type: "multi_select", options: opts(["Price", "Quality", "Service", "Range", "Location", "Other"]) });
       else if (kind === 2) Object.assign(q, { type: "matrix_single", rows: opts(["Brand A", "Brand B", "Brand C", "Brand D"]), options: AGREE_5 });
       else if (kind === 3) Object.assign(q, { type: "numeric", settings: { minValue: 0, maxValue: 100 } });
-      else if (kind === 4) Object.assign(q, { type: "text", text: `Why did you say that about item ${qn}? {{${qn > 0 ? `Q${qn}` : "S2"}}}` });
+      else if (kind === 4) Object.assign(q, { type: "open_text", text: `Why did you say that about item ${qn}? {{${qn > 0 ? `Q${qn}` : "S2"}}}` });
       else if (kind === 5) Object.assign(q, { type: "single_select", options: YES_NO });
       else if (kind === 6) Object.assign(q, { type: "nps" });
       else if (kind === 7) Object.assign(q, { type: "single_select", options: AGREE_5 });
       else if (kind === 8) Object.assign(q, { type: "multi_select", options: opts(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]) });
-      else Object.assign(q, { type: "text" });
+      else Object.assign(q, { type: "open_text" });
 
       // every fourth question reads an earlier one
       if (qn % 4 === 3 && qn >= 4) {

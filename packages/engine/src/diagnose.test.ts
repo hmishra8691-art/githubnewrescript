@@ -14,8 +14,8 @@ const make = (over: { questions?: object[]; flow?: object[]; displayRules?: obje
   questions: over.questions ?? [
     { id: "q1", code: "Q1", variableName: "Q1", type: "single_select", text: "Own a car?", options: yn },
     { id: "q2", code: "Q2", variableName: "Q2", type: "single_select", text: "Like it?", options: yn },
-    { id: "q3", code: "Q3", variableName: "Q3", type: "text", text: "Why?" },
-    { id: "q4", code: "Q4", variableName: "Q4", type: "text", text: "Anything else?" },
+    { id: "q3", code: "Q3", variableName: "Q3", type: "open_text", text: "Why?" },
+    { id: "q4", code: "Q4", variableName: "Q4", type: "open_text", text: "Anything else?" },
   ],
   flow: over.flow ?? [
     { type: "page", id: "p1", questionIds: ["q1"] },

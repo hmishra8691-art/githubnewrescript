@@ -26,7 +26,7 @@
  *            refused with the reason
  */
 import assert from "node:assert/strict";
-import { chromium } from "/home/claude/.npm-global/lib/node_modules/playwright/index.mjs";
+import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 
@@ -230,6 +230,40 @@ console.log("\nRUNTIME — one pipeline");
   assert.equal(await frames(page), 0, "Q1's script is not running on Q2's page");
   await page.close();
   ok("leaving the page undoes what its script changed and removes its frame");
+}
+
+{ // 7. RUNTIME-08: a script cannot strand the respondent by hiding / disabling Next
+  const { page, logs } = await open(withScripts(
+    beh("strand", `
+      var next = document.querySelector('[data-testid="rs-next"]');
+      next.setAttribute("hidden", "true"); next.setAttribute("disabled", "true");
+      next.classList.add("zz-next-styled");
+      document.querySelector(".rs-nav").setAttribute("hidden", "true");
+      document.body.setAttribute("data-strand-done", "1");`),
+  ));
+  await waitAttr(page, "data-strand-done", "1");
+  await page.waitForTimeout(600);
+  const next = await page.$eval('[data-testid="rs-next"]', (e) => ({ hidden: e.hasAttribute("hidden"), disabled: e.disabled, styled: e.classList.contains("zz-next-styled") }));
+  assert.equal(next.hidden, false, "Next is not hidden by a script");
+  assert.equal(next.disabled, false, "Next is not disabled by a script");
+  assert.equal(next.styled, true, "…but a class on it is still applied");
+  assert.equal(await page.$eval(".rs-nav", (e) => e.hasAttribute("hidden")), false, "the navigation bar is not hidden");
+  assert.match(logs.join("\n"), /cannot (hide|disable) the Next/i, "the refusal is said in the console");
+  await page.click('[data-qid="q1"] label:has-text("Alpha")');
+  await page.click('[data-testid="rs-next"]');
+  await page.waitForSelector('[data-qid="q2"]');
+  await page.close();
+  ok("RUNTIME-08: hidden/disabled on Next or .rs-nav is refused and logged; classes still apply; the respondent can always move on");
+}
+
+{ // 8. OR-01: an unknown question type is a visible notice, not a text box
+  const def = survey({ questions: [{ id: "q1", code: "Q1", variableName: "Q1", type: "constant_sum", text: "Split 100 points", options: [{ code: 1, label: "A" }] }, survey().questions[1]] });
+  const { page } = await open(def);
+  await page.waitForSelector('[data-qid="q1"] [data-testid="rs-unsupported"]');
+  assert.match(await page.textContent('[data-qid="q1"] [data-testid="rs-unsupported"]'), /not supported by this version/);
+  assert.equal(await page.$('[data-qid="q1"] input[type="text"], [data-qid="q1"] textarea'), null, "no text box is drawn for it");
+  await page.close();
+  ok("OR-01: an unregistered question type renders the 'not supported by this version' card instead of a text input");
 }
 
 /* ============================================================ STUDIO */

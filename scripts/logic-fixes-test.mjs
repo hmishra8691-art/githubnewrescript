@@ -198,5 +198,47 @@ console.log("\nMATRIX — rows and the scale are separate axes, and the Logic Bu
   console.log("  ok   rowCode and columnId survive as separate axes; the answer is keyed by row");
 }
 
+/* ------------------------------------------------ P2 batch (2026-10-16) */
+console.log("\nBACK FOLLOWS THE PATH TAKEN (LOGIC-04) · on_submit WAITS FOR A VALID PAGE (LOGIC-11)");
+{
+  const q = (id, code, type, extra = {}) => ({ id, code, variableName: code, type, text: `${code} text`, options: [], rows: [], columns: [], validation: [], required: false, settings: { readOnly: false, hidden: false }, skipLogic: [], listLogic: [], ...extra });
+  const yn = [{ code: "1", label: "Yes", flags: [] }, { code: "2", label: "No", flags: [] }];
+  const def = await h.readDef();
+  def.questions = [
+    q("q1", "Q1", "single_select", { options: yn, skipLogic: [{ id: "sk1", when: { type: "rule", source: { kind: "question", ref: "q1" }, operator: "eq", value: "2" }, target: { kind: "question", ref: "q4" } }] }),
+    q("q2", "Q2", "open_text"),
+    q("q3", "Q3", "open_text"),
+    q("q4", "Q4", "open_text"),
+  ];
+  def.flow = [{ type: "page", id: "p1", questionIds: ["q1"] }, { type: "page", id: "p2", questionIds: ["q2"] }, { type: "page", id: "p3", questionIds: ["q3"] }, { type: "page", id: "p4", questionIds: ["q4"] }, { type: "end", id: "e1", status: "complete" }];
+  const pv = await h.preview(["q1"], (d) => { Object.assign(d, { questions: def.questions, flow: def.flow }); });
+  await pv.click('[data-qid="q1"] [data-rs-el="option"][data-rs-id="2"] input');
+  await h.next(pv);
+  await pv.waitForSelector('[data-qid="q4"]');
+  await pv.click('[data-testid="rs-back"]');
+  await pv.waitForSelector('[data-qid="q1"]', { timeout: 5000 });
+  assert.equal(await pv.locator('[data-qid="q3"]').count(), 0, "Back did not land on the skipped page");
+  await pv.context().close();
+  console.log("  ok   Q1=No skips Q2 and Q3; Back from Q4 returns to Q1, the page the respondent came from");
+}
+{
+  const q = { id: "q1", code: "Q1", variableName: "Q1", type: "numeric", text: "Age?", options: [], rows: [], columns: [], required: true, validation: [], settings: { readOnly: false, hidden: false }, skipLogic: [], listLogic: [] };
+  const pv = await h.preview(["q1"], (d) => {
+    d.questions = [q];
+    d.scripts = [{ id: "s1", name: "mark", scope: "page", ref: "p1", event: "on_submit", enabled: true, code: "flag('submit_ran');" }];
+  });
+  await h.next(pv);                                     // required, empty: the page is rejected
+  await pv.waitForTimeout(300);
+  const flagsBlocked = await pv.evaluate(() => (window.__rescriptState?.flags ?? []).slice());
+  assert.ok(!flagsBlocked.includes("submit_ran"), `a rejected submit did not run on_submit: ${flagsBlocked}`);
+  await pv.fill('[data-qid="q1"] input', "30");
+  await h.next(pv);
+  await pv.waitForTimeout(300);
+  const flagsOk = await pv.evaluate(() => (window.__rescriptState?.flags ?? []).slice());
+  assert.ok(flagsOk.includes("submit_ran"), `a valid submit does: ${flagsOk}`);
+  await pv.context().close();
+  console.log("  ok   on_submit runs after the page validates, not on a rejected submit");
+}
+
 await h.close();
 console.log("\nALL LOGIC FIX CHECKS PASSED");
