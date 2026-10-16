@@ -140,7 +140,7 @@ Safe at any time: the versions route detects the missing function and falls back
 | 0055 profiles self-update columns | applied |
 | 0056 abandoned status | applied |
 | 0057 quota release on delete | applied |
-| 0058 housekeeping | **pending** — apply from the Supabase SQL editor (its function body contains `DELETE`, which the agent tool holds for a confirmation that did not arrive) |
+| 0058 housekeeping | applied (from the Supabase SQL editor; its function body contains `DELETE`, which the agent tool holds for a confirmation) |
 | 0059 atomic version cut | applied |
 
 0055, 0057 and 0059 use `create or replace trigger` / `create or replace function` instead of `drop … if exists` + `create`; the effect is the same and they stay re-runnable.

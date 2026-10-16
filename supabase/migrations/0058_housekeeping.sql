@@ -24,7 +24,7 @@
 -- for `designs[].file.storagePath` exists, and moving designs out of the definition would use it. Marked
 -- with a table comment instead; the decision is recorded in docs/MIGRATION-UNDO-NOTES.md.
 --
--- Re-runnable. Undo: docs/MIGRATION-UNDO-NOTES.md. UNEXECUTED when written (no Postgres in the sandbox).
+-- Re-runnable. Undo: docs/MIGRATION-UNDO-NOTES.md. Applied to rescript-survey-platform on 2026-10-16 (SQL editor).
 
 -- the age predicates need an index that leads with created_at (the existing ones lead with identifier / ip / share / interview)
 create index if not exists login_attempts_created_idx on public.login_attempts (created_at);
