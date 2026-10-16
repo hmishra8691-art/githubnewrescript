@@ -69,9 +69,11 @@ export function buildScaleSurvey(n = 600, surveyId = `scale-${n}`): SurveyDefini
       // every fourth question reads an earlier one
       if (qn % 4 === 3 && qn >= 4) {
         const src = `q${qn - 3}`;
+        // compare against a code the source actually has: a yes/no source (kind 5) has codes 1–2, the rest reach 5
+        const v = (qn - 4) % 10 === 5 ? 2 : 5; // ids are 1-based: q${qn-3} is the question at index qn-4
         q.displayLogic = qn % 8 === 7
-          ? and(rule("q_segment", "in", [1, 2]), rule(src, "ne", 5))
-          : rule(src, "ne", 5);
+          ? and(rule("q_segment", "in", [1, 2]), rule(src, "ne", v))
+          : rule(src, "ne", v);
       }
       // every tenth has a skip over the next block
       if (qn % 10 === 5 && b + 1 < blocks) {

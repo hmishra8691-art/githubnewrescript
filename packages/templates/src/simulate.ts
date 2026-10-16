@@ -14,7 +14,7 @@
 import type { LoopContext, QuotaCounts, ListFillCounts, ValidationError } from "@rescript/engine";
 import {
   advance, answerKey, applyListFillDestinations, createResponseState, decideListFill, effectiveQuestion, listFillVariables,
-  pendingListFills, resolvePiping, runScripts, setAnswer, start, validatePage, visibleQuestions,
+  pendingListFills, resolvePiping, runScripts, setAnswer, start, validatePage, visibleQuestions, designRowsFor,
 } from "@rescript/engine";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 
@@ -112,17 +112,17 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
       return Object.fromEntries(rows.map((r) => [r, Object.fromEntries(cols.map((c) => [c.id, share != null ? share : cell(c.responseType)]))]));
     }
     case "conjoint_task": {
+      // the tasks THIS respondent sees: their design version follows the seed (designVersion.ts), not version 1
       const d = def.designs.find((x) => x.id === s.designRef); const out: Record<string, string> = {};
-      for (const r of d?.file?.rows ?? []) if (String(r.version ?? "1") === "1") out[String(r.task)] = "1";
+      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed)) out[String(r.task)] = "1";
       return out;
     }
     case "maxdiff_task": {
       const d = def.designs.find((x) => x.id === s.designRef);
       const out: Record<string, { best: string; worst: string; anchor?: string }> = {};
-      for (const r of d?.file?.rows ?? []) {
-        if (String(r.version ?? "1") !== "1") continue;
+      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed)) {
         const t = String(r.task); const idx = String(r.item_index);
-        if (!out[t]) out[t] = { best: idx, worst: idx }; else out[t].worst = idx;
+        if (!out[t]) out[t] = { best: idx, worst: idx }; else out[t].worst = idx; // first item best, last worst — never the same one
       }
       /*
        * An anchored design asks a follow-up per task (§17). A headless
