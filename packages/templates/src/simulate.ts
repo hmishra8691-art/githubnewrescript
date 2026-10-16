@@ -94,7 +94,7 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
     case "multi_select": case "multi_dropdown": case "image_select": return some;
     case "numeric": return s.minValue != null && s.maxValue != null ? Math.round((s.minValue + s.maxValue) / 2) : 10;
     case "slider": case "nps": return s.maxValue ?? 10;
-    case "open_text": return q.variant === "text.email" ? "demo@example.com" : q.variant === "text.zip" ? "98101" : "Demo answer";
+    case "open_text": return q.variant === "text.email" ? "demo@example.com" : q.variant === "text.zip" ? "98101" : q.variant === "text.phone" ? "+1 206 555 0100" : q.variant === "text.url" ? "https://example.com" : "Demo answer";
     case "long_text": return "Demo open-ended answer with enough text.";
     case "date": return "2026-02-01";
     case "time": return "12:00";
@@ -163,10 +163,23 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
     const step = nav.steps[nav.stepIndex];
     if (step.kind !== "page") break;
     const loop = step.loop ?? null;
-    const visible = visibleQuestions(def, step, state, quotaCounts);
+    /*
+     * A page is answered the way a respondent fills it in: questions that
+     * appear BECAUSE of an answer on the same page — a carry-forward list
+     * that is empty until its source is chosen, a question whose display
+     * logic reads a sibling — are answered too, until nothing new appears.
+     * The browser re-renders on every change, so by the time Next is pressed
+     * those questions are visible and their rules apply; the server replay
+     * (`checkSubmission`) sees the same, and a walk that skipped them would
+     * produce a "complete" interview the real runtime refuses.
+     */
+    let visible = visibleQuestions(def, step, state, quotaCounts);
     const visited: VisitedPage = { pageId: step.pageId, loop, questionIds: visible.map((q) => q.id), texts: {} };
-
+    const answeredHere = new Set<string>();
+    for (let pass = 0; pass < 5; pass++) {
     for (const q of visible) {
+      if (answeredHere.has(q.id)) continue;
+      answeredHere.add(q.id);
       if (q.type === "html") continue;
       const key = answerKey(q.id, loop);
       const already = state.answers[key];
@@ -182,6 +195,11 @@ export function simulateRespondent(def: SurveyDefinition, opts: SimulationOption
         out.logs.push(...r.logs);
       }
     }
+    const now = visibleQuestions(def, step, state, quotaCounts);
+    if (now.every((q) => answeredHere.has(q.id))) { visible = now; break; }
+    visible = now;
+    }
+    visited.questionIds = visible.map((q) => q.id);
     // piped texts as the respondent would have seen them
     for (const q of visible) visited.texts[q.id] = resolvePiping(q.text, { def, state, loop, quotaCounts });
     out.pages.push(visited);

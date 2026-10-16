@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
-import { qualitySalt } from "@/lib/session";
+import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { quotaIncrements, type ResponseState } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const { data: existing } = await db
     .from("responses")
-    .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at, surveys(customer_id)")
+    .select("id, survey_id, version_id, status, respondent_id, is_test, respondent_code, deleted_at, seed, started_at, surveys(customer_id)")
     .eq("session_id", sessionId)
     .maybeSingle();
   if (!existing) return NextResponse.json({ error: "unknown session" }, { status: 404 });
@@ -56,6 +56,32 @@ export async function POST(req: NextRequest) {
   const tcfg = def?.quality?.telemetry;
   const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg) : undefined;
   const deviceHash = tcfg?.device === false ? null : deviceHashFrom(qualitySalt(existing.survey_id), keepTelemetry?.device ?? null);
+
+  /*
+   * RUNTIME-01 (audit 2026-10-16) — THE SERVER NO LONGER TAKES THE CLIENT'S
+   * WORD FOR IT. The payload is replayed with the engine the browser ran
+   * (`checkSubmission`): every page before the one the client claims to be
+   * on must validate, and a completion must reach an end. The posture is set
+   * by RUNTIME_SERVER_VALIDATION:
+   *
+   *   off      — the old behaviour (store verbatim)
+   *   log      — replay, log every problem, store anyway        ← default
+   *   enforce  — refuse a payload with a hard problem (422)
+   *
+   * `log` is the default so a deployment can watch a week of real traffic
+   * for would-be refusals before turning enforcement on; a false refusal
+   * would strand a respondent, which is worse than a stored bad row. TEST
+   * sessions are never refused: a programmer's test link may start mid-survey
+   * (`startAt`), which the replay cannot know about.
+   */
+  const check = def ? await serverCheck(def, existing, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed }, sessionId) : null;
+  if (check && !check.ok && validationPosture() === "enforce" && !existing.is_test) {
+    const first = check.hard[0];
+    return NextResponse.json({
+      error: first.questionId ? `This answer could not be saved: ${first.message}` : `This page could not be saved: ${first.message}`,
+      problems: check.hard,
+    }, { status: 422 });
+  }
 
   const update: Record<string, unknown> = {
     status: newStatus,
@@ -196,6 +222,48 @@ export async function POST(req: NextRequest) {
     status: newStatus,
     definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null },
   });
+}
+
+type Posture = "off" | "log" | "enforce";
+function validationPosture(): Posture {
+  const v = (process.env.RUNTIME_SERVER_VALIDATION ?? "log").toLowerCase();
+  return v === "off" || v === "enforce" ? v : "log";
+}
+
+/**
+ * Replay the posted interview against the definition this session runs and
+ * say what does not add up. Never throws and never blocks the save by itself:
+ * an engine error here is logged and treated as "could not check".
+ */
+async function serverCheck(
+  def: SurveyDefinition,
+  existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null },
+  posted: { status: string; stepIndex: unknown; answers: unknown; calculated: unknown; embedded: unknown; flags: unknown; completed: unknown },
+  sessionId: string,
+): Promise<SubmissionCheck | null> {
+  const posture = validationPosture();
+  if (posture === "off") return null;
+  try {
+    const quotaCounts = def.quotas?.length ? await loadQuotaCounts(existing.survey_id, !!existing.is_test) : {};
+    const check = checkSubmission({
+      def,
+      prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null },
+      posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed },
+      quotaCounts,
+    });
+    if (check.hard.length || check.soft.length) {
+      console[check.hard.length ? "warn" : "info"]("[rescript:save] submission check", JSON.stringify({
+        sessionId: sessionId.slice(0, 8), surveyId: existing.survey_id, isTest: !!existing.is_test, posture,
+        status: posted.status, stepIndex: posted.stepIndex, replayedPages: check.replayedPages, endStatus: check.endStatus ?? null,
+        wouldRefuse: check.hard.length > 0 && !existing.is_test,
+        hard: check.hard, soft: check.soft,
+      }));
+    }
+    return check;
+  } catch (e) {
+    console.error("[rescript:save] submission check failed (stored as posted)", JSON.stringify({ sessionId: sessionId.slice(0, 8), error: (e as Error).message }));
+    return null;
+  }
 }
 
 /**

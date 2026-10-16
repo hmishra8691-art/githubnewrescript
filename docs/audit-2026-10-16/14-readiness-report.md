@@ -8,7 +8,7 @@ Commit audited: `b0dbe08` (`main`). Date: 2026-10-16.
 ## Blockers (must ship before release)
 | # | Blocker | Register | Evidence of fix required |
 |---|---|---|---|
-| B1 | Server trusts respondent client for answers/status (P0) and mints sessions on password/closed surveys | RUNTIME-01, RUNTIME-02 | DB-backed `runtime-trust-test` green; one release of log-only enforcement showing zero false rejections |
+| B1 | Server trusts respondent client for answers/status (P0 — **fixed 2026-10-16, ships in `log` posture; enforce after review**) and mints sessions on password/closed surveys (RUNTIME-02 still open) | RUNTIME-01, RUNTIME-02 | DB-backed `runtime-trust-test` green; one release of log-only enforcement showing zero false rejections |
 | B2 | AI-generated questions lose intrinsic validation; no semantic validation; non-numbers pass numeric bounds | QT-01/AI-01, QT-02, QT-03 | age-validation boundary table 10/10 for integer-age; browser e2e refuses `25.5`; registry tests for email/phone/postal/url/percent/currency |
 | B3 | Hand-edited option/row codes break logic silently; calcs null-out renamed codes | LOGIC-01, LOGIC-03 | ref-integrity and calc-eq scripts pass; codes-sync suite extended |
 | B4 | MaxDiff collection and analysis defects | METHOD-01/02/03 | engine + analytics tests; browser methodology suite |

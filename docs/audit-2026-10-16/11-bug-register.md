@@ -13,6 +13,7 @@ Repo at commit `b0dbe08` (branch `main`, after the script-pipeline unification).
 ## A. P0 — critical
 
 ### RUNTIME-01 · Respondent API stores whatever the client posts — no server-side validation, status or flow check
+- **Fix status (2026-10-16):** FIXED behind `RUNTIME_SERVER_VALIDATION` (default `log`, switch to `enforce` after a log-only period) — engine `checkSubmission` replays the interview server-side; see `docs/RUNTIME-SERVER-VALIDATION-2026-10-16.md`. Tests: engine `serverValidation.test.ts` (7), templates `serverCheck.test.ts` (no false refusals on every template + master-demo test paths).
 - **Module / feature:** `apps/runtime/app/api/session/save/route.ts` · response collection.
 - **Category:** data integrity / security.
 - **Status:** BROKEN (code-verified by orchestrator; no DB here, so not exercised against Postgres).
