@@ -282,6 +282,60 @@ export function environmentCells(row: QualityExportRow): string[] {
   return [row.state.isTest ? "TEST" : "LIVE"];
 }
 
+/**
+ * DOC-09 — the quality engine's SYSTEM_* variables, as columns. Every
+ * assessment stores them (`responses.quality->system`); a client cleaning the
+ * data their own way needs the per-category scores, the duration ratio, the
+ * attention counts and the cluster id, not only the verdict.
+ *
+ * Exported: the SCALAR variables. Not exported, on purpose: the identifiers
+ * the file already carries (SESSION_ID / START_TIME), the three already in the
+ * quality block (QUALITY_STATUS / QUALITY_SCORE / FRAUD_RISK_SCORE), the
+ * per-page / per-question / per-grid maps (no rectangular cell holds a map),
+ * and the fingerprints and hashes (IP, device, answer, open-end, grid and
+ * navigation signatures, similar-respondent ids) — pseudonymous identifiers
+ * for matching respondents inside the platform, not data for delivery.
+ * Off unless asked for (`buildExportExtra({ system: true })`).
+ */
+export const SYSTEM_EXPORT_COLUMNS: { name: string; label: string; numeric: boolean }[] = [
+  { name: "SYSTEM_END_TIMESTAMP", label: "Interview end time", numeric: false },
+  { name: "SYSTEM_TOTAL_DURATION", label: "Total duration, seconds", numeric: true },
+  { name: "SYSTEM_MEDIAN_DURATION", label: "Benchmark (median or estimated) duration, seconds", numeric: true },
+  { name: "SYSTEM_DURATION_RATIO", label: "Duration / benchmark", numeric: true },
+  { name: "SYSTEM_TAB_SWITCH_COUNT", label: "Times the tab lost focus", numeric: true },
+  { name: "SYSTEM_TOTAL_OUT_OF_FOCUS_TIME", label: "Seconds out of focus", numeric: true },
+  { name: "SYSTEM_COPY_COUNT", label: "Copy events", numeric: true },
+  { name: "SYSTEM_PASTE_COUNT", label: "Paste events", numeric: true },
+  { name: "SYSTEM_PASTE_CHARS", label: "Characters pasted", numeric: true },
+  { name: "SYSTEM_BACK_COUNT", label: "Back navigations", numeric: true },
+  { name: "SYSTEM_RELOAD_COUNT", label: "Page reloads", numeric: true },
+  { name: "SYSTEM_DEVICE_TYPE", label: "Device type", numeric: false },
+  { name: "SYSTEM_BROWSER", label: "Browser", numeric: false },
+  { name: "SYSTEM_OS", label: "Operating system", numeric: false },
+  { name: "SYSTEM_SCREEN_SIZE", label: "Screen size", numeric: false },
+  { name: "SYSTEM_TIMEZONE", label: "Time zone", numeric: false },
+  { name: "SYSTEM_LOCALE", label: "Browser locale", numeric: false },
+  { name: "SYSTEM_NETWORK_RISK", label: "Network risk score", numeric: true },
+  { name: "SYSTEM_ATTENTION_FAILED", label: "Attention checks failed", numeric: true },
+  { name: "SYSTEM_ATTENTION_PASSED", label: "Attention checks passed", numeric: true },
+  ...["SPEEDER", "STRAIGHTLINE", "ATTENTION", "CONSISTENCY", "OPENEND", "NAVIGATION", "BOT", "DUPLICATE", "PATTERN", "CLUSTER", "DEVICE", "INTERACTION", "SCREENER"]
+    .map((c) => ({ name: `SYSTEM_${c}_SCORE`, label: `${c.charAt(0)}${c.slice(1).toLowerCase()} category score, 0-100`, numeric: true })),
+  { name: "SYSTEM_SIMILARITY_SCORE", label: "Highest similarity to another response, 0-1", numeric: true },
+  { name: "SYSTEM_CLUSTER_ID", label: "Similarity cluster", numeric: false },
+  { name: "SYSTEM_CLUSTER_RISK_SCORE", label: "Cluster risk score", numeric: true },
+  { name: "SYSTEM_FLAG_COUNT", label: "Quality flags raised", numeric: true },
+  { name: "SYSTEM_HIGH_SEVERITY_FLAGS", label: "High-severity quality flags", numeric: true },
+];
+export function systemCells(row: QualityExportRow): (string | number)[] {
+  const sys = row.quality?.system ?? {};
+  return SYSTEM_EXPORT_COLUMNS.map((c) => {
+    const v = sys[c.name];
+    if (v === undefined || v === null) return "";
+    if (c.numeric) return typeof v === "number" && Number.isFinite(v) ? v : "";
+    return typeof v === "string" || typeof v === "number" ? v : "";
+  });
+}
+
 /** CSV columns appended to the main data when quality columns are requested. */
 export const QUALITY_CSV_COLUMNS = ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS"] as const;
 export function qualityCsvCells(row: QualityExportRow): (string | number)[] {

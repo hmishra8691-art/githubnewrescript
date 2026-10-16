@@ -170,9 +170,13 @@ export interface QualityFlag {
 }
 
 /**
- * The hidden system variables. Every value here is exported with the
- * response (prefixed SYSTEM_) and is what custom rules test against as
- * `calc.SYSTEM_*`. Kept flat and JSON-friendly.
+ * The hidden system variables: what custom rules test against as
+ * `calc.SYSTEM_*`, stored with every assessment (`responses.quality->system`;
+ * the JSON export carries only SYSTEM_TOTAL_DURATION, as `durationSec`). The response-data
+ * exports (CSV / .sav / .xpt / .dta) carry the SCALAR ones as columns when
+ * asked for (`buildExportExtra({ system: true })`, `SYSTEM_EXPORT_COLUMNS` in
+ * @rescript/exporters); the per-page maps, the signatures and the IP/device
+ * hashes stay inside the platform. Kept flat and JSON-friendly.
  */
 export interface SystemVars {
   SYSTEM_RESPONSE_ID: string;

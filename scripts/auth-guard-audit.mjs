@@ -78,10 +78,18 @@ const PUBLIC = {
     "advances story-report video exports in the background: the same bearer-token credential as the media job, checked "
     + "against CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. "
     + "It touches only queued exports whose lease has lapsed, so there is no project to gate on — and no session",
+  "cron/housekeeping/route.ts":
+    "the weekly retention sweep (migration 0058): the same bearer-token credential as the media job, checked against "
+    + "CRON_SECRET by `timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It deletes "
+    + "only expired or aged rows by a fixed rule, so there is no project to gate on — and no session",
   "cron/billing-reservations/route.ts":
     "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
     + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "
     + "project to gate on — and no session, because a scheduler has none",
+  "cron/expire-partials/route.ts":
+    "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
+    + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "
+    + "refusing everything when it is unset. It sweeps every survey, so there is no project to gate on — and no session",
 };
 
 /**

@@ -7,6 +7,7 @@ import { RULES } from "./catalogue.js";
 import { noisyOr, classify } from "./score.js";
 import { gibberishScore, isGenericAnswer, polishedTextScore, textSimilarity, isDiagonal, repeatingPeriod } from "./metrics.js";
 import { clusterSurvey, comparable, pairSimilarity, valueFrequencies } from "./similarity.js";
+import { timingQuantumMs } from "./rules/timing.js";
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -299,6 +300,36 @@ test("timing pattern match: the same per-page profile as another respondent", ()
   const a = assess({ def: def(), response: response({ secs: twinSecs.map((s) => s * 1.02) }), peers: p });
   assert.ok(has(a, "timing.pattern_match"), ruleIds(a).join());
   assert.deepEqual(a.flags.find((f) => f.ruleId === "timing.pattern_match")!.relatedSessionIds, [twin.sessionId]);
+});
+
+test("timing pattern match (CLEAN-12): whole-second page times that differ do not match", () => {
+  // two careful respondents whose true times differed, both recorded to the whole second: every
+  // short page collides at 0 s difference and the long ones differ by 1–2 s (all within 5% before the fix)
+  const p = peers(12);
+  const otherSecs = [6, 10, 44, 31, 8, 68, 21, 22];
+  const other = response({ secs: otherSecs });
+  const otherA = assess({ def: def(), response: other, peers: p });
+  p.push({ sessionId: other.sessionId, status: "complete", answers: other.answers, startedAt: other.startedAt, completedAt: other.completedAt, ipHash: "ipY", deviceHash: "devY", system: otherA.system });
+  const a = assess({ def: def(), response: response({ secs: HUMAN_SECS }), peers: p });
+  assert.ok(!has(a, "timing.pattern_match"), ruleIds(a).join());
+});
+
+test("timing pattern match (CLEAN-12): a flat profile at the clock's resolution has no shape to match", () => {
+  const p = peers(12);
+  const flat = HUMAN_SECS.map(() => 30);
+  const other = response({ secs: flat });
+  const otherA = assess({ def: def(), response: other, peers: p });
+  p.push({ sessionId: other.sessionId, status: "complete", answers: other.answers, startedAt: other.startedAt, completedAt: other.completedAt, ipHash: "ipZ", deviceHash: "devZ", system: otherA.system });
+  const a = assess({ def: def(), response: response({ secs: flat }), peers: p });
+  assert.ok(!has(a, "timing.pattern_match"), ruleIds(a).join());
+});
+
+test("timingQuantumMs reads the rounding step of a profile", () => {
+  assert.equal(timingQuantumMs([6, 10, 45, 30]), 1000);
+  assert.equal(timingQuantumMs([6.5, 10, 45.5]), 500);
+  assert.equal(timingQuantumMs([5.7, 9.5, 42.8]), 100);
+  assert.equal(timingQuantumMs([5.814, 9.69, 43.605]), 0);
+  assert.equal(timingQuantumMs([6, 10]), 0);
 });
 
 /* ------------------------------------------------------------- matrix */

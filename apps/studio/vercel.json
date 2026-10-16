@@ -16,6 +16,14 @@
     {
       "path": "/api/cron/story-renders",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/expire-partials",
+      "schedule": "41 * * * *"
+    },
+    {
+      "path": "/api/cron/housekeeping",
+      "schedule": "43 3 * * 0"
     }
   ]
 }

@@ -1,6 +1,6 @@
 import type { FlagDraft, RuleContext } from "../types.js";
 import { pageBenchmark, pageSeconds, questionSeconds, totalBenchmark, totalSeconds } from "../benchmarks.js";
-import { cv, median, normalizedEntropy, pct, round1 } from "../metrics.js";
+import { cv, median, normalizedEntropy, pct, round1, stddev } from "../metrics.js";
 import { isMatrix, isOpen, isRespondentQuestion, pageQuestionIds, pageWordCount, screenerQuestionIds } from "../survey.js";
 
 const fmtSec = (s: number) => {
@@ -8,6 +8,19 @@ const fmtSec = (s: number) => {
   const m = Math.floor(s / 60); const r = Math.round(s - m * 60);
   return `${m}:${String(r).padStart(2, "0")}`;
 };
+
+/**
+ * The rounding step of a set of page times given in seconds, in ms: the
+ * coarsest of 1 s, 0.5 s, 0.1 s and 10 ms that every value is a multiple of,
+ * else 0 (millisecond telemetry). Fewer than three values say nothing.
+ */
+export function timingQuantumMs(secs: number[]): number {
+  if (secs.length < 3) return 0;
+  for (const q of [1000, 500, 100, 10]) {
+    if (secs.every((s) => { const ms = s * 1000; return Math.abs(ms - Math.round(ms / q) * q) < 1e-6 * Math.max(1, ms); })) return q;
+  }
+  return 0;
+}
 
 export function timingRules(ctx: RuleContext): FlagDraft[] {
   const drafts: FlagDraft[] = [];
@@ -268,9 +281,25 @@ export function timingRules(ctx: RuleContext): FlagDraft[] {
       if (peer.sessionId === ctx.response.sessionId) continue;
       const theirs = peer.system?.SYSTEM_PAGE_TIME;
       if (!theirs) continue;
-      const common = pageIds.filter((pid) => theirs[pid] !== undefined && mine[pid] !== undefined && mine[pid] > 0);
+      const shared = pageIds.filter((pid) => theirs[pid] !== undefined && mine[pid] !== undefined && mine[pid] > 0);
+      if (shared.length < minPages) continue;
+      /*
+       * IN MILLISECONDS, NET OF THE CLOCK'S RESOLUTION (audit CLEAN-12). Two
+       * profiles rounded to whole seconds collide on every short page whatever
+       * the true times were — a 6 s page has a 300 ms tolerance and a 1 000 ms
+       * rounding step. Each side may be off by half its own step, so a page
+       * counts as close only when the difference PLUS that slack still fits
+       * the tolerance; a page whose tolerance is smaller than the slack cannot
+       * evidence anything and is left out. Peers' stored times are rounded to
+       * 0.1 s, so the slack is never below 50 ms against a stored profile.
+       */
+      const slackMs = (timingQuantumMs(shared.map((pid) => mine[pid])) + timingQuantumMs(shared.map((pid) => theirs[pid]))) / 2;
+      const common = shared.filter((pid) => tol * mine[pid] * 1000 >= slackMs);
       if (common.length < minPages) continue;
-      const close = common.filter((pid) => Math.abs(theirs[pid] - mine[pid]) / Math.max(mine[pid], 0.5) <= tol);
+      // a profile flat at the clock's resolution has no shape to match (timing.uniform owns that signal)
+      const spreadMs = (stddev(common.map((pid) => mine[pid] * 1000)) ?? 0);
+      if (spreadMs < 2 * slackMs) continue;
+      const close = common.filter((pid) => Math.abs(theirs[pid] - mine[pid]) * 1000 + slackMs <= tol * Math.max(mine[pid], 0.5) * 1000);
       if (close.length === common.length) matches.push(peer.sessionId);
     }
     if (matches.length) {

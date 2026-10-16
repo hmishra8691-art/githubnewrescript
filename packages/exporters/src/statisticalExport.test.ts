@@ -1044,6 +1044,31 @@ test("CSV, .sav, .xpt and .dta carry the same status columns in the same positio
   assert.ok(responsesToSasSyntax(def, states, { extra }).includes("RESPONSE_STATUS"), "the SAS syntax reads the column the CSV carries");
 });
 
+test("DOC-09: system=1 appends the scalar SYSTEM_* variables last, numeric in the .sav, maps and hashes never", () => {
+  const sysRows: QualityExportRow[] = [
+    { ...qualityRows[0], quality: { ...qualityRows[0].quality!, system: { SYSTEM_TOTAL_DURATION: 212, SYSTEM_DURATION_RATIO: 0.84, SYSTEM_SPEEDER_SCORE: 12, SYSTEM_ATTENTION_FAILED: 1, SYSTEM_DEVICE_TYPE: "desktop", SYSTEM_CLUSTER_ID: "c3", SYSTEM_IP_HASH: "abc", SYSTEM_PAGE_TIME: { p1: 6 } } } },
+    qualityRows[1],
+  ];
+  // without the flag the delivery is unchanged
+  assert.deepEqual(buildExportExtra(sysRows, { quality: true })!.columns, ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS"]);
+  const extra = buildExportExtra(sysRows, { quality: true, environment: true, system: true })!;
+  assert.deepEqual(extra.columns.slice(0, 5), ["QUALITY_STATUS", "QUALITY_SCORE", "FRAUD_RISK_SCORE", "RESPONSE_STATUS", "ENVIRONMENT"]);
+  for (const c of ["SYSTEM_TOTAL_DURATION", "SYSTEM_DURATION_RATIO", "SYSTEM_SPEEDER_SCORE", "SYSTEM_ATTENTION_FAILED", "SYSTEM_CLUSTER_ID", "SYSTEM_HIGH_SEVERITY_FLAGS"]) assert.ok(extra.columns.includes(c), c);
+  for (const c of ["SYSTEM_IP_HASH", "SYSTEM_DEVICE_HASH", "SYSTEM_PAGE_TIME", "SYSTEM_ANSWER_SIGNATURE", "SYSTEM_QUALITY_SCORE"]) assert.ok(!extra.columns.includes(c), c);
+  const at = (name: string, i: number) => extra.cells(i)[extra.columns.indexOf(name)];
+  assert.equal(at("SYSTEM_TOTAL_DURATION", 0), 212);
+  assert.equal(at("SYSTEM_DEVICE_TYPE", 0), "desktop");
+  assert.equal(at("SYSTEM_TOTAL_DURATION", 1), "", "an assessment without system vars leaves the cells blank");
+  const def = makeSurvey();
+  const csvHeader = responsesToCSV(def, states, extra).split("\n")[0].split(",");
+  assert.deepEqual(csvHeader, buildResponseMatrix(def, states, { extra }).names);
+  const sav = readSav(responsesToSav(def, states, { extra }));
+  assert.equal(sav.cases[0].SYSTEM_DURATION_RATIO, 0.84, "numeric in the .sav");
+  assert.equal(sav.widths.SYSTEM_TOTAL_DURATION, undefined, "declared numeric, not string");
+  assert.ok(sav.widths.SYSTEM_DEVICE_TYPE > 0, "strings stay strings");
+  assert.equal(sav.labels.SYSTEM_TOTAL_DURATION, "Total duration, seconds");
+});
+
 test("pyreadstat reads RESPONSE_STATUS / QUALITY / ENVIRONMENT back from the .sav, .xpt and .dta, with the scores numeric and the blank score missing", { skip: !pyreadstat && "python3 with pyreadstat is not installed" }, () => {
   const def = makeSurvey();
   // a third, never-assessed response: its numeric scores must read as missing, not 0 or ""

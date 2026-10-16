@@ -26,7 +26,6 @@ function parseDataset(raw: string | null): DatasetFilter {
 
 /** Response data export (CSV / JSON / XLSX) + summary counts. */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const format = req.nextUrl.searchParams.get("format") ?? "summary";
   /*
    * DOC-07 (audit 2026-10-16). The summary count is a READ; a file that
    * leaves the platform is an EXPORT, and the role model keeps the two
@@ -34,8 +33,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * off with the dataset. One gate for both meant every viewer could download
    * CSV/XLSX/SPSS/SAS/Stata/JSON of every response.
    */
-  const gate = await requireProject(req, params.id, format === "summary" ? "responses.read" : "responses.export");
+  const gate = await requireProject(req, params.id, (req.nextUrl.searchParams.get("format") ?? "summary") === "summary" ? "responses.read" : "responses.export");
   if (isFailure(gate)) return gate.response;
+  const format = req.nextUrl.searchParams.get("format") ?? "summary";
+  // DOC-09: the SYSTEM_* quality variables, last in the column order, when asked for
+  const withSystem = req.nextUrl.searchParams.get("system") === "1";
 
   const db = supabaseAdmin();
   // include=live|test|all ("test=1" kept for backwards compatibility)
@@ -398,7 +400,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * after the variables, and the SAS CSV and syntax get the same set so the
      * three never disagree.
      */
-    const statExtra = buildExportExtra(kept, { quality: withQuality, statusWhenMarked: true, environment: withEnvironment, dataset });
+    const statExtra = buildExportExtra(kept, { quality: withQuality, statusWhenMarked: true, environment: withEnvironment, dataset, system: withSystem });
     const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
@@ -522,6 +524,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     quality: withQuality || (dataset.kind === "all" && kept.some((r) => r.review.status === "REMOVE")),
     environment: withEnvironment,
     dataset,
+    system: withSystem,
   });
   /*
    * DOC-10. Excel on Windows opens a BOM-less UTF-8 file as the system code

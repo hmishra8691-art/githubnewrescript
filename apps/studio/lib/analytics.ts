@@ -1,4 +1,5 @@
 import { singleFlight } from "./singleFlight";
+import { BoundedLru } from "./boundedLru";
 import { stableStringify } from "@/lib/stableJson";
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -82,7 +83,14 @@ export function rowCacheStats() { return { entries: rowCache.size, bytes: cacheB
  * the dataset staler than it already was; it only stops the same question
  * being asked ten times in one breath.
  */
-const stampCache = new Map<string, { at: number; stamp: string }>();
+/*
+ * Bounded (ANALYTICS-11): one entry per survey × environment ever reported on
+ * used to live for the life of the instance. 500 most-recently-used keys is
+ * far more than are live inside one 2-second window. The stamp stays per
+ * environment, not per status / date range — a new partial invalidates a
+ * completes-only cache too, which costs a recompute and is never stale.
+ */
+const stampCache = new BoundedLru<string, { at: number; stamp: string }>(500);
 const STAMP_TTL_MS = 2_000;
 
 async function dataStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> {

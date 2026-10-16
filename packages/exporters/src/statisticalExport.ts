@@ -9,7 +9,7 @@ import { buildZip } from "./zip.js";
 import { variableDictionaryToCSV } from "./csv.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { spssBasesSyntax } from "./spssBases.js";
-import { QUALITY_CSV_COLUMNS, SAMPLE_COLUMNS, ENVIRONMENT_COLUMNS, qualityCsvCells, sampleCells, environmentCells, type DatasetFilter, type QualityExportRow } from "./responseQuality.js";
+import { QUALITY_CSV_COLUMNS, SAMPLE_COLUMNS, ENVIRONMENT_COLUMNS, SYSTEM_EXPORT_COLUMNS, qualityCsvCells, sampleCells, environmentCells, systemCells, type DatasetFilter, type QualityExportRow } from "./responseQuality.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -165,6 +165,7 @@ const EXTRA: { name: string; label: string; numeric: boolean }[] = [
   { name: "SAMPLE_SOURCE", label: "Sample supplier", numeric: false },
   { name: "SAMPLE_SOURCE_RESPONDENT", label: "Supplier's respondent identifier", numeric: false },
   { name: "ENVIRONMENT", label: "TEST or LIVE interview", numeric: false },
+  ...SYSTEM_EXPORT_COLUMNS,
 ];
 
 function systemVariable(name: string): { label: string; numeric: boolean } | undefined {
@@ -177,7 +178,7 @@ const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name))
 
 /**
  * The extra columns for one delivery, composed in the one order every format
- * uses (quality, sample, environment), so the CSV, the .sav, the SAS bundle
+ * uses (quality, sample, environment, then SYSTEM_* when `system` asks), so the CSV, the .sav, the SAS bundle
  * and the .dta carry the same columns in the same positions.
  *
  * `rows` must be the rows being delivered, in delivery order. Quality /
@@ -188,16 +189,19 @@ const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name))
  */
 export function buildExportExtra(
   rows: QualityExportRow[],
-  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean } = {},
+  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean; system?: boolean } = {},
 ): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
   const marked = rows.some((r) => !!r.quality || !!r.review.status);
   const withQuality = !!opts.quality || (!!opts.statusWhenMarked && (marked || (opts.dataset?.kind ?? "all") !== "all"));
   const withSample = rows.some((r) => !!r.state.sampleSource);
   const withEnvironment = !!opts.environment;
+  // DOC-09: the SYSTEM_* block goes LAST, so a file asked for without it keeps every column position it had
+  const withSystem = !!opts.system;
   const columns = [
     ...(withQuality ? QUALITY_CSV_COLUMNS : []),
     ...(withSample ? SAMPLE_COLUMNS : []),
     ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
+    ...(withSystem ? SYSTEM_EXPORT_COLUMNS.map((c) => c.name) : []),
   ];
   if (!columns.length) return undefined;
   return {
@@ -206,6 +210,7 @@ export function buildExportExtra(
       ...(withQuality ? qualityCsvCells(rows[i]) : []),
       ...(withSample ? sampleCells(rows[i]) : []),
       ...(withEnvironment ? environmentCells(rows[i]) : []),
+      ...(withSystem ? systemCells(rows[i]) : []),
     ],
   };
 }
