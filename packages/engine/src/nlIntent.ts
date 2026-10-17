@@ -489,6 +489,24 @@ const deferred: Recogniser = (r) => {
   return null;
 };
 
+/* ---------------------------------------------------------- look and behaviour: popups, messages, tooltips */
+
+/**
+ * "When Q3 option 2 is selected, show a small hint popup", "if Q3 = 1 show a
+ * message saying thanks", "show an alert if Q1 is under 18": the thing shown
+ * is not a question but a survey behaviour (P3, 2026-10-17). Display logic
+ * read these as "show question ‘a popup’" and refused them ("There is no
+ * question …"), so the request never reached the model and its UX guide. A
+ * popup, message, tooltip, banner, alert or animation goes to the model; a
+ * question that happens to be called that ("show the message question") does not.
+ */
+const UX_THING = String.raw`(?:pop[\s-]?ups?|modals?|dialog(?:ue)?s?|light[\s-]?box(?:es)?|overlays?|tool[\s-]?tips?|hints?|banners?|alerts?|toasts?|notifications?|messages?|notes?|warnings?|callouts?|animations?|confetti|badges?)`;
+const UX_SHOW = new RegExp(String.raw`\b(?:show|display|open|pop\s*up|present|trigger|play|flash|add|put|give)\s+(?:(?:an?|the|one|some|this|that)\s+)?(?:[\w’'-]+\s+){0,3}?${UX_THING}\b(?!\s+(?:question|item)\b)`, "i");
+const uxLook: Recogniser = (r) => {
+  if (!UX_SHOW.test(r.text)) return null;
+  return { kind: "model", category: "survey_editing", reason: MODEL_REASONS.survey_editing!, detected: namedObjects(r) };
+};
+
 /* ---------------------------------------------------------- queries: dependencies */
 
 /** the Studio's sections, in the order an inspector lists them */
@@ -2871,7 +2889,7 @@ function fallback(r: Run): Interpretation {
  */
 const RECOGNISERS: Recogniser[] = [
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
-  deferred, longBrief,
+  deferred, uxLook, longBrief,
   surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
@@ -2887,7 +2905,7 @@ function interpret(r: Run): Interpretation {
     if (!out) continue;
     r.ctx.debug?.(`[nl] ${rec.name} → ${out.kind}`);
     /* a recogniser that hands on to the model, or that could not find the object it was given, lets the semantic tier try first (Phase 7) */
-    if (r.depth === 0 && rec !== deferred && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
+    if (r.depth === 0 && rec !== deferred && rec !== uxLook && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
       const sem = semantic(r);
       if (sem) return sem;
     }

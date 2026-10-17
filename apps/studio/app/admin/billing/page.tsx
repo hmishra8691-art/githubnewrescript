@@ -29,7 +29,7 @@ type Tab = "wallets" | "transfers" | "requests" | "config" | "rates" | "events";
 interface WalletRow { id: string; surveyId: string | null; customerId: string; sharedWalletId: string | null; currency: string; project: { code: string; title: string; status: string; owner: string | null; customer: string | null } | null; balance: number; reserved: number; totalAdded: number; totalUsed: number; state: string; level: string; overdraftEnabled: boolean | null; overdraftLimit: number | null; usage: { today: number; thisWeek: number; thisMonth: number }; costs: { providerCost: number; infraCost: number; paymentFee: number; taxReserve: number; grossProfit: number; netProfit: number; marginPct: number }; events: number }
 interface RequestRow { id: string; surveyId: string | null; requestedAmount: number; reason: string; message: string | null; status: string; createdAt: string; requester: string; project: { code: string; title: string } | null; decidedAmount: number | null; adminNote: string | null }
 interface ConfigField { key: string; label: string; kind: "pct" | "money" | "number" | "bool" | "enum"; group: string; help: string; options?: string[] }
-interface Rate { id: string; provider: string; service: string; model: string | null; side: "input" | "output" | null; unit: string; providerCost: number; unitSize: number; markupPct: number; customerRate: number | null; currency: string; effectiveFrom: string | null; effectiveUntil: string | null; active: boolean; estimated: boolean; note: string }
+interface Rate { id: string; provider: string; service: string; model: string | null; side: "input" | "output" | "cache_read" | "cache_write" | null; unit: string; providerCost: number; unitSize: number; markupPct: number; customerRate: number | null; currency: string; effectiveFrom: string | null; effectiveUntil: string | null; active: boolean; estimated: boolean; note: string }
 interface EventDef { type: string; label: string; category: string; unit: string; billable: boolean; rate: { provider: string; service: string; model?: string | null } | null; description: string; active: boolean }
 
 async function call<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; json: T & { error?: string; code?: string; issues?: string[] } }> {
@@ -482,7 +482,7 @@ function RatesTab({ say }: { say: (t: string, ok?: boolean) => void }) {
   React.useEffect(() => { void load(); }, [load]);
   const save = async () => {
     if (!edit) return;
-    const rate = { ...edit, id: edit.id || `${edit.provider}.${edit.service}.${edit.model ?? "*"}${edit.side ? `.${edit.side === "input" ? "in" : "out"}` : ""}`, model: edit.model || null };
+    const rate = { ...edit, id: edit.id || `${edit.provider}.${edit.service}.${edit.model ?? "*"}${edit.side ? `.${edit.side === "input" ? "in" : edit.side === "output" ? "out" : edit.side}` : ""}`, model: edit.model || null };
     const r = await call("/api/admin/billing/rates", { method: "PUT", body: JSON.stringify({ rate }) });
     if (!r.ok) { say([r.json.error, ...(r.json.issues ?? [])].filter(Boolean).join(" · "), false); return; }
     say(`Rate ${rate.id} saved.`); setEdit(null); await load();
@@ -529,7 +529,7 @@ function RatesTab({ say }: { say: (t: string, ok?: boolean) => void }) {
               <label className="flabel">Service</label><input className="input small" value={edit.service} onChange={(e) => f("service", e.target.value)} placeholder="translate · chat · tts · storage" data-testid="rate-service" />
               <label className="flabel">Model (blank or * = any)</label><input className="input small" value={edit.model ?? ""} onChange={(e) => f("model", e.target.value || null)} data-testid="rate-model" />
               <label className="flabel">Side (two-sided token pricing)</label>
-              <select className="select small" value={edit.side ?? ""} onChange={(e) => f("side", e.target.value || null)}><option value="">single-sided</option><option value="input">input</option><option value="output">output</option></select>
+              <select className="select small" value={edit.side ?? ""} onChange={(e) => f("side", e.target.value || null)}><option value="">single-sided</option><option value="input">input</option><option value="output">output</option><option value="cache_read">cached input (read)</option><option value="cache_write">cache write</option></select>
             </div>
             <div className="bl-form">
               <label className="flabel">Unit</label>

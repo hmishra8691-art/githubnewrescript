@@ -1054,6 +1054,11 @@ const QuestionObject = z.object({
        * value, so nothing downstream knows or cares that it was spoken.
        * `speechLang` is a BCP-47 tag for the recogniser; unset, the survey's
        * language is used, then the browser's.
+       *
+       * ON BY DEFAULT since October 2026: absent means every eligible free-text
+       * field of the question (its text answer, its "Other, specify" boxes,
+       * its text fields) takes dictation; `false` opts the question out.
+       * `true` is what older surveys stored to opt in, and still means on.
        */
       speechInput: z.boolean().optional(),
       speechLang: z.string().optional(),

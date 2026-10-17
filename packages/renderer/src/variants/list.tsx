@@ -6,6 +6,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField, SliderCell, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { SpeechInputButton } from "../SpeechInput";
 import { anchor, cellAnchor } from "../authoring";
 import { CellMultiDropdown } from "../cellMultiDropdown";
 
@@ -102,6 +103,10 @@ export function DynamicList(p: QRProps) {
               if (e.key === "Enter" && i === lines.length - 1) { e.preventDefault(); add(); }
             }}
           />
+          {/* dictation into this line (text lines only — the control skips every formatted field type) */}
+          <SpeechInputButton def={p.def} q={p.q} value={v} compact
+            field={{ kind: "field", fieldType: field.fieldType, row: field }} label={`${field.label.replace(/<[^>]*>/g, "")} ${i + 1}`}
+            onChange={(x) => setLine(i, x)} />
           <button type="button" className="rs-dynlist-remove"
             data-line={i}
             aria-label={`Remove line ${i + 1}`}

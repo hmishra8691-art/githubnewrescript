@@ -2,7 +2,7 @@ import { billingConfig, type BillingConfig } from "./config.js";
 import { money6 } from "./money.js";
 import { priceOperation, type ChargeBreakdown } from "./pricing.js";
 import {
-  DEFAULT_BILLABLE_EVENTS, DEFAULT_RATES, eventDef, findRate, fixedChargeFor, providerCostFor,
+  DEFAULT_BILLABLE_EVENTS, DEFAULT_RATES, cacheRateFor, eventDef, findRate, fixedChargeFor, providerCostFor,
   type BillableEventDef, type Rate, type UsageCategory,
 } from "./registry.js";
 import {
@@ -54,6 +54,13 @@ export interface UsageSpec {
   /** two-sided pricing (AI tokens): priced from the provider's input / output rows */
   inputUnits?: number | null;
   outputUnits?: number | null;
+  /**
+   * Of `inputUnits`: the tokens the provider READ from / WROTE to its prompt
+   * cache. Priced at the model's `cache_read` / `cache_write` rates (its input
+   * rate when it has none); the rest of the input at the input rate.
+   */
+  cacheReadUnits?: number | null;
+  cacheWriteUnits?: number | null;
   unit?: string;
   /** the vendor's cost when the caller knows it (invoice data); otherwise computed from the registry */
   providerCost?: number | null;
@@ -76,6 +83,11 @@ export interface Priced {
   rate: Rate | null;
   rateIn: Rate | null;
   rateOut: Rate | null;
+  /** the prompt-cache rates the cached part of the input was priced at (null: at the input rate) */
+  rateCacheRead?: Rate | null;
+  rateCacheWrite?: Rate | null;
+  /** the input split as it was priced: uncached, read from the cache, written to it */
+  tokens?: { input: number; uncachedInput: number; cacheRead: number; cacheWrite: number; output: number };
   event: BillableEventDef;
   billable: boolean;
   category: UsageCategory;
@@ -494,12 +506,33 @@ export function priceSpec(spec: UsageSpec, environment: Environment, cfg: Billin
   const model = spec.model ?? event.rate?.model ?? null;
   const twoSided = spec.inputUnits != null || spec.outputUnits != null;
   let rate: Rate | null = null, rateIn: Rate | null = null, rateOut: Rate | null = null;
+  let rateCacheRead: Rate | null = null, rateCacheWrite: Rate | null = null;
+  let tokens: Priced["tokens"];
   let providerCost = 0;
   let quantity = spec.quantity ?? 0;
   if (twoSided && provider && service) {
     rateIn = findRate(rates, { provider, service, model, side: "input" });
     rateOut = findRate(rates, { provider, service, model, side: "output" });
-    providerCost = money6(providerCostFor(rateIn, spec.inputUnits ?? 0) + providerCostFor(rateOut, spec.outputUnits ?? 0));
+    /*
+     * THE INPUT IN THREE PARTS (AI cost audit, 2026-10-17). What the provider
+     * read from its prompt cache and what it wrote into it are billed by the
+     * provider at their own rates; the customer's charge follows that cost
+     * under the same margin model. The parts are clamped to the input they
+     * belong to, so a malformed report can never price more than was sent.
+     */
+    const input = Math.max(0, spec.inputUnits ?? 0);
+    const cacheRead = Math.min(input, Math.max(0, spec.cacheReadUnits ?? 0));
+    const cacheWrite = Math.min(input - cacheRead, Math.max(0, spec.cacheWriteUnits ?? 0));
+    const output = Math.max(0, spec.outputUnits ?? 0);
+    tokens = { input, uncachedInput: input - cacheRead - cacheWrite, cacheRead, cacheWrite, output };
+    if (cacheRead > 0) rateCacheRead = cacheRateFor(rates, rateIn, "cache_read");
+    if (cacheWrite > 0) rateCacheWrite = cacheRateFor(rates, rateIn, "cache_write");
+    providerCost = money6(
+      providerCostFor(rateIn, tokens.uncachedInput)
+      + providerCostFor(rateCacheRead ?? rateIn, cacheRead)
+      + providerCostFor(rateCacheWrite ?? rateIn, cacheWrite)
+      + providerCostFor(rateOut, output),
+    );
     if (!spec.quantity) quantity = (spec.inputUnits ?? 0) + (spec.outputUnits ?? 0);
   } else if (provider && service) {
     rate = findRate(rates, { provider, service, model });
@@ -512,7 +545,7 @@ export function priceSpec(spec: UsageSpec, environment: Environment, cfg: Billin
   const breakdown = billable
     ? priceOperation({ providerCost, infraCost }, cfg, { fixedCustomerCharge: fixed, environment })
     : { ...priceOperation({ providerCost, infraCost }, cfg, { fixedCustomerCharge: 0, environment }), fixedRate: false };
-  return { breakdown, rate, rateIn, rateOut, event, billable, category: event.category, unit: spec.unit ?? event.unit, quantity };
+  return { breakdown, rate, rateIn, rateOut, rateCacheRead, rateCacheWrite, tokens, event, billable, category: event.category, unit: spec.unit ?? event.unit, quantity };
 }
 
 function eventInput(ctx: MeterContext, spec: UsageSpec, priced: Priced, walletId: string | null, reservationId: string | null): UsageEventInput {
@@ -526,7 +559,15 @@ function eventInput(ctx: MeterContext, spec: UsageSpec, priced: Priced, walletId
     providerCost: b.providerCost, infraCost: b.infraCost, paymentFee: b.paymentFee, taxReserve: b.taxReserve,
     customerCharge: b.customerCharge, grossProfit: b.grossProfit, netProfit: b.netProfit, marginPct: b.marginPct,
     reservationId, adjustsEventId: null, idempotencyKey: spec.idempotencyKey ?? null,
-    metadata: { ...(spec.metadata ?? {}), billable: priced.billable, testAdjustment: b.testAdjustment, minimumApplied: b.minimumApplied, fixedRate: b.fixedRate, rateId: priced.rate?.id ?? null, rateInId: priced.rateIn?.id ?? null, rateOutId: priced.rateOut?.id ?? null },
+    metadata: {
+      ...(spec.metadata ?? {}), billable: priced.billable, testAdjustment: b.testAdjustment, minimumApplied: b.minimumApplied, fixedRate: b.fixedRate, rateId: priced.rate?.id ?? null, rateInId: priced.rateIn?.id ?? null, rateOutId: priced.rateOut?.id ?? null,
+      /* the floor, when it lifted the price, says by how much — a minimum is never silently a fee */
+      ...(b.minimumApplied ? { minimumLift: b.minimumLift } : {}),
+      /* WHY THIS MUCH: the tokens as they were priced, so a customer (and support) can see what was cached */
+      ...(priced.tokens ? { tokens: { input: priced.tokens.input, cachedInput: priced.tokens.cacheRead, cacheWrite: priced.tokens.cacheWrite, uncachedInput: priced.tokens.uncachedInput, output: priced.tokens.output } } : {}),
+      ...(priced.rateCacheRead ? { rateCacheReadId: priced.rateCacheRead.id } : {}),
+      ...(priced.rateCacheWrite ? { rateCacheWriteId: priced.rateCacheWrite.id } : {}),
+    },
   };
 }
 

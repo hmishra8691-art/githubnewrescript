@@ -702,6 +702,10 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-speech-btn.listening { border-color: var(--rs-danger, #d02b2b); color: var(--rs-danger, #d02b2b); }
 .rs-speech-live { color: var(--rs-subtle); font-style: italic; }
 .rs-speech-reason { color: var(--rs-danger, #d02b2b); }
+/* the icon-sized mic beside an inline box: an "Other, specify" box, a form / list field */
+.rs-speech.compact { display: inline-flex; flex: 0 0 auto; gap: 6px; margin-left: 6px; font-size: 0.86em; }
+.rs-speech.compact .rs-speech-btn { padding: 4px 8px; line-height: 1.2; }
+.rs-other-below + .rs-speech.compact { margin: 6px 0 0; }
 
 /* ---------- empty states in the preview ---------- */
 .rs-empty-hint {
@@ -922,6 +926,50 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-popup-message p { margin: 0 0 8px; }
 .rs-popup-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 @media (max-width: 480px) { .rs-popup-actions .rs-btn { flex: 1 1 100%; } }
+
+/* ── The survey's own popup (UX effect show_popup / a script's rs.popup) ──────
+   Drawn by uxPopup.ts inside the survey shell, so it takes the theme variables
+   and, in the Studio's preview, stays inside the preview. center: a modal
+   centred over the survey (90vw on a phone); anchored: a bubble next to its
+   target; top: a banner; inline: a box in the question's card. */
+.rs-ux-popup-layer {
+  position: fixed; inset: 0; z-index: 2147482000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; box-sizing: border-box; background: rgba(15, 23, 42, 0.45);
+}
+.rs-ux-popup {
+  position: relative; box-sizing: border-box; width: min(460px, 90vw); max-height: calc(100vh - 32px); overflow: auto;
+  background: var(--rs-surface, #fff); color: var(--rs-text, #111827);
+  border: 1px solid var(--rs-border, rgba(0, 0, 0, 0.08)); border-top: 4px solid var(--rs-primary, #2563eb);
+  border-radius: var(--rs-radius, 12px); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+  padding: 20px 48px 20px 22px; font-family: var(--rs-font, inherit); font-size: 1rem; line-height: 1.5; text-align: start;
+}
+.rs-ux-popup:focus { outline: none; }
+.rs-ux-popup-title { font-weight: 700; font-size: 1.12em; margin: 0 0 6px; }
+.rs-ux-popup-text { overflow-wrap: anywhere; white-space: pre-line; }
+.rs-ux-popup-close {
+  position: absolute; top: 8px; inset-inline-end: 8px; width: 36px; height: 36px; padding: 0;
+  border: 0; border-radius: 999px; background: transparent; color: inherit;
+  font-size: 24px; line-height: 1; cursor: pointer; opacity: 0.7;
+}
+.rs-ux-popup-close:hover, .rs-ux-popup-close:focus-visible { opacity: 1; background: rgba(127, 127, 127, 0.15); }
+.rs-ux-popup-close:focus-visible { outline: 2px solid var(--rs-focus, var(--rs-primary, #2563eb)); outline-offset: 2px; }
+.rs-ux-popup-top {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2147482000;
+  width: min(560px, calc(100vw - 24px));
+}
+.rs-ux-popup-top .rs-ux-popup { width: 100%; }
+.rs-ux-popup-anchored { position: absolute; z-index: 2147482000; width: min(320px, calc(100vw - 16px)); }
+.rs-ux-popup-anchored .rs-ux-popup { width: 100%; padding: 12px 42px 12px 14px; font-size: 0.95rem; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2); }
+.rs-ux-popup-anchored .rs-ux-popup-close { top: 4px; width: 32px; height: 32px; font-size: 20px; }
+.rs-ux-popup-inline { margin-top: 12px; }
+.rs-ux-popup-inline .rs-ux-popup { width: 100%; max-height: none; box-shadow: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .rs-ux-popup-layer[data-rs-ux-anim] { animation: rs-ux-popup-fade 0.16s ease-out; }
+  [data-rs-ux-anim] .rs-ux-popup { animation: rs-ux-popup-in 0.18s ease-out; }
+}
+@keyframes rs-ux-popup-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes rs-ux-popup-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 /* ---------- multi-select dropdown inside a matrix cell ---------- */
 .rs-cmd { display: inline-block; max-width: 100%; min-width: 150px; }

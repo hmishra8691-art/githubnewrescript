@@ -19,7 +19,8 @@ import { parseIntent, EXAMPLES } from "../../lib/intelligent/grammar";
 import { planProposal, type Proposal, type Intent } from "../../lib/intelligent/proposal";
 import { surveyContext } from "../../lib/intelligent/context";
 import { coerceIntent } from "../../lib/intelligent/ai";
-import { languageName, pickRecordingMime, type HeardTranscript } from "../../lib/intelligent/voice";
+import { languageName, type HeardTranscript } from "../../lib/intelligent/voice";
+import { useVoiceInput } from "../../lib/useVoiceInput";
 import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/import/chat";
 import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
 import type { QuotaImportNote } from "./copilot/QuotasTab";
@@ -118,8 +119,7 @@ const importFiles = new Map<string, File>();
 const sessions = new Map<string, Entry[]>();
 /** whether /api/ai/logic answered (true), refused (false) or has not been asked yet — for the page's lifetime */
 let aiKnown: boolean | null = null;
-/** the same for /api/ai/transcribe: null until the first recording is sent */
-let sttKnown: boolean | null = null;
+/* /api/ai/transcribe's availability is kept by the shared microphone hook (lib/useVoiceInput) */
 
 const PREFS_KEY = "rescript.intelligent";
 function loadPrefs(): { inspector: number } {
@@ -611,77 +611,19 @@ export function IntelligentView() {
    * comes back is asked exactly as a typed sentence would be, with what was
    * heard kept on the turn so the programmer can check the reading.
    */
-  const [voice, setVoice] = React.useState<"idle" | "recording" | "transcribing">("idle");
-  const [sttAvailable, setSttAvailableState] = React.useState<boolean | null>(sttKnown);
-  const setSttAvailable = React.useCallback((v: boolean) => { sttKnown = v; setSttAvailableState(v); }, []);
-  const [voiceError, setVoiceError] = React.useState<string | null>(null);
-  const recorder = React.useRef<{ rec: MediaRecorder; stream: MediaStream; chunks: Blob[]; timer: number } | null>(null);
-  const hintRef = React.useRef<{ hint: string; language: string } | null>(null);
-
-  const sendRecording = React.useCallback(async (blob: Blob) => {
-    setVoice("transcribing");
-    try {
-      const form = new FormData();
-      form.append("audio", blob, "instruction.webm");
-      form.append("surveyId", s.surveyDbId);
-      // the browser suites, against the fake provider, say what the fake should have heard
-      if (hintRef.current) { form.append("hint", hintRef.current.hint); form.append("hintLanguage", hintRef.current.language); hintRef.current = null; }
-      const r = await fetch("/api/ai/transcribe", { method: "POST", body: form });
-      if (r.status === 501) { setSttAvailable(false); setVoiceError("No transcription provider is configured on this Studio."); return; }
-      const d = await r.json().catch(() => null) as { ok?: boolean; text?: string; language?: string; english?: string; model?: string; error?: string } | null;
-      if (!r.ok || !d?.ok) { setVoiceError(d?.error ?? `Transcription failed (${r.status}).`); return; }
-      setSttAvailable(true);
-      const heard: HeardTranscript = { text: d.text ?? "", language: d.language ?? "en", ...(d.english ? { english: d.english } : {}), ...(d.model ? { model: d.model } : {}) };
-      const sentence = (heard.english || heard.text).trim();
-      if (!sentence) { setVoiceError("I could not make out any words — try again, a little closer to the microphone."); return; }
+  /* the recording itself — MediaRecorder → /api/ai/transcribe, states, errors, the 45 s limit and the fake provider's hint seam — is the shared hook the Branding theme assistant uses too */
+  const voiceIn = useVoiceInput({
+    surveyId: s.surveyDbId,
+    refusedMessage: "Microphone access was refused — allow it in the browser to speak an instruction.",
+    onTranscript: async (heard) => {
       setText("");
-      await ask(sentence, heard);
-    } catch (e) {
-      setVoiceError((e as Error).message);
-    } finally {
-      setVoice("idle");
-    }
-  }, [ask, s.surveyDbId, setSttAvailable]);
-
-  const stopRecording = React.useCallback(() => {
-    const r = recorder.current;
-    if (!r) return;
-    window.clearTimeout(r.timer);
-    if (r.rec.state !== "inactive") r.rec.stop();
-  }, []);
-
-  const startRecording = React.useCallback(async () => {
-    setVoiceError(null);
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { setVoiceError("This browser cannot record audio."); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = pickRecordingMime((m) => MediaRecorder.isTypeSupported(m));
-      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      const chunks: Blob[] = [];
-      rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-      rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        recorder.current = null;
-        const blob = new Blob(chunks, { type: rec.mimeType || mimeType || "audio/webm" });
-        if (blob.size === 0) { setVoice("idle"); setVoiceError("Nothing was recorded."); return; }
-        void sendRecording(blob);
-      };
-      rec.start(250);
-      const timer = window.setTimeout(() => stopRecording(), 45_000);
-      recorder.current = { rec, stream, chunks, timer };
-      setVoice("recording");
-    } catch (e) {
-      setVoiceError(/NotAllowed|Permission/i.test(String((e as Error).name)) ? "Microphone access was refused — allow it in the browser to speak an instruction." : (e as Error).message);
-      setVoice("idle");
-    }
-  }, [sendRecording, stopRecording]);
-  React.useEffect(() => () => { const r = recorder.current; if (r) { window.clearTimeout(r.timer); r.stream.getTracks().forEach((t) => t.stop()); } }, []);
-  const toggleVoice = () => { if (voice === "recording") stopRecording(); else if (voice === "idle") void startRecording(); };
-  // the browser suites set the fake provider's transcript through a global hook, since a fake cannot hear
-  React.useEffect(() => {
-    (window as unknown as { __rescriptVoiceHint?: (hint: string, language?: string) => void }).__rescriptVoiceHint = (hint, language = "en") => { hintRef.current = { hint, language }; };
-    return () => { delete (window as unknown as { __rescriptVoiceHint?: unknown }).__rescriptVoiceHint; };
-  }, []);
+      await ask((heard.english || heard.text).trim(), heard);
+    },
+  });
+  const voice = voiceIn.state;
+  const sttAvailable = voiceIn.available;
+  const voiceError = voiceIn.error;
+  const toggleVoice = voiceIn.toggle;
 
   /* -------------------------------------------------------------- resize */
   const dragging = React.useRef<{ startX: number; start: number } | null>(null);

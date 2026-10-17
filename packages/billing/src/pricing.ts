@@ -49,6 +49,8 @@ export interface ChargeBreakdown {
   grossMarginPct: number;
   /** the minimum-charge floor lifted the price */
   minimumApplied: boolean;
+  /** by how much the floor lifted it (0 when it did not) — recorded on the event, so a floor is never an invisible fee */
+  minimumLift: number;
   /** a fixed customer rate from the registry was used instead of the model */
   fixedRate: boolean;
   /** TEST usage policy applied: free or discounted */
@@ -100,8 +102,17 @@ export function priceOperation(costs: CostInputs, cfg: BillingConfig, opts: Pric
     charge = base / denom;
   }
 
+  /*
+   * THE FLOOR (`minimumChargePerOperation`, default 0.001, 0 = none). It lifts
+   * only an operation whose priced charge is below it — a few hundred tokens
+   * of a small model — and never one that costs more: a $0.16 copilot call is
+   * charged $0.16, not a fixed amount. When it lifts, the event says so and by
+   * how much (`minimumApplied`, `minimumLift`).
+   */
   let minimumApplied = false;
+  let minimumLift = 0;
   if (!opts.noMinimum && !fixedRate && base > 0 && cfg.minimumChargePerOperation > 0 && charge < cfg.minimumChargePerOperation) {
+    minimumLift = money6(cfg.minimumChargePerOperation - charge);
     charge = cfg.minimumChargePerOperation;
     minimumApplied = true;
   }
@@ -122,7 +133,7 @@ export function priceOperation(costs: CostInputs, cfg: BillingConfig, opts: Pric
     customerCharge: charge, grossProfit, netProfit,
     marginPct: charge > 0 ? Math.round((netProfit / charge) * 10000) / 100 : 0,
     grossMarginPct: charge > 0 ? Math.round((grossProfit / charge) * 10000) / 100 : 0,
-    minimumApplied, fixedRate, testAdjustment,
+    minimumApplied, minimumLift, fixedRate, testAdjustment,
   };
 }
 

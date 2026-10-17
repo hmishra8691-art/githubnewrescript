@@ -188,29 +188,35 @@ const OVERLAY = `(function(){
   rs.after(30, function(){ overlay.style.opacity = '1'; });
   rs.after(2200, function(){ overlay.style.opacity = '0'; rs.after(350, function(){ if (overlay.parentElement) overlay.parentElement.removeChild(overlay); }); });
 })();`;
+const NOTE = "rs.showMessage('self', 'You are eligible to proceed!');";
 
 test("21:25 — a script with on/options (\"run this when option 1 is selected\") is written the supported way, not refused", () => {
+  // the wrapping is what is tested here; the hand-built OVERLAY itself is refused since P3 (popup.test.ts)
   const r = applySurveyActions(popupSurvey(), [
-    { op: "create_behavior", label: "Q2 Eligible Popup on Yes", target: "Q2", on: "select_option", options: ["1"], script: OVERLAY },
-    { op: "create_behavior", label: "Q1 Welcome Popup", target: "Q1", on: "appear", script: OVERLAY.replace("You are eligible to proceed!", "Welcome Americans!") },
+    { op: "create_behavior", label: "Q2 Eligible Popup on Yes", target: "Q2", on: "select_option", options: ["1"], script: NOTE },
+    { op: "create_behavior", label: "Q1 Welcome Popup", target: "Q1", on: "appear", script: NOTE.replace("You are eligible to proceed!", "Welcome Americans!") },
   ] as never);
   assert.deepEqual(r.results.map((x) => x.ok), [true, true], r.errors.join("; "));
   const [q2, q1] = r.def.ux!.behaviors;
   assert.equal(q2!.on, undefined); assert.equal(q2!.options, undefined);
   assert.ok(q2!.script!.startsWith(`rs.listen("select", "self", function (e) {\n  if (["1"].indexOf(String(e.option)) < 0) return;\n`), q2!.script);
   assert.ok(q2!.script!.includes("You are eligible to proceed!"));
-  assert.equal(q1!.script, OVERLAY.replace("You are eligible to proceed!", "Welcome Americans!"), "appear: the script runs when the page opens, as written");
+  assert.equal(q1!.script, NOTE.replace("You are eligible to proceed!", "Welcome Americans!"), "appear: the script runs when the page opens, as written");
   assert.deepEqual(validateUxScript(q2!.script!, r.def).errors, [], "the wrapped script passes the runtime gate");
   // the same on update_behavior
   const u = applySurveyActions(r.def, [{ op: "update_behavior", id: q1!.id, on: "deselect_option", options: ["1"], script: "rs.hideMessage('self');" }] as never);
   assert.equal(u.results[0]!.ok, true, u.errors.join("; "));
   assert.match(u.def.ux!.behaviors[1]!.script!, /^rs\.listen\("deselect", "self"/);
   // options on an event that has none, and an unknown event, are refused with the reason
-  assert.match(applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "x", target: "Q2", on: "hover", options: ["1"], script: OVERLAY }] as never).errors.join(" "), /options apply to select_option/);
+  assert.match(applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "x", target: "Q2", on: "hover", options: ["1"], script: NOTE }] as never).errors.join(" "), /options apply to select_option/);
 });
 
-test("21:23 — the age popup (overlay on document.body, inline transitions) is accepted; <style> in document.head and inline keyframes are not", () => {
-  const ok = applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "Q3 popup", target: "Q3", script: `var box = document.querySelector('[data-qid="q_age"] input');\nfunction show(){ if (parseInt(box.value, 10) >= 18) { ${OVERLAY} } }\nbox.addEventListener('input', show);` }] as never);
+test("21:23 — the age popup as a hand-built overlay is refused with the survey's popup as the fix (P3); <style> in document.head and inline keyframes are refused too", () => {
+  const no = applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "Q3 popup", target: "Q3", script: `var box = document.querySelector('[data-qid="q_age"] input');\nfunction show(){ if (parseInt(box.value, 10) >= 18) { ${OVERLAY} } }\nbox.addEventListener('input', show);` }] as never);
+  assert.equal(no.results[0]!.ok, false);
+  assert.match(no.errors.join(" "), /builds its own popup .*covers the whole screen.*show_popup.*rs\.popup/);
+  // the same intent through the survey's popup passes
+  const ok = applySurveyActions(popupSurvey(), [{ op: "create_behavior", label: "Q3 popup", target: "Q3", script: `rs.listen("answer", "self", function (e) { if (Number(e.value) >= 18) rs.popup("You are an eligible voter!", { placement: "center" }); else rs.closePopup(); });` }] as never);
   assert.equal(ok.results[0]!.ok, true, ok.errors.join("; "));
   const head = scriptAuthoringProblems(`var s = document.createElement('style'); s.textContent = '@keyframes rsFadeIn{from{opacity:0}to{opacity:1}}'; document.head.appendChild(s); var o = document.createElement('div'); o.style.cssText = 'animation:rsFadeIn 0.35s ease'; document.body.appendChild(o);`, popupSurvey());
   assert.ok(head.some((e) => /cannot add a <style> element/.test(e) && /create_animation/.test(e)), head.join("\n"));

@@ -761,7 +761,16 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       } else if (a.js !== undefined) {
         const ux = (def.ux ??= { styles: [], animations: [], behaviors: [] });
         const mine = (b: UxBehavior) => b.source === "copilot_custom_code" && b.target.questionId === q.id;
-        const had = ux.behaviors.find(mine);
+        /*
+         * THE QUESTION'S OLD CUSTOM CODE IS THIS CODE (P3 audit). The Studio migrates `customJs` into a
+         * script (source "question_custom_js") as soon as a survey is opened, so by the time this action
+         * runs the old code is usually that script, not the field — and it used to be left in place, so
+         * the old code and the new one both ran on the page. Writing the question's code supersedes it,
+         * in either form; the replacement keeps its id, so it stays where it was in the list.
+         */
+        const legacy = ux.behaviors.filter((b) => b.source === "question_custom_js" && b.target.questionId === q.id);
+        const had = ux.behaviors.find(mine) ?? legacy[0];
+        for (const old of legacy.filter((b) => b !== had)) { ux.behaviors.splice(ux.behaviors.indexOf(old), 1); changed.push("old custom JavaScript script superseded"); lossy.push(`${a.js === null ? "removes" : "replaces"} the old custom JavaScript of ${q.code} (${(old.script ?? "").length} characters, moved into a script)`); }
         /* an un-migrated legacy field on this question is superseded by what is written here (it would otherwise run as well) */
         if (q.customJs !== undefined) { lossy.push(`${a.js === null ? "removes" : "replaces"} the old custom JavaScript of ${q.code} (${q.customJs.length} characters)`); delete q.customJs; changed.push("old custom JavaScript moved"); }
         if (a.js === null) {

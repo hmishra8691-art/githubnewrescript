@@ -74,7 +74,8 @@ test("the repair call is built with the reply schema, and so is every completeJs
   assert.equal(o.schema, COPILOT_REPLY_SCHEMA);
   assert.equal(o.operation, "copilot_edit_repair");
   const src = readFileSync(new URL("../../app/api/copilot/turn/route.ts", import.meta.url), "utf8");
-  const calls = [...src.matchAll(/completeJson\(COPILOT_SYSTEM_PROMPT,[\s\S]*?operation: `?"?([a-z_${}]+)/g)].map((m) => ({ text: m[0], op: m[1] }));
+  /* the system prompt goes first — as a string, or as the cacheable blocks `copilotCall` builds (AI cost audit, 2026-10-17) */
+  const calls = [...src.matchAll(/completeJson\((?:COPILOT_SYSTEM_PROMPT,|\.\.\.copilotCall\()[\s\S]*?operation: `?"?([a-z_${}]+)/g)].map((m) => ({ text: m[0], op: m[1] }));
   assert.ok(calls.length >= 5, `found ${calls.length} calls`);
   for (const c of calls) assert.ok(/schema: (COPILOT_REPLY_SCHEMA|CHANGE_PLAN_SCHEMA)|replyCallOptions\(/.test(c.text), `${c.op} passes a schema`);
   assert.ok(calls.some((c) => /_repair/.test(c.op) && /replyCallOptions\(/.test(c.text)), "the repair call is among them");

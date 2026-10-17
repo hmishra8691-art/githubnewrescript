@@ -18,6 +18,12 @@
  *   honesty    no false "cannot create a <script>" diagnostics; a <style>-in-head script is refused
  *              on the card with the reason; the turn's memory says what was NOT applied
  *
+ * P3 (2026-10-17): a hand-built overlay (a position:fixed div on the body) is now REFUSED where it is
+ * written, with the survey's own popup as the fix. So the 21:23 field answer is refused on the card and
+ * its correction (rs.popup / rs.closePopup) is what gets applied; the 21:25 answers are written the way
+ * the guide now teaches (on/options + a script that calls rs.popup) and are still accepted first time.
+ * Popups are counted by their text as the survey draws them ([data-rs-ux-popup]).
+ *
  *   node scripts/style-script-p0-test.mjs     (studio :3000 with AI_API_URL=fake:, runtime :3001)
  */
 import assert from "node:assert/strict";
@@ -55,6 +61,10 @@ const AGE_POPUP = `var box = document.querySelector('[data-qid="q_age"] input');
 var shownFor = null;
 function show() { var n = parseInt(box.value, 10); if (isNaN(n) || n < 18) { shownFor = null; return; } if (shownFor === n) return; shownFor = n; ${overlay("age", "You are an Eligible Voter!")} }
 box.addEventListener('input', show);`;
+/* the correction, through the survey's own popup: shown from 18, closed below */
+const AGE_POPUP_FIXED = `var box = document.querySelector('[data-qid="q_age"] input');
+function show() { var n = parseInt(box.value, 10); if (n >= 18) rs.popup('You are an Eligible Voter!', { placement: 'center' }); else rs.closePopup(); }
+box.addEventListener('input', show);`;
 
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
@@ -90,24 +100,30 @@ await switchMode(page, "intelligent");
 await page.waitForSelector('[data-testid="intelligent-view"]');
 
 { // 21:23 — "javascript … popup when the age is 18+": validation + script; look-only was only inferred
-  const body = await say("Q3 pe mujhe javascript lagana hai, agar age ki value 18 ke upar dalta hu to wahan pe automatic popup hokar aana chahiye ki you are eligible voter", {
+  const body = await say("Q3 pe mujhe javascript lagana hai, agar age ki value 18 ke upar dalta hu to wahan pe automatic popup hokar aana chahiye ki you are eligible voter", [{
     kind: "proposal", reply: "Q3: validation + popup.", memory: "Q3 validation: integer, min_value:18. Q3 behaviour: popup on 18+.",
     actions: [
       { op: "set_validation", target: "Q3", rules: [{ kind: "integer" }, { kind: "min_value", value: 18, message: "You must be 18 years or older to participate in this survey." }] },
       { op: "create_behavior", label: "Q3 age popup", target: "Q3", script: AGE_POPUP },
     ],
-  });
+  }, { // P3: the hand-built overlay is refused; the correction uses the survey's popup
+    kind: "proposal", reply: "Q3: the popup through the survey's own popup.", memory: "Q3 validation: integer, min_value:18. Q3 behaviour: rs.popup on 18+.",
+    actions: [{ op: "create_behavior", label: "Q3 age popup", target: "Q3", script: AGE_POPUP_FIXED }],
+  }]);
   assert.equal(body.context.uxOnly, true, "look-only was inferred from the words");
+  assert.match((body.context.repair?.refused ?? []).join(" "), /builds its own popup .*covers the whole screen.*show_popup/, "P3: the hand-built overlay is refused with the survey's popup as the fix");
+  assert.equal(body.context.repair.fixed, true);
   assert.deepEqual(body.validation.results.map((r) => r.ok), [true, true], JSON.stringify(body.validation.errors));
   await apply();
-  ok("21:23: the min-18 validation is no longer refused when look-only is only inferred — validation and popup both applied");
+  ok("21:23: the min-18 validation is no longer refused when look-only is only inferred; the hand-built overlay is refused (P3) and its rs.popup correction applied");
 }
 { // 21:25 — scripts written with on/options
   const body = await say("मुझे अभी क्यूँ एन को पे लगाना है पॉप अप खुड़ा आए की वैलकुम अमेरीकनस और क्यूँ टू पे या सलेक करूगी तो फिर लिख कर आए you are eligible to proceed जावसक्रिप्ट", {
     kind: "proposal", reply: "Q1 welcome popup; Q2 Yes popup.", memory: "Q1 appear → welcome popup; Q2 option 1 → eligible popup.",
     actions: [
-      { op: "create_behavior", label: "Q1 Welcome Popup", target: "Q1", on: "appear", script: overlay("welcome", "Welcome Americans!") },
-      { op: "create_behavior", label: "Q2 Eligible Popup on Yes", target: "Q2", on: "select_option", options: ["1"], script: overlay("eligible", "You are eligible to proceed!") },
+      // as the model writes them with the P3 guide: the event and options as on/options, the popup through rs.popup
+      { op: "create_behavior", label: "Q1 Welcome Popup", target: "Q1", on: "appear", script: "rs.popup('Welcome Americans!', { placement: 'top', dismiss: 'auto', autoMs: 1500 });" },
+      { op: "create_behavior", label: "Q2 Eligible Popup on Yes", target: "Q2", on: "select_option", options: ["1"], script: "rs.popup('You are eligible to proceed!', { placement: 'top', dismiss: 'auto', autoMs: 1500 });" },
     ],
   });
   assert.deepEqual(body.validation.results.map((r) => r.ok), [true, true], JSON.stringify(body.validation.errors));
@@ -115,7 +131,7 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   assert.ok(body.validation.results.every((r) => /not run yet — try it in Preview/.test(r.description)), "each says checked, not run");
   // the card's preview runs the scripts inside the Studio: a popup must stay in the preview, never cover the Studio
   await page.waitForTimeout(600);
-  const outside = await page.$$eval("[data-pop]", (els) => els.filter((e) => !e.closest('[data-testid="cp-ux-shell"]')).length);
+  const outside = await page.$$eval("[data-pop], [data-rs-ux-popup]", (els) => els.filter((e) => !e.closest('[data-testid="cp-ux-shell"]')).length);
   assert.equal(outside, 0, "a script's popup in the Studio preview stays inside the preview");
   await apply();
   ok("21:25: “on select_option 1 + script” and “on appear + script” are accepted first time (no repair call), marked checked-not-run, and their popups stay inside the Studio preview");
@@ -158,21 +174,22 @@ const logs = [], rtErrors = [];
 rt.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
 rt.on("pageerror", (e) => rtErrors.push(String(e)));
 await rt.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-// every popup a script ever adds, counted by the page itself (a page's own changes are undone when it is left)
+// every popup the survey opens, counted by its text by the page itself (a page's own changes are undone when it is left)
 await rt.evaluate(() => {
   window.__pops = {};
-  new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeType === 1 && n.getAttribute("data-pop")) { const k = n.getAttribute("data-pop"); window.__pops[k] = (window.__pops[k] ?? 0) + 1; } }).observe(document.body, { childList: true, subtree: true });
+  new MutationObserver((rs) => { for (const r of rs) for (const n of r.addedNodes) if (n.nodeType === 1 && n.hasAttribute("data-rs-ux-popup")) { const k = n.querySelector(".rs-ux-popup-text")?.textContent ?? ""; window.__pops[k] = (window.__pops[k] ?? 0) + 1; } }).observe(document.body, { childList: true, subtree: true });
 });
+const WELCOME = "Welcome Americans!", ELIGIBLE = "You are eligible to proceed!", AGE = "You are an Eligible Voter!";
 await sendPreview(rt, { definition: { ...def, meta: { ...def.meta, id: "p0style" } } }, { selector: '[data-qid="q_consent"]' });
 const count = (id) => rt.evaluate((k) => window.__pops[k] ?? 0, id);
 const waitCount = (id, n) => rt.waitForFunction(([k, v]) => (window.__pops[k] ?? 0) >= v, [id, n], { timeout: 8000 });
-const visibleText = () => rt.evaluate(() => [...document.querySelectorAll("[data-pop]")].map((e) => e.textContent).join("|"));
+const visibleText = () => rt.evaluate(() => [...document.querySelectorAll("[data-rs-ux-popup]")].map((e) => e.textContent).join("|"));
 
-await waitCount("welcome", 1);
+await waitCount(WELCOME, 1);
 assert.match(await visibleText(), /Welcome Americans!/);
 await rt.waitForTimeout(400);
-assert.equal(await count("welcome"), 1, "once on open");
-ok("Q1: the welcome popup appears once when the page opens (an overlay on the page, fixed)");
+assert.equal(await count(WELCOME), 1, "once on open");
+ok("Q1: the welcome popup appears once when the page opens (the survey's own popup, a banner)");
 
 await rt.click('[data-qid="q_consent"] label:has-text("Continue")');
 await rt.click('[data-testid="rs-next"]');
@@ -180,11 +197,11 @@ await rt.waitForSelector('[data-qid="q_cit"]');
 const border = (qid) => rt.$eval(`[data-qid="${qid}"]`, (e) => getComputedStyle(e).borderTopColor);
 assert.equal(await border("q_cit"), "rgb(220, 20, 60)", "Q2 has the border");
 await rt.click('[data-qid="q_cit"] label:has-text("No")'); await rt.waitForTimeout(500);
-assert.equal(await count("eligible"), 0, "No does not fire the Yes popup");
+assert.equal(await count(ELIGIBLE), 0, "No does not fire the Yes popup");
 await rt.click('[data-qid="q_cit"] label:has-text("Yes")');
-await waitCount("eligible", 1);
+await waitCount(ELIGIBLE, 1);
 await rt.waitForTimeout(500);
-assert.equal(await count("eligible"), 1, "one Yes, one popup");
+assert.equal(await count(ELIGIBLE), 1, "one Yes, one popup");
 assert.match(await visibleText(), /You are eligible to proceed!/);
 const anim = await rt.$$eval('[data-qid="q_cit"] [data-rs-el="option"]', (els) => els.some((e) => /rs-ux/.test(getComputedStyle(e).animationName) || e.getAnimations().length > 0));
 assert.ok(anim, "the pulse played on the selected option");
@@ -192,14 +209,14 @@ ok("Q2: the scoped border, Yes → exactly one “eligible” popup (No → none
 
 await rt.click('[data-testid="rs-back"]');
 await rt.waitForSelector('[data-qid="q_consent"]');
-await waitCount("welcome", 2);
+await waitCount(WELCOME, 2);
 await rt.waitForTimeout(500);
-assert.equal(await count("welcome"), 2, "back on Q1: shown once more, not twice more");
+assert.equal(await count(WELCOME), 2, "back on Q1: shown once more, not twice more");
 await rt.click('[data-testid="rs-next"]');
 await rt.waitForSelector('[data-qid="q_cit"]');
 assert.equal(await border("q_cit"), "rgb(220, 20, 60)");
 await rt.waitForTimeout(300);
-assert.equal(await count("eligible"), 1, "coming back to Q2 with Yes kept does not fire the select popup again");
+assert.equal(await count(ELIGIBLE), 1, "coming back to Q2 with Yes kept does not fire the select popup again");
 ok("Next → Back → Next: the page's script starts once per visit, no accumulated handlers, the style is still applied");
 
 const prevBorder = await rt.$eval('[data-qid="q_cit"]', (e) => getComputedStyle(e).borderTopColor);
@@ -207,14 +224,16 @@ await rt.click('[data-testid="rs-next"]');
 await rt.waitForSelector('[data-qid="q_age"] input');
 assert.notEqual(await border("q_age"), prevBorder, "Q3 is not affected by Q2's style");
 await rt.fill('[data-qid="q_age"] input', "17"); await rt.waitForTimeout(400);
-assert.equal(await count("age"), 0);
+assert.equal(await count(AGE), 0);
 await rt.click('[data-testid="rs-next"]'); await rt.waitForTimeout(700);
 assert.ok(await rt.$('[data-qid="q_age"] input'), "17: cannot continue");
 assert.match(await rt.textContent('[data-qid="q_age"]'), /You must be 18 years or older/);
 await rt.fill('[data-qid="q_age"] input', "25");
-await waitCount("age", 1);
+await waitCount(AGE, 1);
 assert.match(await visibleText(), /You are an Eligible Voter!/);
-ok("Q3: 17 → validation stops Next with its message; 25 → the popup; Q2's style does not leak to Q3");
+await rt.click('[data-testid="rs-ux-popup-close"]');
+assert.equal(await rt.$$eval("[data-rs-ux-popup]", (e) => e.length), 0, "the close button closes it");
+ok("Q3: 17 → validation stops Next with its message; 25 → the survey's centred popup, closed with its button; Q2's style does not leak to Q3");
 
 await rt.click('[data-testid="rs-next"]');
 await rt.waitForFunction(() => /complete|thank/i.test(document.body.innerText) || !!document.querySelector('[data-testid="rs-end"]'), null, { timeout: 10000 });

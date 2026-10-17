@@ -78,6 +78,8 @@ export function publicEvent(e: UsageEvent) {
     provider: e.provider, model: e.model, quantity: e.quantity, unit: e.unit, inputUnits: e.inputUnits, outputUnits: e.outputUnits,
     customerCharge: e.customerCharge,
     reversal: !!e.adjustsEventId, unbilled: e.metadata?.unbilled === true, operation: typeof e.metadata?.operation === "string" ? e.metadata.operation : null, cached: e.metadata?.cached === true,
+    // the input that the provider read from its prompt cache (priced at the cheaper cached rate) — shown so a customer can see why a call cost what it did
+    cachedInputUnits: typeof (e.metadata?.tokens as { cachedInput?: unknown } | undefined)?.cachedInput === "number" ? (e.metadata!.tokens as { cachedInput: number }).cachedInput : null,
     surveyId: e.surveyId,
   };
 }

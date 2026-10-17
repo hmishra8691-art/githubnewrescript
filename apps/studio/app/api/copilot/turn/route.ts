@@ -13,9 +13,11 @@ import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type Cov
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, isSandboxProject, meteredAi, refusalResponse } from "@/lib/metering";
+/* the system prompt and the guides as cacheable system blocks; the outline and the request after them (AI cost audit, 2026-10-17) */
+import { copilotCall } from "@/lib/aiPromptCache";
 import { latestRun } from "@/lib/analytics";
 import { supabaseAdmin } from "@/lib/admin";
-import { describeThemeImage, withThemeImage } from "@/lib/copilot/themeImageText";
+import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
 import { COPILOT_SYSTEM_PROMPT, classifyRequest, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
@@ -110,7 +112,7 @@ const approvedCount = (plan: { items: unknown[] }) => plan.items.length;
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
   const startedAt = Date.now();
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; themeImages?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   /* the researcher chose "send this once" while the project runs Internal: that one request may reach the model (audit A-2); nothing else may */
@@ -143,10 +145,11 @@ export async function POST(req: NextRequest) {
   const themeScope = body.scope === "theme";
   const cls = themeScope ? { ...classified, mode: "ux" as RequestMode, ux: true, uxOnly: true } : classified;
   const mode: RequestMode = body.mode === "review" ? "review" : body.mode === "generate" ? "generate" : cls.mode;
-  /* an image to build the theme from: its colours go to the model, its address stays here */
-  const ti = body.themeImage && typeof body.themeImage === "object" ? body.themeImage as { url?: unknown; name?: unknown; dominant?: unknown; palette?: unknown; dark?: unknown } : null;
-  const themeImageUrl = ti && typeof ti.url === "string" && (/^https:\/\/[^\s"'()<>\\]+$/i.test(ti.url) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(ti.url) || /^\/[^\s"'()<>\\]+$/.test(ti.url)) ? ti.url : null;
-  const themeImageText = ti && themeImageUrl ? describeThemeImage({ name: typeof ti.name === "string" ? ti.name.slice(0, 80) : undefined, dominant: Array.isArray(ti.dominant) ? ti.dominant.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [], palette: ti.palette && typeof ti.palette === "object" ? Object.fromEntries(Object.entries(ti.palette as Record<string, unknown>).filter(([k, v]) => /^[a-z]{2,20}$/i.test(k) && typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v)).slice(0, 16)) as Record<string, string> : {}, dark: ti.dark === true }) : undefined;
+  /* images to build the theme from — one (`themeImage`, Intelligent mode) or up to four references (`themeImages`, Branding's Design with AI): their colours go to the model, their addresses stay here */
+  const okUrl = (u: unknown): u is string => typeof u === "string" && (/^https:\/\/[^\s"'()<>\\]+$/i.test(u) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(u) || /^\/[^\s"'()<>\\]+$/.test(u));
+  const tis = (Array.isArray(body.themeImages) ? body.themeImages.slice(0, 4) : [body.themeImage]).filter((t): t is { url?: unknown; name?: unknown; dominant?: unknown; palette?: unknown; dark?: unknown } => !!t && typeof t === "object" && okUrl((t as { url?: unknown }).url));
+  const themeImageUrl: string[] | null = tis.length ? tis.map((t) => t.url as string) : null;
+  const themeImageText = tis.length ? describeThemeImages(tis.map((ti) => ({ name: typeof ti.name === "string" ? ti.name.slice(0, 80) : undefined, dominant: Array.isArray(ti.dominant) ? ti.dominant.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [], palette: ti.palette && typeof ti.palette === "object" ? Object.fromEntries(Object.entries(ti.palette as Record<string, unknown>).filter(([k, v]) => /^[a-z]{2,20}$/i.test(k) && typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v)).slice(0, 16)) as Record<string, string> : {}, dark: ti.dark === true }))) : undefined;
   const selectedId = typeof body.selectedId === "string" ? body.selectedId : null;
   // a request about the look and behaviour gets the UX guide, the theme and the UX of the questions it names
   const uxTurn = cls.ux || mode === "ux";
@@ -266,7 +269,7 @@ export async function POST(req: NextRequest) {
     try {
       const pb = outputBudget("plan");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
-        () => fitting((c) => shared("plan", promptOf(c) + planStagePrompt(), () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, promptOf(c) + planStagePrompt(), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
+        () => fitting((c) => shared("plan", promptOf(c) + planStagePrompt(), () => model(() => completeJson(...copilotCall(promptOf(c) + planStagePrompt()), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -314,7 +317,7 @@ export async function POST(req: NextRequest) {
       const t0 = Date.now();
       try {
         const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
-          () => fitting((c) => { const p = promptOf(c) + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, p, ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }));
+          () => fitting((c) => { const p = promptOf(c) + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }));
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -371,7 +374,7 @@ export async function POST(req: NextRequest) {
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
-        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, promptOf(c), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
+        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(...copilotCall(promptOf(c)), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -417,7 +420,7 @@ export async function POST(req: NextRequest) {
     try {
       const rb = outputBudget("repair");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPromptText, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
-        () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, repairPromptText, rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
+        () => model(() => completeJson(...copilotCall(repairPromptText), rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
@@ -460,7 +463,7 @@ export async function POST(req: NextRequest) {
       try {
         const cb = outputBudget("coverage");
         const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
-          () => model(() => completeJson(COPILOT_SYSTEM_PROMPT, coveragePrompt, cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
+          () => model(() => completeJson(...copilotCall(coveragePrompt), cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;
           const raw3 = nextFake ?? m.value;

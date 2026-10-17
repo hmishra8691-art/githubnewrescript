@@ -1,7 +1,7 @@
 import type { Condition, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { parseLogicExpression } from "./logicExpression.js";
-import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, effectiveResponseModel } from "@rescript/schema";
-import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, type UxLookups } from "./ux.js";
+import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, UX_POPUP_PLACEMENTS, UX_POPUP_DISMISS, effectiveResponseModel } from "@rescript/schema";
+import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, uxBehaviorKey, uxBehaviorTrigger, UX_HOLDING_EVENTS, type UxLookups } from "./ux.js";
 import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { applyThemePatch } from "./theme.js";
 import { defaultAnswerFor } from "./defaultValue.js";
@@ -42,9 +42,11 @@ export const UX_ACTION_OPS = [
 export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavior_to_option", "attach_behavior_to_block", "attach_behavior_to_page", "create_responsive_rule", "create_behaviour", "update_behaviour", "remove_behaviour"] as const;
 
 export interface RawRule { state?: string; media?: string; whenClass?: string; selector?: string; declarations: Record<string, string> }
-export interface RawEffect { do: string; target?: unknown; className?: string; preset?: string; durationMs?: number; style?: Record<string, string>; text?: string }
+export interface RawEffect { do: string; target?: unknown; className?: string; preset?: string; durationMs?: number; style?: Record<string, string>; text?: string; title?: string; placement?: string; dismiss?: string; autoMs?: number }
+/** update_behavior: a small change to a stored script without sending it again — each `find` must occur exactly once */
+export interface ScriptEdit { find: string; replace: string }
 type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string; when?: string | null };
-type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null };
+type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null; edits?: ScriptEdit[] };
 export type UxAction =
   | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string; when?: string }
   | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null; when?: string | null }
@@ -95,7 +97,13 @@ const effect = (v: unknown): RawEffect | null => {
   const o = v as Record<string, unknown>;
   const d = str(o.do) ?? str(o.effect) ?? str(o.action);
   if (!d) return null;
-  return { do: d, ...(target(o.target) ? { target: target(o.target) } : {}), ...(str(o.className) ?? str(o.class) ? { className: str(o.className) ?? str(o.class) } : {}), ...(str(o.preset) ?? str(o.animation) ? { preset: str(o.preset) ?? str(o.animation) } : {}), ...(ms(o.durationMs ?? o.duration) ? { durationMs: ms(o.durationMs ?? o.duration) } : {}), ...(record(o.style) ? { style: record(o.style) } : {}), ...(str(o.text) ?? str(o.message) ? { text: str(o.text) ?? str(o.message) } : {}) };
+  return { do: d, ...(target(o.target) ? { target: target(o.target) } : {}), ...(str(o.className) ?? str(o.class) ? { className: str(o.className) ?? str(o.class) } : {}), ...(str(o.preset) ?? str(o.animation) ? { preset: str(o.preset) ?? str(o.animation) } : {}), ...(ms(o.durationMs ?? o.duration) ? { durationMs: ms(o.durationMs ?? o.duration) } : {}), ...(record(o.style) ? { style: record(o.style) } : {}), ...(str(o.text) ?? str(o.message) ? { text: str(o.text) ?? str(o.message) } : {}), ...(str(o.title) ?? str(o.heading) ? { title: str(o.title) ?? str(o.heading) } : {}), ...(str(o.placement) ?? str(o.position) ? { placement: str(o.placement) ?? str(o.position) } : {}), ...(str(o.dismiss) ? { dismiss: str(o.dismiss) } : {}), ...(ms(o.autoMs ?? o.autoCloseMs ?? o.closeAfter) ? { autoMs: ms(o.autoMs ?? o.autoCloseMs ?? o.closeAfter) } : {}) };
+};
+/** [{find, replace}] — the model's small change to a stored script (update_behavior "edits") */
+const edits = (v: unknown): ScriptEdit[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.map((x) => { const o = (x ?? {}) as Record<string, unknown>; const find = typeof o.find === "string" ? o.find : typeof o.old === "string" ? o.old : undefined; const replace = typeof o.replace === "string" ? o.replace : typeof o.new === "string" ? o.new : o.replace === null ? "" : undefined; return find !== undefined && replace !== undefined ? { find: find.slice(0, 20000), replace: replace.slice(0, 20000) } : null; });
+  return out.filter((x): x is ScriptEdit => !!x).slice(0, 20);
 };
 const animFields = (o: Record<string, unknown>): AnimFields => ({
   ...(str(o.preset) ?? str(o.animation) ? { preset: str(o.preset) ?? str(o.animation) } : {}),
@@ -174,7 +182,9 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
     case "update_behavior": case "update_behaviour": {
       const id = itemId(o);
       if (!id) return "update_behavior needs the behaviour's id";
-      return { op: "update_behavior", id, ...behFields(o), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(str(o.newLabel) ? { label: str(o.newLabel) } : {}) };
+      const e = edits(o.edits);
+      if (Array.isArray(o.edits) && !e?.length) return "update_behavior edits are [{\"find\":\"text in the script\",\"replace\":\"its replacement\"}]";
+      return { op: "update_behavior", id, ...behFields(o), ...(e?.length ? { edits: e } : {}), ...(target(o.newTarget) ? { target: target(o.newTarget) } : {}), ...(str(o.newLabel) ? { label: str(o.newLabel) } : {}) };
     }
     case "set_theme": case "update_theme": case "set_branding": {
       const patch: Record<string, unknown> = {};
@@ -246,7 +256,8 @@ function buildRules(raw: RawRule[]): UxRule[] {
 }
 function buildEffects(def: SurveyDefinition, raw: RawEffect[], env: UxEnv): UxEffect[] {
   return raw.map((e) => {
-    const d = oneOf(UX_EFFECTS, e.do === "message" ? "show_message" : e.do === "expand" ? "animate" : e.do, "effect")!;
+    const d = oneOf(UX_EFFECTS, e.do === "message" ? "show_message" : e.do === "expand" ? "animate" : EFFECT_ALIASES[e.do.toLowerCase()] ?? e.do, "effect")!;
+    const popup = d === "show_popup";
     return {
       do: d,
       ...(e.target != null && e.target !== "self" ? { target: resolveTarget(def, e.target, env) } : {}),
@@ -255,9 +266,17 @@ function buildEffects(def: SurveyDefinition, raw: RawEffect[], env: UxEnv): UxEf
       ...(e.durationMs ? { durationMs: Math.max(50, Math.min(10000, e.durationMs)) } : {}),
       ...(e.style ? { style: uxDeclarations(e.style) } : {}),
       ...(e.text ? { text: e.text.replace(/<[^>]*>/g, "").slice(0, 600) } : {}),
+      ...(popup && e.title ? { title: e.title.replace(/<[^>]*>/g, "").slice(0, 120) } : {}),
+      ...(popup && e.placement ? { placement: oneOf(UX_POPUP_PLACEMENTS, PLACEMENT_ALIASES[e.placement.toLowerCase()] ?? e.placement, "popup placement")! } : {}),
+      ...(popup && e.dismiss ? { dismiss: oneOf(UX_POPUP_DISMISS, DISMISS_ALIASES[e.dismiss.toLowerCase()] ?? e.dismiss, "popup dismiss")! } : {}),
+      ...(popup && e.autoMs ? { autoMs: Math.max(1000, Math.min(60000, e.autoMs)) } : {}),
     } as UxEffect;
   });
 }
+/* the words a model uses for the survey's popup */
+const EFFECT_ALIASES: Record<string, string> = { popup: "show_popup", show_modal: "show_popup", modal: "show_popup", dialog: "show_popup", open_popup: "show_popup", alert: "show_popup", close_popup: "hide_popup", hide_modal: "hide_popup", close_modal: "hide_popup" };
+const PLACEMENT_ALIASES: Record<string, string> = { centre: "center", centered: "center", centred: "center", middle: "center", modal: "center", anchor: "anchored", tooltip: "anchored", near: "anchored", next_to: "anchored", beside: "anchored", banner: "top", toast: "top", below: "inline", under: "inline", in_card: "inline" };
+const DISMISS_ALIASES: Record<string, string> = { close: "button", close_button: "button", x: "button", manual: "button", timeout: "auto", timer: "auto", auto_close: "auto", never: "none", no: "none" };
 function ensureUx(def: SurveyDefinition) {
   def.ux = def.ux ?? { styles: [], animations: [], behaviors: [] };
   def.ux.styles ??= []; def.ux.animations ??= []; def.ux.behaviors ??= [];
@@ -432,9 +451,10 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       const t = resolveTarget(def, a.target, env);
       const b: UxBehavior = { id: env.ids("uxb"), label: a.label, target: t, ...(a.on ? { on: oneOf(UX_EVENTS, a.on === "select" ? "select_option" : a.on === "deselect" ? "deselect_option" : a.on === "complete" ? "page_complete" : a.on, "event")! } : {}), ...(a.options?.length ? { options: optionCodes(def, t, a.options) } : {}), effects: a.effects ? buildEffects(def, a.effects, env) : [], ...(a.script ? { script: a.script } : {}), ...(a.once ? { once: true } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
       const warnings = gate(def, "behavior", b);
+      refuseDuplicate(def, ux.behaviors, b);
       ux.behaviors.push(b);
       if (a.ref) env.refs.set(a.ref.toLowerCase(), b.id);
-      return { description: b.script ? `Behaviour “${b.label}” on ${describeUxTarget(def, t)}: a sandboxed script (${b.script.split("\n").length} line${b.script.split("\n").length === 1 ? "" : "s"}) — ${SCRIPT_CHECKED}` : `Behaviour “${b.label}”: when ${eventWords(b)} on ${describeUxTarget(def, t)} → ${b.effects.map((e) => effectWords(def, e)).join(", ")}`, warnings, touched: t.questionId ? [t.questionId] : [] };
+      return { description: b.script ? `Behaviour “${b.label}” on ${describeUxTarget(def, t)}: a sandboxed script (${b.script.split("\n").length} line${b.script.split("\n").length === 1 ? "" : "s"}) — ${SCRIPT_CHECKED}` : `Behaviour “${b.label}”: when ${eventWords(b)} on ${describeUxTarget(def, t)} → ${b.effects.map((e) => effectWords(def, e)).join(", ")}${b.effects.some((e) => e.do === "show_popup") && UX_HOLDING_EVENTS.has(b.on ?? "") ? " — shown only while that holds, closed when it stops" : ""}`, warnings, touched: t.questionId ? [t.questionId] : [] };
     }
     case "update_behavior": {
       const b = find(ux.behaviors, a.id, env, "behaviour");
@@ -444,6 +464,10 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       if (a.on) next.on = oneOf(UX_EVENTS, a.on, "event")!;
       if (a.options) next.options = optionCodes(def, next.target, a.options);
       if (a.effects) next.effects = buildEffects(def, a.effects, env);
+      if (a.edits?.length) {
+        if (a.script !== undefined) fail("give the whole script or edits to it, not both");
+        next.script = applyScriptEdits(b, a.edits);
+      }
       if (a.script !== undefined) {
         // "run this when option 1 is selected": the event and options wrap the script, as on create
         const ev = a.script && (a.on || a.options?.length) && !a.effects?.length ? scriptOnEvent(a.script, a.on, a.options) : null;
@@ -454,8 +478,10 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       if (a.when === null) delete next.when;
       else if (a.when) next.when = parseGuard(def, a.when);
       const warnings = gate(def, "behavior", next);
+      refuseDuplicate(def, ux.behaviors, next);
       ux.behaviors[ux.behaviors.indexOf(b)] = next;
-      return { description: `Change behaviour “${next.label}”${a.script ? ` — ${SCRIPT_CHECKED}` : ""}`, warnings, touched: [] };
+      const edited = a.edits?.length ? `: ${a.edits.length} edit${a.edits.length === 1 ? "" : "s"} to its script (${a.edits.map((x) => `“${oneLine(x.find, 30)}” → “${oneLine(x.replace, 30)}”`).join("; ")})` : "";
+      return { description: `Change behaviour “${next.label}”${edited}${a.script || a.edits?.length ? ` — ${SCRIPT_CHECKED}` : ""}`, warnings, touched: [] };
     }
     case "remove_behavior": {
       const b = find(ux.behaviors, a.id, env, "behaviour");
@@ -465,6 +491,46 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     }
   }
 }
+const oneLine = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+/**
+ * A SMALL CHANGE TO A STORED SCRIPT, without sending the script again: each edit's `find` must occur
+ * exactly once in the script as it is (after the edits before it), so the change lands where it was
+ * meant to or not at all. The result is validated like any script (the action's gate).
+ */
+export function applyScriptEdits(b: Pick<UxBehavior, "label" | "script">, list: ScriptEdit[]): string {
+  if (!b.script) fail(`“${b.label}” has no script to edit — give its effects, or a "script"`);
+  let out = b.script!;
+  for (const [i, e] of list.entries()) {
+    const at = `edit ${i + 1}`;
+    if (!e.find) fail(`${at}: "find" is empty — give text that is in the script`);
+    let n = out.split(e.find).length - 1;
+    let span: [number, number] | null = n === 1 ? [out.indexOf(e.find), out.indexOf(e.find) + e.find.length] : null;
+    if (n === 0 && e.find.trim()) {
+      // the outline shows a short script on one line: the same text with its line breaks and indentation is the same text
+      const re = new RegExp(e.find.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"), "g");
+      const hits = [...out.matchAll(re)];
+      n = hits.length;
+      if (n === 1) span = [hits[0]!.index!, hits[0]!.index! + hits[0]![0].length];
+    }
+    if (n === 0) fail(`${at}: “${oneLine(e.find, 60)}” is not in the script of “${b.label}” — copy the text exactly as it is in the outline`);
+    if (n > 1) fail(`${at}: “${oneLine(e.find, 60)}” occurs ${n} times in the script of “${b.label}” — include more of the text around it so it occurs once`);
+    out = out.slice(0, span![0]) + e.replace + out.slice(span![1]);
+  }
+  if (out.length > 20000) fail("the edited script is longer than 20,000 characters");
+  return out;
+}
+/**
+ * ONE BEHAVIOUR PER THING. A second behaviour on the same target, event, options and condition would
+ * run alongside the first — two popups, two messages, a script and an effect fighting over one element.
+ * The model is told to change the one there is (the outline lists it with its id).
+ */
+function refuseDuplicate(def: SurveyDefinition, list: UxBehavior[], b: UxBehavior) {
+  const key = uxBehaviorKey(b);
+  if (!key) return;
+  const twin = list.find((x) => x.id !== b.id && uxBehaviorKey(x) === key);
+  if (twin) fail(`there is already a behaviour for this — ${twin.id} “${twin.label}” (when ${eventWords(twin.script ? { ...twin, ...uxTriggerOf(twin) } : twin)} on ${describeUxTarget(def, twin.target)}${twin.script ? ", a script" : ` → ${twin.effects.map((e) => effectWords(def, e)).join(", ")}`}). Update ${twin.id} instead of adding a second one (update_behavior {"id":"${twin.id}", …}${twin.script ? ' with "edits" or a new "script"' : ' with its "effects" plus the new one'}) — two behaviours on one event both run`);
+}
+const uxTriggerOf = (b: UxBehavior): Partial<UxBehavior> => { const t = uxBehaviorTrigger(b); return t ? { on: t.on as UxBehavior["on"], options: t.options } : {}; };
 function optionCodes(def: SurveyDefinition, t: UxTarget, raw: string[]): string[] {
   const q = t.questionId ? def.questions.find((x) => x.id === t.questionId) : undefined;
   if (!q) return raw;
@@ -485,6 +551,12 @@ function effectWords(def: SurveyDefinition, e: UxEffect): string {
     case "show_message": return `show “${(e.text ?? "").slice(0, 60)}”${on ? ` under${on}` : ""}`;
     case "hide_message": return "hide the message";
     case "scroll_into_view": return `scroll to${on}`;
+    case "show_popup": {
+      const where = e.placement === "anchored" ? `a popup next to${on || " it"}` : e.placement === "top" ? "a popup at the top of the screen" : e.placement === "inline" ? `a popup in${on || " the question's card"}` : "a centred popup";
+      const close = e.dismiss === "auto" ? `, closes after ${Math.round((e.autoMs ?? 5000) / 1000)} s` : e.dismiss === "none" ? ", no close button" : ", with a close button";
+      return `open ${where}${e.title ? ` “${e.title.slice(0, 40)}”:` : ""} “${(e.text ?? "").slice(0, 60)}”${close}`;
+    }
+    case "hide_popup": return "close the popup";
     default: return `${e.do.replace("_", " ")}${on}`;
   }
 }

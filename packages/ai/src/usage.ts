@@ -16,8 +16,18 @@ export interface AiUsage {
   kind: "chat" | "tts" | "stt" | "translate";
   provider: string;            // openai-compatible | fake | google | …
   model: string | null;
+  /** ALL input tokens of the call, cached or not (what `prompt_tokens` means on an OpenAI-style API) */
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * PROMPT CACHING. Of `inputTokens`: how many the provider READ from its prompt
+   * cache (Anthropic `cache_read_input_tokens`, OpenAI
+   * `prompt_tokens_details.cached_tokens`) and how many it WROTE into it
+   * (Anthropic `cache_creation_input_tokens`). Both are subsets of
+   * `inputTokens`, priced at the provider's cached rates by the meter.
+   */
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
   /** characters sent (translation, text-to-speech) */
   characters?: number;
   /** audio seconds (speech) */
@@ -53,10 +63,11 @@ export function approxTokens(text: string): number {
 }
 
 /** Totals over a collection. */
-export function sumUsage(list: AiUsage[]): { inputTokens: number; outputTokens: number; characters: number; seconds: number; requests: number; estimated: boolean; model: string | null; provider: string | null } {
-  const t = { inputTokens: 0, outputTokens: 0, characters: 0, seconds: 0, requests: 0, estimated: false, model: null as string | null, provider: null as string | null };
+export function sumUsage(list: AiUsage[]): { inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheWriteTokens: number; characters: number; seconds: number; requests: number; estimated: boolean; model: string | null; provider: string | null } {
+  const t = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, characters: 0, seconds: 0, requests: 0, estimated: false, model: null as string | null, provider: null as string | null };
   for (const u of list) {
     t.inputTokens += u.inputTokens ?? 0; t.outputTokens += u.outputTokens ?? 0; t.characters += u.characters ?? 0; t.seconds += u.seconds ?? 0; t.requests += u.requests;
+    t.cachedInputTokens += u.cachedInputTokens ?? 0; t.cacheWriteTokens += u.cacheWriteTokens ?? 0;
     t.estimated = t.estimated || u.estimated; t.model = t.model ?? u.model; t.provider = t.provider ?? u.provider;
   }
   return t;

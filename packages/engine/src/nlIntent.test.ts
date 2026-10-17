@@ -878,3 +878,23 @@ test("DOC-03: 'statistical analysis plan' / 'SAP' / 'analysis framework document
   const prop = say(def, "Create the client-ready research proposal");
   assert.equal(prop.kind === "output" && prop.output.type, "proposal_docx");
 });
+
+test("a popup, message, tooltip or alert shown on an answer goes to the model (P3, 2026-10-17) — never display logic for a question called “a popup”", () => {
+  const def = survey();
+  for (const text of [
+    "When Q3 option 2 is selected, show a small hint popup next to that option",
+    "Show a popup when Q3 = 1",
+    "If Q3 = 1 show a message saying thanks",
+    "show an alert if Q1 is under 18",
+    "Display a centred modal when Q7 is Yes",
+    "show a tooltip on Q3 option 2",
+    "when Q7 is Yes, display a thank-you banner",
+  ]) {
+    const i = as(say(def, text), "model");
+    assert.equal(i.category, "survey_editing", text);
+    assert.notEqual(i.reason, DEFER_TO_GRAMMAR, text);
+  }
+  // questions are still shown and hidden by the engine
+  assert.deepEqual(as(say(def, "show Q11 only when Q7 is not Yes"), "actions").actions, [{ op: "set_display_logic", target: "Q11", expression: "Q7 != Yes" }]);
+  assert.equal(as(say(def, "hide Q11 when Q3 = 2"), "actions").actions[0].op, "set_display_logic");
+});

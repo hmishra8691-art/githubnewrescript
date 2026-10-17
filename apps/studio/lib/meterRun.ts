@@ -34,7 +34,16 @@ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" |
   if (kind === "stt") return { provider: meterProvider(provider, "stt"), service: "stt", model: meterModel(provider, t.model, "stt"), quantity: (t.seconds ?? 0) / 60, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, seconds: t.seconds ?? 0 } };
   if (kind === "translate") return { provider: meterProvider(provider, "translate"), service: "translate", model: meterModel(provider, t.model, "translate"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
   if (kind === "tts") return { provider: meterProvider(provider, "tts"), service: "tts", model: meterModel(provider, t.model, "tts"), quantity: t.characters, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
-  return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
+  /*
+   * PROMPT CACHING (AI cost audit, 2026-10-17): of the input, what the provider read from its cache and
+   * what it wrote — summed over every request of this logical call (continuations, the JSON re-ask) —
+   * priced by the meter at the model's cache rates. `inputUnits` stays ALL the input.
+   */
+  return {
+    provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens,
+    ...(t.cachedInputTokens ? { cacheReadUnits: t.cachedInputTokens } : {}), ...(t.cacheWriteTokens ? { cacheWriteUnits: t.cacheWriteTokens } : {}),
+    metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider },
+  };
 }
 
 /**

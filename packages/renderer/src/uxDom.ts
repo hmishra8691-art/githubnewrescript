@@ -137,7 +137,8 @@ export class DomBridge {
     if (n.nodeType === 3) { const i = idOf(n); this.byId.set(i, n); return { i, x: (n.nodeValue ?? "").slice(0, MAX_TEXT) }; }
     if (n.nodeType !== 1) return null;
     const el = n as Element;
-    if (SKIP_TAGS.has(el.tagName) || el.hasAttribute("data-rs-ux-sandbox") || el.getAttribute("data-rs-ux-created") === this.o.id) return null;
+    // the survey's own popups are the platform's, not part of the page a script edits (rs.popup / rs.closePopup are)
+    if (SKIP_TAGS.has(el.tagName) || el.hasAttribute("data-rs-ux-sandbox") || el.hasAttribute("data-rs-ux-popup") || el.getAttribute("data-rs-ux-created") === this.o.id) return null;
     const out = this.shallow(el);
     const tag = el.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {

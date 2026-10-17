@@ -5,6 +5,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField, ValidationMessageText } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
+import { SpeechInputButton } from "../SpeechInput";
 
 /**
  * Custom Form family — the presentations that were "coming soon".
@@ -136,6 +137,10 @@ export function RepeatForm(p: QRProps) {
                         onChange={(e) => setField(i, rc, e.target.value)} />
                     )}
                     {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
+                    {/* dictation into a text / long-text field of this entry (the control skips every formatted field) */}
+                    <SpeechInputButton def={p.def} q={p.q} value={v == null ? "" : String(v)} compact
+                      field={{ kind: "field", fieldType: ft, row }} label={`${plain} — entry ${i + 1}`}
+                      onChange={(x) => setField(i, rc, x)} />
                   </label>
                 );
               })}

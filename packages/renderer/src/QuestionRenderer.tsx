@@ -169,7 +169,9 @@ export function otherTextOfOption(p: QRProps, code: string | number): string {
 /** One box. Named by its option, so React never reuses another box's state. */
 function OtherInput(p: QRProps & { option: Option; below?: boolean }) {
   const code = String(p.option.code);
+  const text = otherTextOfOption(p, code);
   return (
+    <>
     <input
       className={`rs-input rs-other-input${p.below ? " rs-other-below" : ""}`}
       data-testid="rs-other-input"
@@ -181,11 +183,17 @@ function OtherInput(p: QRProps & { option: Option; below?: boolean }) {
       /* the format the author asked for, told to the keyboard as well as to
          the validator — a numeric box should open a number pad on a phone */
       inputMode={p.q.settings.otherSpecifyFormat === "numeric" ? "decimal" : undefined}
-      value={otherTextOfOption(p, code)}
+      value={text}
       disabled={p.q.settings.readOnly}
       onClick={(e) => e.stopPropagation()}
       onChange={(e) => p.onOtherChange?.(e.target.value, code)}
     />
+    {/* dictation into THIS box, through its own writer and key (on by default; never on a numeric box) */}
+    {p.onOtherChange && (
+      <SpeechInputButton def={p.def} q={p.q} value={text} field={{ kind: "other" }} compact
+        label={stripTags(String(p.option.label ?? ""))} onChange={(t) => p.onOtherChange?.(t, code)} />
+    )}
+    </>
   );
 }
 
@@ -229,6 +237,10 @@ export function RowLabel(p: QRProps & { row: QuestionRow; labelClass?: string })
         onKeyDown={(e) => e.stopPropagation()}
         onChange={(e) => p.onOtherChange?.(e.target.value, code)}
       />
+      {p.onOtherChange && (
+        <SpeechInputButton def={p.def} q={p.q} value={otherTextOfOption(p, code)} field={{ kind: "other" }} compact
+          label={plain} onChange={(t) => p.onOtherChange?.(t, code)} />
+      )}
     </span>
   );
 }
@@ -918,8 +930,8 @@ export function TextInput(p: QRProps) {
         readOnly={p.q.settings.readOnly}
         onChange={(e) => p.onChange(e.target.value)}
       />
-      {/* `speech_input`: dictation writes into the SAME value, through the same onChange */}
-      {p.q.settings.speechInput && <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />}
+      {/* `speech_input`, on by default: dictation writes into the SAME value, through the same onChange (the control decides whether it belongs here) */}
+      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />
     </div>
   );
 }
@@ -942,7 +954,7 @@ export function LongText(p: QRProps) {
         maxLength={Number.isFinite(Number(maxLen)) ? Number(maxLen) : undefined}
         onChange={(e) => p.onChange(e.target.value)}
       />
-      {p.q.settings.speechInput && <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />}
+      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />
       {(Number.isFinite(min) || Number.isFinite(Number(maxLen))) && (
         <div className={`rs-counter ${short ? "short" : ""}`} data-testid="char-counter">
           {text.length}
@@ -1196,6 +1208,10 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                     onChange={(e) => setField(rc, e.target.value === "" ? null : e.target.value)}
                   />
                 )}
+                {/* dictation into a text / long-text field, under the field's own key (the control skips every formatted field) */}
+                <SpeechInputButton def={p.def} q={p.q} value={v == null ? "" : String(v)} compact
+                  field={{ kind: "field", fieldType: ft, row }} label={stripTags(String(row.label ?? ""))}
+                  onChange={(x) => setField(rc, x === "" ? null : x)} />
                 {/* a symbol on the right when the author put it there */}
                 {ip.suffix && <span className="rs-prefix">{ip.suffix}</span>}
                 {own?.side === "right" && <span className="rs-affix-text right" data-testid={`field-affix-right-${rc}`}>{own.text}</span>}
@@ -1230,6 +1246,7 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
               }}
             />
           ) : (
+            <>
             <input
               className="rs-input"
               type="text"
@@ -1241,6 +1258,15 @@ export function ListInput(p: QRProps & { numeric: boolean }) {
                 p.onChange(next);
               }}
             />
+            <SpeechInputButton def={p.def} q={p.q} value={arr[i] == null ? "" : String(arr[i])} compact
+              field={{ kind: "field", fieldType: "text" }} label={`${i + 1}`}
+              onChange={(x) => {
+                const cur: unknown[] = Array.isArray(p.value) ? [...(p.value as unknown[])] : [];
+                while (cur.length <= i) cur.push(null);
+                cur[i] = x === "" ? null : x;
+                p.onChange(cur);
+              }} />
+            </>
           )}
         </div>
       ))}

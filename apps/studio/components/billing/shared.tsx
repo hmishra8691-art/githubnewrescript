@@ -42,6 +42,7 @@ export interface UsageRow {
   id: string; at: string; eventType: string; category: string; label: string; environment: "TEST" | "LIVE";
   provider: string | null; model: string | null; quantity: number; unit: string; inputUnits: number | null; outputUnits: number | null;
   customerCharge: number; reversal: boolean; unbilled: boolean; operation: string | null; cached: boolean;
+  cachedInputUnits?: number | null;
   surveyId?: string | null; projectTitle?: string | null;
   /* administrator only */
   actualCost?: number; providerCost?: number; infraCost?: number; paymentFee?: number; taxReserve?: number; grossProfit?: number; netProfit?: number; marginPct?: number;
@@ -54,13 +55,27 @@ export const EVENT_WORDS: Record<string, string> = {
 };
 export const OPERATION_WORDS: Record<string, string> = { ai_classify: "AI classification", ai_sentiment: "AI sentiment", probe: "AI follow-up", rephrase_for_speech: "AI spoken version", tts_preview: "AI voice preview", geocode: "Address lookup" };
 
+/** Intelligent Mode's calls by what they did: copilot_ux → "Intelligent Mode · look & behaviour", copilot_ux_repair → "… · correction" */
+const COPILOT_WORDS: Record<string, string> = { ux: "look & behaviour", edit: "edit", question: "edit", generate: "survey generation", review: "review", plan: "plan", theme: "theme" };
+export function copilotWords(op: string): string | null {
+  const m = /^copilot_([a-z]+?)(?:_(item|repair|coverage))?$/.exec(op);
+  if (!m) return null;
+  const what = COPILOT_WORDS[m[1]] ?? m[1].replace(/_/g, " ");
+  return `Intelligent Mode · ${what}${m[2] === "repair" ? " · correction" : m[2] === "coverage" ? " · coverage check" : m[2] === "item" ? " · plan item" : ""}`;
+}
+
 export function describeRow(r: UsageRow): string {
   if (r.operation && OPERATION_WORDS[r.operation]) return OPERATION_WORDS[r.operation];
+  if (r.operation && copilotWords(r.operation)) return copilotWords(r.operation)!;
   if (r.operation?.startsWith("translate:")) return `Translation ${r.operation.slice(10).replace("->", " → ")}`;
   return EVENT_WORDS[r.eventType] ?? r.eventType.toLowerCase().replace(/_/g, " ");
 }
 export function describeQuantity(r: UsageRow): string {
-  if (r.inputUnits != null || r.outputUnits != null) return `${Math.round((r.inputUnits ?? 0) + (r.outputUnits ?? 0)).toLocaleString()} tokens`;
+  if (r.inputUnits != null || r.outputUnits != null) {
+    const n = (x: number) => Math.round(x).toLocaleString();
+    // the breakdown the charge was priced from: input (of which read from the provider's cache, at its cheaper rate) and output
+    return `${n((r.inputUnits ?? 0) + (r.outputUnits ?? 0))} tokens (${n(r.inputUnits ?? 0)} in${r.cachedInputUnits ? `, ${n(r.cachedInputUnits)} cached` : ""} · ${n(r.outputUnits ?? 0)} out)`;
+  }
   return fmtQty(r.quantity, r.unit);
 }
 

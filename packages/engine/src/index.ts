@@ -133,3 +133,4 @@ export * from "./languageCorpus.js";
 export * from "./gridCell.js";
 export * from "./conditionCopy.js";
 export * from "./optionPopups.js";
+export * from "./speechInput.js";

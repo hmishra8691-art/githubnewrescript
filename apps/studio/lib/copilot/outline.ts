@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+import { listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
 import { hypothesisLabel } from "@rescript/schema";
@@ -59,11 +59,15 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     lines.push(`UX configuration (${items} item${items === 1 ? "" : "s"}; change these by id rather than adding competing ones):`);
     for (const st of ux.styles.slice(0, 40)) lines.push(`  style ${st.id} “${st.label}” on ${describeUxTarget(def, st.target)}: ${st.rules.map((r) => `${[r.state, r.media, r.whenClass ? `when ${r.whenClass}` : "", r.selector].filter(Boolean).join(" ") || "base"} {${Object.entries(r.declarations).map(([k, v]) => `${k}:${v}`).join("; ").slice(0, 160)}}`).join(" · ").slice(0, 400)}${st.css ? ` + scoped CSS (${st.css.length} chars)` : ""}`);
     for (const a of ux.animations.slice(0, 40)) lines.push(`  animation ${a.id} “${a.label}” on ${describeUxTarget(def, a.target)}: ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.delayMs ? ` +${a.delayMs}ms` : ""}${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}${a.iterations !== 1 ? `, ×${a.iterations}` : ""}${a.media ? `, ${a.media}` : ""}`);
-    for (const bh of ux.behaviors.slice(0, 40)) lines.push(`  behaviour ${bh.id} “${bh.label}” on ${describeUxTarget(def, bh.target)}: ${bh.script ? `script: ${bh.script.replace(/\s+/g, " ").slice(0, opts.ux ? 600 : 120)}` : `on ${bh.on}${bh.options?.length ? ` (${bh.options.join(", ")})` : ""} → ${bh.effects.map((e) => `${e.do}${e.target ? ` ${describeUxTarget(def, e.target)}` : ""}${e.preset ? ` ${e.preset}` : ""}${e.className ? ` “${e.className}”` : ""}`).join(", ")}`}`);
+    // event, options, effects (a popup's placement), guard and once: what the model needs to UPDATE one rather than add a second
+    for (const bh of ux.behaviors.slice(0, 40)) lines.push(`  behaviour ${bh.id} “${bh.label}” on ${describeUxTarget(def, bh.target)}: ${uxBehaviorWords(def, bh)}${bh.script ? `: ${bh.script.replace(/\s+/g, " ").slice(0, opts.ux ? 600 : 120)}` : ""}`);
   }
   if (opts.ux) for (const id of focus) {
     const q = def.questions.find((x) => x.id === id);
-    if (q) lines.push(`${q.code} ux: ${uxContextFor(def, id).join(" · ")}`);
+    if (!q) continue;
+    lines.push(`${q.code} ux: ${uxContextFor(def, id).join(" · ")}`);
+    // a script on a question the request names, as stored — so a small change is update_behavior "edits" (find → replace) instead of the whole script again
+    for (const bh of (ux?.behaviors ?? []).filter((b) => b.script && b.target.questionId === id && b.script.length > 600).slice(0, 3)) lines.push(`${bh.id} script as stored (${bh.script!.length} chars): ${JSON.stringify(bh.script!.slice(0, 4000))}`);
   }
   const r = def.research;
   if (r) {

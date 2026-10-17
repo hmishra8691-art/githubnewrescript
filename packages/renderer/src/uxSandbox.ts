@@ -80,6 +80,13 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
     getBlock: function () { return meta.block || null; },
     getPage: function () { return meta.page || null; },
     after: function (ms, fn) { setTimeout(fn, Math.max(0, Math.min(60000, Number(ms) || 0))); },
+    /* the survey's own popup (one per script; the next replaces it) — never a hand-built overlay */
+    popup: function (text, opts) {
+      var o = opts && typeof opts === "object" ? opts : {}, keep = {};
+      ["title", "placement", "target", "dismiss", "autoMs"].forEach(function (k) { var v = o[k]; if (v != null && (typeof v === "string" || typeof v === "number")) keep[k] = v; });
+      send("popup", [text == null ? "" : String(text), keep]);
+    },
+    closePopup: function () { send("closePopup", []); },
     log: function () { send("log", Array.prototype.map.call(arguments, String)); }
   };
   ["addClass","removeClass","toggleClass","animate","setStyle","clearStyle","show","hide","showMessage","hideMessage","scrollTo","focus"].forEach(function (n) { rs[n] = function () { send(n, Array.prototype.slice.call(arguments, 0, 3)); }; });

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { Question, SurveyDefinition } from "@rescript/schema";
+import { appendSpoken, speechInputFor, speechInputLang, type SpeechField } from "@rescript/engine";
 
 /**
  * DICTATION FOR A TEXT ANSWER — the `speech_input` capability.
@@ -69,14 +70,10 @@ export function speechInputAvailable(): boolean {
  * What the respondent typed is left exactly as they typed it — leading and
  * trailing spaces included. Only the transcript is trimmed, because a
  * recogniser's idea of where a phrase begins is not something the respondent
- * chose.
+ * chose. (It lives in `@rescript/engine`, beside the eligibility rules, so
+ * it is unit-tested; re-exported here for existing importers.)
  */
-export function appendSpoken(current: string, spoken: string): string {
-  const add = spoken.trim();
-  if (!add) return current;
-  if (!current) return add;
-  return /\s$/.test(current) ? current + add : `${current} ${add}`;
-}
+export { appendSpoken };
 
 const REASONS: Record<string, string> = {
   "not-allowed": "Microphone access was refused. Allow it in your browser and try again.",
@@ -87,13 +84,27 @@ const REASONS: Record<string, string> = {
   "aborted": "",
 };
 
+/**
+ * ON BY DEFAULT (October 2026). The control decides for itself whether it
+ * belongs beside its field — `speechInputFor` in the engine: the survey's
+ * switch (`deployment.speechInput === false` turns it off everywhere), the
+ * question's (`settings.speechInput === false`), never a read-only or hidden
+ * question, never a formatted field (email, phone, URL, ZIP, number, date, a
+ * regex mask). `field` says which field it sits beside — the question's own
+ * text answer (default), an "Other, specify" box, or a form / list field —
+ * and `compact` draws an icon-sized button for the boxes that sit inline.
+ */
 export function SpeechInputButton({
-  def, q, value, onChange,
+  def, q, value, onChange, field, compact, label,
 }: {
   def: SurveyDefinition;
   q: Question;
   value: string;
   onChange(next: string): void;
+  field?: SpeechField;
+  compact?: boolean;
+  /** what the field is, for the button's accessible name when several sit on one question */
+  label?: string;
 }) {
   const Ctor = recognizerCtor();
   const [listening, setListening] = React.useState(false);
@@ -120,18 +131,23 @@ export function SpeechInputButton({
    */
   const latest = React.useRef(value);
   latest.current = value;
+  /*
+   * The field's writer as of the LATEST render, not the one `start()` closed
+   * over: a form field's onChange spreads the question's other fields from
+   * its own render, and a phrase arriving after the respondent typed in a
+   * neighbouring field must not put that field back.
+   */
+  const writer = React.useRef(onChange);
+  writer.current = onChange;
   /** Write through the ref as well, so results in the same task compose. */
-  const write = (next: string) => { latest.current = next; onChange(next); };
+  const write = (next: string) => { latest.current = next; writer.current(next); };
 
   React.useEffect(() => () => rec.current?.abort(), []);
 
-  if (!Ctor || q.settings.readOnly) return null;
+  if (!Ctor || !speechInputFor(def, q, field ?? { kind: "answer" })) return null;
 
-  const lang = q.settings.speechLang
-    || def.branding?.layout?.voice?.lang // the voice presentation mode's language, when set
-    || (def as unknown as { meta?: { language?: string } }).meta?.language
-    || def.deployment?.languages?.[0]
-    || (typeof navigator !== "undefined" ? navigator.language : "en");
+  // the question's speechLang, the voice mode's, the survey's, then the browser's
+  const lang = speechInputLang(def, q, typeof navigator !== "undefined" ? navigator.language : "en");
 
   const start = () => {
     const r = new Ctor();
@@ -169,18 +185,24 @@ export function SpeechInputButton({
   };
   const stop = () => { rec.current?.stop(); setListening(false); };
 
+  const of = label ? ` — ${label}` : "";
+  const Wrap = compact ? "span" : "div";
   return (
-    <div className="rs-speech" data-testid="speech-input">
+    <Wrap className={`rs-speech${compact ? " compact" : ""}`} data-testid="speech-input" data-speech-field={(field ?? { kind: "answer" }).kind}
+      /* an inline box sits inside an option's label or a grid row: the mic is its own control, never a click on the row */
+      onClick={compact ? (e) => e.stopPropagation() : undefined}
+      onPointerDown={compact ? (e) => e.stopPropagation() : undefined}
+      onKeyDown={compact ? (e) => e.stopPropagation() : undefined}>
       <button
         type="button"
         className={`rs-btn secondary rs-speech-btn ${listening ? "listening" : ""}`}
         data-testid="speech-toggle"
         aria-pressed={listening}
-        aria-label={listening ? "Stop dictating" : "Dictate your answer"}
+        aria-label={listening ? `Stop dictating${of}` : `Dictate your answer${of}`}
         title={listening ? "Stop dictating" : `Dictate (${lang})`}
         onClick={listening ? stop : start}
       >
-        {listening ? "■ Stop" : "🎤 Dictate"}
+        {compact ? (listening ? "■" : "🎤") : listening ? "■ Stop" : "🎤 Dictate"}
       </button>
       {listening && (
         <span className="rs-speech-live" data-testid="speech-interim" aria-live="polite">
@@ -188,6 +210,6 @@ export function SpeechInputButton({
         </span>
       )}
       {reason && <span className="rs-speech-reason" role="status" data-testid="speech-reason">{reason}</span>}
-    </div>
+    </Wrap>
   );
 }

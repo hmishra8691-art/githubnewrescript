@@ -1,10 +1,11 @@
 import { guardScriptLoops, scriptAuthoringProblems, selectorGuesses } from "./uxScriptGuard.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
-import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS } from "@rescript/schema";
+import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS, UX_POPUP_PLACEMENTS, UX_POPUP_DISMISS } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
 import { layoutColumns } from "./rendererReads.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { evaluateCondition } from "./evaluate.js";
+import { formatCondition } from "./logicExpression.js";
 import { createResponseState, type ResponseState } from "./state.js";
 
 /**
@@ -666,7 +667,7 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /* ------------------------------------------------------------ scripts */
 
 /** what a sandboxed script can call — and nothing else */
-export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log"] as const;
+export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
 /** names that are refused wherever they appear */
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
@@ -755,6 +756,33 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
   return { errors: [...new Set(errors)], warnings: [...new Set(warnings)] };
 }
 
+/** the events whose effects HOLD while true and are undone when they stop (evaluateUxTriggers' hold; hover in the UxLayer) */
+export const UX_HOLDING_EVENTS: ReadonlySet<string> = new Set(["select_option", "page_complete", "block_complete", "hover"]);
+
+/**
+ * WHAT A BEHAVIOUR LISTENS FOR — its event and option codes: declared (`on` + `options`), or read
+ * back from a script the engine wrapped itself (`scriptOnEvent` writes `rs.listen("select", "self",
+ * function (e) { if (["1"].indexOf(…) < 0) return; …`). Null for a script that decides for itself.
+ * Used to find a second behaviour for the same thing, and to tell the model what each one does.
+ */
+export function uxBehaviorTrigger(b: Pick<UxBehavior, "on" | "options" | "script">): { on: string; options: string[] } | null {
+  if (b.script) {
+    const m = /^rs\.listen\("(select|deselect|answer|change|click|hover|complete)", "self", function \(e\) \{\n(?: {2}if \((\[[^\n]*\])\.indexOf\(String\(e\.option\)\) < 0\) return;\n)?/.exec(b.script);
+    if (!m) return null;
+    const on = ({ select: "select_option", deselect: "deselect_option", complete: "page_complete" } as Record<string, string>)[m[1]] ?? m[1];
+    let options: unknown = [];
+    try { options = m[2] ? JSON.parse(m[2]) : []; } catch { options = []; }
+    return { on, options: (Array.isArray(options) ? options : []).map(String).sort() };
+  }
+  if (!b.on) return null;
+  return { on: b.on, options: [...(b.options ?? [])].map(String).sort() };
+}
+/** the same target, the same event and options, the same guard: two such behaviours would both run for one thing */
+export function uxBehaviorKey(b: UxBehavior): string | null {
+  const t = uxBehaviorTrigger(b);
+  return t ? `${uxTargetKey(b.target)}|${t.on}|${t.options.join(",")}|${JSON.stringify(b.when ?? null)}` : null;
+}
+
 /* ------------------------------------------------------------ validation + review */
 
 export interface UxFinding { level: "critical" | "warning" | "suggestion"; message: string; itemId?: string; fix?: { op: "remove_style" | "remove_animation" | "remove_behavior"; id: string } }
@@ -828,6 +856,13 @@ export function validateUxItem(def: SurveyDefinition, kind: "style" | "animation
           else { const c = checkDeclarations(e.style, { target: t, where: at }); errors.push(...c.errors); warnings.push(...c.warnings); }
         }
         if (e.do === "hide" && ["question", "option", "row"].includes(t.kind) && (!t.part || t.part === "card")) warnings.push(`${at}: hiding a ${t.kind} is a visual change only — it is still asked and validated; use display logic to remove it`);
+        if (e.do === "show_popup") {
+          if (!e.text) errors.push(`${at} needs text`);
+          // a centred popup covers the survey: one the respondent cannot close strands them
+          if ((e.placement ?? "center") === "center" && e.dismiss === "none") errors.push(`${at}: a centred popup covers the survey, so the respondent must be able to close it — use "dismiss":"button" (or "auto"), or "placement":"inline" / "anchored" / "top" for one that stays while its condition holds`);
+          // a momentary event opens it and nothing closes it when the answer changes
+          if (b.on && !UX_HOLDING_EVENTS.has(b.on) && !e.dismiss) warnings.push(`${at}: on ${b.on} the popup opens and stays until the respondent closes it — it does not close when the answer changes. Say how it closes ("dismiss":"button" or "auto"), or use select_option, which shows it only while the option is selected`);
+        }
       }
     }
   }
@@ -921,10 +956,23 @@ export function uxContextFor(def: SurveyDefinition, questionId: string): string[
   const mine = (t: UxTarget) => t.questionId === q.id || (!t.questionId && ["question", "option"].includes(t.kind));
   for (const st of ux.styles.filter((x) => mine(x.target))) lines.push(`style ${st.id} “${st.label}” on ${describeUxTarget(def, st.target)}: ${st.rules.map((r) => `${[r.state, r.media, r.selector].filter(Boolean).join(" ") || "base"} {${Object.entries(r.declarations).map(([k, v]) => `${k}:${v}`).join("; ")}}`).join(" · ")}${st.css ? ` + css ${st.css.length} chars` : ""}`);
   for (const a of ux.animations.filter((x) => mine(x.target))) lines.push(`animation ${a.id} “${a.label}” ${a.preset} on ${a.trigger}, ${a.durationMs}ms${a.staggerMs ? `, stagger ${a.staggerMs}ms` : ""}`);
-  for (const b of ux.behaviors.filter((x) => mine(x.target) || x.effects.some((e) => e.target && mine(e.target)))) lines.push(`behaviour ${b.id} “${b.label}” ${b.script ? `script (${b.script.length} chars)` : `on ${b.on}${b.options?.length ? ` ${b.options.join(",")}` : ""} → ${b.effects.map((e) => e.do).join(", ")}`}`);
+  // each with its id, its event and codes, what it does, its guard: enough to UPDATE it rather than add a second one
+  for (const b of ux.behaviors.filter((x) => mine(x.target) || x.effects.some((e) => e.target && mine(e.target)))) lines.push(`behaviour ${b.id} “${b.label}” ${uxBehaviorWords(def, b)}`);
   if (q.customCss) lines.push(`its own custom CSS: ${q.customCss.slice(0, 300)}`);
   if (q.customJs) lines.push(q.type === "custom_component" ? `its component JS (${q.customJs.length} chars — it IS the component; change it with set_custom_code)` : `custom JS (${q.customJs.length} chars) not yet moved into a script — it runs once it is`);
   return lines;
+}
+
+/** a behaviour in a line, for the model: "on select_option 1 → show_popup center “…”, when Q1 >= 18, once" / "script (412 chars, runs on select_option 1)" */
+export function uxBehaviorWords(def: SurveyDefinition, b: UxBehavior): string {
+  const trig = uxBehaviorTrigger(b);
+  const eff = (e: UxEffect) => `${e.do}${e.target ? ` ${describeUxTarget(def, e.target)}` : ""}${e.preset ? ` ${e.preset}` : ""}${e.className ? ` “${e.className}”` : ""}${e.do === "show_popup" ? ` ${e.placement ?? "center"}${e.dismiss ? ` dismiss ${e.dismiss}` : ""}` : ""}${e.text ? ` “${e.text.replace(/\s+/g, " ").slice(0, 40)}”` : ""}`;
+  const what = b.script
+    ? `script (${b.script.length} chars${trig ? `, runs on ${trig.on}${trig.options.length ? ` ${trig.options.join(",")}` : ""}` : ""}${b.source === "question_custom_js" || b.source === "branding_custom_js" ? ", moved from Custom code" : ""}${/\brs\s*\.\s*popup\s*\(/.test(b.script) ? ", opens rs.popup" : ""})`
+    : `on ${b.on}${b.options?.length ? ` ${b.options.join(",")}` : ""} → ${b.effects.map(eff).join(", ")}`;
+  let when = "";
+  if (b.when) { try { when = `, when ${formatCondition(def, b.when, { width: 160 }).replace(/\s+/g, " ")}`; } catch { when = ", with a condition"; } }
+  return `${what}${when}${b.once ? ", once" : ""}`;
 }
 
 /* ------------------------------------------------------------ the diff */
@@ -945,7 +993,7 @@ export function diffUx(before: SurveyDefinition, after: SurveyDefinition): UxDif
 /** the survey with its UX taken out — what "the structure did not change" is checked against */
 export function withoutUx(def: SurveyDefinition): SurveyDefinition { const { ux: _ux, ...rest } = def; return rest as SurveyDefinition; }
 
-export const UX_VOCABULARY = { kinds: UX_TARGET_KINDS, parts: UX_PARTS, states: UX_STATES, media: UX_MEDIA, presets: UX_PRESETS, triggers: UX_ANIMATION_TRIGGERS, events: UX_EVENTS, effects: UX_EFFECTS, buttons: UX_BUTTONS, api: UX_SCRIPT_API, scriptEvents: UX_SCRIPT_EVENTS };
+export const UX_VOCABULARY = { kinds: UX_TARGET_KINDS, parts: UX_PARTS, states: UX_STATES, media: UX_MEDIA, presets: UX_PRESETS, triggers: UX_ANIMATION_TRIGGERS, events: UX_EVENTS, effects: UX_EFFECTS, buttons: UX_BUTTONS, api: UX_SCRIPT_API, scriptEvents: UX_SCRIPT_EVENTS, popupPlacements: UX_POPUP_PLACEMENTS, popupDismiss: UX_POPUP_DISMISS };
 export type { UxConfig, UxRule, UxEffect };
 
 /* ------------------------------------------------------------ runtime triggers */

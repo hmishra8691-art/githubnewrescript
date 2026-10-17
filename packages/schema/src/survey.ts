@@ -695,6 +695,15 @@ export const DeploymentConfig = z.object({
     })
     .default({}),
   languages: z.array(z.string()).default(["en"]),
+  /**
+   * DICTATION ON EVERY OPEN TEXT FIELD — the survey-wide switch. Absent (every
+   * survey so far) or true: each editable free-text field shows a microphone
+   * when the respondent's browser can recognise speech (browser-native, no
+   * audio leaves the device). `false` turns it off everywhere; a question
+   * turns it off for itself with `settings.speechInput: false`. See
+   * `speechInputFor` in `@rescript/engine`.
+   */
+  speechInput: z.boolean().optional(),
   activeFrom: z.string().optional(),
   activeUntil: z.string().optional(),
   /*

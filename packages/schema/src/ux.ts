@@ -41,7 +41,15 @@ export const UX_PRESETS = ["fade-in", "fade-up", "fade-down", "slide-left", "sli
 export const UX_ANIMATION_TRIGGERS = ["appear", "page_enter", "hover", "focus", "select", "answer"] as const;
 /** what a behaviour listens for */
 export const UX_EVENTS = ["answer", "change", "select_option", "deselect_option", "page_complete", "block_complete", "appear", "page_enter", "click", "hover"] as const;
-export const UX_EFFECTS = ["add_class", "remove_class", "toggle_class", "animate", "set_style", "show", "hide", "show_message", "hide_message", "scroll_into_view", "focus"] as const;
+export const UX_EFFECTS = ["add_class", "remove_class", "toggle_class", "animate", "set_style", "show", "hide", "show_message", "hide_message", "scroll_into_view", "focus", "show_popup", "hide_popup"] as const;
+/**
+ * show_popup: where the survey's own popup appears — a centred modal (confirmations, eligibility,
+ * anything that needs attention), anchored next to its target (a hint about one element), a banner at
+ * the top, or inline in the question's card (feedback beside the answer).
+ */
+export const UX_POPUP_PLACEMENTS = ["center", "anchored", "top", "inline"] as const;
+/** how a popup is closed besides its trigger stopping: a close button (+ Escape), by itself after autoMs, or only by its trigger */
+export const UX_POPUP_DISMISS = ["button", "auto", "none"] as const;
 
 export const UxTarget = z.object({
   kind: z.enum(UX_TARGET_KINDS),
@@ -111,8 +119,16 @@ export const UxEffect = z.object({
   preset: z.enum(UX_PRESETS).optional(),
   durationMs: z.number().int().min(50).max(10000).optional(),
   style: z.record(z.string().max(400)).optional(),
-  /** show_message: plain text, never HTML */
+  /** show_message / show_popup: plain text, never HTML */
   text: z.string().max(600).optional(),
+  /** show_popup: a heading, plain text */
+  title: z.string().max(120).optional(),
+  /** show_popup: where it appears (absent: center) */
+  placement: z.enum(UX_POPUP_PLACEMENTS).optional(),
+  /** show_popup: how the respondent closes it (absent: a close button) */
+  dismiss: z.enum(UX_POPUP_DISMISS).optional(),
+  /** show_popup with dismiss "auto": how long it stays (absent: 5 s) */
+  autoMs: z.number().int().min(1000).max(60000).optional(),
 });
 export type UxEffect = z.infer<typeof UxEffect>;
 

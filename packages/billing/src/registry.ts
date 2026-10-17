@@ -121,13 +121,21 @@ export const DEFAULT_BILLABLE_EVENTS: BillableEventDef[] = [
   { type: "CUSTOM_EVENT", label: "Custom event", category: "other", unit: "unit", billable: true, rate: null, description: "A feature-defined event priced by its own provider/service/model.", active: true },
 ];
 
+export const RATE_SIDES = ["input", "output", "cache_read", "cache_write"] as const;
+export type RateSide = (typeof RATE_SIDES)[number];
+
 export const Rate = z.object({
   id: z.string().min(1),
   provider: z.string().min(1),          // google | openai-compatible | anthropic | supabase | rescript | resend | geocode | …
   service: z.string().min(1),           // translate | chat | tts | storage | runtime | …
   model: z.string().nullable().default(null),   // claude-sonnet-4-6 | gpt-4o-mini | v2 | gb_month | …
-  /** which side of a two-sided price this row is: input / output tokens; null for single-sided */
-  side: z.enum(["input", "output"]).nullable().default(null),
+  /**
+   * which side of a two-sided price this row is: input / output tokens; null for single-sided.
+   * `cache_read` / `cache_write` price the part of the INPUT the provider read from / wrote to its
+   * prompt cache (AI cost audit, 2026-10-17). They apply only to the model of the input row that
+   * priced the call; a model without them is priced at its input rate, as before they existed.
+   */
+  side: z.enum(RATE_SIDES).nullable().default(null),
   unit: z.enum(USAGE_UNITS),
   /** the provider's price for `unitSize` units, in `currency` */
   providerCost: z.number().min(0),
@@ -147,6 +155,11 @@ export const Rate = z.object({
 export type Rate = z.infer<typeof Rate>;
 
 const M = 1_000_000;
+/** the cache read (and, when the provider charges one, write) rows of one chat model, per million tokens */
+function cacheRows(model: string, read: number, write: number | null, note: string): Rate[] {
+  const row = (side: "cache_read" | "cache_write", cost: number): Rate => ({ id: `ai.chat.${model}.${side}`, provider: "openai-compatible", service: "chat", model, side, unit: "token", providerCost: cost, unitSize: M, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note });
+  return write == null ? [row("cache_read", read)] : [row("cache_read", read), row("cache_write", write)];
+}
 /**
  * Starting rates — list prices as published in 2026, to be maintained from
  * the administration screen. Every AI model is a row; an unknown model falls
@@ -174,6 +187,22 @@ export const DEFAULT_RATES: Rate[] = [
   { id: "ai.chat.gpt-4o-mini.out", provider: "openai-compatible", service: "chat", model: "gpt-4o-mini", side: "output", unit: "token", providerCost: 0.6, unitSize: M, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note: "" },
   { id: "ai.chat.*.in", provider: "openai-compatible", service: "chat", model: "*", side: "input", unit: "token", providerCost: 3, unitSize: M, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note: "fallback for a model with no row of its own" },
   { id: "ai.chat.*.out", provider: "openai-compatible", service: "chat", model: "*", side: "output", unit: "token", providerCost: 15, unitSize: M, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note: "fallback for a model with no row of its own" },
+  /*
+   * PROMPT CACHE RATES (AI cost audit, 2026-10-17) — what the provider bills
+   * for input it read from (`cache_read`) or wrote to (`cache_write`) its
+   * prompt cache. Anthropic: a read is 10 % of the input price, a 5-minute
+   * write 125 %. OpenAI: a cached read is 50 %, and there is no write charge
+   * (no write row: a write, which OpenAI never reports, would be priced as
+   * input). Each row applies to its own model only — a model with no cache
+   * row is priced at its input rate, never at another model's cache rate.
+   */
+  ...cacheRows("claude-sonnet-4-6", 0.3, 3.75, ""),
+  ...cacheRows("claude-fable-5-1", 1, 12.5, "10 % / 125 % of the input list price"),
+  ...cacheRows("claude-opus-5-5", 0.4, 5, "10 % / 125 % of the input list price"),
+  ...cacheRows("claude-sonnet-5-5", 0.2, 2.5, "10 % / 125 % of the input list price"),
+  ...cacheRows("claude-haiku-4-5", 0.1, 1.25, ""),
+  ...cacheRows("gpt-4o-mini", 0.075, null, "OpenAI cached input; no write charge"),
+  ...cacheRows("*", 0.3, 3.75, "for a model priced by the * input row"),
   // speech
   { id: "ai.tts.*", provider: "openai-compatible", service: "tts", model: "*", side: null, unit: "character", providerCost: 15, unitSize: M, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note: "text-to-speech per character" },
   { id: "ai.stt.*", provider: "openai-compatible", service: "stt", model: "*", side: null, unit: "minute", providerCost: 0.006, unitSize: 1, markupPct: 0, customerRate: null, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: false, note: "speech-to-text per audio minute" },
@@ -191,7 +220,7 @@ export const DEFAULT_RATES: Rate[] = [
   { id: "rescript.export.dataset", provider: "rescript", service: "export", model: "dataset", side: null, unit: "file", providerCost: 0, unitSize: 1, markupPct: 0, customerRate: 0, currency: "USD", effectiveFrom: null, effectiveUntil: null, active: true, estimated: true, note: "" },
 ];
 
-export interface RateQuery { provider: string; service: string; model?: string | null; side?: "input" | "output" | null; at?: Date | string }
+export interface RateQuery { provider: string; service: string; model?: string | null; side?: RateSide | null; at?: Date | string }
 
 function inEffect(r: Rate, at: number): boolean {
   if (!r.active) return false;
@@ -212,6 +241,21 @@ export function findRate(rates: Rate[], q: RateQuery): Rate | null {
     .filter((r) => r.provider === q.provider && r.service === q.service && (r.model ?? null) === model && (r.side ?? null) === side && inEffect(r, at))
     .sort((a, b) => Date.parse(b.effectiveFrom ?? "1970-01-01") - Date.parse(a.effectiveFrom ?? "1970-01-01"))[0] ?? null;
   return pick(q.model ?? null) ?? (q.model != null ? pick("*") : null) ?? pick(null) ?? null;
+}
+
+/**
+ * The prompt-cache rate that goes with an input rate: same provider, service
+ * and model (the input row's own model — `*` only when the input row is the
+ * `*` row), in effect at `at`. Null when there is none: the cached tokens are
+ * then priced at the input rate, which is what they cost before cache rows
+ * existed. Never another model's cache price.
+ */
+export function cacheRateFor(rates: Rate[], input: Rate | null, side: "cache_read" | "cache_write", at?: Date | string): Rate | null {
+  if (!input) return null;
+  const t = at ? (typeof at === "string" ? Date.parse(at) : at.getTime()) : Date.now();
+  return rates
+    .filter((r) => r.provider === input.provider && r.service === input.service && (r.model ?? null) === (input.model ?? null) && r.side === side && inEffect(r, t))
+    .sort((a, b) => Date.parse(b.effectiveFrom ?? "1970-01-01") - Date.parse(a.effectiveFrom ?? "1970-01-01"))[0] ?? null;
 }
 
 /** Provider cost of `quantity` units under a rate (with the rate's own markup applied). */

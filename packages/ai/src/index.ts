@@ -1099,6 +1099,104 @@ async function postChat(base: string, key: string, body: Record<string, unknown>
   return { r: await send(plain) };
 }
 
+/* ------------------------------------------------------- prompt caching */
+
+/*
+ * PROVIDER PROMPT CACHING (AI cost audit, 2026-10-17).
+ *
+ * Every copilot call sent the same ~15k-character system prompt (and, for a
+ * behaviour request, the same ~20k-character UX guide) at the full input
+ * price, call after call. Providers cache a stable prompt PREFIX and bill a
+ * read of it at a fraction of the input rate:
+ *
+ *   Anthropic   only through its own Messages API (`/v1/messages`) with
+ *               `cache_control: {type: "ephemeral"}` on the blocks to cache
+ *               (a 5-minute cache, refreshed on every hit; a write costs
+ *               ~125 % of input, a read ~10 %). Its OpenAI-compatible
+ *               endpoint does not cache. So a base on anthropic.com is called
+ *               natively by `completeJson`; the reply, the stop reason and the
+ *               usage are read back into the same shape as before.
+ *   OpenAI      automatic for a prefix of 1,024+ tokens (a read ~50 %);
+ *               nothing to send — `usage.prompt_tokens_details.cached_tokens`
+ *               says how much was read. Keeping the stable text FIRST (the
+ *               system blocks, joined) is what makes it hit.
+ *
+ * A call opts in by giving its system prompt as BLOCKS (or `promptCache:
+ * true`): the copilot does; a call with a plain string is sent exactly as
+ * before, so no other feature changes protocol or pays a cache write it never
+ * reads back. `AI_PROMPT_CACHE=off` turns both off: Anthropic is then called through its
+ * OpenAI-compatible endpoint exactly as before. A native request the provider
+ * refuses as malformed (400) or unknown (404) is sent once more the old way,
+ * and that base is not called natively again for the life of the process —
+ * a protocol difference never costs a researcher their request.
+ */
+export function promptCacheEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return !/^(off|0|false|no)$/i.test((env.AI_PROMPT_CACHE ?? "").trim());
+}
+/** bases whose native Messages API refused a request: called through the OpenAI-compatible endpoint from then on */
+const NO_NATIVE = new Set<string>();
+export function resetNativeRefusals(): void { NO_NATIVE.clear(); }
+/** is this base Anthropic's own API, to be called natively (so its prompt cache works)? */
+export function anthropicNative(base: string, env: Record<string, string | undefined> = process.env): boolean {
+  if (!promptCacheEnabled(env) || NO_NATIVE.has(base)) return false;
+  try { return /(^|\.)anthropic\.com$/i.test(new URL(base).hostname); } catch { return false; }
+}
+
+/** what a provider said the call consumed, in one shape — OpenAI-style (`prompt_tokens` includes the cached part) and Anthropic Messages (`input_tokens` excludes it) alike */
+export interface ChatUsageCounts {
+  /** all input tokens, cached or not; undefined when the provider reported none */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** of the input: read from the provider's prompt cache */
+  cachedInputTokens: number;
+  /** of the input: written into it */
+  cacheWriteTokens: number;
+}
+export function chatUsageFrom(usage: unknown): ChatUsageCounts {
+  const o = usage && typeof usage === "object" ? usage as Record<string, unknown> : {};
+  const n = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+  if (n(o.prompt_tokens) == null && (n(o.input_tokens) != null || n(o.output_tokens) != null)) {
+    /* Anthropic Messages: input_tokens is what was NOT read from or written to the cache */
+    const read = n(o.cache_read_input_tokens) ?? 0, write = n(o.cache_creation_input_tokens) ?? 0, rest = n(o.input_tokens);
+    return { inputTokens: rest == null ? undefined : rest + read + write, outputTokens: n(o.output_tokens), cachedInputTokens: rest == null ? 0 : read, cacheWriteTokens: rest == null ? 0 : write };
+  }
+  const details = (o.prompt_tokens_details && typeof o.prompt_tokens_details === "object" ? o.prompt_tokens_details : {}) as Record<string, unknown>;
+  const input = n(o.prompt_tokens);
+  const read = n(details.cached_tokens) ?? n(o.prompt_cache_hit_tokens) ?? n(o.cache_read_input_tokens) ?? 0;
+  const write = n(details.cache_write_tokens) ?? n(o.cache_creation_input_tokens) ?? 0;
+  if (input == null) return { inputTokens: undefined, outputTokens: n(o.completion_tokens), cachedInputTokens: 0, cacheWriteTokens: 0 };
+  const r = Math.min(read, input);
+  return { inputTokens: input, outputTokens: n(o.completion_tokens), cachedInputTokens: r, cacheWriteTokens: Math.min(write, input - r) };
+}
+
+type Turn = { role: "user" | "assistant"; content: string };
+/** Anthropic allows at most four cache breakpoints per request */
+const MAX_BREAKPOINTS = 4;
+/**
+ * The body of one Anthropic Messages request: the system blocks (each a cache
+ * breakpoint when caching is on — the last four), the turns, the budget.
+ * Exported for the tests: what is sent is the contract.
+ */
+export function anthropicRequest(model: string, maxTokens: number, system: readonly string[], turns: Turn[], cache = true): Record<string, unknown> {
+  const parts = system.filter((s) => s.trim());
+  const blocks = parts.map((text, i) => ({ type: "text", text, ...(cache && i >= parts.length - MAX_BREAKPOINTS ? { cache_control: { type: "ephemeral" } } : {}) }));
+  /* the Messages API refuses an empty text block; an empty turn (a reply with no content, sent back for continuation) says so in words */
+  const messages = turns.map((t) => ({ role: t.role, content: t.content.trim() ? t.content : "(empty)" }));
+  return { model, max_tokens: maxTokens, temperature: 0, ...(blocks.length ? { system: blocks } : {}), messages };
+}
+/** Anthropic's own authentication: the key in `x-api-key`, the API version, and the extra headers (workspace) the configuration names */
+function anthropicHeaders(key: string, extra: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { "content-type": "application/json" };
+  for (const [k, v] of Object.entries(extra)) if (!/^(authorization|x-api-key|content-type)$/i.test(k)) h[k] = v;
+  return { ...h, ...(key ? { "x-api-key": key } : {}), "anthropic-version": (process.env.AI_ANTHROPIC_VERSION ?? "").trim() || "2023-06-01" };
+}
+async function postMessages(base: string, key: string, body: Record<string, unknown>, signal: AbortSignal, retry: RetryPolicy, deadline: number, label?: string, onEvent?: (e: ProviderEvent) => void, via?: Via): Promise<Response> {
+  const init: RequestInit = { method: "POST", signal, cache: "no-store", headers: anthropicHeaders(key, via ? via.headers ?? {} : aiExtraHeaders()), body: JSON.stringify(body) };
+  const url = `${base}/messages`;
+  const once = () => (via ? (via.guard ? guardedFetch(url, init, { allowPrivate: via.allowPrivate }) : fetch(url, init)) : aiFetch("chat", url, init));
+  return managedSend({ base, key, once, signal, deadline, retry, label, onEvent });
+}
+
 /** a model tier: "large" drafts (AI_MODEL), "small" structures a short answer (AI_MODEL_SMALL, else AI_MODEL) — Phase 6 */
 export type AiModelTier = "small" | "large";
 
@@ -1191,6 +1289,15 @@ export interface CompleteJsonOptions {
   onEvent?: (e: ProviderEvent) => void;
   /** a name for the log line ("copilot_plan") */
   operation?: string;
+  /**
+   * Ask the provider to cache the system blocks (see `promptCacheEnabled`).
+   * Default: on when `system` is given as a list of blocks — the caller has
+   * said which text is stable — and off for a plain string, so a one-off call
+   * never pays a cache write it will not read back. Only on does Anthropic go
+   * through its native Messages API; off, every provider is called exactly as
+   * before. (OpenAI caches a long prefix by itself either way.)
+   */
+  promptCache?: boolean;
 }
 
 /**
@@ -1216,8 +1323,15 @@ export function isAiReplyError(e: unknown): e is AiReplyError {
   return e instanceof AiReplyError || (!!e && typeof e === "object" && (e as { name?: string }).name === "AiReplyError");
 }
 
+/**
+ * `system` may be a list of blocks: the STABLE text of the request (the
+ * instructions, the guides), first and unchanging between calls, so the
+ * provider's prompt cache can serve it (see `promptCacheEnabled`). To an
+ * OpenAI-style provider the blocks are one system message, joined by a blank
+ * line — exactly the text a single string would have been.
+ */
 export async function completeJson(
-  system: string,
+  system: string | readonly string[],
   user: string,
   maxTokens = 160,
   options: CompleteJsonOptions = {},
@@ -1226,6 +1340,9 @@ export async function completeJson(
   const model = aiModelName(options.tier);
   const key = chatKey();
   if (!base) return null;
+  const systemParts: readonly string[] = typeof system === "string" ? [system] : system.map(String);
+  const systemText = systemParts.join("\n\n");
+  const cachePrefix = options.promptCache ?? typeof system !== "string";
 
   if (aiProviderName() === "fake") {
     /*
@@ -1234,7 +1351,7 @@ export async function completeJson(
      * a candidate's mouth, and `verifyEvidence` would then have to drop them
      * — which is the right behaviour, exercised on made-up input.
      */
-    reportFake("chat", system + user, 20);
+    reportFake("chat", systemText + user, 20);
     return {};
   }
 
@@ -1280,7 +1397,7 @@ export async function completeJson(
   let onFallback = false;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  type Msg = { role: "system" | "user" | "assistant"; content: string };
+  type Msg = Turn;
   const format = options.schema
     ? { type: "json_schema", json_schema: { name: options.schema.name, schema: options.schema.schema, ...(options.schema.strict ? { strict: true } : {}) } }
     : { type: "json_object" };
@@ -1305,11 +1422,19 @@ export async function completeJson(
     try { return await again(); }
     catch (e2) { if (isProviderError(e2)) throw new ProviderError({ kind: e2.kind, status: e2.status, detail: `${e2.detail} (the fallback provider also failed; the first failed with ${e.kind})`, retryAfterMs: e2.retryAfterMs ?? e.retryAfterMs, host: e2.host, exhausted: true, attempts: e2.attempts, viaFallback: true }); throw e2; }
   };
-  /* one call, its content and why it stopped — usage reported per call, so a continuation is metered like any other */
+  /*
+   * one call, its content and why it stopped — usage reported per call, so a
+   * continuation is metered like any other (and, inside one `collectUsage`,
+   * summed into the ONE charge of the logical call). `messages` are the turns
+   * after the system blocks, which every call of this request repeats first.
+   */
   const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
     let r: Response, refused: string | undefined;
+    const native = cachePrefix && anthropicNative(target.base);
+    const label = options.operation ? `${options.operation} ${target.model}` : target.model;
     try {
-      ({ r, detail: refused } = await postChat(target.base, target.key, { model: target.model, temperature: 0, max_tokens: limit, response_format: format, messages }, ctrl.signal, retry, deadline, options.operation ? `${options.operation} ${target.model}` : target.model, options.onEvent, target.via));
+      if (native) r = await postMessages(target.base, target.key, anthropicRequest(target.model, limit, systemParts, messages), ctrl.signal, retry, deadline, label, options.onEvent, target.via);
+      else ({ r, detail: refused } = await postChat(target.base, target.key, { model: target.model, temperature: 0, max_tokens: limit, response_format: format, messages: [{ role: "system", content: systemText }, ...messages] }, ctrl.signal, retry, deadline, label, options.onEvent, target.via));
     } catch (e) {
       if (isProviderError(e)) return viaFallback(e, () => call(messages, lowered));
       throw e;
@@ -1319,6 +1444,12 @@ export async function completeJson(
       const ceiling = r.status === 400 && !lowered ? outputCeilingFrom(detail, limit) : null;
       if (ceiling) { OUTPUT_CEILING.set(`${target.base} ${target.model}`, ceiling); limit = ceiling; return call(messages, true); }
       const err = classifyResponse(r.status, r.headers, detail);
+      /* the native API refused the request's SHAPE (not its size, not the account): the OpenAI-compatible endpoint, as before — once, and remembered */
+      if (native && ((err.kind === "bad_request" && !err.contextTooLong) || err.kind === "not_found")) {
+        NO_NATIVE.add(target.base);
+        logProvider("native_refused", { host: (() => { try { return new URL(target.base).host; } catch { return "provider"; } })(), label, status: r.status, said: redact(detail, 200), reason: "sent again through the OpenAI-compatible endpoint; prompt caching is off for this provider until restart" });
+        return call(messages, lowered);
+      }
       const exhausted = new ProviderError({ kind: err.kind, status: r.status, detail: detail.slice(0, 200), retryAfterMs: err.retryAfterMs, host: err.host, exhausted: err.retryable, viaFallback: onFallback, contextTooLong: err.contextTooLong });
       /* a refusal of the request itself is the one failure the request manager does not log (json-mode probing would flood it): the ladder is over, so what the provider said is logged here — once, redacted — because it is the only way an administrator learns why */
       if (exhausted.kind === "bad_request") logProvider("refused", { host: exhausted.host ?? (() => { try { return new URL(target.base).host; } catch { return "provider"; } })(), label: options.operation ? `${options.operation} ${target.model}` : target.model, kind: "bad_request", status: r.status, said: exhausted.detail.slice(0, 200), maxTokens: limit, schema: !!options.schema, attempts: 1, reason: "the request was refused" });
@@ -1326,26 +1457,32 @@ export async function completeJson(
     }
     const j = await r.json().catch(() => null) as {
       choices?: { message?: { content?: string }; finish_reason?: string }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      content?: { type?: string; text?: string }[];
+      stop_reason?: string | null;
+      usage?: unknown;
       model?: string;
     } | null;
-    const content = j?.choices?.[0]?.message?.content ?? "";
-    const inTok = j?.usage?.prompt_tokens, outTok = j?.usage?.completion_tokens;
-    const outputTokens = typeof outTok === "number" ? outTok : approxTokens(content);
+    /* the Messages API answers in content blocks and says `max_tokens` where an OpenAI-style one says `length` */
+    const content = native ? (j?.content ?? []).filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("") : j?.choices?.[0]?.message?.content ?? "";
+    const finish = native ? (j?.stop_reason === "max_tokens" ? "length" : j?.stop_reason ?? null) : j?.choices?.[0]?.finish_reason ?? null;
+    const u = chatUsageFrom(j?.usage);
+    const outputTokens = typeof u.outputTokens === "number" ? u.outputTokens : approxTokens(content);
     reportUsage({
       kind: "chat", provider: "openai-compatible", model: j?.model || target.model, source: target.source, providerId: target.provider, ...(onFallback ? { usedFallback: true } : {}),
-      inputTokens: typeof inTok === "number" ? inTok : approxTokens(messages.map((m) => m.content).join("")),
+      inputTokens: typeof u.inputTokens === "number" ? u.inputTokens : approxTokens(systemText + messages.map((m) => m.content).join("")),
       outputTokens,
-      requests: 1, estimated: typeof inTok !== "number",
+      ...(u.cachedInputTokens ? { cachedInputTokens: u.cachedInputTokens } : {}),
+      ...(u.cacheWriteTokens ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
+      requests: 1, estimated: typeof u.inputTokens !== "number",
     });
-    return { content, finish: j?.choices?.[0]?.finish_reason ?? null, outputTokens };
+    return { content, finish, outputTokens };
   };
   const read = (content: string): unknown | null => {
     try { return JSON.parse(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); }
     catch { return parseJsonReply(content); }   /* without json mode the object can come after a sentence */
   };
   try {
-    const messages: Msg[] = [{ role: "system", content: system }, { role: "user", content: user }];
+    const messages: Msg[] = [{ role: "user", content: user }];
     let { content, finish, outputTokens } = await call(messages);
     /*
      * CUT OFF AT THE OUTPUT BUDGET. A survey of forty questions with options,

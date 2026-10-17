@@ -8,6 +8,7 @@ import {
 } from "@rescript/engine";
 import { DomBridge } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
+import { closeUxPopups, openUxPopup, placeUxPopups } from "./uxPopup";
 
 /**
  * THE UX LAYER — the runtime half of the survey's styles, animations and
@@ -72,6 +73,17 @@ const setByUx = new WeakMap<HTMLElement, Set<string>>();
 /** apply one effect; returns how to revert it (for held conditions) */
 function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget, e: UxEffect, ownerId: string): Undo[] {
   const t = e.target ?? owner;
+  /*
+   * THE SURVEY'S POPUP: one per behaviour (or script), whatever the target matches. Its close is the
+   * undo, so a held condition (select_option…) closes it when it stops holding, and a page change
+   * closes it with everything else the page held.
+   */
+  if (e.do === "show_popup") {
+    if (!e.text) return [];
+    const anchor = e.placement === "anchored" || e.placement === "inline" ? uxElements(root, t)[0] ?? null : null;
+    return [{ run: openUxPopup({ root, owner: ownerId, anchor, effect: e }) }];
+  }
+  if (e.do === "hide_popup") { closeUxPopups(root); return []; }
   const content = e.do === "animate" && ["survey", "block", "page"].includes(t.kind);
   const els = uxElements(root, t, { content });
   const undo: Undo[] = [];
@@ -197,9 +209,10 @@ export function UxLayer(p: UxLayerProps) {
     if (!root) return;
     const pageChanged = lastPage.current !== p.pageKey;
     if (pageChanged) {
-      // a new page: held effects of the old one go with it
+      // a new page: held effects of the old one go with it — and every popup (one opened by a momentary event has no undo)
       for (const undo of active.current.values()) for (const u of undo) u.run();
       active.current.clear();
+      closeUxPopups(root);
       prevValues.current = null;
       lastPage.current = p.pageKey;
     }
@@ -228,6 +241,8 @@ export function UxLayer(p: UxLayerProps) {
       for (const b of r.hold) { active.current.set(b.id, b.effects.flatMap((e) => applyEffect(root, def, b.target, e, b.id))); if (b.once) fired.current.add(b.id); }
       for (const b of r.fire) { for (const e of b.effects) applyEffect(root, def, b.target, e, b.id); if (b.once) fired.current.add(b.id); }
     }
+    // an anchored popup follows its target when the page re-renders around it
+    placeUxPopups(root);
     // scripts hear about answers
     const prev = prevValues.current;
     for (const s of scripts.current) {
@@ -249,6 +264,21 @@ export function UxLayer(p: UxLayerProps) {
     }
     prevValues.current = { ...p.values };
   });
+
+  /*
+   * Leaving the survey (the end page) or unmounting: popups and held effects go. Under React's
+   * StrictMode the layer is mounted, unmounted and mounted again at once — so this also forgets the
+   * page, and the next run applies what holds again instead of believing it is still applied.
+   */
+  React.useEffect(() => {
+    const root = p.rootRef.current;
+    return () => {
+      for (const undo of active.current.values()) for (const u of undo) u.run();
+      active.current.clear();
+      lastPage.current = null;
+      if (root) closeUxPopups(root);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* click / hover behaviours: delegated on the shell */
   React.useEffect(() => {
@@ -353,6 +383,19 @@ export function UxLayer(p: UxLayerProps) {
           case "show": effect({ do: "show" }, resolve(a[0])); break;
           case "hide": effect({ do: "hide" }, resolve(a[0])); break;
           case "showMessage": effect({ do: "show_message", text: str(a[1]) }, resolve(a[0])); break;
+          case "popup": {
+            // the survey's own popup — rs.popup(text, { title, placement, target, dismiss, autoMs }); one per script, replaced by the next
+            const o = (a[1] && typeof a[1] === "object" ? a[1] : {}) as Record<string, unknown>;
+            const text = str(a[0]);
+            if (!text) { report("rs.popup needs text"); break; }
+            const pick = <T extends string>(v: unknown, list: readonly T[], what: string): T | undefined => { if (v == null || v === "") return undefined; if ((list as readonly string[]).includes(String(v))) return String(v) as T; report(`rs.popup: “${str(v)}” is not a ${what} (${list.join(", ")})`); return undefined; };
+            const placement = pick(o.placement, ["center", "anchored", "top", "inline"] as const, "placement");
+            const dismiss = pick(o.dismiss, ["button", "auto", "none"] as const, "dismiss");
+            const autoMs = Number(o.autoMs) > 0 ? Math.max(1000, Math.min(60000, Math.round(Number(o.autoMs)))) : undefined;
+            effect({ do: "show_popup", text, ...(o.title ? { title: str(o.title).slice(0, 120) } : {}), ...(placement ? { placement } : {}), ...(dismiss ? { dismiss } : {}), ...(autoMs ? { autoMs } : {}) }, resolve(o.target ?? "self"));
+            break;
+          }
+          case "closePopup": closeUxPopups(root, b.id); break;
           case "hideMessage": effect({ do: "hide_message" }, resolve(a[0])); break;
           case "scrollTo": effect({ do: "scroll_into_view" }, resolve(a[0])); break;
           case "focus": effect({ do: "focus" }, resolve(a[0])); break;

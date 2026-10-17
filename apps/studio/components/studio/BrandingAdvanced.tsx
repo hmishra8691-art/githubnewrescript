@@ -1,11 +1,13 @@
 "use client";
 import React from "react";
 import type { Branding } from "@rescript/schema";
-import { applySurveyActions, type SurveyAction } from "@rescript/engine";
+import { applySurveyActions, appendSpoken, type SurveyAction } from "@rescript/engine";
 import { useStudio } from "./store";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { prepareThemeImage, type ThemeImage } from "@/lib/copilot/themeImage";
 import { themePreviewStore } from "@/lib/themePreview";
+import { useVoiceInput } from "@/lib/useVoiceInput";
+import { refuseThemeReference, THEME_REFERENCE_ACCEPT, THEME_REFERENCE_MAX, THEME_REFERENCE_MAX_BYTES } from "@/lib/copilot/themeReferences";
 
 /**
  * THE REST OF THE THEME — everything the renderer used to hard-code and the
@@ -125,17 +127,26 @@ export function ResponsiveSection({ b, set }: { b: Branding; set: Set }) {
 }
 
 /**
- * THE THEME ASSISTANT — Intelligent mode's theme skill, in Branding: "make
- * it look like this", "a premium dark theme around this image", or an image
- * to build the theme from. The copilot answers with `set_theme`, checked by
- * the engine exactly as in Intelligent mode, previewed here field by field,
- * and applied as one undoable edit INTO these settings — so everything it
- * chose is then in the controls above to adjust by hand.
+ * THE THEME ASSISTANT — "Design with AI": Intelligent mode's theme skill, in
+ * Branding. "Make it look like this", "a premium dark theme around these",
+ * typed or SPOKEN (the Studio's shared microphone — the same recorder and
+ * /api/ai/transcribe path as Intelligent mode; the transcript is appended to
+ * what is typed, never replacing it, and stays editable before sending), with
+ * up to four reference images to build the theme from. The copilot answers
+ * with `set_theme`, checked by the engine exactly as in Intelligent mode,
+ * previewed here field by field, and applied as one undoable edit INTO these
+ * settings — so everything it chose is then in the controls above to adjust
+ * by hand.
  */
+type ThemeRef = { id: string; name: string; size: number; preview: string; image: ThemeImage | null };
+const fmtSize = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
+let refSeq = 0;
+
 export function ThemeAssistant() {
   const s = useStudio();
   const [text, setText] = React.useState("");
-  const [image, setImage] = React.useState<ThemeImage | null>(null);
+  const [refs, setRefs] = React.useState<ThemeRef[]>([]);
+  const [refErrors, setRefErrors] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [proposal, setProposal] = React.useState<{ actions: SurveyAction[]; reply: string; lines: string[]; errors: string[] } | null>(null);
@@ -146,14 +157,49 @@ export function ThemeAssistant() {
     w.__rescriptThemeFake = (r) => { fakeRef.current.push(r); };
     return () => { delete w.__rescriptThemeFake; };
   }, []);
+  /* the microphone: what was heard is APPENDED to the prompt (as spoken — the model reads any language), then editable before sending */
+  const voice = useVoiceInput({
+    surveyId: s.surveyDbId,
+    fileName: "theme.webm",
+    refusedMessage: "Microphone access was refused — allow it in the browser to describe the look by voice.",
+    onTranscript: (heard) => { setText((t) => appendSpoken(t, heard.text || heard.english || "")); },
+  });
+  const recording = voice.state === "recording" || voice.state === "paused";
+  const ready = refs.filter((r) => r.image).map((r) => r.image!);
+  const reading = refs.some((r) => !r.image);
+
+  const addFiles = async (files: File[]) => {
+    const errs: string[] = [];
+    const accepted: { ref: ThemeRef; file: File }[] = [];
+    for (const f of files) {
+      const why = refuseThemeReference(f, refs.length + accepted.length);
+      if (why) { errs.push(why); continue; }
+      accepted.push({ ref: { id: `ref${++refSeq}`, name: f.name, size: f.size, preview: URL.createObjectURL(f), image: null }, file: f });
+    }
+    setRefErrors(errs);
+    if (!accepted.length) return;
+    setRefs((rs) => [...rs, ...accepted.map((a) => a.ref)]);
+    for (const { ref, file: f } of accepted) {
+      try {
+        const image = await prepareThemeImage(f, s.surveyDbId);
+        setRefs((rs) => rs.map((r) => (r.id === ref.id ? { ...r, image } : r)));
+      } catch (x) {
+        setRefs((rs) => rs.filter((r) => r.id !== ref.id));
+        setRefErrors((es) => [...es, `“${f.name}” could not be read: ${(x as Error).message}`]);
+      } finally { URL.revokeObjectURL(ref.preview); }
+    }
+  };
+  const removeRef = (id: string) => { setRefs((rs) => rs.filter((r) => r.id !== id)); setRefErrors([]); };
+
   const ask = async () => {
-    if (!text.trim() && !image) return;
+    if ((!text.trim() && !ready.length) || reading) return;
     setBusy("Designing the theme…"); setError(null); setProposal(null);
     try {
       const fake = fakeRef.current.shift();
+      const fallback = ready.length > 1 ? "Build the survey theme from these references." : "Build the survey theme from this image.";
       const r = await fetch("/api/copilot/turn", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ surveyId: s.surveyDbId, message: text.trim() || "Build the survey theme from this image.", definition: s.def, scope: "theme", ...(image ? { themeImage: image } : {}), ...(fake ? { fake } : {}) }),
+        body: JSON.stringify({ surveyId: s.surveyDbId, message: text.trim() || fallback, definition: s.def, scope: "theme", ...(ready.length ? { themeImages: ready } : {}), ...(fake ? { fake } : {}) }),
       });
       const d = await r.json().catch(() => null) as { ok?: boolean; error?: string; reply?: { reply: string; actions: SurveyAction[] } | null; message?: string } | null;
       if (r.status === 501) { setError("No language model is configured on this Studio — the controls below still set every part of the theme."); return; }
@@ -169,33 +215,67 @@ export function ThemeAssistant() {
     if (!proposal) return;
     const out = applySurveyActions(s.def, proposal.actions as never, { uxOnly: true });
     if (!out.valid || !out.results.some((x) => x.ok)) { setError(out.errors.join(" ") || "Nothing to apply."); return; }
-    s.labelNextEdit(`AI theme: ${text.trim().slice(0, 50) || "from an image"}`);
+    s.labelNextEdit(`AI theme: ${text.trim().slice(0, 50) || (refs.length > 1 ? "from references" : "from an image")}`);
     s.replace(out.def);
     s.toast("Theme applied — every setting is below to adjust by hand. Undo with ⌘Z.");
-    setProposal(null); setText(""); setImage(null);
+    setProposal(null); setText(""); setRefs([]); setRefErrors([]);
     themePreviewStore.set(null);
   };
   React.useEffect(() => () => themePreviewStore.set(null), []);
+  const micLabel = voice.state === "transcribing" ? "Transcribing…" : recording ? "Stop and transcribe" : "Describe the look by voice";
   return (
     <div className="theme-assistant" data-testid="theme-assistant">
       <div className="row" style={{ gap: 6, alignItems: "flex-start" }}>
-        <textarea className="ta grow" rows={2} value={text} placeholder="Describe the look — “a premium dark theme”, “make it look like our website”, “use this image as the background”…"
+        <textarea className="ta grow" rows={2} value={text} aria-label="Describe the look"
+          placeholder={recording ? "Listening… press the microphone again when you have finished." : voice.state === "transcribing" ? "Transcribing…" : "Describe the look — “a premium dark theme”, “make it look like our website”, “use this image as the background” — type, or press the microphone"}
           onChange={(e) => setText(e.target.value)} data-testid="theme-assistant-input" />
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <input ref={file} type="file" accept="image/*" hidden data-testid="theme-assistant-file"
-            onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; setBusy("Reading the image…"); setError(null); try { setImage(await prepareThemeImage(f, s.surveyDbId)); } catch (x) { setError((x as Error).message); } finally { setBusy(null); } }} />
-          <button type="button" className="btn small" onClick={() => file.current?.click()} disabled={!!busy} data-testid="theme-assistant-image">Image…</button>
-          <button type="button" className="btn small primary" onClick={() => void ask()} disabled={!!busy || (!text.trim() && !image) || s.readOnly} data-testid="theme-assistant-ask">Design theme</button>
+          <div className="row" style={{ gap: 4 }}>
+            <button type="button" className={`btn small${recording ? " primary" : ""}`} data-testid="theme-assistant-mic" data-state={voice.state}
+              onClick={voice.toggle} disabled={!!busy || voice.state === "transcribing" || voice.available === false || s.readOnly}
+              aria-pressed={recording} aria-label={micLabel}
+              title={voice.available === false ? "No transcription provider is configured on this Studio" : recording ? "Stop — what you said is added to the text, to edit before sending" : "Speak — what you say is transcribed and added to the text (any language)"}>
+              {voice.state === "transcribing" ? "…" : recording ? "■" : "🎤"}
+            </button>
+            {/* pause / resume, where the recorder has them (MediaRecorder.pause / resume); elsewhere stop and record again */}
+            {recording && voice.canPause && (
+              <button type="button" className="btn small" data-testid="theme-assistant-mic-pause" aria-pressed={voice.state === "paused"}
+                aria-label={voice.state === "paused" ? "Resume recording" : "Pause recording"}
+                onClick={voice.state === "paused" ? voice.resume : voice.pause}>
+                {voice.state === "paused" ? "▶" : "❚❚"}
+              </button>
+            )}
+          </div>
+          <input ref={file} type="file" accept={THEME_REFERENCE_ACCEPT} multiple hidden data-testid="theme-assistant-file"
+            onChange={(e) => { const fs = [...(e.target.files ?? [])]; e.target.value = ""; if (fs.length) void addFiles(fs); }} />
+          <button type="button" className="btn small" onClick={() => file.current?.click()} disabled={!!busy || refs.length >= THEME_REFERENCE_MAX} data-testid="theme-assistant-image"
+            title={`Up to ${THEME_REFERENCE_MAX} reference images — PNG, JPG or WebP, ${Math.round(THEME_REFERENCE_MAX_BYTES / 1024 / 1024)} MB each`}>Images…</button>
+          <button type="button" className="btn small primary" onClick={() => void ask()} disabled={!!busy || reading || recording || voice.state === "transcribing" || (!text.trim() && !ready.length) || s.readOnly} data-testid="theme-assistant-ask">Design theme</button>
         </div>
       </div>
-      {image && (
-        <div className="row" style={{ gap: 8, marginTop: 6 }} data-testid="theme-assistant-image-chip">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={image.url} alt="" style={{ width: 54, height: 36, objectFit: "cover", borderRadius: 4 }} />
-          <span className="row" style={{ gap: 3 }}>{image.dominant.map((c) => <span key={c} title={c} style={{ width: 14, height: 14, borderRadius: 3, background: c, border: "1px solid var(--border)" }} />)}</span>
-          <span className="muted" style={{ fontSize: 12 }}>{image.name} · {image.dark ? "dark" : "light"} image{image.uploaded ? "" : " · kept inline (the asset library is not set up)"}</span>
-          <button type="button" className="btn small ghost" onClick={() => setImage(null)}>×</button>
-        </div>
+      {voice.state !== "idle" && (
+        <p className="muted" style={{ fontSize: 12, margin: "4px 0" }} data-testid="theme-assistant-voice-status" aria-live="polite">
+          {voice.state === "recording" ? "● Recording — press ■ to stop" : voice.state === "paused" ? "Paused — ▶ to continue, ■ to finish" : "Transcribing what you said…"}
+        </p>
+      )}
+      {voice.error && <p className="muted" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }} role="alert" data-testid="theme-assistant-voice-error">⚠ {voice.error}</p>}
+      {refs.length > 0 && (
+        <ul className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap", listStyle: "none", padding: 0 }} aria-label="Reference images" data-testid="theme-assistant-refs">
+          {refs.map((r) => (
+            <li key={r.id} className="row" style={{ gap: 6 }} data-testid="theme-assistant-image-chip" data-name={r.name} data-state={r.image ? "ready" : "reading"}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={r.image?.url ?? r.preview} alt={`Reference: ${r.name}`} style={{ width: 54, height: 36, objectFit: "cover", borderRadius: 4 }} />
+              {r.image && <span className="row" style={{ gap: 3 }}>{r.image.dominant.slice(0, 5).map((c) => <span key={c} title={c} style={{ width: 14, height: 14, borderRadius: 3, background: c, border: "1px solid var(--border)" }} />)}</span>}
+              <span className="muted" style={{ fontSize: 12 }}>{r.name} · {fmtSize(r.size)}{r.image ? ` · ${r.image.dark ? "dark" : "light"}${r.image.uploaded ? "" : " · kept inline (the asset library is not set up)"}` : " · reading…"}</span>
+              <button type="button" className="btn small ghost" aria-label={`Remove ${r.name}`} data-testid="theme-assistant-ref-remove" onClick={() => removeRef(r.id)}>×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {refErrors.length > 0 && (
+        <ul className="muted" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)", margin: "4px 0", paddingLeft: 16 }} role="alert" data-testid="theme-assistant-ref-errors">
+          {refErrors.map((e, i) => <li key={i}>{e}</li>)}
+        </ul>
       )}
       {busy && <p className="muted" style={{ fontSize: 12 }}>{busy}</p>}
       {error && <p className="muted" style={{ fontSize: 12.5, color: "var(--danger, #b91c1c)" }} data-testid="theme-assistant-error">⚠ {error}</p>}

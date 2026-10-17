@@ -224,7 +224,60 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
     const self = new RegExp(`(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*(?:${name}\\b|function\\s*\\([^)]*\\)\\s*\\{\\s*${name}\\s*\\(|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()|(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*\\d+\\s*,\\s*(?:${name}\\b|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()`);
     if (self.test(body)) errors.push(`${name}() waits for an element by calling itself on a timer — on a survey page the elements a script names already exist when it starts (one that is never found means its selector is wrong, and the timer would run for ever); for something that appears later use rs.listen or a MutationObserver`);
   }
+  errors.push(...popupProblems(code));
   return [...new Set(errors)];
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * POPUPS (P3, 2026-10-17). "When Q3 has option 1 selected, display a popup" produced scripts that
+ * built their own overlay: a position:fixed div appended to the body, its own fade timers, nothing
+ * that closed it when the answer changed — one landed in the far left corner of the screen. The
+ * survey has a popup of its own (the show_popup effect, rs.popup in a script): centred or anchored,
+ * sized for phones, accessible, one per behaviour, closed when its condition stops. So:
+ *
+ *   - a script that appends a position:fixed element to the body that covers the screen or is
+ *     plainly a popup (popup / modal / overlay / dialog / backdrop) is refused with that alternative;
+ *   - a script that opens rs.popup from an answer event (select, deselect, answer, change, an
+ *     input / change listener) and never calls rs.closePopup is refused: when the answer changes
+ *     the popup would still be saying something that is no longer true. REFUSED, not warned,
+ *     because staying in step with the answer is the whole requirement, the fix is one line (or the
+ *     declarative effect, which closes itself), and a refusal is what sends the model its one
+ *     repair with the reason; it is an authoring check, so a stored script keeps running.
+ * ------------------------------------------------------------------------------------------------ */
+
+/** the code with comments blanked but string contents kept (style text lives in strings) */
+function withoutComments(code: string): string {
+  const { bare, strings } = lexJs(code);
+  let out = bare;
+  for (const s of strings) out = out.slice(0, s.start) + code.slice(s.start, s.end) + out.slice(s.end);
+  return out;
+}
+
+export const POPUP_ALTERNATIVE = 'use the survey\'s own popup instead — a behaviour effect {"do":"show_popup","text":"…","title":"…","placement":"center"} (on select_option with "options" it shows only while the option is selected and closes by itself), or in a script rs.popup(text, {title, placement: "center"|"anchored"|"top"|"inline", target}) with rs.closePopup()';
+
+export function popupProblems(code: string): string[] {
+  const src = withoutComments(code);
+  const { bare } = lexJs(code);
+  const out: string[] = [];
+  const fixed = /position\s*["']?\s*[:=]\s*["']?\s*fixed\b/i.test(src);
+  const toBody = /\b(?:document\s*\.\s*)?body\s*\.\s*(?:appendChild|append|prepend|insertBefore|insertAdjacentElement|insertAdjacentHTML)\s*\(/.test(src);
+  if (fixed && toBody) {
+    const inset0 = /\binset\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i.test(src);
+    const full = (re: RegExp) => re.test(src);
+    const wide = full(/\bwidth\s*["']?\s*[:=]\s*["']?\s*100\s*(?:%|vw)/i), tall = full(/\bheight\s*["']?\s*[:=]\s*["']?\s*100\s*(?:%|vh)/i);
+    const edges = [/\btop\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bleft\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bright\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bbottom\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i].filter((re) => re.test(src)).length;
+    const covers = inset0 || (wide && tall) || edges >= 4;
+    const looksLikePopup = /popup|pop-up|modal|overlay|dialog|backdrop|lightbox|toast/i.test(src);
+    if (covers || looksLikePopup) out.push(`the script builds its own popup (a position: fixed element appended to document.body${covers ? " that covers the whole screen" : ""}) — it is not sized for phones, not reachable by keyboard or a screen reader, and nothing closes it when the answer changes; ${POPUP_ALTERNATIVE}`);
+  }
+  const opens = /\brs\s*\.\s*popup\s*\(/.test(bare);
+  if (opens) {
+    const onAnswer = /\brs\s*\.\s*listen\s*\(\s*["'](?:select|deselect|answer|change|select_option|deselect_option)["']/.test(src) || /addEventListener\s*\(\s*["'](?:input|change)["']/.test(src);
+    const closes = /\brs\s*\.\s*closePopup\s*\(/.test(bare);
+    const auto = /\bdismiss\s*["']?\s*:\s*["']auto["']/.test(src);
+    if (onAnswer && !closes && !auto) out.push(`the script opens rs.popup when the answer changes but never closes it — after a deselect or another answer the popup would still be showing. Call rs.closePopup() when the condition no longer holds (in the same handler), or use the show_popup effect on select_option, which closes itself`);
+  }
+  return out;
 }
 
 /**

@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { headerRepeatApplies, gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken } from "@rescript/engine";
+import { headerRepeatApplies, gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { useCanvas } from "../canvas/CanvasContext";
@@ -908,6 +908,14 @@ export function SurveySettings() {
         Allow a respondent to retake the survey
       </label>
 
+      {/* dictation on every free-text field, on by default; a question can opt itself out in Properties → State */}
+      <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8 }}
+        title="A microphone beside each editable free-text field (text answers, Other boxes, text fields of forms and lists) when the respondent's browser can recognise speech. Recognition runs in the browser — no audio is sent by the survey. Never on numeric, email, phone, URL, date, ZIP or masked fields.">
+        <input type="checkbox" checked={dep.speechInput !== false} data-testid="survey-speech-input"
+          onChange={(e) => s.update((d) => { if (e.target.checked) delete d.deployment.speechInput; else d.deployment.speechInput = false; })} />
+        Let respondents dictate open-text answers (microphone)
+      </label>
+
       <QualitySettings />
 
       {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
@@ -1490,14 +1498,17 @@ export function PropertiesPanel() {
           <input type="checkbox" checked={q.settings.readOnly}
             onChange={(e) => patch({ settings: { ...q.settings, readOnly: e.target.checked } })} /> read-only
         </label>
-        {hasCap("speech_input") && (
-          <label className="row" style={{ gap: 4, fontSize: 13 }} title="Adds a microphone; the transcript becomes the ordinary text answer">
-            <input type="checkbox" checked={!!q.settings.speechInput} data-testid="speech-input-toggle"
-              onChange={(e) => patch({ settings: { ...q.settings, speechInput: e.target.checked || undefined } })} /> allow dictation
+        {/* dictation is ON BY DEFAULT on every free-text field of a question (its text answer, its Other boxes, its text fields): the switch opts this question out */}
+        {questionOffersSpeechInput(q) && (
+          <label className="row" style={{ gap: 4, fontSize: 13 }} title="A microphone beside each free-text field when the respondent's browser can recognise speech (on the device — no audio is sent). The transcript is the ordinary text answer. On by default.">
+            <input type="checkbox" checked={q.settings.speechInput !== false} data-testid="speech-input-toggle"
+              disabled={s.def.deployment.speechInput === false}
+              onChange={(e) => patchSettings({ speechInput: e.target.checked ? undefined : false })} /> allow dictation
+            {s.def.deployment.speechInput === false && <span className="muted" data-testid="speech-input-survey-off"> (off for the whole survey — Survey settings)</span>}
           </label>
         )}
       </div>
-      {hasCap("speech_input") && q.settings.speechInput && (
+      {questionOffersSpeechInput(q) && q.settings.speechInput !== false && s.def.deployment.speechInput !== false && (
         <label className="f" style={{ marginTop: 8 }}><span>Dictation language (BCP-47, blank = survey language)</span>
           <input className="input mono" value={q.settings.speechLang ?? ""} placeholder="en-GB, hi-IN, de-DE…"
             data-testid="speech-lang"
