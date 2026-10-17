@@ -9,7 +9,9 @@ export type IconName =
   | "questions" | "settings" | "flow" | "logic" | "variables" | "calc" | "quotas" | "listfill" | "designs" | "branding" | "scripts"
   | "data" | "versions" | "json" | "collaborators" | "notes" | "activity" | "analytics" | "clean" | "reports"
   | "assets"
-  | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers" | "upload" | "paperclip";
+  | "search" | "plus" | "play" | "flask" | "download" | "export" | "user" | "bell" | "chevron-down" | "chevron-right" | "check" | "warning" | "info" | "close" | "home" | "grid" | "share" | "shield" | "logout" | "sparkle" | "chart" | "table" | "layers" | "upload" | "paperclip"
+  /* Survey Flow elements (Add Element grid) */
+  | "shuffle" | "repeat" | "redirect" | "flag";
 
 const P: Record<IconName, React.ReactNode> = {
   questions: <><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8 9h8M8 13h8M8 17h5" /></>,
@@ -58,6 +60,10 @@ const P: Record<IconName, React.ReactNode> = {
   layers: <><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5M3 17l9 5 9-5" /></>,
   upload: <><path d="M12 20V9M7 13l5-5 5 5M5 4h14" /></>,
   paperclip: <><path d="m20 11.5-8.3 8.3a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.4 17.3a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6" /></>,
+  shuffle: <><path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 3.6c1.1 1.7 2.3 2.7 4.3 2.7H21" /><path d="M3 17h3.5c1.4 0 2.4-.5 3.2-1.4M14.3 8.4c.8-.9 1.8-1.4 3.2-1.4H21" /><path d="m18 4 3 3-3 3M18 14l3 3-3 3" /></>,
+  repeat: <><path d="M4 11V9a3 3 0 0 1 3-3h12" /><path d="m16 3 3 3-3 3" /><path d="M20 13v2a3 3 0 0 1-3 3H5" /><path d="m8 21-3-3 3-3" /></>,
+  redirect: <><path d="M14 4h6v6" /><path d="M20 4 10 14" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>,
+  flag: <><path d="M5 21V4" /><path d="M5 4h11l-2 4 2 4H5" /></>,
 };
 
 export function Icon({ name, size = 18, className, title }: { name: IconName; size?: number; className?: string; title?: string }) {

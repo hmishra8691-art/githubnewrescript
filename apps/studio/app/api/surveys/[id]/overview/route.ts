@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auditCategory, describeEvent } from "@rescript/access";
+import { accessLabel, auditCategory, capabilitiesOf, describeEvent, describeExpiry } from "@rescript/access";
 import type { SurveyDefinition } from "@rescript/schema";
 import { isFailure, requireProject } from "@/lib/guard";
 import { supabaseAdmin } from "@/lib/admin";
@@ -67,6 +67,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       id: surveyId, code: String(survey.code), title: String(survey.title), status: String(survey.status), version: loaded.version, revision: loaded.revision,
       draftSavedAt: survey.draft_updated_at ? String(survey.draft_updated_at) : null, updatedAt: String(survey.updated_at ?? ""), createdAt: String(survey.created_at ?? ""),
       locked: !!survey.locked, role: ctx.role, roleSource: ctx.roleSource, ...config,
+      /* the caller's membership (0062): what the Overview may offer, and when it ends */
+      accessLabel: accessLabel(ctx.role), capabilities: capabilitiesOf(ctx.grant),
+      accessExpiresAt: ctx.expiresAt, accessExpiryText: ctx.expiresAt ? describeExpiry(ctx.expiresAt) : null,
       languages: def.localization?.languages.length ?? 0, sourceLanguage: def.localization?.sourceLanguage ?? "en",
     },
     counts: {

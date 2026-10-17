@@ -440,7 +440,7 @@ function QuestionProps({ q }: { q: Question }) {
       </label>
 
       <h3 className="sec">Display logic</h3>
-      <OptionalCondition label="Show this question when" value={q.displayLogic}
+      <OptionalCondition label="Show this question when" value={q.displayLogic} purpose={`Display ${q.code} if`}
         onChange={(c) => patch({ displayLogic: c })} />
 
       <h3 className="sec">Randomization</h3>

@@ -104,7 +104,7 @@ export function resolveOptionValue(options: OptionList, v: unknown): OptionValue
 /** the operators whose value is an option CODE (or a list of them) — what canonicalisation rewrites, and what the parser leaves to it */
 export const CODE_OPERATORS = new Set<string>([
   "eq", "ne", "in", "notIn", "contains", "notContains", "selected", "notSelected",
-  "containsAny", "containsAll", "containsNone",
+  "containsAny", "containsAll", "containsNone", "containsExactly",
   "rankedFirst", "rankedLast", "rankedTopN", "rankEquals", "rankGreaterThan", "rankLessThan", "notRanked",
   "displayed", "notDisplayed",
 ]);

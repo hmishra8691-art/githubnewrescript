@@ -30,6 +30,22 @@ export const EmbeddedDataType = z.enum([
    * percent-encoded as a parameter value (`redirect.ts`).
    */
   "url",
+  /*
+   * AUTOMATIC TYPE (document 15/10/2026, item G). The value is read for
+   * what it is, per value: "25" is a whole number, "25.5" a decimal,
+   * "true" a boolean, "90210, 10001" a list, and "02108" stays TEXT — a
+   * leading zero is an identifier, never a number. The default for NEW
+   * fields only: a field saved with any other type (or with none) keeps
+   * reading its value exactly as before. See `effectiveEmbeddedType` in
+   * `@rescript/engine` for how a consumer reads an Auto field's type.
+   */
+  "auto",
+  /*
+   * A comma-, semicolon- or line-separated LIST of text items, kept as
+   * written ("2000, 2001, 2002"). `contains` matches whole items
+   * (`listContainsItem`). Additive, like "auto".
+   */
+  "list",
 ]);
 export type EmbeddedDataType = z.infer<typeof EmbeddedDataType>;
 

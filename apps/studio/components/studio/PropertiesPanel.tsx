@@ -1092,7 +1092,7 @@ export function PropertiesPanel() {
       <CollapsibleSection id="display-logic" title="Display logic" active={!isEmptyConditionTree(q.displayLogic)}>
       <div className="logic-rule">
         <div className="logic-if">IF</div>
-        <OptionalCondition label="these conditions hold"
+        <OptionalCondition label="these conditions hold" purpose={`Display ${q.code} if`}
           hint={`Nothing here means ${q.code} always shows.`}
           value={q.displayLogic} onChange={(c) => patch({ displayLogic: c })} />
         <div className="logic-then">

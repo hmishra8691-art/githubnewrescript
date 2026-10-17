@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { fmtMoney, LEVEL_CLASS, LEVEL_WORD, Progress } from "@/components/billing/shared";
+import { accessLabel } from "@rescript/access";
 
 /**
  * One survey project on the dashboard.
@@ -148,7 +149,7 @@ function Stat({ label, value, title, onClick }: {
 
 export function SurveyCard({
   survey, stats, contributors, loading, onOpen, onResponses, onStatus, onDelete, canDelete = true,
-  meter, meterLoading = false, canBudget = false, onBudget, onClone,
+  meter, meterLoading = false, canBudget = false, onBudget, onClone, onCollaborators,
 }: {
   survey: SurveyRow;
   stats: SurveyStats | undefined;
@@ -165,6 +166,8 @@ export function SurveyCard({
   canBudget?: boolean;
   onBudget?(): void;
   onClone?(): void;
+  /** open the ONE collaborators panel (the same one the Studio tab and the Overview open) */
+  onCollaborators?(): void;
   /**
    * Whether this viewer's role permits permanently deleting the survey.
    * Defaults to `true` (unchanged behavior) when the caller doesn't know the
@@ -234,7 +237,7 @@ export function SurveyCard({
             </span>
           )}
           {survey.myRole && survey.myRole !== "owner" && (
-            <span className="chip card-role" data-testid="card-role">{survey.myRole.replace("_", " ")}</span>
+            <span className="chip card-role" data-testid="card-role" title={survey.myRole.replace(/_/g, " ")}>{accessLabel(survey.myRole)}</span>
           )}
           {survey.collaborators ? <span className="chip card-role">{survey.collaborators} shared</span> : null}
           {survey.locked && (
@@ -397,6 +400,13 @@ export function SurveyCard({
                     * wrap, every action is still reachable from one place.
                     */}
                   <div className="menu-label">Project</div>
+                  {onCollaborators && (
+                    <button className="menu-item" data-testid="collaborators-menu-item"
+                      onClick={() => { setMenu(false); onCollaborators(); }}
+                      title="Who has access, invitations, permissions and expiry">
+                      Collaborators…
+                    </button>
+                  )}
                   {onClone && (
                     <button className="menu-item" data-testid="clone-project-menu-item"
                       onClick={() => { setMenu(false); onClone(); }}

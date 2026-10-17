@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { can, GRANTABLE_ROLES, isProjectRole, parseIdentifier, ROLE_LABEL } from "@rescript/access";
+import { accessLabel, can, diffAccess, parseIdentifier, type MemberGrant } from "@rescript/access";
 import { newInvitationToken, supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
+import { grantRefusal, parseAccessRequest } from "@/lib/projectAccess";
 import { sendMail } from "@/lib/mail";
 import { projectInvitationEmail } from "@rescript/mail";
 
@@ -60,7 +61,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   // already in? say so rather than letting the owner "share" a second time
   const [{ data: existing }, { data: theirWorkspace }] = await Promise.all([
-    db.from("project_members").select("role").eq("survey_id", params.id).eq("user_id", person.id).maybeSingle(),
+    /* a revoked row is history, not access — the panel must not say "already has access" for it */
+    db.from("project_members").select("role").eq("survey_id", params.id).eq("user_id", person.id).is("revoked_at", null).maybeSingle(),
     db.from("profiles").select("customer_id").eq("id", person.id).maybeSingle(),
   ]);
   const isOwner = ctx.survey.owner_id === person.id;
@@ -74,6 +76,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     },
     alreadyHasAccess: isOwner || !!existing,
     currentRole: isOwner ? "owner" : existing?.role ?? null,
+    currentAccessLabel: isOwner ? "Owner" : existing?.role ? accessLabel(existing.role) : null,
     /**
      * Worth surfacing in the dialog: an explicit share is what authorizes
      * reaching across organizations (§24), so the person doing it should be
@@ -92,16 +95,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try { body = await req.json(); } catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
 
   const raw = String(body?.identifier ?? body?.email ?? body?.userCode ?? "").trim();
-  const role = String(body?.role ?? "viewer");
   if (!raw) return NextResponse.json({ error: "Enter an email address or User ID." }, { status: 400 });
-  if (!isProjectRole(role) || !GRANTABLE_ROLES.includes(role)) {
-    // 'owner' lands here too: there is exactly one owner and it is transferred,
-    // never granted (§12)
-    return NextResponse.json(
-      { error: `Choose one of: ${GRANTABLE_ROLES.map((r) => ROLE_LABEL[r]).join(", ")}.` },
-      { status: 400 },
-    );
-  }
+  /*
+   * Role, custom permissions and expiry (0062). `{ identifier, role }` — what
+   * an older client sends — reads as that role, no permissions, and expiry
+   * not mentioned. 'owner' is refused here: there is exactly one owner and
+   * it is transferred, never granted (§12).
+   */
+  const parsed = parseAccessRequest({ ...body, role: body?.role ?? "viewer" });
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const { role, permissions } = parsed.value;
+  const grantWanted: MemberGrant = { role, permissions, expiresAt: parsed.value.expiresAt ?? null };
+  const roleName = accessLabel(role);
+
+  /* nobody grants what they do not hold: an editor may invite up to an editor, never a project admin */
+  const refused = grantRefusal(ctx.grant, ctx.user.isPlatformAdmin, grantWanted);
+  if (refused) return NextResponse.json({ error: refused, code: "insufficient_role" }, { status: 403 });
 
   const identifier = parseIdentifier(raw);
   if (identifier.kind === "unknown") {
@@ -137,47 +146,71 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      * already hold stays a no-op success, because that is not a change and
      * refusing it would make the share dialog fail for no reason.
      */
-    const { data: existingRow } = await db
-      .from("project_members").select("role, revoked_at")
+    /* the 0062 columns read soft: a database without them answers as before */
+    type Existing = { role: string; revoked_at: string | null; permissions?: unknown; expires_at?: string | null };
+    const read = await db.from("project_members").select("role, revoked_at, permissions, expires_at")
       .eq("survey_id", params.id).eq("user_id", person.id).maybeSingle();
+    const existingRow = (read.error
+      ? (await db.from("project_members").select("role, revoked_at").eq("survey_id", params.id).eq("user_id", person.id).maybeSingle()).data
+      : read.data) as Existing | null;
     /* a revoked row is history, not a collaborator: re-sharing that person is
-       a grant, not a role change (see the `revoked_at` note in `members`) */
-    const current = existingRow && !existingRow.revoked_at ? existingRow : null;
-    if (current && current.role !== role && !can(ctx.role, "project.manage_members") && !ctx.user.isPlatformAdmin) {
+       a grant, not a role change (see the `revoked_at` note in `members`);
+       an EXPIRED row is the same — their access had ended */
+    const lapsed = !!existingRow?.expires_at && Date.parse(existingRow.expires_at) <= Date.now();
+    const current = existingRow && !existingRow.revoked_at && !lapsed ? existingRow : null;
+    /* an older client does not mention expiry: for a live member, leave theirs alone */
+    const effective: MemberGrant = {
+      ...grantWanted,
+      expiresAt: parsed.value.expiresAt === undefined && current ? current.expires_at ?? null : grantWanted.expiresAt,
+    };
+    const changes = current ? diffAccess({ role: current.role as never, permissions: current.permissions ?? null, expiresAt: current.expires_at ?? null }, effective) : [];
+    if (current && changes.length && !can(ctx.grant, "project.manage_members") && !ctx.user.isPlatformAdmin) {
       return NextResponse.json(
         {
-          error: `${person.full_name} already has ${ROLE_LABEL[current.role as keyof typeof ROLE_LABEL] ?? current.role} access. Only the project's owner can change someone's role.`,
+          error: `${person.full_name} already has ${accessLabel(current.role)} access. Only the project's owner or an admin can change someone's access.`,
           code: "insufficient_role",
         },
         { status: 403 },
       );
     }
 
+    /*
+     * The 0062 columns are written only when they mean something — a custom
+     * role, an expiry, or a row that already carries either (re-granting a
+     * revoked or expired row must clear its old end date). So `{ identifier,
+     * role }` still works on a database that has not had 0062 applied.
+     */
+    const carries0062 = role === "custom" || !!effective.expiresAt || !!existingRow?.expires_at || existingRow?.permissions != null;
+    const extra = carries0062 ? { permissions: effective.permissions ?? null, expires_at: effective.expiresAt ?? null } : {};
     const { error } = existingRow
       ? await db
           .from("project_members")
-          .update({ role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString() })
+          .update({ role, revoked_at: null, revoked_by: null, updated_at: new Date().toISOString(), ...extra })
           .eq("survey_id", params.id).eq("user_id", person.id)
       : await db
           .from("project_members")
-          .insert({ survey_id: params.id, user_id: person.id, role, added_by: user.userId, updated_at: new Date().toISOString() });
+          .insert({ survey_id: params.id, user_id: person.id, role, added_by: user.userId, updated_at: new Date().toISOString(), ...extra });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     await audit({
-      action: "project.shared", userId: user.userId, sessionId: user.sessionId,
+      action: current && changes.length ? "project.permission_changed" : "project.shared", userId: user.userId, sessionId: user.sessionId,
       surveyId: params.id, customerId: user.customerId,
-      detail: { targetName: person.full_name, targetUserCode: person.user_code, targetEmail: person.email, role: ROLE_LABEL[role] },
+      detail: {
+        targetName: person.full_name, targetUserCode: person.user_code, targetEmail: person.email, role: roleName,
+        expiresAt: effective.expiresAt ?? null, ...(current ? { from: current.role, changes } : {}),
+      },
     });
     await notifyProject({
-      surveyId: params.id, action: "project.shared", onlyUserIds: [person.id],
-      detail: { actorName: user.fullName, role: ROLE_LABEL[role], project: `${ctx.survey.code} — ${ctx.survey.title}` },
+      surveyId: params.id, action: current && changes.length ? "project.permission_changed" : "project.shared", onlyUserIds: [person.id],
+      detail: { actorName: user.fullName, role: roleName, expiresAt: effective.expiresAt ?? null, project: `${ctx.survey.code} — ${ctx.survey.title}` },
     });
 
     return NextResponse.json({
       ok: true, kind: "granted",
       user: { userId: person.id, userCode: person.user_code, name: person.full_name, email: person.email },
       role,
-      message: `${person.full_name} (${person.user_code}) now has ${ROLE_LABEL[role]} access.`,
+      expiresAt: effective.expiresAt ?? null,
+      message: `${person.full_name} (${person.user_code}) now has ${roleName} access${effective.expiresAt ? ` until ${effective.expiresAt.slice(0, 10)}` : ""}.`,
     });
   }
 
@@ -245,16 +278,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
      JS rather than through `ilike`, whose `%` and `_` are wildcards and `_` is
      an ordinary character in an address */
   const wanted = identifier.value.toLowerCase();
-  const { data: live } = await db
+  type Live = { id: string; email: string | null; expires_at: string; permissions?: unknown; access_expires_at?: string | null };
+  const liveRead = await db
     .from("project_invitations")
-    .select("id, email, expires_at")
+    .select("id, email, expires_at, permissions, access_expires_at")
     .eq("survey_id", params.id)
     .is("accepted_at", null)
     .is("revoked_at", null);
+  /* the 0062 columns read soft: a database without them answers as before */
+  const live = (liveRead.error
+    ? (await db.from("project_invitations").select("id, email, expires_at")
+        .eq("survey_id", params.id).is("accepted_at", null).is("revoked_at", null)).data
+    : liveRead.data) as Live[] | null;
   const pending = (live ?? []).find((i) => (i.email ?? "").toLowerCase() === wanted) ?? null;
 
   const row = {
     survey_id: params.id, email: identifier.value, role,
+    /*
+     * What the membership will be once accepted (0062). Written when it says
+     * something — or when a re-invited row carries an older grant that must
+     * not survive into this one.
+     */
+    ...(role === "custom" || grantWanted.expiresAt || pending?.permissions != null || pending?.access_expires_at
+      ? { permissions: grantWanted.permissions ?? null, access_expires_at: grantWanted.expiresAt ?? null } : {}),
     token_hash: tokenHash,
     /*
      * Explicitly null, not merely omitted: re-inviting somebody reuses an
@@ -300,7 +346,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   await audit({
     action: "project.invitation_sent", userId: user.userId, sessionId: user.sessionId,
     surveyId: params.id, customerId: user.customerId,
-    detail: { targetEmail: identifier.value, role: ROLE_LABEL[role], invitationId: invitation?.id },
+    detail: { targetEmail: identifier.value, role: roleName, invitationId: invitation?.id, expiresAt: grantWanted.expiresAt ?? null },
   });
 
   const base = (process.env.STUDIO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
@@ -324,7 +370,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       inviterName: user.fullName || user.userCode || "A colleague",
       projectTitle: project.data?.title ?? "a survey project",
       projectCode: project.data?.code ?? "",
-      roleLabel: ROLE_LABEL[role],
+      roleLabel: roleName,
       url: inviteUrl,
       expiresAt: invitation?.expires_at ?? null,
       /* an existing account is being granted access; a new one has to sign up first */
@@ -361,8 +407,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     delivery,
     message:
       delivery === "sent"
-        ? `${identifier.value} has been invited as ${ROLE_LABEL[role]}, and the invitation has been emailed to them.`
-        : `${identifier.value} has been invited as ${ROLE_LABEL[role]}. ${
+        ? `${identifier.value} has been invited as ${roleName}, and the invitation has been emailed to them.`
+        : `${identifier.value} has been invited as ${roleName}. ${
             delivery === "not_configured"
               ? "No mail is configured on this instance, so send them the link yourself."
               : delivery === "suppressed"
@@ -395,4 +441,72 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     surveyId: params.id, customerId: ctx.user.customerId, detail: { targetEmail: inv.email },
   });
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * RESEND a pending invitation (0062): a FRESH link — the old one stops
+ * working, because only the newest token's hash is kept — mailed again.
+ * `project.share`, like inviting: whoever could have sent it can send it
+ * again. The link's own 14-day life is not extended, for the reason the
+ * re-invite path gives: re-sending must not keep a link alive for ever.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const ctx = await requireProject(req, params.id, "project.share");
+  if (isFailure(ctx)) return ctx.response;
+  const { user } = ctx;
+
+  let body: any = {};
+  try { body = await req.json(); } catch { /* checked below */ }
+  const invitationId = String(body?.invitationId ?? "");
+  if (body?.action !== "resend" || !invitationId) return NextResponse.json({ error: "Which invitation, and what to do with it?" }, { status: 400 });
+
+  const db = supabaseService();
+  const { data: inv } = await db
+    .from("project_invitations").select("id, email, role, survey_id, accepted_at, revoked_at, expires_at, resend_count")
+    .eq("id", invitationId).maybeSingle();
+  if (!inv || inv.survey_id !== params.id) return NextResponse.json({ error: "Unknown invitation." }, { status: 404 });
+  if (inv.accepted_at) return NextResponse.json({ error: "That invitation was already accepted." }, { status: 409 });
+  if (inv.revoked_at) return NextResponse.json({ error: "That invitation was cancelled. Invite them again instead." }, { status: 409 });
+  if (Date.parse(inv.expires_at) <= Date.now()) {
+    return NextResponse.json({ error: "That invitation link has expired. Cancel it and invite them again." }, { status: 409 });
+  }
+  if (!inv.email) return NextResponse.json({ error: "That invitation has no email address to send to." }, { status: 409 });
+
+  const token = newInvitationToken();
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const count = Number(inv.resend_count ?? 0) + 1;
+  const { error } = await db.from("project_invitations")
+    .update({ token_hash: tokenHash, token: null, resent_at: new Date().toISOString(), resend_count: count })
+    .eq("id", inv.id).is("accepted_at", null).is("revoked_at", null);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await audit({
+    action: "project.invitation_resent", userId: user.userId, sessionId: user.sessionId,
+    surveyId: params.id, customerId: user.customerId, detail: { targetEmail: inv.email, invitationId: inv.id, count },
+  });
+
+  const base = (process.env.STUDIO_PUBLIC_URL ?? "").trim().replace(/\/+$/, "");
+  const inviteUrl = `${base}/signup?invite=${encodeURIComponent(token)}`;
+  let delivery: "sent" | "not_configured" | "suppressed" | "failed" = "not_configured";
+  if (base) {
+    const mail = projectInvitationEmail({
+      inviterName: user.fullName || user.userCode || "A colleague",
+      projectTitle: ctx.survey.title, projectCode: ctx.survey.code,
+      roleLabel: accessLabel(inv.role), url: inviteUrl, expiresAt: inv.expires_at, hasAccount: false,
+    });
+    const out = await sendMail({
+      to: inv.email, subject: mail.subject, text: mail.text, html: mail.html,
+      kind: "project_invitation", surveyId: params.id, customerId: user.customerId, userId: user.userId,
+      /* a resend is a new message on purpose: keyed on the count, not only the row */
+      dedupeKey: `project_invitation:${inv.id}:resend:${count}`,
+      replyTo: user.email || undefined,
+    });
+    delivery = out.sent ? "sent" : out.reason === "not_configured" ? "not_configured" : out.reason === "suppressed" ? "suppressed" : "failed";
+  }
+  return NextResponse.json({
+    ok: true, inviteUrl, delivery, resendCount: count,
+    message: delivery === "sent"
+      ? `The invitation was sent again to ${inv.email}. The previous link no longer works.`
+      : `A new link was made for ${inv.email} (the previous one no longer works). No email was sent — send them the link yourself.`,
+  });
 }

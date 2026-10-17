@@ -225,7 +225,13 @@ test("affected: a type change lists its direct readers, judged as a retype; a re
   const typed = pick(changeItems(b, a).items, "Question type")!;
   assert.ok(typed.affected.length > 0);
   assert.ok(typed.affected.every((i) => !i.indirect), "Q11, reached through its skip, is not a direct reader");
-  assert.equal(typed.affected.find((i) => i.object.kind === "quota")?.severity, "breaks", "`in` does not fit a text answer");
+  /*
+   * October 2026 (smart operators): `in` IS a text operator now — exact
+   * membership of a typed answer in a list (a ZIP in a list of ZIPs) — so a
+   * quota reading `in` survives the retype and is judged a change in meaning,
+   * like `=` always was, rather than a break.
+   */
+  assert.equal(typed.affected.find((i) => i.object.kind === "quota")?.severity, "changes", "`in` still evaluates on a text answer, with a new meaning");
   const [b2, a2] = pair(withSkip, (a) => { a.questions.splice(1, 1); page(a, "p1").questionIds = ["q1"]; });
   const removed = pick(changeItems(b2, a2).items, "Question", (i) => i.kind === "removed")!;
   assert.ok(removed.affected.some((i) => i.indirect && i.object.id === "q11"), JSON.stringify(removed.affected.map((i) => [i.object.id, i.indirect])));

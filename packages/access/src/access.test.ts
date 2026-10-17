@@ -33,7 +33,9 @@ const at = (mins: number) => new Date(T0 + mins * 60_000).toISOString();
 
 test("every role is read-only except the ones meant to write", () => {
   const writers = PROJECT_ROLES.filter((r) => can(r, "survey.edit"));
-  assert.deepEqual(writers, ["owner", "editor", "programmer"], "only these three may change a survey");
+  /* 2026-10-17: Project Admin is the one new fixed role that writes; `custom` writes only when its
+     stored permissions say so (collaborators.test.ts), never as a bare role */
+  assert.deepEqual(writers, ["owner", "editor", "programmer", "project_admin"], "only these may change a survey");
   for (const r of ["reviewer", "viewer", "test_user", "deployment_manager"] as const) {
     assert.equal(can(r, "survey.edit"), false, `${r} must not be able to edit`);
     assert.equal(can(r, "survey.save_version"), false, `${r} must not be able to cut a version`);

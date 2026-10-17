@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const requests = await meter.store.listCreditRequests({ surveyId: params.id });
     const payload = {
       ok: true, sandbox: false, ...view, requests: requests.slice(0, 20),
-      canRequest: gate.role != null && ["owner", "editor"].includes(gate.role),
+      canRequest: can(gate.grant, "billing.request_credits"),
       /* the owner decides what this project may take from their wallet */
       canBudget: can(gate.role, "billing.set_budget") || gate.user.isPlatformAdmin,
     };

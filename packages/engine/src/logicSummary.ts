@@ -10,7 +10,7 @@ import type {
   QuestionRow,
   SurveyDefinition,
 } from "@rescript/schema";
-import { VALUELESS_OPERATORS, TWO_VALUE_OPERATORS, isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
+import { VALUELESS_OPERATORS, TWO_VALUE_OPERATORS, isOptionValueRef, isQuestionValueRef, isPipedValueRef } from "@rescript/schema";
 import { findNamedExpression } from "./namedExpressions.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { LIST_OP_LABELS } from "@rescript/schema";
@@ -65,6 +65,10 @@ const OPERATOR_WORDS: Record<ComparisonOperator, string> = {
   dateBetween: "is between",
   displayed: "was shown",
   notDisplayed: "was not shown",
+  containsItem: "contains the item",
+  notContainsItem: "does not contain the item",
+  containsAllItems: "contains all of the items",
+  containsExactly: "is exactly",
 };
 
 const stripHtml = (s: string) => stripHtmlText(String(s ?? ""));
@@ -80,6 +84,7 @@ function labelForCode(q: Question | undefined, code: unknown): string {
 
 function valueText(def: SurveyDefinition, src: Question | undefined, value: unknown): string {
   if (isOptionValueRef(value)) return "this option";
+  if (isPipedValueRef(value)) return `the piped value ${value.$pipe}`;
   if (isQuestionValueRef(value)) {
     const q = getQuestionByCodeOrVar(def, value.$question);
     const name = `${q?.code ?? value.$question}${value.rowCode ? ` row ${value.rowCode}` : ""}${value.columnId ? ` — ${value.columnId}` : ""}`;

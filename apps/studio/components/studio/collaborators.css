@@ -1,0 +1,108 @@
+/*
+ * Collaborators & advanced access (2026-10-17) — the one collaborators panel,
+ * its dialog on the Research Workspace and the Project Overview, and the
+ * access editor. Built only from the Studio's design tokens (design-system.css),
+ * so it follows the app's theme; kept in its own file so globals.css is not a
+ * merge point.
+ */
+
+.cx-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.cx-head h2 { margin: 0; font-size: 17px; }
+.cx-tabs { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel2); }
+.cx-tab { border: 0; background: transparent; border-radius: 999px; padding: 3px 12px; font: inherit; font-size: 13px; color: var(--subtle); cursor: pointer; min-height: 28px; }
+.cx-tab[aria-selected="true"] { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, .08); }
+.cx-tab:focus-visible, .ax-seg-btn:focus-visible, .ax-card-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.cx-invite-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cx-invite-row .input { flex: 1 1 220px; min-width: 0; }
+.ax-access-select { flex: 0 1 220px; min-width: 160px; }
+.cx-options-toggle { margin-top: 8px; }
+
+.cx-member-access { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.chip.cx-expired { color: var(--c-error-fg); border-color: var(--c-error-bd); background: var(--c-error-bg); }
+.chip.cx-expiring { color: var(--c-warning-fg); border-color: var(--c-warning-bd); background: var(--c-warning-bg); }
+.collab-row.cx-is-expired .nm { color: var(--subtle); text-decoration: line-through; text-decoration-thickness: 1px; }
+.cx-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.cx-row-wrap { margin-bottom: 6px; }
+.cx-row-wrap > .collab-row { margin-bottom: 0; }
+.cx-edit { border: 1px solid var(--border); border-top: 0; border-radius: 0 0 8px 8px; padding: 12px; background: var(--panel2); }
+.cx-edit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap; }
+.cx-history { list-style: none; margin: 0; padding: 0; }
+.cx-history li { display: grid; grid-template-columns: minmax(96px, auto) 1fr; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.cx-history .cx-when { color: var(--subtle); font-size: 12.5px; white-space: nowrap; }
+.cx-history ul { margin: 4px 0 0; padding-left: 18px; color: var(--subtle); font-size: 12.5px; grid-column: 2; }
+
+/* the compact avatar button on the Project Overview */
+.cx-avatars-btn { display: inline-flex; align-items: center; gap: 8px; }
+.cx-avatars-btn .avatar-stack { display: inline-flex; }
+.cx-more { font-size: 12.5px; color: var(--subtle); font-weight: 600; }
+
+/* the dialog */
+.modal.cx-dialog { width: 760px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px); padding: 0; display: flex; flex-direction: column; }
+.cx-dialog-head { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.cx-dialog-head h2 { margin: 0; font-size: 16px; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-dialog-body { padding: 16px 18px; overflow-y: auto; }
+
+/* ------------------------------------------------ the access editor */
+.ax-editor { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.ax-start { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ax-start-label { font-size: 12.5px; color: var(--subtle); font-weight: 600; }
+.ax-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.ax-preset { cursor: pointer; font: inherit; font-size: 12.5px; }
+.chip.ax-preset.on { color: var(--c-primary-700); border-color: var(--c-primary-100); background: var(--c-primary-50); }
+.ax-copy { flex: 0 1 180px; min-width: 140px; }
+.ax-customize { align-self: flex-start; }
+
+.ax-cards { display: flex; flex-direction: column; gap: 6px; }
+.ax-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 4px; }
+.ax-search .input { flex: 1 1 240px; min-width: 0; }
+.ax-search-count { font-size: 12.5px; }
+.ax-card { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 8px 10px; }
+.ax-card.open { border-color: var(--c-border-strong); }
+.ax-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ax-card-title { flex: 1 1 180px; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; font: inherit; font-weight: 600; font-size: 14px; color: var(--text); cursor: pointer; text-align: left; padding: 4px 0; min-height: 30px; }
+.ax-caret { width: 12px; color: var(--subtle); }
+.ax-card-desc { margin: 2px 0 0 18px; font-size: 12.5px; }
+.ax-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--panel2); }
+.ax-seg-btn { border: 0; border-right: 1px solid var(--border); background: transparent; font: inherit; font-size: 12.5px; padding: 0 10px; min-height: 30px; min-width: 56px; color: var(--c-text-2); cursor: pointer; }
+.ax-seg-btn:last-child { border-right: 0; }
+.ax-seg-btn.on { background: var(--accent); color: #fff; font-weight: 600; }
+.ax-seg-btn:disabled { color: var(--c-text-4); cursor: not-allowed; background: transparent; }
+.ax-adv { margin: 8px 0 2px 18px; display: flex; flex-direction: column; gap: 4px; }
+.ax-cap { display: flex; gap: 8px; align-items: center; font-size: 13.5px; padding: 3px 6px; border-radius: 6px; }
+.ax-cap.hit { background: var(--c-warning-bg); }
+.ax-cap input { margin: 0; }
+.ax-from { font-size: 12px; margin-left: auto; }
+.ax-note { font-size: 12.5px; margin: 4px 0 0; }
+
+.ax-expiry { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin: 0; background: var(--panel); }
+.ax-expiry legend { font-size: 12.5px; font-weight: 600; color: var(--subtle); padding: 0 4px; }
+.ax-expiry-opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip.ax-exp { cursor: pointer; }
+.chip.ax-exp input { position: absolute; opacity: 0; pointer-events: none; }
+.chip.ax-exp:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chip.ax-exp.on { color: var(--c-primary-700); border-color: var(--c-primary-100); background: var(--c-primary-50); font-weight: 600; }
+.ax-date { width: 160px; }
+.ax-expiry-text { display: block; font-size: 12.5px; margin-top: 6px; }
+.ax-expiry-text.err, .ax-refusal { color: var(--c-error-fg); }
+
+.ax-preview { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel2); margin: 10px 0; }
+.ax-preview-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+.ax-preview-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; font-size: 13px; }
+.ax-preview-cols ul { margin: 2px 0 6px; padding-left: 18px; }
+.ax-preview-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.ax-preview-label.ok { color: var(--c-success-fg); }
+.ax-preview-label.no { color: var(--c-error-fg); }
+.ax-preview-mod { font-weight: 600; font-size: 12.5px; }
+.ax-changes { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+
+@media (max-width: 640px) {
+  .ax-preview-cols { grid-template-columns: 1fr; }
+  .ax-seg { width: 100%; }
+  .ax-seg-btn { flex: 1 1 0; min-width: 0; padding: 0 4px; }
+  .cx-controls { width: 100%; justify-content: flex-start; }
+  .collab-row { flex-wrap: wrap; }
+  .cx-history li { grid-template-columns: 1fr; }
+  .cx-history ul { grid-column: 1; }
+  .modal.cx-dialog { max-height: calc(100vh - 16px); }
+}

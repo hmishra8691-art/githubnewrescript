@@ -855,7 +855,17 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       hidden: true,
       valueCodes: [],
       valueLabels: {},
-      notes: ed.source,
+      /*
+       * Auto and List fields (document 15/10/2026) are TEXT in the dictionary
+       * on purpose: one column can hold 25 for one respondent and "02108" for
+       * the next, and only text keeps both exactly. The note says so. Every
+       * other field's entry is unchanged.
+       */
+      notes: ed.dataType === "auto"
+        ? [ed.source, "Auto type — each value read for what it is (number, decimal, true/false, list or text); exported as text so identifiers such as 02108 keep their leading zero"].filter(Boolean).join(" · ")
+        : ed.dataType === "list"
+          ? [ed.source, "List — comma-separated items, exported as written"].filter(Boolean).join(" · ")
+          : ed.source,
     });
   }
   /*

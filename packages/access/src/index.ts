@@ -12,6 +12,7 @@
  * predicates stated here, so the two can never disagree.
  */
 export * from "./roles.js";
+export * from "./permissions.js";
 export * from "./sessions.js";
 export * from "./locks.js";
 export * from "./audit.js";

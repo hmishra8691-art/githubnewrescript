@@ -16,6 +16,10 @@ import { NodeEditor } from "./FlowNodeEditors";
 import {
   FlowDragProvider, useFlowDrag, DragHandle, DropZone, InsideDropTarget, EmptyContainerZone,
 } from "./FlowDnd";
+import { Icon, type IconName } from "@/components/ui/Icon";
+import { InsertPipedText } from "./InsertPipedText";
+import { gridMove, insertAt } from "@/lib/flow/flowEd";
+import { lintEmbeddedPiping } from "@rescript/engine";
 
 /* ==========================================================================
  * Survey Flow — one recursive tree over the canonical definition.
@@ -46,40 +50,81 @@ const makeNode = (type: string): FlowNode => newFlowNode(type as FlowNode["type"
 
 /**
  * One picker, used everywhere something can be added (req §19) — between
- * cards, inside a randomizer, inside a branch path. Same list, same search,
- * same wording, so "add an element" is one thing to learn.
+ * cards, inside a randomizer, inside a branch path. Same list, same wording,
+ * so "add an element" is one thing to learn.
+ *
+ * A BUTTON GRID (document 15/10/2026, item F): every element in view at once,
+ * each a labelled button with its icon, three to a row (two on a narrow
+ * screen), its purpose as the tooltip and in the line under the grid. The
+ * search box went: with every element visible there is nothing to search
+ * for, and the document asks for direct selection. Arrow keys move, Enter
+ * adds, Escape closes; a click adds at this position and closes.
  */
-function AddElementMenu({ onAdd, testid, compact }: {
+const ELEMENT_ICONS: Record<string, IconName> = {
+  embedded_data: "data", branch: "logic", randomizer: "shuffle", loop: "repeat", quota_check: "quotas",
+  redirect: "redirect", end: "flag", page: "questions", section: "layers",
+};
+const GRID_COLS = 3;
+
+function AddElementMenu({ onAdd, testid, compact, align }: {
   onAdd(type: string): void; testid?: string; compact?: boolean;
+  /** "start": the button sits at the left edge, so the grid opens rightwards rather than centred on it */
+  align?: "start";
 }) {
   const [open, setOpen] = React.useState(false);
-  const [filter, setFilter] = React.useState("");
-  const f = filter.trim().toLowerCase();
-  const items = INSERTABLE.filter(
-    (it) => !f || it.label.toLowerCase().includes(f) || it.hint.toLowerCase().includes(f),
-  );
+  const [focus, setFocus] = React.useState(0);
+  /* the pointer's element, for the purpose line; the keyboard keeps its own place */
+  const [hover, setHover] = React.useState<number | null>(null);
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  const gridRef = React.useRef<HTMLDivElement>(null);
+  const hintId = React.useId();
+  const items = INSERTABLE;
+  const close = (refocus = true) => {
+    setOpen(false);
+    if (refocus) requestAnimationFrame(() => buttonRef.current?.focus());
+  };
+  React.useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => gridRef.current?.querySelectorAll<HTMLButtonElement>("button")[focus]?.focus());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
+    /* two columns on a narrow screen: read the real column count from the layout */
+    const cols = gridRef.current ? (getComputedStyle(gridRef.current).gridTemplateColumns.split(" ").length || GRID_COLS) : GRID_COLS;
+    const next = gridMove(focus, e.key, cols, items.length);
+    if (next === null) return;
+    e.preventDefault();
+    setFocus(next);
+    gridRef.current?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
+  };
+  const current = items[hover ?? focus];
   return (
     <div className="menu-anchor">
-      <button className={compact ? "fi-btn" : "btn small"} data-testid={testid ?? "flow-insert"}
-        title="Add a flow element here" onClick={() => setOpen((o) => !o)}>
+      <button ref={buttonRef} className={compact ? "fi-btn" : "btn small"} data-testid={testid ?? "flow-insert"}
+        aria-haspopup="menu" aria-expanded={open}
+        title="Add a flow element here" onClick={() => (open ? close() : setOpen(true))}>
         + Add element
       </button>
       {open && (
         <>
-          <div className="menu-scrim" onClick={() => setOpen(false)} />
-          <div className="menu wide" role="menu" data-testid="flow-insert-menu">
-            <input className="input" autoFocus placeholder="search elements…"
-              data-testid="flow-insert-search"
-              value={filter} onChange={(e) => setFilter(e.target.value)} />
-            <div className="menu-scroll">
-              {items.map((it) => (
-                <button key={it.type} className="menu-item" data-testid={`insert-${it.type}`}
-                  onClick={() => { setOpen(false); setFilter(""); onAdd(it.type); }}>
-                  <span className="mi-label">{it.label}</span>
-                  <span className="mi-hint">{it.hint}</span>
+          <div className="menu-scrim" onClick={() => close()} />
+          <div className={`menu add-el-menu${align === "start" ? " start" : ""}`} role="menu" aria-label="Add a flow element" data-testid="flow-insert-menu"
+            onKeyDown={onKeyDown}>
+            <div className="menu-label">Add element here</div>
+            <div ref={gridRef} className="add-el-grid">
+              {items.map((it, i) => (
+                <button key={it.type} type="button" role="menuitem" className="add-el-btn" data-testid={`insert-${it.type}`}
+                  title={`${it.label} — ${it.hint}`} aria-describedby={hintId} tabIndex={i === focus ? 0 : -1}
+                  onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onFocus={() => setFocus(i)}
+                  onClick={() => { close(false); onAdd(it.type); }}>
+                  <Icon name={ELEMENT_ICONS[it.type] ?? "plus"} size={20} />
+                  <span className="add-el-label">{it.label}</span>
                 </button>
               ))}
-              {items.length === 0 && <div className="menu-group">nothing matches “{filter}”</div>}
+            </div>
+            <div id={hintId} className="add-el-hint" data-testid="flow-insert-hint" aria-live="polite">
+              {current ? <><strong>{current.label}</strong> — {current.hint}</> : null}
             </div>
           </div>
         </>
@@ -212,7 +257,7 @@ function FlowChildren({ nodes, container, depth, what }: {
       <div className="flow-children">
         <EmptyContainerZone zoneKey={zoneKey(insideTarget(0))} target={insideTarget(0)} what={what} />
         <div className="row" style={{ marginTop: 6 }}>
-          <AddElementMenu compact testid="flow-insert-empty"
+          <AddElementMenu compact align="start" testid="flow-insert-empty"
             onAdd={(t) => ops.insert(t, insideTarget(0))} />
         </div>
       </div>
@@ -282,10 +327,18 @@ function CardHead({ node, badge, badgeClass, children }: {
   );
 }
 
+/** Insert a piped token into a title input at its cursor. */
+function pipeIntoTitle(el: HTMLInputElement | null, current: string, token: string, set: (v: string) => void) {
+  const r = insertAt(current, el?.selectionStart, el?.selectionEnd, token);
+  set(r.value);
+  requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(r.caret, r.caret); } });
+}
+
 function BlockCard({ node }: { node: FlowNode }) {
   const s = useStudio();
   const ops = useOps();
   const [open, setOpen] = React.useState(false);
+  const titleRef = React.useRef<HTMLInputElement>(null);
   const block = listBlocks([node])[0];
   const pages = block?.pages ?? [];
   const n = block ? blockSize(block) : 0;
@@ -297,9 +350,12 @@ function BlockCard({ node }: { node: FlowNode }) {
         <button className="block-toggle" onClick={() => setOpen((o) => !o)}
           title={open ? "Hide questions" : "Show questions"}>{open ? "▾" : "▸"}</button>
         <span className="block-badge">BLOCK {ops.blockNumber(node.id) ?? ""}</span>
-        <input className="input block-title" data-testid="flow-block-title"
+        <input ref={titleRef} className="input block-title" data-testid="flow-block-title"
           placeholder="Name this block" value={(node as any).title ?? ""}
           onChange={(e) => ops.rename(node.id, e.target.value)} />
+        {/* a block's name is the page heading respondents see, and the runtime pipes it */}
+        <InsertPipedText def={s.def} label="{ }" testId="block-title-pipe" context={{ flowPosition: node.id }}
+          onInsert={(t) => pipeIntoTitle(titleRef.current, (node as any).title ?? "", t, (v) => ops.rename(node.id, v))} />
         <span className="muted block-count">
           {n} question{n === 1 ? "" : "s"}{pages.length > 1 ? ` · ${pages.length} pages` : ""}
         </span>
@@ -339,8 +395,10 @@ function BlockCard({ node }: { node: FlowNode }) {
 }
 
 function GroupCard({ node, depth }: { node: FlowNode; depth: number }) {
+  const s = useStudio();
   const ops = useOps();
   const [shut, setShut] = React.useState(false);
+  const titleRef = React.useRef<HTMLInputElement>(null);
   const kids = ((node as any).children ?? []) as FlowNode[];
   const summary = summarizeFlowNode(node);
   const inside: FlowDropTarget = { kind: "inside", ownerId: node.id, slot: "children" };
@@ -353,9 +411,12 @@ function GroupCard({ node, depth }: { node: FlowNode; depth: number }) {
           <button className="block-toggle" data-testid="group-toggle"
             onClick={() => setShut((v) => !v)}>{shut ? "▶" : "▼"}</button>
           <span className="group-badge">GROUP</span>
-          <input className="input block-title" data-testid="group-title"
+          <input ref={titleRef} className="input block-title" data-testid="group-title"
             placeholder="Name this group" value={(node as any).title ?? ""}
             onChange={(e) => ops.rename(node.id, e.target.value)} />
+          {/* the runtime pipes a group's name where it shows it (the block-name line) */}
+          <InsertPipedText def={s.def} label="{ }" testId="group-title-pipe" context={{ flowPosition: node.id }}
+            onInsert={(t) => pipeIntoTitle(titleRef.current, (node as any).title ?? "", t, (v) => ops.rename(node.id, v))} />
           <span className="muted block-count">{summary.detail}</span>
           <button className="btn small" data-testid="ungroup"
             title="Remove the group, keep what is inside it"
@@ -648,7 +709,8 @@ export function FlowPanel() {
     },
   };
 
-  const issues = validateFlowStructure(flow);
+  /* the flow's shape, and piped Embedded Data values that reference nothing or something set later */
+  const issues = [...validateFlowStructure(flow), ...lintEmbeddedPiping(s.def)];
   const groupCount = countByType(flow, "section");
 
   return (

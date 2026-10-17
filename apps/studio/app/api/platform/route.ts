@@ -83,6 +83,8 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
    * rather than merely an old one.
    */
   { migration: "0034", what: "revocable membership and the billing replay guards", table: "project_members", column: "revoked_at" },
+  /* without it, custom access, access expiry and the five new roles cannot be granted (the routes say so); existing access is unaffected */
+  { migration: "0062", what: "collaborator permissions and access expiry", table: "project_members", column: "expires_at" },
 ];
 
 export async function GET(_req: NextRequest) {

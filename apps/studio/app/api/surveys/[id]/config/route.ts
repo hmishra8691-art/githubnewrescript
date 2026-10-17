@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
+import { can } from "@rescript/access";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { isEmail } from "@rescript/mail";
 
@@ -107,8 +108,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * rather than letting somebody type into it and be refused on save.
      */
     can: {
-      edit: gate.role === "owner" || gate.role === "editor" || gate.role === "programmer",
-      lockSettings: gate.role === "owner",
+      /* from the membership — identical to the old role lists for every fixed role, and right for the new ones */
+      edit: can(gate.grant, "survey.edit"),
+      lockSettings: can(gate.grant, "project.lock_settings"),
     },
     role: gate.role,
   }, { headers: { "cache-control": "no-store" } });

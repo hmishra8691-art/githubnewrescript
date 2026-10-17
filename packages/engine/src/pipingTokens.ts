@@ -26,7 +26,96 @@
 export const PIPE_TOKEN_RE = /\{\{\s*((?:[^{}]|\{(?!\{)|\{\{[^{}]*\}\})+?)\s*\}\}/g;
 
 /** Where a pipe reads from. */
-export type PipeKind = "question" | "calc" | "embedded" | "loop" | "expr";
+export type PipeKind = "question" | "calc" | "embedded" | "loop" | "expr" | "system";
+
+/**
+ * SYSTEM SOURCES (document 15/10/2026, item C) — values the platform itself
+ * knows, piped with the same `{{…}}` syntax as everything else:
+ *
+ *   {{survey.id}} {{survey.code}} {{survey.name}} {{survey.version}}
+ *   {{response.id}} {{response.respondent_id}} {{response.language}} {{response.status}}
+ *   {{date.today}} {{date.now}} {{date.time}} {{date.start_date}} {{date.start_time}} {{date.start}}
+ *   {{date.day}} {{date.month}} {{date.month_name}} {{date.year}} {{date.weekday}}
+ *   {{date.timezone}} {{date.unix}} {{date.iso}}           — with |fmt:DD/MM/YYYY, |fmt:hh:mm A …
+ *   {{device.type}} {{device.os}} {{device.browser}} {{device.screen}} {{device.viewport}}
+ *   {{device.language}} {{device.user_agent}}
+ *   {{distribution.channel}} {{distribution.link_type}}
+ *   {{quota.<id or name>.count|limit|remaining|percent|status|name|cell}}
+ *   {{random.int(1,100)}} {{random.decimal(0,1,2)}} {{random.pick(A,B,C)}}
+ *   {{random.id(8)}} {{random.bool}} {{random.uuid}}       — with |per:respondent|session|loop|each
+ *
+ * Recognised only for these exact names, so `{{date.label}}` on a question
+ * coded `date` is still that question — and the runtime checks again: a
+ * question whose code is the namespace wins (`piping.ts`). Resolution lives
+ * in `systemPipes.ts`.
+ */
+export const SYSTEM_PIPE_KEYS: Record<string, readonly string[]> = {
+  survey: ["id", "code", "name", "version"],
+  response: ["id", "respondent_id", "language", "status"],
+  date: ["today", "now", "time", "start_date", "start_time", "start", "day", "month", "month_name", "year", "weekday", "timezone", "unix", "iso"],
+  device: ["type", "os", "browser", "screen", "viewport", "language", "user_agent"],
+  distribution: ["channel", "link_type"],
+};
+export const QUOTA_PIPE_PROPS = ["count", "limit", "remaining", "percent", "status", "name", "id", "cell"] as const;
+export const RANDOM_PIPE_KINDS = ["int", "decimal", "pick", "id", "bool", "uuid"] as const;
+export type RandomPersistence = "respondent" | "session" | "loop" | "each";
+const RANDOM_RE = /^random\.(int|decimal|pick|id|bool|uuid)(?:\((.*)\))?$/;
+const QUOTA_RE = /^quota\.(.+)\.([a-z_]+)$/;
+
+/** Is `body` (the text before any `|`) a system source? */
+export function isSystemPipeRef(body: string): boolean {
+  const b = body.trim();
+  if (RANDOM_RE.test(b)) return true;
+  const q = QUOTA_RE.exec(b);
+  if (q) return (QUOTA_PIPE_PROPS as readonly string[]).includes(q[2]);
+  const dot = b.indexOf(".");
+  if (dot < 0) return false;
+  return SYSTEM_PIPE_KEYS[b.slice(0, dot)]?.includes(b.slice(dot + 1)) ?? false;
+}
+
+/** The parts of a `random.*` source; null when `ref` is not one. */
+export function parseRandomRef(ref: string): { kind: (typeof RANDOM_PIPE_KINDS)[number]; args: string[] } | null {
+  const m = RANDOM_RE.exec(ref.trim());
+  if (!m) return null;
+  const args = m[2] === undefined ? [] : m[2].split(",").map((a) => a.trim()).filter((a, i, all) => a !== "" || all.length > 1);
+  return { kind: m[1] as (typeof RANDOM_PIPE_KINDS)[number], args };
+}
+
+/** The parts of a `quota.*` source; null when `ref` is not one. */
+export function parseQuotaRef(ref: string): { quota: string; prop: (typeof QUOTA_PIPE_PROPS)[number] } | null {
+  const m = QUOTA_RE.exec(ref.trim());
+  if (!m || !(QUOTA_PIPE_PROPS as readonly string[]).includes(m[2])) return null;
+  return { quota: m[1], prop: m[2] as (typeof QUOTA_PIPE_PROPS)[number] };
+}
+
+/**
+ * Why a system token cannot resolve in this survey, or null. Pure: the
+ * builder's warning and the linter say the same thing.
+ */
+export function systemPipeProblem(
+  t: Pick<PipeToken, "ref" | "fmt" | "per">,
+  def: { quotas?: { id: string; name: string }[] },
+): string | null {
+  const rnd = parseRandomRef(t.ref);
+  if (rnd) {
+    const nums = rnd.args.map(Number);
+    if ((rnd.kind === "int" || rnd.kind === "decimal") && rnd.args.length >= 2) {
+      if (nums.slice(0, 2).some((n) => !Number.isFinite(n))) return `${t.ref}: the minimum and maximum must be numbers`;
+      if (nums[0] > nums[1]) return `${t.ref}: the minimum is larger than the maximum`;
+    }
+    if (rnd.kind === "decimal" && rnd.args.length >= 3 && !(Number.isInteger(nums[2]) && nums[2] >= 0 && nums[2] <= 10)) return `${t.ref}: decimal places must be 0–10`;
+    if (rnd.kind === "pick" && rnd.args.length === 0) return `${t.ref}: list the values to pick from, e.g. random.pick(A,B,C)`;
+    if (rnd.kind === "id" && rnd.args.length && !(Number.isInteger(nums[0]) && nums[0] >= 1 && nums[0] <= 64)) return `${t.ref}: the id length must be 1–64`;
+    if (t.per && !["respondent", "session", "loop", "each"].includes(t.per)) return `${t.ref}: "per:${t.per}" — use per:respondent, per:session, per:loop or per:each`;
+    return null;
+  }
+  const q = parseQuotaRef(t.ref);
+  if (q) {
+    const wanted = q.quota.toLowerCase();
+    if (!(def.quotas ?? []).some((x) => x.id.toLowerCase() === wanted || x.name.toLowerCase() === wanted)) return `No quota named "${q.quota}"`;
+  }
+  return null;
+}
 
 /** What it reads. Only some are valid for a given kind — see PIPE_PROPERTIES. */
 export type PipeProperty =
@@ -90,6 +179,12 @@ export interface PipeToken {
   format?: PipeFormat;
   /** custom joiner from `|join:…` */
   joiner?: string;
+  /** a date / time pattern from `|fmt:…` (system date sources) */
+  fmt?: string;
+  /** how long a `random.*` value lasts, from `|per:…` (default: respondent) */
+  per?: RandomPersistence;
+  /** a name that makes two identical `random.*` tokens draw independently, from `|key:…` */
+  key?: string;
   /** the inner text exactly as written */
   raw: string;
   /** the full `{{…}}` source */
@@ -142,6 +237,9 @@ export function parsePipeBody(raw: string, text = `{{${raw}}}`): PipeToken | nul
   const body = parts[0].trim();
   let format: PipeFormat | undefined;
   let joiner: string | undefined;
+  let fmt: string | undefined;
+  let per: RandomPersistence | undefined;
+  let key: string | undefined;
   for (let i = 1; i < parts.length; i++) {
     const mod = parts[i].trim();
     if (mod.startsWith("join:")) {
@@ -150,6 +248,13 @@ export function parsePipeBody(raw: string, text = `{{${raw}}}`): PipeToken | nul
       break;
     }
     if (FORMAT_NAMES.has(mod as PipeFormat)) format = mod as PipeFormat;
+    else if (mod.startsWith("fmt:")) fmt = mod.slice(4).trim();
+    else if (mod.startsWith("per:")) per = mod.slice(4).trim() as RandomPersistence;
+    else if (mod.startsWith("key:")) key = mod.slice(4).trim();
+  }
+
+  if (isSystemPipeRef(body)) {
+    return { kind: "system", ref: body, property: "value", format, joiner, fmt, per, key, raw, text };
   }
 
   if (body.startsWith("calc.")) {
@@ -218,6 +323,9 @@ export function serializePipeToken(t: Omit<PipeToken, "raw" | "text">): string {
     case "expr":
       body = `expr: ${t.ref}`;
       break;
+    case "system":
+      body = t.ref;
+      break;
     case "question":
     default:
       body = t.ref + (t.rowCode ? `[${t.rowCode}]` : "") + (t.property ? `.${t.property}` : "");
@@ -225,6 +333,10 @@ export function serializePipeToken(t: Omit<PipeToken, "raw" | "text">): string {
   }
   const mods: string[] = [];
   if (t.format && t.format !== "comma") mods.push(t.format);
+  if (t.fmt) mods.push(`fmt:${t.fmt}`);
+  if (t.per && t.per !== "respondent") mods.push(`per:${t.per}`);
+  if (t.key) mods.push(`key:${t.key}`);
+  // last: a joiner runs to the end of the token
   if (t.joiner) mods.push(`join:${t.joiner}`);
   return `{{${body}${mods.length ? `|${mods.join("|")}` : ""}}}`;
 }
@@ -299,6 +411,8 @@ export function describePipeToken(t: PipeToken, codeFor?: (ref: string) => strin
       return `loop: ${name}`;
     case "expr":
       return `= ${name}`;
+    case "system":
+      return `${name}${t.fmt ? ` (${t.fmt})` : ""}`;
     default:
       return `${name}${t.rowCode ? `[${t.rowCode}]` : ""} → ${prop ?? t.property}`;
   }

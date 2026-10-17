@@ -47,6 +47,10 @@ Each operator's spellings, canonical first (the one the Studio prints). The came
 | `dateAfter` | `after`, `dateAfter` | one |
 | `dateEquals` | `on`, `dateEquals` | one |
 | `dateBetween` | `between dates`, `dateBetween` | two (`X and Y`) |
+| `containsItem` | `contains item`, `containsItem`, `has item` | one |
+| `notContainsItem` | `not contains item`, `notContainsItem`, `lacks item` | one |
+| `containsAllItems` | `contains all items`, `containsAllItems` | one |
+| `containsExactly` | `contains exactly`, `containsExactly`, `selected exactly` | a list `[a, b]` |
 
 Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BUT NOT` (= AND NOT), parentheses. `NOT` binds tighter than `AND`, `AND` tighter than `OR`; mixing `AND` and `OR` without brackets is accepted with a warning.
 
@@ -56,11 +60,11 @@ Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BU
 |---|---|
 | `any` | `answered`, `unanswered`, `isEmpty`, `isNotEmpty`, `eq`, `ne` |
 | `choice` | `selected`, `notSelected`, `in`, `notIn`, `contains`, `notContains`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `displayed`, `notDisplayed` |
-| `list` | `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `selected`, `notSelected`, `in`, `notIn`, `displayed`, `notDisplayed` |
-| `text` | `eq`, `ne`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches`, `isEmpty`, `isNotEmpty` |
+| `list` | `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `selected`, `notSelected`, `in`, `notIn`, `displayed`, `notDisplayed`, `containsItem`, `notContainsItem`, `containsAllItems`, `containsExactly` |
+| `text` | `eq`, `ne`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches`, `isEmpty`, `isNotEmpty`, `in`, `notIn` |
 | `numeric` | `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `in`, `notIn` |
 | `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `displayed`, `notDisplayed` |
-| `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered` |
+| `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween` |
 
 ## Calculation functions
 
@@ -113,6 +117,22 @@ A token is `{{ … }}` in any question text, instruction, option label, HTML blo
 | `image` | Show as image | a URL becomes the picture it points to |
 
 Also `|join:<separator>`. Namespaces: `{{calc.NAME}}`, `{{ed.NAME}}` / `{{embedded.NAME}}`, `{{loop.label}}` / `.code` / `.index` / `.count` / `.<column>`, `{{<loopVar>.<column>}}` for an outer loop, `{{CURRENT_ITEM}}`, `{{LOOP_INDEX}}`, `{{LOOP_COUNT}}`, `{{expr: Q1 + Q2}}`.
+
+### System sources
+
+Values the platform supplies. A question coded like a namespace (`date`, `device`) keeps meaning that question.
+
+| namespace | keys |
+|---|---|
+| `survey.*` | `id`, `code`, `name`, `version` |
+| `response.*` | `id`, `respondent_id`, `language`, `status` |
+| `date.*` | `today`, `now`, `time`, `start_date`, `start_time`, `start`, `day`, `month`, `month_name`, `year`, `weekday`, `timezone`, `unix`, `iso` |
+| `device.*` | `type`, `os`, `browser`, `screen`, `viewport`, `language`, `user_agent` |
+| `distribution.*` | `channel`, `link_type` |
+| `quota.<id or name>.*` | `count`, `limit`, `remaining`, `percent`, `status`, `name`, `id`, `cell` |
+| `random.*` | `int`, `decimal`, `pick`, `id`, `bool`, `uuid` |
+
+Modifiers: `|fmt:<pattern>` for dates and times (`YYYY YY MMMM MMM MM M DD D dddd ddd HH H hh h mm ss A`, `[literal]`); `|per:respondent` (default) / `session` / `loop` / `each` and `|key:<name>` for random values, e.g. `{{random.int(1,100)|per:loop}}`, `{{random.decimal(0,1,2)}}`, `{{random.pick(A,B,C)}}`, `{{random.id(8)}}`. An Embedded Data Fixed value may pipe; it is resolved where the element runs in the flow and the resolved value is stored.
 
 ## Auto-punch verbs
 

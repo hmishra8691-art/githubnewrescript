@@ -11,7 +11,8 @@ import { seededShuffle, subSeed } from "./random.js";
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { checkQuotas, type QuotaCounts } from "./quotas.js";
-import { applyEmbeddedField, type EmbeddedField } from "./embedded.js";
+import { type EmbeddedField } from "./embedded.js";
+import { applyEmbeddedFieldInFlow } from "./embeddedPiping.js";
 import { prefillQuestions, maskingVariablesFor, applyPunches } from "./setExpression.js";
 import { questionDependencies } from "./dependencies.js";
 import { applyDefaultValues } from "./defaultValue.js";
@@ -45,7 +46,8 @@ export type RuntimeStep =
       /** ids of every enclosing flow node — block, section, branch, loop … — outermost first */
       nodePath: string[];
     }
-  | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[] }
+  /** `loop`: the iteration the element runs in, so a piped value can read `{{loop.label}}` */
+  | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[]; loop?: LoopContext | null }
   | { kind: "quota_check"; nodeId: string; quotaIds: string[]; onFull: { kind: string; url?: string } }
   | { kind: "redirect"; nodeId: string; url: string; newWindow?: boolean }
   | { kind: "end"; nodeId: string; status: "complete" | "screened" | "quota_full" | "terminated"; message?: string; redirectUrl?: string };
@@ -233,7 +235,7 @@ export function compileFlow(
           break;
         }
         case "embedded_data":
-          steps.push({ kind: "embedded_data", nodeId: node.id, fields: node.fields });
+          steps.push({ kind: "embedded_data", nodeId: node.id, fields: node.fields, ...(loop ? { loop } : {}) });
           break;
         case "quota_check":
           // a check with a condition only applies to the respondents it names
@@ -595,7 +597,15 @@ function moveForward(
       for (const f of s.fields) {
         // a field with a `when` is captured only while it holds — "store SOURCE = panel only for panel respondents"
         if (f.when && !evaluateCondition(f.when, { def, state, loop: null, quotaCounts })) continue;
-        applyEmbeddedField(def, state, f);
+        /*
+         * A Fixed value may pipe (`{{ed.LOWCAL_1}}`, `Customer: {{ed.Name}}`):
+         * resolved HERE, where the element runs — fields set earlier, even
+         * earlier in this element, are already in `state` — and the resolved
+         * value is what is stored (embeddedPiping.ts). Every other source
+         * goes through `applyEmbeddedField` exactly as before. The `when`
+         * above keeps reading outside the loop, as it always has.
+         */
+        applyEmbeddedFieldInFlow(def, state, f, { loop: s.loop ?? null, quotaCounts });
       }
       idx++; continue;
     }
@@ -608,7 +618,11 @@ function moveForward(
         }
         if (s.onFull.kind === "redirect") {
           state.status = "quota_full";
-          return { steps, stepIndex: idx, done: true, endStatus: "quota_full", redirectUrl: s.onFull.url, triggeredSkips, quotaFull: full };
+          /* the over-quota link takes tokens like every other redirect (`…?rid={{response.id}}`) — it was the one that sent them literally */
+          const url = s.onFull.url && s.onFull.url.includes("{{")
+            ? resolveUrlTemplate(s.onFull.url, { def, state, loop: null, quotaCounts })
+            : s.onFull.url;
+          return { steps, stepIndex: idx, done: true, endStatus: "quota_full", redirectUrl: url, triggeredSkips, quotaFull: full };
         }
         if (s.onFull.kind === "flag") state.flags.push(...full.map((f) => `quota_full:${f}`));
       }

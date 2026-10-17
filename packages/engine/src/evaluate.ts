@@ -1,15 +1,17 @@
 import { displayedCodesFor, hasDisplayedResolver } from "./displayedRegistry.js";
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
-import { isOptionValueRef, isQuestionValueRef, effectiveResponseModel } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef, isPipedValueRef, effectiveResponseModel } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
 import { evaluateCount } from "./countCondition.js";
 import { safeExpression } from "./calcContext.js";
 import { findNamedExpression } from "./namedExpressions.js";
-import { getEffectiveListsResolver } from "./piping.js";
+import { getEffectiveListsResolver, resolvePipingText } from "./piping.js";
 import { isEmptyAnswer } from "./answers.js";
 import { isCategoricalGrid } from "./gridCell.js";
+import { listItems } from "./listValue.js";
+import { effectiveEmbeddedType, embeddedCatalog } from "./embedded.js";
 
 /**
  * The option currently under evaluation. Present whenever a condition is
@@ -369,6 +371,19 @@ function looseEqCI(a: unknown, b: unknown): boolean {
   return String(a).toLowerCase() === String(b).toLowerCase();
 }
 
+/**
+ * The ITEMS of a list value, for the whole-item operators (`containsItem` …).
+ * A delimited string ("10001, 10002") is split, an array is taken member by
+ * member (a member that is itself delimited text is split too, so a list typed
+ * into one box and a list picked item by item read the same), and a scalar is
+ * a one-item list. Trimmed, never re-typed: "02108" stays "02108".
+ */
+function itemsOf(v: unknown): string[] {
+  if (Array.isArray(v)) return v.flatMap((x) => (Array.isArray(x) ? itemsOf(x) : listItems(x)));
+  return listItems(v);
+}
+const sameItem = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
 /** `contains`, in one place, so `notContains` cannot drift from it. */
 function containsValue(left: unknown, right: unknown): boolean {
   if (Array.isArray(left)) return left.some((l) => looseEqCI(l, right));
@@ -458,6 +473,15 @@ function rankOf(left: unknown, code: unknown): number | null {
  */
 export function resolveComparisonValue(v: unknown, ctx: EvalContext): unknown {
   if (Array.isArray(v)) return v.map((x) => resolveComparisonValue(x, ctx));
+  /*
+   * PIPED TEXT as the comparison value — `{{Q1.ZIP_Code}}`, `{{ed.REGION}}` —
+   * resolved by the same piping engine the page uses, as plain text (see
+   * `resolvePipingText`). Only a `{ $pipe }` reference is resolved, so a
+   * literal value that happens to contain braces keeps its stored meaning.
+   */
+  if (isPipedValueRef(v)) {
+    try { return resolvePipingText(v.$pipe, ctx); } catch { return null; }
+  }
   if (isQuestionValueRef(v)) {
     /*
      * Resolved through `resolveSourceValue` rather than by reading answers
@@ -632,6 +656,35 @@ function applyOperator(operator: ConditionRule["operator"], left: unknown, right
       break;
     }
 
+    /* ------------------------------------------------------- list items
+     * WHOLE ITEMS, not text (documents 15/10, 16/10). "10001, 10002, …" holds
+     * the item "10005"; it does not hold "1000", and "110001" never matches
+     * "10001". A value that is itself a list matches when ANY of its items is
+     * held (containsItem), when NONE is (notContainsItem), or when ALL are
+     * (containsAllItems). New operators, so no stored `contains` changes.
+     */
+    case "containsItem":
+    case "notContainsItem": {
+      const l = itemsOf(left);
+      const wanted = itemsOf(right);
+      const any = wanted.some((w) => l.some((x) => sameItem(x, w)));
+      result = operator === "containsItem" ? any : !any;
+      break;
+    }
+    case "containsAllItems": {
+      const l = itemsOf(left);
+      const wanted = itemsOf(right);
+      result = wanted.length > 0 && wanted.every((w) => l.some((x) => sameItem(x, w)));
+      break;
+    }
+    case "containsExactly": {
+      /* "has selected exactly A and C": the same set, in any order — `eq` on two arrays compared their order */
+      const l = [...new Set(itemsOf(left).map((x) => x.toLowerCase()))];
+      const wanted = [...new Set(itemsOf(right).map((x) => x.toLowerCase()))];
+      result = wanted.length > 0 && l.length === wanted.length && wanted.every((w) => l.includes(w));
+      break;
+    }
+
     /* ---------------------------------------------------------- ranking */
     case "rankedFirst":
       result = rankOf(left, right) === 1;
@@ -778,6 +831,18 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
   ) {
     right = rule.source.columnId;
   }
+  /*
+   * `contains` ON AN EMBEDDED DATA LIST MATCHES WHOLE ITEMS (document 15/10).
+   * Only for a field whose type is LIST — declared "list", or "auto" holding
+   * a list. Both types are new, so no stored survey's `contains` changes:
+   * an untyped or "string" field keeps its substring meaning, and offers
+   * "contains item" for whole items.
+   */
+  if ((operator === "contains" || operator === "notContains") && isEmbeddedListSource(rule, ctx, left)) {
+    const result = applyOperator(operator === "contains" ? "containsItem" : "notContainsItem", left, right, right2);
+    ctx.trace?.push({ rule: rule.source.ref, result, left, operator, right });
+    return result;
+  }
   let result: boolean;
   const ex = EXISTENTIAL[operator];
   const cells = ex
@@ -801,6 +866,17 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
     right,
   });
   return result;
+}
+
+/** Is this rule reading an Embedded Data field whose effective type is a LIST? */
+function isEmbeddedListSource(rule: ConditionRule, ctx: EvalContext, value: unknown): boolean {
+  const s = rule.source;
+  if (s.count) return false;
+  const named = s.kind === "embedded"
+    || ((s.kind === "question" || s.kind === "variable") && !getQuestionByCodeOrVar(ctx.def, s.ref)
+      && embeddedCatalog(ctx.def).some((e) => e.name === s.ref));
+  if (!named) return false;
+  try { return effectiveEmbeddedType(ctx.def, s.ref, value) === "list"; } catch { return false; }
 }
 
 /**

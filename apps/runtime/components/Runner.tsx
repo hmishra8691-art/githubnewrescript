@@ -3,6 +3,7 @@ import React from "react";
 import type { SurveyDefinition, Branding, Question, ProbeConfig } from "@rescript/schema";
 import {
   createResponseState,
+  runtimePipeMeta,
   compileFlow,
   start,
   resumeAt,
@@ -818,6 +819,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       const name = embeddedFieldName(f);
       if (f.source === "url" && urlParams?.[name] != null) state.embedded[name] = urlParams[name];
     }
+    /*
+     * What system piping sources read (`{{device.type}}`, `{{distribution.channel}}`,
+     * `{{response.language}}` — document 15/10/2026, item C): what THIS
+     * browser reports, recorded before the first flow element runs so an
+     * Embedded Data value can store it. Nothing is guessed; an unknown part is "".
+     */
+    state.meta = {
+      ...(state.meta ?? {}),
+      ...runtimePipeMeta({
+        channel: mode,
+        language: lang,
+        device: typeof navigator !== "undefined" && typeof window !== "undefined" ? {
+          userAgent: navigator.userAgent, language: navigator.language, maxTouchPoints: navigator.maxTouchPoints,
+          screenWidth: window.screen?.width, screenHeight: window.screen?.height,
+          viewportWidth: window.innerWidth, viewportHeight: window.innerHeight,
+        } : null,
+      }),
+    };
     stateRef.current = state;
     // test and preview only: the live state, for the inspector's consumers and
     // the browser suites — the same object, so it is never stale

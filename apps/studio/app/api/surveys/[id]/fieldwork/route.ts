@@ -81,7 +81,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * manager watching delivery is reading response data, and making them take
    * the questionnaire away from a programmer to do it would be absurd.
    */
-  const gate = await requireProject(req, params.id, "responses.read");
+  /* `fieldwork.read` (0062): held by every role that held `responses.read`, and by vendors and interviewers — aggregates only */
+  const gate = await requireProject(req, params.id, "fieldwork.read");
   if (isFailure(gate)) return gate.response;
 
   const q = req.nextUrl.searchParams;

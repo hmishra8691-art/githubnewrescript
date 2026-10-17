@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  activePresence, activityFor, avatarHue, can, capabilitiesOf, initialsOf,
+  accessLabel, activePresence, activityFor, avatarHue, can, capabilitiesOf, describeExpiry, initialsOf,
   lockBanner, lockStatus, roleSourceNote, roleSummary,
   type PresenceEntry,
 } from "@rescript/access";
@@ -97,7 +97,7 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
        *   · a refusal is not an error. The lock read below sees whoever won
        *     and the client goes read-only naming them, in this same response.
        */
-      if (!alive && can(role, "survey.edit")) {
+      if (!alive && can(ctx.grant, "survey.edit")) {
         await db.rpc("rescript_acquire_lock", {
           p_survey: surveyId,
           p_user: user.userId,
@@ -166,12 +166,20 @@ async function handle(req: NextRequest, ctx: ProjectContext, report: boolean) {
       roleSource: ctx.roleSource,
       roleSourceNote: roleSourceNote(ctx.roleSource),
       viaAdmin: ctx.viaAdmin,
-      capabilities: capabilitiesOf(role),
-      canEdit: can(role, "survey.edit"),
-      canShare: can(role, "project.share"),
-      canManageMembers: can(role, "project.manage_members"),
-      canForceRelease: can(role, "lock.force_release") || user.isPlatformAdmin,
-      canComment: can(role, "comment.create"),
+      /*
+       * From the MEMBERSHIP (ctx.grant), not the bare role: a custom member's
+       * per-module permissions decide what the Studio offers, exactly as they
+       * decide what the routes allow. For every fixed role the two are equal.
+       */
+      capabilities: capabilitiesOf(ctx.grant),
+      canEdit: can(ctx.grant, "survey.edit"),
+      canShare: can(ctx.grant, "project.share"),
+      canManageMembers: can(ctx.grant, "project.manage_members"),
+      canForceRelease: can(ctx.grant, "lock.force_release") || user.isPlatformAdmin,
+      canComment: can(ctx.grant, "comment.create"),
+      accessLabel: accessLabel(role),
+      expiresAt: ctx.expiresAt,
+      expiryText: ctx.expiresAt ? describeExpiry(ctx.expiresAt) : null,
       /**
        * THE flag the whole UI hangs off. Read-only is the default: a user is
        * editable only while they demonstrably hold the lock, so a client that

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { parseEnvironment } from "@/lib/responseData";
+import { can } from "@rescript/access";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { invitationsToCSV, invitationsToXlsx, type Invitation } from "@rescript/exporters";
 import { surveyBaseUrl } from "@/lib/runtime-url";
@@ -30,6 +31,10 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const gate = await requireProject(req, params.id, "responses.export");
   if (isFailure(gate)) return gate.response;
+  /* names and addresses are respondent contact details: a custom member may export data without them (0062) */
+  if (!can(gate.grant, "responses.read_pii")) {
+    return NextResponse.json({ error: "Your access does not include respondent contact details.", code: "insufficient_role", capability: "responses.read_pii" }, { status: 403 });
+  }
 
   const sp = req.nextUrl.searchParams;
   const environment = parseEnvironment(sp.get("environment") ?? "LIVE");

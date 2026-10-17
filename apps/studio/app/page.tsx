@@ -9,6 +9,7 @@ import {
 import { ProjectBudgetDialog } from "@/components/dashboard/ProjectBudgetDialog";
 import { AddFundsDialog } from "@/components/dashboard/AddFundsDialog";
 import { CloneProjectDialog } from "@/components/dashboard/CloneProjectDialog";
+import { CollaboratorsDialog } from "@/components/studio/CollaboratorsPanel";
 import { useSession } from "@/lib/useSession";
 import { AppHeader, greeting } from "@/components/ui/AppHeader";
 import { Icon } from "@/components/ui/Icon";
@@ -113,6 +114,8 @@ export default function Dashboard() {
   const [budgeting, setBudgeting] = React.useState<SurveyRow | null>(null);
   const [addingFunds, setAddingFunds] = React.useState(false);
   const [cloning, setCloning] = React.useState<SurveyRow | null>(null);
+  /* the project whose collaborators panel is open (the card's ⋯ → Collaborators…) */
+  const [sharing, setSharing] = React.useState<SurveyRow | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [title, setTitle] = React.useState("");
   const [code, setCode] = React.useState("");
@@ -591,6 +594,7 @@ export default function Dashboard() {
           canBudget={!!budgetable[s.id]}
           onBudget={() => setBudgeting(s)}
           onClone={() => setCloning(s)}
+          onCollaborators={() => setSharing(s)}
           /*
            * project.delete is owner-only (packages/access/src/roles.ts) and
            * that's already enforced server-side — this is only a courtesy so
@@ -802,6 +806,10 @@ export default function Dashboard() {
           onClose={() => setAddingFunds(false)}
           onRequested={() => { void loadMeters(); try { window.dispatchEvent(new Event("rescript:wallet-changed")); } catch { /* no window */ } }}
         />
+      )}
+      {sharing && (
+        /* the ONE collaborators panel — the Studio tab and the Overview's avatar button open the same component */
+        <CollaboratorsDialog surveyId={sharing.id} title={sharing.title} onClose={() => setSharing(null)} onChanged={() => void load()} />
       )}
       {cloning && (
         <CloneProjectDialog

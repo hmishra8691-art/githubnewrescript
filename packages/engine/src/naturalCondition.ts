@@ -83,6 +83,9 @@ const REWRITES: [RegExp, Rewrite][] = [
   [/\b(?:is\s+)?at\s+most\b/gi, "<="],
   [/\b(?:is\s+)?up\s+to\b/gi, "<="],
   [/\b(?:is\s+)?(?:equal\s+to|equals)\b/gi, "="],
+  /* whole list ITEMS (October 2026): "ZIP_Code_DMA contains the item 10005", "doesn't include item 99999" */
+  [/\b(?:does\s+not|doesn't|did\s+not|didn't)\s+(?:contain|include|have)\s+(?:the\s+|any\s+)?items?\b/gi, "not contains item"],
+  [/\b(?:contains|includes|has)\s+(?:the\s+|an\s+|any\s+)?items?\b/gi, "contains item"],
   [/\b(?:does\s+not|doesn't|didn't|did\s+not)\s+(?:equal|contain|include)\b/gi, "is not"],
   [/\b(?:is\s+not|isn't|was\s+not|wasn't)\s+(?:selected|chosen|picked|ticked)\b/gi, "not selected"],
   [/\b(?:is|was|has\s+been)\s+(?:selected|chosen|picked|ticked)\b/gi, "selected"],
@@ -113,7 +116,7 @@ const REWRITES: [RegExp, Rewrite][] = [
  * write, `Q4 = "United States"` is what the parser reads. Only bare words
  * (no quotes, no digits-only tokens) up to the next AND/OR/parenthesis.
  */
-const OPERAND_AFTER = /((?:^|\s)(?:=|!=|<>|>=|<=|>|<|is not|is|not contains|contains|not selected|selected|matches|starts with|ends with))\s+((?!and\b|or\b|nor\b|not\b|then\b)[A-Za-z][\w'’\-\/]*(?:\s+(?!and\b|or\b|nor\b|not\b|then\b)[A-Za-z0-9][\w'’\-\/]*)+)(?=\s+(?:and|or|nor|then)\b|\s*\)|$)/gi;
+const OPERAND_AFTER = /((?:^|\s)(?:=|!=|<>|>=|<=|>|<|is not|is|not contains item|contains item|not contains(?!\s+item\b)|contains(?!\s+item\b)|not selected|selected|matches|starts with|ends with))\s+((?!and\b|or\b|nor\b|not\b|then\b)[A-Za-z][\w'’\-\/]*(?:\s+(?!and\b|or\b|nor\b|not\b|then\b)[A-Za-z0-9][\w'’\-\/]*)+)(?=\s+(?:and|or|nor|then)\b|\s*\)|$)/gi;
 
 /**
  * "none of A, B or C" / "any of …" / "all of …" at the head of a condition:

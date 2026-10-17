@@ -2,6 +2,7 @@ import type { SurveyDefinition, EmbeddedDataType, FlowNode } from "@rescript/sch
 import type { ResponseState } from "./state.js";
 import { CALC_FUNCTION_NAMES, evaluateExpression, validateExpression } from "./calc.js";
 import { calcOptionsFor } from "./calcContext.js";
+import { detectValueType, isListText, listItems, type DetectedValueType } from "./listValue.js";
 
 /**
  * Typed embedded data (reqs §12–15).
@@ -19,13 +20,16 @@ import { calcOptionsFor } from "./calcContext.js";
 export type EmbeddedField = Extract<FlowNode, { type: "embedded_data" }>["fields"][number];
 
 export const EMBEDDED_TYPES: { value: EmbeddedDataType; label: string; hint: string }[] = [
-  { value: "string", label: "String", hint: "text — the default" },
+  /* first, because it is what a NEW field starts as (document 15/10, item G) */
+  { value: "auto", label: "Auto", hint: "detected from the value: number, decimal, true/false, list or text — 02108 stays text" },
+  { value: "string", label: "String", hint: "text — kept exactly as written" },
   { value: "integer", label: "Integer", hint: "whole number, e.g. 25" },
   { value: "decimal", label: "Decimal", hint: "number with a fraction, e.g. 12.5" },
   { value: "boolean", label: "Boolean", hint: "true / false (1, yes, y also count)" },
   { value: "date", label: "Date", hint: "YYYY-MM-DD" },
   { value: "datetime", label: "Date & time", hint: "ISO 8601 timestamp" },
   { value: "url", label: "URL", hint: "a web address starting with http:// or https:// — kept exactly as written" },
+  { value: "list", label: "List", hint: "comma-separated items, e.g. 2000, 2001, 2002 — kept as text, matched item by item" },
 ];
 
 /**
@@ -74,7 +78,44 @@ export function coerceEmbedded(type: EmbeddedDataType | undefined, raw: unknown)
   const t = type;
   const text = String(raw).trim();
 
+  /*
+   * A FIXED VALUE THAT PIPES ANOTHER VALUE IS NOT A VALUE YET (document 15/10,
+   * item A). `{{ed.LOWCAL_1}}` under Integer is resolved where the element
+   * runs (`embeddedPiping.ts`) and only THEN read as an integer; judged as
+   * written it would be "not a number" for every respondent, which is what
+   * the release check used to say. No value, no error: there is nothing to
+   * read until the flow reaches it.
+   */
+  if (typeof raw === "string" && t !== "string" && t !== "auto" && t !== "list" && /\{\{[^}]+\}\}/.test(text)) {
+    return { value: null };
+  }
+  /*
+   * A LIST UNDER A SINGLE-VALUE TYPE ("2000, 2001, 2002" as Integer — the ZIP
+   * screenshot). Said as what it is, with the way out, rather than the bare
+   * "is not a number" that read as if the codes themselves were wrong.
+   */
+  if (typeof raw === "string" && t !== "string" && t !== "auto" && t !== "list" && t !== "url" && isListText(text)) {
+    const n = listItems(text).length;
+    return { value: null, error: `"${text.length > 40 ? `${text.slice(0, 40)}…` : text}" is a list of ${n} items, not a single ${t === "integer" || t === "decimal" ? "number" : t === "boolean" ? "true/false value" : "date"} — choose the Auto or List type to keep it` };
+  }
+
   switch (t) {
+    case "auto": {
+      /*
+       * The value as what it IS: a number or a boolean that is already one is
+       * kept; text is read by `detectValueType` — and only a plain whole or
+       * decimal number becomes a number. "02108", a list, a date, a URL and
+       * free text stay EXACTLY the text that was written.
+       */
+      if (typeof raw === "number" || typeof raw === "boolean") return { value: raw };
+      if (Array.isArray(raw)) return { value: raw.map((v) => String(v ?? "")).join(", ") };
+      const d = detectValueType(text);
+      if (d === "integer" || d === "decimal") return { value: Number(text) };
+      if (d === "boolean") return { value: text.toLowerCase() === "true" };
+      return { value: String(raw) };
+    }
+    case "list":
+      return { value: Array.isArray(raw) ? raw.map((v) => String(v ?? "")).join(", ") : String(raw) };
     case "string":
       return { value: String(raw) };
     case "integer": {
@@ -129,6 +170,60 @@ export function embeddedTypeOf(def: SurveyDefinition, name: string): EmbeddedDat
     if (field.name === name && field.dataType) return field.dataType;
   }
   return undefined;
+}
+
+/** What an Auto field's value was detected as, or an explicit type. "empty" never leaves this module. */
+export type EffectiveEmbeddedType = Exclude<EmbeddedDataType, "auto">;
+
+/**
+ * THE TYPE A CONSUMER SHOULD READ AN EMBEDDED VALUE AS (document 15/10, item G).
+ *
+ *   • an explicit type (Integer, Decimal, Boolean, Date, Date & time, URL,
+ *     List, String) is the type — exactly as before;
+ *   • Auto is the type DETECTED FROM THE VALUE (`detectValueType`): 25 →
+ *     integer, 25.5 → decimal, true → boolean, "90210, 10001" → list,
+ *     "02108" → string. A value Auto already stored as a number is a number;
+ *   • a field with no declared type (written before types existed) is a
+ *     string — what it has always been.
+ *
+ * Conditions, exports and piping read the stored value together with THIS
+ * type, never the raw `dataType`, so an Auto field compares as a number when
+ * it holds one and as text when it holds an identifier. Pass the value you
+ * hold; omit it to read the field's current value from `state`.
+ */
+export function effectiveEmbeddedType(
+  def: SurveyDefinition,
+  name: string,
+  value?: unknown,
+  state?: Pick<ResponseState, "embedded"> | null,
+): EffectiveEmbeddedType {
+  const declared = embeddedTypeOf(def, name);
+  if (declared && declared !== "auto") return declared;
+  if (!declared) return "string";
+  const v = value === undefined ? state?.embedded?.[name] : value;
+  return detectedAsEmbeddedType(detectValueType(v));
+}
+
+/** `detectValueType`'s answer as an embedded type ("empty" reads as string). */
+export function detectedAsEmbeddedType(d: DetectedValueType): EffectiveEmbeddedType {
+  return d === "empty" ? "string" : d;
+}
+
+/** "List of 4 items", "Whole number", "Text" — the words the type control shows for an Auto value. */
+export function describeDetectedType(raw: unknown): string {
+  const d = detectValueType(raw);
+  switch (d) {
+    case "empty": return "nothing yet";
+    case "integer": return "Whole number";
+    case "decimal": return "Decimal";
+    case "boolean": return "True / false";
+    case "date": return "Date";
+    case "datetime": return "Date & time";
+    case "url": return "URL";
+    case "list": { const n = listItems(raw).length; return `List of ${n} item${n === 1 ? "" : "s"}`; }
+    default:
+      return typeof raw === "string" && /^0\d+$/.test(raw.trim()) ? "Text — leading zero kept" : "Text";
+  }
 }
 
 /**

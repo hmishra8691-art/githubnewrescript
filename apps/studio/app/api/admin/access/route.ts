@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   ACCESS_FIELDS, DEFAULT_SESSION_POLICY, DEFAULT_THROTTLE,
   buildAccessPolicy, describeAccessPolicy,
-  GRANTABLE_ROLES,
+  BASELINE_ROLES,
 } from "@rescript/access";
 import { loadPolicies, supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireAdmin } from "@/lib/guard";
@@ -104,7 +104,9 @@ export async function GET(req: NextRequest) {
     stored,
     platformDefault: platform,
     fields: ACCESS_FIELDS,
-    grantableRoles: GRANTABLE_ROLES,
+    /* the workspace BASELINE's choices: the six roles the SQL accepts (0009). Custom needs stored
+       permissions and the 2026-10-17 roles are explicit-share-only, so neither is offered here. */
+    grantableRoles: BASELINE_ROLES,
     workspaceId: customerId,
     ...(migration ? { migration } : {}),
   }, { headers: { "cache-control": "no-store" } });

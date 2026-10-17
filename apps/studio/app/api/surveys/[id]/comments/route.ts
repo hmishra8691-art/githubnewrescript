@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { avatarHue, initialsOf } from "@rescript/access";
+import { avatarHue, can, initialsOf } from "@rescript/access";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, notifyProject, requireProject } from "@/lib/guard";
 
@@ -93,7 +93,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     threads,
     openCount: rows.filter((r) => !r.parent_id && !r.resolved_at).length,
     canComment: ctx.role ? ["owner", "editor", "programmer", "reviewer", "test_user", "deployment_manager"].includes(ctx.role) : false,
-    canResolve: ctx.role ? ["owner", "editor", "programmer", "reviewer"].includes(ctx.role) : false,
+    /* the same four roles as the list this replaced (`comment.resolve`), plus a custom member who was given it */
+    canResolve: can(ctx.grant, "comment.resolve"),
   }, { headers: { "cache-control": "no-store" } });
 }
 
@@ -173,7 +174,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const isAuthor = comment.author_id === ctx.user.userId;
   const isOwner = ctx.role === "owner";
-  const canResolve = ctx.role ? ["owner", "editor", "programmer", "reviewer"].includes(ctx.role) : false;
+  const canResolve = can(ctx.grant, "comment.resolve");
 
   if (typeof body?.resolved === "boolean") {
     if (!canResolve) return NextResponse.json({ error: "Your role cannot resolve notes." }, { status: 403 });

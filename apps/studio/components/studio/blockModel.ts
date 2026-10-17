@@ -55,7 +55,8 @@ export function newFlowNode(type: FlowNode["type"]): FlowNode {
       otherwise: [],
     };
     case "loop": return { type, id, source: { kind: "static", items: [] }, loopVar: "item", children: [] };
-    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "string" }] };
+    /* a NEW field's type is Auto — detected from its value (document 15/10/2026, item G) */
+    case "embedded_data": return { type, id, fields: [{ name: "", source: "url", dataType: "auto" }] };
     case "quota_check": return { type, id, quotaIds: [], onFull: { kind: "terminate" } };
     case "redirect": return { type, id, url: "https://" };
     case "end": return { type, id, status: "complete" };

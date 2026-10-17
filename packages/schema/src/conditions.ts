@@ -63,6 +63,20 @@ export const ComparisonOperator = z.enum([
   "dateAfter",
   "dateEquals",
   "dateBetween", // value .. value2
+
+  /* --- list ITEMS (October 2026, documents 15/10 and 16/10) ---------------
+   * A comma-separated Embedded Data list ("10001, 10002, 10003"), a calc that
+   * produces one, or an array: these compare WHOLE ITEMS, trimmed and
+   * case-insensitive — "10001" never matches "110001", leading zeros are kept.
+   * A value that is itself a list ("10001, 10003") matches when ANY of its
+   * items does. Added beside `contains` rather than changing it, so every
+   * stored `contains` keeps its substring meaning on text: the researcher
+   * picks "contains item" or "contains text" explicitly.
+   */
+  "containsItem", // the list holds the item (or any item of a list value)
+  "notContainsItem", // the list holds none of the value's items
+  "containsAllItems", // the list holds every item of the value
+  "containsExactly", // the answer holds exactly these items, in any order (multi-select "has selected exactly")
 ]);
 export type ComparisonOperator = z.infer<typeof ComparisonOperator>;
 
@@ -95,6 +109,15 @@ export const LIST_VALUE_OPERATORS: ComparisonOperator[] = [
   "containsAny",
   "containsAll",
   "containsNone",
+  "containsExactly",
+];
+
+/** Operators that compare whole list ITEMS (see `containsItem` above). */
+export const LIST_ITEM_OPERATORS: ComparisonOperator[] = [
+  "containsItem",
+  "notContainsItem",
+  "containsAllItems",
+  "containsExactly",
 ];
 
 /**
@@ -129,6 +152,11 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "notIn",
     "displayed",
     "notDisplayed",
+    /* October 2026: whole-item comparisons and "has selected exactly" (additive) */
+    "containsItem",
+    "notContainsItem",
+    "containsAllItems",
+    "containsExactly",
   ],
   text: [
     "eq",
@@ -140,6 +168,14 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "matches",
     "isEmpty",
     "isNotEmpty",
+    /*
+     * October 2026 (additive — nothing that was valid stops being valid):
+     * "is one of" — exact membership of the typed answer in a list, e.g. a
+     * typed ZIP in a list of ZIPs. `contains` on an open end keeps its
+     * substring meaning.
+     */
+    "in",
+    "notIn",
   ],
   numeric: ["eq", "ne", "gt", "gte", "lt", "lte", "between", "notBetween", "in", "notIn"],
   ranking: [
@@ -164,7 +200,16 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
     "displayed",
     "notDisplayed",
   ],
-  date: ["dateBefore", "dateAfter", "dateEquals", "dateBetween", "answered", "unanswered"],
+  date: [
+    "dateBefore", "dateAfter", "dateEquals", "dateBetween", "answered", "unanswered",
+    /*
+     * October 2026 (additive): "on or before", "on or after", "not between",
+     * and the clock-time comparisons of a `time` question. The evaluator has
+     * always ordered dates and times in these (`comparableOperands`); only
+     * this table refused them.
+     */
+    "gt", "gte", "lt", "lte", "between", "notBetween",
+  ],
 };
 
 /* ========================================================== count conditions
@@ -431,6 +476,23 @@ export type QuestionValueRef = z.infer<typeof QuestionValueRef>;
 
 export function isQuestionValueRef(v: unknown): v is QuestionValueRef {
   return !!v && typeof v === "object" && !Array.isArray(v) && "$question" in (v as object);
+}
+
+/**
+ * A comparison value that is PIPED TEXT — `{{Q1}}`, `{{ed.ZIP}}`,
+ * `{{Q1.label}}`, or text with tokens in it — resolved by the piping engine
+ * when the rule is evaluated (October 2026, documents 15/10 and 16/10:
+ * "IF ZIP_Code_DMA contains item {{Q1.ZIP_Code}}").
+ *
+ * A structured reference rather than a magic string, so no stored literal
+ * value changes meaning: a rule written before this existed never holds one,
+ * and a literal "{{x}}" typed as a value stays a literal.
+ */
+export const PipedValueRef = z.object({ $pipe: z.string() });
+export type PipedValueRef = z.infer<typeof PipedValueRef>;
+
+export function isPipedValueRef(v: unknown): v is PipedValueRef {
+  return !!v && typeof v === "object" && !Array.isArray(v) && typeof (v as { $pipe?: unknown }).$pipe === "string";
 }
 
 /** Convenience builders used by Studio and tests. */

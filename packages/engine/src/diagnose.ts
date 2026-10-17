@@ -59,7 +59,7 @@ export interface Diagnosis {
 }
 
 /** operators that are FALSE when the question they read has no answer */
-const NEEDS_ANSWER = new Set(["eq", "gt", "lt", "gte", "lte", "in", "contains", "selected", "answered", "between", "matches", "startsWith", "endsWith", "rankedAbove", "rankedAt"]);
+const NEEDS_ANSWER = new Set(["eq", "gt", "lt", "gte", "lte", "in", "contains", "selected", "answered", "between", "matches", "startsWith", "endsWith", "rankedAbove", "rankedAt", "containsItem", "containsAllItems", "containsExactly"]);
 
 interface Gate { kind: "branch" | "branch_shadowed" | "otherwise" | "randomizer" | "loop" | "container_logic"; text: string; when?: Condition; id: string }
 

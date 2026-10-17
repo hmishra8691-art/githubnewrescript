@@ -5,7 +5,7 @@ import type {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { stripHtmlText } from "./html.js";
-import { isOptionValueRef, isQuestionValueRef } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef, isPipedValueRef } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
 import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
@@ -199,6 +199,11 @@ export const OPERATOR_WORDS: Partial<Record<ComparisonOperator, string[]>> = {
   dateAfter: ["after", "dateAfter"],
   dateEquals: ["on", "dateEquals"],
   dateBetween: ["between dates", "dateBetween"],
+  /* whole list ITEMS (October 2026) — "contains" alone keeps its text meaning */
+  containsItem: ["contains item", "containsItem", "has item"],
+  notContainsItem: ["not contains item", "notContainsItem", "lacks item"],
+  containsAllItems: ["contains all items", "containsAllItems"],
+  containsExactly: ["contains exactly", "containsExactly", "selected exactly"],
 };
 
 /** Operators that take no operand at all. */
@@ -212,7 +217,7 @@ const TWO_OPERANDS: ComparisonOperator[] = [
 ];
 /** Operators whose operand is a list. */
 const LIST_OPERAND: ComparisonOperator[] = [
-  "in", "notIn", "containsAny", "containsAll", "containsNone",
+  "in", "notIn", "containsAny", "containsAll", "containsNone", "containsExactly",
 ];
 
 /**
@@ -946,6 +951,16 @@ export function parseLogicExpression(
         if (!opts.perOption && countWhereDepth === 0) fail("“@option” can only be used in option-level logic", t!.pos);
         return { $option: (optRef[1] ?? "code").toLowerCase() };
       }
+      /* `PIPED("{{Q1.ZIP}}")` on the right: piped text, resolved when the rule is evaluated */
+      if (t!.text.toLowerCase() === "piped" && peek()?.kind === "punct" && peek()!.text === "(") {
+        at += 1;
+        const body = peek();
+        if (!body || body.kind !== "string") fail("PIPED( needs quoted piped text, e.g. PIPED(\"{{Q1}}\")", body?.pos ?? t!.pos);
+        at += 1;
+        if (!(peek()?.kind === "punct" && peek()!.text === ")")) fail("PIPED( is missing its )", peek()?.pos ?? t!.pos);
+        at += 1;
+        return { $pipe: body!.text };
+      }
       /* `COUNT(Q6)` on the right: how many codes Q6 holds */
       if (COUNT_FUNCTIONS.has(t!.text.toLowerCase()) && peek()?.kind === "punct" && peek()!.text === "(") {
         at += 1;
@@ -1431,6 +1446,8 @@ function operandText(v: unknown, def?: SurveyDefinition, quoteNumeric = false): 
    * promotes that same bare word straight back to a reference.
    */
   if (isOptionValueRef(v)) return `@option.${v.$option ?? "code"}`;
+  /* piped text as the value: PIPED("{{Q1}}") — read back by `readOperand` as the same reference */
+  if (isPipedValueRef(v)) return `PIPED("${v.$pipe.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
   if (isQuestionValueRef(v)) {
     if (v.read === "count") return `COUNT(${v.$question})`;
     const rq = def ? getQuestionByCodeOrVar(def, v.$question) : undefined;

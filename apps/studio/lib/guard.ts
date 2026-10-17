@@ -1,12 +1,12 @@
 import "server-only";
 import { NextResponse, type NextRequest } from "next/server";
 import {
-  can, decideAccess, decideEdit, isProjectRole, lockStatus, sessionAuthorizes, sessionStatus,
-  ROLE_LABEL,
-  type Actor, type Capability, type LockRecord, type ProjectRole, type RoleSource,
+  can, decideEdit, lockStatus, sessionAuthorizes, sessionStatus,
+  type AccessSubject, type Actor, type Capability, type LockRecord, type ProjectRole, type RoleSource,
   type SessionRecord, type AuditEvent,
 } from "@rescript/access";
 import { clearSessionCookie, loadPolicies, sessionIdFrom, supabaseService, type AccessPolicies } from "./authServer";
+import { decideProjectGate, type AccessRow, type MemberRow } from "./projectAccess";
 
 /**
  * THE GATE. Every authenticated request in the Studio passes through here.
@@ -199,6 +199,16 @@ export interface ProjectContext {
   roleSource: RoleSource;
   /** the capability was granted by platform-admin duties, not by membership */
   viaAdmin: boolean;
+  /**
+   * The membership the decision was made on: a bare role for the owner and a
+   * workspace baseline, `{ role, permissions, expiresAt }` for an explicit
+   * share (migration 0062). Ask `can(ctx.grant, cap)` — never `can(ctx.role,
+   * cap)` — for any further decision inside a route, so a custom member's
+   * permissions are honoured there too.
+   */
+  grant: AccessSubject;
+  /** when this membership ends (null = no expiry, or not a membership) */
+  expiresAt: string | null;
   survey: { id: string; code: string; title: string; status: string; owner_id: string | null; customer_id: string | null; locked: boolean };
 }
 
@@ -247,34 +257,26 @@ export async function requireProjectFor(
    * never granted them anything and cannot find them in the member list.
    */
   const { data: accessRaw } = await db.rpc("rescript_project_access", { p_user: user.userId, p_survey: surveyId });
-  const accessRow = (Array.isArray(accessRaw) ? accessRaw[0] : accessRaw) as
-    | { project_role: string | null; role_source: string | null }
-    | null
-    | undefined;
-  const role = isProjectRole(accessRow?.project_role) ? accessRow!.project_role as ProjectRole : null;
-  const roleSource = (["owner", "member", "workspace", "none"] as const).includes(accessRow?.role_source as never)
-    ? (accessRow!.role_source as RoleSource)
-    : role ? "member" : "none";
-  const decision = decideAccess(user, role, capability, roleSource);
+  const accessRow = (Array.isArray(accessRaw) ? accessRaw[0] : accessRaw) as AccessRow | null | undefined;
 
-  if (!decision.allowed) {
-    if (decision.reason === "not_a_member") {
-      // indistinguishable from a project that does not exist, on purpose
-      return fail({ error: "Unknown project." }, 404);
-    }
-    return fail(
-      {
-        error: roleSource === "workspace"
-          ? `Your workspace grants ${ROLE_LABEL[role!].toLowerCase()} access to projects it does not own, which does not allow this. Ask the project's owner to share it with you directly.`
-          : `Your role on this project (${ROLE_LABEL[role!] ?? role}) does not allow this.`,
-        code: "insufficient_role",
-        role,
-        roleSource,
-        capability,
-      },
-      403,
-    );
+  /*
+   * An explicit share is a MEMBERSHIP, not just a role: per-module permissions
+   * (role `custom`) and an expiry (migration 0062). Read only for a member —
+   * the owner and a workspace baseline have neither — and read soft: on a
+   * database without 0062 the columns do not exist, the query fails, and the
+   * member is decided on their role exactly as before.
+   */
+  let memberRow: MemberRow | null = null;
+  if (accessRow?.role_source === "member" || accessRow?.role_source === "expired") {
+    const { data: m, error: mErr } = await db
+      .from("project_members").select("permissions, expires_at")
+      .eq("survey_id", surveyId).eq("user_id", user.userId).maybeSingle();
+    if (!mErr && m) memberRow = m as MemberRow;
   }
+
+  const gate = decideProjectGate({ user, access: accessRow, member: memberRow, capability });
+  if (!gate.ok) return fail(gate.body, gate.status);
+  const { role, roleSource } = gate;
 
   // A frozen project refuses every write, whatever the role — the owner's
   // "lock project" is meant to survive an editor who disagrees with it.
@@ -282,7 +284,10 @@ export async function requireProjectFor(
     return fail({ error: "This project has been locked by its owner and cannot be changed.", code: "project_locked" }, 423);
   }
 
-  return { user, surveyId, role, roleSource, viaAdmin: decision.viaAdmin, survey: survey as ProjectContext["survey"] };
+  return {
+    user, surveyId, role, roleSource, viaAdmin: gate.viaAdmin, grant: gate.grant, expiresAt: gate.expiresAt,
+    survey: survey as ProjectContext["survey"],
+  };
 }
 
 /**
@@ -392,7 +397,8 @@ export async function requireEditRightFor(
   const lock = await loadLock(ctx.surveyId);
 
   const verdict = decideEdit({
-    canEdit: can(ctx.role, capability),
+    /* the membership, not the bare role: a custom member with Programming: View cannot save */
+    canEdit: can(ctx.grant, capability),
     lock,
     sessionId: ctx.user.sessionId,
     userId: ctx.user.userId,

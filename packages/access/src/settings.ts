@@ -3,7 +3,7 @@ import {
   sessionPolicy, throttlePolicy,
   type SessionPolicy, type ThrottlePolicy,
 } from "./sessions.js";
-import { GRANTABLE_ROLES, isProjectRole } from "./roles.js";
+import { BASELINE_ROLES, isProjectRole } from "./roles.js";
 
 /**
  * BUILDING THE STORED ACCESS POLICY (§7).
@@ -178,7 +178,7 @@ export function buildAccessPolicy(input: AccessPolicyInput): AccessPolicyDraft {
        * baseline this workspace deliberately refused.
        */
       policy.workspace = { defaultRole: null };
-    } else if (isProjectRole(baseline) && (GRANTABLE_ROLES as readonly string[]).includes(baseline)) {
+    } else if (isProjectRole(baseline) && (BASELINE_ROLES as readonly string[]).includes(baseline)) {
       policy.workspace = { defaultRole: baseline };
     } else {
       rejected.push(`“${baseline}” is not a role that can be granted`);

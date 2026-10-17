@@ -56,7 +56,12 @@ const MAX_ROWS = 20_000;
 /* ------------------------------------------------------------------ read */
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireProject(req, params.id, "responses.read");
+  /*
+   * Names, emails and external ids are respondent CONTACT DETAILS
+   * (`responses.read_pii`, 0062). Every role that held `responses.read` holds
+   * it, so nobody loses the list; a custom member can be given data without it.
+   */
+  const gate = await requireProject(req, params.id, "responses.read_pii");
   if (isFailure(gate)) return gate.response;
 
   const sp = req.nextUrl.searchParams;

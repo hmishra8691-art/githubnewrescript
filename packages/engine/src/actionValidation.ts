@@ -180,6 +180,7 @@ function operatorReads(op: ConditionRule["operator"]): string {
   if (op.startsWith("rank") || op === "notRanked") return "a ranking";
   if (op.startsWith("date")) return "a date";
   if (op === "contains" || op === "notContains") return "text or a list";
+  if (["containsItem", "notContainsItem", "containsAllItems", "containsExactly"].includes(op)) return "a list of items";
   return "a value";
 }
 
@@ -402,7 +403,7 @@ function literalMisfit(src: Question, r: ConditionRule): string | null {
     return null;
   }
   if (kind === "choice" || kind === "list" || kind === "ranking") {
-    if (!["eq", "ne", "in", "notIn", "contains", "notContains", "selected", "notSelected", "containsAny", "containsAll", "containsNone", "rankedFirst", "rankedLast", "rankedTopN", "rankEquals", "rankGreaterThan", "rankLessThan", "notRanked"].includes(r.operator)) return null;
+    if (!["eq", "ne", "in", "notIn", "contains", "notContains", "selected", "notSelected", "containsAny", "containsAll", "containsNone", "containsExactly", "rankedFirst", "rankedLast", "rankedTopN", "rankEquals", "rankGreaterThan", "rankLessThan", "notRanked"].includes(r.operator)) return null;
     const options = codeDomain(src, r);
     if (!options.length) return null;
     // ranking operators compare a code (value) and a rank (value2): only the code is an option

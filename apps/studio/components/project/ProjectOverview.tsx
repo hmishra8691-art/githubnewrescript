@@ -6,6 +6,7 @@ import { useSession } from "@/lib/useSession";
 import { STATUS_META, relativeTime } from "@/components/SurveyCard";
 import { fmtMoney } from "@/components/billing/shared";
 import type { ModuleStatus } from "@/lib/projectOverview";
+import { CollaboratorsButton } from "@/components/studio/CollaboratorsPanel";
 
 /**
  * THE PROJECT OVERVIEW (dashboard brief §2) — the page a project opens on.
@@ -15,7 +16,7 @@ import type { ModuleStatus } from "@/lib/projectOverview";
  * last, and a door into every module. One request (`/api/surveys/{id}/overview`).
  */
 interface Overview {
-  project: { id: string; code: string; title: string; status: string; version: string | null; revision: number | null; draftSavedAt: string | null; updatedAt: string; createdAt: string; locked: boolean; role: string | null; clientName: string | null; projectManager: string | null; fieldworkFrom: string | null; fieldworkTo: string | null; dueDate: string | null; languages: number; sourceLanguage: string };
+  project: { id: string; code: string; title: string; status: string; version: string | null; revision: number | null; draftSavedAt: string | null; updatedAt: string; createdAt: string; locked: boolean; role: string | null; accessLabel?: string; capabilities?: string[]; accessExpiresAt?: string | null; accessExpiryText?: string | null; clientName: string | null; projectManager: string | null; fieldworkFrom: string | null; fieldworkTo: string | null; dueDate: string | null; languages: number; sourceLanguage: string };
   counts: { questions: number; pages: number; responses: number | null; live: number | null; test: number | null; complete: number | null; lastResponseAt: string | null };
   modules: ModuleStatus[];
   summary: { configured: number; total: number; attention: ModuleStatus[] };
@@ -27,17 +28,18 @@ interface Overview {
 const STATE_WORD: Record<ModuleStatus["state"], string> = { configured: "Configured", incomplete: "Incomplete", not_configured: "Not set up", needs_attention: "Needs attention" };
 
 /** the modules a researcher reaches from here, in the order the work happens; each is a Studio tab */
-const MODULES: { key: string; label: string; tab: string; icon: IconName; blurb: string }[] = [
-  { key: "programming", label: "Programming", tab: "questions", icon: "questions", blurb: "Questions, logic, flow — Studio, Intelligent, Flow and Grid modes" },
-  { key: "quotas", label: "Quotas", tab: "quotas", icon: "quotas", blurb: "Cells, limits and fills" },
-  { key: "collection", label: "Versions & Deploy", tab: "versions", icon: "versions", blurb: "Save a version, deploy test and live links" },
-  { key: "data", label: "Data", tab: "data", icon: "data", blurb: "Responses, quality, exports" },
-  { key: "fieldwork", label: "Fieldwork", tab: "fieldwork", icon: "clean", blurb: "Sample sources, timeline, cost" },
-  { key: "analytics", label: "Data Analytics", tab: "analytics", icon: "analytics", blurb: "Analyses, dashboards, reports" },
-  { key: "languages", label: "Translation", tab: "localization", icon: "share", blurb: "Languages and translations" },
-  { key: "settings", label: "Survey Settings", tab: "settings", icon: "settings", blurb: "Research design, brief, enforcement" },
-  { key: "project", label: "Project", tab: "project", icon: "home", blurb: "Client, manager, dates, access" },
-  { key: "usage", label: "Usage & Wallet", tab: "usage", icon: "chart", blurb: "This project's spend and its limit" },
+/* `needs`: the capability that module's own routes require to READ (packages/access) — a member without it sees the tile disabled, and the route answers 403 anyway */
+const MODULES: { key: string; label: string; tab: string; icon: IconName; blurb: string; needs: string }[] = [
+  { key: "programming", label: "Programming", tab: "questions", icon: "questions", blurb: "Questions, logic, flow — Studio, Intelligent, Flow and Grid modes", needs: "project.read" },
+  { key: "quotas", label: "Quotas", tab: "quotas", icon: "quotas", blurb: "Cells, limits and fills", needs: "project.read" },
+  { key: "collection", label: "Versions & Deploy", tab: "versions", icon: "versions", blurb: "Save a version, deploy test and live links", needs: "project.read" },
+  { key: "data", label: "Data", tab: "data", icon: "data", blurb: "Responses, quality, exports", needs: "responses.read" },
+  { key: "fieldwork", label: "Fieldwork", tab: "fieldwork", icon: "clean", blurb: "Sample sources, timeline, cost", needs: "fieldwork.read" },
+  { key: "analytics", label: "Data Analytics", tab: "analytics", icon: "analytics", blurb: "Analyses, dashboards, reports", needs: "analytics.read" },
+  { key: "languages", label: "Translation", tab: "localization", icon: "share", blurb: "Languages and translations", needs: "project.read" },
+  { key: "settings", label: "Survey Settings", tab: "settings", icon: "settings", blurb: "Research design, brief, enforcement", needs: "project.read" },
+  { key: "project", label: "Project", tab: "project", icon: "home", blurb: "Client, manager, dates, access", needs: "project.read" },
+  { key: "usage", label: "Usage & Wallet", tab: "usage", icon: "chart", blurb: "This project's spend and its limit", needs: "billing.read" },
 ];
 
 export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
@@ -58,6 +60,8 @@ export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
   const p = data?.project;
   const meta = p ? STATUS_META[p.status] ?? { label: p.status, tone: "draft", hint: "" } : null;
   const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString());
+  /* an older server sends no capability list: offer everything, as before — the routes decide either way */
+  const allowed = (cap: string) => !p?.capabilities || p.capabilities.includes(cap);
 
   return (
     <div className="dash po" data-testid="project-overview" data-loaded={data ? "true" : "false"}>
@@ -78,12 +82,17 @@ export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
             {p.version ? `v${p.version}` : "no saved version"}{p.revision != null ? ` · rev ${p.revision}` : ""}
             {p.draftSavedAt ? ` · draft saved ${relativeTime(p.draftSavedAt)}` : ""}
             {p.clientName ? ` · ${p.clientName}` : ""}{p.projectManager ? ` · ${p.projectManager}` : ""}{p.dueDate ? ` · due ${p.dueDate}` : ""}
-            {p.role ? ` · you are ${p.role}` : ""}
+            {p.role ? ` · you are ${p.accessLabel ?? p.role}` : ""}
+            {p.accessExpiryText ? <span data-testid="po-access-expiry"> · your access: {p.accessExpiryText.toLowerCase()}</span> : null}
           </div>
         )}
         <div className="po-actions">
           <a className="btn primary" href={href("questions")} data-testid="po-open-programming"><Icon name="questions" size={15} /> Open programming</a>
-          <a className="btn" href={href("data")} data-testid="po-open-data"><Icon name="data" size={15} /> Data</a>
+          {/* who is on this project, and "+ Invite" — both open the ONE collaborators panel */}
+          <CollaboratorsButton surveyId={surveyDbId} title={p?.title} />
+          {allowed("responses.read")
+            ? <a className="btn" href={href("data")} data-testid="po-open-data"><Icon name="data" size={15} /> Data</a>
+            : <span className="btn" aria-disabled="true" data-testid="po-open-data" data-denied="true" title="Your access does not include response data">Data</span>}
           <a className="btn" href="/" data-testid="po-back">← All projects</a>
         </div>
       </section>
@@ -143,12 +152,19 @@ export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
         <section className="card po-card po-wide" data-testid="po-nav">
           <h3>Modules</h3>
           <div className="po-nav">
-            {MODULES.map((m) => (
+            {MODULES.map((m) => allowed(m.needs) ? (
               <a key={m.key} href={href(m.tab)} className="po-nav-item" data-testid={`po-nav-${m.key}`}>
                 <Icon name={m.icon} size={18} />
                 <span className="po-nav-label">{m.label}</span>
                 <span className="po-nav-blurb muted">{m.blurb}</span>
               </a>
+            ) : (
+              <span key={m.key} className="po-nav-item" aria-disabled="true" data-denied="true" data-testid={`po-nav-${m.key}`} style={{ opacity: 0.5, cursor: "not-allowed" }}
+                title="Your access to this project does not include this module">
+                <Icon name={m.icon} size={18} />
+                <span className="po-nav-label">{m.label}</span>
+                <span className="po-nav-blurb muted">No access</span>
+              </span>
             ))}
           </div>
         </section>

@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
  * `is_test` column answers as LIVE and says so.
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const gate = await requireProject(req, params.id, "responses.read");
+  /* quota COUNTS are fieldwork progress (`fieldwork.read`, 0062) — every role that held `responses.read` holds it */
+  const gate = await requireProject(req, params.id, "fieldwork.read");
   if (isFailure(gate)) return gate.response;
 
   const environment = parseEnvironment(req.nextUrl.searchParams.get("environment") ?? "LIVE");

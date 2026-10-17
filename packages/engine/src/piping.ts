@@ -12,6 +12,7 @@ import {
   PIPE_TOKEN_RE,
   parsePipeBody,
   formatPipeValues,
+  systemPipeProblem,
   type PipeToken,
 } from "./pipingTokens.js";
 import { embeddedCatalog } from "./embedded.js";
@@ -110,6 +111,45 @@ export function registerBareNameResolver(fn: BareNameResolver): void {
   bareNameResolver = fn;
 }
 
+/**
+ * System sources (`{{date.today}}`, `{{random.int(1,10)}}`, `{{quota.Q.count}}`
+ * …) — resolved by `systemPipes.ts`, which registers itself here on load for
+ * the same reason the resolvers above do: it reads quotas, and quotas reach
+ * `evaluate.ts`, which must not become an import of this module. Returns the
+ * plain (unescaped) text, "" when the platform has no such value here.
+ */
+type SystemPipeResolver = (t: PipeToken, ctx: EvalContext) => string;
+let systemPipeResolver: SystemPipeResolver | null = null;
+export function registerSystemPipeResolver(fn: SystemPipeResolver): void {
+  systemPipeResolver = fn;
+}
+
+/**
+ * Piped text as PLAIN TEXT — for a value that is stored rather than shown
+ * (an Embedded Data fixed value, document 15/10 item A). `resolvePiping`
+ * produces HTML for a page: `Ben &amp; Jerry`, `<br>` between lines. A stored
+ * value must be what the respondent's data actually is, so entities are
+ * decoded and list markup becomes plain separators.
+ */
+export function resolvePipingText(text: string, ctx: EvalContext): string {
+  if (!text || !text.includes("{{")) return text;
+  return htmlToPlain(resolvePiping(text, ctx));
+}
+
+/** Rendered pipe output (escaped, maybe list markup) as the plain text it stands for. */
+export function htmlToPlain(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/li>\s*<li>/gi, "\n")
+    .replace(/<img\b[^>]*\bsrc="([^"]*)"[^>]*>/gi, "$1")
+    .replace(/<\/?(?:ul|ol|li)>/gi, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
 export function resolvePiping(text: string, ctx: EvalContext): string {
   if (!text || !text.includes("{{")) return text;
   return text.replace(PIPE_TOKEN_RE, (_m, raw: string) => {
@@ -191,7 +231,29 @@ function renderToken(t: PipeToken, ctx: EvalContext): string {
   }
   if (t.kind === "embedded") {
     const v = ctx.state.embedded[t.ref];
+    /*
+     * `{{ed.RESPONSE_ID}}` and `{{ed.SURVEY_CODE}}` have been offered by the
+     * redirect picker as "System" values since it existed, and nothing ever
+     * wrote them: a completion link carried an empty id. A field the survey
+     * itself captures under that name still wins.
+     */
+    if (v == null && t.ref === "RESPONSE_ID") return escapeHtml(ctx.state.sessionId ?? "");
+    if (v == null && t.ref === "SURVEY_CODE") return escapeHtml(ctx.def.meta?.code ?? "");
     return v == null ? "" : escapeHtml(String(v));
+  }
+  if (t.kind === "system") {
+    /*
+     * A question coded like the namespace (`date`, `device`) is that question —
+     * every survey that piped `{{date.label}}` before system sources existed
+     * pipes exactly what it did.
+     */
+    const ns = t.ref.split(".")[0];
+    if (getQuestionByCodeOrVar(ctx.def, ns) && /^[A-Za-z0-9_]+\.[A-Za-z_]+$/.test(t.ref)) {
+      // exactly the question token the parser produced before system sources existed
+      return renderToken({ ...t, kind: "question", ref: ns, property: t.ref.slice(ns.length + 1) as PipeToken["property"] }, ctx);
+    }
+    const v = systemPipeResolver ? systemPipeResolver(t, ctx) : "";
+    return v === "" ? "" : fmt([escapeHtml(v)]);
   }
   if (t.kind === "loop") {
     const l = findLoopScope(ctx.loop, t.scope);
@@ -492,9 +554,15 @@ export function lintPipingTokens(def: SurveyDefinition, text: string, q?: Questi
        * produced, so checking it told programmers their own embedded fields
        * did not exist while they were typing.
        */
-      if (!embeddedCatalog(def).some((e) => e.name === t.ref)) {
+      if (t.ref !== "RESPONSE_ID" && t.ref !== "SURVEY_CODE" && !embeddedCatalog(def).some((e) => e.name === t.ref)) {
         problems.push(`No embedded data field named "${t.ref}"`);
       }
+      continue;
+    }
+    if (t.kind === "system") {
+      if (getQuestionByCodeOrVar(def, t.ref.split(".")[0])) continue; // a question of that code — see renderToken
+      const problem = systemPipeProblem(t, def);
+      if (problem) problems.push(problem);
       continue;
     }
     if (t.kind !== "question") continue;

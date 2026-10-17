@@ -17,6 +17,7 @@ import {
   VALUELESS_OPERATORS,
   isOptionValueRef,
   isQuestionValueRef,
+  isPipedValueRef,
   effectiveResponseModel,
   isMultiValuedQuestion,
   resolveVariant,
@@ -25,7 +26,7 @@ import { conditionDepth, forEachConditionRoot, stripVacuous } from "./conditionW
 import { MAX_CONDITION_DEPTH } from "./evaluate.js";
 import { LOOP_BUILTIN_REFS, getQuestionByCodeOrVar } from "./state.js";
 import { PIPE_TOKEN_RE, parsePipeBody } from "./pipingTokens.js";
-import { registerBareNameResolver } from "./piping.js";
+import { registerBareNameResolver, lintPipingTokens } from "./piping.js";
 import { describeCycle, detectLogicCycles, orderIndex, unknownCalculationNames } from "./dependencies.js";
 import { MAX_LOOP_DEPTH, MAX_LOOP_PRODUCT, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
@@ -37,6 +38,7 @@ import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
 import { effectiveScale } from "./scale.js";
+import { EMBEDDED_MEANINGLESS } from "./smartOperators.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
@@ -354,6 +356,25 @@ function lintCondition(
     });
   }
 
+  /*
+   * An embedded field is never ranked and is never "displayed": a ranking or
+   * display operator on one is always false, whatever arrives. It is what a
+   * rule copied from a question onto a field looks like, so it is called out
+   * as needing an update rather than left to fail silently.
+   */
+  if (source.kind === "embedded" && EMBEDDED_MEANINGLESS.includes(operator)) {
+    ctx.push({
+      level: "error",
+      path,
+      message: `Operator “${operator}” cannot be used with the embedded field ${source.ref} — this condition needs updating: a field is never ranked or displayed.`,
+    });
+  }
+
+  /* piped text as the value: its tokens must resolve, like any other piping */
+  if (isPipedValueRef(c.value)) {
+    for (const message of lintPipingTokens(ctx.def, c.value.$pipe)) ctx.push({ level: "warning", path: `${path}.value`, message });
+  }
+
   let src: Question | undefined;
   if (source.kind === "question" || source.kind === "variable") {
     if (!source.ref) {
@@ -387,14 +408,20 @@ function lintCondition(
         ctx.push({
           level: "error",
           path,
-          message: `Operator “${operator}” cannot be used with ${src.code} (${src.type}).`,
+          /*
+           * NEEDS UPDATE. Usually the source question's type changed under a
+           * rule written for the old one. The rule is never rewritten for the
+           * programmer — the builder marks it and offers this question's own
+           * operators — and, being an error, it blocks deployment until chosen.
+           */
+          message: `Operator “${operator}” cannot be used with ${src.code} (${src.type}) — this condition needs updating: choose one of the operators ${src.code} offers.`,
         });
       }
       // deleted option codes
       if (!isOptionValueRef(c.value) && (src.options?.length ?? 0) > 0) {
         const codes = optionCodes(src);
         /* a right-hand question (`Q1 = Q6`) is compared by value at runtime, not against the code list */
-        const values = (Array.isArray(c.value) ? c.value : [c.value]).filter((v) => !isQuestionValueRef(v));
+        const values = (Array.isArray(c.value) ? c.value : [c.value]).filter((v) => !isQuestionValueRef(v) && !isPipedValueRef(v));
         const codeBased =
           ["selected", "notSelected", "eq", "ne", "in", "notIn", "contains", "notContains"].includes(
             operator,
@@ -419,7 +446,7 @@ function lintCondition(
           }
         }
       }
-      if (source.rowCode && !gridAxes(src).rows.some((r) => r.ref === String(source.rowCode)) && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) {
+      if (source.rowCode && src.type !== "maxdiff_task" && !gridAxes(src).rows.some((r) => r.ref === String(source.rowCode)) && !(src.rows ?? []).some((r) => String(r.code) === String(source.rowCode))) {
         ctx.push({
           level: "warning",
           path,
@@ -434,7 +461,8 @@ function lintCondition(
        * what the tests cover. Validating it against `q.columns` alone
        * reported every supported matrix reference as a mistake.
        */
-      if (source.columnId) {
+      /* a MaxDiff answer is read by task (row) and `best` / `worst` (column) — not grid axes */
+      if (source.columnId && !(src.type === "maxdiff_task" && (source.columnId === "best" || source.columnId === "worst"))) {
         const axes = gridAxes(src);
         const known = axes.columns.some((x) => x.ref === String(source.columnId));
         if (!known) {
@@ -1253,6 +1281,12 @@ export function skipTargetProblem(def: SurveyDefinition, q: Question, target: { 
     : `Skip from ${q.code} goes back to ${name} — skips can only move forward; this one falls through to the next page.`;
 }
 
+/** survey-level checks contributed by other modules (registered once, from index.ts) */
+const EXTRA_SURVEY_LINTS: ((def: SurveyDefinition) => LogicIssue[])[] = [];
+export function registerSurveyLint(fn: (def: SurveyDefinition) => LogicIssue[]): void {
+  if (!EXTRA_SURVEY_LINTS.includes(fn)) EXTRA_SURVEY_LINTS.push(fn);
+}
+
 export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   const issues: LogicIssue[] = [];
   const order = orderIndex(def); // once, not once per question — see lintQuestionLogic
@@ -1260,6 +1294,10 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   issues.push(...lintSurveyLevelConditions(def, order));
   issues.push(...lintLoops(def));
   issues.push(...lintListFills(def)); // circular / dangling / duplicate List Fills (2026-10-17)
+  /* checks registered by modules that lintLogic cannot import without changing the package's module load order (e.g. piped Embedded Data values, 2026-10-17 — registered in index.ts) */
+  for (const extra of EXTRA_SURVEY_LINTS) {
+    try { issues.push(...extra(def)); } catch { /* a registered check never breaks the survey's own check */ }
+  }
   issues.push(...lintStructure(def));
   /* a calculation reading a name nothing defines is null for every respondent, silently — an error, like a pipe from nowhere */
   for (const u of unknownCalculationNames(def)) {

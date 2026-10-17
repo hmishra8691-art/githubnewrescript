@@ -79,6 +79,11 @@ export const AUDIT_EVENTS = [
   "project.invitation_sent",
   "project.invitation_accepted",
   "project.invitation_revoked",
+  /* collaborators & advanced access (2026-10-17): a pending invitation mailed again with a fresh link,
+     and a membership whose expiry date passed — the latter is never written by a request (nothing happens
+     at the moment access ends); the collaborators panel's history derives it from `expires_at` */
+  "project.invitation_resent",
+  "project.access_expired",
 
   /* collaborative editing */
   "lock.acquired",
@@ -243,16 +248,23 @@ export function describeEvent(r: AuditRow): string {
       : `${who} set this project to spend ${d.mode === "priority" ? "as the priority project" : "freely"} from the owner's wallet`;
     case "project.opened": return `${who} opened this project${d.readOnly ? " (read-only)" : ""}`;
     case "project.deleted": return `${who} deleted this project`;
-    case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}`;
+    case "project.shared": return `${who} shared this project with ${target}${role ? ` as ${role}` : ""}${d.expiresAt ? `, until ${str(d.expiresAt).slice(0, 10)}` : ""}`;
     case "workspace.ai_byok_policy_changed": return `${who} ${d.allowed === false ? "turned off" : "turned on"} user-managed AI providers for ${str(d.workspace) || "a workspace"}`;
     case "workspace.access_policy_changed":
       return `${who} changed the workspace access policy${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "project.access_removed": return `${who} removed ${target}'s access`;
-    case "project.permission_changed": return `${who} changed ${target}'s role to ${role}`;
+    case "project.permission_changed": {
+      const changes = Array.isArray(d.changes) ? (d.changes as unknown[]).map(str).filter(Boolean) : [];
+      return changes.length && !d.role
+        ? `${who} changed ${target}'s access — ${changes.slice(0, 3).join("; ")}${changes.length > 3 ? "; …" : ""}`
+        : `${who} changed ${target}'s role to ${role}${changes.length > 1 ? ` — ${changes.filter((c) => !c.startsWith("Access:")).slice(0, 3).join("; ")}` : ""}`;
+    }
     case "project.ownership_transferred": return `${who} transferred ownership to ${target}`;
     case "project.invitation_sent": return `${who} invited ${target} as ${role || "a collaborator"}`;
     case "project.invitation_accepted": return `${target || who} accepted the invitation to this project`;
     case "project.invitation_revoked": return `${who} revoked the invitation for ${target}`;
+    case "project.invitation_resent": return `${who} re-sent the invitation to ${target}`;
+    case "project.access_expired": return `${target || who}'s access expired${d.expiresAt ? ` on ${str(d.expiresAt).slice(0, 10)}` : ""}`;
 
     case "lock.acquired": return `${who} started editing${d.section ? ` (${str(d.section)})` : ""}`;
     case "lock.released": return `${who} released the edit lock`;

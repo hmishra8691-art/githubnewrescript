@@ -137,3 +137,22 @@ export * from "./gridCell.js";
 export * from "./conditionCopy.js";
 export * from "./optionPopups.js";
 export * from "./speechInput.js";
+export * from "./listValue.js";
+export * from "./smartOperators.js";
+/* Embedded Data piping, system piping sources, the Insert Piped Text catalog (document 15/10/2026) */
+export * from "./systemPipes.js";
+export * from "./embeddedPiping.js";
+export * from "./pipeCatalog.js";
+
+/*
+ * The survey's own logic check also carries the piped Embedded Data warnings
+ * (2026-10-17). Registered here, after every module has loaded, because
+ * importing embeddedPiping from lintLogic changes the package's module load
+ * order and breaks the piping ↔ carryforward initialisation.
+ */
+import { registerSurveyLint as __registerSurveyLint } from "./lintLogic.js";
+import { lintEmbeddedPiping as __lintEmbeddedPiping } from "./embeddedPiping.js";
+import type { ObjectKey as __ObjectKey } from "./dependencyIndex.js";
+__registerSurveyLint((def) => __lintEmbeddedPiping(def).map((i) => ({
+  level: "warning" as const, questionCode: "Flow", path: `flow.${i.nodeId}.fields.${i.field}`, message: i.message, objectKey: `flowNode:${i.nodeId}` as __ObjectKey,
+})));

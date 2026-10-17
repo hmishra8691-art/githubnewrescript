@@ -119,8 +119,14 @@ export function CollabBar({
 
       {/* my standing, said plainly rather than implied by greyed-out controls */}
       <span className={`chip ${readOnly ? "" : "on"} card-role`} data-testid="collab-role" title={me.roleSummary}>
-        {readOnly ? "Read-only" : "Editing"} · {me.role ?? "no access"}
+        {readOnly ? "Read-only" : "Editing"} · {(me as { accessLabel?: string }).accessLabel ?? me.role ?? "no access"}
       </span>
+      {/* a membership with an end date says so where the person works (0062) — the server stops it at that instant */}
+      {(me as { expiryText?: string | null }).expiryText && (
+        <span className="chip warn" data-testid="collab-access-expiry" title="Your access to this project ends automatically">
+          {(me as { expiryText?: string | null }).expiryText}
+        </span>
+      )}
 
       {/* ------------------------------------------------ the actions */}
       {!me.canEdit && (

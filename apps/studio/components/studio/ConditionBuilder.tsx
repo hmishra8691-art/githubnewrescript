@@ -7,6 +7,7 @@ import {
   LIST_VALUE_OPERATORS,
   isOptionValueRef,
   isQuestionValueRef,
+  isPipedValueRef,
 } from "@rescript/schema";
 import {
   operatorsForQuestion, choiceDisplayText, conditionSummary, embeddedCatalog, authoringQuestionView,
@@ -17,6 +18,9 @@ import {
   duplicateAt, setOperatorAt, groupSelection, ungroupAt, canUngroup, validateLogicTree,
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
   stripHtmlText,
+  operatorMenu, entryForRule, applyOperatorEntry, operatorStatus, ruleSentence, conditionSentence,
+  conditionTestInputs, evaluateWithTestInputs, containsMatchesItems,
+  type OperatorEntry,
 } from "@rescript/engine";
 import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
 import { useLoopScope } from "./loopScope";
@@ -24,6 +28,7 @@ import { useStudio } from "./store";
 import { ExpressionEditor } from "./ExpressionEditor";
 import { CountEditor, COUNT_OPERATORS, scopesFor } from "./CountEditor";
 import { ExprEditor } from "./ExprEditor";
+import { InsertPipedText } from "./InsertPipedText";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -76,6 +81,10 @@ const OPERATOR_LABELS: Record<ComparisonOperator, string> = {
   /* "Display": the option (or row) was on the respondent's screen after display / exclusion logic, selected or not */
   displayed: "option is displayed",
   notDisplayed: "option is not displayed",
+  containsItem: "contains item",
+  notContainsItem: "does not contain item",
+  containsAllItems: "contains all items",
+  containsExactly: "is exactly",
 };
 
 const VALUE2_PLACEHOLDER: Partial<Record<ComparisonOperator, string>> = {
@@ -94,7 +103,22 @@ function newRule(defaultRef: string, def?: SurveyDefinition): ConditionRule {
   if (q && def && isCategoricalGrid(authoringQuestionView(q, def))) {
     return { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "selected" };
   }
-  return { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "eq", value: "" };
+  const base: ConditionRule = { type: "rule", source: { kind: "question", ref: defaultRef }, operator: "eq", value: "" };
+  /* SMART OPERATORS: a new rule starts on its source's own default — Equals, Has selected, Is on … */
+  return def && q ? withDefaultOperator(def, base) : base;
+}
+
+/**
+ * The rule on its (new) source's DEFAULT operator — Equals for a single
+ * select, "has selected" for a multi select, "is" a row's answer on a grid,
+ * "contains item" for a list, "is on" for a date. Used only when the SOURCE is
+ * picked, when the old operator and value belong to the old source; a stored
+ * rule is never re-pointed by this (see `operatorStatus` for that case).
+ */
+function withDefaultOperator(def: SurveyDefinition, next: ConditionRule): ConditionRule {
+  if (next.source.kind === "rule") return next;
+  const m = operatorMenu(def, next.source);
+  return m.defaultEntry ? applyOperatorEntry({ ...next, value: undefined, value2: undefined }, m.defaultEntry) : next;
 }
 
 /**
@@ -180,10 +204,11 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
   const displayChoices: { ref: string; label: string }[] = !displayOp || !srcQuestion ? [] : gridQ
     ? axes.rows.map((r) => ({ ref: String(r.ref), label: String(r.label) }))
     : valueChoices.map((o) => ({ ref: String(o.ref), label: String(o.label) }));
-  const needsValue = !VALUELESS_OPERATORS.includes(rule.operator) && !cellForm;
   const needsValue2 = TWO_VALUE_OPERATORS.includes(rule.operator);
   const usesOption = isOptionValueRef(rule.value);
   const usesQuestion = isQuestionValueRef(rule.value);
+  /* piped text as the value — `{{Q1.ZIP}}` — resolved when the rule is evaluated */
+  const usesPipe = isPipedValueRef(rule.value);
 
   /*
    * COUNTING CHANGES THE LEFT-HAND SIDE, SO IT CHANGES THE OPERATORS.
@@ -196,18 +221,22 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
    */
   const counting = !!rule.source.count;
 
-  // only offer operators that make sense for the chosen source (req §7)
-  const allowed: ComparisonOperator[] =
-    counting
-      ? COUNT_OPERATORS
-      : gridQ
-        ? gridCellOperators(gridQ)
-        : rule.source.kind === "question" && q
-          /* OR-05: a composite column takes its own column type's operators, not the whole vocabulary */
-          ? operatorsForQuestion(q, rule.source.columnId)
-          : (Object.keys(OPERATOR_LABELS) as ComparisonOperator[]);
-  /* a stored `=` on a grid still evaluates — it is not "stale", it is just not offered for new rules */
-  const legacyAllowed = !!gridQ && !!q && operatorsForQuestion(q).includes(rule.operator);
+  /*
+   * SMART OPERATORS (document 16/10): ONE menu per source, from the engine —
+   * the same function every builder in the Studio reaches through this
+   * component (display, skip, branch, flow, quota, validation, auto-punch,
+   * masking, option logic, loops, list fills, named expressions …). It knows
+   * the source's type, groups the operators, words them for that type and
+   * names the default. OR-05 still holds: a composite column takes its own
+   * column type's operators.
+   */
+  const menu = rule.source.kind === "rule" ? null : operatorMenu(s.def, rule.source);
+  const currentEntry: OperatorEntry | undefined = menu ? entryForRule(menu, rule) : undefined;
+  const status = rule.source.kind === "rule" ? { status: "ok" as const, message: undefined } : operatorStatus(s.def, rule);
+  const [opQuery, setOpQuery] = React.useState("");
+  const allowed: ComparisonOperator[] = counting ? COUNT_OPERATORS : (menu?.entries ?? []).map((x) => x.op);
+  /* a stored operator this source still evaluates but no longer offers (`Q1 > 2` on a single select): kept, shown as "other" */
+  const legacyAllowed = status.status === "other";
   /*
    * AN OPERATOR THE SOURCE CAN NO LONGER TAKE.
    *
@@ -222,13 +251,24 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
    * which is the same lie the other way round — but it is labelled for what
    * it is, and the row says so with a one-click fix beside it.
    */
-  const operatorStale = !counting && !allowed.includes(rule.operator) && !legacyAllowed;
-  const operatorChoices = operatorStale || (legacyAllowed && !allowed.includes(rule.operator)) ? [rule.operator, ...allowed] : allowed;
-  /* the words for an operator on a grid: the answer column reads as a sentence */
-  const operatorLabel = (o: ComparisonOperator): string =>
-    gridQ && o === "selected" ? (gridQ.type === "matrix_multi" ? "has selected" : "is")
-      : gridQ && o === "notSelected" ? (gridQ.type === "matrix_multi" ? "hasn't selected" : "is not")
-      : (OPERATOR_LABELS[o] ?? o);
+  /*
+   * NEEDS UPDATE: the source's type changed under the rule. Never silently
+   * replaced — the stored operator stays selected and labelled, the menu
+   * offers this source's own operators, and the linter blocks deployment
+   * until the programmer chooses one.
+   */
+  const operatorStale = status.status === "needsUpdate";
+  const query = opQuery.trim().toLowerCase();
+  const shownGroups = (menu?.groups ?? [])
+    .map((g) => ({ ...g, entries: g.entries.filter((x) => !query || x === currentEntry || x.label.toLowerCase().includes(query) || x.op.toLowerCase().includes(query)) }))
+    .filter((g) => g.entries.length > 0);
+  const valueKind = currentEntry?.value;
+  /* "is true" / "has uploaded a file" carry their value in the operator choice itself */
+  const needsValue = !VALUELESS_OPERATORS.includes(rule.operator) && !cellForm && valueKind !== "none";
+  const rankOp = valueKind === "rank";
+  const inputType = valueKind === "number" || valueKind === "numberRange" ? "number"
+    : valueKind === "date" || valueKind === "dateRange" ? "date"
+    : valueKind === "time" || valueKind === "timeRange" ? "time" : "text";
 
   /**
    * Turn counting on or off for this rule.
@@ -287,18 +327,17 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
        */
       if (ref === rule.source.ref) return;
       const next = s.def.questions.find((x) => x.id === ref);
-      const nextAllowed = next
-        ? (isCategoricalGrid(authoringQuestionView(next, s.def)) ? gridCellOperators(authoringQuestionView(next, s.def)) : operatorsForQuestion(next))
-        : [];
-      const keep = nextAllowed.includes(rule.operator) && !LIST_VALUE_OPERATORS.includes(rule.operator) ? rule.operator : (nextAllowed[0] ?? rule.operator);
       const { rowCode: _r, columnId: _c, rowPosition: _rp, optionPosition: _op, count: _ct, ...rest } = rule.source;
-      return onChange({
+      const keep = rule.operator;
+      const base: ConditionRule = {
         ...rule,
         source: { ...rest, kind: "question", ref },
         operator: keep,
         value: VALUELESS_OPERATORS.includes(keep) || (next && isCategoricalGrid(next) && isCellOperator(keep)) ? undefined : "",
         value2: undefined,
-      });
+      };
+      /* SMART OPERATORS: the operator is kept when the new question offers it, otherwise it becomes that question's default */
+      return onChange(next ? withDefaultOperator(s.def, base) : base);
     }
     /*
      * A named expression already answers yes or no, so choosing one fixes the
@@ -314,14 +353,23 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
         value2: undefined,
       });
     }
-    if (kind === "o") return setSource({ kind: "option", ref: ref || "code" });
+    /*
+     * Any other source: a field, a calculation, a loop value, this option.
+     * The previous question's row, column and count do not belong to it, and
+     * the operator becomes this source's default unless it already offers it
+     * — an Embedded Data list starts on "contains item", a boolean on "is true".
+     */
+    const { rowCode: _r2, columnId: _c2, rowPosition: _rp2, optionPosition: _op2, count: _ct2, scope: _sc2, ...baseSrc } = rule.source;
+    const switchTo = (src: Partial<ConditionRule["source"]>) =>
+      onChange(withDefaultOperator(s.def, { ...rule, source: { ...baseSrc, ...src } as ConditionRule["source"] }));
+    if (kind === "o") return switchTo({ kind: "option", ref: ref || "code" });
     if (kind === "loopscope") {
       // an OUTER loop, named by its loopVar (§32)
       const [scope, ...r] = rest;
-      return setSource({ kind: "loop", ref: r.join(":"), scope });
+      return switchTo({ kind: "loop", ref: r.join(":"), scope });
     }
-    if (kind === "loop") return setSource({ kind: "loop", ref, scope: undefined });
-    setSource({ kind: kind as any, ref });
+    if (kind === "loop") return switchTo({ kind: "loop", ref });
+    switchTo({ kind: kind as any, ref });
   };
 
   /*
@@ -493,7 +541,7 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             <select className="select" data-testid="cond-row" value={rule.source.rowCode ?? ""}
               onChange={(e) => setSource({ rowCode: e.target.value || undefined })}>
               <option value="">any row</option>
-              {axes.rows.map((r) => <option key={r.ref} value={r.ref}>row: {r.label}</option>)}
+              {axes.rows.map((r) => <option key={r.ref} value={r.ref}>{menu?.rowSelector === "field" ? "field" : "row"}: {r.label}</option>)}
             </select>
           )}
           {/* on a categorical grid the column is the ANSWER and belongs to "is / is not"; a comparison has a value instead */}
@@ -505,7 +553,10 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
                 if (!gridQ && q && !counting) {
                   const fits = operatorsForQuestion(q, columnId);
                   if (!fits.includes(rule.operator)) {
-                    return onChange({ ...rule, source: { ...rule.source, columnId }, operator: fits.find((o) => o === "eq") ?? fits[0] ?? rule.operator, value: undefined, value2: undefined });
+                    /* that column's own default operator (smart operators), never one it cannot take */
+                    const m = operatorMenu(s.def, { ...rule.source, columnId });
+                    const moved = { ...rule, source: { ...rule.source, columnId }, value: undefined, value2: undefined };
+                    return onChange(m.defaultEntry ? applyOperatorEntry(moved, m.defaultEntry) : { ...moved, operator: fits[0] ?? rule.operator });
                   }
                 }
                 setSource({ columnId });
@@ -543,25 +594,45 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
         >{rule.value === false ? "is NOT true" : "is true"}</button>
       ) : (
         <>
-          <select className={`select op-select${operatorStale ? " stale" : ""}`} value={rule.operator} data-testid="cond-operator"
+          {/* MaxDiff: which task — none means any task */}
+          {menu?.rowSelector === "task" && !counting && (
+            <input className="input" type="number" min={1} style={{ maxWidth: 92 }} data-testid="cond-task"
+              aria-label="Task" placeholder="any task" title="Which task — leave empty for any task"
+              value={String(rule.source.rowCode ?? "")}
+              onChange={(e) => setSource({ rowCode: e.target.value === "" ? undefined : e.target.value })} />
+          )}
+          <select className={`select op-select${operatorStale ? " stale" : ""}`} value={currentEntry?.id ?? rule.operator} data-testid="cond-operator"
             data-stale={operatorStale ? "1" : undefined}
+            data-operand-type={menu?.type}
+            aria-label={`Operator — ${menu?.typeLabel ?? "value"}`}
+            title={currentEntry?.hint ?? menu?.typeLabel}
             onChange={(e) => {
-              const op = e.target.value as ComparisonOperator;
-              if (gridQ) return onChange(withGridOperator(rule, op));
+              const entry = menu?.entries.find((x) => x.id === e.target.value);
+              if (!entry) return; /* the stored, no-longer-offered operator itself: nothing to change */
+              setOpQuery("");
+              if (gridQ && !entry.preset) return onChange(withGridOperator(rule, entry.op));
               /* to or from Display the old value is a different kind of thing (an answer vs an option shown) */
-              if (isDisplayOperator(op) !== displayOp) return onChange({ ...rule, operator: op, value: undefined, value2: undefined });
-              onChange({ ...rule, operator: op });
+              if (isDisplayOperator(entry.op) !== displayOp) return onChange({ ...rule, operator: entry.op, value: undefined, value2: undefined });
+              onChange(applyOperatorEntry(rule, entry, currentEntry));
             }}>
-            {operatorChoices.map((o) => (
-              <option key={o} value={o}>
-                {operatorLabel(o) + (operatorStale && o === rule.operator ? " — not available for this question" : "")}
+            {(operatorStale || (legacyAllowed && !currentEntry)) && (
+              <option value={rule.operator}>
+                {(OPERATOR_LABELS[rule.operator] ?? rule.operator) + (operatorStale ? " — not available for this question (needs update)" : " — other, still valid")}
               </option>
+            )}
+            {shownGroups.map((g) => (
+              <optgroup key={g.id} label={g.label}>
+                {g.entries.map((x) => <option key={x.id} value={x.id} title={x.hint}>{x.label}</option>)}
+              </optgroup>
             ))}
           </select>
-          {operatorStale && allowed.length > 0 && (
+          {operatorStale && (
+            <span className="chip warn" data-testid="cond-needs-update" title={status.message}>needs update</span>
+          )}
+          {operatorStale && menu?.defaultEntry && (
             <button type="button" className="btn small" data-testid="fix-operator"
-              title={`“${OPERATOR_LABELS[rule.operator] ?? rule.operator}” cannot be evaluated against this question any more — its type changed. Use “${OPERATOR_LABELS[allowed[0]] ?? allowed[0]}” instead.`}
-              onClick={() => onChange({ ...rule, operator: allowed[0], value: undefined })}>
+              title={`“${OPERATOR_LABELS[rule.operator] ?? rule.operator}” cannot be evaluated against this source any more — its type changed. Use “${menu.defaultEntry.label}” (or pick another operator from the list).`}
+              onClick={() => onChange(applyOperatorEntry({ ...rule, value: undefined, value2: undefined }, menu.defaultEntry!))}>
               fix
             </button>
           )}
@@ -578,7 +649,12 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
           onChange={(e) => onChange({ ...rule, value: e.target.value === "" ? undefined : Number(e.target.value) })}
         />
       ) : needsValue && (
-        usesOption ? (
+        usesPipe ? (
+          <input className="input mono" data-testid="cond-value-pipe" aria-label="Piped value"
+            title="Piped text — resolved for each respondent when the condition is evaluated"
+            value={(rule.value as { $pipe: string }).$pipe}
+            onChange={(e) => onChange({ ...rule, value: { $pipe: e.target.value } })} />
+        ) : usesOption ? (
           <span className="chip pipe-chip" title="Compares against the option this rule is attached to">
             this option’s {(rule.value as any).$option}
           </span>
@@ -628,13 +704,46 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             ))}
           </select>
         ) : (
-          <input className="input"
-            placeholder={listOps ? "1,2,3" : "value"}
+          <input className="input" type={listOps ? "text" : inputType} data-testid="cond-value-input"
+            inputMode={inputType === "number" ? "decimal" : undefined}
+            placeholder={listOps ? "1,2,3" : valueKind === "items" ? "10003 — or a list: 10001, 10003" : valueKind === "textList" ? "a, b, c" : "value"}
             value={listOps && Array.isArray(rule.value) ? rule.value.join(",") : String(rule.value ?? "")}
             onChange={(e) =>
               onChange({ ...rule, value: listOps ? e.target.value.split(",").map((x) => x.trim()) : e.target.value })
             } />
         )
+      )}
+      {/*
+        * INSERT PIPED TEXT (FLOW's shared picker): the comparison value can be
+        * another answer, an Embedded Data field, a calculation … — "IF
+        * ZIP_Code_DMA contains item {{Q1.ZIP_Code}}". Offered for typed values
+        * only (a number field is offered numeric sources); the token is stored
+        * as a `{ $pipe }` reference, never as literal text.
+        */}
+      {needsValue && !counting && !usesOption && !usesQuestion && !listOps && !displayOp && !rankOp
+        && ["text", "number", "items", "date", "time"].includes(String(valueKind)) && (
+        <InsertPipedText def={s.def} accept={inputType === "number" ? "number" : "text"} label="Pipe" testId="cond-insert-pipe"
+          onInsert={(token) => onChange({ ...rule, value: { $pipe: `${usesPipe ? (rule.value as { $pipe: string }).$pipe : String(rule.value ?? "")}${token}` } })} />
+      )}
+      {usesPipe && (
+        <button type="button" className="btn small" data-testid="cond-pipe-clear" title="Compare against a typed value instead"
+          onClick={() => onChange({ ...rule, value: "" })}>fixed value</button>
+      )}
+      {/* SEVERAL OPTIONS: tick them (the typed list beside stays in step) */}
+      {needsValue && listOps && !usesOption && !usesQuestion && !counting && valueChoices.length > 0 && (
+        <span className="cond-options" data-testid="cond-options" role="group" aria-label="Options">
+          {valueChoices.map((o) => {
+            const cur = Array.isArray(rule.value) ? rule.value.map(String) : [];
+            const on = cur.includes(String(o.ref));
+            return (
+              <label key={o.ref} className="chip" style={{ cursor: "pointer" }}>
+                <input type="checkbox" data-testid="cond-option" data-code={o.ref} checked={on}
+                  onChange={(e) => onChange({ ...rule, value: e.target.checked ? [...cur.filter((x) => x !== ""), String(o.ref)] : cur.filter((x) => x !== String(o.ref)) })} />
+                {" "}{choiceDisplayText(o)}
+              </label>
+            );
+          })}
+        </span>
       )}
       {perOption && needsValue && (
         <button className="btn small" style={{ flex: "0 0 auto" }}
@@ -659,12 +768,44 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
           {usesQuestion ? "fixed value" : "↔ a question"}
         </button>
       )}
-      {needsValue2 && (
+      {needsValue2 && rankOp ? (
+        /* a rank POSITION: 1 … the number of items */
+        <select className="select" data-testid="cond-rank-position" aria-label="Position"
+          value={String(rule.value2 ?? "")}
+          onChange={(e) => onChange({ ...rule, value2: e.target.value === "" ? undefined : Number(e.target.value) })}>
+          <option value="">{VALUE2_PLACEHOLDER[rule.operator] ?? "position"}</option>
+          {Array.from({ length: Math.max(valueChoices.length, 2) }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
+        </select>
+      ) : needsValue2 && (
         <input className="input" style={{ flex: "0 1 90px" }} placeholder={VALUE2_PLACEHOLDER[rule.operator] ?? "and"}
+          type={inputType} data-testid="cond-value2" aria-label="Second value"
           value={String(rule.value2 ?? "")}
           onChange={(e) => onChange({ ...rule, value2: e.target.value })} />
       )}
       </div>
+      {/*
+        * UNDER THE RULE: what it says in words, the item-vs-text rule where it
+        * matters, and a search over this source's operators (outside the main
+        * row so it never stands in for the value box).
+        */}
+      {rule.source.kind !== "rule" && (
+        <div className="cond-rule-tools" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", fontSize: 12.5 }}>
+          <span className="muted cond-rule-summary" data-testid="cond-rule-summary">{ruleSentence(s.def, rule)}</span>
+          {(menu?.entries.length ?? 0) > 6 && (
+            <input className="op-search" data-testid="cond-op-search" type="search" placeholder="find operator…"
+              aria-label="Find an operator" value={opQuery} style={{ fontSize: 12, padding: "1px 6px", maxWidth: 140 }}
+              onChange={(e) => setOpQuery(e.target.value)} />
+          )}
+          {menu && <span className="muted" data-testid="cond-operand-type" style={{ fontSize: 11.5 }}>{menu.typeLabel}</span>}
+          {(rule.operator === "contains" || rule.operator === "notContains" || rule.operator === "containsItem" || rule.operator === "notContainsItem" || rule.operator === "containsAllItems") && menu && (menu.type === "list" || menu.type === "text" || menu.type === "any") && (
+            <span className="muted" data-testid="cond-op-hint" style={{ flexBasis: "100%" }}>
+              {(rule.operator === "contains" || rule.operator === "notContains") && !containsMatchesItems(s.def, rule.source)
+                ? "Contains text: any part of the text — “1000” matches “10001”. For a comma-separated list use “contains item”."
+                : "Contains item: whole items of a comma-separated list, spaces and case ignored — 10001 never matches 110001; a list of items matches when any of them is there."}
+            </span>
+          )}
+        </div>
+      )}
       {/* the count's own controls, on their own line: what to count, over
           what, narrowed to what, and a plain reading of the result */}
       {counting && <CountEditor rule={rule} onChange={onChange}
@@ -901,8 +1042,12 @@ function GroupRow({ ctx, path, group }: {
  */
 export function ConditionEditor(props: {
   value: Condition; onChange(c: Condition): void; perOption?: boolean;
+  /** what the condition decides, to read it as a sentence: "Display Q4 if" */
+  purpose?: string;
 }) {
   const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  const s = useStudio();
+  const sentence = props.purpose ? conditionSentence(s.def, props.value, props.purpose) : "";
   return (
     <div className="cond-modes">
       <div className="cond-mode-bar" data-testid="logic-mode-bar">
@@ -921,6 +1066,59 @@ export function ConditionEditor(props: {
       {/* one plain-English reading, under whichever pane is open — it used to
           be rendered by OptionalCondition as well, which showed it twice */}
       <ConditionSummary value={props.value} />
+      {sentence && <div className="muted" data-testid="cond-purpose-summary" style={{ fontSize: 12.5, marginTop: 2 }}>{sentence}</div>}
+      <ConditionTester value={props.value} />
+    </div>
+  );
+}
+
+/**
+ * TEST CONDITION — type a test response, see TRUE or FALSE from the real
+ * evaluator (`evaluateWithTestInputs` → `evaluateCondition`), with nothing
+ * saved anywhere. One input per thing the condition reads.
+ */
+function ConditionTester({ value }: { value: Condition | undefined }) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const [vals, setVals] = React.useState<Record<string, string>>({});
+  const inputs = React.useMemo(() => (open ? conditionTestInputs(s.def, value) : []), [open, s.def, value]);
+  if (!value || (value.type === "group" && (value.children ?? []).length === 0)) return null;
+  let verdict: boolean | null = null;
+  let problem: string | null = null;
+  if (open) {
+    try { verdict = evaluateWithTestInputs(s.def, value, vals).result; } catch (e) { problem = (e as Error).message; }
+  }
+  return (
+    <div className="cond-tester" data-testid="cond-test" style={{ marginTop: 6 }}>
+      <button type="button" className="btn small ghost" data-testid="cond-test-toggle" onClick={() => setOpen(!open)}>
+        {open ? "Hide test" : "Test condition"}
+      </button>
+      {open && (
+        <div className="card" style={{ padding: 8, marginTop: 4, display: "grid", gap: 6 }}>
+          {inputs.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>This condition reads nothing a test response can set (loop values, this option, quotas).</span>}
+          {inputs.map((i) => (
+            <label key={i.key} className="f" style={{ marginBottom: 0 }}>
+              <span>{i.label} <span className="muted">— {i.hint}</span></span>
+              <input className="op-search" data-testid="cond-test-input" data-key={i.key}
+                list={i.choices ? `cond-test-${i.key}` : undefined}
+                value={vals[i.key] ?? ""} placeholder={i.choices ? i.choices.slice(0, 4).map((c) => c.code).join(", ") : ""}
+                onChange={(e) => setVals({ ...vals, [i.key]: e.target.value })} />
+              {i.choices && (
+                <datalist id={`cond-test-${i.key}`}>
+                  {i.choices.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
+                </datalist>
+              )}
+            </label>
+          ))}
+          <div>
+            Result:{" "}
+            <strong data-testid="cond-test-result" data-result={verdict === null ? "" : String(verdict)}
+              style={{ color: verdict ? "var(--ok, #157f3b)" : "var(--danger, #b42318)" }}>
+              {problem ? `cannot evaluate: ${problem}` : verdict ? "TRUE" : "FALSE"}
+            </strong>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1073,9 +1271,11 @@ function VisualConditionEditor({ value, onChange, perOption }: {
 }
 
 /** Optional condition wrapper: none / edit. */
-export function OptionalCondition({ label, value, onChange, perOption, hint }: {
+export function OptionalCondition({ label, value, onChange, perOption, hint, purpose }: {
   label: string; value: Condition | undefined; onChange(c: Condition | undefined): void;
   perOption?: boolean; hint?: string;
+  /** read the condition as a sentence: "Display Q4 if …" */
+  purpose?: string;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -1093,7 +1293,7 @@ export function OptionalCondition({ label, value, onChange, perOption, hint }: {
         )}
       </div>
       {hint && !value && <div className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>{hint}</div>}
-      {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} />}
+      {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} purpose={purpose} />}
     </div>
   );
 }

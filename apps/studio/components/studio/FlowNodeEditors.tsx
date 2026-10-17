@@ -3,10 +3,15 @@ import { UxItemsEditor } from "./UxItemsEditor";
 import React from "react";
 import type { FlowNode, EmbeddedDataType } from "@rescript/schema";
 import {
-  EMBEDDED_TYPES, checkEmbeddedExpression, normalizeExpression, coerceEmbedded,
+  EMBEDDED_TYPES, checkEmbeddedExpression, normalizeExpression,
   validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
+  lintEmbeddedPiping, describeDetectedType, type EmbeddedField,
 } from "@rescript/engine";
 import { useStudio, uid } from "./store";
+import { Icon } from "@/components/ui/Icon";
+import { InsertPipedText } from "./InsertPipedText";
+import { CompactValueInput, StoredAsPreview, TestValuePanel, type CompactValueHandle } from "./FlowValueInput";
+import { insertAt } from "@/lib/flow/flowEd";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
 import { LoopEditor } from "./LoopEditor";
 
@@ -30,11 +35,13 @@ const FUNCTION_KEYS = ["sum(", "avg(", "round(", "min(", "max(", "if("];
  * evaluates and the exports show. A structured builder that stored its own
  * tree would need a second evaluator to agree with the first one.
  */
-export function ExpressionField({ value, dataType, onChange, placeholder }: {
+export function ExpressionField({ value, dataType, onChange, placeholder, flowPosition }: {
   value: string;
   dataType?: EmbeddedDataType;
   onChange(v: string): void;
   placeholder?: string;
+  /** the flow node the expression belongs to, for Insert variable's "available here" */
+  flowPosition?: string;
 }) {
   const s = useStudio();
   const [showPalette, setShowPalette] = React.useState(false);
@@ -69,6 +76,9 @@ export function ExpressionField({ value, dataType, onChange, placeholder }: {
           onClick={() => setShowPalette((v) => !v)}>
           {showPalette ? "hide builder" : "⌗ builder"}
         </button>
+        {/* the Calc DSL's own references (ed.NAME, a variable name), numeric sources only */}
+        <InsertPipedText def={s.def} syntax="calc" accept="number" testId="expr-insert-var"
+          context={flowPosition ? { flowPosition } : undefined} onInsert={insert} />
         {check && (
           <span className={`chip ${check.ok ? "on" : "warn"}`} data-testid="expr-status">
             {check.ok ? "valid" : check.error}
@@ -141,13 +151,18 @@ export function ExpressionField({ value, dataType, onChange, placeholder }: {
 
 /* ================================================== typed embedded data */
 
-/** Embedded data: a name, a type, where the value comes from (reqs §12–13). */
+/** Embedded data: a name, a type, where the value comes from (reqs §12–13; document 15/10/2026). */
 export function EmbeddedDataEditor({ node, onChange }: {
   node: Extract<FlowNode, { type: "embedded_data" }>;
   onChange(n: FlowNode): void;
 }) {
+  const s = useStudio();
   const setField = (i: number, patch: Record<string, unknown>) =>
     onChange({ ...node, fields: node.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) });
+  /* the builder's warnings for piped values in THIS element: not found, set later in the flow */
+  const pipeIssues = React.useMemo(() => lintEmbeddedPiping(s.def).filter((x) => x.nodeId === node.id), [s.def, node.id]);
+  const valueRefs = React.useRef<Record<number, CompactValueHandle | null>>({});
+  const [testing, setTesting] = React.useState<Record<number, boolean>>({});
 
   return (
     <div className="ed-editor">
@@ -155,9 +170,17 @@ export function EmbeddedDataEditor({ node, onChange }: {
         Captured values become variables you can use in any logic, in piping and in
         redirect URLs. The type decides how the value is read — an Integer
         <code> score</code> compares as a number, so 9 is less than 80 rather than after it.
+        <strong> Auto</strong> reads each value for what it is: 25 is a number, “2000, 2001” a list,
+        and 02108 stays text.
       </p>
       {node.fields.map((f, i) => {
         const dataType = (f.dataType ?? "string") as EmbeddedDataType;
+        const name = (f.name ?? "").trim();
+        const piped = f.source === "static" && /\{\{[^}]*\}\}/.test(f.value ?? "");
+        /* what Auto sees in the value that is there to see (a fixed value, else the default) */
+        const sample = f.source === "static" ? f.value : f.defaultValue;
+        const detected = dataType === "auto" && sample && !piped ? describeDetectedType(sample) : null;
+        const issues = pipeIssues.filter((x) => x.field === name);
         return (
           <div key={i} className="card ed-field" data-testid="ed-field">
             <div className="row ed-row1">
@@ -167,12 +190,16 @@ export function EmbeddedDataEditor({ node, onChange }: {
                   placeholder="customer_score"
                   onChange={(e) => setField(i, { name: e.target.value.replace(/\s+/g, "_") })} />
               </label>
-              <label className="f" style={{ marginBottom: 0, width: 132 }}>
-                <span>Data type</span>
+              <label className="f ed-type-field" style={{ marginBottom: 0 }}>
+                <span>Type</span>
+                {/* Auto shows what it detected; every explicit type is still there to override it */}
                 <select className="select" data-testid="ed-type" value={dataType}
+                  title={EMBEDDED_TYPES.find((t) => t.value === dataType)?.hint}
                   onChange={(e) => setField(i, { dataType: e.target.value as EmbeddedDataType })}>
                   {EMBEDDED_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
+                    <option key={t.value} value={t.value}>
+                      {t.value === "auto" && detected ? `Auto (detected: ${detected})` : t.label}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -192,22 +219,51 @@ export function EmbeddedDataEditor({ node, onChange }: {
 
             <div className="ed-row2">
               {f.source === "static" && (
-                <label className="f" style={{ marginBottom: 0 }}>
-                  <span>Value{dataType === "url" ? " — a web address (http:// or https://), kept exactly as typed" : ""}</span>
+                <div className="f ed-value-field">
+                  <span className="flabel" id={`ed-value-label-${node.id}-${i}`}>
+                    Value{dataType === "url" ? " — a web address (http:// or https://), kept exactly as typed" : ""}
+                  </span>
                   {/* the value is stored as typed: no trimming, re-encoding or reformatting — the type reads it, never rewrites it */}
-                  <input className={`input${dataType === "url" ? " mono" : ""}`} data-testid="ed-value" value={f.value ?? ""}
-                    inputMode={dataType === "url" ? "url" : undefined} spellCheck={dataType === "url" ? false : undefined}
-                    autoCapitalize={dataType === "url" ? "off" : undefined} autoCorrect={dataType === "url" ? "off" : undefined}
-                    placeholder={dataType === "url" ? "https://example.com/survey?id=123" : undefined}
-                    onChange={(e) => setField(i, { value: e.target.value })} />
-                </label>
+                  <div className="ed-value-row">
+                    <CompactValueInput ref={(h) => { valueRefs.current[i] = h; }} value={f.value ?? ""}
+                      testId="ed-value" mono={dataType === "url"} inputMode={dataType === "url" ? "url" : undefined}
+                      ariaLabel={`Value of ${name || "this field"}`}
+                      placeholder={dataType === "url" ? "https://example.com/survey?id=123" : "e.g. India, 25, or {{ed.FIELD}}"}
+                      onChange={(v) => setField(i, { value: v })} />
+                    <div className="ed-value-tools">
+                      <InsertPipedText def={s.def} testId="ed-insert-pipe" context={{ flowPosition: node.id }}
+                        accept={dataType === "integer" || dataType === "decimal" ? "number" : "any"}
+                        onInsert={(token) => valueRefs.current[i]?.insert(token)} />
+                      <button type="button" className={`btn small${testing[i] ? " on" : ""}`} data-testid="ed-test-value"
+                        aria-expanded={!!testing[i]} title="See the value this field would store, using sample data"
+                        onClick={() => setTesting((t) => ({ ...t, [i]: !t[i] }))}>
+                        <Icon name="flask" size={14} /> Test value
+                      </button>
+                    </div>
+                  </div>
+                </div>
               )}
               {f.source === "expression" && (
-                <label className="f" style={{ marginBottom: 0 }}>
-                  <span>Expression</span>
-                  <ExpressionField value={f.value ?? ""} dataType={dataType}
+                <div className="f ed-value-field">
+                  <span className="flabel">Expression</span>
+                  <ExpressionField value={f.value ?? ""} dataType={dataType} flowPosition={node.id}
                     onChange={(v) => setField(i, { value: v })} />
-                </label>
+                  <div className="ed-value-tools" style={{ marginTop: 4 }}>
+                    <button type="button" className={`btn small${testing[i] ? " on" : ""}`} data-testid="ed-test-value"
+                      aria-expanded={!!testing[i]} title="See the value this calculation would store, using sample data"
+                      onClick={() => setTesting((t) => ({ ...t, [i]: !t[i] }))}>
+                      <Icon name="flask" size={14} /> Test value
+                    </button>
+                  </div>
+                </div>
+              )}
+              {issues.length > 0 && (
+                <div className="ed-issues" data-testid="ed-pipe-issues">
+                  {issues.map((x) => <div key={x.message} className="fi-issue warning" data-testid="ed-pipe-issue">⚠ {x.message.replace(/^Embedded data "[^"]*": /, "")}</div>)}
+                </div>
+              )}
+              {testing[i] && (f.source === "static" || f.source === "expression") && (
+                <TestValuePanel def={s.def} field={{ ...f, name: name || "VALUE" } as EmbeddedField} />
               )}
               {(f.source === "url" || f.source === "panel") && (
                 <p className="muted" style={{ fontSize: 12.5, margin: "2px 0 6px" }}>
@@ -215,13 +271,14 @@ export function EmbeddedDataEditor({ node, onChange }: {
                 </p>
               )}
               <label className="f" style={{ marginBottom: 0, maxWidth: 260 }}>
-                <span>Default value {f.source === "static" ? "(unused for a fixed value)" : "(when nothing arrives)"}</span>
+                <span>Default value {f.source === "static" ? (piped ? "(when the piped value is empty)" : "(unused for a fixed value)") : "(when nothing arrives)"}</span>
                 <input className={`input${dataType === "url" ? " mono" : ""}`} data-testid="ed-default" value={f.defaultValue ?? ""}
                   inputMode={dataType === "url" ? "url" : undefined} spellCheck={dataType === "url" ? false : undefined}
                   placeholder={dataType === "integer" ? "25" : dataType === "boolean" ? "false" : dataType === "url" ? "https://example.com/fallback" : ""}
                   onChange={(e) => setField(i, { defaultValue: e.target.value || undefined })} />
               </label>
-              <TypePreview dataType={dataType} raw={f.source === "static" ? f.value : f.defaultValue} />
+              <StoredAsPreview dataType={dataType} piped={piped && f.source === "static"}
+                raw={f.source === "static" ? f.value : f.defaultValue} />
               <OptionalCondition label="Set only when" value={f.when}
                 hint="Otherwise this field is left as it was."
                 onChange={(c) => setField(i, { when: c })} />
@@ -232,22 +289,9 @@ export function EmbeddedDataEditor({ node, onChange }: {
       <button className="btn small" data-testid="ed-add-field"
         onClick={() => onChange({
           ...node,
-          fields: [...node.fields, { name: "", source: "url", dataType: "string" }],
+          // a NEW field reads its value automatically; existing fields keep their stored type
+          fields: [...node.fields, { name: "", source: "url", dataType: "auto" }],
         })}>+ add field</button>
-    </div>
-  );
-}
-
-/** Shows how the declared type will read the value — before any respondent does. */
-function TypePreview({ dataType, raw }: { dataType: EmbeddedDataType; raw?: string }) {
-  if (!raw) return null;
-  // the engine's own coercion, so this preview cannot disagree with the runtime
-  const { value, error } = coerceEmbedded(dataType, raw);
-  return (
-    <div className="row" style={{ marginTop: 4 }}>
-      <span className={`chip ${error ? "warn" : "on"}`} data-testid="ed-preview">
-        {error ? error : dataType === "url" ? `stored as url: ${String(value)}` : `stored as ${dataType}: ${JSON.stringify(value)}`}
-      </span>
     </div>
   );
 }
@@ -361,6 +405,14 @@ export function RedirectEditor({ node, onChange }: {
 
 export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: FlowNode): void }) {
   const s = useStudio();
+  /* fields that pipe: their inputs, so Insert piped text lands at the cursor */
+  const urlRef = React.useRef<HTMLInputElement>(null);
+  const msgRef = React.useRef<HTMLInputElement>(null);
+  const insertInto = (el: HTMLInputElement | null, current: string, token: string, set: (v: string) => void) => {
+    const r = insertAt(current, el?.selectionStart, el?.selectionEnd, token);
+    set(r.value);
+    requestAnimationFrame(() => { if (el) { el.focus(); el.setSelectionRange(r.caret, r.caret); } });
+  };
   switch (node.type) {
     case "page":
       return (
@@ -521,10 +573,14 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
             <option value="flag">flag &amp; continue</option>
             <option value="continue">continue</option>
           </select>
-          {node.onFull.kind === "redirect" && (
-            <input className="input grow mono" placeholder="https://…" value={node.onFull.url ?? ""}
+          {node.onFull.kind === "redirect" && (<>
+            <input ref={urlRef} className="input grow mono" placeholder="https://…?rid={{response.id}}" value={node.onFull.url ?? ""}
+              data-testid="quota-redirect-url"
               onChange={(e) => onChange({ ...node, onFull: { ...node.onFull, url: e.target.value } })} />
-          )}
+            {/* the over-quota link resolves its tokens (flow.ts) — so it may carry them */}
+            <InsertPipedText def={s.def} testId="quota-url-pipe" context={{ flowPosition: node.id }}
+              onInsert={(t) => insertInto(urlRef.current, node.onFull.url ?? "", t, (url) => onChange({ ...node, onFull: { ...node.onFull, url } }))} />
+          </>)}
         </div>
           <OptionalCondition label="Check only when" value={node.when}
             hint="Otherwise respondents pass this point without the full-quota check (they still count toward the quota on completion)."
@@ -543,15 +599,22 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               <option value="quota_full">quota full</option>
               <option value="terminated">terminated</option>
             </select>
-            <input className="input grow" placeholder="end message (piping allowed)" value={node.message ?? ""}
+            <input ref={msgRef} className="input grow" placeholder="end message (piping allowed)" value={node.message ?? ""}
+              data-testid="end-message"
               onChange={(e) => onChange({ ...node, message: e.target.value || undefined })} />
+            <InsertPipedText def={s.def} testId="end-message-pipe" context={{ flowPosition: node.id }}
+              onInsert={(t) => insertInto(msgRef.current, node.message ?? "", t, (message) => onChange({ ...node, message: message || undefined }))} />
           </div>
           <label className="f" style={{ marginTop: 8 }}>
             <span>Redirect on finish (optional — variables allowed)</span>
-            <input className="input mono" placeholder="https://panel.com/done?id={{ed.PANEL_ID}}"
-              data-testid="end-redirect-url"
-              value={node.redirectUrl ?? ""}
-              onChange={(e) => onChange({ ...node, redirectUrl: e.target.value || undefined })} />
+            <div className="row">
+              <input ref={urlRef} className="input mono grow" placeholder="https://panel.com/done?id={{ed.PANEL_ID}}"
+                data-testid="end-redirect-url"
+                value={node.redirectUrl ?? ""}
+                onChange={(e) => onChange({ ...node, redirectUrl: e.target.value || undefined })} />
+              <InsertPipedText def={s.def} testId="end-redirect-pipe" context={{ flowPosition: node.id }}
+                onInsert={(t) => insertInto(urlRef.current, node.redirectUrl ?? "", t, (redirectUrl) => onChange({ ...node, redirectUrl: redirectUrl || undefined }))} />
+            </div>
           </label>
           {node.redirectUrl && (
             <span className={`chip ${validateRedirectUrl(node.redirectUrl, s.def).ok ? "on" : "warn"}`} data-testid="end-redirect-check">
