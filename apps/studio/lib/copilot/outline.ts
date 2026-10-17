@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+import { describeDesignQuestion, listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
 import { hypothesisLabel } from "@rescript/schema";
@@ -130,9 +130,13 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
       const s = l.source.kind === "question" ? `${code(l.source.questionId)} ${l.source.take}` : l.source.kind;
       const c = l.selection.count.kind === "fixed" ? `${l.selection.count.n}${l.selection.count.allUpTo ? ` (all when ≤ ${l.selection.count.allUpTo})` : ""}` : l.selection.count.kind;
       const p = l.options.filter((o) => o.priority != null).sort((a, b) => a.priority! - b.priority!).map((o) => o.label ?? o.code);
-      return `${l.name ?? l.id} [id ${l.id}${l.enabled ? "" : ", off"}] from ${s}, ${c} by ${l.selection.method}${p.length ? `, priority ${p.slice(0, 5).join(" > ")}` : ""}${l.destinations.length ? ` → ${[...new Set(l.destinations.map((d) => code(d.questionId)))].join(", ")}` : ""}`;
+      return `${l.name ?? l.id} [id ${l.id}${l.enabled ? "" : ", off"}] from ${s}, ${c} by ${l.selection.method}${l.selection.method === "least_filled" && l.selection.leastFilled ? ` (basis ${l.selection.leastFilled.basis}, ties ${l.selection.leastFilled.tieBreak})` : ""}${p.length ? `, priority ${p.slice(0, 5).join(" > ")}` : ""}${l.destinations.length ? ` → ${[...new Set(l.destinations.map((d) => code(d.questionId)))].join(", ")}` : ""}`;
     }).join("; ")}`);
   }
+
+  /* THE DESIGNS (MaxDiff, conjoint), named on every turn with their settings, so update_maxdiff / update_conjoint change them rather than a second design being made */
+  const designLines = def.questions.map((q) => describeDesignQuestion(def, q)).filter((x): x is string => !!x);
+  if (designLines.length) lines.push(`Designs: ${designLines.slice(0, 12).join("; ")}`);
 
   /*
    * THE FINDINGS, on a findings or analysis turn: the latest analysis run —

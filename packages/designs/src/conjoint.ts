@@ -1,10 +1,26 @@
 /**
  * Choice-Based Conjoint (CBC) design generator.
  *
- * Balanced-overlap style: each alternative is built by picking, per attribute,
- * among the least-used levels so far (one-way frequency balancing), with
- * seeded-RNG tie-breaking. Duplicate alternatives inside a task are avoided
- * by re-drawing a bounded number of times.
+ * Two methods (`config.method`):
+ *
+ *   balanced   each alternative is built by picking, per attribute, among the
+ *              least-used levels so far (one-way frequency balancing), with
+ *              seeded-RNG tie-breaking. Measured (conjoint audit 2026-10-17):
+ *              exact one-way balance and, because a level just used is no
+ *              longer least-used, MINIMAL overlap — 0% of task × attribute
+ *              cells repeat a level when the attribute has as many levels as
+ *              the task has concepts. It was described as "balanced
+ *              overlap", which is a different (Sawtooth) method that repeats
+ *              levels on purpose; the description now says what it does.
+ *              The default when `method` is absent, so every existing
+ *              configuration regenerates exactly as before.
+ *   efficient  the balanced design, then level SWAPPING (Huber & Zwerina
+ *              1996) within each version to maximise main-effects
+ *              D-efficiency at β = 0. Swaps keep every level's count, so the
+ *              one-way balance is untouched; see conjointEfficiency.ts.
+ *
+ * Every design reports its D-efficiency (pooled and per version), overlap and
+ * duplicate checks in `summary.efficiency`.
  *
  * Deterministic given (config, seed): all randomness flows through
  * mulberry32 / subSeed from @rescript/engine.
@@ -12,6 +28,7 @@
 import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { mulberry32, subSeed } from "@rescript/engine";
 import { twoWayBalance } from "./diagnostics.js";
+import { measureConjointDesign, swapImprove } from "./conjointEfficiency.js";
 
 export interface ConjointAttribute {
   name: string;
@@ -94,9 +111,31 @@ export interface ConjointConfig {
   holdoutTasks?: number;
   /** Number of design versions (blocks). Default 1. */
   versions?: number;
+  /**
+   * Design method: "balanced" (frequency-balanced, minimal overlap — the
+   * default when absent, so stored configurations regenerate unchanged) or
+   * "efficient" (balanced, then D-efficiency swapping within each version).
+   */
+  method?: "balanced" | "efficient";
+  /** Text of the None alternative shown to respondents. Default "None of these". */
+  noneLabel?: string;
 }
 
+/** The design-file columns a CBC design writes besides its attributes — an attribute may not be named after one. */
+export const CONJOINT_RESERVED_COLUMNS = ["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"] as const;
+
 const MAX_REDRAWS = 30;
+
+/**
+ * The efficient method's work budget: swap evaluations over the whole design,
+ * shared equally by the versions, never fewer than SWAP_MIN_PER_VERSION each.
+ * A count, not a clock, so the design is reproducible from (config, seed).
+ * Measured (conjoint audit 2026-10-17): a 12-task version of 4 three-level
+ * attributes converges in about 5 000 evaluations, so up to ~40 versions run
+ * to convergence; beyond that each version stops at its share.
+ */
+const SWAP_EVALUATION_BUDGET = 200_000;
+const SWAP_MIN_PER_VERSION = 600;
 
 /**
  * The separator that joins a concept's levels into its uniqueness key.
@@ -119,6 +158,7 @@ interface NormalizedConjoint {
   noneOption: boolean;
   holdoutTasks: number;
   versions: number;
+  method: "balanced" | "efficient";
 }
 
 function normalize(config: ConjointConfig): NormalizedConjoint {
@@ -130,6 +170,7 @@ function normalize(config: ConjointConfig): NormalizedConjoint {
     noneOption: config.noneOption ?? false,
     holdoutTasks: config.holdoutTasks ?? 0,
     versions: config.versions ?? 1,
+    method: config.method === "efficient" ? "efficient" : "balanced",
   };
 }
 
@@ -189,8 +230,17 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
   kind: "conjoint",
   label: "Choice-Based Conjoint (CBC)",
   description:
-    "Balanced-overlap CBC design: frequency-balanced level assignment per attribute, no duplicate concepts within a task, optional None option and holdout tasks.",
+    "CBC design: level-balanced, minimal-overlap concepts (optionally improved for D-efficiency by level swapping), prohibitions honoured, no duplicate concept within a task, optional None option, holdout tasks and versions. The summary reports measured D-efficiency, balance and overlap.",
   configFields: [
+    {
+      name: "method",
+      label: "Design method",
+      type: "select",
+      // "balanced" first: a stored configuration with no method shows (and generates) balanced
+      options: ["balanced", "efficient"],
+      default: "efficient",
+      help: "efficient — level-balanced, then levels are swapped between concepts to maximise D-efficiency (Huber–Zwerina); level counts do not change. balanced — level-balanced, minimal overlap, no optimisation (faster, slightly less efficient per version).",
+    },
     {
       name: "attributes",
       label: "Attributes & levels",
@@ -215,6 +265,12 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       label: "Include a None option",
       type: "boolean",
       default: false,
+    },
+    {
+      name: "noneLabel",
+      label: "None option text",
+      type: "text",
+      help: "What respondents read for the opt-out, e.g. \"I would not buy any of these\". Blank = \"None of these\".",
     },
     {
       name: "holdoutTasks",
@@ -249,12 +305,44 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
     if (new Set(names).size !== names.length) {
       errors.push("Attribute names must be unique.");
     }
+    /*
+     * Conjoint audit 2026-10-17. Each of these produced a design that looked
+     * fine and was not: an attribute called "task" overwrote the task number
+     * of every concept; a level listed twice made two codes for one label; a
+     * blank level rendered as an empty cell; 2.5 tasks generated 2.
+     */
+    for (const attr of c.attributes) {
+      if (attr.name && (CONJOINT_RESERVED_COLUMNS as readonly string[]).includes(attr.name.trim().toLowerCase())) {
+        errors.push(`"${attr.name}" cannot be an attribute name — the design file uses that column. Rename the attribute.`);
+      }
+      const levels = (attr.levels ?? []).map((l) => String(l));
+      if (levels.some((l) => !l.trim())) errors.push(`Attribute "${attr.name}" has a blank level.`);
+      const dupes = levels.filter((l, i) => levels.indexOf(l) !== i);
+      if (dupes.length) errors.push(`Attribute "${attr.name}" lists "${dupes[0]}" more than once — every level must be different.`);
+    }
     if (c.alternativesPerTask < 2) {
       errors.push("alternativesPerTask must be at least 2.");
     }
     if (c.tasks < 1) errors.push("tasks must be at least 1.");
     if (c.holdoutTasks < 0) errors.push("holdoutTasks cannot be negative.");
     if (c.versions < 1) errors.push("versions must be at least 1.");
+    for (const [k, v] of [["tasks", c.tasks], ["alternativesPerTask", c.alternativesPerTask], ["holdoutTasks", c.holdoutTasks], ["versions", c.versions]] as const) {
+      if (!Number.isInteger(v)) errors.push(`${k} must be a whole number (got ${v}).`);
+    }
+    if (config.method != null && config.method !== "balanced" && config.method !== "efficient") {
+      errors.push(`Unknown design method "${String(config.method)}" — use "efficient" or "balanced".`);
+    }
+    /*
+     * The concept space must hold a task's worth of DIFFERENT concepts even
+     * with no prohibition at all: two attributes of two levels have four
+     * concepts, and a task of five used to be generated with a duplicate.
+     */
+    if (errors.length === 0 && c.prohibitions.length === 0) {
+      const space = c.attributes.reduce((n, a) => n * Math.max(1, a.levels.length), 1);
+      if (space < c.alternativesPerTask) {
+        errors.push(`These attributes make only ${space} different concepts, and each task needs ${c.alternativesPerTask}. Add levels or attributes, or show fewer alternatives per task.`);
+      }
+    }
 
     /* --- prohibitions: real levels, and enough concepts left to field --- */
     const levelsOf = new Map(c.attributes.map((a) => [a.name, new Set(a.levels)]));
@@ -316,9 +404,11 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
      * A generator that quietly emits an illegal concept is worse than one
      * that refuses: the design file looks fine, the survey fields it, and the
      * prohibition the client asked for is violated in front of a respondent.
-     * So the configuration is validated here too, not only in the editor.
+     * So the configuration is validated here too, not only in the editor —
+     * every configuration now, not only one with prohibitions (a too-small
+     * concept space produced duplicate concepts with none configured).
      */
-    if (c.prohibitions.length) {
+    {
       const problems = conjointPlugin.validateConfig!(config);
       if (problems.length) throw new Error(problems[0]);
     }
@@ -412,7 +502,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
               }
             }
           }
-          if (!accepted && c.prohibitions.length) {
+          if (!accepted) {
             throw new Error(
               `Task ${task} of version ${version} needs ${c.alternativesPerTask} different legal concepts, and these prohibitions do not allow that many. Relax a prohibition, or show fewer alternatives per task.`,
             );
@@ -448,6 +538,34 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       }
     }
 
+    /*
+     * EFFICIENT: level swapping within each version (Huber & Zwerina). The
+     * level counts — and with them `levelCounts` and the one-way balance —
+     * are unchanged by construction. A work budget, not a clock, bounds it so
+     * the result is reproducible: about 3·10⁸ multiply-adds over the design.
+     */
+    let optimisation: Record<string, unknown> | undefined;
+    if (c.method === "efficient") {
+      const budget = Math.max(SWAP_MIN_PER_VERSION, Math.floor(SWAP_EVALUATION_BUDGET / c.versions));
+      let swaps = 0, evaluations = 0, exhausted = 0;
+      const legal = c.prohibitions.length ? (pr: Record<string, string>) => !violates(pr, c.prohibitions) : null;
+      const byVersionTask = new Map<string, Record<string, unknown>[]>();
+      for (const r of rows) {
+        if (Number(r.none_option) === 1) continue;
+        const k = `${r.version}:${r.task}`;
+        (byVersionTask.get(k) ?? byVersionTask.set(k, []).get(k)!).push(r);
+      }
+      for (let version = 1; version <= c.versions; version++) {
+        const taskRows: Record<string, unknown>[][] = [];
+        for (let task = 1; task <= c.tasks; task++) taskRows.push(byVersionTask.get(`${version}:${task}`) ?? []);
+        const profiles = taskRows.map((ts) => ts.map((r) => Object.fromEntries(c.attributes.map((a) => [a.name, String(r[a.name])]))));
+        const res = swapImprove(c.attributes, profiles, legal, mulberry32(subSeed(seed, `conjoint:swap:v${version}`)), { maxEvaluations: budget });
+        swaps += res.swaps; evaluations += res.evaluations; if (res.exhausted) exhausted++;
+        taskRows.forEach((ts, t) => ts.forEach((r, j) => Object.assign(r, profiles[t][j])));
+      }
+      optimisation = { algorithm: "level swapping (Huber & Zwerina 1996)", swaps, evaluations, versionsStoppedAtBudget: exhausted };
+    }
+
     // Summary: level frequencies and one-way balance score per attribute.
     const levelFrequencies: Record<string, Record<string, number>> = {};
     const balanceScores: Record<string, number> = {};
@@ -472,6 +590,18 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       ? (a: string, la: string, b: string, lb: string) => legalPool.some((p) => p[a] === la && p[b] === lb)
       : undefined;
     const diagnostics = twoWayBalance(c.attributes, estimationProfiles, possible);
+    const efficiency = measureConjointDesign(c.attributes, rows);
+    /*
+     * One version too short to identify the model on its own: fine for the
+     * aggregate model (versions are pooled), not for individual-level (HB)
+     * estimation — say so rather than show a per-version efficiency of 0.
+     */
+    const designWarnings = [...diagnostics.warnings];
+    if (efficiency.minVersionDegreesOfFreedom < efficiency.parameters) {
+      designWarnings.push(
+        `One version gives ${efficiency.minVersionDegreesOfFreedom} choice degrees of freedom for ${efficiency.parameters} part-worths, so a single respondent's answers cannot identify the model (per-version D-efficiency is 0). The aggregate model pools versions and is unaffected; for individual-level (HB) estimation use at least ${Math.ceil(efficiency.parameters / Math.max(1, c.alternativesPerTask - 1))} tasks.`,
+      );
+    }
 
     return {
       columns,
@@ -483,10 +613,13 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
        * their standard errors grew.
        */
       summary: {
+        method: c.method,
         levelFrequencies,
         balanceScores,
         diagnostics,
-        ...(diagnostics.warnings.length ? { warnings: diagnostics.warnings } : {}),
+        efficiency,
+        ...(optimisation ? { optimisation } : {}),
+        ...(designWarnings.length ? { warnings: designWarnings } : {}),
         ...(c.prohibitions.length
           ? {
             prohibitions: c.prohibitions.length,

@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describeUxTarget, diffSurveys, replayCorpus, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
+import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describeUxTarget, diffSurveys, isMethodOp, replayCorpus, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
@@ -147,6 +147,13 @@ function ChangesTab({ copilot, onSelect, onSelectKey, onSelectOption, onApply, a
       <div className="iq-label">The copilot wants to make these changes</div>
       {p.steps.length > 1 && <p className="iqi-dim" data-testid="cp-steps">{p.steps.length} requests: {p.steps.map((x) => `“${x.request.slice(0, 50)}”`).join(" → ")}</p>}
       <ul className="cp-summary" data-testid="cp-summary">{st.diff.summary.map((l, i) => <li key={i}><Linked text={l} def={st.after} onSelect={onSelect} /></li>)}</ul>
+      {/* MaxDiff / conjoint (Priority 5): the configuration and the diagnostics MEASURED on the generated design, in the engine's words, for review before Apply */}
+      {st.results.some((r) => r.ok && isMethodOp(r.op)) && (
+        <div className="cp-block" data-testid="cp-designs">
+          <div className="iq-label">Research design — measured on the generated tasks</div>
+          <ul>{st.results.filter((r) => r.ok && isMethodOp(r.op)).map((r, i) => <li key={i} data-testid="cp-design-line" data-op={r.op}><Linked text={r.description} def={st.after} onSelect={onSelect} /></li>)}</ul>
+        </div>
+      )}
       {copilot.stale && <p className="iq-warning" data-testid="cp-stale"><Icon name="warning" size={12} /> The survey changed since this was proposed; Apply replays it onto the current survey first.</p>}
       {st.errors.length > 0 && (
         <div className="cp-block err" data-testid="cp-refused">

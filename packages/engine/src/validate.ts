@@ -763,6 +763,23 @@ export function validateQuestion(
    * or a menu decision (MBC — a non-empty set of items, or the explicit
    * "nothing"). Menu tasks also honour the design's min/max selections.
    */
+  /*
+   * CBC (conjoint audit 2026-10-17): a stored choice must be an alternative
+   * of THAT task in the respondent's own design version — required or not.
+   * The answer names the design alternative (`alt`), so a value that is not
+   * one (a forged or stale payload, an alternative of another version) would
+   * be exported and analysed as a choice of a concept that was never shown.
+   */
+  if (q.type === "conjoint_task" && value && typeof value === "object" && !Array.isArray(value)) {
+    const design = def.designs.find((d) => d.id === q.settings.designRef);
+    const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
+    if (design?.kind !== "menu" && allRows.length && allRows.every((r) => r.alt != null)) {
+      const mine = designRowsFor(q, allRows, ctx.state.seed);
+      const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) =>
+        v != null && v !== "" && !mine.some((r) => String(r.task) === t && String(r.alt) === String(v)));
+      if (bad.length) push(`Task ${bad[0][0]}: that choice is not one of the options shown.`);
+    }
+  }
   if (q.type === "conjoint_task" && q.required && !hasNoAnswerableItems(q, ctx)) {
     const design = def.designs.find((d) => d.id === q.settings.designRef);
     const rows = (design?.file?.rows ?? []) as Record<string, unknown>[];
@@ -800,25 +817,40 @@ export function validateQuestion(
    * covered CBC only and a required MaxDiff accepted best == worst, untouched
    * tasks and codes outside the set (METHOD-01).
    */
-  if (q.type === "maxdiff_task" && q.required && !hasNoAnswerableItems(q, ctx)) {
+  /*
+   * MD-P1: the same-item check now applies to ANY answered MaxDiff, not only
+   * a required one — an optional question that stores best == worst is just
+   * as unanalysable. `required` adds completeness and the set check. A
+   * best-only design (config.responseMode) needs only a best per task, and a
+   * practice task (rows with practice = 1) is named as such.
+   */
+  if (q.type === "maxdiff_task" && (q.required || !isEmpty(value)) && !hasNoAnswerableItems(q, ctx)) {
     const design = def.designs.find((d) => d.id === q.settings.designRef);
     const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
     const rows = allRows.length ? designRowsFor(q, allRows, ctx.state.seed) : [];
     if (rows.length) {
+      const bestOnly = (design?.config as { responseMode?: string } | undefined)?.responseMode === "best_only";
+      const practice = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));
+      const name = (t: string) => (practice.has(t) ? "the practice task" : `task ${t}`);
+      const Name = (t: string) => (practice.has(t) ? "The practice task" : `Task ${t}`);
       const tasks = [...new Set(rows.map((r) => String(r.task)))];
-      const vals = (value ?? {}) as Record<string, unknown>;
+      const vals = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
       const taskOf = (t: string) => (vals[t] && typeof vals[t] === "object" ? (vals[t] as { best?: unknown; worst?: unknown }) : {});
       const itemsOf = (t: string) => new Set(rows.filter((r) => String(r.task) === t).map((r) => String(r.item_index)));
-      const missing = tasks.filter((t) => { const bw = taskOf(t); return isEmpty(bw.best) || isEmpty(bw.worst); });
+      const missing = q.required
+        ? tasks.filter((t) => { const bw = taskOf(t); return isEmpty(bw.best) || (!bestOnly && isEmpty(bw.worst)); })
+        : [];
       const same = tasks.filter((t) => { const bw = taskOf(t); return !isEmpty(bw.best) && !isEmpty(bw.worst) && String(bw.best) === String(bw.worst); });
-      const outside = tasks.filter((t) => {
+      /* a code outside the set can only come from a tampered or stale answer: checked when required, as before */
+      const outside = !q.required ? [] : tasks.filter((t) => {
         const bw = taskOf(t), items = itemsOf(t);
         return (!isEmpty(bw.best) && !items.has(String(bw.best))) || (!isEmpty(bw.worst) && !items.has(String(bw.worst)));
       });
+      const what = bestOnly ? "a best" : "a best and a worst";
       // nothing at all is the generic required message above; a partial answer names what is left
-      if (missing.length && !isEmpty(value)) push(missing.length === 1 ? `Please choose a best and a worst for task ${missing[0]}.` : "Please choose a best and a worst for every task.");
-      if (same.length) push(same.length === 1 ? `Task ${same[0]}: best and worst cannot be the same item.` : "Best and worst cannot be the same item.");
-      if (outside.length) push(outside.length === 1 ? `Task ${outside[0]}: please choose items from this task.` : "Please choose items from each task.");
+      if (missing.length && !isEmpty(value)) push(missing.length === 1 ? `Please choose ${what} for ${name(missing[0])}.` : `Please choose ${what} for every task.`);
+      if (same.length) push(same.length === 1 ? `${Name(same[0])}: best and worst cannot be the same item.` : "Best and worst cannot be the same item.");
+      if (outside.length) push(outside.length === 1 ? `${Name(outside[0])}: please choose items from this task.` : "Please choose items from each task.");
     }
   }
 

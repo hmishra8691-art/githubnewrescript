@@ -37,13 +37,38 @@ function questionIdFor(ds: Dataset, name: string, type: string): string | undefi
 /* ============================================================ conjoint */
 
 export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
-  const qid = questionIdFor(ds, def.variables[0] ?? "", "conjoint_task");
+  /*
+   * Conjoint audit 2026-10-17: the question NAMED must be the one analysed.
+   * `questionIdFor` falls back to any conjoint_task in the survey, so a plan
+   * item on an ACBC question (the analysis framework plans conjoint_utilities
+   * for it) silently analysed a DIFFERENT question — or a menu — and reported
+   * "Only 0 choice tasks answered". A named question of another type is now
+   * refused in words.
+   */
+  const named = def.variables[0] ? (() => {
+    const meta = ds.byName.get(def.variables[0]!);
+    return ds.def.questions.find((x) => x.id === meta?.questionId || x.id === def.variables[0] || x.code === def.variables[0] || x.variableName === def.variables[0]);
+  })() : undefined;
+  if (named && named.type !== "conjoint_task") {
+    const what = named.type === "acbc_task"
+      ? `${named.code} is an Adaptive CBC (ACBC) exercise. No ACBC estimator exists on this platform (it needs individual-level HB over the screening and tournament stages); the transcripts are exported in ${named.variableName}_JSON and the BYO / winner columns for tabulation.`
+      : `${named.code} is not a conjoint question (${named.type}).`;
+    return makeResult(def, ds, { tables: [], chart: {}, warnings: [what], recommendedCharts: ["attribute_importance"], totalCases });
+  }
+  const qid = named?.id ?? questionIdFor(ds, def.variables[0] ?? "", "conjoint_task");
   if (!qid) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["No conjoint task question found in this survey."], recommendedCharts: ["attribute_importance"], totalCases });
   const { q, design, rows, columns } = designFor(ds, qid);
   if (!design || !rows.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["The conjoint design file has not been generated."], recommendedCharts: ["attribute_importance"], totalCases });
+  if (design.kind === "menu") return menuCounts(def, ds, totalCases, qid);
   const attrs = columns.filter((c) => !DESIGN_COLS.has(c));
   const levels: Record<string, string[]> = {};
-  for (const a of attrs) levels[a] = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a])))];
+  // levels in the order the design was configured with (the file's first-appearance order otherwise)
+  const configured = ((design.config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
+  for (const a of attrs) {
+    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a])))];
+    const cfg = configured.find((x) => x.name === a)?.levels?.map(String).filter((l) => seen.includes(l));
+    levels[a] = cfg && cfg.length === seen.length ? cfg : seen;
+  }
   // parameter layout: for each attribute, levels[1..] (first = reference, effects-coded so utilities sum to zero per attribute), then none constant if present
   const hasNone = rows.some((r) => Number(r.none_option) === 1);
   const idx: { attr: string; level: string; i: number }[] = [];
@@ -67,6 +92,9 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const sets: ChoiceSet[] = [], holdouts: ChoiceSet[] = [];
   const noneCode = String(((design.config as { alternativesPerTask?: number })?.alternativesPerTask ?? Math.max(...rows.map((r) => Number(r.alt) || 0))) + (hasNone ? 1 : 0));
   let respondents = 0, tasksAnswered = 0, noneChosen = 0;
+  /* RAW COUNTS (not a model): per level, how often it was shown in an answered estimation task and how often the alternative carrying it was chosen */
+  const shownN = new Map<string, number>(), chosenN = new Map<string, number>();
+  const lk = (a: string, l: string) => `${a}\u0000${l}`;
   const wOf = (i: number) => (ds.weighted ? ds.cases[i].weight : 1);
   ds.cases.forEach((c, ci) => {
     const ans = c.answers[qid] as Record<string, unknown> | undefined;
@@ -82,6 +110,16 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       if (chosenIdx < 0) continue;
       const isNone = Number(alts[chosenIdx].none_option) === 1 || String(choice) === noneCode && Number(alts[chosenIdx].none_option) === 1;
       if (isNone) noneChosen++;
+      if (Number(alts[0].is_holdout) !== 1) {
+        for (let k = 0; k < alts.length; k++) {
+          if (Number(alts[k].none_option) === 1) continue;
+          for (const a of attrs) {
+            const key = lk(a, String(alts[k][a]));
+            shownN.set(key, (shownN.get(key) ?? 0) + wOf(ci));
+            if (k === chosenIdx) chosenN.set(key, (chosenN.get(key) ?? 0) + wOf(ci));
+          }
+        }
+      }
       if (ci % sampleStep === 0) {
         const set: ChoiceSet = { alternatives: alts.map(featuresOf), chosen: chosenIdx, weight: wOf(ci) };
         if (Number(alts[0].is_holdout) === 1 && !includeHoldout) holdouts.push(set); else sets.push(set);
@@ -129,17 +167,73 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   }
   const tables: ResultTable[] = [
     { id: "importance", title: "Attribute importance", columns: [{ key: "attribute", label: "Attribute" }, { key: "importance", label: "Relative importance %", type: "pct", decimals: 1 }, { key: "range", label: "Utility range", type: "number", decimals: 3 }], rows: importance.map((a) => ({ ...a, importance: pct(a.importance), range: round(a.range, 3) })), base: { n: respondents, label: `${respondents} respondents, ${sets.length} choice tasks` } },
-    { id: "partworths", title: "Part-worth utilities (zero-centred, effects-coded)", columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "utility", label: "Utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: partWorths.flatMap((a) => a.levels.map((l) => ({ attribute: a.attribute, level: l.level, utility: round(l.utility, 3), se: round(l.se, 3), p: l.p == null ? "(reference)" : fmtP(l.p) }))) },
-    { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choice tasks", v: sets.length }, { m: "Log-likelihood", v: round(fit.logLikelihood, 2) }, { m: "Null log-likelihood", v: round(fit.nullLogLikelihood, 2) }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "In-sample hit rate", v: fmtPct(fit.hitRate * 100, 1) }, ...(holdouts.length ? [{ m: `Holdout hit rate (${holdouts.length} tasks)`, v: fmtPct((holdoutHits / holdouts.length) * 100, 1) }] : []), ...(hasNone ? [{ m: "“None” chosen", v: fmtPct(tasksAnswered ? (noneChosen / tasksAnswered) * 100 : 0, 1) }] : []), { m: "Converged", v: fit.converged ? "yes" : "no" }] },
-    { id: "simulation", title: "Preference share simulation", columns: [{ key: "profile", label: "Profile" }, { key: "description", label: "Levels" }, { key: "utility", label: "Total utility", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }], rows: simRows, notes: ["Shares follow the logit rule over the listed profiles" + (hasNone ? " plus the none option." : ".")] },
+    { id: "partworths", title: "Part-worth utilities — aggregate multinomial logit (effects-coded, zero-centred)", notes: ["One set of utilities for the whole sample (pooled conditional logit, Newton–Raphson). Not individual-level: no hierarchical Bayes or latent-class model is estimated here."], columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "utility", label: "Utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: partWorths.flatMap((a) => a.levels.map((l) => ({ attribute: a.attribute, level: l.level, utility: round(l.utility, 3), se: round(l.se, 3), p: l.p == null ? "(reference)" : fmtP(l.p) }))) },
+    { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choice tasks", v: sets.length }, { m: "Log-likelihood", v: round(fit.logLikelihood, 2) }, { m: "Null log-likelihood", v: round(fit.nullLogLikelihood, 2) }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "In-sample hit rate", v: fmtPct(fit.hitRate * 100, 1) }, ...(holdouts.length ? [{ m: `Holdout hit rate (${holdouts.length} tasks)`, v: fmtPct((holdoutHits / holdouts.length) * 100, 1) }] : []), ...(hasNone ? [{ m: "“None” chosen", v: fmtPct(tasksAnswered ? (noneChosen / tasksAnswered) * 100 : 0, 1) }] : []), { m: "Converged", v: fit.converged ? "yes" : "no" }, { m: "Model", v: `Aggregate multinomial logit, effects-coded${hasNone ? ", None constant" : ""}, ${fit.iterations} Newton–Raphson iterations` }] },
+    { id: "simulation", title: "Share-of-preference simulation (from the aggregate logit)", columns: [{ key: "profile", label: "Profile" }, { key: "description", label: "Levels" }, { key: "utility", label: "Total utility", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }], rows: simRows, notes: ["Shares follow the logit rule over the listed profiles" + (hasNone ? " plus the none option." : ".")] },
   ];
   if (wtp.length) tables.push({ id: "wtp", title: `Willingness to pay (vs. reference level, in ${priceAttr} units)`, columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "wtp", label: "WTP", type: "number", decimals: 2 }], rows: wtp.map((x) => ({ ...x, wtp: round(x.wtp, 2) })) });
+  // raw counts last, so the model's tables keep their places (importance, part-worths, fit, simulation)
+  tables.push({ id: "counts", title: "Counts — choice share of each level (raw, not a model)", columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "chosen", label: "Times chosen", type: "number", decimals: 0 }, { key: "share", label: "Chosen when shown %", type: "pct", decimals: 1 }], rows: attrs.flatMap((a) => levels[a].map((l) => { const sh = shownN.get(lk(a, l)) ?? 0, ch = chosenN.get(lk(a, l)) ?? 0; return { attribute: a, level: l, shown: round(sh, 0), chosen: round(ch, 0), share: pct(sh ? (ch / sh) * 100 : 0) }; })), notes: ["Counts are descriptive: a level's share also reflects the levels it happened to be shown with. The part-worths table is the estimated model."] });
   const insights = [`${importance[0].attribute} is the most important attribute (${fmtPct(importance[0].importance, 0)} of total utility range)${importance.length > 1 ? `, followed by ${importance[1].attribute} (${fmtPct(importance[1].importance, 0)})` : ""}; ${importance[importance.length - 1].attribute} matters least (${fmtPct(importance[importance.length - 1].importance, 0)}).`];
   for (const a of partWorths.slice(0, 3)) { const best = a.levels.reduce((b, l) => (l.utility > b.utility ? l : b)); insights.push(`Preferred ${a.attribute}: ${best.level} (utility ${fmtNum(best.utility, 2)}).`); }
   insights.push(`Model fit: McFadden R² ${fmtNum(fit.mcFaddenR2, 2)}, hit rate ${fmtPct(fit.hitRate * 100, 0)}${holdouts.length ? `, holdout hit rate ${fmtPct((holdoutHits / holdouts.length) * 100, 0)}` : ""}.`);
   return makeResult(def, ds, {
     tables, chart: { categories: importance.map((a) => a.attribute), series: [{ name: "Importance %", values: importance.map((a) => pct(a.importance)) }], tree: partWorths.map((a) => ({ name: a.attribute, children: a.levels.map((l) => ({ name: l.level, value: round(l.utility, 3) ?? 0 })) })), kpis: [{ label: "Respondents", value: respondents }, { label: "McFadden R²", value: round(fit.mcFaddenR2, 2) ?? 0 }, { label: "Hit rate", value: round(fit.hitRate * 100, 0) ?? 0, unit: "%" }], valueFormat: "pct" },
     insights, warnings: [...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []), ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."])], recommendedCharts: ["attribute_importance", "part_worth", "utility_by_level", "preference_share", "wtp"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
+  });
+}
+
+/**
+ * MENU-BASED CONJOINT — counts, said to be counts (conjoint audit 2026-10-17).
+ *
+ * A menu answer is a set of ticked items per task, not one alternative, so
+ * the CBC model cannot read it (it used to report "Only 0 choice tasks
+ * answered"). No menu choice model (per-item binary logits on own and cross
+ * prices) is estimated on this platform; what is honest and useful is the
+ * take rate of each item at each price it was shown at.
+ */
+function menuCounts(def: AnalysisDefinition, ds: Dataset, totalCases: number, qid: string): AnalysisResult {
+  const { q, rows } = designFor(ds, qid);
+  const byTask = designIndex(rows);
+  const shown = new Map<string, number>(), taken = new Map<string, number>();
+  const items = new Map<string, string>();
+  const prices = new Map<string, string[]>();
+  for (const r of rows) {
+    const it = String(r.item);
+    items.set(it, String(r.item_label ?? it));
+    const ps = prices.get(it) ?? prices.set(it, []).get(it)!;
+    if (!ps.includes(String(r.price))) ps.push(String(r.price));
+  }
+  let respondents = 0, tasks = 0, none = 0;
+  ds.cases.forEach((c) => {
+    const ans = c.answers[qid] as Record<string, unknown> | undefined;
+    if (!ans || typeof ans !== "object") return;
+    const version = String(c.vars[`${q?.variableName}_VERSION`] ?? "1");
+    let any = false;
+    for (const [task, v] of Object.entries(ans)) {
+      if (!Array.isArray(v)) continue;
+      const chosen = v.map(String);
+      const w = ds.weighted ? c.weight : 1;
+      tasks++; any = true;
+      if (chosen.includes("none")) none += 1;
+      for (const r of byTask(task, version)) {
+        const key = `${r.item}\u0000${r.price}`;
+        shown.set(key, (shown.get(key) ?? 0) + w);
+        if (!chosen.includes("none") && (Number(r.required) === 1 || chosen.includes(String(r.item)))) taken.set(key, (taken.get(key) ?? 0) + w);
+      }
+    }
+    if (any) respondents++;
+  });
+  const tableRows = [...items.entries()].flatMap(([it, label]) => (prices.get(it) ?? []).map((pr) => {
+    const sh = shown.get(`${it}\u0000${pr}`) ?? 0, tk = taken.get(`${it}\u0000${pr}`) ?? 0;
+    return { item: label, price: pr, shown: round(sh, 0), taken: round(tk, 0), rate: pct(sh ? (tk / sh) * 100 : 0) };
+  }));
+  return makeResult(def, ds, {
+    tables: [{ id: "menu_counts", title: "Menu-based conjoint — take rate by item and price (counts, not a model)", columns: [{ key: "item", label: "Item" }, { key: "price", label: "Price" }, { key: "shown", label: "Times offered", type: "number", decimals: 0 }, { key: "taken", label: "Times chosen", type: "number", decimals: 0 }, { key: "rate", label: "Take rate %", type: "pct", decimals: 1 }], rows: tableRows, base: { n: respondents, label: `${respondents} respondents, ${tasks} menu tasks` }, notes: ["Raw counts. Required (base) items count as chosen whenever the respondent did not choose None."] }],
+    chart: { categories: tableRows.map((r) => `${r.item} @ ${r.price}`), series: [{ name: "Take rate %", values: tableRows.map((r) => r.rate) }], valueFormat: "pct" },
+    insights: tasks ? [`“None” was chosen in ${fmtPct((none / tasks) * 100, 1)} of menu tasks.`] : [],
+    warnings: ["Menu-based conjoint: no choice model is estimated on this platform — these are take-rate counts. For price sensitivity, fit per-item logits on the exported VAR_T<n>_<item> columns."],
+    recommendedCharts: ["bar_horizontal"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
   });
 }
 
@@ -187,6 +281,9 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
    * one.
    */
   const anchored = (design.config as { anchored?: boolean } | undefined)?.anchored === true;
+  /* MD-P1: practice tasks (rows with practice = 1) are answered but are not part of the experiment */
+  const practiceTasks = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));
+  const bestOnly = (design.config as { responseMode?: string } | undefined)?.responseMode === "best_only";
   const P = anchored ? K : K - 1;
   const anchorCounts: Record<string, number> = { all: 0, some: 0, none: 0 };
   let anchorObservations = 0;
@@ -212,6 +309,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
     const target = ci % sampleStep === 0 ? sets : scratch;
     for (const [task, bw] of Object.entries(ans)) {
       if (!bw || typeof bw !== "object") continue;
+      if (practiceTasks.has(task)) continue;
       const alts = altsOf(task, version);
       const ids = alts.map((r) => itemIdx.get(String(r.item_index))!).filter((x) => x != null);
       if (ids.length < 2) continue;
@@ -275,7 +373,8 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const maxShare = Math.max(...table.map((t) => t.share));
   const rowsOut = table.map((t, r) => ({ rank: r + 1, item: t.item, best: t.best, worst: t.worst, shown: t.shown, bw: pct(t.bw), utility: round(t.utility, 3), se: round(t.se, 3), share: pct(t.share), relative: pct((t.share / maxShare) * 100), ...(anchored ? { centred: round(t.centred, 3), important: t.aboveAnchor ? "yes" : "no" } : {}) }));
   const tables: ResultTable[] = [
-    { id: "maxdiff", title: "MaxDiff item scores", columns: [{ key: "rank", label: "Rank" }, { key: "item", label: "Item" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "best", label: "Best", type: "number", decimals: 0 }, { key: "worst", label: "Worst", type: "number", decimals: 0 }, { key: "bw", label: "B−W score %", type: "number", decimals: 1 }, { key: "utility", label: "Logit utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }, { key: "relative", label: "Relative to top %", type: "pct", decimals: 1 }, ...(anchored ? [{ key: "centred", label: "Zero-centred utility", type: "number" as const, decimals: 3 }, { key: "important", label: "Above the anchor" }] : [])], rows: rowsOut, base: { n: respondents, label: `${respondents} respondents, ${sets.length} choices` }, notes: anchored ? ["Utilities from an aggregate conditional logit against the ANCHOR, whose utility is zero by definition — so a positive utility means the item is important in absolute terms, not merely more important than the rest of the list.", "Zero-centred utilities are also shown, for comparison with a standard (unanchored) MaxDiff.", "Preference share = rescaled choice probability summing to 100."] : ["Utilities from an aggregate conditional logit (best choices plus worst choices with reversed sign), zero-centred. Preference share = rescaled choice probability summing to 100.", "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."] },
+    { id: "maxdiff", title: "MaxDiff item scores", columns: [{ key: "rank", label: "Rank" }, { key: "item", label: "Item" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "best", label: "Best", type: "number", decimals: 0 }, { key: "worst", label: "Worst", type: "number", decimals: 0 }, { key: "bw", label: "B−W score %", type: "number", decimals: 1 }, { key: "utility", label: "Logit utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }, { key: "relative", label: "Relative to top %", type: "pct", decimals: 1 }, ...(anchored ? [{ key: "centred", label: "Zero-centred utility", type: "number" as const, decimals: 3 }, { key: "important", label: "Above the anchor" }] : [])], rows: rowsOut, base: { n: respondents, label: `${respondents} respondents, ${sets.length} choices` }, notes: anchored ? ["“B−W score %” is a descriptive count, not a model estimate; the utilities come from the pooled logit model below.", "Utilities from an aggregate conditional logit against the ANCHOR, whose utility is zero by definition — so a positive utility means the item is important in absolute terms, not merely more important than the rest of the list.", "Zero-centred utilities are also shown, for comparison with a standard (unanchored) MaxDiff.", "Preference share = rescaled choice probability summing to 100."] : [bestOnly ? "Utilities from an aggregate (pooled) conditional logit on the best choices, zero-centred. Preference share = rescaled choice probability summing to 100." : "Utilities from an aggregate (pooled) conditional logit (best choices plus worst choices with reversed sign — the sequential best-worst model), zero-centred. Preference share = rescaled choice probability summing to 100.",
+      "“B−W score %” is a descriptive COUNT — (times best − times worst) / times shown — not a model estimate; it is shown beside the logit utilities, which account for which items each one was shown with. The model is pooled across respondents: individual-level (HB) utilities are not estimated here.", "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."] },
     { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choices modelled", v: sets.length }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "Hit rate", v: fmtPct(fit.hitRate * 100, 1) }, { m: "Converged", v: fit.converged ? "yes" : "no" }, ...(anchored ? [{ m: "Anchor observations", v: anchorObservations }, { m: "“All important”", v: round(anchorCounts.all, 0) }, { m: "“Some important”", v: round(anchorCounts.some, 0) }, { m: "“None important”", v: round(anchorCounts.none, 0) }] : [])] },
   ];
   // by segment variable: mean B−W count score per group

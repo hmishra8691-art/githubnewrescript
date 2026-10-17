@@ -2976,6 +2976,15 @@ function semantic(r: Run): Interpretation | null {
  */
 export function interpretRequest(def: SurveyDefinition, text: string, ctx: InterpretContext = {}): Interpretation {
   const clean = String(text ?? "").trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+  /*
+   * A MAXDIFF / CONJOINT DESIGN TO CONFIGURE (Priority 5, 2026-10-17) is the design actions' (create_maxdiff,
+   * create_conjoint, update_*) with the methods guide — the grammar has no design actions, and read
+   * "add a None option to the conjoint" as an option for a question called "the conjoint" (refused). A
+   * question about the method ("why MaxDiff scores?", "explain the conjoint utilities") stays here.
+   */
+  if (DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean)) {
+    return { kind: "model", category: null, reason: "a MaxDiff / conjoint design is configured by the design actions and the methods guide — the language model takes it, and the engine generates and checks the design", detected: [] };
+  }
   try {
     const parts = splitCommands(clean);
     // a sentence whose "and …" is part of one request ("adapt it for X and remove the unnecessary questions") is read whole before it is split
@@ -2987,6 +2996,9 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
     return { kind: "model", category: null, reason: `the interpreter could not read this (${(e as Error).message}) — the language model takes it`, detected: [] };
   }
 }
+
+const DESIGN_METHOD = /\b(?:max[\s-]?diff|best[\s-]?(?:and[\s-]?|\/\s?)?worst|conjoint|cbc|acbc|choice[\s-]?(?:tasks?|sets?|based)|menu[\s-]?based|discrete[\s-]?choice)\b/i;
+const DESIGN_CONFIG = /\b(?:create|build|set\s?up|configure|design|add|make|change|use|prohibit\w*|exclude|remove|drop|regenerate|increase|reduce|lower|raise|allow|items?\s+per\s+task|tasks?|versions?|alternatives?|concepts?|attributes?|levels?|none\s+option|labels?)\b/i;
 
 /*
  * MORE THAN ONE INSTRUCTION IN A SENTENCE. "Remove the trust block and make

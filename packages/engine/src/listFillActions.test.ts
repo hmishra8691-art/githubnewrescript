@@ -172,12 +172,14 @@ test("real case: the respondent goes Back and re-rates → the list is decided a
   assert.ok(!third.visible.includes("Q38"));
 });
 
-test("a sample-level list keeps allocate-once (the claim is idempotent in the database)", () => {
+test("a sample-level list follows a changed answer (keep_valid, 2026-10-17); onChange freeze keeps the old allocate-once", () => {
   const env = realCase();
   const lf = { ...env.lf, tracking: { ...env.lf.tracking, sampleLevel: true } };
   const st = respondent(env, rated("Apple", "Samsung")).st;
   st.answers[env.q37.id] = Object.fromEntries(env.q37.rows.map((r) => [String(r.code), 1])) as never;
-  assert.equal(listFillIsStale(env.def, lf, st), false);
+  // before 2026-10-17 this was false: the respondent kept Apple and Samsung after un-rating both
+  assert.equal(listFillIsStale(env.def, lf, st), true);
+  assert.equal(listFillIsStale(env.def, { ...lf, selection: { ...lf.selection, onChange: "freeze" } }, st), false);
   assert.equal(listFillIsStale(env.def, env.lf, st), true);
 });
 
@@ -312,7 +314,9 @@ test("update_list_fill: a new count and whenUnused; a rename carries the variabl
   const lf = out.def.listFills[0];
   assert.equal(lf.name, "TOPBRANDS");
   assert.deepEqual(lf.selection.count, { kind: "fixed", n: 3 });
-  assert.equal(lf.destinations[0].whenUnused, "disable");
+  // "disable" is acted on by nothing at runtime (no renderer reads it): stored as hide, and said so (2026-10-17)
+  assert.equal(lf.destinations[0].whenUnused, "hide");
+  assert.ok(out.warnings.some((w) => /disable.*not supported at runtime/.test(w)), JSON.stringify(out.warnings));
   assert.equal(lf.options[0].priority, 1, "untouched settings stay");
   assert.equal(out.def.questions.find((q) => q.code === "Q40")!.text, "Tell us about {{LISTFILL_TOPBRANDS_1}}");
   assert.match(out.results[0].description, /^List Fill now TOPBRANDS: .*3 items/);

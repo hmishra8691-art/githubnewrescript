@@ -13,6 +13,7 @@ import { menuPlugin } from "./menu.js";
 import { acbcPlugin } from "./acbc.js";
 
 export * from "./conjoint.js";
+export * from "./conjointEfficiency.js";
 export * from "./maxdiff.js";
 export * from "./custom.js";
 export * from "./menu.js";

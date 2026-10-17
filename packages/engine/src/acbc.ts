@@ -35,7 +35,45 @@ import { mulberry32, subSeed } from "./random.js";
  */
 
 export interface AcbcAttribute { name: string; levels: string[] }
-export interface AcbcProhibition { a: { attribute: string; level: string }; b: { attribute: string; level: string } }
+/**
+ * A prohibition — the same shape the CBC generator reads (designs/conjoint.ts):
+ * the pair a + b, optionally AND further levels (`also`, all of them or with
+ * `alsoOp: "or"` any one), or a whole `when` condition tree. The ACBC design
+ * form uses the same prohibitions editor as CBC, so a combination authored
+ * there must mean the same thing here: before the conjoint audit (2026-10-17)
+ * this engine read only a + b, so "never Value at $999 AND 3 years" silently
+ * became "never Value at $999" (more concepts forbidden than asked), and a
+ * `when`-only rule crashed on the missing pair.
+ */
+export interface AcbcProhibition {
+  a: { attribute: string; level: string };
+  b: { attribute: string; level: string };
+  also?: { attribute: string; level: string }[];
+  alsoOp?: "and" | "or";
+  when?: AcbcLevelCondition;
+}
+export type AcbcLevelCondition =
+  | { attribute: string; level: string }
+  | { op: "and" | "or" | "not"; children: AcbcLevelCondition[] };
+
+function acbcConditionMatches(p: Profile, c: AcbcLevelCondition, depth = 0): boolean {
+  if (depth > 64 || !c) return false;
+  if ("attribute" in c) return p[c.attribute] === c.level;
+  if (!c.children?.length) return false;
+  if (c.op === "and") return c.children.every((k) => acbcConditionMatches(p, k, depth + 1));
+  if (c.op === "or") return c.children.some((k) => acbcConditionMatches(p, k, depth + 1));
+  return !c.children.some((k) => acbcConditionMatches(p, k, depth + 1));
+}
+
+/** Does a concept break this prohibition? (the CBC generator's `effectiveProhibition` + `conceptMatches`) */
+export function acbcProhibited(p: Profile, x: AcbcProhibition): boolean {
+  if (x.when) return acbcConditionMatches(p, x.when);
+  if (!x.a || !x.b) return false;
+  if (p[x.a.attribute] !== x.a.level || p[x.b.attribute] !== x.b.level) return false;
+  const extra = (x.also ?? []).filter((e) => e?.attribute && e.level != null);
+  if (!extra.length) return true;
+  return x.alsoOp === "or" ? extra.some((e) => p[e.attribute] === e.level) : extra.every((e) => p[e.attribute] === e.level);
+}
 
 export interface AcbcConfig {
   attributes: AcbcAttribute[];
@@ -97,7 +135,7 @@ export function isAcbcAnswer(v: unknown): v is AcbcAnswer {
   return !!v && typeof v === "object" && !Array.isArray(v) && typeof (v as AcbcAnswer).stage === "string" && Array.isArray((v as AcbcAnswer).screens);
 }
 
-const violates = (p: Profile, pro: AcbcProhibition[]) => pro.some((x) => p[x.a.attribute] === x.a.level && p[x.b.attribute] === x.b.level);
+const violates = (p: Profile, pro: AcbcProhibition[]) => pro.some((x) => acbcProhibited(p, x));
 const profileKey = (attrs: AcbcAttribute[], p: Profile) => attrs.map((a) => p[a.name]).join("");
 
 /** Levels ruled out by confirmed unacceptables, and forced by confirmed must-haves. */

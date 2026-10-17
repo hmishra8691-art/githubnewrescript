@@ -39,7 +39,7 @@ test("several guides: one block, in the prompt's order; a request with none send
 });
 
 test("every guide copilotUserPrompt can add is found verbatim (a wording change that breaks caching fails here)", () => {
-  const all = copilotUserPrompt({ ...base, mode: "edit", ux: true, analysis: true, translation: true, quota: true, listFill: true, findings: true });
+  const all = copilotUserPrompt({ ...base, mode: "edit", ux: true, analysis: true, translation: true, quota: true, listFill: true, methods: true, findings: true });
   const { stable } = splitStable(all, COPILOT_STABLE_GUIDES);
   assert.equal(stable.length, COPILOT_STABLE_GUIDES.length);
 });

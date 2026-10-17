@@ -1,6 +1,7 @@
 export * from "./variableDictionary.js";
 export * from "./json.js";
 export * from "./csv.js";
+export * from "./choiceExport.js";
 export { csvCell, csvRow, needsFormulaGuard } from "./csvCell.js";
 export { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 export * from "./exportConfig.js";
@@ -20,3 +21,4 @@ export * from "./statisticalExport.js";
 export * from "./spssBases.js";
 export * from "./stamp.js";
 export * from "./cleaningPlan.js";
+export * from "./maxdiffLong.js";

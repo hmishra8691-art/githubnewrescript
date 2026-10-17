@@ -7,7 +7,7 @@ import type { ListFill, ListFillMethod } from "@rescript/schema";
 import {
   decideListFill, simulateListFill, listFillStatus, listFillVariableNames, explainRejection,
   type ListFillCounts, type ListFillTrace, type ResponseState,
-  stripHtmlText, listFillItemsAreRows,
+  stripHtmlText, listFillItemsAreRows, lintListFills, listFillCapBasis, listFillBalanceBasis, listFillOnChange,
 } from "@rescript/engine";
 
 type Env = "TEST" | "LIVE";
@@ -43,10 +43,14 @@ const METHODS: { value: ListFillMethod; label: string; hint: string }[] = [
   { value: "selection_order", label: "Selection order", hint: "The respondent's own order of selection." },
   { value: "random", label: "Random", hint: "Even chance between everything eligible." },
   { value: "weighted_random", label: "Weighted random", hint: "Chance proportional to each option's weight." },
-  { value: "balanced_random", label: "Balanced", hint: "Prefer whichever option is furthest from its target." },
+  { value: "least_filled", label: "Least filled", hint: "Prefer whichever eligible option the FEWEST respondents have been given so far (no target needed); ties broken as set below. Needs counting across the sample." },
+  { value: "balanced_random", label: "Balanced to target", hint: "Prefer whichever option is furthest below its TARGET (as a share of it). Without targets this is plain random — use Least filled to balance counts." },
   { value: "quota_aware_random", label: "Most remaining capacity", hint: "Prefer whichever option has the most room left." },
   { value: "custom", label: "Custom script", hint: "A script supplies the order; falls back to priority if it does not." },
 ];
+
+/** methods that order a priority band with the equal-priority rule — the only ones it changes */
+const USES_EQUAL_PRIORITY = new Set<ListFillMethod>(["highest_priority", "lowest_priority", "priority_random", "priority_quota", "custom"]);
 
 const STATUS_TONE: Record<string, string> = {
   ACTIVE: "on", NEAR_CAP: "warn", TARGET_REACHED: "warn", FULL: "warn", INELIGIBLE: "", DISABLED: "",
@@ -112,16 +116,20 @@ export function ListFillPanel() {
     return lf.options.map((o) => ({ code: String(o.code), label: o.label ?? String(o.code) }));
   };
 
+  /** the counter this list's cap is judged on (completes for "count completed interviews only") and the one least-filled ranks by */
+  const capCounts = (lf: ListFill): ListFillCounts => (listFillCapBasis(lf) === "completed" ? completed : counts);
+  const balanceCounts = (lf: ListFill): ListFillCounts => (listFillBalanceBasis(lf) === "completed" ? completed : counts);
   const simulateOne = (lf: ListFill) => {
-    const res = decideListFill({ def: s.def, listFill: lf, state: simState(lf, Date.now() % 100000), counts });
+    const res = decideListFill({ def: s.def, listFill: lf, state: simState(lf, Date.now() % 100000), counts: capCounts(lf), balanceCounts: balanceCounts(lf) });
     setSim({ listFillId: lf.id, kind: "one", trace: res.trace });
   };
   const simulateMany = (lf: ListFill) => {
-    const res = simulateListFill({ def: s.def, listFill: lf, state: simState(lf, 12345), counts, draws: simDraws });
+    const res = simulateListFill({ def: s.def, listFill: lf, state: simState(lf, 12345), counts: capCounts(lf), draws: simDraws });
     setSim({ listFillId: lf.id, kind: "many", counts: res.counts, empty: res.empty, draws: res.draws });
   };
 
   const setLf = (i: number, patch: (lf: any) => void) => s.update((d) => { patch(d.listFills[i]); });
+  const lint = React.useMemo(() => lintListFills(s.def), [s.def]);
 
   return (
     <div>
@@ -209,6 +217,11 @@ export function ListFillPanel() {
               <button className="btn small danger" onClick={() => s.update((d) => { d.listFills.splice(i, 1); })}>× list fill</button>
             </div>
 
+            {lint.filter((x) => x.path.startsWith(`listFills[${i}].`)).map((x, k) => (
+              <div key={k} className={`chip ${x.level === "error" ? "warn" : ""} qd-note`} data-testid={`lf-lint-${lf.id}`} data-level={x.level}>
+                {x.message}
+              </div>
+            ))}
             {/* the dashboard is always visible: it is what you check during fieldwork */}
             <div className="table-wrap">
             <table className="grid lf-grid" data-testid={`lf-grid-${lf.id}`}>
@@ -312,13 +325,45 @@ export function ListFillPanel() {
                       onChange={(e) => setLf(i, (x) => { x.selection.count = e.target.checked ? { kind: "all" } : { kind: "fixed", n: 1 }; })} />
                     all eligible
                   </label>
+                  {lf.selection.count.kind === "fixed" && (
+                    <label className="row" style={{ gap: 4 }} title="If more than this many qualify, take the number above; otherwise take all of them">
+                      all of them when at most
+                      <CountInput width={58} value={lf.selection.count.allUpTo}
+                        data-testid={`lf-allupto-${lf.id}`}
+                        onChange={(v) => setLf(i, (x) => { if (v == null) delete x.selection.count.allUpTo; else x.selection.count.allUpTo = v; })} />
+                      qualify
+                    </label>
+                  )}
                 </div>
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
                   {METHODS.find((m) => m.value === lf.selection.method)?.hint}
                 </p>
 
+                {lf.selection.method === "least_filled" && (
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 6 }} data-testid={`lf-least-${lf.id}`}>
+                    <label className="row" style={{ gap: 4 }}>count
+                      <select className="select" style={{ width: 200 }} value={lf.selection.leastFilled?.basis ?? "auto"}
+                        data-testid={`lf-least-basis-${lf.id}`}
+                        onChange={(e) => setLf(i, (x) => { x.selection.leastFilled = { tieBreak: "random", ...(x.selection.leastFilled ?? {}), basis: e.target.value }; })}>
+                        <option value="auto">same as the cap ({lf.tracking.countOnCompleteOnly ? "completed" : "allocated"})</option>
+                        <option value="allocated">allocated (incl. in progress)</option>
+                        <option value="completed">completed interviews</option>
+                      </select>
+                    </label>
+                    <label className="row" style={{ gap: 4 }}>ties
+                      <select className="select" style={{ width: 170 }} value={lf.selection.leastFilled?.tieBreak ?? "random"}
+                        data-testid={`lf-least-tie-${lf.id}`}
+                        onChange={(e) => setLf(i, (x) => { x.selection.leastFilled = { basis: "auto", ...(x.selection.leastFilled ?? {}), tieBreak: e.target.value }; })}>
+                        <option value="random">random (seeded)</option>
+                        <option value="sequential">source order</option>
+                        <option value="priority">priority, then random</option>
+                      </select>
+                    </label>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Counted per List Fill. Maximums still cap; a target with “at target” still demotes.</span>
+                  </div>
+                )}
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                  <label className="row" style={{ gap: 4 }}>equal priority
+                  {USES_EQUAL_PRIORITY.has(lf.selection.method) && <label className="row" style={{ gap: 4 }}>equal priority
                     <select className="select" style={{ width: 150 }} value={lf.selection.equalPriority}
                       onChange={(e) => setLf(i, (x) => { x.selection.equalPriority = e.target.value; })}>
                       <option value="random">random</option>
@@ -327,7 +372,7 @@ export function ListFillPanel() {
                       <option value="weighted">weighted</option>
                       <option value="quota_aware_random">most room left</option>
                     </select>
-                  </label>
+                  </label>}
                   <label className="row" style={{ gap: 4 }}>at target
                     <select className="select" style={{ width: 140 }} value={lf.selection.afterTarget}
                       onChange={(e) => setLf(i, (x) => { x.selection.afterTarget = e.target.value; })}>
@@ -338,14 +383,19 @@ export function ListFillPanel() {
                       <option value="stop">stop using</option>
                     </select>
                   </label>
-                  <label className="row" style={{ gap: 4 }}>when nothing is left
-                    <select className="select" style={{ width: 150 }} value={lf.selection.fallback}
-                      onChange={(e) => setLf(i, (x) => { x.selection.fallback = e.target.value; })}>
-                      <option value="none">allocate nothing</option>
-                      <option value="random_eligible">random eligible</option>
-                      <option value="weighted_eligible">weighted eligible</option>
-                      <option value="balanced_eligible">balanced eligible</option>
-                      <option value="next_priority">next priority</option>
+                  {/* "when nothing is left" (selection.fallback) is no longer offered: the strategy already tries every
+                      eligible option with room, so the fallback pool is empty in every case but one — an item a quota
+                      cell blocked at one POSITION is retried at the next. It never substitutes an ineligible or full
+                      item, which is what the label promised (listFill.test "fallback never substitutes"). The stored
+                      value keeps working; the default is unchanged. */}
+                  <label className="row" style={{ gap: 4 }} title="What a stored allocation does when the respondent goes Back and changes the answers it was decided from">
+                    on a changed answer
+                    <select className="select" style={{ width: 190 }} value={listFillOnChange(s.def, lf)}
+                      data-testid={`lf-onchange-${lf.id}`}
+                      onChange={(e) => setLf(i, (x) => { x.selection.onChange = e.target.value; })}>
+                      <option value="keep_valid">keep what still qualifies</option>
+                      <option value="redecide">decide the list again</option>
+                      <option value="freeze">never change it</option>
                     </select>
                   </label>
                 </div>
@@ -369,12 +419,12 @@ export function ListFillPanel() {
                       onChange={(e) => setLf(i, (x) => { x.tracking.respectQuotas = e.target.checked; })} />
                     respect hard quotas
                   </label>
-                  <label className="row" style={{ gap: 4 }}>
-                    <input type="checkbox" checked={lf.storeTrace}
-                      onChange={(e) => setLf(i, (x) => { x.storeTrace = e.target.checked; })} />
-                    store the decision trace on each response
-                  </label>
+                  {/* "store the decision trace on each response" (storeTrace) is not offered: nothing stores it — the
+                      trace is returned to test sessions and the simulator only. */}
                 </div>
+                {lf.selection.method === "least_filled" && !lf.tracking.sampleLevel && (
+                  <p className="chip warn qd-note" style={{ fontSize: 12.5 }}>Least filled needs counting across the sample — without it every count is 0 and only the tie-break decides.</p>
+                )}
                 {lf.tracking.countOnCompleteOnly && (
                   <p className="muted" style={{ fontSize: 12.5 }}>
                     Counting completes means in-progress sessions do not close an option, so slightly more respondents than
@@ -405,7 +455,7 @@ export function ListFillPanel() {
                         <option value="">leave as is</option>
                         <option value="hide">hide the question</option>
                         <option value="skip">skip it</option>
-                        <option value="disable">show it disabled</option>
+                        {dest.whenUnused === "disable" && <option value="disable">show it disabled (not supported — shown normally)</option>}
                         <option value="blank">clear the answer</option>
                         <option value="do_not_instantiate">do not create it</option>
                       </select>

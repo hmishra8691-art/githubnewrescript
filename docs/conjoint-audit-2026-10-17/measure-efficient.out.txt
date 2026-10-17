@@ -1,0 +1,32 @@
+method=efficient
+A1 4x3, 3 alts, 12 tasks, 10 versions
+  rows=360 none rows=0 ms=766 reproducible=true
+  one-way pooled: Brand 120..120; Screen 120..120; Battery 120..120; Colour 120..120; worst per-version spread=0
+  tasks with duplicate concept=0/120; task×attribute cells with overlap=0/480 (0.0%); prohibited concepts=0
+  D-eff pooled=99.9%  per-version mean=99.0% min=98.4%  two-way worst={"a":"Brand","b":"Screen","min":38,"max":43,"ratio":1.13,"emptyCells":0}
+A2 4x3, 3 alts, 12 tasks, 300 versions
+  rows=10800 none rows=0 ms=1647 reproducible=true
+  one-way pooled: Brand 3600..3600; Screen 3600..3600; Battery 3600..3600; Colour 3600..3600; worst per-version spread=0
+  tasks with duplicate concept=0/3600; task×attribute cells with overlap=588/14400 (4.1%); prohibited concepts=0
+  D-eff pooled=98.6%  per-version mean=96.3% min=92.0%  two-way worst={"a":"Brand","b":"Colour","min":1168,"max":1234,"ratio":1.06,"emptyCells":0}
+B  + prohibition Brand=Gamma x Battery=3 days, 10 versions
+  rows=360 none rows=0 ms=649 reproducible=true
+  one-way pooled: Brand 120..120; Screen 120..120; Battery 120..120; Colour 120..120; worst per-version spread=2
+  tasks with duplicate concept=0/120; task×attribute cells with overlap=2/480 (0.4%); prohibited concepts=0
+  D-eff pooled=96.2%  per-version mean=95.2% min=94.1%  two-way worst={"a":"Brand","b":"Battery","min":27,"max":62,"ratio":2.3,"emptyCells":0}
+C  price attribute, 10 versions
+  rows=360 none rows=0 ms=206 reproducible=true
+  one-way pooled: Brand 120..120; Screen 120..120; Battery 120..120; Price 120..120; worst per-version spread=0
+  tasks with duplicate concept=0/120; task×attribute cells with overlap=0/480 (0.0%); prohibited concepts=0
+  D-eff pooled=99.9%  per-version mean=99.0% min=98.4%  two-way worst={"a":"Brand","b":"Screen","min":38,"max":43,"ratio":1.13,"emptyCells":0}
+D  none option, 10 versions
+  rows=480 none rows=120 ms=106 reproducible=true
+  one-way pooled: Brand 120..120; Screen 120..120; Battery 120..120; Colour 120..120; worst per-version spread=0
+  tasks with duplicate concept=0/120; task×attribute cells with overlap=0/480 (0.0%); prohibited concepts=0
+  D-eff pooled=99.9%  per-version mean=99.0% min=98.4%  two-way worst={"a":"Brand","b":"Screen","min":38,"max":43,"ratio":1.13,"emptyCells":0}
+E  mixed 3x4x2x5, 4 alts, 10 tasks, 20 versions
+  rows=800 none rows=0 ms=865 reproducible=true
+  one-way pooled: Brand 266..267; Size 200..200; Eco 400..400; Price 160..160; worst per-version spread=2
+  tasks with duplicate concept=0/200; task×attribute cells with overlap=400/800 (50.0%); prohibited concepts=0
+  D-eff pooled=100.0%  per-version mean=99.4% min=99.0%  two-way worst={"a":"Brand","b":"Size","min":63,"max":70,"ratio":1.11,"emptyCells":0}
+random baseline (legal, no dup) per-version mean D-eff 4x3/3alts/12 tasks: 56.8%

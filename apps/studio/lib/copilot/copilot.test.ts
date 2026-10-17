@@ -6,6 +6,7 @@ import { chunkResearchDocument, ResearchIndex } from "@rescript/import/research"
 import { coerceCopilotReply, classifyRequest, copilotUserPrompt, referencedQuestions, surveyLanguageOf, uxIntent, analysisIntent, translationIntent, quotaIntent, findingsIntent, COPILOT_SYSTEM_PROMPT, COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_FINDINGS_GUIDE } from "./prompt.ts";
 import { copilotOutline } from "./outline.ts";
 import { COPILOT_LIST_FILL_GUIDE, listFillIntent } from "./listFillGuide.ts";
+import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 import { coerceDocSummary, summaryInput, researchCards, researchPassages } from "./research.ts";
 
 const empty = () => SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "Skincare" }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }], deployment: { clientSlug: "c", studySlug: "s" } });
@@ -189,7 +190,7 @@ test("a revised proposal numbers the questions it made in order — and replays 
 
 import { SURVEY_ACTION_OPS, UX_ACTION_ALIASES } from "@rescript/engine";
 test("the model is told about every action the engine accepts — and only those", () => {
-  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE + COPILOT_LIST_FILL_GUIDE;
+  const both = COPILOT_SYSTEM_PROMPT + COPILOT_UX_GUIDE + COPILOT_ANALYSIS_GUIDE + COPILOT_TRANSLATION_GUIDE + COPILOT_QUOTA_GUIDE + COPILOT_LIST_FILL_GUIDE + COPILOT_METHODS_GUIDE;
   for (const op of SURVEY_ACTION_OPS) assert.ok(both.includes(`"op":"${op}"`), `the prompt, the UX guide or the analysis guide documents ${op}`);
   for (const op of ["create_style", "create_animation", "create_behavior", "attach_behavior_to_question", "create_responsive_rule"]) assert.ok(COPILOT_SYSTEM_PROMPT.includes(op), `the system prompt names ${op}, so the model never says the platform cannot style`);
   const documented = [...both.matchAll(/"op":"([a-z_]+)"/g)].map((m) => m[1]);

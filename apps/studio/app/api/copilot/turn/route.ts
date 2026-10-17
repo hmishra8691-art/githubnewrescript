@@ -25,6 +25,11 @@ import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
 import { listFillIntent } from "@/lib/copilot/listFillGuide";
+import { methodsIntent } from "@/lib/copilot/methodsGuide";
+/* create_maxdiff / create_conjoint generate their designs through the schema's registry: the real generators, here as in the Studio's panel and the browser's replay */
+import { registerBuiltinDesignGenerators } from "@rescript/designs";
+
+registerBuiltinDesignGenerators();
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -162,6 +167,8 @@ export async function POST(req: NextRequest) {
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const listFillTurn = listFillIntent(message);
+  // MaxDiff / conjoint: the methods guide (the designs in the survey are on the outline's "Designs:" line every turn)
+  const methodsTurn = methodsIntent(message);
   const quotaCounts = body.quotaCounts && typeof body.quotaCounts === "object" ? body.quotaCounts as Record<string, Record<string, number>> : null;
   // findings: what the data showed — the latest analysis run the Studio sent, answered from its numbers
   const findingsTurn = findingsIntent(message);
@@ -196,7 +203,7 @@ export async function POST(req: NextRequest) {
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly,
-    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, findings: findingsTurn,
+    analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, methods: methodsTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
   });
@@ -413,7 +420,7 @@ export async function POST(req: NextRequest) {
   const repairable = refused.filter((r) => !policyRefusal(r));
   if (applied && refused.length && !repairable.length) repair = { refused, fixed: false, skipped: "policy" };
   if (applied && repairable.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
-    const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
+    const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, methodsGuideSent: methodsTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
     const repairPromptText = rp.text;
     // what was refused, for whoever reads the server log: the request did not reach the guide, or the model ignored it
     console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, refused: refused.map((e) => e.slice(0, 300)) }));
@@ -502,7 +509,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

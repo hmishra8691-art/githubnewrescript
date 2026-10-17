@@ -52,6 +52,12 @@ export interface QualityExportRow {
      */
     sampleSource?: string | null;
     sampleSourceRespondent?: string | null;
+    /*
+     * MD-P1: the response seed. Conjoint / MaxDiff `_VERSION` and `_ORDER`
+     * are derived from it (designVersion.ts); without it every row reads as
+     * version 1 and the shown order is missing.
+     */
+    seed?: number;
   };
   quality: QualityLike | null;
   review: { status: string | null; reason?: string | null; by?: string | null; at?: string | null };

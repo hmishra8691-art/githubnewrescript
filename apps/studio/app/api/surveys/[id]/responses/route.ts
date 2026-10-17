@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { choiceDataToCSV, maxdiffChoiceCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { resolveExportVersions } from "@/lib/exportVersions";
@@ -313,7 +313,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   // the dataset filter (REMOVED never in a clean dataset; raw rows untouched)
   const exportRows: QualityExportRow[] = (resp ?? []).map((r: any) => ({
-    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, surveyVersion: versioned.forSession(r.session_id).version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
+    /* `seed` (MD-P1): conjoint / MaxDiff `_VERSION` and `_ORDER` are derived from it — without it the XLSX said version 1 for everyone */
+    state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, seed: r.seed == null ? undefined : Number(r.seed), surveyVersion: versioned.forSession(r.session_id).version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
     quality: r.quality ?? null,
     review: { status: r.review_status ?? null, reason: r.review_reason ?? null, by: r.reviewed_by ?? null, at: r.reviewed_at ?? null },
   }));
@@ -390,6 +391,41 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    * Writing labels into the cells would produce a string variable and cost
    * them every analysis the format exists for.
    */
+  /*
+   * The STACKED CBC CHOICE FILE (conjoint audit 2026-10-17): one row per
+   * respondent × task × shown alternative (None included) with version, design
+   * alternative, concept id, screen position, every level and `chosen` — the
+   * design joined to the choice, which is what MNL / HB software reads.
+   * Responses without a seed cannot be placed in a version and are skipped;
+   * the count goes in a header rather than into the data.
+   */
+  if (format === "cbc") {
+    const out = choiceDataToCSV(parsed.data, states as any, { versioned: versionedSource, bom: req.nextUrl.searchParams.get("bom") === "1" });
+    return new NextResponse(out.csv, {
+      headers: {
+        ...versionHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "x-rescript-cbc-skipped-no-seed": String(out.skippedNoSeed),
+        "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}_cbc_choices.csv"`,
+      },
+    });
+  }
+  /*
+   * MD-P1: the MaxDiff CHOICE FILE — one row per respondent × task × item
+   * shown, with version, on-screen position and best / worst flags — the
+   * long layout HB and logit tools read. Version and order are recomputed
+   * from each response's seed, as the renderer computed them.
+   */
+  if (format === "maxdiff") {
+    const csv = maxdiffChoiceCSV(parsed.data, states as any, { bom: req.nextUrl.searchParams.get("bom") === "1" });
+    return new NextResponse(csv, {
+      headers: {
+        ...versionHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}_maxdiff_choices.csv"`,
+      },
+    });
+  }
   if (format === "sav" || format === "sas" || format === "dta") {
     /*
      * DOC-08 / CLEAN-08. The statistical files used to carry only the

@@ -18,6 +18,8 @@ export default function PreviewPage() {
    * block preview starts fresh while ordinary live edits keep the position.
    */
   const [entry, setEntry] = React.useState<{ startAt?: string; answers?: Record<string, unknown>; revision?: number | null } | null>(null);
+  /** List Fill sample counters to decide against (a preview has no sample); optional, see RunnerProps.listFillCounts */
+  const [listFillCounts, setListFillCounts] = React.useState<Record<string, Record<string, number>> | undefined>(undefined);
 
   /**
    * The preview's own query string, handed to the survey as its URL
@@ -65,6 +67,7 @@ export default function PreviewPage() {
     const onMsg = (e: MessageEvent) => {
       if (e.data?.type === "rescript:preview" && e.data.definition) {
         tryLoad(e.data.definition);
+        if (e.data.listFillCounts && typeof e.data.listFillCounts === "object") setListFillCounts(e.data.listFillCounts);
         if (e.data.startAt !== undefined || e.data.answers !== undefined) {
           setEntry({ startAt: e.data.startAt || undefined, answers: e.data.answers ?? undefined, revision: e.data.revision ?? null });
         }
@@ -126,6 +129,7 @@ export default function PreviewPage() {
         startAt={entry?.startAt}
         seedAnswers={entry?.answers}
         urlParams={urlParams}
+        listFillCounts={listFillCounts}
       />
     </>
   );

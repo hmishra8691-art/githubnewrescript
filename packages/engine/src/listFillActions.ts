@@ -69,6 +69,12 @@ export interface ListFillSpec {
   destinations?: (string | ListFillDestinationInput)[];
   whenUnused?: UnusedDestinationRule;
   runWhen?: CondInput | null;
+  /** least fill: which counter is "fill" — auto (the cap's), allocated (claimed, incl. in progress) or completed */
+  basis?: "auto" | "allocated" | "completed";
+  /** least fill: order among equal counts — random (seeded), sequential (source order), priority */
+  tieBreak?: "random" | "sequential" | "priority";
+  /** what a stored allocation does when the respondent goes Back and changes its source */
+  onChange?: "keep_valid" | "redecide" | "freeze";
 }
 
 export type ListFillAction =
@@ -92,7 +98,10 @@ const METHOD_ALIASES: Record<string, ListFillMethod> = {
   random: "random", randomly: "random", random_n: "random",
   priority: "highest_priority", priority_order: "highest_priority", highest_priority: "highest_priority", lowest_priority: "lowest_priority",
   priority_random: "priority_random", random_with_priority: "priority_random", priority_then_random: "priority_random",
-  least_fill: "balanced_random", least_filled: "balanced_random", least_fills: "balanced_random", balanced: "balanced_random", balanced_random: "balanced_random",
+  // LEAST FILL = fewest already allocated first (no target needed). It used to map to balanced_random, which
+  // ranks by distance from a TARGET and is plain random when no target is set (audit 2026-10-17)
+  least_fill: "least_filled", least_filled: "least_filled", least_fills: "least_filled", least: "least_filled", fewest_allocated: "least_filled",
+  balanced: "balanced_random", balanced_random: "balanced_random", balanced_to_target: "balanced_random",
   priority_quota: "priority_quota", quota_aware_random: "quota_aware_random", most_remaining: "quota_aware_random",
   selection_order: "selection_order", in_order: "selection_order", first_selected: "first_selected", rank_order: "selection_order",
   weighted_random: "weighted_random", weighted: "weighted_random",
@@ -100,7 +109,7 @@ const METHOD_ALIASES: Record<string, ListFillMethod> = {
 /** methods that ignore per-item priority — a priority given with one of these would be silently dead */
 const IGNORES_PRIORITY = new Set<ListFillMethod>(["random", "weighted_random", "balanced_random", "quota_aware_random", "selection_order", "first_selected"]);
 /** methods that read the sample-level counters */
-const NEEDS_COUNTS = new Set<ListFillMethod>(["balanced_random", "quota_aware_random", "priority_quota"]);
+const NEEDS_COUNTS = new Set<ListFillMethod>(["balanced_random", "quota_aware_random", "priority_quota", "least_filled"]);
 const UNUSED = new Set<string>(UnusedRule.options);
 
 function numMap(v: unknown, what: string): Record<string, number> | string | undefined {
@@ -228,7 +237,7 @@ function specOf(o: Record<string, unknown>, partial: boolean): ListFillSpec | st
   if (m) {
     if (m === "custom") return "method custom needs a script and nothing in the engine runs one — choose priority_random, random, highest_priority or least_fill";
     const method = METHOD_ALIASES[m];
-    if (!method) return `“${m}” is not a List Fill method — random, priority_random, highest_priority, lowest_priority, least_fill (balanced), selection_order, weighted_random`;
+    if (!method) return `“${m}” is not a List Fill method — random, priority_random, highest_priority, lowest_priority, least_fill (fewest allocated first), balanced (furthest below target), selection_order, weighted_random`;
     spec.method = method;
   }
   if (o.priority === null) spec.priority = null;
@@ -248,6 +257,25 @@ function specOf(o: Record<string, unknown>, partial: boolean): ListFillSpec | st
   if (wu) { if (!UNUSED.has(wu)) return `whenUnused is one of ${[...UNUSED].join(", ")} — not “${wu}”`; spec.whenUnused = wu as UnusedDestinationRule; }
   const d = destinationsOf(o.destinations ?? o.destination ?? o.into ?? o.to); if (typeof d === "string") return d; if (d) spec.destinations = d;
   if (o.runWhen === null) spec.runWhen = null; else { const rw = cond(o.runWhen ?? o.when); if (rw) spec.runWhen = rw; }
+  /* least fill's settings and the Back/change rule (audit 2026-10-17), with the words people use for them */
+  const basis = str(o.basis ?? o.countedOn ?? o.counted_on)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (basis) {
+    const m: Record<string, "auto" | "allocated" | "completed"> = { auto: "auto", allocated: "allocated", allocations: "allocated", claimed: "allocated", started: "allocated", starts: "allocated", assigned: "allocated", completed: "completed", completes: "completed", complete: "completed", completed_interviews: "completed" };
+    if (!m[basis]) return `basis is auto (the cap's counter), allocated (everyone the list was given to, including interviews in progress) or completed (finished interviews) — not “${basis}”`;
+    spec.basis = m[basis];
+  }
+  const tie = str(o.tieBreak ?? o.ties)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (tie) {
+    const m: Record<string, "random" | "sequential" | "priority"> = { random: "random", sequential: "sequential", source_order: "sequential", in_order: "sequential", order: "sequential", priority: "priority" };
+    if (!m[tie]) return `tieBreak is random, sequential (the source's order) or priority — not “${tie}”`;
+    spec.tieBreak = m[tie];
+  }
+  const oc = str(o.onChange ?? o.on_change ?? o.onBack)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (oc) {
+    const m: Record<string, "keep_valid" | "redecide" | "freeze"> = { keep_valid: "keep_valid", keep: "keep_valid", keep_still_valid: "keep_valid", redecide: "redecide", re_decide: "redecide", reallocate: "redecide", recompute: "redecide", freeze: "freeze", frozen: "freeze", never: "freeze", lock: "freeze" };
+    if (!m[oc]) return `onChange is keep_valid (keep what still qualifies, top up), redecide (decide again) or freeze (never change) — not “${oc}”`;
+    spec.onChange = m[oc];
+  }
   return spec;
 }
 
@@ -557,6 +585,10 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
   let method: ListFillMethod = spec.method ?? prevSel?.method ?? (prioritised ? "priority_random" : "random");
   // a priority given now, on a list whose method ignores it, means "priority first, random among the rest"
   if (!spec.method && prioritised && IGNORES_PRIORITY.has(method) && (spec.priority || spec.always)) method = "priority_random";
+  // least-filled ranks by count; a priority given with it can only break ties between equal counts
+  if (method === "least_filled" && spec.always?.length) fail("always puts an item first, but least_fill orders by how many respondents already have each item — use priority_random for “always first”, or drop always");
+  if ((spec.basis || spec.tieBreak) && method !== "least_filled") fail(`basis and tieBreak are least fill's settings, and this list's method is ${method.replace(/_/g, " ")} — add method least_fill too, or leave them out`);
+  if (spec.tieBreak === "priority" && !prioritised) fail("tieBreak priority needs a priority per item (priority: {item: n})");
   if (prioritised && IGNORES_PRIORITY.has(method)) fail(`method ${method} ignores priority, so the priority given would do nothing — use priority_random (priority first, random among the rest) or highest_priority`);
   if (method === "weighted_random" && !options.some((o) => o.weight != null)) fail("weighted_random needs weights (weight: {item: n})");
   const caps = options.some((o) => o.maximum != null || o.target != null || o.minimum != null);
@@ -582,7 +614,12 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
       if (src.question && order.indexOf(q.id) <= srcAt) fail(`${q.code} is asked before ${src.question.code}, so the list is not decided yet when ${q.code} is shown — put the destination after the source`);
       if (srcPage && pageOf(def, q.id) === srcPage) fail(`${q.code} is on the same page as ${src.question!.code}; a List Fill runs when that page is submitted, so ${q.code} must be on a later page (page_break after ${src.question!.code})`);
       const as = d.as ?? (SHOWABLE(q) ? "show" : "piping");
-      const whenUnused = d.whenUnused ?? spec.whenUnused;
+      let whenUnused = d.whenUnused ?? spec.whenUnused;
+      if (whenUnused === "disable" || whenUnused === "terminate_block") {
+        // neither is acted on by the runtime (no renderer reads them): hide, and say so
+        warnings.push(`whenUnused “${whenUnused}” is not supported at runtime — ${q.code} is hidden instead when nothing qualifies.`);
+        whenUnused = "hide";
+      }
       touched.add(q.id);
       if (as === "show") {
         if (!SHOWABLE(q)) fail(`${q.code} is a ${q.type.replace(/_/g, " ")} question with no options or rows to show the items as — pipe them instead ({question: "${q.code}", as: "piping"})`);
@@ -623,7 +660,9 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
       }
     }
   } else if (spec.whenUnused && prev) {
-    for (const d of destinations) d.whenUnused = spec.whenUnused;
+    const wu = spec.whenUnused === "disable" || spec.whenUnused === "terminate_block" ? "hide" : spec.whenUnused;
+    if (wu !== spec.whenUnused) warnings.push(`whenUnused “${spec.whenUnused}” is not supported at runtime — hidden instead when nothing qualifies.`);
+    for (const d of destinations) d.whenUnused = wu;
   }
   /* -- runWhen ------------------------------------------------------- */
   let runWhen = prev?.runWhen;
@@ -638,6 +677,8 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
       ...(prevSel ?? {}),
       count, method,
       equalPriority: prevSel?.equalPriority ?? "random",
+      ...(method === "least_filled" ? { leastFilled: { basis: spec.basis ?? prevSel?.leastFilled?.basis ?? "auto", tieBreak: spec.tieBreak ?? (prioritised ? "priority" : prevSel?.leastFilled?.tieBreak ?? "random") } } : {}),
+      ...(spec.onChange ? { onChange: spec.onChange } : {}),
     },
     tracking: { ...(prev?.tracking ?? {}), sampleLevel, respectQuotas: sampleLevel ? prev?.tracking.respectQuotas ?? true : false },
     options,
@@ -656,14 +697,14 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
   const ranked = tops.filter((t) => !always.some((a) => a.code === String(t.code)));
   const prioWords = ranked.length ? `${always.length ? "then " : ""}${ranked.map(itemsOf).join(" > ")} first when eligible` : "";
   const countWords = count.kind === "fixed" ? `${plural(count.n, "item")}${(count as { allUpTo?: number }).allUpTo ? ` (all of them when ${(count as { allUpTo?: number }).allUpTo} or fewer qualify)` : ""}` : count.kind === "all" ? "every eligible item" : "as many items as the answer says";
-  const methodWords = method === "priority_random" ? (tops.length ? "random among the rest" : "at random") : method === "random" ? "at random" : method === "balanced_random" ? "least-filled first" : method.replace(/_/g, " ");
+  const methodWords = method === "priority_random" ? (tops.length ? "random among the rest" : "at random") : method === "random" ? "at random" : method === "least_filled" ? `least-filled first (fewest ${lf.selection.leastFilled?.basis === "completed" ? "completed interviews" : lf.selection.leastFilled?.basis === "allocated" ? "respondents allocated" : "respondents so far"}${lf.selection.leastFilled?.tieBreak === "priority" ? ", ties by priority" : lf.selection.leastFilled?.tieBreak === "sequential" ? ", ties in source order" : ""})` : method === "balanced_random" ? "furthest below its target first" : method.replace(/_/g, " ");
   const parts = [
     `from ${src.words}${ruleWords ? ` ${ruleWords}` : ""}`,
     countWords,
     [alwaysWords, prioWords].filter(Boolean).join(", "),
     methodWords,
   ].filter(Boolean);
-  const description = `List Fill ${name}: ${parts.join(", ")}${destWords.length ? `, into ${destWords.join(", ")}` : destinations.length ? "" : " — no destination yet (its items are LISTFILL_" + name.toUpperCase() + "_1 …)"}${runWhen ? ", only when its condition holds" : ""}${sampleLevel ? ", counted across the sample" : ""}`;
+  const description = `List Fill ${name}: ${parts.join(", ")}${destWords.length ? `, into ${destWords.join(", ")}` : destinations.length ? "" : " — no destination yet (its items are LISTFILL_" + name.toUpperCase() + "_1 …)"}${runWhen ? ", only when its condition holds" : ""}${sampleLevel ? ", counted across the sample" : ""}${lf.selection.onChange ? `; on a changed answer: ${lf.selection.onChange === "keep_valid" ? "keep what still qualifies and top up" : lf.selection.onChange === "redecide" ? "decide again" : "never change"}` : ""}`;
   return { lf, description, destructive, warnings, touched: [...touched] };
 }
 

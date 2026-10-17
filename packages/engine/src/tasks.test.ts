@@ -40,7 +40,8 @@ const def = (kind: "conjoint" | "maxdiff" | "menu", extra: Record<string, unknow
 test("CBC: one column per task, declared from the design, filled with the alternative chosen", () => {
   const d = def("conjoint");
   const names = buildVariableDictionary(d).filter((v) => v.questionId === "q1").map((v) => v.name);
-  assert.deepEqual(names, ["TASKS_TASKS", "TASKS_VERSION", "TASKS_T1", "TASKS_T2"]);
+  // conjoint audit 2026-10-17: each task also records the order the alternatives were shown in
+  assert.deepEqual(names, ["TASKS_TASKS", "TASKS_VERSION", "TASKS_T1", "TASKS_T1_ORDER", "TASKS_T2", "TASKS_T2_ORDER"]);
   const state = createResponseState(d, { seed: 3 });
   setAnswer(d, state, "q1", { "1": "2", "2": "4" });
   const flat = flattenVariables(d, state);

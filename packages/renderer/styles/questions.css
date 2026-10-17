@@ -283,6 +283,23 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-viewport.mobile .rs-matrix-stack .rs-mcell { display: flex; justify-content: flex-start; min-height: 38px; width: 100%; }
 .rs-viewport.mobile .rs-matrix-stack .rs-mcap { display: inline; }
 
+/* CBC tasks (conjoint audit 2026-10-17): on a phone each alternative is a card and every level is
+   captioned with its attribute (the header row is hidden in the stacked layout). The caption is CSS
+   content, so it never enters the cell's text. The None card shows only its label and the choice. */
+.rs-cbc .rs-cbc-pick { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.rs-cbc tr.rs-cbc-chosen > td { background: color-mix(in srgb, var(--rs-primary) 7%, var(--rs-surface)); }
+@media (max-width: 480px) {
+  .rs-cbc td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: var(--rs-subtle); }
+  .rs-cbc tr[data-none] td[data-label] { display: none; }
+  .rs-cbc tr.rs-cbc-chosen { border-color: var(--rs-primary); border-width: 2px; }
+  .rs-cbc td.rs-cbc-choose { padding-top: 6px; }
+  .rs-cbc .rs-cbc-pick { min-height: 38px; width: 100%; }
+}
+.rs-viewport.mobile .rs-cbc td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; color: var(--rs-subtle); }
+.rs-viewport.mobile .rs-cbc tr[data-none] td[data-label] { display: none; }
+.rs-viewport.mobile .rs-cbc tr.rs-cbc-chosen { border-color: var(--rs-primary); border-width: 2px; }
+.rs-viewport.mobile .rs-cbc .rs-cbc-pick { min-height: 38px; width: 100%; }
+
 .rs-nps { display: flex; gap: 6px; flex-wrap: wrap; }
 .rs-nps button {
   width: 42px; height: 42px; border-radius: 8px; border: 1.5px solid var(--rs-border);
@@ -994,3 +1011,12 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 
 /* OR-01: an unknown question type — visible, not a text box */
 .rs-unsupported { border: 1.5px dashed var(--rs-error); background: color-mix(in srgb, var(--rs-error) 6%, var(--rs-surface)); color: var(--rs-error); border-radius: 8px; padding: 12px 16px; font-size: 0.95em; }
+
+/* MaxDiff (MD-P1): the item column wraps instead of forcing a scroll, and the best/worst radios
+   sit in a 40px tap target, so a task of 4–5 items fits a 390px phone without horizontal scroll */
+.rs-md td.rowlabel, .rs-md th.rowlabel { min-width: 0; overflow-wrap: anywhere; }
+.rs-md th:not(.rowlabel), .rs-md td:not(.rowlabel) { width: 64px; padding: 4px; }
+.rs-md .rs-md-pick { display: flex; align-items: center; justify-content: center; min-height: 40px; min-width: 40px; cursor: pointer; }
+.rs-md input[type="radio"] { width: 20px; height: 20px; }
+.rs-md-instructions { margin-bottom: 2px; }
+.rs-md-notice { font-size: 0.92em; }

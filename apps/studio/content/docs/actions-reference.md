@@ -20,6 +20,8 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **List Fill** (3): `create_list_fill`, `update_list_fill`, `remove_list_fill`
 
+**Research methods (MaxDiff, conjoint)** (4): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`
+
 ## Survey actions
 
 From `packages/engine/src/surveyActions.ts`:
@@ -58,6 +60,8 @@ export type SurveyAction =
   | QuotaAction
   /* List Fills — see listFillActions.ts; they write def.listFills and the destinations' masks */
   | ListFillAction
+  /* MaxDiff and conjoint as research designs — see methodActions.ts; they write def.designs and the question that renders the design */
+  | MethodAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
   | OptionAction;
 ```
@@ -170,6 +174,58 @@ export type QuotaAction =
   | { op: "remove_quota_cells"; quota: string; cells: string[] }
   | { op: "delete_quota"; quota: string }
   | { op: "set_quota_check"; quotas: string[]; after?: string; onFull?: QuotaOnFull; when?: CondInput | null };
+```
+
+## Research method actions (MaxDiff, conjoint)
+
+From `packages/engine/src/methodActions.ts`:
+
+```ts
+export type MethodAction =
+  | ({ op: "create_maxdiff" } & MethodPlacement & MaxDiffSpec)
+  | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
+  | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
+  | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec);
+```
+
+Supporting types:
+
+```ts
+export interface MethodPlacement {
+  ref?: string; block?: string; after?: string; newPage?: boolean; code?: string;
+  /** question text; a neutral default for the method when absent */
+  text?: string; required?: boolean;
+}
+export interface MaxDiffSpec {
+  items?: string[];
+  /** take the items from this question's options (or a grid's rows); None / Other excluded */
+  itemsFrom?: string;
+  addItems?: string[]; removeItems?: string[];
+  perTask?: number; tasks?: number | null; appearances?: number | null; versions?: number;
+  responseMode?: "best_worst" | "best_only";
+  anchored?: boolean; anchorPrompt?: string | null;
+  prohibitedPairs?: MaxDiffPair[]; addProhibitedPairs?: MaxDiffPair[]; removeProhibitedPairs?: MaxDiffPair[];
+  bestLabel?: string | null; worstLabel?: string | null; instructions?: string | null;
+  practice?: boolean; itemsPerVersion?: number | null; balance?: "optimized" | "greedy";
+  seed?: number; name?: string;
+}
+export interface ConjointSpec {
+  method?: ConjointMethodName;
+  attributes?: { name: string; levels: string[] }[];
+  addAttributes?: { name: string; levels: string[] }[];
+  removeAttributes?: string[];
+  /** replaces the levels of the named attributes */
+  levels?: Record<string, string[]>;
+  alternatives?: number; tasks?: number | null; versions?: number; holdouts?: number;
+  none?: boolean; noneLabel?: string | null;
+  prohibitions?: ConjointProhibitionInput[]; addProhibitions?: ConjointProhibitionInput[]; removeProhibitions?: ConjointProhibitionInput[];
+  design?: "efficient" | "balanced";
+  /* menu-based */
+  items?: MenuItemInput[]; requiredItems?: string[]; minSelections?: number; maxSelections?: number; currency?: string;
+  /* adaptive (ACBC) */
+  screeningTasks?: number; conceptsPerScreen?: number; tournamentAlternatives?: number; maxAttributesVaried?: number; minTournamentConcepts?: number;
+  seed?: number; name?: string;
+}
 ```
 
 ## Friendly type names

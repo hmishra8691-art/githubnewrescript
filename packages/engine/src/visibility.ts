@@ -212,7 +212,7 @@ export function pruneHiddenSelections(
      * allocation, ranking or design-task answer names no option at all.
      */
     const model = effectiveResponseModel(q);
-    if (model !== "single_choice" && model !== "multiple_choice" && model !== "per_row" && model !== "cells") continue;
+    if (model !== "single_choice" && model !== "multiple_choice" && model !== "rank_order" && model !== "per_row" && model !== "cells") continue;
 
     /*
      * DOES THIS QUESTION'S ANSWER HOLD OPTION CODES AT ALL?
@@ -252,6 +252,27 @@ export function pruneHiddenSelections(
     const rows = new Set(view.rows.map((r) => String(r.code)));
     const removed: string[] = [];
 
+    /*
+     * A RANKING is an ordered array of option codes — the same vocabulary as a
+     * multiple choice. It was skipped, so a respondent who ranked the brands a
+     * List Fill (or any mask) showed, went Back and changed the answer that
+     * decided them, came back to a ranking that still held the OLD brands —
+     * on the export and in every rule reading it (audit 2026-10-17, U9). As
+     * with grid rows below, a ranked code goes only if THE QUESTION AUTHORS IT
+     * and the pipeline has since taken it away (a mask, option logic); a code
+     * the question does not author (a tournament's cards, carried items this
+     * function cannot see) is left alone. The remaining ranks keep their order.
+     */
+    if (model === "rank_order") {
+      if (!Array.isArray(answer) || !offered.size) continue;
+      const authoredCodes = new Set((q.options ?? []).map((o) => String(o.code)));
+      const gone = (v: unknown) => (typeof v === "string" || typeof v === "number") && authoredCodes.has(String(v)) && !offered.has(String(v));
+      if (!answer.some(gone)) continue;
+      for (const v of answer) if (gone(v)) removed.push(String(v));
+      state.answers[key] = answer.filter((v) => !gone(v)) as never;
+      out.push({ questionId: q.id, scope: "option", removed });
+      continue;
+    }
     if (model === "multiple_choice") {
       if (!valuesAreCodes || !Array.isArray(answer) || !offered.size) continue;
       const kept = answer.filter((v) => (typeof v === "string" || typeof v === "number") && offered.has(String(v)));

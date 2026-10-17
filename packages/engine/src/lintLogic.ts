@@ -29,6 +29,7 @@ import { registerBareNameResolver } from "./piping.js";
 import { describeCycle, detectLogicCycles, orderIndex, unknownCalculationNames } from "./dependencies.js";
 import { MAX_LOOP_DEPTH, MAX_LOOP_PRODUCT, loopNodes, loopVariableNames, maxLoopIterations, possibleLoopItems, questionIdsInLoop } from "./loops.js";
 import { listFillVariableNames } from "./listFill.js";
+import { lintListFills } from "./listFillLint.js";
 import { buildVariableDictionary } from "./variables.js";
 import { embeddedCatalog, isNamedEmbeddedField, embeddedFieldName, coerceEmbedded } from "./embedded.js";
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
@@ -1258,6 +1259,7 @@ export function lintSurveyLogic(def: SurveyDefinition): LogicIssue[] {
   for (const q of def.questions ?? []) issues.push(...lintQuestionLogic(def, q, order));
   issues.push(...lintSurveyLevelConditions(def, order));
   issues.push(...lintLoops(def));
+  issues.push(...lintListFills(def)); // circular / dangling / duplicate List Fills (2026-10-17)
   issues.push(...lintStructure(def));
   /* a calculation reading a name nothing defines is null for every respondent, silently — an error, like a pipe from nowhere */
   for (const u of unknownCalculationNames(def)) {

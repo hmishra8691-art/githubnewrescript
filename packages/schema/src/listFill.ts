@@ -79,6 +79,17 @@ export const ListFillMethod = z.enum([
   "priority_quota",      // priority bands, quota- and capacity-aware inside one
   "quota_aware_random",  // random, but weighted by remaining capacity
   "custom",              // a script decides (§34)
+  /**
+   * LEAST FILL (the market-research sense: Decipher / Forsta "least fill").
+   * The eligible item(s) with the LOWEST current sample count go first —
+   * fewest respondents already allocated (or completed, see
+   * `leastFilled.basis`) — ties broken by `leastFilled.tieBreak`. No target is
+   * needed: it balances exposure across whatever is eligible. Distinct from
+   * `balanced_random`, which ranks by distance from each item's TARGET and is
+   * plain random when no target is set. Needs `tracking.sampleLevel` (without
+   * it there are no counts and only the tie-break decides).
+   */
+  "least_filled",
 ]);
 export type ListFillMethod = z.infer<typeof ListFillMethod>;
 
@@ -119,6 +130,43 @@ export const FallbackRule = z.enum([
   "next_priority",       // simply keep walking the priority order
 ]);
 export type FallbackRule = z.infer<typeof FallbackRule>;
+
+/**
+ * The settings of `method: "least_filled"`. Every field has one testable
+ * meaning (see the engine's `orderCandidates`):
+ *
+ *   basis     which counter is "fill": `allocated` (claimed, including
+ *             sessions still in progress), `completed` (finished interviews),
+ *             or `auto` = whichever the cap uses (`countOnCompleteOnly`).
+ *             Counting is always PER LIST FILL — two lists never share a count.
+ *   tieBreak  items with the same count: `random` (seeded per respondent, so
+ *             reproducible), `sequential` (the source's order), or `priority`
+ *             (lower priority number first, then random).
+ */
+export const LeastFilledSettings = z.object({
+  basis: z.enum(["auto", "allocated", "completed"]).default("auto"),
+  tieBreak: z.enum(["random", "sequential", "priority"]).default("random"),
+});
+export type LeastFilledSettings = z.infer<typeof LeastFilledSettings>;
+
+/**
+ * What a STORED allocation does when the respondent goes Back and changes the
+ * answers it was decided from (the source, an eligibility condition, `runWhen`
+ * or the count):
+ *
+ *   keep_valid  keep every item that is still eligible, in its position; drop
+ *               the ones that no longer qualify (their sample slot is given
+ *               back) and top up from a fresh decision. An unchanged source
+ *               changes nothing. Default for a sample-counted list, and for a
+ *               list that consults a hard quota.
+ *   redecide    decide the whole list again. Default for any other
+ *               (per-respondent) list — deterministic per respondent, so an
+ *               unchanged source reproduces the same items.
+ *   freeze      never change after the first allocation (the pre-2026-10-17
+ *               behaviour of a sample-counted list).
+ */
+export const ListFillOnChange = z.enum(["keep_valid", "redecide", "freeze"]);
+export type ListFillOnChange = z.infer<typeof ListFillOnChange>;
 
 /* ------------------------------------------------------------ how many */
 
@@ -273,6 +321,10 @@ export const ListFillSelection = z.object({
   fillToCount: z.boolean().default(true),
   /** a registered script implementing `method: "custom"` (§34) */
   scriptId: z.string().optional(),
+  /** settings of `method: "least_filled"`; absent = basis auto, random tie-break */
+  leastFilled: LeastFilledSettings.optional(),
+  /** Back + changed answers; absent = keep_valid (sample-counted) / redecide (per respondent) */
+  onChange: ListFillOnChange.optional(),
 });
 export type ListFillSelection = z.infer<typeof ListFillSelection>;
 

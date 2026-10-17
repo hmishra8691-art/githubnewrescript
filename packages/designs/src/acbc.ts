@@ -13,6 +13,7 @@
  */
 import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { normalizeAcbc, type AcbcConfig } from "@rescript/engine";
+import { effectiveProhibition, type ConjointLevelCondition, type ConjointProhibition } from "./conjoint.js";
 
 export type { AcbcConfig } from "@rescript/engine";
 
@@ -45,12 +46,20 @@ export const acbcPlugin: DesignGeneratorPlugin<AcbcConfig> = {
     if (new Set(names).size !== names.length) errors.push("Attribute names must be unique.");
     const levelsOf = new Map(c.attributes.map((a) => [a.name, new Set(a.levels)]));
     for (const p of c.prohibitions) {
-      for (const side of [p.a, p.b]) {
+      /*
+       * Every level the prohibition names — the pair, its `also` levels, or
+       * the leaves of a `when` tree (conjoint audit 2026-10-17: a `when`-only
+       * rule used to crash here on the missing pair).
+       */
+      const leaves: { attribute: string; level: string }[] = [];
+      const walk = (x: ConjointLevelCondition, d = 0) => { if (d > 64 || !x) return; if ("attribute" in x) leaves.push(x); else (x.children ?? []).forEach((k) => walk(k, d + 1)); };
+      walk(effectiveProhibition(p as ConjointProhibition));
+      for (const side of leaves) {
         const known = levelsOf.get(side.attribute);
         if (!known) errors.push(`Prohibition names attribute "${side.attribute}", which is not in this design.`);
         else if (!known.has(side.level)) errors.push(`Prohibition names level "${side.level}" of "${side.attribute}", which is not one of its levels.`);
       }
-      if (p.a.attribute === p.b.attribute) errors.push(`A prohibition cannot pair two levels of the same attribute ("${p.a.attribute}").`);
+      if (!p.when && p.a && p.b && p.a.attribute === p.b.attribute) errors.push(`A prohibition cannot pair two levels of the same attribute ("${p.a.attribute}").`);
     }
     if ((config.screeningTasks ?? 6) < 1) errors.push("At least one screening screen is needed.");
     if ((config.conceptsPerScreen ?? 4) < 2) errors.push("At least 2 concepts per screen.");

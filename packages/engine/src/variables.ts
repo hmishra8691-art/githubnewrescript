@@ -420,16 +420,32 @@ export function questionVariables(
         const tasks = [...new Set(v1.map((r) => String(r.task)))];
         for (const t of tasks) {
           if (q.type === "maxdiff_task") {
-            push({ name: `${q.variableName}_T${t}_BEST`, label: `${q.code} — task ${t} best (item index)`, dataType: "numeric" });
-            push({ name: `${q.variableName}_T${t}_WORST`, label: `${q.code} — task ${t} worst (item index)`, dataType: "numeric" });
+            /*
+             * MD-P1: a best-only design has no worst column; a practice task
+             * (task 0, `practice` = 1) is labelled as one; and the item index
+             * carries its item label, so a labelled export (SPSS, values=label)
+             * says which item was picked.
+             */
+            const mdCfg = (design?.config ?? {}) as { responseMode?: string };
+            const practice = v1.some((r) => String(r.task) === t && Number(r.practice) === 1);
+            const taskName = practice ? "practice task (not analysed)" : `task ${t}`;
+            const itemLabels: Record<string, string> = {};
+            for (const r of rows) if (r.item_index != null) itemLabels[String(r.item_index)] = strip(String(r.item_label ?? r.item_index));
+            const itemCodes = Object.keys(itemLabels).map(Number).sort((a, b) => a - b);
+            push({ name: `${q.variableName}_T${t}_BEST`, label: `${q.code} — ${taskName} best (item index)`, dataType: "numeric",
+              ...(itemCodes.length ? { valueCodes: itemCodes, valueLabels: itemLabels } : {}) });
+            if (mdCfg.responseMode !== "best_only") {
+              push({ name: `${q.variableName}_T${t}_WORST`, label: `${q.code} — ${taskName} worst (item index)`, dataType: "numeric",
+                ...(itemCodes.length ? { valueCodes: itemCodes, valueLabels: itemLabels } : {}) });
+            }
             // METHOD-04: one anchor column per task (all / some / none) when the design is anchored
             if ((design?.config as { anchored?: boolean } | undefined)?.anchored) {
-              push({ name: `${q.variableName}_T${t}_ANCHOR`, label: `${q.code} — task ${t} anchor (all / some / none important)`, dataType: "text",
+              push({ name: `${q.variableName}_T${t}_ANCHOR`, label: `${q.code} — ${taskName} anchor (all / some / none important)`, dataType: "text",
                 valueCodes: ["all", "some", "none"],
                 notes: "The dual-response follow-up asked after this set. Places the utility scale's zero point." });
             }
             // METHOD-14: what the respondent actually saw, top to bottom (the design's own `position` is re-shuffled per respondent)
-            push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — task ${t} shown order (item indices, top to bottom)`, dataType: "text",
+            push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — ${taskName} shown order (item indices, top to bottom)`, dataType: "text",
               notes: "Item indices in the order this respondent saw them, joined by '|'. Use it to test position effects." });
           } else if (design?.kind === "menu") {
             const items = v1.filter((r) => String(r.task) === t).sort((a, b) => Number(a.item) - Number(b.item));
@@ -441,7 +457,10 @@ export function questionVariables(
             push({ name: `${q.variableName}_T${t}_TOTAL`, label: `${q.code} — task ${t}: bundle total`, dataType: "numeric", derived: true });
           } else {
             push({ name: `${q.variableName}_T${t}`, label: `${q.code} — task ${t} choice (alternative)`, dataType: "numeric",
-              notes: "The alternative number chosen; the None option, when offered, is alternatives + 1" });
+              notes: "The design alternative chosen (the design file's `alt`, not the screen position); the None option, when offered, is alternatives + 1" });
+            // conjoint audit 2026-10-17: what this respondent saw, top to bottom — the position randomisation, recorded
+            push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — task ${t} shown order (design alternatives, top to bottom)`, dataType: "text",
+              notes: "Design alternative numbers in the order this respondent saw them, joined by '|' (None last). Use it to test position effects; the stacked choice export has the same as a `position` column." });
           }
         }
       }

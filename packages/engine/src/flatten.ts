@@ -81,7 +81,17 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
     if (q.type !== "conjoint_task" && q.type !== "maxdiff_task") continue;
     const design = designFor(def, q);
     if (!design) continue;
-    out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, state.seed);
+    /*
+     * Conjoint audit 2026-10-17: without a seed there is no version to derive.
+     * `designVersionFor(…, undefined)` hashed the question id alone and gave
+     * EVERY respondent the same, made-up version — which is what the XLSX
+     * export (it passed no seed) wrote for multi-version designs. Blank is
+     * honest; a guessed version attaches choices to concepts nobody saw.
+     */
+    // a bigint seed may arrive from the database as a numeric string; null / "" / non-numeric is no seed
+    const seedNum = state.seed == null || (state.seed as unknown) === "" ? NaN : Number(state.seed);
+    if (!Number.isFinite(seedNum)) continue;
+    out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, seedNum);
   }
 
   for (const q of def.questions) {
@@ -188,10 +198,12 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
       if (anchor != null && anchor !== "") out[`${varName}_T${task}_ANCHOR`] = String(anchor);
       // METHOD-14: the order this respondent saw the items in. The renderer rolls it from
       // (seed, question, task) via shuffleAlternatives, so it is recomputed, not stored.
-      if (seed !== undefined) {
+      // a null / "" seed is no seed (the response predates seeds, or the store lost it): no order is invented
+      const mdSeed = seed == null || (seed as unknown) === "" ? NaN : Number(seed);
+      if (Number.isFinite(mdSeed)) {
         const shown = shuffleAlternatives(
           rows.filter((r) => String(r.version ?? "1") === version && String(r.task) === task),
-          seed,
+          mdSeed,
           `${q.id}:${task}`,
         );
         if (shown.length) out[`${varName}_T${task}_ORDER`] = shown.map((r, i) => String(r.item_index ?? i)).join("|");
@@ -210,6 +222,17 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
     } else {
       const n = Number(v);
       out[`${varName}_T${task}`] = Number.isFinite(n) ? n : String(v);
+      // conjoint audit 2026-10-17: the CBC shown order — design alternative numbers top to bottom
+      // (None last), recomputed from the seed exactly as the renderer rolls it
+      const seedNum = seed == null || (seed as unknown) === "" ? NaN : Number(seed);
+      if (Number.isFinite(seedNum) && out[`${varName}_VERSION`] != null) {
+        const shown = shuffleAlternatives(
+          rows.filter((r) => String(r.version ?? "1") === version && String(r.task) === task),
+          seedNum,
+          `${q.id}:${task}`,
+        );
+        if (shown.length) out[`${varName}_T${task}_ORDER`] = shown.map((r, i) => String(r.alt ?? i + 1)).join("|");
+      }
     }
   }
 }

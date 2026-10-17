@@ -53,6 +53,8 @@ import {
   type VoiceRecord,
   decideListFill,
   listFillVariables,
+  listFillRetained,
+  type ListFillCounts,
   setOtherText,
   setOtherTextFor,
   otherTextsOf,
@@ -111,6 +113,13 @@ export interface RunnerProps {
    */
   startAt?: string;
   seedAnswers?: Record<string, unknown>;
+  /**
+   * PREVIEW ONLY: the sample counters a preview's List Fills decide against
+   * (`{ listFillId: { code: n } }`) — what the Studio's simulator shows, or a
+   * test harness walking several respondents. Live and test read the real
+   * counters on the server; this is never sent anywhere.
+   */
+  listFillCounts?: ListFillCounts;
 }
 
 type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; status?: number } | { ok: true; skipped: true };
@@ -311,14 +320,17 @@ async function runListFills(
   session: RunnerProps["session"],
   build: RunnerProps["build"],
   onTrace?: (line: string) => void,
+  previewCounts?: ListFillCounts,
 ): Promise<string[]> {
-  const due = pendingListFills(def, state);
+  const due = pendingListFills(def, state, { counts: mode === "preview" ? previewCounts : undefined });
   if (!due.length) return [];
 
   if (mode === "preview" || !session) {
     const ran: string[] = [];
     for (const lf of due) {
-      const res = decideListFill({ def, listFill: lf, state });
+      // a re-decision after Back + a change keeps the items that still qualify (selection.onChange)
+      const counts = previewCounts ?? {};
+      const res = decideListFill({ def, listFill: lf, state, counts, retain: listFillRetained(def, lf, state, { counts }) });
       Object.assign(state.calculated, listFillVariables(lf, res));
       applyListFillDestinations(lf, res, state);
       ran.push(lf.id);
@@ -385,7 +397,7 @@ export function Runner(props: RunnerProps) {
   );
 }
 
-function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers }: RunnerProps) {
+function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers, listFillCounts }: RunnerProps) {
   const [, force] = React.useReducer((x: number) => x + 1, 0);
   /*
    * THE ONE SCRIPT PIPELINE. A survey saved before "Custom code" was folded
@@ -762,7 +774,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     function initSurvey() {
     const state = createResponseState(def, {
       sessionId: session?.sessionId,
-      seed: session?.seed,
+      // a preview has no session: a reload keeps the seed it stored with its answers (see checkpoint)
+      seed: session?.seed ?? (mode === "preview" ? readPreviewState(previewStateId)?.seed : undefined),
       embedded: Object.fromEntries(
         def.embeddedData
           .map((e) => embeddedFieldName(e))
@@ -1215,7 +1228,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * after navigation would show the respondent a page built from an item
      * they had not been given yet.
      */
-    const allocated = await runListFills(def, state, mode, session, build, (line) => setLogs((l) => [...l, line]));
+    const allocated = await runListFills(def, state, mode, session, build, (line) => setLogs((l) => [...l, line]), listFillCounts);
     if (allocated.length && mode !== "live") {
       console.info("[rescript:listfill] allocated", allocated.map((id) => ({
         id, items: def.listFills.find((lf) => lf.id === id)?.name ?? id,
@@ -1318,7 +1331,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     } else if (mode === "preview") {
       /* the preview's own position, so a refresh comes back here rather
          than to page one — see cachePreviewState */
-      cachePreviewState(previewStateId, snapshot);
+      // the seed too (conjoint audit 2026-10-17): a CBC / MaxDiff answer names a design alternative of the
+      // respondent's VERSION, and the version comes from the seed — a reload with a fresh seed would put
+      // the restored choices on another version's concepts (and re-roll every randomised order)
+      cachePreviewState(previewStateId, { ...snapshot, seed: state.seed });
     }
     void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
       if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }

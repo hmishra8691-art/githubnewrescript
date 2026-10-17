@@ -1,12 +1,13 @@
 import { COPILOT_ANALYSIS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_SYSTEM_PROMPT, COPILOT_TRANSLATION_GUIDE, COPILOT_UX_GUIDE } from "./copilot/prompt.ts";
 import { COPILOT_LIST_FILL_GUIDE } from "./copilot/listFillGuide.ts";
+import { COPILOT_METHODS_GUIDE } from "./copilot/methodsGuide.ts";
 
 /**
  * THE STABLE PREFIX OF A COPILOT CALL (AI cost audit, 2026-10-17).
  *
  * `copilotUserPrompt` puts the guides a request needs (the UX guide for a
  * behaviour or JavaScript request, ~20k characters; the analysis, translation,
- * quota, List Fill and findings guides) AFTER the survey outline, the memory
+ * quota, List Fill, methods and findings guides) AFTER the survey outline, the memory
  * and the recent turns — so the only text a provider's prompt cache could
  * reuse between two calls was the system prompt. Moved in front, as system
  * blocks, the guides are the same bytes on every call that needs them and are
@@ -22,7 +23,7 @@ import { COPILOT_LIST_FILL_GUIDE } from "./copilot/listFillGuide.ts";
  */
 
 /** the guides, in the order `copilotUserPrompt` adds them */
-export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_FINDINGS_GUIDE];
+export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE];
 
 /** Lift each of `guides` found verbatim in `text` out of it: the guides found (in the list's order) and what is left. */
 export function splitStable(text: string, guides: readonly string[]): { stable: string[]; variable: string } {

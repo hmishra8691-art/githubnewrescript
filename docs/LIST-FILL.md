@@ -24,13 +24,16 @@ set of options with limits, a strategy, and somewhere to put the answer.
 | Configuration model (versioned with the survey) | `packages/schema/src/listFill.ts` |
 | The decision engine — pure, deterministic, explainable | `packages/engine/src/listFill.ts` |
 | Atomic allocation, counters, audit | `supabase/migrations/0007_list_fill.sql` |
-| Server-side allocation for a session | `apps/runtime/app/api/session/listfill/route.ts` |
+| Re-allocation after Back + a change, one lock order (no deadlock), active-only slot uniqueness | `supabase/migrations/0061_list_fill_reallocate.sql` |
+| Server-side allocation for a session | `apps/runtime/app/api/session/listfill/route.ts` → `apps/runtime/lib/listFillAllocate.ts` |
+| Circular / dangling / duplicate lint | `packages/engine/src/listFillLint.ts` (in `lintSurveyLogic`, Quality check → List Fill) |
 | Runtime integration (runs on page submit) | `apps/runtime/components/Runner.tsx` |
 | Programming panel, dashboard, simulator | `apps/studio/components/studio/ListFillPanel.tsx` |
 | Counts + recount API | `apps/studio/app/api/surveys/[id]/listfill/route.ts` |
-| Unit tests (38) | `packages/engine/src/listFill.test.ts` |
+| Unit tests | `packages/engine/src/listFill.test.ts`, `listFillLeast.test.ts` (least fill, Back/change, lint), `listFillActions.test.ts`, `apps/runtime/lib/listFillAllocate.test.ts` |
 | Concurrency proof (45 checks, real parallel transactions) | `scripts/listfill-allocation-test.mjs` |
-| Browser suite (22 checks) | `scripts/listfill-test.mjs` |
+| SQL re-allocation proof (19 checks) + pgbench concurrency | `scripts/listfill-reallocate-sql-test.sql`, `scripts/listfill-reallocate-concurrency.sh` |
+| Browser suites | `scripts/listfill-test.mjs`, `scripts/listfill-least-test.mjs`, `scripts/listfill-intelligent-test.mjs` |
 
 `def.listFills` is an array inside the survey definition, so a List Fill
 versions, autosaves, exports, diffs and rolls back exactly like a question or
@@ -128,11 +131,24 @@ free: a cell saying "Apple AND male AND 25–34 AND North" is one ordinary
 condition, evaluated with the candidate sitting beside the answers already in
 the state. No quota structure is hardcoded.
 
-**Strategy.** Eleven selection methods (`highest_priority`, `lowest_priority`,
+**Strategy.** Twelve selection methods (`highest_priority`, `lowest_priority`,
 `priority_random`, `priority_quota`, `first_selected`, `selection_order`,
 `random`, `weighted_random`, `balanced_random`, `quota_aware_random`,
-`custom`) and five equal-priority rules (`random`, `balanced`, `sequential`,
-`weighted`, `quota_aware_random`). `afterTarget` decides what a satisfied
+`least_filled`, `custom`) and five equal-priority rules (`random`, `balanced`,
+`sequential`, `weighted`, `quota_aware_random`). The equal-priority rule only
+changes the priority methods (`highest_priority`, `lowest_priority`,
+`priority_random`, `priority_quota`, `custom`); the panel hides it otherwise.
+
+**Least fill** (`least_filled`, 2026-10-17) is the market-research "least
+fill": the eligible item(s) the FEWEST respondents already have go first.
+`selection.leastFilled.basis` says which counter that is (`allocated`,
+`completed`, or `auto` = the cap's counter) and `tieBreak` how equal counts
+are separated (`random` seeded per respondent, `sequential` source order,
+`priority` lower number first). Counting is per List Fill. Maximums still cap
+and eligibility still applies first. It is NOT `balanced_random`, which ranks
+by distance from each item's TARGET and is plain random when no target is set
+— measured over 1,000 respondents: random/balanced spread 233, least filled 3
+(docs/LIST-FILL-LEAST-AUDIT-2026-10-17.md). It needs sample-level counting. `afterTarget` decides what a satisfied
 option does — keep going, drop behind, join a random pool, or stop — and
 `fallback` decides what happens when the whole preference order runs dry.
 
@@ -223,7 +239,7 @@ is the audit trail and the source of truth the counters are a cache of.
 
 ---
 
-## Idempotency
+## Idempotency, and Back + a changed answer
 
 `rescript_allocate_listfill` returns a session's existing allocations
 unchanged if it already has them, marked `reused`. Going back, reloading,
@@ -231,6 +247,29 @@ resuming tomorrow, or double-submitting a page all yield the same items. An
 advisory lock on session + list serialises a session's own concurrent
 requests, so even a genuine double-submit from two connections cannot
 allocate twice — asserted in the concurrency suite.
+
+A respondent who goes Back and CHANGES what a list was decided from is
+handled by `selection.onChange` (engine `reconcileListFill`):
+
+| onChange | Meaning | Default for |
+| --- | --- | --- |
+| `keep_valid` | keep the stored items that still qualify (eligibility only — a held item keeps its own slot), give back the slots of the ones that do not, top up the free positions | sample-counted lists, lists consulting a hard quota |
+| `redecide` | decide the whole list again (deterministic per respondent, so an unchanged source reproduces it) | per-respondent lists |
+| `freeze` | never change after the first allocation (the pre-2026-10-17 behaviour of a sample-counted list) | — |
+
+A plain Back/Next with nothing changed is never a change, whatever the
+counters did meanwhile. For a sample-counted list the server calls
+`rescript_reallocate_listfill` (0061): under the same advisory lock it
+releases the dropped claims (reason `changed`, kept as audit, never restored
+by an undelete), keeps the rest in their slots and claims the free positions
+from the engine's new order. Destinations, piping variables and an answer the
+list wrote earlier all follow; a ranking of the items loses the ones taken
+away. Without migration 0061 the route keeps the stored items (and logs it).
+
+Every counter-touching function locks the counter rows it may touch first,
+in code order (`rescript_lock_listfill_rows`) — before 0061 two respondents
+claiming in crossing preference orders ([A,B] and [B,A], normal under random
+and least-fill methods) deadlocked.
 
 ---
 
@@ -254,6 +293,18 @@ Because it is the same engine, what the simulator shows is what fieldwork
 does.
 
 ---
+
+## Settings the panel does not offer (2026-10-17)
+
+`selection.fallback` ("when nothing is left"): the strategy already tries
+every eligible item with room, so its pool is empty except for an item a quota
+cell blocked at one position (retried at the next); it never substitutes an
+ineligible or full item. `storeTrace`: nothing stores the trace (test sessions
+and the simulator show it). `whenUnused: "disable"` / `terminate_block`: no
+renderer acts on them — Intelligent Mode stores `hide` instead and says so.
+`afterMaximum`, `allowDuplicates`, `fillToCount`, `weighted`, `repeatBlockId`,
+`method: "custom"`, `source.kind: "script"`, `count.kind: "expression"` remain
+schema-only (see LIST-FILL-AUDIT-2026-10-16 U2–U4). Stored values keep working.
 
 ## What is intentionally not here
 

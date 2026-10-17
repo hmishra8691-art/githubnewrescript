@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cachePending, clearPending, readPending, mergeResumeSnapshot, type PendingAnswers } from "./resume.ts";
+import { cachePending, clearPending, readPending, mergeResumeSnapshot, cachePreviewState, readPreviewState, type PendingAnswers } from "./resume.ts";
 
 /* a minimal localStorage, so the browser-only cache can run under node */
 function installStorage(): Map<string, string> {
@@ -63,4 +63,16 @@ test("clearPending without a stamp still clears unconditionally", () => {
   cachePending(sid, { answers: {}, calculated: {}, embedded: {}, flags: [], stepIndex: 1 });
   clearPending(sid);
   assert.equal(readPending(sid), null);
+});
+
+/* conjoint audit 2026-10-17: a preview reload keeps its seed, so a CBC answer (a design alternative of the
+   seed's version) is restored onto the same concepts, in the same order */
+test("a preview snapshot carries the response seed back after a reload", () => {
+  installStorage();
+  cachePreviewState("cj:full", { answers: { q1: { "1": "2" } }, calculated: {}, embedded: {}, flags: [], stepIndex: 1, seed: 424242 });
+  const back = readPreviewState("cj:full");
+  assert.equal(back?.seed, 424242);
+  assert.deepEqual(back?.answers, { q1: { "1": "2" } });
+  cachePreviewState("old:full", { answers: {}, calculated: {}, embedded: {}, flags: [], stepIndex: 0 });
+  assert.equal(readPreviewState("old:full")?.seed, undefined, "a snapshot without one (written before) reads as before");
 });

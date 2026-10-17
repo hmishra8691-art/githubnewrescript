@@ -2,6 +2,14 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
 import { applySurveyActions, diffSurveys, listBlocks, renumberNewQuestions, isUxOp, withoutPresentation, type SurveyAction, type ApplyActionsOutcome, type ActionResult, type SurveyDiff } from "@rescript/engine";
 import type { CopilotReply, TurnMemory } from "./prompt.ts";
+/*
+ * THE REPLAY GENERATES WHAT THE SERVER GENERATED. create_maxdiff / create_conjoint (and update_*) reach the design
+ * generators through the schema's registry; the browser's replay on Apply must hold the same generators as the
+ * route, or the proposal would be refused here ("not loaded"). Seeded, so the design is identical.
+ */
+import { registerBuiltinDesignGenerators } from "@rescript/designs";
+
+registerBuiltinDesignGenerators();
 
 /**
  * THE COPILOT IN THE BROWSER — the pure part: proposals as chains of action

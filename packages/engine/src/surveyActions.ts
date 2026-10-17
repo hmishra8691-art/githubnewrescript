@@ -22,6 +22,8 @@ import { applyLocalizationAction, coerceLocalizationAction, describeLocalization
 import { languageName, pruneOrphanedTranslations, movedTranslationKeys } from "./localization.js";
 import { applyQuotaAction, coerceQuotaAction, describeQuotaAction, isQuotaOp, quotaDiff, containsQuestion, endIndex, QUOTA_ACTION_OPS, type QuotaAction } from "./quotaActions.js";
 import { applyListFillAction, coerceListFillAction, describeListFillAction, isListFillOp, listFillDiff, LIST_FILL_ACTION_OPS, type ListFillAction } from "./listFillActions.js";
+import { applyMethodAction, coerceMethodAction, describeMethodAction, designDiff, isMethodOp, METHOD_ACTION_OPS, type MethodAction } from "./methodActions.js";
+import { DESIGN_TASK_TYPES } from "./lintLogic.js";
 import { parsePunchExpression, formatPunchExpression } from "./autoPunch.js";
 import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
@@ -118,6 +120,8 @@ export type SurveyAction =
   | QuotaAction
   /* List Fills — see listFillActions.ts; they write def.listFills and the destinations' masks */
   | ListFillAction
+  /* MaxDiff and conjoint as research designs — see methodActions.ts; they write def.designs and the question that renders the design */
+  | MethodAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
   | OptionAction;
 
@@ -127,7 +131,7 @@ export const SURVEY_ACTION_OPS = [
   "create_randomizer", "create_branch", "create_loop", "set_research", "add_punch", "remove_punches",
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
-  ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS,
+  ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
   ...OPTION_ACTION_OPS,
 ] as const;
 
@@ -369,6 +373,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (qa !== null) return qa;
       const lfa = op ? coerceListFillAction(op, o) : null;
       if (lfa !== null) return lfa;
+      const ma = op ? coerceMethodAction(op, o) : null;
+      if (ma !== null) return ma;
       const oa = op ? coerceOptionAction(op, o) : null;
       if (oa !== null) return oa;
       return op ? `unknown action “${op}”` : "an action needs an op";
@@ -540,6 +546,8 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
 
 class ActionError extends Error {}
 const fail = (m: string): never => { throw new ActionError(m); };
+/** the create_question actions a method action makes for its design (the only way a design-task question is created) */
+const designQuestionActions = new WeakSet<object>();
 /** the actions whose dependents are worth listing before applying */
 const IMPACT_OPS = new Set(["delete_question", "delete_block", "update_question", "update_option", "move_question", "set_display_logic", "update_embedded", "remove_embedded"]);
 
@@ -579,6 +587,14 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     case "create_question": {
       const variantId = variantForActionType(a.type) ?? fail(`“${a.type}” is not a question type the Studio knows`);
       const v = variantRegistry.get(variantId)!;
+      /*
+       * A MAXDIFF / CONJOINT QUESTION IS ITS DESIGN (Priority 5). Created bare it renders nothing ("no
+       * design is selected"), so the copilot's create_question of such a type is refused with the action
+       * that configures, checks, generates and attaches the design — never left half made.
+       */
+      if ((DESIGN_TASK_TYPES as readonly string[]).includes(v.baseType) && !designQuestionActions.has(a)) {
+        fail(`a ${v.name} question renders a generated design — use ${v.baseType === "maxdiff_task" ? "create_maxdiff (items, perTask, tasks, versions …)" : "create_conjoint (method, attributes and levels, alternatives, tasks …)"}, which generates and attaches the design`);
+      }
       // a batch ref that reads as a variable name ("AGE", "BUY") becomes the variable, so the
       // model's own conditions and piping ("AGE < 18", "{{BUY}}") name the question natively
       const naming = namingFor(def, a.code, a.variable ?? (a.ref && /^[A-Za-z_][A-Za-z0-9_]{0,40}$/.test(a.ref) ? a.ref.toUpperCase() : undefined));
@@ -633,6 +649,9 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (a.type) {
         const variantId = variantForActionType(a.type) ?? fail(`“${a.type}” is not a question type the Studio knows`);
         const v = variantRegistry.get(variantId)!;
+        if ((DESIGN_TASK_TYPES as readonly string[]).includes(v.baseType) && v.baseType !== q.type) {
+          fail(`${q.code} cannot become a ${v.name} by a type change — that question renders a generated design: create it with ${v.baseType === "maxdiff_task" ? "create_maxdiff" : "create_conjoint"} (it can take its items from ${q.code}: itemsFrom) and remove ${q.code} if it is no longer wanted`);
+        }
         if (v.id !== q.variant || v.baseType !== q.type) {
           const from = typeLabel(q);
           const m = migrateQuestionType(q, v);
@@ -966,6 +985,21 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       // the List Fills: def.listFills and the masks of their destinations; every question, item and code resolved here
       if (isListFillOp(a.op)) {
         const r = applyListFillAction(def, a as ListFillAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
+      // MaxDiff / conjoint: the design configured, checked by its generator, generated, pinned in def.designs and rendered by its question
+      if (isMethodOp(a.op)) {
+        const r = applyMethodAction(def, a as MethodAction, {
+          question: (x) => tryQuestion(ctx, x),
+          createQuestion: (p) => {
+            const make: SurveyAction = { op: "create_question", type: p.variant, text: p.text, ...(p.ref ? { ref: p.ref } : {}), ...(p.block ? { block: p.block } : {}), ...(p.after ? { after: p.after } : {}), ...(p.newPage ? { newPage: true } : {}), ...(p.code ? { code: p.code } : {}), ...(p.required !== undefined ? { required: p.required } : {}) };
+            designQuestionActions.add(make);
+            const made = apply(ctx, make);
+            return ctx.def.questions.find((x) => x.id === made.touched?.[0]) ?? fail("the question could not be created");
+          },
+          ids: ctx.ids, now: ctx.now,
+        });
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
@@ -1400,7 +1434,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1570,6 +1604,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     calculationsAdded.length ? `Add calculation${calculationsAdded.length === 1 ? "" : "s"} ${calculationsAdded.join(", ")}` : "",
     ...quotaDiff(before, after),
     ...listFillDiff(before, after),
+    ...designDiff(before, after),
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",

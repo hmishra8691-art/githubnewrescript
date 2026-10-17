@@ -15,7 +15,7 @@ Each base type has a *response model* that decides the stored answer and the col
 | `cells` | composite, custom_table | `{ row: { columnId: value } }` | `<variableStem>_<row>` per column |
 | `rank_order` | ranking, image_ranking | the codes in rank order | `VAR_<code>` = rank 1..n |
 | `allocation` | allocation | `{ code: amount }` | `VAR_<code>`, `VAR_total` |
-| `tasks` | conjoint_task, maxdiff_task, acbc_task | per-task choices | `VAR_T<n>` (+ `_VERSION`), `VAR_T<n>_BEST` / `_WORST`, the ACBC set (`_BYO_*`, `_WINNER_*`, `_UNACCEPTABLE`, `_MUSTHAVE`…) |
+| `tasks` | conjoint_task, maxdiff_task, acbc_task | per-task choices (CBC: the design alternative chosen, not the screen position) | `VAR_T<n>` (+ `_VERSION`; CBC also `VAR_T<n>_ORDER`, the design alternatives in the order shown), `VAR_T<n>_BEST` / `_WORST`, the ACBC set (`_BYO_*`, `_WINNER_*`, `_UNACCEPTABLE`, `_MUSTHAVE`…) |
 | `coordinates` | hotspot, annotation, media_timeline | points, pins and strokes, timeline reactions | `VAR_<i>_X` / `_Y`, `_PINS` / `_STROKES` / `_JSON`, `_N` / `_<code>_N` |
 | `geo` | geo | `{ lat, lng, accuracy, radiusM, address{…}, source }` | `VAR_LAT`, `_LNG`, `_ACCURACY_M`, `_RADIUS_M`, `_CITY`, `_REGION`, `_COUNTRY`, `_POSTAL`, `_SOURCE` |
 | `media` | upload | `{ url, name, size, type }` (or a list) | `VAR_URL`, `_NAME`, `_SIZE` |
@@ -33,7 +33,7 @@ A survey's responses are read as a **dataset**: `environment` `LIVE`, `TEST` or 
 
 ## Formats
 
-`GET /api/surveys/{id}/responses?format=csv|xlsx|sav|sas|dta|json` with `include=live|all`, `test=1`, `dataset=all|clean|custom:…`, `values=code|label|code_label`, `quality=1`, `dictionary=1`. Export presets (`export-presets`) save a format, a value style, a header style (`name`, `label`, `name_label`) and a column selection.
+`GET /api/surveys/{id}/responses?format=csv|xlsx|sav|sas|dta|json` (and `format=cbc` — the stacked conjoint choice file: one row per respondent × task × alternative shown, None included, with `version`, `task`, `alt`, `concept_id`, `position`, `none`, `chosen` and every attribute's level and `_code`, for MNL / HB software) with `include=live|all`, `test=1`, `dataset=all|clean|custom:…`, `values=code|label|code_label`, `quality=1`, `dictionary=1`. Export presets (`export-presets`) save a format, a value style, a header style (`name`, `label`, `name_label`) and a column selection.
 
 | Format | What you get |
 |---|---|

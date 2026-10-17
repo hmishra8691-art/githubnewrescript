@@ -285,6 +285,16 @@ export function DataPanel() {
               title="Zip: SAS transport file, CSV, and a .sas program with PROC FORMAT and LABEL">⬇ SAS (.xpt + syntax)</a>
             <a className="btn small" href={dtaHref} target="_blank" data-testid="export-dta"
               title="Stata 14+ — UTF-8 throughout, 32-character names, value labels as metadata">⬇ Stata (.dta)</a>
+            {/* conjoint audit 2026-10-17: the stacked CBC file (design joined to choice) — only when the survey has a CBC question */}
+            {s.def.questions.some((q) => q.type === "conjoint_task" && s.def.designs.some((d) => d.id === q.settings?.designRef && d.kind !== "menu")) && (
+              <a className="btn small" href={exportUrl("cbc")} target="_blank" data-testid="export-cbc"
+                title="One row per respondent × task × alternative shown (None included): version, task, design alternative, concept id, on-screen position, every attribute level and code, chosen 0/1 — the layout MNL / HB tools read">⬇ Conjoint choice file (.csv)</a>
+            )}
+            {/* MD-P1: the long choice file a MaxDiff model reads — only when the survey has one */}
+            {s.def.questions.some((q) => q.type === "maxdiff_task") && (
+              <a className="btn small" href={exportUrl("maxdiff")} target="_blank" data-testid="export-maxdiff"
+                title="One row per respondent × task × item shown: version, task, on-screen position, best/worst flags — the layout HB / logit tools read">⬇ MaxDiff choice file (.csv)</a>
+            )}
             <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>
               Codes stay codes in these; the labels travel as metadata, so frequencies come out labelled.
             </span>

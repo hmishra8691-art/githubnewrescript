@@ -1829,6 +1829,8 @@ export function Composite(p: QRProps) {
 
 /* --------------------------------------------- design-driven task questions */
 function DesignTasks(p: QRProps) {
+  /* MaxDiff: the last best/worst conflict the respondent ran into, per task (MD-P1, see the radios below) */
+  const [mdNotice, setMdNotice] = React.useState<Record<string, string>>({});
   const design = p.def.designs.find((d) => d.id === p.q.settings.designRef);
   if (!design?.file?.rows?.length) {
     return <div className="rs-error-msg">Design file “{p.q.settings.designRef}” not generated yet.</div>;
@@ -1865,11 +1867,25 @@ function DesignTasks(p: QRProps) {
     (anchorCfg.anchorPrompt ?? "").trim() ||
     "Thinking about the items in this set, how many of them are important to you?";
   const attrCols = design.file.columns.filter(
-    (c) => !["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"].includes(c),
+    (c) => !["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label", "practice"].includes(c),
   );
+  /*
+   * MAXDIFF METHOD AND WORDING (MD-P1), from the design's config like the
+   * anchor: best-only or best-and-worst, the column labels, instructions, and
+   * the practice task (task rows with `practice` = 1). Absent keys are the
+   * standard best-worst task this has always rendered.
+   */
+  const mdCfg = (design.config ?? {}) as { responseMode?: string; bestLabel?: string; worstLabel?: string; instructions?: string };
+  const bestOnly = isMaxdiff && mdCfg.responseMode === "best_only";
+  const bestLabel = (mdCfg.bestLabel ?? "").trim() || "Most";
+  const worstLabel = (mdCfg.worstLabel ?? "").trim() || "Least";
+  const mdInstructions = isMaxdiff ? (mdCfg.instructions ?? "").trim() : "";
+  const practiceTasks = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));
+  const realTasks = tasks.filter((t) => !practiceTasks.has(t));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      {mdInstructions && <div className="rs-md-instructions" data-testid="md-instructions">{mdInstructions}</div>}
       {tasks.map((t) => {
         // the design fixes which concepts share a task, not the order they
         // appear in; position effects are real, so the order is rolled per
@@ -1881,14 +1897,17 @@ function DesignTasks(p: QRProps) {
         );
         return (
           <div key={t} className="rs-card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 600, marginBottom: 10 }}>Task {t}</div>
+            <div style={{ fontWeight: 600, marginBottom: 10 }} data-testid={isMaxdiff ? `md-task-${t}` : undefined}>
+              {isMaxdiff && practiceTasks.has(t) ? "Practice task (not counted)"
+                : isMaxdiff ? `Task ${realTasks.indexOf(t) + 1} of ${realTasks.length}` : `Task ${tasks.indexOf(t) + 1} of ${tasks.length}`}
+            </div>
             <div className="rs-table-wrap">
-              <table className="rs-matrix">
+              <table className={isMaxdiff ? "rs-matrix rs-md" : "rs-matrix rs-matrix-stack rs-cbc"} data-testid={isMaxdiff ? `md-table-${t}` : `cbc-task-${t}`}>
                 <thead>
                   <tr>
                     {isMaxdiff ? (
                       <>
-                        <th>Least</th><th className="rowlabel">Item</th><th>Most</th>
+                        {!bestOnly && <th>{worstLabel}</th>}<th className="rowlabel">Item</th><th>{bestLabel}</th>
                       </>
                     ) : (
                       <>
@@ -1904,36 +1923,76 @@ function DesignTasks(p: QRProps) {
                     const altKey = isMaxdiff ? String(alt.item_index ?? i) : String(alt.alt ?? i + 1);
                     if (isMaxdiff) {
                       const cur = (vals[t] ?? {}) as { best?: string; worst?: string };
-                      // an item cannot be both best and worst: the opposite radio is disabled
-                      // for the chosen item, and the engine refuses the pair regardless (METHOD-01)
+                      /*
+                       * An item cannot be both best and worst. The opposite radio used to
+                       * be DISABLED for the chosen item, which prevented the pair but said
+                       * nothing, and made "I meant this one as least" a two-step undo. Now
+                       * the new pick wins, the other side is cleared, and the task says
+                       * why (MD-P1). The engine refuses the pair regardless (METHOD-01).
+                       */
                       const isBest = cur.best != null && String(cur.best) === altKey;
                       const isWorst = cur.worst != null && String(cur.worst) === altKey;
+                      const label = String(alt.item_label ?? altKey);
+                      const pick = (side: "best" | "worst") => {
+                        const other = side === "best" ? "worst" : "best";
+                        const next: Record<string, unknown> = { ...cur, [side]: altKey };
+                        let notice = "";
+                        if (cur[other] != null && String(cur[other]) === altKey) {
+                          delete next[other];
+                          notice = `“${label}” can't be both ${bestLabel} and ${worstLabel}. It is now your ${side === "best" ? bestLabel : worstLabel} choice — pick a different item for ${other === "best" ? bestLabel : worstLabel}.`;
+                        }
+                        setMdNotice((m) => ({ ...m, [t]: notice }));
+                        p.onChange({ ...vals, [t]: next });
+                      };
                       return (
-                        <tr key={altKey}>
+                        <tr key={altKey} data-testid="md-item" data-task={t} data-item={altKey} data-position={i + 1}>
+                          {!bestOnly && (
+                            <td>
+                              <label className="rs-md-pick">
+                                <input type="radio" name={`${p.q.id}_${t}_worst`}
+                                  aria-label={`${worstLabel}: ${label}`}
+                                  checked={isWorst}
+                                  onChange={() => pick("worst")} />
+                              </label>
+                            </td>
+                          )}
+                          <td className="rowlabel">{label}</td>
                           <td>
-                            <input type="radio" name={`${p.q.id}_${t}_worst`}
-                              checked={isWorst}
-                              disabled={isBest}
-                              onChange={() => p.onChange({ ...vals, [t]: { ...cur, worst: altKey } })} />
-                          </td>
-                          <td className="rowlabel">{String(alt.item_label ?? altKey)}</td>
-                          <td>
-                            <input type="radio" name={`${p.q.id}_${t}_best`}
-                              checked={isBest}
-                              disabled={isWorst}
-                              onChange={() => p.onChange({ ...vals, [t]: { ...cur, best: altKey } })} />
+                            <label className="rs-md-pick">
+                              <input type="radio" name={`${p.q.id}_${t}_best`}
+                                aria-label={`${bestLabel}: ${label}`}
+                                checked={isBest}
+                                onChange={() => pick("best")} />
+                            </label>
                           </td>
                         </tr>
                       );
                     }
+                    /*
+                     * CBC (conjoint audit 2026-10-17). The STORED value is the design
+                     * alternative (`alt`) — the concept's identity — while the LABEL is
+                     * the screen position (Option A, B, C…). It used to print the design
+                     * number, so a shuffled task read "Option 3, Option 1, Option 2".
+                     * Each attribute cell carries its attribute name for the phone layout
+                     * (rs-matrix-stack: one card per alternative, every level captioned).
+                     */
+                    const isNone = Number(alt.none_option) === 1;
+                    const noneText = String((design.config as { noneLabel?: unknown } | undefined)?.noneLabel ?? "").trim() || "None of these";
+                    const optLabel = isNone ? noneText : `Option ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
+                    const isChosen = vals[t] != null && String(vals[t]) === altKey;
                     return (
-                      <tr key={altKey}>
-                        <td className="rowlabel">{Number(alt.none_option) === 1 ? "None of these" : `Option ${altKey}`}</td>
-                        {attrCols.map((a) => <td key={a}>{Number(alt.none_option) === 1 ? "—" : String(alt[a] ?? "")}</td>)}
-                        <td>
-                          <input type="radio" name={`${p.q.id}_${t}`}
-                            checked={String(vals[t]) === altKey}
-                            onChange={() => p.onChange({ ...vals, [t]: altKey })} />
+                      <tr key={altKey} className={isChosen ? "rs-cbc-chosen" : undefined} data-testid="cbc-alt"
+                        data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined}>
+                        <td className="rowlabel">{optLabel}</td>
+                        {attrCols.map((a) => <td key={a} data-label={a}>{isNone ? "—" : String(alt[a] ?? "")}</td>)}
+                        <td className="rs-cbc-choose">
+                          <label className="rs-cbc-pick">
+                            <input type="radio" name={`${p.q.id}_${t}`} aria-label={`Choose ${optLabel}`}
+                              data-testid={`cbc-choose-${t}-${altKey}`}
+                              checked={isChosen}
+                              onChange={() => p.onChange({ ...vals, [t]: altKey })} />
+                            <span className="rs-mcap" aria-hidden="true">Choose</span>
+                          </label>
                         </td>
                       </tr>
                     );
@@ -1941,6 +2000,11 @@ function DesignTasks(p: QRProps) {
                 </tbody>
               </table>
             </div>
+            {isMaxdiff && mdNotice[t] && (
+              <div role="status" className="rs-md-notice rs-error-msg" data-testid={`md-conflict-${t}`} style={{ marginTop: 8 }}>
+                {mdNotice[t]}
+              </div>
+            )}
             {isMaxdiff && anchored && (
               /*
                * ANCHORED (DUAL-RESPONSE) MAXDIFF (§17).

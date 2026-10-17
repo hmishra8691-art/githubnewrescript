@@ -1,6 +1,7 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
+import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 
 /**
  * THE COPILOT'S CONTRACT WITH THE MODEL.
@@ -415,10 +416,12 @@ export function mergeRepair<T>(accepted: T[], corrected: T[]): T[] {
 }
 
 export const UX_ACTION_OP = /^(?:create|update|remove)_(?:style|animation|behavior)$|^attach_behavior_to_|^create_responsive_rule$|^set_custom_(?:code|html)$|^set_theme$/;
-export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[] }): { text: string; addedUxGuide: boolean } {
+export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[]; methodsGuideSent?: boolean }): { text: string; addedUxGuide: boolean; addedMethodsGuide?: boolean } {
   const addedUxGuide = !input.uxGuideSent && input.ops.some((op) => UX_ACTION_OP.test(op));
-  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer in the same JSON shape with ONLY the corrected replacements for the refused actions — the accepted ones are kept as they are, do not repeat them. Correct each refused action using only the actions, events and rs api described above, or leave it out and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
-  return { text, addedUxGuide };
+  // a MaxDiff / conjoint written as create_question (refused, naming create_maxdiff / create_conjoint) or a method action without its guide: the guide goes with the repair
+  const addedMethodsGuide = !input.methodsGuideSent && !input.prompt.includes(COPILOT_METHODS_GUIDE) && (input.ops.some((op) => /^(?:create|update)_(?:maxdiff|conjoint)$/.test(op)) || input.refused.some((r) => /create_maxdiff|create_conjoint/.test(r)));
+  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}${addedMethodsGuide ? `\n\n${COPILOT_METHODS_GUIDE}` : ""}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer in the same JSON shape with ONLY the corrected replacements for the refused actions — the accepted ones are kept as they are, do not repeat them. Correct each refused action using only the actions, events and rs api described above, or leave it out and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+  return { text, addedUxGuide, ...(addedMethodsGuide ? { addedMethodsGuide } : {}) };
 }
 
 /** the model's running memory, with what the Studio refused appended in the Studio's words (a refused action is never remembered as done) */
@@ -458,6 +461,8 @@ export function copilotUserPrompt(input: {
   translation?: boolean;
   quota?: boolean;
   listFill?: boolean;
+  /** the request names MaxDiff / conjoint: the methods guide goes with it */
+  methods?: boolean;
   findings?: boolean;
 }): string {
   const parts: string[] = [];
@@ -473,6 +478,7 @@ export function copilotUserPrompt(input: {
   if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
   if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
   if (input.listFill) parts.push(COPILOT_LIST_FILL_GUIDE);
+  if (input.methods) parts.push(COPILOT_METHODS_GUIDE);
   if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, blocks, punch rules, variables) will be refused — validation that stops the respondent (an age limit, a format) is the one exception, unless the researcher said not to change anything. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");

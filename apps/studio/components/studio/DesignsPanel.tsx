@@ -1,9 +1,10 @@
 "use client";
 import React from "react";
 import { designGeneratorRegistry, type DesignReference } from "@rescript/schema";
-import { registerBuiltinDesignGenerators, designToCSV, designFileName } from "@rescript/designs";
+import { registerBuiltinDesignGenerators, designToCSV, designFileName, measureMaxDiffDesign, type MaxDiffDiagnostics } from "@rescript/designs";
 import { designVersionCount } from "@rescript/engine";
 import { useStudio, uid } from "./store";
+import { ConjointDesignQuality } from "./ConjointDesignQuality";
 
 registerBuiltinDesignGenerators();
 
@@ -40,7 +41,8 @@ function ConfigField({ field, value, onChange, config }: {
         <label className="f"><span>{field.label}</span>
           <select className="select" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)}>
             {(field.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
-          </select></label>
+          </select>
+          {field.help && <div className="muted" style={{ fontSize: 12.5 }}>{field.help}</div>}</label>
       );
     case "list": {
       const items: string[] = Array.isArray(value) ? (value as string[]) : [];
@@ -178,12 +180,91 @@ function ConfigField({ field, value, onChange, config }: {
         </div>
       );
     }
+    /**
+     * MAXDIFF PROHIBITED PAIRS (MD-P1) — two items that may never share a
+     * task. Pickers over the design's own item list, for the same reason as
+     * the conjoint prohibitions above: a pair naming an item the list does
+     * not have is silently no prohibition at all.
+     */
+    case "itemPairs": {
+      const pairs: [string, string][] = Array.isArray(value) ? (value as [string, string][]) : [];
+      const items: string[] = Array.isArray(config?.items) ? (config!.items as string[]).filter((x) => x.trim()) : [];
+      if (items.length < 2) {
+        return (
+          <div style={{ marginBottom: 10 }}>
+            <span className="flabel">{field.label}</span>
+            <p className="muted" style={{ fontSize: 12.5, margin: "2px 0 0" }}>Add items first — a prohibited pair names two of them.</p>
+          </div>
+        );
+      }
+      const set = (i: number, j: 0 | 1, v: string) =>
+        onChange(pairs.map((p, k) => (k === i ? (j === 0 ? [v, p[1]] : [p[0], v]) : p)));
+      return (
+        <div style={{ marginBottom: 10 }} data-testid="md-pairs-editor">
+          <span className="flabel">{field.label}</span>
+          {field.help && <div className="muted" style={{ fontSize: 12.5, marginBottom: 6 }}>{field.help}</div>}
+          {pairs.map((p, i) => (
+            <div key={i} className="row" data-testid="md-pair" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>never</span>
+              <select className="select" style={{ width: 180 }} value={p[0]} onChange={(e) => set(i, 0, e.target.value)}>
+                {items.map((it) => <option key={it} value={it}>{it}</option>)}
+              </select>
+              <span className="muted" style={{ fontSize: 12.5 }}>with</span>
+              <select className="select" style={{ width: 180 }} value={p[1]} onChange={(e) => set(i, 1, e.target.value)}>
+                {items.map((it) => <option key={it} value={it}>{it}</option>)}
+              </select>
+              <button className="btn small danger" onClick={() => onChange(pairs.filter((_, k) => k !== i))}>×</button>
+            </div>
+          ))}
+          <button className="btn small" data-testid="add-md-pair"
+            onClick={() => onChange([...pairs, [items[0], items[1]]])}>+ prohibited pair</button>
+        </div>
+      );
+    }
     default:
       return (
         <label className="f"><span>{field.label}</span>
           <input className="input" value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} /></label>
       );
   }
+}
+
+/**
+ * MAXDIFF DESIGN BALANCE, AS MEASURED (MD-P1).
+ *
+ * The numbers come from `measureMaxDiffDesign` on the rows themselves — item
+ * show counts, pair co-occurrence, positions, prohibited pairs — so whatever
+ * this says about balance is a measurement. "Balanced" is shown only when the
+ * spreads are the smallest the counts allow; otherwise it says near-balanced
+ * or uneven, with the numbers.
+ */
+function MaxDiffBalance({ diagnostics }: { diagnostics: Pick<MaxDiffDiagnostics, "lines" | "warnings" | "balanced"> }) {
+  return (
+    <div data-testid="md-balance" style={{ marginTop: 8, fontSize: 12.5 }}>
+      <span className={`chip ${diagnostics.balanced ? "" : "warn"}`} data-testid="md-balance-verdict">
+        {diagnostics.balanced ? "balanced (as even as the counts allow)" : "not exactly balanced — see the numbers"}
+      </span>
+      <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+        {diagnostics.lines.map((l, i) => <li key={i}>{l}</li>)}
+        {diagnostics.warnings.map((w, i) => <li key={`w${i}`} style={{ color: "var(--warn, #b45309)" }}>{w}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+/** The balance of an attached MaxDiff design — stored by the generator, or measured now for an older or imported file. */
+function maxdiffDiagnosticsOf(d: DesignReference): Pick<MaxDiffDiagnostics, "lines" | "warnings" | "balanced"> | null {
+  const rows = (d.file?.rows ?? []) as Record<string, unknown>[];
+  if (!rows.length || !rows[0] || !("item_index" in rows[0])) return null;
+  const stored = (d.file?.summary as { diagnostics?: Partial<MaxDiffDiagnostics> } | undefined)?.diagnostics;
+  if (stored?.lines && stored.warnings) return stored as MaxDiffDiagnostics;
+  const cfg = (d.config ?? {}) as { items?: string[]; prohibitedPairs?: [string, string][] };
+  const byIndex = new Map<number, string>();
+  for (const r of rows) byIndex.set(Number(r.item_index), String(r.item_label ?? r.item_index));
+  const items = Array.isArray(cfg.items) && cfg.items.length
+    ? cfg.items
+    : Array.from({ length: Math.max(0, ...byIndex.keys()) }, (_, i) => byIndex.get(i + 1) ?? `Item ${i + 1}`);
+  return measureMaxDiffDesign(rows, items, { prohibitedPairs: cfg.prohibitedPairs });
 }
 
 function GeneratorForm({ kind, existing, onDone }: {
@@ -293,7 +374,12 @@ function GeneratorForm({ kind, existing, onDone }: {
               </tbody>
             </table>
           </div>
-          {preview.summary && <pre className="logic-pre" style={{ marginTop: 8 }}>{JSON.stringify(preview.summary, null, 2)}</pre>}
+          {kind === "maxdiff" && preview.summary?.diagnostics?.lines && <MaxDiffBalance diagnostics={preview.summary.diagnostics} />}
+          {/* conjoint audit 2026-10-17: the measured quality, readable; the raw summary stays one click away */}
+          {preview.summary && kind === "conjoint" && <ConjointDesignQuality summary={preview.summary} />}
+          {preview.summary && (kind === "conjoint"
+            ? <details style={{ marginTop: 8 }}><summary className="muted" style={{ fontSize: 12.5 }}>raw summary</summary><pre className="logic-pre">{JSON.stringify(preview.summary, null, 2)}</pre></details>
+            : <pre className="logic-pre" style={{ marginTop: 8 }}>{JSON.stringify(preview.summary, null, 2)}</pre>)}
         </>
       )}
     </div>
@@ -473,6 +559,11 @@ export function DesignsPanel() {
             <button className="btn small danger" onClick={() =>
               s.update((x) => { x.designs = x.designs.filter((y) => y.id !== d.id); })}>×</button>
           </div>
+          {d.kind === "conjoint" && d.file?.summary && <ConjointDesignQuality compact summary={d.file.summary as Record<string, unknown>} />}
+          {(d.kind === "maxdiff" || d.kind === "imported") && (() => {
+            const diag = maxdiffDiagnosticsOf(d);
+            return diag ? <MaxDiffBalance diagnostics={diag} /> : null;
+          })()}
         </div>
       ))}
     </div>

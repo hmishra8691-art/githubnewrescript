@@ -50,7 +50,8 @@ export interface DesignGeneratorPlugin<C = Record<string, unknown>> {
      * and a plugin interface with no way to say "these two may not co-occur"
      * is why no generator in the platform had prohibitions.
      */
-    type: "number" | "text" | "boolean" | "select" | "list" | "attributes" | "prohibitions";
+    /* `itemPairs` (MaxDiff): pairs of entries from the `items` list that may never share a task */
+    type: "number" | "text" | "boolean" | "select" | "list" | "attributes" | "prohibitions" | "itemPairs";
     default?: unknown;
     options?: string[];
     help?: string;

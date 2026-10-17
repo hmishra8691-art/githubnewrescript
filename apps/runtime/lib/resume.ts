@@ -121,6 +121,8 @@ export interface PendingAnswers {
   flags: unknown[];
   stepIndex: number;
   at: number;
+  /** preview only: the response seed, so a reload re-derives the same design version and orders */
+  seed?: number;
 }
 
 /**

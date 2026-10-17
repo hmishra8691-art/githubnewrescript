@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts } from "@/lib/session";
-import {
-  decideListFill, confirmListFill, allocationPayload, listFillVariables,
-  pendingListFills, applyListFillDestinations, needsAllocation,
-  type ListFillCounts, type ResponseState,
-} from "@rescript/engine";
+import { pendingListFills, type ResponseState } from "@rescript/engine";
+import { allocateListFills, countersFromRows, type CounterRow, type ListFillStore } from "@/lib/listFillAllocate";
 import { resolveRunDefinition } from "@rescript/quality/server";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +24,11 @@ export const dynamic = "force-dynamic";
  *      between, the confirmed answer is the next one down
  *   5  the confirmed items become LISTFILL_* variables and destination
  *      answers, which is all the rest of the platform ever sees
+ *   6  a list that ALREADY allocated and whose answers changed (Back + a new
+ *      answer) is reconciled: still-valid items are kept, the slots of the
+ *      ones that no longer qualify are given back and the free positions are
+ *      claimed again — `rescript_reallocate_listfill` (0061). The logic lives
+ *      in `lib/listFillAllocate.ts` (tested with a fake store).
  *
  * The client is told the result, never asked for it. A respondent editing
  * their own JavaScript cannot award themselves a full option, because the
@@ -77,19 +79,8 @@ export async function POST(req: NextRequest) {
     stepIndex: 0,
   } as unknown as ResponseState;
 
-  // which lists to run: the ones the client says are due, narrowed to the
-  // ones the definition agrees are actually ready. A client asking for a list
-  // whose source is empty, whose condition fails, or which has already
-  // allocated gets nothing — the server decides readiness too.
-  // the rebuilt state has stepIndex 0 and cannot tell the source page was passed; the client only asks after it was
-  const ready = pendingListFills(def, state, { assumeSourcesSettled: true });
-  const requested = Array.isArray(listFillIds) && listFillIds.length
-    ? ready.filter((lf) => listFillIds.includes(lf.id))
-    : ready;
-  if (!requested.length) return NextResponse.json({ ok: true, allocations: [] });
-
-  // counters for this environment only
-  const counts: ListFillCounts = {};
+  // counters for this environment only — read first: whether a stored list is
+  // stale can depend on them (a short list with nothing left to top up is not)
   const { data: countRows, error: countErr } = await db
     .from("listfill_counts")
     .select("list_fill_id, option_code, allocated_count, completed_count")
@@ -98,82 +89,77 @@ export async function POST(req: NextRequest) {
   if (countErr && !/does not exist|relation/.test(countErr.message)) {
     console.error("[rescript:listfill] counters unreadable", { sessionId: sessionId.slice(0, 8), error: countErr.message });
   }
-  for (const row of countRows ?? []) {
-    counts[row.list_fill_id] = counts[row.list_fill_id] ?? {};
-    // a list capped on completes is judged on completes; the engine is told
-    // the number its own configuration cares about
-    const lf = def.listFills.find((x) => x.id === row.list_fill_id);
-    counts[row.list_fill_id][row.option_code] = lf?.tracking.countOnCompleteOnly
-      ? row.completed_count
-      : row.allocated_count;
-  }
+  const counters = countersFromRows(def, (countRows ?? []) as CounterRow[]);
+
+  // which lists to run: the ones the client says are due, narrowed to the
+  // ones the definition agrees are actually ready. A client asking for a list
+  // whose source is empty, whose condition fails, or which has already
+  // allocated and not changed gets nothing — the server decides readiness too.
+  // the rebuilt state has stepIndex 0 and cannot tell the source page was passed; the client only asks after it was
+  const ready = pendingListFills(def, state, { assumeSourcesSettled: true, counts: counters.counts });
+  const requested = Array.isArray(listFillIds) && listFillIds.length
+    ? ready.filter((lf) => listFillIds.includes(lf.id))
+    : ready;
+  if (!requested.length) return NextResponse.json({ ok: true, allocations: [] });
+
   const quotaCounts = await loadQuotaCounts(existing.survey_id, isTest);
 
-  const allocations: {
-    listFillId: string;
-    name: string;
-    items: { code: string; label: string; position: number }[];
-    variables: Record<string, string | number | boolean | null>;
-    destinations: string[];
-    trace: unknown;
-  }[] = [];
-
-  for (const lf of requested) {
-    const decided = decideListFill({ def, listFill: lf, state, counts, quotaCounts });
-
-    let final = decided;
-    if (needsAllocation(lf) && decided.preference.length) {
-      const { data: granted, error } = await db.rpc("rescript_allocate_listfill", {
-        p_survey: existing.survey_id,
-        p_test: isTest,
-        p_list_fill: lf.id,
-        p_session: sessionId,
-        p_preference: allocationPayload(lf, decided),
-        p_count: decided.trace.requestedCount,
-        p_use_completed: !!lf.tracking.countOnCompleteOnly,
-        p_version: run.versionId ?? null,
-      });
-      if (error) {
-        // The claim is the only thing that may hand out a capped slot, so a
-        // failure here must NOT fall back to the optimistic decision — that
-        // is exactly how two respondents end up sharing the last slot.
-        console.error("[rescript:listfill] allocation failed", JSON.stringify({
-          sessionId: sessionId.slice(0, 8), listFill: lf.id, error: error.message,
-        }));
-        return NextResponse.json({ error: "the allocation could not be recorded", listFillId: lf.id }, { status: 503 });
-      }
-      const confirmed = (granted ?? [])
-        .slice()
-        .sort((a: any, b: any) => a.slot_no - b.slot_no)
-        .map((r: any) => String(r.option_code));
-      final = confirmListFill(lf, decided, confirmed);
-      // keep the in-memory counters moving, so a second list decided in this
-      // same request sees the capacity the first one just took
-      counts[lf.id] = counts[lf.id] ?? {};
-      for (const item of final.items) counts[lf.id][item.code] = (counts[lf.id][item.code] ?? 0) + 1;
-    }
-
-    const variables = listFillVariables(lf, final);
-    Object.assign(state.calculated, variables);
-    const written = applyListFillDestinations(lf, final, state);
-
-    allocations.push({
-      listFillId: lf.id,
-      name: final.name,
-      items: final.items,
-      variables,
-      destinations: written,
-      // the trace travels in test and preview only: it names every option and
-      // its capacity, which is not a respondent's business
-      trace: isTest ? final.trace : undefined,
+  const rpc = async (fn: string, args: Record<string, unknown>) => {
+    const { data, error } = await db.rpc(fn, {
+      p_survey: existing.survey_id, p_test: isTest, p_session: sessionId, p_version: run.versionId ?? null, ...args,
     });
+    if (error) return { ok: false as const, error: error.message };
+    const codes = ((data ?? []) as { slot_no: number; option_code: string }[])
+      .slice().sort((a, b) => a.slot_no - b.slot_no).map((r) => String(r.option_code));
+    return { ok: true as const, codes };
+  };
+  const store: ListFillStore = {
+    allocate: (a) => rpc("rescript_allocate_listfill", {
+      p_list_fill: a.listFillId, p_preference: a.preference, p_count: a.count, p_use_completed: a.useCompleted,
+    }),
+    reallocate: async (a) => {
+      const r = await rpc("rescript_reallocate_listfill", {
+        p_list_fill: a.listFillId, p_keep: a.keep, p_preference: a.preference, p_count: a.count, p_use_completed: a.useCompleted,
+      });
+      // a database without migration 0061 cannot re-allocate: the respondent keeps
+      // what they hold (the pre-0061 behaviour) rather than the page failing
+      if (!r.ok && /rescript_reallocate_listfill|does not exist|schema cache/i.test(r.error)) {
+        console.warn("[rescript:listfill] re-allocation needs migration 0061 — keeping the stored allocation", { listFill: a.listFillId });
+        return { ok: true as const, codes: a.held };
+      }
+      return r;
+    },
+  };
 
+  const out = await allocateListFills(def, state, requested, counters, quotaCounts, store);
+  if (!out.ok) {
+    // The claim is the only thing that may hand out a capped slot, so a
+    // failure here must NOT fall back to the optimistic decision — that is
+    // exactly how two respondents end up sharing the last slot.
+    console.error("[rescript:listfill] allocation failed", JSON.stringify({
+      sessionId: sessionId.slice(0, 8), listFill: out.listFillId, error: out.error,
+    }));
+    return NextResponse.json({ error: "the allocation could not be recorded", listFillId: out.listFillId }, { status: 503 });
+  }
+
+  const allocations = out.allocations.map((a) => {
     console.info("[rescript:listfill] allocated", JSON.stringify({
       surveyId: existing.survey_id, sessionId: sessionId.slice(0, 8), environment: isTest ? "TEST" : "LIVE",
-      listFill: lf.id, requested: final.trace.requestedCount, items: final.items.map((i) => i.code),
-      preference: final.preference, version: run.versionId, source: run.source,
+      listFill: a.listFillId, requested: a.result.trace.requestedCount, items: a.items.map((i) => i.code),
+      preference: a.result.preference, change: a.change, version: run.versionId, source: run.source,
     }));
-  }
+    return {
+      listFillId: a.listFillId,
+      name: a.name,
+      items: a.items,
+      variables: a.variables,
+      destinations: a.destinations,
+      change: a.change,
+      // the trace travels in test and preview only: it names every option and
+      // its capacity, which is not a respondent's business
+      trace: isTest ? a.result.trace : undefined,
+    };
+  });
 
   return NextResponse.json({ ok: true, allocations, environment: isTest ? "TEST" : "LIVE" });
 }

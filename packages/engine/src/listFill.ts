@@ -81,6 +81,10 @@ export interface ListFillOptionTrace {
   position?: number;
   /** which stage put it there, in words */
   selectedBy?: string;
+  /** the count `least_filled` ranks by (the cap count unless `leastFilled.basis` names the other one) */
+  fill?: number;
+  /** already held by this respondent from an earlier allocation and still valid (`retain`) */
+  held?: boolean;
 }
 
 export interface ListFillTrace {
@@ -205,7 +209,17 @@ export function listFillCandidates(
   const asList = (v: unknown): string[] => {
     if (v == null || v === "") return [];
     if (Array.isArray(v)) return v.map(String);
-    if (typeof v === "object") return Object.keys(v as Record<string, unknown>);
+    /*
+     * An object answer (an ALLOCATION / constant sum `{code: points}`, a
+     * per-item map) selects the keys that hold something: `{A: 0, B: 60}`
+     * selected B only. Object.keys() made every item given 0 points — or left
+     * blank — a candidate (audit 2026-10-17).
+     */
+    if (typeof v === "object") {
+      return Object.entries(v as Record<string, unknown>)
+        .filter(([, x]) => x != null && x !== "" && x !== 0 && x !== "0" && x !== false && !(Array.isArray(x) && x.length === 0))
+        .map(([k]) => k);
+    }
     // a delimited string, which is how imported and URL-supplied lists arrive
     return String(v).split(/[,;|]/).map((x) => x.trim()).filter(Boolean);
   };
@@ -244,7 +258,15 @@ export function listFillCandidates(
       }
       // a carry-forward source has no static options: borrow the label from its carried list
       const carried = q.options.length ? q.options : carrySourceOptions(q, ctx ?? { def, state });
-      return asList(state.answers[src.questionId]).map((c) => ({
+      /*
+       * Only codes the question actually has (audit 2026-10-17): a stale answer
+       * from a removed option, or a payload naming a code that does not exist,
+       * was allocated as an item of its own — an unlimited, unconfigured option
+       * that went into the counters and the export. A question with no known
+       * list (nothing carried yet) keeps the answer as it is.
+       */
+      const known = new Set(carried.map((o) => String(o.code)));
+      return asList(state.answers[src.questionId]).filter((c) => !known.size || known.has(c)).map((c) => ({
         code: c,
         label: carried.find((o) => String(o.code) === String(c))?.label ?? labelFor(src.questionId, c),
       }));
@@ -366,6 +388,19 @@ export interface ListFillInput {
   quotaCounts?: QuotaCounts;
   /** overrides the respondent's seed — the simulator varies it per draw */
   seed?: number;
+  /**
+   * Items this respondent ALREADY holds from an earlier allocation that are
+   * still valid (see `reconcileListFill`). They are placed first, in this
+   * order, without a capacity or quota check — they hold their own slot, so a
+   * full count includes them — and the rest of the list is decided around
+   * them. Codes that are no longer eligible candidates are ignored.
+   */
+  retain?: string[];
+  /**
+   * The counts `least_filled` ranks by, when they differ from the cap counts
+   * (`leastFilled.basis` naming the other counter). Absent = `counts`.
+   */
+  balanceCounts?: ListFillCounts;
 }
 
 /**
@@ -413,6 +448,8 @@ export function decideListFill(input: ListFillInput): ListFillResult {
 
   /* -- 2-4. judge every candidate --------------------------------------- */
   const traces: ListFillOptionTrace[] = [];
+  const retain = new Set((input.retain ?? []).map(String));
+  const balance = input.balanceCounts ?? counts;
   for (const c of pool) {
     const opt = settingsFor(lf, c.code);
     const current = lf.tracking.sampleLevel ? countOf(counts, lf.id, c.code) : 0;
@@ -424,11 +461,13 @@ export function decideListFill(input: ListFillInput): ListFillResult {
       eligible = false;
       rejected = "eligibility_condition";
     }
-    const quotaBlockedBy = eligible ? quotaBlocks(def, lf, state, c.code, 1, quotaCounts) : [];
+    // an item this respondent already holds keeps its own slot: no capacity or quota re-check
+    const held = eligible && retain.has(c.code);
+    const quotaBlockedBy = eligible && !held ? quotaBlocks(def, lf, state, c.code, 1, quotaCounts) : [];
     if (eligible && quotaBlockedBy.length) rejected = "quota_full";
-    if (eligible && !rejected && remaining !== null && remaining <= 0) rejected = "maximum_reached";
+    if (eligible && !held && !rejected && remaining !== null && remaining <= 0) rejected = "maximum_reached";
     const afterTarget = opt.afterTarget ?? sel.afterTarget;
-    if (eligible && !rejected && afterTarget === "stop" && opt.target != null && current >= opt.target) {
+    if (eligible && !held && !rejected && afterTarget === "stop" && opt.target != null && current >= opt.target) {
       rejected = "target_reached_and_stopped";
     }
     traces.push({
@@ -441,6 +480,8 @@ export function decideListFill(input: ListFillInput): ListFillResult {
       minimum: opt.minimum ?? null,
       weight: opt.weight ?? 1,
       current,
+      fill: lf.tracking.sampleLevel ? countOf(balance, lf.id, c.code) : 0,
+      held,
       remaining,
       status: allocationStatus(opt, current, eligible && !quotaBlockedBy.length),
       eligible: eligible && !rejected,
@@ -491,7 +532,13 @@ export function decideListFill(input: ListFillInput): ListFillResult {
   }
 
   /* -- 5-7. order, select, fall back ------------------------------------ */
-  const order = orderCandidates(usable, lf, sel.method, rng, steps);
+  // held items first, in the order they were held; the strategy decides the rest
+  const heldFirst = [...retain].map((code) => usable.find((t) => t.code === code && t.held)).filter((t): t is ListFillOptionTrace => !!t);
+  if (heldFirst.length) {
+    steps.push(`Kept from the earlier allocation (still eligible): ${heldFirst.map((t) => t.code).join(", ")}.`);
+    for (const t of heldFirst) t.selectedBy = "kept from the earlier allocation";
+  }
+  const order = [...heldFirst, ...orderCandidates(usable.filter((t) => !heldFirst.includes(t)), lf, sel.method, rng, steps)];
   const items: ListFillItem[] = [];
   const preference: string[] = order.map((t) => t.code);
   const takenCapacity: Record<string, number> = {};
@@ -507,14 +554,14 @@ export function decideListFill(input: ListFillInput): ListFillResult {
     }
     // capacity again, now accounting for what THIS respondent already took
     const used = takenCapacity[t.code] ?? 0;
-    if (t.remaining !== null && t.remaining - used <= 0) {
+    if (!t.held && t.remaining !== null && t.remaining - used <= 0) {
       t.rejectedBecause = "no_remaining_capacity";
       steps.push(`${t.code}: no capacity left after this respondent's earlier items.`);
       continue;
     }
     const position = items.length + 1;
     // the quota check is position-sensitive, so ask again for this position
-    const blocked = quotaBlocks(def, lf, state, t.code, position, quotaCounts);
+    const blocked = t.held ? [] : quotaBlocks(def, lf, state, t.code, position, quotaCounts);
     if (blocked.length) {
       t.quotaBlockedBy = blocked;
       t.rejectedBecause = "quota_full";
@@ -526,7 +573,7 @@ export function decideListFill(input: ListFillInput): ListFillResult {
     takenCapacity[t.code] = used + 1;
     t.position = position;
     t.selectedBy = t.selectedBy ?? "priority order";
-    steps.push(`${t.code}: SELECTED at position ${position} (priority ${t.priority ?? "—"}, ${t.remaining === null ? "unlimited" : `${t.remaining - used} left`}).`);
+    steps.push(`${t.code}: SELECTED at position ${position} (priority ${t.priority ?? "—"}, ${t.held ? "already held" : t.remaining === null ? "unlimited" : `${t.remaining - used} left`}${sel.method === "least_filled" && !t.held ? `, count ${t.fill ?? 0}` : ""}).`);
   }
 
   // still short: the fallback pool, when one is configured
@@ -690,6 +737,23 @@ function orderCandidates(
     case "quota_aware_random":
       ordered = capacityOrder(usable);
       break;
+    case "least_filled": {
+      /*
+       * LEAST FILL: lowest count first. The tie-break is applied FIRST and the
+       * count sort after it — Array.prototype.sort is stable, so items with
+       * equal counts keep the tie-break's order.
+       */
+      const lfs = sel.leastFilled ?? { basis: "auto", tieBreak: "random" };
+      const tied = lfs.tieBreak === "sequential"
+        ? usable
+        : lfs.tieBreak === "priority"
+          ? shuffled(usable).sort((a, b) => priorityOf(opt(a)) - priorityOf(opt(b)))
+          : shuffled(usable);
+      ordered = [...tied].sort((a, b) => (a.fill ?? 0) - (b.fill ?? 0));
+      if (!lf.tracking.sampleLevel) steps.push("least_filled without sample-level counting: every count is 0, so only the tie-break decides.");
+      steps.push(`Least filled (${lfs.basis === "auto" ? (lf.tracking.countOnCompleteOnly ? "completed" : "allocated") : lfs.basis}, ties ${lfs.tieBreak}): ${ordered.map((t) => `${t.code}=${t.fill ?? 0}`).join(", ")}.`);
+      break;
+    }
     case "custom":
       // a custom script supplies the order via the runtime; without it the
       // engine falls back to its most conservative documented behaviour
@@ -757,11 +821,22 @@ function fallbackOrder(
  * applied by the engine in producing this order. Keeping the split that sharp
  * is what stops a second, divergent copy of the rules growing in SQL.
  */
-export function allocationPayload(lf: ListFill, result: ListFillResult): { code: string; maximum?: number }[] {
-  return result.preference.map((code) => {
+export function allocationPayload(lf: ListFill, result: ListFillResult, exclude: string[] = []): { code: string; maximum?: number }[] {
+  return result.preference.filter((code) => !exclude.includes(code)).map((code) => {
     const opt = settingsFor(lf, code);
     return opt.maximum == null ? { code } : { code, maximum: opt.maximum };
   });
+}
+
+/** Which counter a cap of this list is judged on. */
+export function listFillCapBasis(lf: ListFill): "allocated" | "completed" {
+  return lf.tracking.countOnCompleteOnly ? "completed" : "allocated";
+}
+
+/** Which counter `least_filled` ranks by: `leastFilled.basis`, or the cap's when `auto`. */
+export function listFillBalanceBasis(lf: ListFill): "allocated" | "completed" {
+  const b = lf.selection.leastFilled?.basis ?? "auto";
+  return b === "auto" ? listFillCapBasis(lf) : b;
 }
 
 /** Is sample-level tracking on, i.e. does this list need the atomic allocator at all? */
@@ -919,13 +994,19 @@ export function applyListFillDestinations(lf: ListFill, result: ListFillResult, 
    */
   const key = `LISTFILL_${nameOf(lf).toUpperCase()}_`;
   const positional = /^(\d+)(_CODE|_POSITION)?$/;
+  // the codes the PREVIOUS list had beyond the new length, before they are cleared below
+  const oldCode = (pos: number): unknown => state.calculated[`${key}${pos}_CODE`];
+  const previous = new Map<number, unknown>();
+  for (let pos = result.items.length + 1; oldCode(pos) != null; pos++) previous.set(pos, oldCode(pos));
   for (const k of Object.keys(state.calculated)) {
     if (!k.startsWith(key)) continue;
     const m = positional.exec(k.slice(key.length));
     if (m && Number(m[1]) > result.items.length) delete state.calculated[k];
   }
   let next = 0;
+  let unpinned = 0;
   for (const dest of lf.destinations) {
+    if (dest.position == null) unpinned++;
     const item = dest.position != null
       ? result.items.find((i) => i.position === dest.position)
       : result.items[next];
@@ -934,6 +1015,17 @@ export function applyListFillDestinations(lf: ListFill, result: ListFillResult, 
       // an unused destination: `blank` clears any earlier value so a
       // re-decided allocation cannot leave a stale answer behind
       if (dest.whenUnused === "blank") delete state.answers[dest.questionId];
+      /*
+       * U8 (audit 2026-10-16/17): a re-decided, SHORTER list left an answer
+       * destination holding the code this list wrote there before — the
+       * export reported an item the respondent no longer has. The answer is
+       * cleared when it is exactly the code the previous list had at this
+       * position (so an answer the respondent gave themselves is untouched).
+       */
+      else if (dest.write === "answer") {
+        const was = previous.get(dest.position ?? unpinned);
+        if (was != null && String(state.answers[dest.questionId] ?? "") === String(was)) delete state.answers[dest.questionId];
+      }
       continue;
     }
     if (dest.write === "answer") {
@@ -997,13 +1089,21 @@ export function listFillHiddenDestinations(def: SurveyDefinition, state: Respons
 export function pendingListFills(
   def: SurveyDefinition,
   state: ResponseState,
-  opts: { assumeSourcesSettled?: boolean } = {},
+  opts: { assumeSourcesSettled?: boolean; counts?: ListFillCounts } = {},
 ): ListFill[] {
   const ctx: EvalContext = { def, state };
   return def.listFills.filter((lf) => {
     if (!lf.enabled) return false;
-    if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] != null) return listFillIsStale(def, lf, state);
-    if (lf.runWhen && !evaluateCondition(lf.runWhen, ctx)) return false;
+    if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] != null) return listFillIsStale(def, lf, state, { counts: opts.counts });
+    /*
+     * U7 (audit 2026-10-16/17): a list whose `runWhen` is false never ran, so
+     * it never reached count 0 and its destinations' `whenUnused` never
+     * applied — "How do you rate {{LISTFILL_X_1}}?" stayed on screen. It now
+     * runs (to nothing) once its source is settled; if the condition turns
+     * true later, the stored empty list is short and `reconcileListFill`
+     * re-decides it then.
+     */
+    if (lf.runWhen && !evaluateCondition(lf.runWhen, ctx)) return opts.assumeSourcesSettled === true || listFillSourceSettled(def, lf, state);
     if (listFillCandidates(def, lf, state, ctx).length > 0) return true;
     /*
      * METHOD-09: an EMPTY source still runs once the source has been settled
@@ -1018,33 +1118,164 @@ export function pendingListFills(
 /**
  * Has the respondent changed what this list was decided from?
  *
- * "Allocate once" is right for a list that claims SAMPLE capacity: the claim
- * is idempotent in the database and re-deciding would consume a slot twice.
- * It is wrong for a per-respondent selector ("show the brands rated 3–5,
- * four of them at random"): a respondent who goes Back and re-rates the
- * grid was shown the OLD brands on the next page — items they no longer
- * rate, and none of the ones they now do.
+ * Until 2026-10-17 a list that claims SAMPLE capacity was "allocate once": a
+ * respondent who went Back and de-selected the brand they had been allocated
+ * kept it (the database claim was idempotent and had no per-list release).
+ * A per-respondent selector was re-decided when a fresh decision differed.
  *
- * So a list that does not need the allocator is re-decided against the
- * current answers. The decision is a pure function of the answers and the
- * respondent's seed, so an unchanged source reproduces the stored list
- * exactly (no churn, no reshuffle on a plain Back/Next); only a real change
- * re-runs it. Lists that consult hard quotas keep "allocate once": their
- * result depends on counters this check cannot see.
+ * Now every list follows its `selection.onChange` (see `reconcileListFill`):
+ * a sample-counted list keeps its still-valid items and gives back only the
+ * slots of items that no longer qualify (`rescript_reallocate_listfill`,
+ * migration 0061); a per-respondent list is re-decided as before. `counts`,
+ * when the caller has them (the server), let a short list skip a top-up that
+ * could only fail.
  */
-export function listFillIsStale(def: SurveyDefinition, lf: ListFill, state: ResponseState): boolean {
-  if (needsAllocation(lf)) return false;
-  if (lf.tracking.respectQuotas && def.quotas.some((q) => q.mode === "hard" && (!lf.tracking.quotaIds.length || lf.tracking.quotaIds.includes(q.id)))) return false;
-  const key = `LISTFILL_${nameOf(lf).toUpperCase()}`;
-  // a list whose `runWhen` no longer holds re-decides to nothing, which is what hides its destinations
-  let fresh: ListFillResult;
-  try {
-    fresh = decideListFill({ def, listFill: lf, state });
-  } catch {
-    return false;
+export function listFillIsStale(
+  def: SurveyDefinition,
+  lf: ListFill,
+  state: ResponseState,
+  opts: { counts?: ListFillCounts } = {},
+): boolean {
+  return reconcileListFill(def, lf, state, opts).stale;
+}
+
+/** Does this list consult a hard quota? Its result then depends on counters a per-respondent re-decision cannot see. */
+function consultsHardQuota(def: SurveyDefinition, lf: ListFill): boolean {
+  return lf.tracking.respectQuotas && def.quotas.some((q) => q.mode === "hard" && (!lf.tracking.quotaIds.length || lf.tracking.quotaIds.includes(q.id)));
+}
+
+/**
+ * The effective `selection.onChange` (schema `ListFillOnChange`). Absent:
+ * `keep_valid` for a list whose result depends on shared counters (it claims
+ * sample capacity, or consults a hard quota), `redecide` for a pure
+ * per-respondent selector — the behaviour such lists already had.
+ */
+export function listFillOnChange(def: SurveyDefinition, lf: ListFill): "keep_valid" | "redecide" | "freeze" {
+  return lf.selection.onChange ?? (needsAllocation(lf) || consultsHardQuota(def, lf) ? "keep_valid" : "redecide");
+}
+
+/** The codes this respondent currently holds for a list, from its stored `_CODES` variable. */
+export function listFillStoredCodes(lf: ListFill, state: ResponseState): string[] {
+  const raw = state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_CODES`];
+  if (raw == null || raw === "") return [];
+  return String(raw).split(",").map((c) => c.trim()).filter(Boolean);
+}
+
+export interface ListFillReconcile {
+  /** the stored allocation no longer matches the respondent's answers */
+  stale: boolean;
+  /** stored items that stay, in their stored order */
+  keep: string[];
+  /** stored items that go (their sample slot is given back) */
+  drop: string[];
+  mode: "keep_valid" | "redecide" | "freeze";
+  reason: string;
+}
+
+/**
+ * HAS THE RESPONDENT CHANGED WHAT THIS LIST WAS DECIDED FROM — AND WHAT STAYS?
+ *
+ * Run when a list already has a stored allocation (its `_COUNT` variable is
+ * set): a page revisit, Back + a changed answer, a reload. `freeze` never
+ * changes it. `keep_valid` judges the stored items against the CURRENT
+ * answers with the eligibility rules only (`runWhen`, candidates,
+ * `eligible`, `eligibleWhen`) — never capacity, because a held item holds its
+ * own slot — so a plain Back/Next is never a change, whatever other
+ * respondents have done to the counters meanwhile. It is stale when a stored
+ * item no longer qualifies, when the count shrank, or when the list is short
+ * and an item with room (per `counts`, when known) now qualifies.
+ * `redecide` re-decides a per-respondent list (deterministic, so it is stale
+ * only when a fresh decision differs) and, for a list holding sample slots,
+ * replaces the whole list whenever `keep_valid` would see a change.
+ */
+export function reconcileListFill(
+  def: SurveyDefinition,
+  lf: ListFill,
+  state: ResponseState,
+  opts: { counts?: ListFillCounts } = {},
+): ListFillReconcile {
+  const mode = listFillOnChange(def, lf);
+  const stored = listFillStoredCodes(lf, state);
+  const none = (reason: string): ListFillReconcile => ({ stale: false, keep: stored, drop: [], mode, reason });
+  if (!lf.enabled) return none("switched off");
+  if (mode === "freeze") return none("frozen after the first allocation");
+
+  if (mode === "redecide" && !needsAllocation(lf) && !consultsHardQuota(def, lf)) {
+    let fresh: ListFillResult;
+    try {
+      fresh = decideListFill({ def, listFill: lf, state });
+    } catch {
+      return none("could not be re-decided");
+    }
+    const changed = fresh.items.map((i) => i.code).join(",") !== stored.join(",");
+    return changed
+      ? { stale: true, keep: [], drop: stored, mode, reason: "a fresh decision differs from the stored one" }
+      : none("unchanged");
   }
-  const stored = String(state.calculated[`${key}_CODES`] ?? "");
-  return fresh.items.map((i) => i.code).join(",") !== stored;
+
+  /* keep_valid (and redecide for a list holding shared counters) */
+  const ctx: EvalContext = { def, state };
+  let eligibleNow: string[] = [];
+  if (!lf.runWhen || evaluateCondition(lf.runWhen, ctx)) {
+    const seen = new Set<string>();
+    for (const c of listFillCandidates(def, lf, state, ctx)) {
+      if (seen.has(c.code)) continue;
+      seen.add(c.code);
+      const o = settingsFor(lf, c.code);
+      if (o.eligible === false) continue;
+      if (o.eligibleWhen && !evaluateCondition(o.eligibleWhen, ctx)) continue;
+      eligibleNow.push(c.code);
+    }
+  }
+  const eligibleSet = new Set(eligibleNow);
+  let want = Math.min(resolveListFillCount(def, lf, state, eligibleNow.length), eligibleNow.length);
+  const cnt = lf.selection.count;
+  if (cnt.kind === "fixed" && cnt.allUpTo != null && eligibleNow.length > 0 && eligibleNow.length <= cnt.allUpTo) want = eligibleNow.length;
+  let keep = stored.filter((c) => eligibleSet.has(c));
+  let drop = stored.filter((c) => !eligibleSet.has(c));
+  let reason = drop.length ? `no longer eligible: ${drop.join(", ")}` : "";
+  if (keep.length > want) {
+    drop = [...drop, ...keep.slice(want)];
+    keep = keep.slice(0, want);
+    reason = `${reason ? `${reason}; ` : ""}the count is now ${want}`;
+  }
+  if (!drop.length && keep.length < want) {
+    // short: is there an eligible item with room that is not held? (unknown counts → assume room; the server decides)
+    const counts = opts.counts;
+    const roomFor = (code: string): boolean => {
+      if (!counts || !lf.tracking.sampleLevel) return true;
+      const o = settingsFor(lf, code);
+      const cur = countOf(counts, lf.id, code);
+      if (o.maximum != null && cur >= o.maximum) return false;
+      if ((o.afterTarget ?? lf.selection.afterTarget) === "stop" && o.target != null && cur >= o.target) return false;
+      return true;
+    };
+    const extra = eligibleNow.filter((c) => !keep.includes(c) && roomFor(c));
+    if (extra.length) reason = `short by ${want - keep.length} and ${extra.join(", ")} now qualif${extra.length === 1 ? "ies" : "y"}`;
+    else return none("short, but nothing else that qualifies has room");
+  }
+  if (!reason) return none("unchanged");
+  return mode === "redecide"
+    ? { stale: true, keep: [], drop: stored, mode, reason }
+    : { stale: true, keep, drop, mode, reason };
+}
+
+/**
+ * The items a re-decision keeps (`retain` for `decideListFill`): the still-valid
+ * stored items when the list is stale under `keep_valid`, otherwise none.
+ */
+export function listFillRetained(def: SurveyDefinition, lf: ListFill, state: ResponseState, opts: { counts?: ListFillCounts } = {}): string[] {
+  if (state.calculated[`LISTFILL_${nameOf(lf).toUpperCase()}_COUNT`] == null) return [];
+  const r = reconcileListFill(def, lf, state, opts);
+  return r.stale ? r.keep : [];
+}
+
+/** `counts` with one claim per code taken off — the claims a re-decision is about to give back. */
+export function countsWithout(counts: ListFillCounts, listFillId: string, codes: string[]): ListFillCounts {
+  if (!codes.length) return counts;
+  const mine = { ...(counts[listFillId] ?? {}) };
+  for (const c of codes) mine[c] = Math.max(0, (mine[c] ?? 0) - 1);
+  return { ...counts, [listFillId]: mine };
 }
 
 type StepLocator = (def: SurveyDefinition, state: ResponseState, questionId: string) => number;
