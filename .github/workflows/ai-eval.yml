@@ -1,0 +1,99 @@
+# Intelligent Mode evaluation harness (docs/AI-EVAL-AND-CACHE-2026-10-18.md).
+#
+#   Manual: Actions → "AI eval" → Run workflow (optional case filter, record cassettes, cost cap).
+#   Nightly: 02:17 UTC — fake + replay only (free); the real run is manual unless EVAL_NIGHTLY_REAL=true.
+#
+# Always runs the fake-provider suite (free, deterministic: the pipeline and the harness) and every committed
+# cassette in --replay (free, offline: re-scores recorded real replies). The REAL-model run needs the repository
+# secret EVAL_AI_API_KEY (and optionally the variables EVAL_AI_API_URL / EVAL_AI_MODEL); without it that step says
+# so and is skipped — the workflow still succeeds. The reports are uploaded as the "ai-eval-report" artifact.
+name: AI eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter:
+        description: "Case ids or categories (regex); empty = all"
+        required: false
+        default: ""
+      record:
+        description: "Record the real replies as a cassette (artifact)"
+        type: boolean
+        default: false
+      max_cost:
+        description: "Hard cap in USD for the real run (stops between cases)"
+        required: false
+        default: "5"
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EVAL_AI_API_KEY: ${{ secrets.EVAL_AI_API_KEY }}
+      EVAL_AI_API_URL: ${{ vars.EVAL_AI_API_URL || 'https://api.anthropic.com/v1' }}
+      EVAL_AI_MODEL: ${{ vars.EVAL_AI_MODEL || 'claude-sonnet-4-6' }}
+      FILTER: ${{ github.event.inputs.filter }}
+      MAX_COST: ${{ github.event.inputs.max_cost || '5' }}
+      RECORD: ${{ github.event.inputs.record }}
+      # the nightly run is free (fake + replay) unless the repository variable EVAL_NIGHTLY_REAL is "true"
+      REAL_ALLOWED: ${{ github.event_name == 'workflow_dispatch' || vars.EVAL_NIGHTLY_REAL == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the packages
+        run: pnpm -r --filter "./packages/*" build
+
+      - name: Fake provider (pipeline and harness; compared with the stored baseline)
+        run: |
+          EVAL_AI_API_KEY= EVAL_AI_API_URL= node --experimental-strip-types --no-warnings scripts/eval-ai.mjs --out eval-reports/fake
+
+      - name: Replay committed cassettes (offline, no key)
+        run: |
+          shopt -s nullglob
+          files=(apps/studio/lib/eval/cassettes/*.json)
+          if [ ${#files[@]} -eq 0 ]; then echo "No cassette committed yet — nothing to replay."; exit 0; fi
+          for f in "${files[@]}"; do
+            name=$(basename "$f" .json)
+            EVAL_AI_API_KEY= node --experimental-strip-types --no-warnings scripts/eval-ai.mjs --replay "$f" --out "eval-reports/replay-$name"
+          done
+
+      - name: Real model
+        run: |
+          if [ "$REAL_ALLOWED" != "true" ]; then
+            echo "::notice::Scheduled run: the real-model run is manual only (set the repository variable EVAL_NIGHTLY_REAL=true to run it nightly)."
+            exit 0
+          fi
+          if [ -z "$EVAL_AI_API_KEY" ]; then
+            echo "::notice::EVAL_AI_API_KEY is not set — the real-model run is skipped (fake and replay results are in the artifact)."
+            exit 0
+          fi
+          args=(--out eval-reports/live --max-cost "$MAX_COST")
+          if [ -n "$FILTER" ]; then args+=(--filter "$FILTER"); fi
+          if [ "$RECORD" = "true" ]; then args+=(--record "eval-reports/cassette-${{ github.run_id }}.json"); fi
+          node --experimental-strip-types --no-warnings scripts/eval-ai.mjs "${args[@]}"
+
+      - name: Upload the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-eval-report
+          path: eval-reports/
+          if-no-files-found: warn
+          retention-days: 30
