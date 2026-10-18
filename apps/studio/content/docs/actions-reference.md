@@ -6,7 +6,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (20): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`
+**Survey** (22): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`
 
 **Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
 

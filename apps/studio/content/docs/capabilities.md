@@ -12,8 +12,8 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Monadic concept test | supported | single_select, matrix_single | a randomizer showing ONE of the concept blocks (show 1); each block sets an embedded arm variable | anova, t_test, chi_square, crosstab | mean_ci, bar_grouped |  |
 | Sequential monadic concept test | partial | matrix_single, single_select | a randomizer over the concept blocks, all shown, in random order | mean, top_box, crosstab | bar_grouped, dot_plot | concepts are rotated by a randomizer showing every block; the ORDER a respondent saw is not recorded unless an embedded variable records it, and within-respondent tests (paired t, Wilcoxon, Friedman) run in the Analytics workspace, not from the analysis plan |
 | A/B (split) test | supported | single_select | a randomizer showing one stimulus block (show 1) that records the cell | chi_square, t_test | bar_grouped, mean_ci |  |
-| MaxDiff (best–worst scaling) | supported | maxdiff_task | a seeded balanced design, versions assigned per respondent, task order randomized | maxdiff_scores | maxdiff_utility | aggregate scores (counts and logit utilities); HB / individual utilities are not estimated — the MaxDiff choice file is the hand-off |
-| Choice-based conjoint (CBC) | supported | conjoint_task | a seeded efficient design, versions per respondent, alternatives shuffled | conjoint_utilities | attribute_importance | aggregate logit part-worths, importances and share simulation; HB / latent class not estimated (the stacked CBC file is the hand-off) |
+| MaxDiff (best–worst scaling) | supported | maxdiff_task | a seeded balanced design, versions assigned per respondent, task order randomized | maxdiff_scores | maxdiff_utility | aggregate scores (counts and logit utilities) from the plan; individual-level HB utilities in Data Analytics (Hierarchical Bayes); the MaxDiff choice file is the hand-off for other tools |
+| Choice-based conjoint (CBC) | supported | conjoint_task | a seeded efficient design, versions per respondent, alternatives shuffled | conjoint_utilities | attribute_importance | aggregate logit part-worths, importances and share simulation from the plan; individual-level HB in Data Analytics (Hierarchical Bayes); latent-class choice models not estimated (the stacked CBC file is the hand-off) |
 | Menu-based conjoint | supported | conjoint_task | a seeded design over the prices | conjoint_utilities | attribute_importance | aggregate analysis only |
 | Adaptive CBC (ACBC) | supported | acbc_task | adaptive screening and tournament | conjoint_utilities | attribute_importance | aggregate analysis only |
 | TURF (reach and frequency) | supported | multi_select, matrix_single | item order randomized | turf | bar_horizontal |  |
@@ -21,7 +21,7 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Constant sum / allocation | supported | allocation | item order randomized | allocation_shares | bar_horizontal |  |
 | Van Westendorp price sensitivity | supported | numeric | none (fixed order) | pricing | price_sensitivity | the four prices are planned as one pricing item over four numeric questions in the order too cheap, cheap, expensive, too expensive |
 | Gabor–Granger demand | partial | single_select | none (ascending prices) | pricing | demand_curve | the questions are built here and the Analytics workspace runs Gabor–Granger (prices, accept codes), but a planned pricing item runs Van Westendorp — the plan cannot select Gabor–Granger yet |
-| Segmentation (cluster) | partial | matrix_single | battery row order randomized | factor, cluster | segment_size | k-means / hierarchical clustering on a basis battery; latent-class and typing tools are not available |
+| Segmentation (cluster) | partial | matrix_single | battery row order randomized | factor, cluster | segment_size | k-means / hierarchical clustering on a basis battery from the plan; latent class analysis of categorical indicators in Data Analytics (Latent class); typing tools are not available |
 | Brand funnel / equity | partial | multi_select, single_select | brand order randomized | brand_funnel | funnel_brand | the funnel (awareness → consideration → usage → preference) and conversion are run from stage questions over one brand list; composite brand-equity models are not |
 | Key driver analysis | supported | matrix_single, single_select | battery row order randomized | regression, driver_analysis | coefficient_plot |  |
 | Qualitative interview guide (self-completion, AI-probed) | supported | long_text, open_text | none (a guide flows) | text_themes | word_cloud | open-ended questions with AI follow-up probes, typed or dictated; themes are keyword-coded counts |
@@ -46,37 +46,46 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Correlation | supported |  |
 | Linear regression (moderation, mediation) | supported |  |
 | Logistic regression | supported |  |
-| Factor analysis / PCA | partial | exploratory (PCA / rotation); no confirmatory model |
+| Factor analysis / PCA | partial | exploratory (PCA / rotation); confirmatory models in Data Analytics (SEM / CFA) |
 | Reliability (Cronbach's α) | supported |  |
-| Cluster analysis | partial | k-means / hierarchical; no latent class |
-| Conjoint utilities | partial | aggregate logit; no HB / latent class |
-| MaxDiff scores | partial | counts and aggregate utilities; no HB |
+| Cluster analysis | partial | k-means / hierarchical; latent class analysis in Data Analytics (Latent class) |
+| Conjoint utilities | partial | aggregate logit; individual-level HB in Data Analytics (Hierarchical Bayes); no latent-class choice model |
+| MaxDiff scores | partial | counts and aggregate utilities; individual-level HB in Data Analytics (Hierarchical Bayes) |
 | TURF | supported |  |
 | Driver analysis | supported |  |
-| Text themes / sentiment | partial | word / phrase counts, lexicon sentiment, keyword coding frame; no AI coding, no quotes |
+| Text themes / sentiment | partial | word / phrase counts, lexicon sentiment, keyword coding frame; AI-assisted coding with verbatim quotes is in Research Tools → Qualitative, not the plan |
 | Ranking scores | supported |  |
 | Allocation shares | supported |  |
 | Pricing (Van Westendorp / Gabor–Granger) | partial | a planned item runs Van Westendorp; Gabor–Granger from the Analytics workspace |
 | Brand funnel | partial | stages read in variable order (awareness → … → preference) |
-| Hierarchical Bayes (individual utilities) | not supported | aggregate logit is run; export the MaxDiff choice file / stacked CBC file for HB elsewhere |
-| Latent class analysis | not supported | k-means / hierarchical cluster instead |
-| Structural equation modelling / CFA | not supported | regression (moderation, mediation), exploratory factor analysis and reliability instead |
+| Hierarchical Bayes (individual utilities) | partial | Data Analytics only; CBC and standard MaxDiff: HB-MNL by MCMC with convergence diagnostics (R̂, ESS, Geweke, acceptance), individual utilities, importances and simulation; not selectable from the analysis plan; no ACBC, menu or anchored-MaxDiff HB |
+| Latent class analysis | partial | Data Analytics only; categorical indicators: EM with seeded random starts, K = 1..8 compared by LL / AIC / BIC / SABIC / entropy, profiles and posterior membership; not selectable from the analysis plan; no covariates, distal outcomes or continuous indicators |
+| Structural equation modelling / CFA | partial | Data Analytics only; lavaan-style syntax (=~, ~, ~~, :=): ML on the covariance matrix, expected-information SEs, χ² / CFI / TLI / RMSEA (90% CI) / SRMR / AIC / BIC, standardised estimates, indirect effects (delta method); not selectable from the analysis plan; no FIML, ordinal (WLSMV), multi-group or bootstrap |
 | Multilevel / mixed-effects models | not supported | regression with a group control instead |
-| Automatic AI coding of open text | not supported | text_themes: counts, sentiment, a keyword coding frame |
+| AI-assisted coding of transcripts and open text | requires configuration | in Research Tools → Qualitative, not the plan; AI-suggested codebook, codes and excerpts (inductive or deductive), redacted before sending, every quote checked verbatim, human review (the plan's text_themes is keyword coding) |
 | Paired / repeated-measures tests in the analysis plan | partial | paired t, Wilcoxon and Friedman run in the Analytics workspace; the plan's methods are between-group |
 
 ## Qualitative support
 
 | Capability | Status | What works / the alternative |
 |---|---|---|
-| Moderated live interviews / focus groups | not supported | Studio surveys are self-completion; write the guide as a self-completion interview with AI probes (the Interviews app records and transcribes hiring interviews, not research guides) |
-| Selected quotes in reports | not supported | open answers are exported and themes counted; quotes are chosen by hand |
+| Running live moderated interviews / focus groups | not supported | no video conferencing or real-time moderation: plan the study (create_qual_guide), run it in your own conferencing or facility, then record the session, upload the recording and import or transcribe the transcript in Research Tools → Qualitative |
+| Selected quotes in reports | partial | the qualitative report (Research Tools → Qualitative) carries reviewed verbatim excerpts with source, speaker and time; the survey findings deck and report do not |
 | Open-ended questions (short / essay) | supported |  |
 | AI follow-up probes on open ends | supported | up to 5 per question, gated by conditions; fixed wording or written by the AI at run time |
 | Spoken answers (dictation) on open text | supported | on by default on every prose field |
-| Recorded audio answers with transcription | partial | video_interview questions only |
+| Recorded audio answers with transcription | partial | video_interview answers in surveys; moderated session recordings are transcribed in Research Tools → Qualitative (qualitative:session_transcription) |
 | AI conversational interviewer (voice) | supported | reads the programmed survey aloud and takes spoken answers; the survey stays the authority |
-| Theme coding of open answers | partial | word / phrase counts, lexicon sentiment, keyword coding frame; no AI coding, no quotes |
+| Theme coding of open answers | partial | word / phrase counts, lexicon sentiment, keyword coding frame; AI-assisted coding with verbatim quotes is in Research Tools → Qualitative, not the plan |
+| Interview / focus-group guide (moderated study plan) | supported | objectives, protocol, timed sections with scripts, questions, probes and conditional probes, moderator instructions, ground rules, exercises, concepts, screening, consent and recording disclosure, segments, session plan; created and patched in Intelligent Mode; exported to Word |
+| Session records (interviews / focus groups) | supported | date, moderator, participants and segments, consent captured, notes, observations, status — records of sessions run elsewhere |
+| Session recordings | requires configuration | audio or video uploaded straight to private storage (resumable), played or downloaded through a 15-minute signed URL after an access check (Data view + contact details) |
+| Session transcription | requires configuration | through the configured speech-to-text provider, with timings and speaker separation where the provider offers it (recorded truthfully) |
+| Transcript import (.txt, .vtt, .srt, .docx, “Speaker: text”) | supported | speaker ids and timestamps preserved; moderator role and participant segment suggested and editable; open-ended survey answers can be added as a source |
+| PII redaction of qualitative text | supported | e-mail addresses, phone numbers and a names list replaced before any AI call and for members without contact-details access; spans map back to the original |
+| Human review of codes, themes and excerpts | supported | accept / reject / edit / merge / split codes, rename themes, reassign excerpts, add manual codes and excerpts (verbatim-checked), history of who did what when |
+| Inter-coder agreement (Cohen's kappa per code) | supported | two coders (the AI can be one) over the segments both coded; disagreements listed; undefined when a code has no variation |
+| Theme frequency, negative cases, representative quotes, evidence-based summaries | supported | frequency by group labelled as not importance or significance; every summary claim cites excerpt ids; sentiment only as a labelled lexicon reading |
 
 ## Question types
 
@@ -141,3 +150,29 @@ What ReScript supports, partly supports and does not support — methodologies, 
 | Findings report — Word | supported |  |
 | Tables — Excel | supported |  |
 | Report / deck — PowerPoint | supported |  |
+| Findings deck — PowerPoint (from a run of the plan) | supported | kept once made: asking again downloads the stored version; a new version when the design, the data or the theme changed |
+| Report themes — named or described in words, for Word and PowerPoint | partial | colours by role, fonts, tables, spacing, header/footer and an uploaded logo (Word); five built-ins plus themes saved per organisation or person; section reordering only for the findings report; PDF only by converting the Word file (no PDF download in the Studio) |
+| Interview / discussion guide — Word | supported |  |
+| Qualitative report — Word | supported |  |
+
+## Platform services and their configuration
+
+Each of these works once an operator configures the service it needs; the platform page (`/platform`) shows whether this installation has it. Variable names only — values are never shown.
+
+| Capability | Status | Needs | Configuration (environment) | Notes |
+|---|---|---|---|---|
+| Video / voice responses | partial | Speech-to-text provider, Media storage | AI_STT_API_URL, R2_BUCKET \| SUPABASE_URL | a video_interview question plays a stimulus and records a spoken answer, which is transcribed; dictation works on every open text field; video of the respondent is not recorded in surveys |
+| AI-assisted coding of transcripts and open text | requires configuration | Language model | AI_API_URL | in Research Tools → Qualitative, not the plan; AI-suggested codebook, codes and excerpts (inductive or deductive), redacted before sending, every quote checked verbatim, human review (the plan's text_themes is keyword coding) |
+| AI follow-up probes on open ends | supported | Language model | AI_API_URL | up to 5 per question, gated by conditions; fixed wording or written by the AI at run time |
+| Recorded audio answers with transcription | partial | Speech-to-text provider, Media storage | AI_STT_API_URL, R2_BUCKET \| SUPABASE_URL | video_interview answers in surveys; moderated session recordings are transcribed in Research Tools → Qualitative (qualitative:session_transcription) |
+| AI conversational interviewer (voice) | supported | Language model, Text-to-speech | AI_API_URL | reads the programmed survey aloud and takes spoken answers; the survey stays the authority |
+| Intelligent Mode model reasoning (plans, generation from a brief, descriptive edits) | requires configuration | Language model | AI_API_URL | without a language model, Intelligent Mode is engine-only: instructions that name their objects still work |
+| Spoken requests in Intelligent Mode and Design with AI | requires configuration | Speech-to-text provider | AI_STT_API_URL |  |
+| Machine translation of the survey | requires configuration | Translation provider | GOOGLE_TRANSLATE_API_KEY \| AI_API_URL | the Studio's translate button and batch translation; in Intelligent Mode the model writes translations itself (set_translations), so a copilot request needs no translation provider |
+| Semantic retrieval over research documents | requires configuration | Embeddings model | AI_EMBEDDINGS_MODEL, AI_API_URL | without an embeddings model, passages are retrieved by keywords (BM25) — still cited by id |
+| Transcription of recorded answers | requires configuration | Speech-to-text provider, Media storage | AI_STT_API_URL, R2_BUCKET \| SUPABASE_URL |  |
+| Narrated video reports | requires configuration | Report narration switch, Text-to-speech | REPORT_NARRATION_ENABLED, AI_API_URL |  |
+| Address search on location questions | requires configuration | Address geocoding | GEOCODE_API_URL | without it the typed address is kept and pins still work |
+| Session records (interviews / focus groups) | supported | Supabase database | SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY | date, moderator, participants and segments, consent captured, notes, observations, status — records of sessions run elsewhere |
+| Session recordings | requires configuration | Media storage, Supabase database | R2_BUCKET \| SUPABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY | audio or video uploaded straight to private storage (resumable), played or downloaded through a 15-minute signed URL after an access check (Data view + contact details) |
+| Session transcription | requires configuration | Speech-to-text provider, Media storage | AI_STT_API_URL, R2_BUCKET \| SUPABASE_URL | through the configured speech-to-text provider, with timings and speaker separation where the provider offers it (recorded truthfully) |

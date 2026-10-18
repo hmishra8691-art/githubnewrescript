@@ -143,3 +143,13 @@ test("pending is exactly the three states that still change on their own", () =>
   /* every state has something to say */
   for (const [k, v] of Object.entries(TRANSCRIPT_SAY)) assert.ok(v.length > 0, k);
 });
+
+test("qual_recording (2026-10-18): a private bucket of its own, audio or video, a short playback URL, keyed by survey and session, not transcribed by the media runner", () => {
+  const spec = MEDIA_KINDS.qual_recording;
+  assert.equal(spec.bucket, "rescript-qual");
+  assert.ok(MEDIA_BUCKETS.includes("rescript-qual"));
+  assert.equal(spec.accept, null);
+  assert.equal(spec.transcribed, false);
+  assert.ok(spec.signedSeconds <= 60 * 15);
+  assert.match(mediaPath("qual_recording", { surveyId: "s1", sessionId: "sess-9", fileName: "IDI 1.m4a", now: 5 }), /^s1\/qual\/sess-9\/5-IDI_1\.m4a$|^s1\/qual\/sess-9\/5-IDI.1\.m4a$/);
+});

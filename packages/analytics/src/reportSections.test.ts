@@ -81,7 +81,7 @@ test("a section the analyses cannot fill is not drawn — a note says what to ad
   assert.ok(!titles.includes("Brand comparison"));
   assert.match(d.notes.join(" "), /Brand comparison charts: no saved analysis reads a brand question.*Add a crosstab of the brand question/);
   assert.match(d.notes.join(" "), /Recommendations: none are written.*does not invent them/);
-  assert.match(d.notes.join(" "), /Theme: the Midnight preset/);
+  assert.match(d.notes.join(" "), /Theme: the Midnight theme is applied to this report when you create it/);
 });
 
 test("no fabricated numbers: every number in the hypothesis and section text is one the results contain", () => {

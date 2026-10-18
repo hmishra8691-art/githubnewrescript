@@ -55,7 +55,9 @@ export type AnalysisKind =
   | "descriptive" | "topbox" | "crosstab" | "test" | "correlation" | "regression"
   | "segmentation" | "cluster" | "factor" | "reliability" | "trend"
   | "nps" | "csat" | "turf" | "gap" | "pricing" | "brand" | "ranking" | "allocation"
-  | "text" | "quality" | "weighting" | "conjoint" | "maxdiff";
+  | "text" | "quality" | "weighting" | "conjoint" | "maxdiff"
+  /* advanced models (2026-10-18): hierarchical Bayes, latent class, structural equations */
+  | "hb" | "lca" | "sem";
 
 export const ANALYSIS_KINDS: { kind: AnalysisKind; label: string; group: string; description: string }[] = [
   { kind: "descriptive", label: "Descriptive", group: "Basics", description: "Frequencies, means, medians, spread, percentiles and confidence intervals" },
@@ -82,6 +84,9 @@ export const ANALYSIS_KINDS: { kind: AnalysisKind; label: string; group: string;
   { kind: "weighting", label: "Weighting", group: "Data", description: "Cell and rim weighting with efficiency diagnostics" },
   { kind: "conjoint", label: "Conjoint", group: "Choice", description: "Part-worth utilities, attribute importance, preference shares and market simulation" },
   { kind: "maxdiff", label: "MaxDiff", group: "Choice", description: "Best/worst counts, utility scores, relative importance and segment comparison" },
+  { kind: "hb", label: "Hierarchical Bayes (HB)", group: "Advanced models", description: "Individual-level utilities for CBC or MaxDiff (HB-MNL, MCMC) with convergence diagnostics, importances and simulation" },
+  { kind: "lca", label: "Latent class", group: "Advanced models", description: "Latent class analysis of categorical indicators: 1..K classes, BIC / AIC / entropy, class profiles and membership" },
+  { kind: "sem", label: "SEM / CFA", group: "Advanced models", description: "Confirmatory factor and structural equation models (ML) from lavaan-style syntax, with fit indices and indirect effects" },
 ];
 
 export interface AnalysisDefinition {

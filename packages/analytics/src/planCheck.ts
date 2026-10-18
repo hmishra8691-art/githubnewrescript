@@ -4,6 +4,7 @@ import { crosstabDefinition, testDefinition, type PlannedAnalysis } from "./plan
 import { scaleOf } from "./questionChart.js";
 import type { PlannedCrosstab, PlannedTest, SurveyDefinition } from "@rescript/schema";
 import { isNonQuestionVariable } from "@rescript/engine";
+import { checkSemSyntax } from "./models/sem.js";
 
 /**
  * ONE CHECK FOR EVERY ANALYSIS BEFORE IT IS KEPT — generated or hand-built.
@@ -16,7 +17,7 @@ import { isNonQuestionVariable } from "@rescript/engine";
  * showed as blank or wall-of-warning results. They are caught here instead,
  * with a reason the researcher can act on.
  */
-export type IssueCode = "unknown_variable" | "no_variables" | "missing_axis" | "wrong_type" | "needs_groups" | "same_variable" | "missing_input";
+export type IssueCode = "unknown_variable" | "no_variables" | "missing_axis" | "wrong_type" | "needs_groups" | "same_variable" | "missing_input" | "not_identified" | "invalid_model";
 export interface PlanIssue { code: IssueCode; message: string; variables?: string[]; severity: "error" | "warning" }
 
 const NUMERIC_KINDS = new Set(["regression", "correlation", "factor", "reliability", "cluster"]);
@@ -96,6 +97,50 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
     }
     case "segmentation": if (!(def.segments?.length)) need("A segment profile compares saved segments — choose at least one in Segments & weighting."); break;
     case "weighting": if (!(def.weighting && (def.weighting.variable || def.weighting.rim?.length))) need("Weighting needs rim targets or a weight variable — add them in Segments & weighting."); break;
+    /* advanced models (2026-10-18) — the same minimums the runners in analyses/advanced.ts refuse */
+    case "hb": {
+      if (vs.length > 1) need("Hierarchical Bayes reads one CBC or MaxDiff question — choose only that question.");
+      const meta = variables.find((v) => v.name === vs[0]);
+      if (vs.length === 1 && meta?.questionType && meta.questionType !== "conjoint_task" && meta.questionType !== "maxdiff_task") need(`Hierarchical Bayes needs a CBC (conjoint) or MaxDiff question; ${vs[0]} is a ${meta.questionType.replace(/_/g, " ")} question.`);
+      const iters = (Number(o.burnIn ?? 5000) || 0) + (Number(o.draws ?? 5000) || 0);
+      if (iters > 200_000) need(`Burn-in plus draws is ${iters.toLocaleString()} iterations per chain — the limit is 200,000.`);
+      break;
+    }
+    case "lca": {
+      if (vs.length && items() < 2) need("Latent class analysis needs at least two categorical indicators — add more variables.");
+      const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
+      if (!(minK >= 1 && maxK <= 8 && minK <= maxK)) need("The class range must run from 1 to at most 8 classes, the smallest first.");
+      else if (vs.length && items() >= 2) {
+        const metas = vs.map((n) => variables.find((v) => v.name === n));
+        const cats = metas.map((m) => m?.categories?.length ?? 0);
+        if (cats.every((c) => c >= 2)) {
+          const cells = cats.reduce((t, c) => t * c, 1);
+          const npar = (k: number) => (k - 1) + k * cats.reduce((t, c) => t + c - 1, 0);
+          if (cells - 1 - npar(maxK) < 0) {
+            const ok = Array.from({ length: maxK }, (_, i) => i + 1).filter((k) => cells - 1 - npar(k) >= 0).pop() ?? 1;
+            out.push({ code: "not_identified", severity: minK > ok ? "error" : "warning", message: `${maxK} classes are not identified with these ${vs.length} indicators (${npar(maxK)} parameters for ${cells - 1} response-pattern frequencies) — at most ${ok} class${ok === 1 ? "" : "es"} can be estimated; larger K will be reported as not identified.` });
+          }
+        }
+      }
+      break;
+    }
+    case "sem": {
+      const syntax = typeof o.syntax === "string" ? o.syntax.trim() : "";
+      if (!syntax) { need("Write the model in Options — for example “F1 =~ q1 + q2 + q3” (measurement) and “F2 ~ F1” (structural path)."); break; }
+      const known = variables.length ? new Set(variables.map((v) => v.name)) : null;
+      const b = checkSemSyntax(syntax, { scaling: o.scaling === "unit_variance" ? "unit_variance" : "marker", ...(known ? { available: (n: string) => known.has(n) } : {}) });
+      for (const e of b.errors) out.push({ code: /not identified|t-rule|no scale|single indicator|two indicators/.test(e) ? "not_identified" : "invalid_model", severity: "error", message: e });
+      for (const w of b.warnings) out.push({ code: "not_identified", severity: "warning", message: w });
+      if (!b.errors.length && known) {
+        const metas = new Map(variables.map((v) => [v.name, v]));
+        const observed = b.model?.observed ?? [];
+        const bad = observed.filter((n) => { const sc = scaleOf(metas.get(n)); return sc === "text" || sc === "multi" || sc === "time"; });
+        if (bad.length) out.push({ code: "wrong_type", severity: "error", message: `SEM treats every observed variable as continuous; ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not numeric or scale.` });
+        const nominal = observed.filter((n) => scaleOf(metas.get(n)) === "nominal");
+        if (nominal.length) out.push({ code: "wrong_type", severity: "warning", message: `${nominal.join(", ")} ${nominal.length === 1 ? "is" : "are"} unordered categories; SEM will treat the codes as numbers.` });
+      }
+      break;
+    }
     default: break;
   }
   return out;
@@ -104,6 +149,7 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
 /** the kinds whose inputs are set somewhere other than the variable list, so an empty list is not by itself "no variables" */
 const kindNeedsNoVariables = (def: AnalysisDefinition): boolean => {
   if (def.kind === "quality" || def.kind === "weighting" || def.kind === "segmentation") return true;
+  if (def.kind === "sem") return typeof def.options?.syntax === "string" && def.options.syntax.trim().length > 0;
   const o = (def.options ?? {}) as Record<string, unknown>;
   if (def.kind === "gap") return Array.isArray(o.importance) && (o.importance as unknown[]).length > 0;
   if (def.kind === "brand") return Array.isArray(o.stages) && (o.stages as unknown[]).length >= 2;

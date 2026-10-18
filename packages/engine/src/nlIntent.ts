@@ -110,6 +110,8 @@ export type Interpretation =
   | { kind: "query"; category: IntentCategory; understood: string; query: DataQuery; detected: Detected[] }
   /** a document to produce (Phase 5): the proposal, the findings report or the findings deck — the Studio builds the file */
   | { kind: "output"; category: IntentCategory; understood: string; output: OutputRequest; detected: Detected[] }
+  /** a REPORT THEME request (2026-10-18): the look of the documents and decks, or (asked for in words) their section order — the Studio reads the words into a theme, previews it and applies it on approval */
+  | { kind: "theme"; category: IntentCategory; understood: string; request: ThemeRequest; detected: Detected[] }
   /** the research agent's workflow (Phase 6): the Studio runs the planner on the survey and shows the steps — with the objective when the sentence gave one */
   | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
@@ -140,7 +142,25 @@ export interface OutputRequest {
   client?: string;
   /** the words that named the document, for the card */
   words: string;
+  /** "update / regenerate the Word document": make a new version even when nothing it is made from changed (2026-10-18) */
+  regenerate?: boolean;
+  /** "… with the Healthcare Analytics theme": a report theme by name, resolved by the Studio (2026-10-18) */
+  theme?: string;
 }
+
+/**
+ * A REPORT THEME REQUEST (2026-10-18). The engine only classifies: the words go
+ * to the Studio, which reads them into a structured theme (`@rescript/analytics`
+ * `interpretThemeRequest`), shows a preview, and applies it when approved.
+ *   describe       "healthcare research presentation, restrained colours, clear statistical annotations"
+ *   apply_named    "apply the Healthcare Analytics theme" (`name`)
+ *   save_as        "save this theme as Board Pack" (`name`)
+ *   restructure    "keep the content but reorganize around the hypotheses and recommendations"
+ *   list           "which report themes are there?"
+ */
+export interface ThemeRequest { op: "describe" | "apply_named" | "save_as" | "restructure" | "list"; text: string; name?: string }
+/** the built-in report themes' names — the same five as `@rescript/analytics` REPORT_THEMES (a Studio test keeps them equal) */
+export const REPORT_THEME_NAMES = ["Executive Research", "Healthcare Analytics", "Brand Performance", "Consumer Insights", "Academic Research"] as const;
 
 /** the `reason` of a `model` result that hands the sentence to the Studio's deterministic grammar instead */
 export const DEFER_TO_GRAMMAR = "defer:grammar";
@@ -2237,6 +2257,10 @@ const outputRequest: Recogniser = (r) => {
     || (m = new RegExp(String.raw`${lead}(?:word|docx)\s+(?:document|doc|report|version)\s+(?:of|with|for)\s+(?:the\s+)?(?:findings|results|report)(.*)$`, "i").exec(t))) { type = "findings_docx"; tail = m[1]; }
   if (!type) return null;
   tail = tail.trim();
+  /* "… with / in the Healthcare Analytics theme" (2026-10-18): a report theme by name, for the Studio to resolve */
+  let themeName: string | undefined;
+  const th = /(?:^|,?\s+)(?:with|in|using|on)\s+(?:the\s+|our\s+|my\s+)?(.{2,60}?)\s+(?:report\s+)?theme$/i.exec(tail) ?? /(?:^|,?\s+)(?:with|in|using|on)\s+(?:the\s+|our\s+|my\s+)?(.{2,60}?)\s+(?:report\s+)?theme(?=\s*,?\s+for\s+)/i.exec(tail);
+  if (th) { themeName = unquote(th[1]).trim().replace(/\b\w/g, (c) => c.toUpperCase()); tail = tail.replace(th[0], "").trim(); }
   // the tail: an audience, a client, a language level — anything else is not this recogniser's sentence
   let audience: OutputRequest["audience"] = /\bexecutive\b/i.test(t) ? "executive" : "client";
   let client: string | undefined;
@@ -2254,7 +2278,7 @@ const outputRequest: Recogniser = (r) => {
   const hasDesign = !!(r.def.research?.objective || r.def.research?.hypotheses.length);
   if ((type === "proposal_docx" || type === "research_plan_docx") && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, `There is nothing to write a ${type === "research_plan_docx" ? "research plan" : "proposal"} from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.`, []);
   const fromDesign = type === "proposal_docx" || type === "sap_docx" || type === "research_plan_docx";
-  return { kind: "output", category: "reporting", understood: `${update ? "Regenerate" : "Produce"} ${words}${client ? ` for ${client}` : ""}${fromDesign ? ` from the research design${update ? " as it is now" : ""}` : " from the latest analysis run"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
+  return { kind: "output", category: "reporting", understood: `${update ? "Regenerate" : "Produce"} ${words}${client ? ` for ${client}` : ""}${fromDesign ? ` from the research design${update ? " as it is now" : ""}` : " from the latest analysis run"}${themeName ? `, in the ${themeName} theme` : ""}.`, output: { type, audience, ...(client ? { client } : {}), words, ...(update ? { regenerate: true } : {}), ...(themeName ? { theme: themeName } : {}) }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : []), ...(themeName ? [det("theme", themeName)] : [])] };
 };
 
 /* ---------------------------------------------------------- data questions (Phase 4) */
@@ -2781,6 +2805,47 @@ const workflowRequest: Recogniser = (r) => {
 };
 const quoteFor = (s: string) => `“${s}”`;
 
+/*
+ * REPORT THEMES IN WORDS (2026-10-18). "Apply our premium corporate theme with navy headings…", "executive
+ * consulting-style layout…", "healthcare research presentation, restrained colors, clear statistical
+ * annotations", "use our uploaded logo and brand colors", "keep the content but reorganize around the main
+ * hypotheses and recommendations", "apply the Healthcare Analytics theme". The SURVEY has a theme too (what
+ * respondents see, composed by the model), so a sentence is a report theme only when it says so — a document
+ * word, a built-in report theme's name, or words only reports have (consulting, statistical annotations,
+ * chart palette); one about the survey is left alone; one that could be either is asked about.
+ */
+const REPORT_WORDS = /\b(?:reports?|decks?|presentations?|slides?|documents?|docx|word\s+(?:file|doc)|powerpoint|pptx|findings|research\s+plan|proposal|sap|consult(?:ing|ancy)(?:[- ]style)?|statistical\s+annotations?|chart\s+palette|readouts?)\b/i;
+const SURVEY_WORDS = /\b(?:survey|questionnaire|respondents?|pages?|questions?|answer\s+options?|options|blocks?|flow|progress\s+bar|runtime|branding\s+panel)\b/i;
+const LOOK_WORDS = /\b(?:theme|look|style|styled|layout|colou?rs?|palette|headings?|accents?|backgrounds?|fonts?|typeface|typography|(?:striped|minimal|clean|bordered)\s+tables|annotations?|logo|brand\s+colou?rs)\b/i;
+const reportTheme: Recogniser = (r) => {
+  const text = r.text.replace(/[.!]+$/, "").trim();
+  /* a theme request is a sentence or two; a pasted brief that mentions a presentation is a brief */
+  if (text.length > 280 || /\n/.test(text)) return null;
+  const t = text.toLowerCase();
+  const say = (op: ThemeRequest["op"], understood: string, name?: string): Interpretation => ({ kind: "theme", category: "reporting", understood, request: { op, text, ...(name ? { name } : {}) }, detected: [det("report theme", name ?? op)] });
+  if (/^(?:which|what|list|show)\b.*\breport\s+themes?\b/.test(t) || /^(?:which|what)\s+themes?\s+(?:can|could)\s+(?:i|we)\s+(?:use|apply)\s+(?:to|for|on)\s+(?:the\s+)?(?:report|deck|documents?)/.test(t)) return say("list", "List the report themes: the five built-in ones and the ones saved for you or your organisation.");
+  if (SURVEY_WORDS.test(t) && !REPORT_WORDS.test(t)) return null;
+  let m: RegExpExecArray | null;
+  if ((m = /^save\s+(?:this|the|it|that)?\s*(?:report\s+)?(?:theme|look|style)\s+as\s+(?:the\s+|our\s+|a\s+)?["“]?(.+?)["”]?(?:\s+theme)?(?:\s+for\s+(?:the\s+)?(?:team|organi[sz]ation|company|workspace|me|myself))?$/i.exec(text))) return say("save_as", `Save the report theme as “${m[1].trim()}”.`, m[1].trim());
+  if (/\b(?:re-?organi[sz]e|restructure|rearrange|re-?order)\b/.test(t) && /\b(?:hypothes[ie]s|recommendations?|findings|summary|sections?|content|report|deck|document)\b/.test(t)) return say("restructure", "Reorder the report's sections as asked — the content kept exactly as it is.");
+  const builtin = REPORT_THEME_NAMES.find((n) => t.includes(n.toLowerCase()));
+  const nm = /\b(?:apply|use|switch\s+to|change\s+to|go\s+with)\s+(?:the\s+|our\s+|my\s+)?(.{2,60}?)\s+(?:report\s+)?theme\b(.*)$/i.exec(text);
+  const descriptors = (rest: string) => LOOK_WORDS.test(rest.replace(/\btheme\b/gi, ""));
+  if (builtin && nm && !descriptors(nm[2])) return say("apply_named", `Apply the ${builtin} report theme to the documents and decks.`, builtin);
+  if (builtin || REPORT_WORDS.test(t)) {
+    if (!LOOK_WORDS.test(t) && !builtin && !/\bconsult(?:ing|ancy)(?:[- ]style)?\b|\bstatistical\s+annotations?\b|\bchart\s+palette\b/.test(t)) return null;
+    if (nm && !descriptors(nm[2]) && !LOOK_WORDS.test(nm[1])) return say("apply_named", `Apply the “${nm[1].trim()}” report theme to the documents and decks.`, nm[1].trim());
+    /* a document word alone ("create the findings deck") is the output recogniser's, already tried; here it is the look that is asked for */
+    return say("describe", "Read this as a report theme: the look of the documents and decks (colours, type, tables, spacing, branding) — previewed before it is applied; the content is not changed.");
+  }
+  /* the look, with nothing to say which look: ask */
+  if ((/\b(?:theme|look|layout|style)\b/.test(t) && /\b(?:headings?|accents?|annotations?|logo|brand\s+colou?rs|typography|corporate|premium|executive)\b/.test(t)) || /\blogo\b.*\bbrand\s+colou?rs\b|\bbrand\s+colou?rs\b.*\blogo\b/.test(t)) {
+    const strip = text.replace(/[.!]+$/, "");
+    return { kind: "clarify", category: "reporting", understood: "A look was asked for — for the report documents or for the survey respondents see?", question: "Should this theme apply to the report documents and decks, or to the survey itself?", choices: [{ label: "The report documents and decks", text: `${strip} for the report documents` }, { label: "The survey respondents see", text: `${strip} in the survey` }], detected: [det("look", "report or survey")] };
+  }
+  return null;
+};
+
 /* ---------------------------------------------------------- what the engine can do when no model answers */
 
 /**
@@ -2914,7 +2979,7 @@ function fallback(r: Run): Interpretation {
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
 const RECOGNISERS: Recogniser[] = [
-  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest,
+  analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, uxLook, longBrief,
   surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
@@ -2922,7 +2987,7 @@ const RECOGNISERS: Recogniser[] = [
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [audience, shorten];
+const WHOLE_FIRST: Recogniser[] = [audience, shorten, reportTheme];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
@@ -3079,7 +3144,7 @@ function compound(def: SurveyDefinition, text: string, parts: string[], ctx: Int
     if (it.kind === "refused" && it.noop) { noops.push(it); category ??= it.category; continue; }
     if (it.kind === "clarify") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, choices: it.choices.map((c) => ({ label: c.label, text: text.replace(part, c.text) })) }; continue; }
     if (it.kind === "refused") { stop = { ...it, understood: `In “${part}”: ${it.understood}`, reason: `${it.reason} Nothing else in the request was applied.`, ...(it.suggestion ? { suggestion: { text: text.replace(part, it.suggestion.text) } } : {}) }; continue; }
-    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
+    if (it.kind === "answer" || it.kind === "query" || it.kind === "output" || it.kind === "workflow" || it.kind === "theme") { stop = { kind: "model", category: it.category, reason: "a question and an edit in one sentence — the language model takes the whole request", detected }; continue; }
     category ??= it.category;
     actions.push(...it.actions);
     detected.push(...it.detected);

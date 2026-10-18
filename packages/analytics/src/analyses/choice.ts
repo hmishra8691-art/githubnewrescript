@@ -22,6 +22,133 @@ function designIndex(rows: Record<string, unknown>[]) {
   return (task: string, version: string): Record<string, unknown>[] => byVersion.get(`${version}\u0000${task}`) ?? byTask.get(task) ?? [];
 }
 
+/**
+ * THE CBC DESIGN MATRIX — one coding for every choice model on the platform
+ * (the aggregate MNL below and the HB-MNL in models/hb.ts): levels in the
+ * configured order, effects coding with the first level as reference (−1 on
+ * every level column of its attribute, so part-worths sum to zero per
+ * attribute), then a None constant when the design has a None row.
+ */
+export function cbcCoding(rows: Record<string, unknown>[], columns: string[], config: unknown) {
+  const attrs = columns.filter((c) => !DESIGN_COLS.has(c));
+  const levels: Record<string, string[]> = {};
+  // levels in the order the design was configured with (the file's first-appearance order otherwise)
+  const configured = ((config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
+  for (const a of attrs) {
+    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a])))];
+    const cfg = configured.find((x) => x.name === a)?.levels?.map(String).filter((l) => seen.includes(l));
+    levels[a] = cfg && cfg.length === seen.length ? cfg : seen;
+  }
+  // parameter layout: for each attribute, levels[1..] (first = reference, effects-coded so utilities sum to zero per attribute), then none constant if present
+  const hasNone = rows.some((r) => Number(r.none_option) === 1);
+  const idx: { attr: string; level: string; i: number }[] = [];
+  let p = 0;
+  for (const a of attrs) for (const l of levels[a].slice(1)) idx.push({ attr: a, level: l, i: p++ });
+  const noneIdx = hasNone ? p++ : -1;
+  const featuresOf = (r: Record<string, unknown>): number[] => {
+    const x = new Array(p).fill(0);
+    if (Number(r.none_option) === 1) { if (noneIdx >= 0) x[noneIdx] = 1; return x; }
+    for (const a of attrs) {
+      const l = String(r[a]), ls = levels[a];
+      const k = ls.indexOf(l);
+      if (k === 0) for (const e of idx) { if (e.attr === a) x[e.i] = -1; }  // effects coding: reference = −1 on every level column
+      else { const e = idx.find((e) => e.attr === a && e.level === l); if (e) x[e.i] = 1; }
+    }
+    return x;
+  };
+  /** every level (reference included) as a linear combination of the coded parameters, then None */
+  const levelRows = (): { names: string[]; attr: (string | null)[]; level: string[]; rows: number[][] } => {
+    const names: string[] = [], attr: (string | null)[] = [], level: string[] = [], out: number[][] = [];
+    for (const a of attrs) for (const l of levels[a]) {
+      const r = new Array(p).fill(0);
+      if (l === levels[a][0]) for (const e of idx) { if (e.attr === a) r[e.i] = -1; }
+      else r[idx.find((e) => e.attr === a && e.level === l)!.i] = 1;
+      names.push(`${a}: ${l}`); attr.push(a); level.push(l); out.push(r);
+    }
+    if (noneIdx >= 0) { const r = new Array(p).fill(0); r[noneIdx] = 1; names.push("None"); attr.push(null); level.push("None"); out.push(r); }
+    return { names, attr, level, rows: out };
+  };
+  return { attrs, levels, idx, p, hasNone, noneIdx, featuresOf, levelRows };
+}
+
+/**
+ * The CBC answers of every respondent as choice sets, read exactly as the
+ * aggregate model reads them (version from the seed-derived column, design
+ * alternatives sorted, the chosen alternative located, holdouts set aside) —
+ * grouped per respondent for an individual-level model.
+ */
+export function cbcRespondentSets(ds: Dataset, qid: string, opts: { includeHoldouts?: boolean } = {}) {
+  const { q, design, rows, columns } = designFor(ds, qid);
+  if (!design || !rows.length || design.kind === "menu") return null;
+  const coding = cbcCoding(rows, columns, design.config);
+  const altsOf = designIndex(rows);
+  const respondents: { ci: number; id: string; sets: ChoiceSet[] }[] = [];
+  let holdoutTasks = 0;
+  ds.cases.forEach((c, ci) => {
+    const ans = c.answers[qid] as Record<string, unknown> | undefined;
+    if (!ans || typeof ans !== "object") return;
+    const version = String(c.answers[`${qid}_version`] ?? c.vars[`${q?.variableName}_VERSION`] ?? "1");
+    const sets: ChoiceSet[] = [];
+    for (const [task, choice] of Object.entries(ans)) {
+      if (choice == null || choice === "") continue;
+      let alts = altsOf(task, version);
+      if (!alts.length) continue;
+      alts = [...alts].sort((a, b) => Number(a.alt) - Number(b.alt));
+      const chosenIdx = alts.findIndex((r) => String(r.alt) === String(choice));
+      if (chosenIdx < 0) continue;
+      if (Number(alts[0].is_holdout) === 1 && !opts.includeHoldouts) { holdoutTasks++; continue; }
+      sets.push({ alternatives: alts.map(coding.featuresOf), chosen: chosenIdx });
+    }
+    if (sets.length) respondents.push({ ci, id: String(c.id ?? ci), sets });
+  });
+  return { q, design, coding, respondents, holdoutTasks };
+}
+
+/**
+ * The MaxDiff answers per respondent as choice sets — the same sequential
+ * best–worst coding as the aggregate model (best from the set; worst from the
+ * rest with negated features; effects coding, last item as reference).
+ * Anchored designs are not modelled individually (null + reason).
+ */
+export function maxdiffRespondentSets(ds: Dataset, qid: string) {
+  const { q, design, rows } = designFor(ds, qid);
+  if (!design || !rows.length) return null;
+  if ((design.config as { anchored?: boolean } | undefined)?.anchored === true) return { unsupported: "Anchored (dual-response) MaxDiff is not estimated with HB here: the anchor constraints need a different parameterisation. The aggregate anchored model is available in the MaxDiff analysis." as const };
+  const items = [...new Map(rows.map((r) => [String(r.item_index), String(r.item_label ?? r.item_index)])).entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  const itemIdx = new Map(items.map(([code], i) => [code, i]));
+  const K = items.length, P = K - 1;
+  const feat = (i: number) => { const x = new Array(P).fill(0); if (i === K - 1) x.fill(-1); else x[i] = 1; return x; };
+  const practice = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));
+  const altsOf = designIndex(rows);
+  const respondents: { ci: number; id: string; sets: ChoiceSet[] }[] = [];
+  ds.cases.forEach((c, ci) => {
+    const ans = c.answers[qid] as Record<string, { best?: string; worst?: string }> | undefined;
+    if (!ans || typeof ans !== "object") return;
+    const version = String(c.answers[`${qid}_version`] ?? c.vars[`${q?.variableName}_VERSION`] ?? "1");
+    const sets: ChoiceSet[] = [];
+    for (const [task, bw] of Object.entries(ans)) {
+      if (!bw || typeof bw !== "object" || practice.has(task)) continue;
+      const ids = altsOf(task, version).map((r) => itemIdx.get(String(r.item_index))!).filter((x) => x != null);
+      if (ids.length < 2) continue;
+      const b = bw.best != null ? itemIdx.get(String(bw.best)) : undefined, w = bw.worst != null ? itemIdx.get(String(bw.worst)) : undefined;
+      if (b != null && w != null && b === w) continue;
+      if (b != null && ids.includes(b)) sets.push({ alternatives: ids.map(feat), chosen: ids.indexOf(b) });
+      if (w != null && ids.includes(w)) { const rest = ids.filter((i) => i !== b); if (rest.length >= 2) sets.push({ alternatives: rest.map((i) => feat(i).map((v) => -v)), chosen: rest.indexOf(w) }); }
+    }
+    if (sets.length) respondents.push({ ci, id: String(c.id ?? ci), sets });
+  });
+  const levelRows = items.map((_, i) => (i === K - 1 ? new Array(P).fill(-1) : Array.from({ length: P }, (__, j) => (j === i ? 1 : 0))));
+  return { q, design, items: items.map(([code, label]) => ({ code, label })), p: P, levelRows, respondents };
+}
+
+/** the question an analysis names, resolved the way the choice runners do (exported for the HB runner) */
+export function choiceQuestionFor(ds: Dataset, name: string): { id: string; type: string } | null {
+  const meta = ds.byName.get(name);
+  const q = ds.def.questions.find((x) => x.id === meta?.questionId || x.id === name || x.code === name || x.variableName === name)
+    ?? ds.def.questions.find((x) => x.type === "conjoint_task" || x.type === "maxdiff_task");
+  return q ? { id: q.id, type: q.type } : null;
+}
+
 const samplingWarning = (respondents: number, step: number) => `The model was fitted on every ${step === 2 ? "second" : `${step}th`} respondent (about ${Math.ceil(respondents / step).toLocaleString()} of ${respondents.toLocaleString()}) to keep the run within its time limit; counts and shares of choice use everyone. Estimates from this many respondents are already very precise.`;
 
 /** the most respondents whose tasks go into the model fit; beyond it every k-th respondent is used and the result says so (audit F-3) */
@@ -60,32 +187,7 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const { q, design, rows, columns } = designFor(ds, qid);
   if (!design || !rows.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["The conjoint design file has not been generated."], recommendedCharts: ["attribute_importance"], totalCases });
   if (design.kind === "menu") return menuCounts(def, ds, totalCases, qid);
-  const attrs = columns.filter((c) => !DESIGN_COLS.has(c));
-  const levels: Record<string, string[]> = {};
-  // levels in the order the design was configured with (the file's first-appearance order otherwise)
-  const configured = ((design.config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
-  for (const a of attrs) {
-    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a])))];
-    const cfg = configured.find((x) => x.name === a)?.levels?.map(String).filter((l) => seen.includes(l));
-    levels[a] = cfg && cfg.length === seen.length ? cfg : seen;
-  }
-  // parameter layout: for each attribute, levels[1..] (first = reference, effects-coded so utilities sum to zero per attribute), then none constant if present
-  const hasNone = rows.some((r) => Number(r.none_option) === 1);
-  const idx: { attr: string; level: string; i: number }[] = [];
-  let p = 0;
-  for (const a of attrs) for (const l of levels[a].slice(1)) idx.push({ attr: a, level: l, i: p++ });
-  const noneIdx = hasNone ? p++ : -1;
-  const featuresOf = (r: Record<string, unknown>): number[] => {
-    const x = new Array(p).fill(0);
-    if (Number(r.none_option) === 1) { if (noneIdx >= 0) x[noneIdx] = 1; return x; }
-    for (const a of attrs) {
-      const l = String(r[a]), ls = levels[a];
-      const k = ls.indexOf(l);
-      if (k === 0) for (const e of idx) { if (e.attr === a) x[e.i] = -1; }  // effects coding: reference = −1 on every level column
-      else { const e = idx.find((e) => e.attr === a && e.level === l); if (e) x[e.i] = 1; }
-    }
-    return x;
-  };
+  const { attrs, levels, idx, p, hasNone, noneIdx, featuresOf } = cbcCoding(rows, columns, design.config);
   const altsOf = designIndex(rows);
   const sampleStep = Math.max(1, Math.ceil(ds.cases.length / MAX_MODEL_RESPONDENTS));
   const includeHoldout = opt(def, "includeHoldouts", false) as boolean;
@@ -167,7 +269,7 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   }
   const tables: ResultTable[] = [
     { id: "importance", title: "Attribute importance", columns: [{ key: "attribute", label: "Attribute" }, { key: "importance", label: "Relative importance %", type: "pct", decimals: 1 }, { key: "range", label: "Utility range", type: "number", decimals: 3 }], rows: importance.map((a) => ({ ...a, importance: pct(a.importance), range: round(a.range, 3) })), base: { n: respondents, label: `${respondents} respondents, ${sets.length} choice tasks` } },
-    { id: "partworths", title: "Part-worth utilities — aggregate multinomial logit (effects-coded, zero-centred)", notes: ["One set of utilities for the whole sample (pooled conditional logit, Newton–Raphson). Not individual-level: no hierarchical Bayes or latent-class model is estimated here."], columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "utility", label: "Utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: partWorths.flatMap((a) => a.levels.map((l) => ({ attribute: a.attribute, level: l.level, utility: round(l.utility, 3), se: round(l.se, 3), p: l.p == null ? "(reference)" : fmtP(l.p) }))) },
+    { id: "partworths", title: "Part-worth utilities — aggregate multinomial logit (effects-coded, zero-centred)", notes: ["One set of utilities for the whole sample (pooled conditional logit, Newton–Raphson). Not individual-level: no hierarchical Bayes or latent-class model is estimated here — the Hierarchical Bayes analysis (Advanced models) estimates individual utilities from the same answers."], columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "utility", label: "Utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: partWorths.flatMap((a) => a.levels.map((l) => ({ attribute: a.attribute, level: l.level, utility: round(l.utility, 3), se: round(l.se, 3), p: l.p == null ? "(reference)" : fmtP(l.p) }))) },
     { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choice tasks", v: sets.length }, { m: "Log-likelihood", v: round(fit.logLikelihood, 2) }, { m: "Null log-likelihood", v: round(fit.nullLogLikelihood, 2) }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "In-sample hit rate", v: fmtPct(fit.hitRate * 100, 1) }, ...(holdouts.length ? [{ m: `Holdout hit rate (${holdouts.length} tasks)`, v: fmtPct((holdoutHits / holdouts.length) * 100, 1) }] : []), ...(hasNone ? [{ m: "“None” chosen", v: fmtPct(tasksAnswered ? (noneChosen / tasksAnswered) * 100 : 0, 1) }] : []), { m: "Converged", v: fit.converged ? "yes" : "no" }, { m: "Model", v: `Aggregate multinomial logit, effects-coded${hasNone ? ", None constant" : ""}, ${fit.iterations} Newton–Raphson iterations` }] },
     { id: "simulation", title: "Share-of-preference simulation (from the aggregate logit)", columns: [{ key: "profile", label: "Profile" }, { key: "description", label: "Levels" }, { key: "utility", label: "Total utility", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }], rows: simRows, notes: ["Shares follow the logit rule over the listed profiles" + (hasNone ? " plus the none option." : ".")] },
   ];
@@ -374,7 +476,7 @@ export function maxdiff(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const rowsOut = table.map((t, r) => ({ rank: r + 1, item: t.item, best: t.best, worst: t.worst, shown: t.shown, bw: pct(t.bw), utility: round(t.utility, 3), se: round(t.se, 3), share: pct(t.share), relative: pct((t.share / maxShare) * 100), ...(anchored ? { centred: round(t.centred, 3), important: t.aboveAnchor ? "yes" : "no" } : {}) }));
   const tables: ResultTable[] = [
     { id: "maxdiff", title: "MaxDiff item scores", columns: [{ key: "rank", label: "Rank" }, { key: "item", label: "Item" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "best", label: "Best", type: "number", decimals: 0 }, { key: "worst", label: "Worst", type: "number", decimals: 0 }, { key: "bw", label: "B−W score %", type: "number", decimals: 1 }, { key: "utility", label: "Logit utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }, { key: "relative", label: "Relative to top %", type: "pct", decimals: 1 }, ...(anchored ? [{ key: "centred", label: "Zero-centred utility", type: "number" as const, decimals: 3 }, { key: "important", label: "Above the anchor" }] : [])], rows: rowsOut, base: { n: respondents, label: `${respondents} respondents, ${sets.length} choices` }, notes: anchored ? ["“B−W score %” is a descriptive count, not a model estimate; the utilities come from the pooled logit model below.", "Utilities from an aggregate conditional logit against the ANCHOR, whose utility is zero by definition — so a positive utility means the item is important in absolute terms, not merely more important than the rest of the list.", "Zero-centred utilities are also shown, for comparison with a standard (unanchored) MaxDiff.", "Preference share = rescaled choice probability summing to 100."] : [bestOnly ? "Utilities from an aggregate (pooled) conditional logit on the best choices, zero-centred. Preference share = rescaled choice probability summing to 100." : "Utilities from an aggregate (pooled) conditional logit (best choices plus worst choices with reversed sign — the sequential best-worst model), zero-centred. Preference share = rescaled choice probability summing to 100.",
-      "“B−W score %” is a descriptive COUNT — (times best − times worst) / times shown — not a model estimate; it is shown beside the logit utilities, which account for which items each one was shown with. The model is pooled across respondents: individual-level (HB) utilities are not estimated here.", "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."] },
+      "“B−W score %” is a descriptive COUNT — (times best − times worst) / times shown — not a model estimate; it is shown beside the logit utilities, which account for which items each one was shown with. The model is pooled across respondents: individual-level (HB) utilities are not estimated here — the Hierarchical Bayes analysis (Advanced models) estimates them.", "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."] },
     { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choices modelled", v: sets.length }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "Hit rate", v: fmtPct(fit.hitRate * 100, 1) }, { m: "Converged", v: fit.converged ? "yes" : "no" }, ...(anchored ? [{ m: "Anchor observations", v: anchorObservations }, { m: "“All important”", v: round(anchorCounts.all, 0) }, { m: "“Some important”", v: round(anchorCounts.some, 0) }, { m: "“None important”", v: round(anchorCounts.none, 0) }] : [])] },
   ];
   // by segment variable: mean B−W count score per group

@@ -122,7 +122,7 @@ const SINCE_LIVE_VIEW = ["Data Analytics", "Fieldwork", "Project", "Distribution
 assert.deepEqual(
   navLabelList.filter((t) => !SINCE_LIVE_VIEW.includes(t)),
   ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill",
-   "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"],
+   "Design Generators", "Qualitative", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"],
   "the navigation is exactly what it was before the Live View existed",
 );
 ok("the Studio's original 17 tabs are unchanged, in their original order");

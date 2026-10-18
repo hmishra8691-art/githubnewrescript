@@ -7,6 +7,7 @@ import { offeredSentences } from "./narrative.js";
 import { checkSentence, claimsFromItems, sentenceLabel, type ClaimLabel } from "./claims.js";
 import { mentionsVariable } from "./analyses/index.js";
 import { adjustP } from "./posthoc.js";
+import { REPORT_THEMES, themeNameKey } from "./reportThemes.js";
 
 /**
  * THE INTELLIGENT REPORT BUILDER (Data Analytics audit, Oct 2026).
@@ -79,7 +80,9 @@ export function reportBriefFromText(text: string): { brief: Pick<ReportBrief, "a
   if (/\b(demographic|segment\w*|subgroups?|by\s+(?:age|gender|region|country)|who\s+differs)\b/.test(t)) add("segments");
   if (/\b(recommendations?|next\s+steps|actions?|actionable|implications)\b/.test(t)) add("recommendations");
   if (/\b(method(?:ology)?|technical\s+appendix|sample\s+details)\b/.test(t)) add("methodology");
-  const theme = /\bpremium|luxury|dark|elegant\b/.test(t) ? "Midnight" : /\bwarm|paper|print\b/.test(t) ? "Warm paper" : /\bgraphite|corporate|neutral\b/.test(t) ? "Graphite" : undefined;
+  /* a report theme named outright ("the Healthcare Analytics theme") comes first (2026-10-18) */
+  const namedTheme = REPORT_THEMES.find((x) => ` ${themeNameKey(t)} `.includes(` ${themeNameKey(x.name)} `))?.name;
+  const theme = namedTheme ? namedTheme : /\bpremium|luxury|dark|elegant\b/.test(t) ? "Midnight" : /\bwarm|paper|print\b/.test(t) ? "Warm paper" : /\bgraphite|corporate|neutral\b/.test(t) ? "Graphite" : undefined;
   const unsupported: string[] = [];
   if (/\b(video|mp4|voice[-\s]?over)\b/.test(t)) unsupported.push("A video file cannot be produced; the animated report (HTML story) is the nearest — it can be screen-recorded.");
   if (/\b(forecast|predict(?:ion)?s?|projection)\b/.test(t)) unsupported.push("Forecasts are not produced: the report shows what the data say now, from the saved analyses.");
@@ -283,7 +286,8 @@ export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], v
   section(H.difference, ranked.filter((r) => r.role === "difference"));
   if (brief.sections?.length) blocks.push(...requestedSections(brief, items, ranked, variables, notes));
   if (brief.sections?.includes("recommendations") && !(opts.interpretation?.recommendations.length)) notes.push("Recommendations: none are written. They come only from the interpretation step (a model reading the results above, gated sentence by sentence) — ask for the interpretation when you build, or add them by hand. The report does not invent them.");
-  if (brief.theme) notes.push(`Theme: the ${brief.theme} preset fits this report — apply it under Theme so every chart and block shares it.`);
+  /* 2026-10-18: the theme is APPLIED when the report is created (the builder resolves the name to a saved theme, saving the preset first if needed), no longer only suggested */
+  if (brief.theme) notes.push(`Theme: the ${brief.theme} theme is applied to this report when you create it, so every chart and block shares it.`);
   if (opts.interpretation && (opts.interpretation.implications.length || opts.interpretation.recommendations.length)) {
     blocks.push({ id: bid("sec"), type: "section", title: "Interpretation", subtitle: "What the findings may mean — these are readings of the results above, not results themselves" });
     const md = [...opts.interpretation.implications.map((s) => `- ${s}`), ...(opts.interpretation.recommendations.length ? ["", "**Suggested next steps**", ...opts.interpretation.recommendations.map((s) => `- ${s}`)] : [])].join("\n");

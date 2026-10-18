@@ -35,15 +35,19 @@ test("meteredAi releases the hold when the provider call throws, and settles onl
 
 test("the copilot route reaches the provider only inside meteredAi, and skips items already built", () => {
   const calls = route.match(/completeJson\(/g) ?? [];
-  const metered = route.match(/meteredAi\(/g) ?? [];
-  assert.ok(calls.length >= 5 && metered.length >= calls.length - 1, `${calls.length} model calls, ${metered.length} metered`);
+  /* §3 (2026-10-18): the model calls go through `measured`, which records each call and delegates to meteredAi */
+  const wrapper = route.slice(route.indexOf("const measured = async"), route.indexOf("const keepWorkflow"));
+  assert.match(wrapper, /await meteredAi\(meter, ctx, "AI_REQUEST"/, "measured walks meteredAi");
+  const metered = [...(route.match(/meteredAi\(/g) ?? []), ...(route.match(/await measured\(/g) ?? [])].length - 1;
+  assert.ok(calls.length >= 5 && metered >= calls.length - 1, `${calls.length} model calls, ${metered} metered`);
   assert.match(route, /if \(prior\.has\(item\.id\) && !prior\.get\(item\.id\)!\.applied\) continue;/, "a built item is not asked of the model again");
   assert.match(route, /const prior = sanitizeDone\(body\.done/, "the browser's checkpoint is read");
   assert.match(route, /shared\(`item:\$\{item\.id\}`/, "a duplicate in-flight item shares one call");
 });
 
 test("a failed item is not a charge: the route adds to `charge` only from a returned call", () => {
-  const items = route.slice(route.indexOf("const m = await meteredAi(meter, ctx, \"AI_REQUEST\", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt"));
+  const items = route.slice(route.indexOf("const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt"));
+  assert.ok(items.length < route.length, "the item call is found");
   const firstCharge = items.indexOf("charge += m.event?.customerCharge");
   const firstCatch = items.indexOf("} catch (e) {");
   assert.ok(firstCharge > 0 && firstCharge < firstCatch, "the charge is read from the settled event, before any failure handling");

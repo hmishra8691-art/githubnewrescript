@@ -39,6 +39,11 @@ interface Info {
     canReachRealRecipients: boolean;
   };
   viewer: { isPlatformAdmin: boolean; signedIn: boolean; email?: string | null };
+  /** §11: the capability registry's readiness from the server environment (names and yes / no only) */
+  capabilities?: {
+    services: { id: string; name: string; purpose: string; ready: boolean; missing: string[]; reason?: string; apps: string[] }[];
+    capabilities: { id: string; name: string; status: string; ready: boolean; missing: string[]; reason?: string }[];
+  };
 }
 
 const LABELS: Record<string, string> = {
@@ -172,6 +177,48 @@ export default function PlatformPage() {
           </tbody>
         </table>
       </div>
+
+      {/*
+        * CAPABILITIES (§11). What Intelligent Mode and the Studio can offer on
+        * this installation, from the capability registry: each service with
+        * the variable NAMES it is missing, each capability that depends on one.
+        * A researcher who asks for an unready one is told it needs an
+        * administrator; this is where the administrator sees what to set.
+        */}
+      {info.capabilities && (
+        <>
+          <h3 className="sec">Capabilities and services</h3>
+          <div className="card" data-testid="platform-capabilities">
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
+              From the capability registry. Variable names only — never their values. A change needs a redeploy.
+            </p>
+            <table className="grid">
+              <tbody>
+                {info.capabilities.services.map((s) => (
+                  <tr key={s.id} data-testid={`platform-service-${s.id}`}>
+                    <td>{s.name}<div className="muted" style={{ fontSize: 12 }}>{s.purpose}</div></td>
+                    <td>
+                      <span className={`chip ${s.ready ? "on" : "warn"}`}>{s.ready ? "ready" : "not configured"}</span>
+                      {!s.ready && <span className="muted mono" style={{ fontSize: 12.5, marginLeft: 8 }}>{s.missing.join(", ")}</span>}
+                      {s.reason && <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>{s.reason}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <table className="grid" style={{ marginTop: 12 }}>
+              <tbody>
+                {info.capabilities.capabilities.map((c) => (
+                  <tr key={c.id} data-testid={`platform-capability-${c.id}`}>
+                    <td>{c.name}</td>
+                    <td><span className={`chip ${c.ready ? "on" : "warn"}`}>{c.ready ? "ready" : "not ready"}</span>{!c.ready && <span className="muted mono" style={{ fontSize: 12.5, marginLeft: 8 }}>{c.missing.join(", ")}</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {/*
         * MAIL. Configuration cannot tell you whether a message actually

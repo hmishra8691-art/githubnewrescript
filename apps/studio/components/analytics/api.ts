@@ -1,6 +1,7 @@
 "use client";
 import type { AnalysisDefinition, AnalysisResult, AskOp, AskProposal, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, UndoRecord, VariableMeta } from "@rescript/analytics";
 import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
+import type { ModelJobView } from "@/lib/modelJobState";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
 /** an API failure that keeps its status and body — a 409 "not published" carries the reasons and whether it may be forced */
@@ -20,6 +21,10 @@ export class AxApi {
   variables() { return this.req<{ variables: VariableMeta[]; counts: Record<string, number>; surveyVersion: string | null; revision: number | null }>("variables"); }
   home() { return this.req<{ analyses: Row[]; charts: Row[]; reports: Row[]; shares: Row[] }>("home"); }
   run(definition: AnalysisDefinition, opts?: { /** compute again instead of finding the stored result */ fresh?: boolean }) { return this.req<{ result: RunResult }>("run", { method: "POST", body: JSON.stringify({ definition, ...(opts?.fresh ? { fresh: true } : {}) }) }); }
+  /** chunked model runs (HB, migration 0066): start (runs the first chunk), continue until done, cancel */
+  modelStart(definition: AnalysisDefinition, analysisId?: string | null) { return this.req<{ job: ModelJobView }>("models", { method: "POST", body: JSON.stringify({ definition, ...(analysisId ? { analysisId } : {}) }) }); }
+  modelContinue(jobId: string) { return this.req<{ job: ModelJobView }>(`models/${jobId}/continue`, { method: "POST", body: "{}" }); }
+  modelCancel(jobId: string) { return this.req<{ job: ModelJobView }>(`models/${jobId}/cancel`, { method: "POST", body: "{}" }); }
   list(coll: string, query = "") { return this.req<{ items: Row[] }>(`${coll}${query ? `?${query}` : ""}`); }
   get(coll: string, id: string) { return this.req<{ item: Row }>(`${coll}/${id}`); }
   create(coll: string, body: unknown) { return this.req<{ item: Row }>(coll, { method: "POST", body: JSON.stringify(body) }); }

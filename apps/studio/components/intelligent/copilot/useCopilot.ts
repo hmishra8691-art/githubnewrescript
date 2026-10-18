@@ -21,6 +21,10 @@ import {
 import type { ChangePlan } from "@/lib/copilot/changePlan";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
+import { isArtifactType, editionOf, mimeOf, ARTIFACT_LABEL, type ArtifactType } from "../../../lib/artifacts/core";
+import { fetchArtifactLines, fetchArtifactLink, sandboxFingerprint, saveBytes, saveUrl, sessionStore } from "../../../lib/artifacts/client";
+import { sandboxFind, sandboxGet, sandboxLines, sandboxPut, sandboxTheme, fromBase64 } from "../../../lib/artifacts/sandboxStore";
+import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCard } from "../../../lib/copilot/reportThemeTurn";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -58,7 +62,26 @@ export interface CopilotEntry {
   /** the research coverage of a generated survey, checked on the clone (Phase 3) */
   coverage?: { ok: boolean; summary: string; unmeasured: string[]; unconnected: string[]; hypotheses: { label: string; text: string; status: string }[] };
   /** a document the engine produced (Phase 5): its name, size and a link to it, what it holds, and what the narrative gate kept */
-  output?: { name: string; size: number; url: string; kind: "docx" | "pptx"; summary: string; narrative?: string };
+  output?: {
+    name: string; size: number; url: string; kind: "docx" | "pptx"; summary: string; narrative?: string;
+    /*
+     * THE KEPT DOCUMENT (2026-10-18): which stored version this is, so the card offers it again after a reload
+     * and downloads it without generating. `url` is a blob URL only while this page holds the bytes; a restored
+     * card has none and asks for a fresh signed link (or, in the sandbox, reads the tab's copy) on Download.
+     */
+    type?: string; edition?: string; artifactId?: string; version?: number; fingerprint?: string;
+    /** the stored copy was sent — nothing was generated */
+    reused?: boolean;
+    /** offered again after a reload */
+    restored?: boolean;
+    /** the document made now would differ (the design, the data, the theme changed): "a new version is available" */
+    stale?: boolean;
+    /** why a stored copy was not used, or a new one not kept */
+    note?: string;
+    theme?: string;
+  };
+  /** a report theme turn (2026-10-18): the preview, and what was applied or saved */
+  theme?: ThemeCard;
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
@@ -281,11 +304,17 @@ export function useCopilot(opts: {
        page's own reading and needs no server; the entry is undoable at once and never reads "Applied …" first and
        "Created …" a round-trip later. The server's number is patched in when it answers. */
     const draft: ChangeRecord = { ...x.record, n: null, key: k };
-    setSession((h) => ({ ...h, history: h.history.some((r) => r.key === k) ? h.history.map((r) => (r.key === k ? draft : r)) : [...h.history, draft] }));
+    /*
+     * The History tab opens HERE, with the draft, at the moment of Apply — not when the server's number arrives.
+     * Opened after the round trip, a slow answer (a cold server compiling the route, a busy one) switched the
+     * panel away from whatever tab the researcher had chosen in the meantime (2026-10-18: phase6-agent-test lost
+     * its Workflow tab after Apply on a freshly started server). The answer only patches the number in.
+     */
+    setSession((h) => ({ ...h, history: h.history.some((r) => r.key === k) ? h.history.map((r) => (r.key === k ? draft : r)) : [...h.history, draft], ...(openHistory ? { tab: "history" as const } : {}) }));
     const op = await recorder.update(k, { status: "applied", applied: x.applied, excluded: x.excluded, failed: x.failed, warnings: x.warnings, engineOps: x.engineOps, targets: x.targets, before: x.record.before, after: x.record.after });
     const n = op?.changeN ?? null;
     const record: ChangeRecord = { ...draft, n };
-    setSession((h) => ({ ...h, history: h.history.map((r) => (r.key === k ? { ...r, n } : r)), ...(openHistory ? { tab: "history" as const } : {}) }));
+    setSession((h) => ({ ...h, history: h.history.map((r) => (r.key === k ? { ...r, n } : r)) }));
     show?.(n);
     void auditChange(k, record);
     const ok = await flushing.catch(() => false);
@@ -839,7 +868,7 @@ export function useCopilot(opts: {
    * gate kept. The sandbox makes the proposal from its own definition and
    * the findings outputs from rows a test put on the page.
    */
-  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript, workflowStep?: string): Promise<void> => {
+  const makeOutput = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "output" }>, heard?: HeardTranscript, workflowStep?: string, how: { regenerate?: boolean } = {}): Promise<void> => {
     const id = uid("copilot");
     const engine: EngineTurn = { kind: "output", category: it.category, understood: it.understood, detected: it.detected };
     const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
@@ -851,8 +880,22 @@ export function useCopilot(opts: {
       const rows = sandbox ? rowsRef.current : null;
       /* the documents made from the design alone (the proposal, the research plan, the SAP) need no respondents — the sandbox used to refuse the SAP and the plan as if they were findings (2026-10-17) */
       if (sandbox && !["proposal_docx", "research_plan_docx", "sap_docx"].includes(it.output.type) && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
+      const regenerate = how.regenerate === true || it.output.regenerate === true;
+      /* the sandbox keeps its documents in this tab (sandbox only): the same inputs again are the same document — no request, nothing generated (2026-10-18) */
+      const atype = it.output.type as ArtifactType;
+      const sbx = sandbox ? sandboxTheme(sessionStore()) : null;
+      const sbxFp = sandbox ? sandboxFingerprint({ type: atype, audience: it.output.audience, def: s.def, theme: sbx?.theme, structure: sbx?.structure, rows }) : null;
+      const kept = sandbox && !regenerate && sbxFp ? sandboxFind(sessionStore(), atype, editionOf(atype, it.output.audience), sbxFp) : null;
+      if (kept) {
+        const bytes = fromBase64(kept.base64);
+        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: kept.mime }));
+        const output: NonNullable<CopilotEntry["output"]> = { name: kept.name, size: kept.size, url, kind: kept.name.endsWith(".pptx") ? "pptx" : "docx", summary: kept.summary ?? "", ...(kept.narrative ? { narrative: kept.narrative } : {}), type: kept.type, edition: kept.edition, artifactId: kept.id, version: kept.version, fingerprint: kept.fingerprint, reused: true };
+        const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${kept.name} (${Math.round(kept.size / 1024)} KB). ${kept.summary ?? ""} Version ${kept.version}, kept from earlier — nothing changed, so nothing was regenerated.`;
+        opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", engine: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000) }) });
+        return;
+      }
       const fake = sandbox ? fakeRef.current.shift() : undefined;
-      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(executionMode === "internal" ? { narrative: false } : {}), ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
+      const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: { ...it.output, ...(regenerate ? { regenerate: true } : {}) }, source: workflowStep ? "workflow" : "copilot", ...(executionMode === "internal" ? { narrative: false } : {}), ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}), ...(sbx?.theme ? { theme: sbx.theme } : {}), ...(sbx?.structure ? { structure: sbx.structure } : {}) } : {}) }) });
       if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
       const blob = await r.blob();
       /* a document is offered only when it is one: never an empty or non-ZIP body behind a "ready" card (2026-10-17) */
@@ -862,8 +905,20 @@ export function useCopilot(opts: {
       const summary = r.headers.get("x-rescript-output") ?? "";
       const narrative = r.headers.get("x-rescript-narrative") ?? undefined;
       const url = URL.createObjectURL(blob);
-      const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}) };
-      const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
+      /* which kept version this is (a saved project), or keep it in the tab (the sandbox) */
+      let artifactId = r.headers.get("x-rescript-artifact-id") ?? undefined;
+      let version = Number(r.headers.get("x-rescript-artifact-version") ?? "") || undefined;
+      const reused = r.headers.get("x-rescript-artifact-reused") === "1";
+      const note = r.headers.get("x-rescript-artifact-note") ?? undefined;
+      const themeName = r.headers.get("x-rescript-theme") ?? undefined;
+      const fingerprint = sbxFp ?? r.headers.get("x-rescript-artifact-fingerprint") ?? undefined;
+      if (sandbox && sbxFp) {
+        const keptNow = sandboxPut(sessionStore(), { type: atype, edition: editionOf(atype, it.output.audience), fingerprint: sbxFp, name, mime: blob.type || mimeOf(atype), summary, narrative: narrative ?? null, regenerate }, new Uint8Array(await blob.arrayBuffer()));
+        if (keptNow) { artifactId = keptNow.id; version = keptNow.version; }
+      }
+      const output: NonNullable<CopilotEntry["output"]> = { name, size: blob.size, url, kind: name.endsWith(".pptx") ? "pptx" : "docx", summary, ...(narrative ? { narrative } : {}), type: atype, edition: editionOf(atype, it.output.audience), ...(artifactId ? { artifactId } : {}), ...(version ? { version } : {}), ...(fingerprint ? { fingerprint } : {}), reused, ...(note ? { note } : {}), ...(themeName ? { theme: themeName } : {}) };
+      /* the first sentence is what it always was (the suites read it); what is kept, and the theme, follow */
+      const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}${version ? ` Version ${version}${reused ? ", kept from earlier — nothing changed, so nothing was regenerated" : ""}.` : ""}${themeName ? ` Theme: ${themeName}.` : ""}${note ? ` ${note}` : ""}`;
       opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", engine: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
       /* the workflow's own outputs are marked produced (the deck, the design document) */
       const produced = it.output.type === "proposal_docx" || it.output.type === "research_plan_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
@@ -872,6 +927,106 @@ export function useCopilot(opts: {
       fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);
     } finally { setBusy(false); }
   }, [opts, s.surveyDbId, s.def, recordOp, executionMode]);
+
+  /*
+   * KEPT DOCUMENTS AFTER A RELOAD (2026-10-18). The cards the copilot made are page state; the documents
+   * are not. On opening a survey the copilot asks which documents are kept (a saved project: the
+   * artifacts list; the sandbox: this tab's copies) and offers each document line's latest version again
+   * — Download takes the stored file, nothing is generated; "a new version is available" when what it is
+   * made from changed since.
+   */
+  const restoredDocsRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (restoredDocsRef.current === s.surveyDbId) return;
+    restoredDocsRef.current = s.surveyDbId;
+    let live = true;
+    let done = s.surveyDbId === "sandbox";
+    const card = (o: NonNullable<CopilotEntry["output"]>, label: string, when: string) => opts.push({ id: uid("copilot"), kind: "copilot", text: `${label} — kept`, status: "ready", output: o, reply: { kind: "answer", reply: `${label}, version ${o.version} (${when.slice(0, 10)}) is kept: ${o.name}. Download takes the stored file${o.stale ? " — the design, the data or the theme changed since, so a new version is available" : ""}.`, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] } });
+    (async () => {
+      if (s.surveyDbId === "sandbox") {
+        const st = sandboxTheme(sessionStore());
+        for (const l of sandboxLines(sessionStore())) {
+          const now = sandboxFingerprint({ type: l.type, audience: l.edition, def: s.def, theme: st.theme, structure: st.structure, rows: rowsRef.current });
+          card({ name: l.latest.name, size: l.latest.size, url: "", kind: l.latest.name.endsWith(".pptx") ? "pptx" : "docx", summary: l.latest.summary ?? "", type: l.type, edition: l.edition, artifactId: l.latest.id, version: l.latest.version, fingerprint: l.latest.fingerprint, restored: true, stale: now !== l.latest.fingerprint }, ARTIFACT_LABEL[l.type] ?? l.type, l.latest.createdAt);
+        }
+        return;
+      }
+      const got = await fetchArtifactLines(s.surveyDbId);
+      if (!live) return;
+      done = true;
+      if (!got.ok) return;
+      for (const l of got.lines.filter((x) => x.latest.source === "copilot" || x.latest.source === "workflow")) {
+        card({ name: l.latest.name, size: l.latest.size, url: "", kind: l.latest.name.endsWith(".pptx") ? "pptx" : "docx", summary: l.latest.summary ?? "", ...(l.latest.narrative ? { narrative: l.latest.narrative } : {}), type: l.type, edition: l.edition, artifactId: l.latest.id, version: l.latest.version, fingerprint: l.latest.fingerprint, restored: true, stale: l.state === "stale" }, l.label, l.latest.createdAt);
+      }
+    })().catch(() => { /* nothing kept to offer: the conversation starts empty, as before */ });
+    /* an effect torn down before its answer came (React's development double-mount does exactly this) must let the next run ask again — or the cards never come back */
+    return () => { live = false; if (!done) restoredDocsRef.current = null; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.surveyDbId]);
+
+  /* the sandbox recomputes "a new version is available" as the design changes (a saved project learns it from the artifacts list on the next open) */
+  React.useEffect(() => {
+    if (s.surveyDbId !== "sandbox") return;
+    const t = window.setTimeout(() => {
+      const st = sandboxTheme(sessionStore());
+      opts.patchAll((x) => {
+        const o = x.output;
+        if (!o?.fingerprint || !o.type || !isArtifactType(o.type)) return null;
+        const stale = sandboxFingerprint({ type: o.type, audience: o.edition, def: s.def, theme: st.theme, structure: st.structure, rows: rowsRef.current }) !== o.fingerprint;
+        return stale === !!o.stale ? null : { output: { ...o, stale } };
+      });
+    }, 300);
+    return () => window.clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.def, s.surveyDbId]);
+
+  /** Download on a card: the bytes this page holds, the tab's copy (sandbox), or a fresh signed link to the kept file — never a regeneration */
+  const downloadOutput = React.useCallback(async (entryId: string): Promise<{ ok: boolean; error?: string }> => {
+    const e = copilotTurns.find((t) => t.id === entryId);
+    const o = e?.output;
+    if (!o) return { ok: false, error: "Nothing to download." };
+    if (o.url) { saveUrl(o.url, o.name); return { ok: true }; }
+    if (s.surveyDbId === "sandbox") {
+      const kept = o.artifactId ? sandboxGet(sessionStore(), o.artifactId) : null;
+      if (!kept) { const error = "This tab no longer holds that document (the sandbox keeps two versions per document). Ask for it again."; opts.patch(entryId, { output: { ...o, note: error } }); return { ok: false, error }; }
+      saveBytes(fromBase64(kept.base64), kept.name, kept.mime);
+      return { ok: true };
+    }
+    if (!o.artifactId) return { ok: false, error: "This document was not kept — ask for it again." };
+    const link = await fetchArtifactLink(s.surveyDbId, o.artifactId);
+    if (!link.ok) { opts.patch(entryId, { output: { ...o, note: link.error } }); return { ok: false, error: link.error }; }
+    saveUrl(link.link.url, link.link.name);
+    return { ok: true };
+  }, [copilotTurns, s.surveyDbId, opts]);
+
+  /** "a new version is available" → Regenerate: the same document, made again from what it is made from now */
+  const regenerateOutput = React.useCallback(async (entryId: string): Promise<void> => {
+    const o = copilotTurns.find((t) => t.id === entryId)?.output;
+    if (!o?.type || !isArtifactType(o.type)) return;
+    const words = ARTIFACT_LABEL[o.type] ?? o.type;
+    const audience = o.edition === "executive" || o.edition === "researcher" ? o.edition : "client";
+    await makeOutput(`Regenerate ${words.toLowerCase()}`, { kind: "output", category: "reporting", understood: `Regenerate ${words.toLowerCase()} from what it is made from now.`, output: { type: o.type, audience, words: words.toLowerCase() }, detected: [] }, undefined, undefined, { regenerate: !o.stale });
+    opts.patch(entryId, { output: { ...o, stale: false } });
+  }, [copilotTurns, makeOutput, opts]);
+
+  /* ------------------------------------------------------------ report themes (2026-10-18) */
+  const themeRequest = React.useCallback(async (text: string, it: Extract<Interpretation, { kind: "theme" }>, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "answer", category: it.category, understood: it.understood, detected: it.detected };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply(it.understood), engine });
+    const t = await themeTurn(text, it.request, { surveyId: s.surveyDbId, def: s.def, store: sessionStore() });
+    opts.patch(id, { status: "ready", theme: t.card, reply: reply(t.said), engine, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "theme", engine: "theme", ops: it.request.op }, detected: it.detected, statusDetail: t.said.slice(0, 2000) }) });
+  }, [opts, s.surveyDbId, s.def, recordOp]);
+  const themeCardAction = React.useCallback(async (entryId: string, action: { kind: "apply" } | { kind: "save"; name: string; scope: "user" | "org" } | { kind: "model" }): Promise<void> => {
+    const e = copilotTurns.find((t) => t.id === entryId);
+    if (!e?.theme) return;
+    const ctx = { surveyId: s.surveyDbId, def: s.def, store: sessionStore() };
+    const r = action.kind === "apply" ? await applyThemeTurn(e.theme, ctx) : action.kind === "save" ? await saveThemeTurn(e.theme, action.name, action.scope, ctx) : await themeWithModel(e.text, e.theme, ctx);
+    opts.patch(entryId, { theme: r.card, reply: { kind: "answer", reply: r.said, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] } });
+    /* the kept documents' cards now say whether a new version is available under the new look */
+    if (action.kind !== "model" && r.card.status !== "preview") opts.patchAll((x) => (x.output?.artifactId && x.output.fingerprint && x.output.type && isArtifactType(x.output.type) && s.surveyDbId === "sandbox" ? { output: { ...x.output, stale: sandboxFingerprint({ type: x.output.type, audience: x.output.edition, def: s.def, theme: sandboxTheme(sessionStore()).theme, structure: sandboxTheme(sessionStore()).structure, rows: rowsRef.current }) !== x.output.fingerprint } } : x.output?.artifactId && s.surveyDbId !== "sandbox" ? { output: { ...x.output, stale: true } } : null));
+  }, [copilotTurns, s.surveyDbId, s.def, opts]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
   /*
@@ -1130,6 +1285,7 @@ export function useCopilot(opts: {
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    downloadOutput, regenerateOutput, themeRequest, themeCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),

@@ -182,6 +182,8 @@ export function IntelligentView() {
     patch: (id, p) => setTurns((ts) => ts.map((x) => (x.id === id && "kind" in x && x.kind === "copilot" ? { ...x, ...(typeof p === "function" ? p(x) : p) } : x))),
     patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
   });
+  /* kept documents and report themes on the copilot's cards (2026-10-18) */
+  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction]);
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
   const applyCopilot = React.useCallback(async () => {
     // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
@@ -246,6 +248,11 @@ export function IntelligentView() {
     // a document to produce (Phase 5): the proposal from the design, the findings report or deck from a run — the output route makes the file
     if (interp.kind === "output") {
       await copilot.makeOutput(t, interp, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    // a report theme (2026-10-18): the look of the documents and decks, read into a preview — applied only on approval
+    if (interp.kind === "theme") {
+      await copilot.themeRequest(t, interp, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
     // the research workflow (Phase 6): where the study stands and what comes next — the planner on this survey, the Workflow tab open
@@ -740,6 +747,7 @@ export function IntelligentView() {
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
                     onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
+                    documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
                     canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}

@@ -47,7 +47,16 @@ export function splitStable(text: string, guides: readonly string[]): { stable: 
  * `[[COPILOT_SYSTEM_PROMPT, the guides it carries], the rest]` — spread as the
  * first two arguments of the model call (`...copilotCall(text)`).
  */
-export function copilotCall(userText: string): [readonly string[], string] {
+export function copilotCall(userText: string, extraStable: readonly (string | undefined)[] = []): [readonly string[], string] {
   const { stable, variable } = splitStable(userText, COPILOT_STABLE_GUIDES);
-  return [stable.length ? [COPILOT_SYSTEM_PROMPT, stable.join("\n\n")] : [COPILOT_SYSTEM_PROMPT], variable];
+  /*
+   * §3 (2026-10-18): the research context of a stored brief (and the installation's availability note) are the
+   * same bytes on every item of a build — a THIRD cached block, after the guides (Anthropic caches up to 4).
+   * Lifted verbatim, like the guides; absent from the text = not sent.
+   */
+  const extra = splitStable(variable, extraStable.filter((x): x is string => !!x && x.length > 0));
+  const blocks: string[] = [COPILOT_SYSTEM_PROMPT];
+  if (stable.length) blocks.push(stable.join("\n\n"));
+  if (extra.stable.length) blocks.push(extra.stable.join("\n\n"));
+  return [blocks, extra.variable];
 }

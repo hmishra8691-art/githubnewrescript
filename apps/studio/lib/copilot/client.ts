@@ -256,6 +256,16 @@ export function structureRows(def: SurveyDefinition, diff?: SurveyDiff, side: "b
       rows.push({ kind: "question", id, label: `${q.code} ${plainText(q.text).slice(0, 70)}`, ...(mark ? { mark } : {}) });
     }
   }
+  /* the moderated interview / focus-group guide (def.qualStudy, 2026-10-18): its sections and questions after the questionnaire's, marked by section */
+  const g = def.qualStudy;
+  if (g) {
+    const qd = diff?.qualGuide;
+    for (const sec of g.sections) {
+      const mark = side === "after" ? (qd?.added.includes(sec.id) ? "added" : qd?.changed.includes(sec.id) ? "modified" : undefined) : qd?.removed.includes(sec.id) ? "removed" : qd?.changed.includes(sec.id) ? "modified" : undefined;
+      rows.push({ kind: "block", id: `qual:${sec.id}`, label: `${g.kind === "focus_group" ? "Discussion guide" : "Interview guide"} — ${sec.title}${sec.minutes != null ? ` (${sec.minutes} min)` : ""}`, ...(mark ? { mark } : {}) });
+      for (const q of sec.questions) rows.push({ kind: "question", id: `qual:${q.id}`, label: plainText(q.text).slice(0, 80), ...(mark === "added" || mark === "removed" ? { mark } : {}) });
+    }
+  }
   return rows;
 }
 const ENT: Record<string, string> = { amp: "&", nbsp: " ", lt: "<", gt: ">", quot: "\"", "#39": "'", apos: "'" };

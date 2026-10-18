@@ -30,6 +30,7 @@ import { resolveOptionValue, describeOptions, type OptionList } from "./optionCo
 import { diffUx, type UxDiff } from "./ux.js";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
 import { applyResearchAction, coerceResearchAction, describeResearchAction, isResearchOp, RESEARCH_ACTION_OPS, type ResearchAction } from "./researchActions.js";
+import { applyQualAction, coerceQualAction, describeQualAction, isQualOp, qualGuideDiff, qualSectionChanges, QUAL_ACTION_OPS, type QualAction } from "./qualActions.js";
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
@@ -126,7 +127,9 @@ export type SurveyAction =
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
   | OptionAction
   /* qualitative: AI follow-up probes on open ends — see researchActions.ts; they write question.probe and nothing else */
-  | ResearchAction;
+  | ResearchAction
+  /* qualitative: the moderated interview / focus-group guide — see qualActions.ts; they write def.qualStudy and nothing else */
+  | QualAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -135,7 +138,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -382,6 +385,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (oa !== null) return oa;
       const ra = op ? coerceResearchAction(op, o) : null;
       if (ra !== null) return ra;
+      const qla = op ? coerceQualAction(op, o) : null;
+      if (qla !== null) return qla;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -996,6 +1001,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
+      // qualitative: the moderated interview / focus-group guide — def.qualStudy only, patched field by field
+      if (isQualOp(a.op)) {
+        const r = applyQualAction(def, a as QualAction, { now: ctx.now });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // qualitative: an AI follow-up probe on an open end — question.probe only, every condition through the gate
       if (isResearchOp(a.op)) {
         const r = applyResearchAction(def, a as ResearchAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)) });
@@ -1448,7 +1459,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 
@@ -1472,6 +1483,8 @@ export interface SurveyDiff {
   calculationsAdded: string[];
   quotasAdded: string[];
   researchChanged: boolean;
+  /** the moderated guide's sections (def.qualStudy) added, removed, changed by id (2026-10-18) */
+  qualGuide: { added: string[]; removed: string[]; changed: string[] };
   /** styles, animations and behaviours added, changed, removed */
   ux: UxDiff;
   /** the theme's changed settings, field by field */
@@ -1619,6 +1632,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     ...quotaDiff(before, after),
     ...listFillDiff(before, after),
     ...designDiff(before, after),
+    ...qualGuideDiff(before, after),
     ...questionsModified.slice(0, 30).map((m) => `Change ${m.code}: ${m.changes.map((c) => c.field === "type" ? `${c.from} → ${c.to}` : c.field === "text" ? "wording" : c.field).join(", ")}`),
     dChanged ? `Change ${n(dChanged, "display condition")}` : "",
     blocksRenamed.length ? `Rename ${blocksRenamed.map((b) => `“${b.from}” → “${b.to}”`).join(", ")}` : "",
@@ -1636,7 +1650,7 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     ...ux.removed.map((x) => `Remove ${x.kind} “${x.label}” (${x.target})`),
   ].filter(Boolean);
   const empty = !summary.length;
-  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, questionsMoved, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, ux, theme, summary, empty };
+  return { blocksAdded, blocksRemoved, blocksRenamed, questionsAdded, questionsRemoved, questionsModified, questionsMoved, pages, displayLogic: { added: dAdded, changed: dChanged, removed: dRemoved }, skips: { added: sAdded, removed: sRemoved }, randomizers, embeddedAdded, calculationsAdded, quotasAdded, researchChanged, qualGuide: qualSectionChanges(before, after), ux, theme, summary, empty };
 }
 
 function longestCommonSubsequence(a: string[], b: string[]): Set<string> {

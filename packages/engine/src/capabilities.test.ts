@@ -54,7 +54,8 @@ test("the methodologies name only what exists: registered question types, engine
 
 test("asked by the copilot's refusal / clarify logic: what a request names, with its status", () => {
   const ids = (t: string) => capabilitiesMentioned(t).map((c) => `${c.id}:${c.status}`);
-  assert.ok(ids("estimate HB utilities for the conjoint").includes("analysis:hb:not_supported"));
+  /* E4 2026-10-18: HB runs in Data Analytics (not from the plan) — partial */
+  assert.ok(ids("estimate HB utilities for the conjoint").includes("analysis:hb:partial"));
   assert.ok(ids("run two focus groups first").includes("qualitative:moderated:not_supported"));
   assert.ok(ids("a sequential monadic test of 3 concepts").includes("methodology:sequential_monadic:partial"));
   assert.ok(ids("van westendorp pricing").includes("methodology:van_westendorp:supported"));

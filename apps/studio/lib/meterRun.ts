@@ -42,7 +42,7 @@ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" |
   return {
     provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens,
     ...(t.cachedInputTokens ? { cacheReadUnits: t.cachedInputTokens } : {}), ...(t.cacheWriteTokens ? { cacheWriteUnits: t.cacheWriteTokens } : {}),
-    metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider },
+    metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, ...(t.latencyMs ? { providerLatencyMs: t.latencyMs } : {}) },
   };
 }
 
@@ -80,7 +80,7 @@ export type Metered<T> = { ok: true; value: T; event: UsageEvent | null } | Mete
  */
 export async function meteredCore<T>(
   deps: RunDeps, meter: Meter, ctx: MeterContext,
-  o: { operation: string; once?: boolean; kind: "chat" | "tts" | "stt" | "translate"; reserve: () => UsageSpec; /** translation: the PLATFORM's provider for this call is a language model (so the project's AI switch applies to it) rather than a translation service */ platformIsLlm?: boolean; /** a meter that cannot be reached runs the call unmetered instead of failing it (a recording must not be lost to a billing outage) */ tolerateMeterOutage?: boolean },
+  o: { operation: string; once?: boolean; kind: "chat" | "tts" | "stt" | "translate"; reserve: () => UsageSpec; /** §3 measurement: extra event metadata (workflow id, stage, retries, prompt size) — a function is read when the call has finished */ meta?: Record<string, unknown> | (() => Record<string, unknown>); /** translation: the PLATFORM's provider for this call is a language model (so the project's AI switch applies to it) rather than a translation service */ platformIsLlm?: boolean; /** a meter that cannot be reached runs the call unmetered instead of failing it (a recording must not be lost to a billing outage) */ tolerateMeterOutage?: boolean },
   fn: () => Promise<T>,
 ): Promise<Metered<T>> {
   /*
@@ -107,6 +107,9 @@ export async function meteredCore<T>(
     if (!full.allowed) return aiRefusal(full);
   }
 
+  /* MEASURED PER CALL (§3, 2026-10-18): how long the call took, and what the caller adds (workflow, stage, retries) — on the usage event's metadata */
+  const t0 = Date.now();
+  const measured = () => ({ latencyMs: Date.now() - t0, ...(typeof o.meta === "function" ? o.meta() : o.meta ?? {}) });
   if (conn.kind === "platform") {
     let hold: Awaited<ReturnType<Meter["reserve"]>>;
     try { hold = await meter.reserve(ctx, o.reserve()); }
@@ -120,7 +123,7 @@ export async function meteredCore<T>(
       const { value, usage } = await collectUsage(fn);
       if (!usage.length) { await meter.release(hold); return { ok: true, value, event: null }; }
       const spec = usageToSpec(usage, { kind: o.kind });
-      const event = await meter.settle(hold, { ...spec, metadata: { operation: o.operation, ...spec.metadata } });
+      const event = await meter.settle(hold, { ...spec, metadata: { operation: o.operation, ...spec.metadata, ...measured() } });
       return { ok: true, value, event };
     } catch (e) {
       await meter.release(hold).catch(() => {});
@@ -144,12 +147,12 @@ export async function meteredCore<T>(
     const userUsage = usage.filter((u) => u.source !== "platform");
     let event: UsageEvent | null = null;
     if (holdOk) {
-      if (platformUsage.length) { const spec = usageToSpec(platformUsage, { kind: o.kind }); event = await meter.settle(holdOk, { ...spec, metadata: { operation: o.operation, source: "platform_fallback", ...spec.metadata } }); }
+      if (platformUsage.length) { const spec = usageToSpec(platformUsage, { kind: o.kind }); event = await meter.settle(holdOk, { ...spec, metadata: { operation: o.operation, source: "platform_fallback", ...spec.metadata, ...measured() } }); }
       else await meter.release(holdOk).catch(() => {});
     }
     for (const group of groupByConnection(userUsage)) {
       const spec = usageToSpec(group.usage, { kind: o.kind });
-      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: spec.service === "tts" || spec.service === "translate" ? "character" : spec.service === "stt" ? "minute" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata } });
+      const rec = await recordByok(meter, ctx, { ...spec, eventType: "AI_REQUEST_BYOK", provider: group.provider ?? scope.provider, unit: spec.service === "tts" || spec.service === "translate" ? "character" : spec.service === "stt" ? "minute" : undefined, metadata: { operation: o.operation, byok: true, source: conn.source, providerId: group.provider ?? scope.provider, usedFallback: group.usedFallback, ...spec.metadata, ...measured() } });
       event ??= rec;
     }
     return { ok: true, value, event };

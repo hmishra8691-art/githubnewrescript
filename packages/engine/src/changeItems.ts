@@ -47,6 +47,8 @@ export const CHANGE_CATEGORIES = [
   "Rows", "Columns", "Display logic", "Skip logic", "Validation", "Randomization", "Masking", "Punching", "Piping", "Placement", "Page break",
   "Block", "Randomizer", "Branch", "Loop", "Embedded data", "Calculation", "Quota", "Custom code", "Default value", "Analysis", "Research design", "Analysis plan",
   "Language", "Translation", "Survey", "Theme", "Style", "Animation", "Behaviour",
+  /* 2026-10-18: the moderated interview / focus-group guide (def.qualStudy) */
+  "Qualitative guide",
 ] as const;
 export type ChangeCategory = (typeof CHANGE_CATEGORIES)[number];
 
@@ -508,6 +510,54 @@ function researchItems(t: Tree, before: SurveyDefinition, after: SurveyDefinitio
   }
 }
 
+/**
+ * THE MODERATED GUIDE (2026-10-18) — `def.qualStudy`, reviewed like the research design: its
+ * top-level fields one by one, then each section added, removed or changed (by its stable id), with
+ * what the section holds in words, so a guide created or patched in Intelligent Mode is never an empty
+ * change list.
+ */
+function qualGuideItems(t: Tree, before: SurveyDefinition, after: SurveyDefinition, results: ActionResult[] = []): void {
+  const b = before.qualStudy, a = after.qualStudy;
+  if (!b && !a) return;
+  const strip = (x: typeof a) => (x ? JSON.stringify({ ...x, updatedAt: undefined }) : "");
+  if (strip(b) === strip(a)) return;
+  const notes = results.filter((r) => r.ok && (r.op === "create_qual_guide" || r.op === "update_qual_guide") && r.destructive).map((r) => r.destructive!);
+  const destructive = notes.length ? [...new Set(notes)].join("; ") : undefined;
+  type Study = NonNullable<typeof a>;
+  type Section = Study["sections"][number];
+  const kindWord = (s: Study | undefined) => (!s ? "" : s.kind === "focus_group" ? "focus-group discussion guide" : "interview guide");
+  const fields: [string, (s: Study | undefined) => string][] = [
+    ["guide type", kindWord],
+    ["title", (s) => plain(s?.title, 120)],
+    ["objectives", (s) => (s?.objectives ?? []).map((o) => plain(o, 80)).join("; ")],
+    ["protocol", (s) => plain(s?.protocol, 200)],
+    ["duration", (s) => (s?.durationMinutes ? `${s.durationMinutes} min` : "")],
+    ["ground rules", (s) => (s?.groundRules ?? []).map((g) => plain(g, 60)).join("; ")],
+    ["screening", (s) => (s?.screening ?? []).map((c) => `${c.rule === "exclude" ? "exclude: " : ""}${plain(c.criterion, 60)}`).join("; ")],
+    ["consent and recording", (s) => [s?.consent.statement, s?.consent.recordingDisclosure, s?.consent.dataUse].filter(Boolean).map((x) => plain(x, 80)).join(" | ")],
+    ["segments", (s) => (s?.segments ?? []).map((g) => `${g.name}${g.target != null ? ` (${g.target})` : ""}`).join("; ")],
+    ["session plan", (s) => { const p = s?.sessionPlan; return p ? [p.sessions ? `${p.sessions} sessions` : "", p.participantsPerSession ? `${p.participantsPerSession} each` : "", p.mode ?? "", p.notes ? plain(p.notes, 60) : ""].filter(Boolean).join(", ") : ""; }],
+  ];
+  for (const [name, read] of fields) {
+    const from = read(b), to = read(a);
+    if (from === to) continue;
+    t.add({ objectId: "qualStudy", level: "research", category: "Qualitative guide", kind: !from ? "added" : !to ? "removed" : "modified", field: name, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(destructive && !to ? { destructive } : {}) });
+  }
+  const words = (x: Section) => [`${x.kind.replace("_", "-")}${x.minutes != null ? `, ${x.minutes} min` : ""}`, x.questions.length ? `${x.questions.length} question${x.questions.length === 1 ? "" : "s"}: ${x.questions.map((q) => `${plain(q.text, 60)}${q.probes.length ? ` (+${q.probes.length} probe${q.probes.length === 1 ? "" : "s"})` : ""}${q.conditionalProbes.length ? ` (+${q.conditionalProbes.length} conditional)` : ""}`).join("; ")}` : "", x.script ? `script “${plain(x.script, 60)}”` : "", x.exercise ? `exercise “${plain(x.exercise.title, 40)}”` : "", x.stimuli.length ? `stimuli: ${x.stimuli.join(", ")}` : ""].filter(Boolean).join(" · ");
+  const bs = new Map((b?.sections ?? []).map((x) => [x.id, x]));
+  const as = new Map((a?.sections ?? []).map((x) => [x.id, x]));
+  for (const x of a?.sections ?? []) {
+    const p = bs.get(x.id);
+    const from = p ? words(p) : "", to = words(x);
+    if (p && from === to && p.title === x.title && JSON.stringify(p) === JSON.stringify(x)) continue;
+    t.add({ objectId: `qual:${x.id}`, level: "research", category: "Qualitative guide", kind: p ? "modified" : "added", field: `section “${x.title}”${p && p.title !== x.title ? ` (was “${p.title}”)` : ""}`, ...(from ? { from } : {}), to, technical: { before: p, after: x } });
+  }
+  for (const x of b?.sections ?? []) {
+    if (as.has(x.id)) continue;
+    t.add({ objectId: `qual:${x.id}`, level: "research", category: "Qualitative guide", kind: "removed", field: `section “${x.title}”`, from: words(x), ...(destructive ? { destructive } : {}), technical: { before: x } });
+  }
+}
+
 /** the plan's items by what they are, not by their minted id — a re-proposed plan keeps the same tables under new ids */
 function planItems(t: Tree, before: SurveyDefinition, after: SurveyDefinition): void {
   const b = before.research?.analysisPlan, a = after.research?.analysisPlan;
@@ -631,6 +681,7 @@ export function changeItems(before: SurveyDefinition, after: SurveyDefinition, o
   calculationItems(t, before, after);
   quotaItems(t, before, after);
   researchItems(t, before, after);
+  qualGuideItems(t, before, after, opts.results);
   planItems(t, before, after);
   languageItems(t, before, after);
   surveyItems(t, before, after);

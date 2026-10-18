@@ -140,7 +140,8 @@ export function validateResearch(def: SurveyDefinition, opts: { review?: SurveyR
 
   /* 4 — what the platform does not run, named in the design */
   const designText = [r?.methodology, ...(r?.analysis ?? [])].filter(Boolean).join(" ");
-  for (const c of capabilitiesMentioned(designText).filter((c) => c.status !== "supported" && c.kind !== "question_type")) {
+  /* partial or not supported only: a capability that requires configuration is the operator's matter (its readiness), not the design's */
+  for (const c of capabilitiesMentioned(designText).filter((c) => (c.status === "partial" || c.status === "not_supported") && c.kind !== "question_type")) {
     add({ class: c.status === "not_supported" ? "warning" : "recommendation", area: "unsupported", message: `The design names ${c.name}, which is ${c.status === "not_supported" ? "not supported" : "only partly supported"} here${c.note ? `: ${c.note}` : ""}.`, questionIds: [], source: "research", suggestion: c.status === "not_supported" ? "Keep it as a specification for analysis elsewhere, or use the supported alternative." : "Plan within what runs, and say the rest in the plan's limitations." });
   }
   for (const m of methodologiesNamed(r?.methodology).filter((m) => m.status === "partial" && !capabilitiesMentioned(designText).some((c) => c.id === `methodology:${m.id}`))) {

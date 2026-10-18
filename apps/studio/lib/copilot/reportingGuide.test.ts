@@ -15,4 +15,8 @@ test("reporting guide: in the cached prefix list, tells the model it cannot make
   assert.match(REPORTING_GUIDE, /You cannot create, attach or link files/);
   assert.match(REPORTING_GUIDE, /Never state a number/);
   assert.ok(REPORTING_GUIDE.length < 2_500, `${REPORTING_GUIDE.length}`);
+  /* 2026-10-18: kept documents and report themes — the model is told what the engine does, never to claim it did it */
+  assert.match(REPORTING_GUIDE, /Documents are kept once made/);
+  assert.match(REPORTING_GUIDE, /changes styling only — never wording, numbers or findings/);
+  for (const n of ["Executive Research", "Healthcare Analytics", "Brand Performance", "Consumer Insights", "Academic Research"]) assert.ok(REPORTING_GUIDE.includes(n), n);
 });

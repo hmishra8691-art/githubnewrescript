@@ -1430,6 +1430,7 @@ export async function completeJson(
    */
   const call = async (messages: Msg[], lowered = false): Promise<{ content: string; finish: string | null; outputTokens: number }> => {
     let r: Response, refused: string | undefined;
+    const callStarted = Date.now();
     const native = cachePrefix && anthropicNative(target.base);
     const label = options.operation ? `${options.operation} ${target.model}` : target.model;
     try {
@@ -1473,7 +1474,7 @@ export async function completeJson(
       outputTokens,
       ...(u.cachedInputTokens ? { cachedInputTokens: u.cachedInputTokens } : {}),
       ...(u.cacheWriteTokens ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
-      requests: 1, estimated: typeof u.inputTokens !== "number",
+      requests: 1, estimated: typeof u.inputTokens !== "number", latencyMs: Date.now() - callStarted,
     });
     return { content, finish, outputTokens };
   };

@@ -6,6 +6,7 @@ import { linkify } from "../../../lib/copilot/client";
 import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
+import { DocumentOutput, ThemeTurnCard, type DocumentActions } from "./DocumentCards";
 import { validateResearch, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
@@ -20,7 +21,9 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents }: {
+  /** kept documents and report themes (2026-10-18): Download without regenerating, Regenerate, theme Apply / Save as */
+  documents?: DocumentActions;
   entry: CopilotEntry;
   def: SurveyDefinition;
   onSelect(questionId: string): void;
@@ -134,14 +137,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           </p>
         )}
         {entry.coverage && <ProposalValidation def={def} />}
-        {entry.output && (
-          /* a document the engine produced (Phase 5): the file to download, what it holds, what the narrative gate kept */
-          <p className="cp-data cp-output" data-testid="cp-output" data-kind={entry.output.kind} data-size={entry.output.size}>
-            <Icon name="download" size={12} /> <a className="iq-btn primary" href={entry.output.url} download={entry.output.name} data-testid="cp-output-download">Download {entry.output.name}</a>
-            <span className="iqi-dim">{Math.round(entry.output.size / 1024)} KB · {entry.output.summary}</span>
-            {entry.output.narrative ? <span className="iqi-dim" data-testid="cp-output-narrative"> · Narrative gate: {entry.output.narrative}</span> : null}
-          </p>
-        )}
+        {/* a document the engine produced (Phase 5), or one kept from earlier (2026-10-18): the file to download, what it holds, what the narrative gate kept, whether a new version is available */}
+        {entry.output && <DocumentOutput entry={entry} actions={documents} />}
+        {/* a report theme read from words (2026-10-18): the preview, then Apply / Save as */}
+        {entry.theme && <ThemeTurnCard entry={entry} actions={documents} />}
         {entry.data && (
           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */
           <p className="cp-data" data-testid="cp-data" data-n={entry.data.n} data-source={entry.data.source}>

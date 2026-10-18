@@ -9,6 +9,7 @@ import { FilterBuilder, conditionText, emptyCondition, isEmptyCondition } from "
 import { ResultView, downloadPng, downloadSvg } from "./ResultView";
 import { Chart } from "./charts/Chart";
 import type { TableFormatting } from "./ProTable";
+import type { ModelJobView } from "@/lib/modelJobState";
 
 /**
  * THE ANALYSIS BUILDER (§3–§5). Analysis type → variables → filters → segments →
@@ -39,6 +40,7 @@ const ROLE_FOR_KIND: Record<AnalysisKind, VariableRole[]> = {
   correlation: ["scale", "numeric"], regression: ["scale", "numeric", "categorical"], segmentation: ["categorical", "multi", "scale", "numeric"], cluster: ["scale", "numeric"], factor: ["scale", "numeric"], reliability: ["scale", "numeric"],
   trend: ["scale", "numeric", "categorical"], nps: ["scale", "numeric"], csat: ["scale"], turf: ["multi", "categorical"], gap: ["scale", "numeric"], pricing: ["numeric", "scale", "categorical"], brand: ["multi"], ranking: ["complex", "numeric"], allocation: ["complex", "numeric"],
   text: ["text"], quality: [], weighting: ["categorical"], conjoint: ["complex"], maxdiff: ["complex"],
+  hb: ["complex"], lca: ["categorical", "scale"], sem: ["scale", "numeric"],
 };
 
 const HINT: Partial<Record<AnalysisKind, string>> = {
@@ -48,6 +50,7 @@ const HINT: Partial<Record<AnalysisKind, string>> = {
   trend: "Pick the metric variable; period is chosen in Options.", nps: "Pick the 0–10 recommend question.", csat: "Pick the satisfaction / effort question(s).", turf: "Pick a multi-select question.", gap: "Set importance and performance items in Options.",
   pricing: "Van Westendorp: four price questions in order (too cheap, bargain, expensive, too expensive). Gabor-Granger: purchase-intent items.", brand: "Pick the brand-list questions in funnel order (awareness, consideration, …).",
   ranking: "Pick the ranking question.", allocation: "Pick the allocation question.", text: "Pick an open-ended question.", quality: "No variables needed.", weighting: "Pick the variables to weight on; targets in Options.", conjoint: "Pick the conjoint task question.", maxdiff: "Pick the MaxDiff task question.",
+  hb: "Pick the CBC (conjoint) or MaxDiff task question. HB runs as a background job with progress; chains, burn-in and draws are in Options.", lca: "Pick the categorical indicators (three or more). The class range and random starts are in Options.", sem: "The model is written in Options (lavaan-style syntax); the variables it names are read from the data — no selection needed here.",
 };
 
 const ROLE_LABEL: Record<VariableRole, string> = { categorical: "Categorical", multi: "Multi-select", numeric: "Numeric", scale: "Scale", text: "Text", date: "Date", system: "System", complex: "Question" };
@@ -121,6 +124,7 @@ function CrosstabOptions({ def, set, o, alpha, sel, num }: { def: AnalysisDefini
       <fieldset className="ax-optgroup"><legend>Significance</legend>
         {check("significance", "Column letters (a, b, c…)", true)}
         {alpha}
+        {sel("correction", "Multiple comparisons", [["holm", "Holm (default)"], ["bonferroni", "Bonferroni"], ["bh", "Benjamini–Hochberg (FDR)"], ["none", "None — raw p-values"]], "holm")}
         {check("sigVsTotal", "Mark cells above / below the rest of the sample (▲ ▼)", false)}
       </fieldset>
       <fieldset className="ax-optgroup"><legend>Rows</legend>
@@ -151,7 +155,7 @@ function Options({ def, set, variables }: { def: AnalysisDefinition; set: (o: Re
     case "descriptive": return <>{num("bins", "Histogram bins", "10")}{sel("confidence", "Confidence", [["0.9", "90%"], ["0.95", "95%"], ["0.99", "99%"]], "0.95")}<label className="ax-toggle"><input type="checkbox" checked={!!o.scaleAsNumeric} onChange={(e) => set({ scaleAsNumeric: e.target.checked })} /> Treat scales as numeric (means)</label></>;
     case "topbox": return <>{sel("primaryBox", "Primary box", [["1", "Top / bottom 1"], ["2", "Top / bottom 2"], ["3", "Top / bottom 3"]], "2")}</>;
     case "crosstab": return <CrosstabOptions def={def} set={set} o={o} alpha={alpha} sel={sel} num={num} />;
-    case "test": return <>{sel("test", "Test", [["auto", "Auto-select"], ["chi_square", "Chi-square"], ["fisher_exact", "Fisher's exact"], ["trend_proportion", "Trend in a proportion (Cochran–Armitage)"], ["t_one_sample", "One-sample t"], ["t_independent", "Independent t (equal variance)"], ["t_welch", "Welch t"], ["t_paired", "Paired t"], ["anova_one_way", "One-way ANOVA"], ["anova_two_way", "Two-way ANOVA (outcome, factor A, factor B)"], ["mann_whitney", "Mann-Whitney U"], ["wilcoxon_signed_rank", "Wilcoxon signed-rank"], ["kruskal_wallis", "Kruskal-Wallis"], ["friedman", "Friedman"], ["proportion_one_sample", "One-sample proportion"]], "auto")}{alpha}{num("mu", "Test value (one-sample t)", "0")}{num("p0", "Test proportion (0–1)", "0.5")}</>;
+    case "test": return <>{sel("test", "Test", [["auto", "Auto-select"], ["chi_square", "Chi-square"], ["fisher_exact", "Fisher's exact"], ["trend_proportion", "Trend in a proportion (Cochran–Armitage)"], ["t_one_sample", "One-sample t"], ["t_independent", "Independent t (equal variance)"], ["t_welch", "Welch t"], ["t_paired", "Paired t"], ["anova_one_way", "One-way ANOVA"], ["anova_two_way", "Two-way ANOVA (outcome, factor A, factor B)"], ["mann_whitney", "Mann-Whitney U"], ["wilcoxon_signed_rank", "Wilcoxon signed-rank"], ["kruskal_wallis", "Kruskal-Wallis"], ["friedman", "Friedman"], ["proportion_one_sample", "One-sample proportion"]], "auto")}{alpha}{sel("correction", "Pairwise comparisons after ANOVA / Kruskal–Wallis", [["holm", "Holm (default)"], ["bonferroni", "Bonferroni"], ["bh", "Benjamini–Hochberg (FDR)"], ["none", "None (omnibus test only)"]], "holm")}{num("mu", "Test value (one-sample t)", "0")}{num("p0", "Test proportion (0–1)", "0.5")}</>;
     case "correlation": return <>{sel("method", "Method", [["pearson", "Pearson"], ["spearman", "Spearman"], ["kendall", "Kendall"]], "pearson")}{alpha}</>;
     case "regression": return <>{sel("model", "Model", [["linear", "Linear (OLS)"], ["logistic", "Logistic (binary)"], ["multinomial", "Multinomial logistic"], ["mediation", "Mediation (Y, X, M)"]], "linear")}<label className="ax-toggle"><input type="checkbox" checked={!!o.moderation} onChange={(e) => set({ moderation: e.target.checked })} /> Moderation (interaction of first two predictors)</label>{def.options?.model === "logistic" && <label className="ax-field"><span>Target category code</span><input className="input small" value={(o.target as string | undefined) ?? ""} onChange={(e) => set({ target: e.target.value || undefined })} placeholder="last category" /></label>}</>;
     case "cluster": return <>{num("k", "Clusters (k)", "3")}{sel("method", "Method", [["kmeans", "K-means"], ["hierarchical", "Hierarchical (Ward)"]], "kmeans")}{varSel("profile", "Profile by", ["categorical"], true)}<label className="ax-toggle"><input type="checkbox" checked={o.standardize !== false} onChange={(e) => set({ standardize: e.target.checked })} /> Standardize variables</label></>;
@@ -168,10 +172,54 @@ function Options({ def, set, variables }: { def: AnalysisDefinition; set: (o: Re
     case "weighting": return <div className="muted" style={{ fontSize: 13 }}>Set rim targets in the Weighting section below; this analysis reports the weighting diagnostics and the weighted vs unweighted profile.</div>;
     case "conjoint": return <><label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label><label className="ax-field"><span>Price attribute (for WTP)</span><input className="input small" value={(o.priceAttribute as string | undefined) ?? ""} onChange={(e) => set({ priceAttribute: e.target.value || undefined })} placeholder="auto-detect" /></label><label className="ax-field"><span>Scenario profiles (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label></>;
     case "maxdiff": return <>{varSel("by", "Compare by", ["categorical"])}</>;
+    case "hb": return <AdvancedHbOptions o={o} set={set} num={num} sel={sel} />;
+    case "lca": return <>{num("minClasses", "Fewest classes", "1")}{num("maxClasses", "Most classes (≤ 8)", "4")}{num("starts", "Random starts per K", "20")}{num("seed", "Seed", "1")}{num("classes", "Show the solution with K classes (blank = lowest BIC)")}<div className="muted" style={{ fontSize: 12.5 }}>Every K in the range is fitted and compared (log-likelihood, AIC, BIC, SABIC, entropy); the lowest BIC is recommended, with the trade-offs shown — not chosen automatically. Respondents missing an indicator are left out (listwise).</div></>;
+    case "sem": return <AdvancedSemOptions o={o} set={set} sel={sel} variables={variables} />;
     case "segmentation": return <>{alpha}</>;
     case "reliability": case "ranking": case "allocation": return <div className="muted" style={{ fontSize: 13 }}>No additional options.</div>;
     default: return null;
   }
+}
+
+/** HB options: chains, burn-in, draws, thinning, seed, prior (Sawtooth defaults), holdouts, simulator scenarios */
+function AdvancedHbOptions({ o, set, num, sel }: { o: Record<string, unknown>; set: (o: Record<string, unknown>) => void; num: Num; sel: Sel }) {
+  return (
+    <div className="ax-optgroups" data-testid="ax-hb-options">
+      <fieldset className="ax-optgroup"><legend>Sampler</legend>
+        {sel("chains", "Chains", [["2", "2 (recommended — needed for R̂)"], ["1", "1"], ["3", "3"], ["4", "4"]], "2")}
+        {num("burnIn", "Burn-in iterations per chain", "5000")}
+        {num("draws", "Iterations kept from, per chain", "5000")}
+        {num("thin", "Thinning (keep every k-th)", "5")}
+        {num("seed", "Seed (same seed + data = same result)", "1")}
+      </fieldset>
+      <fieldset className="ax-optgroup"><legend>Prior</legend>
+        {num("priorVariance", "Prior variance", "1")}
+        {num("priorDf", "Additional prior degrees of freedom", "5")}
+        <div className="muted" style={{ fontSize: 12.5 }}>Σ ~ inverse-Wishart; every level (reference included) gets the same prior variance. With few tasks per respondent, a smaller prior variance shrinks individual utilities more.</div>
+      </fieldset>
+      <fieldset className="ax-optgroup"><legend>Data &amp; simulation</legend>
+        <label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label>
+        <label className="ax-field"><span>Scenario profiles for the simulator (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label>
+      </fieldset>
+    </div>
+  );
+}
+
+/** SEM options: the model in lavaan-style syntax, the scaling, and the variable names to write it with */
+function AdvancedSemOptions({ o, set, sel, variables }: { o: Record<string, unknown>; set: (o: Record<string, unknown>) => void; sel: Sel; variables: VariableMeta[] }) {
+  const syntax = (o.syntax as string | undefined) ?? "";
+  const usable = variables.filter((v) => v.role === "scale" || v.role === "numeric").slice(0, 60);
+  return (
+    <div className="ax-optgroups" data-testid="ax-sem-options">
+      <label className="ax-field" style={{ gridColumn: "1 / -1" }}><span>Model</span>
+        <textarea className="ta" rows={7} value={syntax} onChange={(e) => set({ syntax: e.target.value })} data-testid="ax-sem-syntax" spellCheck={false} style={{ fontFamily: "var(--font-mono, monospace)" }}
+          placeholder={"# measurement\nQuality =~ Q1 + Q2 + Q3\nLoyalty =~ L1 + L2 + L3\n# structural\nLoyalty ~ b*Quality\n# residual covariance\nQ1 ~~ Q2\n# defined effect\nind := a*b"} />
+      </label>
+      <div className="muted" style={{ fontSize: 12.5 }}>=~ measured by · ~ regressed on · ~~ covariance · := defined (indirect) effect · a* labels a path, 1* fixes it, NA* frees it. Estimated by maximum likelihood on complete cases; non-identified models are refused before running.</div>
+      {sel("scaling", "Scale each factor by", [["marker", "its first loading (fixed to 1)"], ["unit_variance", "unit variance (all loadings free)"]], "marker")}
+      {usable.length > 0 && <div className="ax-field"><span>Variables (click to add)</span><div className="ax-chips">{usable.map((v) => <button key={v.name} type="button" className="ax-chip" title={v.label} onClick={() => set({ syntax: `${syntax}${syntax && !/[\s+~]$/.test(syntax) ? " + " : ""}${v.name}` })}>{v.name}</button>)}</div></div>}
+    </div>
+  );
 }
 
 /** the four stages of an analysis, after the rail */
@@ -239,13 +287,33 @@ export function AnalysisBuilder(p: BuilderProps) {
 
   /* only the LATEST run may land: an earlier, slower response must not overwrite a newer result or clear `running` under it */
   const runSeq = React.useRef(0);
+  /*
+   * CHUNKED MODEL RUNS (HB, migration 0066): the server advances the chains ≤ 40 s per request and keeps their state;
+   * the builder keeps asking until the run is done, showing progress, and can cancel. A newer Run or Cancel stops the loop.
+   */
+  const [job, setJob] = React.useState<ModelJobView | null>(null);
+  const cancelJob = React.useRef(false);
+  const runJob = async (d: AnalysisDefinition, mine: number): Promise<{ result: RunResult }> => {
+    cancelJob.current = false;
+    let j = (await p.api.modelStart(d, saved?.id ?? null)).job;
+    setJob(j);
+    while (j.status === "running") {
+      if (mine !== runSeq.current) throw new Error("superseded");
+      if (cancelJob.current) { j = (await p.api.modelCancel(j.id)).job; setJob(null); throw new Error("The hierarchical Bayes run was cancelled."); }
+      j = (await p.api.modelContinue(j.id)).job;
+      setJob(j);
+    }
+    setJob(null);
+    if ((j.status === "done" || j.status === "refused") && j.result) return { result: j.result as RunResult };
+    throw new Error(j.error ?? `The model run ${j.status}.`);
+  };
   const run = async () => {
     const mine = ++runSeq.current;
     setRunning(true); setError(null); setMsg(null);
     try {
       const d = current();
       const snapAtStart = runSnapshotOf(def, filter);
-      const { result } = await p.api.run(d);
+      const { result } = d.kind === "hb" ? await runJob(d, mine) : await p.api.run(d);
       if (mine !== runSeq.current) return;
       setResult(result); ranSnap.current = snapAtStart;
       setSpec((s) => ({ ...s, type: result.recommendations[0]?.type ?? result.recommendedCharts[0] ?? "bar_vertical" }));
@@ -384,7 +452,7 @@ export function AnalysisBuilder(p: BuilderProps) {
                       if (removed) update({ rows: rows.filter((x) => x !== removed), columns: cols.filter((x) => x !== removed), layers: lays.filter((x) => x !== removed) });
                     }} roles={roles} />
                   </div>
-                ) : <VariablePicker variables={p.variables} selected={def.variables} onChange={(v) => update({ variables: v })} roles={roles} max={["nps", "turf", "ranking", "allocation", "text", "conjoint", "maxdiff"].includes(def.kind) ? 1 : undefined} />}
+                ) : <VariablePicker variables={p.variables} selected={def.variables} onChange={(v) => update({ variables: v })} roles={roles} max={["nps", "turf", "ranking", "allocation", "text", "conjoint", "maxdiff", "hb"].includes(def.kind) ? 1 : undefined} />}
               </div>
             )}
             {section === 2 && (
@@ -458,6 +526,7 @@ export function AnalysisBuilder(p: BuilderProps) {
         <span className="grow" />
         {stage === "builder" && section > 0 && <button className="btn small" onClick={() => setSection(section - 1)}>Back</button>}
         {stage === "builder" && section < 4 && <button className="btn small" onClick={() => setSection(section + 1)}>Next</button>}
+        {job && job.status === "running" && <span className="ax-job" data-testid="ax-job-progress" data-pct={job.progress.pct} role="status">Hierarchical Bayes: {job.progress.done.toLocaleString()} of {job.progress.total.toLocaleString()} iterations per chain ({job.progress.pct}%){job.progress.projectedMs && job.progress.done ? ` · about ${Math.max(1, Math.round((job.progress.projectedMs * (1 - job.progress.done / Math.max(1, job.progress.total))) / 1000))} s left` : ""} <button type="button" className="btn small" onClick={() => { cancelJob.current = true; }} data-testid="ax-job-cancel">Cancel</button></span>}
         {!canRun && <span className="ax-error" data-testid="ax-run-missing" role="status">{readiness.missing.join(" ")}</span>}
         {canRun && readiness.warnings.length > 0 && <span className="muted" style={{ fontSize: 12.5 }} data-testid="ax-run-warning">{readiness.warnings.join(" ")}</span>}
         <button className="btn primary" disabled={!canRun || running} onClick={run} data-testid="ax-run" data-ready={canRun ? "1" : "0"} title={canRun ? undefined : readiness.missing.join(" ")}>{running ? "Running…" : stale ? "Run again" : "Run analysis"}</button>

@@ -102,6 +102,9 @@ async function dataStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec
   return fresh;
 }
 
+/** the data stamp (count and last change of the responses) — what a stored findings document records it was made from (2026-10-18, artifacts) */
+export const datasetStamp = (db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> => dataStamp(db, surveyId, spec);
+
 async function computeStamp(db: SupabaseClient, surveyId: string, spec: DatasetSpec): Promise<string> {
   let q = db.from("responses").select("updated_at", { count: "exact", head: false }).eq("survey_id", surveyId).is("deleted_at", null).order("updated_at", { ascending: false }).limit(1);
   if (spec.environment === "TEST") q = q.eq("is_test", true);

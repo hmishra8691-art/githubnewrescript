@@ -43,7 +43,8 @@ test("chosen by the request: research briefs, hypotheses, methodology, mixed and
 test("sizes and caching: the system prompt is under its cap; the guides are bounded and ride in the cached prefix", () => {
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
   assert.ok(COPILOT_RESEARCH_GUIDE.length < 8_000, `research guide ${COPILOT_RESEARCH_GUIDE.length}`);
-  assert.ok(COPILOT_QUAL_GUIDE.length < 3_000, `qualitative guide ${COPILOT_QUAL_GUIDE.length}`);
+  /* 3,000 → 5,600 (2026-10-18): the moderated-study guide (create_qual_guide / update_qual_guide) rides at its end; still sent only with qualitative requests, in the cached prefix */
+  assert.ok(COPILOT_QUAL_GUIDE.length < 5_600, `qualitative guide ${COPILOT_QUAL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: "Design a mixed-methods study: qualitative interviews first, then a survey" });
   const [system, user] = copilotCall(prompt);
   assert.deepEqual(system, [COPILOT_SYSTEM_PROMPT, [COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE].join("\n\n")]);

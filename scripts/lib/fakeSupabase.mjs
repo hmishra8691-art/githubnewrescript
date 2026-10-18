@@ -19,7 +19,14 @@ const UNIQUE = {
   analytics_story_renders: [{ name: "analytics_story_renders_one_active", cols: ["story_id", "kind"], where: (r) => ACTIVE.includes(r.status ?? "queued") }],
   analytics_story_versions: [{ name: "analytics_story_versions_story_id_version_key", cols: ["story_id", "version"], where: () => true }],
   analytics_story_segments: [{ name: "analytics_story_segments_pkey", cols: ["survey_id", "hash"], where: () => true }],
+  /* migration 0064: one live row per fingerprint (project artifacts; a private copy is keyed by its owner too), one row per version */
+  artifacts: [
+    { name: "artifacts_fingerprint_key", cols: ["survey_id", "type", "edition", "fingerprint", "__owner"], where: (r) => !r.deleted_at },
+    { name: "artifacts_version_key", cols: ["survey_id", "type", "edition", "version"], where: () => true },
+  ],
 };
+/* a derived column a unique index reads (0064: the owner only for a private artifact) */
+const derived = (table, r) => (table === "artifacts" ? { ...r, __owner: r.visibility === "private" ? r.owner_id : null } : r);
 
 class Query {
   constructor(db, table) { this.db = db; this.table = table; this.op = "select"; this.filters = []; this.head = false; this.wantCount = false; this.orderBy = null; this.limitN = null; this.mode = "many"; this.payload = null; }
@@ -48,7 +55,8 @@ class Query {
     const rows = this.db.tables[this.table];
     if (!rows) return { data: null, error: { message: `relation "public.${this.table}" does not exist` } };
     if (this.op === "insert") {
-      const clash = (UNIQUE[this.table] ?? []).find((u) => rows.some((r) => u.where(r) && u.where(this.payload) && u.cols.every((c) => r[c] === this.payload[c])));
+      const mine = derived(this.table, this.payload);
+      const clash = (UNIQUE[this.table] ?? []).find((u) => rows.some((r0) => { const r = derived(this.table, r0); return u.where(r) && u.where(mine) && u.cols.every((c) => r[c] === mine[c]); }));
       if (clash) return { data: null, error: { message: `duplicate key value violates unique constraint "${clash.name}"`, code: "23505" } };
       const row = { id: uuid(), created_at: stamp(), updated_at: stamp(), ...this.payload };
       if (this.table === "analytics_plan_applies" && !this.payload?.started_at) row.started_at = stamp();

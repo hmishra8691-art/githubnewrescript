@@ -1,4 +1,4 @@
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat, Header, Footer, PageNumber, TabStopType } from "docx";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat, Header, Footer, PageNumber, TabStopType, ImageRun } from "docx";
 import type { SurveyDefinition, Question, AnalysisPlan } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
 import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText, conditionSummary, buildAnalysisFramework, METHOD_CHART, MIN_READ_BASE } from "@rescript/engine";
@@ -10,6 +10,7 @@ import { deckFromRun, type DeckOptions, type DeckSlide } from "../deck.js";
 import { CORRECTION_WORDS } from "../posthoc.js";
 import { seriesForChart } from "./shared.js";
 import { canonicalJson, hash64 } from "../canonical.js";
+import { docStyleOf, type DocStyle, type ThemeSpec, type StructureRequest } from "../reportThemes.js";
 
 /**
  * WORD DOCUMENTS (Research Engine audit, Phase 5) — the two client-ready
@@ -32,33 +33,111 @@ import { canonicalJson, hash64 } from "../canonical.js";
  * implications and the recommendations. Nothing is drawn: a chart's data
  * goes in as a table, which Word readers can read and reuse.
  */
-const INK = "16202E", SUBTLE = "5F6B7D", ACCENT = "1D4ED8", RULE = "D5DBE4", HEAD_FILL = "EEF1F6";
 const PAGE = { size: { width: 12240, height: 15840 }, margin: { top: 1080, bottom: 1080, left: 1080, right: 1080 } };
+
+/*
+ * THE LOOK (2026-10-18): every helper below reads its colours, fonts and sizes from `S`, the style of the
+ * document being built. Without a theme `S` is the documents' standard look, exactly the constants these
+ * helpers always had; with one (`opts.theme`) it is that theme's tokens. `themed()` sets it for the
+ * synchronous part of a build — every paragraph and table is constructed before the first `await` (the
+ * packer's), so two documents built at once cannot see each other's look — and restores it after. Only the
+ * look changes: the same helpers are called with the same text in the same order.
+ */
+let S: DocStyle = docStyleOf(null);
+/** an uploaded logo's bytes, for a theme that places it in the page header or on the cover */
+export interface DocLogo { data: Uint8Array; type: "png" | "jpg"; width: number; height: number }
+const LOGO: { current?: () => ImageRun; cover?: () => ImageRun } = {};
+/** the look of research documents: a report theme and, when the theme places one, the uploaded logo */
+export interface DocLook { theme?: ThemeSpec | null; logo?: DocLogo | null }
+function themed<T>(look: DocLook, build: () => Promise<T>): Promise<T> {
+  const prev = S, prevLogo = { ...LOGO };
+  S = docStyleOf(look.theme ?? null);
+  const place = look.theme?.branding.logo.placement ?? "none";
+  const logo = look.logo;
+  const run = (h: number) => () => new ImageRun({ type: logo!.type, data: logo!.data, transformation: { width: Math.max(1, Math.round(logo!.width * h / Math.max(1, logo!.height))), height: h } });
+  LOGO.current = logo && place === "header" ? run(28) : undefined;
+  LOGO.cover = logo && place === "cover" ? run(72) : undefined;
+  try { return build(); } finally { S = prev; LOGO.current = prevLogo.current; LOGO.cover = prevLogo.cover; }
+}
+
+/** a PNG's or JPEG's own size, read from its header — the logo is placed at its proportions; anything else is not a logo Word can take */
+export function logoFromBytes(bytes: Uint8Array): DocLogo | null {
+  const b = Buffer.from(bytes);
+  if (b.length > 24 && b.readUInt32BE(0) === 0x89504e47) return { data: b, type: "png", width: b.readUInt32BE(16), height: b.readUInt32BE(20) };
+  if (b.length > 4 && b[0] === 0xff && b[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) { i++; continue; }
+      const marker = b[i + 1];
+      const len = b.readUInt16BE(i + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return { data: b, type: "jpg", height: b.readUInt16BE(i + 5), width: b.readUInt16BE(i + 7) };
+      i += 2 + len;
+    }
+  }
+  return null;
+}
+
+/*
+ * STRUCTURE, ASKED FOR IN WORDS ONLY: "reorganize around the main hypotheses and recommendations" moves whole
+ * sections (a Heading 1 and everything under it) — the named ones first, in the order named, the rest after in
+ * their own order. The cover stays first. No block is added, dropped or changed.
+ */
+const STRUCTURE_TITLES: Record<string, RegExp> = {
+  summary: /^executive summary$/i, hypotheses: /^the hypotheses$|^hypotheses/i, findings: /^key findings$/i, segments: /^who differs$/i,
+  implications: /^what it means$/i, recommendations: /^what to do next$|^recommendations/i, method: /^method/i, caveats: /^caveats$/i,
+};
+export function reorderSections(blocks: Block[], structure: StructureRequest | null | undefined): Block[] {
+  if (!structure?.order.length) return blocks;
+  const head: Block[] = [];
+  const sections: { title: string; blocks: Block[] }[] = [];
+  for (const b of blocks) {
+    const t = b instanceof Paragraph ? SECTION_OF.get(b) : undefined;
+    if (t !== undefined) sections.push({ title: t, blocks: [b] });
+    else if (sections.length) sections[sections.length - 1].blocks.push(b);
+    else head.push(b);
+  }
+  /* a closing note after the last section (the generated-by line) stays last */
+  const rank = (title: string) => { const i = structure.order.findIndex((k) => STRUCTURE_TITLES[k]?.test(title)); return i < 0 ? structure.order.length : i; };
+  const ordered = sections.map((sec, i) => ({ sec, i, r: rank(sec.title) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.sec);
+  return [...head, ...ordered.flatMap((x) => x.blocks)];
+}
+/** sections kept with their heading, so a structure request can reorder whole sections and nothing else */
+const SECTION_OF = new WeakMap<Paragraph, string>();
 
 type Block = Paragraph | Table;
 const plain = (s: string | undefined, n = 120) => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
-const h1 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 30, color: INK })], heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 120 }, keepNext: true, keepLines: true });
-const h2 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 24, color: INK })], heading: HeadingLevel.HEADING_2, spacing: { before: 220, after: 80 }, keepNext: true, keepLines: true });
-const label = (text: string) => new Paragraph({ children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: SUBTLE, characterSpacing: 20 })], spacing: { before: 140, after: 40 }, keepNext: true });
-const body = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], spacing: { after: 80 } });
-const lead = (text: string) => new Paragraph({ children: [new TextRun({ text, color: ACCENT, size: 24, bold: true })], spacing: { after: 120 } });
-const muted = (text: string) => new Paragraph({ children: [new TextRun({ text, color: SUBTLE, size: 19, italics: true })], spacing: { after: 60 } });
-const bullet = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], numbering: { reference: "rs-bullets", level: 0 }, spacing: { after: 50 } });
-const numbered = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], numbering: { reference: "rs-numbers", level: 0 }, spacing: { after: 50 } });
-const divider = () => new Paragraph({ text: "", spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: RULE, space: 6 } } });
+const hText = (text: string) => (S.upper ? text.toUpperCase() : text);
+const hRun = (text: string, size: number) => new TextRun({ text: hText(text), bold: S.headingBold, size, color: S.heading, ...(S.themed ? { font: S.headingFont } : {}) });
+const h1 = (text: string) => { const p = new Paragraph({ children: [hRun(text, S.h1Size)], heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 120 }, keepNext: true, keepLines: true, ...(S.titleRule ? { border: { bottom: { style: BorderStyle.SINGLE, size: 8, color: S.accent, space: 4 } } } : {}) }); SECTION_OF.set(p, text); return p; };
+const h2 = (text: string) => new Paragraph({ children: [hRun(text, S.h2Size)], heading: HeadingLevel.HEADING_2, spacing: { before: 220, after: 80 }, keepNext: true, keepLines: true });
+const label = (text: string) => new Paragraph({ children: [new TextRun({ text: text.toUpperCase(), bold: true, size: S.themed ? Math.max(14, S.bodySize - 5) : 16, color: S.subtle, characterSpacing: 20 })], spacing: { before: 140, after: 40 }, keepNext: true });
+const spacing = (after: number) => (S.themed ? { after: Math.round(after * S.after / 80), line: S.line } : { after });
+const body = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.ink, size: S.bodySize })], spacing: spacing(80) });
+const lead = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.accent, size: S.themed ? S.bodySize + 3 : 24, bold: true })], spacing: spacing(120) });
+/* evidence and notes: quiet italics, or — "clear statistical annotations" — upright, darker and full size */
+const muted = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.clearAnnotations ? S.ink : S.subtle, size: S.clearAnnotations ? S.bodySize - 1 : S.themed ? S.bodySize - 2 : 19, italics: !S.clearAnnotations })], spacing: spacing(60) });
+const bullet = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.ink, size: S.bodySize })], numbering: { reference: "rs-bullets", level: 0 }, spacing: spacing(50) });
+const numbered = (text: string) => new Paragraph({ children: [new TextRun({ text, color: S.ink, size: S.bodySize })], numbering: { reference: "rs-numbers", level: 0 }, spacing: spacing(50) });
+const divider = () => new Paragraph({ text: "", spacing: { after: 120 }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: S.rule, space: 6 } } });
 const pageBreak = () => new Paragraph({ children: [new PageBreak()] });
 
 function gridTable(head: string[], rows: string[][], widths?: number[]): Table {
   const total = 9000;
   const ws = widths ?? head.map(() => Math.floor(total / head.length));
-  const cell = (text: string, w: number, isHead: boolean) => new TableCell({
+  /* a theme's table formatting: grid (every rule), minimal (rules above and below the header only) or striped (alternate rows tinted) */
+  const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+  const rule = { style: BorderStyle.SINGLE, size: 6, color: S.rule };
+  const minimalHead = { top: { style: BorderStyle.SINGLE, size: 10, color: S.ink }, bottom: rule, left: none, right: none };
+  const minimalBody = { top: none, bottom: none, left: none, right: none };
+  const cell = (text: string, w: number, isHead: boolean, row = 0) => new TableCell({
     width: { size: w, type: WidthType.DXA },
-    shading: isHead ? { type: ShadingType.CLEAR, fill: HEAD_FILL, color: "auto" } : undefined,
+    shading: isHead ? (S.tableStyle === "minimal" && S.themed && S.headFill === "FFFFFF" ? undefined : { type: ShadingType.CLEAR, fill: S.headFill, color: "auto" }) : S.stripe && row % 2 === 1 ? { type: ShadingType.CLEAR, fill: S.stripe, color: "auto" } : undefined,
+    ...(S.themed && S.tableStyle === "minimal" ? { borders: isHead ? minimalHead : minimalBody } : {}),
     margins: { top: 60, bottom: 60, left: 90, right: 90 },
-    children: [new Paragraph({ children: [new TextRun({ text, bold: isHead, size: 18, color: isHead ? SUBTLE : INK })] })],
+    children: [new Paragraph({ children: [new TextRun({ text, bold: isHead && S.headerBold, size: S.themed ? Math.max(14, S.bodySize - 3) : 18, color: isHead ? S.headText : S.ink })] })],
   });
   /* the header row repeats on every page a table runs onto, and no row is split across a page break (2026-10-17) */
-  return new Table({ width: { size: total, type: WidthType.DXA }, columnWidths: ws, rows: [new TableRow({ tableHeader: true, cantSplit: true, children: head.map((h, i) => cell(h, ws[i], true)) }), ...rows.map((r) => new TableRow({ cantSplit: true, children: r.map((v, i) => cell(v, ws[i] ?? ws[0], false)) }))] });
+  return new Table({ width: { size: total, type: WidthType.DXA }, columnWidths: ws, rows: [new TableRow({ tableHeader: true, cantSplit: true, children: head.map((h, i) => cell(h, ws[i], true)) }), ...rows.map((r, ri) => new TableRow({ cantSplit: true, children: r.map((v, i) => cell(v, ws[i] ?? ws[0], false, ri)) }))] });
 }
 const fmtCell = (v: unknown, type?: string, decimals?: number) => v == null ? "" : typeof v === "number" ? (type === "pct" ? `${v.toFixed(decimals ?? 1)}%` : type === "count" ? String(Math.round(v)) : v.toFixed(decimals ?? 2)) : String(v);
 function resultTable(t: ResultTable, maxRows = 20): Table {
@@ -74,12 +153,21 @@ const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p 
  * number, so a printed or forwarded page always says what it belongs to.
  */
 function document(title: string, description: string, children: Block[], frame: { header?: string; footer?: string } = {}): Promise<Buffer> {
-  const small = (text: string) => new TextRun({ text, size: 16, color: SUBTLE });
-  const header = new Header({ children: [new Paragraph({ children: [small(frame.header ?? title)], border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: RULE, space: 4 } } })] });
-  const footer = new Footer({ children: [new Paragraph({ tabStops: [{ type: TabStopType.RIGHT, position: PAGE.size.width - PAGE.margin.left - PAGE.margin.right }], children: [small(frame.footer ?? "Rescript"), new TextRun({ children: ["\tPage ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES], size: 16, color: SUBTLE })] })] });
+  const small = (text: string) => new TextRun({ text, size: 16, color: S.subtle });
+  /* a theme's header and footer words stand beside the document's own: "Confidential · <title>", "<footer> · Prepared for …" */
+  const headText = S.header ? `${S.header} · ${frame.header ?? title}` : frame.header ?? title;
+  const footText = S.footer ? `${S.footer}${frame.footer ? ` · ${frame.footer}` : ""}` : frame.footer ?? "Rescript";
+  const header = new Header({ children: [new Paragraph({ children: [...(LOGO.current ? [LOGO.current(), new TextRun({ text: "  ", size: 16 })] : []), small(headText)], border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: S.rule, space: 4 } } })] });
+  const footer = new Footer({ children: [new Paragraph({ tabStops: [{ type: TabStopType.RIGHT, position: PAGE.size.width - PAGE.margin.left - PAGE.margin.right }], children: [small(footText), ...(S.pageNumbers ? [new TextRun({ children: ["\tPage ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES], size: 16, color: S.subtle })] : [])] })] });
+  /* a theme declares its look as STYLES too (Normal's font, Heading 1–2's font, size and colour), so Word's style pane and a re-styled copy carry it */
+  const themedStyles = S.themed ? {
+    heading1: { run: { font: S.headingFont, size: S.h1Size, bold: S.headingBold, color: S.heading }, paragraph: { spacing: { before: 320, after: 120 } } },
+    heading2: { run: { font: S.headingFont, size: S.h2Size, bold: S.headingBold, color: S.heading }, paragraph: { spacing: { before: 220, after: 80 } } },
+  } : {};
   const doc = new Document({
     creator: "Rescript", title, description,
-    styles: { default: { document: { run: { font: "Calibri", size: 21, color: INK } } } },
+    ...(S.page ? { background: { color: S.page } } : {}),
+    styles: { default: { document: { run: { font: S.bodyFont, size: S.bodySize, color: S.ink }, ...(S.themed ? { paragraph: { spacing: { line: S.line } } } : {}) }, ...themedStyles } },
     numbering: { config: [
       { reference: "rs-bullets", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
       { reference: "rs-numbers", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
@@ -91,9 +179,10 @@ function document(title: string, description: string, children: Block[], frame: 
 
 function cover(kind: string, title: string, lines: string[]): Block[] {
   return [
-    new Paragraph({ children: [new TextRun({ text: kind.toUpperCase(), bold: true, size: 18, color: ACCENT, characterSpacing: 30 })], spacing: { before: 2400, after: 200 } }),
-    new Paragraph({ children: [new TextRun({ text: title, bold: true, size: 44, color: INK })], spacing: { after: 240 } }),
-    ...lines.filter(Boolean).map((l) => new Paragraph({ children: [new TextRun({ text: l, size: 22, color: SUBTLE })], spacing: { after: 60 } })),
+    ...(LOGO.cover ? [new Paragraph({ children: [LOGO.cover()], spacing: { before: 600, after: 0 } })] : []),
+    new Paragraph({ children: [new TextRun({ text: kind.toUpperCase(), bold: true, size: 18, color: S.accent, characterSpacing: 30 })], spacing: { before: LOGO.cover ? 1600 : 2400, after: 200 } }),
+    new Paragraph({ children: [new TextRun({ text: title, bold: true, size: 44, color: S.heading, ...(S.themed ? { font: S.headingFont } : {}) })], spacing: { after: 240 } }),
+    ...lines.filter(Boolean).map((l) => new Paragraph({ children: [new TextRun({ text: l, size: 22, color: S.subtle })], spacing: { after: 60 } })),
     pageBreak(),
   ];
 }
@@ -185,7 +274,7 @@ export const METHOD_WORDS: Record<string, string> = {
 };
 
 /** the building blocks the sibling documents (the statistical analysis plan) are made of */
-export const docKit = { h1, h2, label, body, lead, muted, bullet, numbered, divider, pageBreak, gridTable, cover, document, plain, fmt, fmtP };
+export const docKit = { h1, h2, label, body, lead, muted, bullet, numbered, divider, pageBreak, gridTable, cover, document, plain, fmt, fmtP, themed };
 export type DocBlock = Block;
 
 /* ------------------------------------------------------------ the proposal */
@@ -200,10 +289,16 @@ export interface ProposalOptions {
    * interpretation framework, the quality-control requirements and the limitations. One exporter, two editions.
    */
   edition?: "proposal" | "research_plan";
+  /** the report theme (2026-10-18): the look only — the text, numbering and tables are the same with or without one */
+  theme?: ThemeSpec | null;
+  logo?: DocLogo | null;
 }
 
 /** The research proposal / design document, from the survey and its research design. */
-export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOptions = {}): Promise<Buffer> {
+export function buildProposalDocx(def: SurveyDefinition, opts: ProposalOptions = {}): Promise<Buffer> {
+  return themed(opts, () => proposalDocx(def, opts));
+}
+async function proposalDocx(def: SurveyDefinition, opts: ProposalOptions): Promise<Buffer> {
   const r = def.research;
   const b = r?.brief;
   const client = opts.client ?? b?.client;
@@ -593,12 +688,20 @@ export interface FindingsDocxOptions extends Omit<DeckOptions, "results"> {
   author?: string;
   /** the results by analysis id, so the groups and the chart data can be tabled */
   results?: Record<string, AnalysisResult>;
+  /** the report theme (2026-10-18): the look only */
+  theme?: ThemeSpec | null;
+  logo?: DocLogo | null;
+  /** a reordering of the sections asked for in words — content unchanged */
+  structure?: StructureRequest | null;
 }
 
 type RunForDocx = Parameters<typeof deckFromRun>[1];
 
 /** The findings report as a Word document, from a run. */
-export async function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, opts: FindingsDocxOptions = {}): Promise<Buffer> {
+export function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, opts: FindingsDocxOptions = {}): Promise<Buffer> {
+  return themed(opts, () => findingsDocx(def, run, opts));
+}
+async function findingsDocx(def: SurveyDefinition, run: RunForDocx, opts: FindingsDocxOptions): Promise<Buffer> {
   const deck = deckFromRun(def, run, { ...opts, results: opts.results });
   const narrative = reportNarrative(def, run as never);
   const date = (opts.date ?? run.computedAt).slice(0, 10);
@@ -680,5 +783,9 @@ export async function buildFindingsDocx(def: SurveyDefinition, run: RunForDocx, 
   if (cav || narrative.caveats) { out.push(h1("Caveats")); for (const b of cav?.bullets ?? run.warnings) out.push(bullet(b)); }
   out.push(divider());
   out.push(muted(`Generated by Rescript from the analysis run of ${date}. Every number in this document is from that run.`));
+  if (opts.structure?.order.length) {
+    const closing = out.splice(out.length - 2, 2);
+    return document(`${title} — findings report`, `Findings report for ${def.meta.title}`, [...reorderSections(out, opts.structure), ...closing]);
+  }
   return document(`${title} — findings report`, `Findings report for ${def.meta.title}`, out);
 }

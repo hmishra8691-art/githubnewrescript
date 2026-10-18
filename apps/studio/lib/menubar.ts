@@ -46,6 +46,7 @@ export const TAB_DESCRIPTIONS: Record<string, string> = {
   quotas: "Cells, targets and what happens when full",
   listfill: "Allocated lists — concepts, cells, pools",
   designs: "Conjoint, MaxDiff and other designs",
+  qualitative: "Interview guides, transcripts, coding and themes",
   branding: "Look, voice and the AI interviewer",
   assets: "Images, video and audio the survey uses",
   localization: "Every language version of the survey",

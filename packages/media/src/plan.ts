@@ -17,7 +17,8 @@ export type MediaKind =
   | "answer_audio"         // the respondent answering out loud
   | "answer_upload"        // any other respondent file answer
   | "localization_audio"   // a recorded or generated reading of a question
-  | "survey_asset";        // an image, PDF or document a researcher attaches to a question
+  | "survey_asset"         // an image, PDF or document a researcher attaches to a question
+  | "qual_recording";      // a moderated interview or focus-group session's audio / video (2026-10-18)
 
 export interface MediaKindSpec {
   readonly bucket: string;
@@ -53,6 +54,16 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindSpec> = {
   answer_upload:      { bucket: "rescript-uploads", maxBytes: 25 * 1024 * 1024,  signedSeconds: YEAR,     accept: null,    transcribed: false },
   localization_audio: { bucket: "rescript-audio",   maxBytes: 20 * 1024 * 1024,  signedSeconds: YEAR * 5, accept: "audio", transcribed: false },
   survey_asset:       { bucket: "rescript-assets",  maxBytes: 200 * 1024 * 1024, signedSeconds: YEAR,     accept: "asset", transcribed: false },
+  /*
+   * A whole session — an hour of interview, two of a focus group — uploaded by the researcher. Private,
+   * its own bucket, played back only through a 15-minute signed URL after the Studio's access check
+   * (Data module + contact details: a voice or a face cannot be redacted). Audio OR video, so `accept`
+   * is null and the qualitative route checks the family. Not transcribed by the media runner: the
+   * qualitative route transcribes it with timings and speakers into a transcript of its own.
+   * 500 MB is the ceiling this package asks for; the store's own (Supabase's global limit, 50 MB by
+   * default) may be lower and wins — `mediaLimits` reports it.
+   */
+  qual_recording:     { bucket: "rescript-qual",    maxBytes: 500 * 1024 * 1024, signedSeconds: 60 * 15,  accept: null,    transcribed: false },
 };
 
 export const MEDIA_BUCKETS: readonly string[] =
@@ -187,6 +198,8 @@ export function mediaPath(kind: MediaKind, parts: PathParts): string {
     case "localization_audio":
     case "survey_asset":
       return `${safeSegment(parts.surveyId)}/${question}/${stamp}-${name}`;
+    case "qual_recording":
+      return `${safeSegment(parts.surveyId)}/qual/${safeSegment(parts.sessionId ?? "session")}/${stamp}-${name}`;
   }
 }
 

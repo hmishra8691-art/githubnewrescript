@@ -2,6 +2,7 @@
 import React from "react";
 import type { BuilderDraft, ReportBrief } from "@rescript/analytics";
 import { AxApi, type Row } from "./api";
+import { resolveReportTheme } from "../../lib/reportThemeResolve";
 
 /**
  * "BUILD WITH RESCRIPT" — the intelligent report builder's front door.
@@ -53,7 +54,15 @@ export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial
   const create = async () => {
     if (!draft) return;
     setBusy(true); setError(null);
-    try { const r = await api.create("reports", { name: draft.report.title, kind: "report", mode: "live", definition: draft.report }); onCreated(r.item); onClose(); }
+    try {
+      /* the theme the sentence asked for is APPLIED (2026-10-18): a saved theme of that name, else the preset saved to this project first */
+      let themeId: string | null = null;
+      const want = resolveReportTheme(initial?.theme, initial?.theme ? ((await api.list("themes").catch(() => ({ items: [] as Row[] }))).items as unknown as { id: string; name: string }[]) : []);
+      if (want?.kind === "saved") themeId = want.themeId;
+      else if (want?.kind === "create") themeId = String((await api.create("themes", { name: want.name, theme: want.theme, scope: "survey" })).item.id);
+      const r = await api.create("reports", { name: draft.report.title, kind: "report", mode: "live", definition: draft.report, ...(themeId ? { themeId } : {}) });
+      onCreated(r.item); onClose();
+    }
     catch (e) { setError((e as Error).message); setBusy(false); }
   };
   const toggleAnalysis = (id: string) => { const cur = picked ?? new Set(analyses.map((a) => a.id)); const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); setPicked(next.size === analyses.length ? null : next); };

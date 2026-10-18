@@ -9,6 +9,7 @@ import { FlowNode, LogicFlow, EmbeddedDataType } from "./flow.js";
 import { QualityConfig } from "./quality.js";
 import { ListFill } from "./listFill.js";
 import { MediaDisplay } from "./mediaDisplay.js";
+import { QualStudy } from "./qualStudy.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -834,6 +835,12 @@ export const SurveyDefinition = z.object({
    * Absent on every survey that never had one.
    */
   research: ResearchDesign.optional(),
+  /**
+   * THE QUALITATIVE STUDY (2026-10-18): the interview or focus-group guide and its protocol, screening,
+   * consent, segments and session plan (see qualStudy.ts). Its sessions, transcripts and codes are data
+   * and live in their own tables (0065). Absent on every survey that never had one.
+   */
+  qualStudy: QualStudy.optional(),
   /**
    * THE SURVEY'S UX — scoped styles, animations and behaviours (see ux.ts).
    * Part of the definition so preview, test, publish, export and duplicate

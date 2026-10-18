@@ -395,6 +395,8 @@ console.log("\nPending invitations, history, and what a non-owner is offered");
   await page.click(`${inv} [data-testid="invitation-resend"]`);
   await page.waitForFunction(() => /sent again/.test(document.querySelector('[data-testid="collab-note"]')?.textContent ?? ""));
   assert.deepEqual(world.lastResend, { invitationId: "inv-1", action: "resend" });
+  /* the note is set before the panel reloads the invitations (changed()), so the row's count arrives a moment later: wait for it rather than racing the reload */
+  await page.waitForFunction((sel) => /re-sent 1×/.test(document.querySelector(sel)?.textContent ?? ""), inv, { timeout: 10000 }).catch(() => {});
   assert.match(await text(page, inv), /re-sent 1×/);
   await page.click(`${inv} [data-testid="invitation-revoke"]`);
   await page.waitForSelector(inv, { state: "detached" });

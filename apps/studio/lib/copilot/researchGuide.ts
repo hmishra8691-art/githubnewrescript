@@ -1,4 +1,5 @@
 import { capabilityBrief } from "@rescript/engine";
+import { COPILOT_QUAL_STUDY_GUIDE } from "./qualStudyGuide.ts";
 
 /**
  * THE RESEARCH GUIDE AND THE QUALITATIVE GUIDE (Research intelligence, 2026-10-17).
@@ -37,7 +38,7 @@ ADVANCED METHODS — state objective → design parameters → questions / varia
 {"op":"add_analysis_test","method":"regression","outcome":"SWITCH","variables":["PRICE_PERC","TENURE"],"hypotheses":["H1"],"reason":"does price perception drive switching, tenure held constant"}
 ${capabilityBrief()}`;
 
-export const COPILOT_QUAL_GUIDE = `QUALITATIVE GUIDE — Rescript runs qualitative research as a SELF-COMPLETION INTERVIEW GUIDE: open questions the respondent types or dictates, each followed by AI probes the runtime writes from the answer (set_probe). Build it as:
+export const COPILOT_QUAL_GUIDE = `QUALITATIVE GUIDE — two forms. Inside a survey, qualitative research is a SELF-COMPLETION INTERVIEW GUIDE: open questions the respondent types or dictates, each followed by AI probes the runtime writes from the answer (set_probe). A study run by a moderator is planned with create_qual_guide (end of this guide). The self-completion guide:
 • set_research: "objective", the topics as "researchQuestions", "methodology" ("Qualitative self-completion interview guide with AI follow-up probes"), and one construct per topic (role "descriptive", "questions" = the refs that explore it) — that is what maps the guide to its objectives.
 • FLOW: a warm-up block (an easy question about the respondent's context) → one block per research question (2–4 open questions, broad then specific, neutral, one idea each) → a wrap-up ("Is there anything else you would like to add?"). long_text for stories, open_text for short answers; not required.
 • PROBES: set_probe on each topic question — maxProbes 1–3, an "instruction" for what to dig for (an example, the reason, the feeling, what happened next); a fixed "prompt" only for one standard follow-up; "minWords" to skip one-word answers; "when" to probe only some answers; "probe": null removes it.
@@ -46,7 +47,8 @@ export const COPILOT_QUAL_GUIDE = `QUALITATIVE GUIDE — Rescript runs qualitati
 {"op":"set_probe","target":"TRIGGER","maxProbes":2,"minWords":3,"instruction":"Ask what tipped the decision and for a concrete example."}
 {"op":"set_research","objective":"Explore why customers switch broadband provider","methodology":"Qualitative self-completion interview guide with AI follow-up probes","researchQuestions":["What triggers customers to consider switching?"],"constructs":[{"name":"Switching triggers","role":"descriptive","questions":["TRIGGER"]}]}
 {"op":"add_analysis_test","method":"text_themes","variables":["TRIGGER"],"reason":"RQ1: what triggers switching"}
-NOT SUPPORTED — say so plainly and offer the guide above: moderated live interviews and focus groups (Studio surveys are self-completion; the Interviews app records and transcribes hiring interviews, not research guides), video of the respondent, automatic AI coding of themes, quotes placed into reports (open answers are exported; quotes are chosen by hand). Spoken answers: dictation is on for every open text field; a video_interview question (added in the Studio editor) plays a stimulus and records a transcribed spoken answer.`;
+NOT SUPPORTED — say so plainly: RUNNING live moderated interviews or focus groups (no conferencing or real-time moderation — plan them with create_qual_guide below; the Interviews app is a hiring product), video of the respondent in a survey, quotes in the survey findings deck (the qualitative report in Research Tools → Qualitative carries verbatim, reviewed quotes). Spoken answers: dictation is on for every open text field; a video_interview question (added in the Studio editor) plays a stimulus and records a transcribed spoken answer.
+${COPILOT_QUAL_STUDY_GUIDE}`;
 
 /**
  * A request that plans or designs research — a brief, objectives, hypotheses, a methodology, a
@@ -60,5 +62,5 @@ export function researchPlanIntent(text: string, mode?: string): boolean {
 
 /** a request about qualitative research — an interview guide, probes, open-ended exploration, a mixed design */
 export function qualIntent(text: string): boolean {
-  return /\bqualitative\b|\bqual\b|\binterview guide\b|\bdiscussion guide\b|\bin[\s-]depth interviews?\b|\bidis?\b|\bfocus groups?\b|\bprob(?:e|es|ing)\b|\bfollow[\s-]?up questions?\b|\bopen[\s-]ended\b|\bexplorator\w*\b|\bethnograph\w*|\bdiary stud\w*|\bmixed[\s-]?methods?\b|\bthemes? (?:analysis|coding)\b|\bverbatims?\b/i.test(text);
+  return /\bqualitative\b|\bqual\b|\binterview guide\b|\bdiscussion guide\b|\bin[\s-]depth interviews?\b|\bidis?\b|\bfocus groups?\b|\bprob(?:e|es|ing)\b|\bfollow[\s-]?up questions?\b|\bopen[\s-]ended\b|\bexplorator\w*\b|\bethnograph\w*|\bdiary stud\w*|\bmixed[\s-]?methods?\b|\bthemes? (?:analysis|coding)\b|\bverbatims?\b|\bmoderat\w*|\btranscripts?\b|\bcodebook\b|\bthematic\b/i.test(text);
 }

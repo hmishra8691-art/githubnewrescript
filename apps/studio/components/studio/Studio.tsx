@@ -19,6 +19,7 @@ import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { useCollab } from "@/lib/useCollab";
 import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
+import { QualPanel } from "./qual/QualPanel";
 import { BrandingPanel, ScriptsPanel, ThemeLivePreview } from "./BrandingPanel";
 import { AssetsPanel } from "./AssetsPanel";
 import { VersionsPanel } from "./VersionsPanel";
@@ -45,7 +46,7 @@ import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "branding" | "assets" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -78,6 +79,12 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
   { key: "quotas", label: "Quotas", icon: "quotas", group: "Programming" },
   { key: "listfill", label: "List Fill", icon: "listfill", group: "Programming" },
   { key: "designs", label: "Design Generators", icon: "designs", group: "Research tools" },
+  /*
+   * Qualitative research (2026-10-18): the interview / focus-group guide, session records and
+   * recordings, transcripts, AI-assisted coding with human review, themes and the report. Not in
+   * EDITING_TABS: its data are Data-module records gated at the routes, not the questionnaire.
+   */
+  { key: "qualitative", label: "Qualitative", icon: "notes", group: "Research tools" },
   { key: "branding", label: "Branding", icon: "branding", group: "Research tools" },
   { key: "assets", label: "Assets", icon: "assets", group: "Research tools" },
   /*
@@ -1078,6 +1085,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "quotas" && <QuotaDashboard />}
           {tab === "listfill" && <ListFillPanel />}
           {tab === "designs" && <DesignsPanel />}
+          {tab === "qualitative" && <QualPanel />}
           {tab === "branding" && <BrandingPanel />}
           {tab === "assets" && <AssetsPanel />}
           {tab === "localization" && <LocalizationPanel />}

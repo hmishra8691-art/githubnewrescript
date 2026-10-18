@@ -9,18 +9,23 @@ import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
-import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, type CoverageReport } from "@rescript/engine";
+import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
+/* §3 (2026-10-18): a long brief read once — the structured research context, its store, the brief's exact passages, task-aware selection, per-call measurement */
+import { addCalls, briefFingerprint, contextLayersFor, contextOwner, deriveResearchContext, itemPassagesFor, questionnaireScope, reconcileContext, renderBriefPassages, renderResearchContext, retrieveBriefPassages, sectionBrief, withProgress, workflowIdFor, type CallMeasure, type ResearchContext, type StoredResearchContext } from "@/lib/copilot/researchContext";
+import { researchContextStoreFor } from "@/lib/copilot/researchContextStore";
+import { qualIntent, researchPlanIntent } from "@/lib/copilot/researchGuide";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, isSandboxProject, meteredAi, refusalResponse } from "@/lib/metering";
 /* the system prompt and the guides as cacheable system blocks; the outline and the request after them (AI cost audit, 2026-10-17) */
 import { copilotCall } from "@/lib/aiPromptCache";
+import type { AiEstimate } from "@/lib/aiEstimate";
 import { latestRun } from "@/lib/analytics";
 import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, reportingIntent, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
@@ -161,6 +166,25 @@ export async function POST(req: NextRequest) {
       usage: { charge: 0 },
     });
   }
+  /*
+   * WHAT THIS INSTALLATION CAN DO (§11, 2026-10-18) — the capability registry's readiness, from the server
+   * environment (presence only; the language model is ready by definition here: a turn without one is refused
+   * below). A short request for a capability that needs configuration this installation lacks gets the refusal
+   * naming the missing dependency — no model call, no charge, no silent substitution. A long brief is never
+   * refused: the model is told what is unavailable and plans around it in the open.
+   */
+  const readiness = capabilityReadiness(process.env, { ai_chat: true });
+  const unavailable = body.scope === "theme" || body.stage === "execute" || scope?.longBrief ? null : capabilityRefusal(message, readiness);
+  if (unavailable) {
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: "answer", reply: unavailable.message, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
+      validation: null, passages: {},
+      context: { mode: "question", scope: "unavailable", capability: unavailable.capability.id, missing: unavailable.capability.missing, modelCalled: false, promptChars: 0, cached: false },
+      usage: { charge: 0 },
+    });
+  }
+  const availability = availabilityNote(readiness) || undefined;
   if (!(await aiReadyFor(user, surveyId, "copilot_turn"))) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
   const parsed = SurveyDefinition.safeParse(body.definition);
   if (!parsed.success) return NextResponse.json({ error: "send the survey as it is open in the editor (definition)" }, { status: 400 });
@@ -212,7 +236,64 @@ export async function POST(req: NextRequest) {
   /* the findings the copilot answers from are the project's own stored run, read here — never numbers the browser sends (audit A-3). The sandbox has no stored data, so its fixture's run is taken as sent. */
   const sentRun = body.analysisRun && typeof body.analysisRun === "object" && Array.isArray((body.analysisRun as { findings?: unknown }).findings) ? body.analysisRun as RunBrief : null;
   const analysisRun: RunBrief | null = !findingsTurn ? null : isSandboxProject(surveyId) ? sentRun : await latestRun(supabaseAdmin(), surveyId).catch(() => null);
-  const outline = copilotOutline(def, { selectedId, focusIds: referencedQuestions(def, message), ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun });
+  /* §3 TASK-AWARE SELECTION: a theme turn gets no questionnaire; a logic edit on a large survey the named questions and their dependencies in full */
+  const focusIds = referencedQuestions(def, message);
+  const qScope = questionnaireScope({ message, mode, themeOnly: themeScope, uxOnly: cls.uxOnly, focusCount: focusIds.length, questionCount: def.questions.length });
+  const outline = copilotOutline(def, { selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope });
+  /*
+   * §3 THE RESEARCH CONTEXT OF A LONG BRIEF (2026-10-18). Kept per survey AND owner (never another survey's,
+   * never another organisation's). Checked against the survey's research design on every turn: the definition
+   * is authoritative, a material change makes the context stale (not sent until regenerated). The build of an
+   * approved plan from a brief uses it — with the exact passages each item needs — instead of the brief.
+   */
+  const owner = contextOwner({ customerId: ctx.customerId, userId: ctx.userId });
+  const workflowId = workflowIdFor(surveyId, owner, message);
+  const execPlanEarly = body.stage === "execute" ? coerceChangePlan(body.plan) : null;
+  const briefStage = !themeScope && !!execPlanEarly && isLongBrief(message);
+  const doneEarly = execPlanEarly ? [...sanitizeDone(body.done, new Set(execPlanEarly.items.map((i) => i.id))).keys()] : [];
+  let rcStore: Awaited<ReturnType<typeof researchContextStoreFor>> | null = null;
+  let stored: StoredResearchContext | null = null;
+  let rcStatus: "none" | "derived" | "reused" | "regenerated" | "stale" | "invalidated" = "none";
+  if (!themeScope) {
+    try {
+      rcStore = await researchContextStoreFor(surveyId);
+      stored = await rcStore.get(surveyId, owner);
+      if (stored) {
+        const rec = reconcileContext(stored.context, def);
+        if (rec.changed) stored = await rcStore.put({ ...stored, context: rec.context }, { userId: ctx.userId });
+        rcStatus = rec.invalidated ? "invalidated" : stored.context.status === "stale" ? "stale" : "reused";
+      }
+      if (briefStage) {
+        const sameBrief = !!stored && stored.context.fingerprint.brief === briefFingerprint(message);
+        if (!stored || !sameBrief || stored.context.status === "stale") {
+          /* derived here when the plan stage did not leave one (another server, an older page); regenerated on demand when stale */
+          const fresh = deriveResearchContext({ brief: message, plan: execPlanEarly, def, previous: stored?.context ?? null, built: doneEarly });
+          const was = stored;
+          stored = await rcStore.put({ surveyId, owner, context: fresh, brief: message, workflow: sameBrief ? was?.workflow ?? null : null }, { userId: ctx.userId });
+          rcStatus = sameBrief ? "regenerated" : "derived";
+        } else {
+          stored = await rcStore.put({ ...stored, context: withProgress(stored.context, execPlanEarly!, doneEarly) }, { userId: ctx.userId });
+          rcStatus = "reused";
+        }
+      }
+    } catch (e) {
+      /* the context is an optimisation: a store that cannot answer never fails the turn — the brief is sent whole, as before */
+      console.warn("[rescript:copilot]", JSON.stringify({ event: "research context unavailable", surveyId, error: ((e as Error)?.message ?? "").slice(0, 200) }));
+      stored = null; rcStatus = "none";
+    }
+  }
+  const rc: ResearchContext | null = stored && stored.context.status === "fresh" ? stored.context : null;
+  /** the context the plan stage derived in this request (reported, not used by this request's own calls) */
+  let planRc: ResearchContext | null = null;
+  const useBriefLayers = briefStage && !!rc && !!stored && stored.context.fingerprint.brief === briefFingerprint(message);
+  /* outside the build of its own brief, a context is used only once the design built from that brief is in the survey (adopted): a survey started over from scratch — or the shared sandbox — is not given an earlier brief's context */
+  const layers = useBriefLayers ? { researchContext: "full" as const } : longBrief ? { researchContext: "none" as const } : contextLayersFor({ mode, themeOnly: themeScope, uxOnly: cls.uxOnly, stage: null, hasContext: !!rc && !rc.fingerprint.designEmpty, stale: !rc });
+  const researchContextText = rc && layers.researchContext !== "none" ? renderResearchContext(rc, { compact: layers.researchContext === "compact" }) : undefined;
+  const briefSections = useBriefLayers ? sectionBrief(stored!.brief) : rc && stored && layers.researchContext === "compact" ? sectionBrief(stored.brief) : [];
+  /* an ordinary turn that names something in the stored brief (its quota table, a definition) gets that passage verbatim */
+  const turnPassages = !useBriefLayers && briefSections.length ? retrieveBriefPassages(briefSections, message, { k: 2, maxChars: 3000, minScore: 6 }) : [];
+  /** the blocks after the guides that are the same on every call of this request: the research context, the availability note */
+  const stableExtra = [researchContextText, availability];
   let research = "";
   let passageIds: string[] = [];
   let charge = 0;
@@ -244,6 +325,11 @@ export async function POST(req: NextRequest) {
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
     ...(planOnly ? { planOnly: true } : {}), ...(longBrief ? { longBrief: true } : {}), ...(scopeNote ? { scopeNote } : {}),
+    /* §3 layers: the research context (1), the stored brief in place of the message with its passages (5); the guides the brief named are still chosen from the brief itself */
+    ...(researchContextText ? { researchContext: researchContextText } : {}),
+    ...(useBriefLayers ? { briefRef: { chars: stored!.brief.length, ref: rc!.fingerprint.brief.slice(0, 12) }, researchPlan: researchPlanIntent(message, mode), qual: qualIntent(message), reporting: reportingIntent(message) } : {}),
+    ...(turnPassages.length ? { briefPassages: renderBriefPassages(turnPassages) } : {}),
+    ...(availability ? { availability } : {}),
   });
   const prompt = promptFor(false);
   let compactPrompt: string | null = null;
@@ -281,6 +367,36 @@ export async function POST(req: NextRequest) {
   const deadline = startedAt + budgetMs;
   const events: ProviderEvent[] = [];
   const onEvent = (e: ProviderEvent) => { events.push(e); };
+  /*
+   * MEASURED PER CALL (§3, 2026-10-18): every model call of this request — characters sent, input / output /
+   * cached tokens, requests, retries, latency, charge — on its usage event (with the workflow id, so a
+   * generation's cost can be summed across requests) and in this request's list; a long brief's workflow keeps
+   * the running totals with its research context. TEST SEAM, fake provider only: what each call sent.
+   */
+  const calls: CallMeasure[] = [];
+  const sent: { operation: string; chars: number; variableChars: number; variable: string; contextBlock: boolean; passages: string[] }[] = [];
+  const retriesNow = () => events.filter((e) => e.type === "retry").length;
+  const measured = async <T,>(est: AiEstimate, userText: string, fn: () => Promise<T>, passages: string[] = []) => {
+    const [sys, variable] = copilotCall(userText, stableExtra);
+    const chars = sys.reduce((n, s) => n + s.length, 0) + variable.length;
+    if (fakeProvider) sent.push({ operation: est.operation, chars, variableChars: variable.length, variable, contextBlock: !!researchContextText && sys.slice(1).some((b) => b.includes(researchContextText)) && !variable.includes(researchContextText), passages });
+    const r0 = retriesNow(); const t0 = Date.now();
+    const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...est, meta: () => ({ workflowId, promptChars: chars, retries: retriesNow() - r0, ...(rc ? { researchContextVersion: rc.version } : {}) }) }, fn);
+    if (m.ok) {
+      const md = (m.event?.metadata ?? {}) as { tokens?: { cachedInput?: number }; requests?: number };
+      calls.push({ operation: est.operation, promptChars: chars, inputTokens: m.event?.inputUnits ?? 0, outputTokens: m.event?.outputUnits ?? 0, cachedInputTokens: Number(md.tokens?.cachedInput ?? 0), requests: Number(md.requests ?? 1), retries: retriesNow() - r0, latencyMs: Date.now() - t0, charge: m.event?.customerCharge ?? 0 });
+    }
+    return m;
+  };
+  /** the workflow's running totals, kept with its research context (a long brief's plan and build) */
+  const keepWorkflow = async (completed: boolean) => {
+    if (!rcStore || !stored || !calls.length || stored.context.fingerprint.brief !== briefFingerprint(message)) return stored?.workflow ?? null;
+    try { stored = await rcStore.put({ ...stored, workflow: addCalls(stored.workflow, workflowId, calls, { completed }) }, { userId: ctx.userId }); }
+    catch (e) { console.warn("[rescript:copilot]", JSON.stringify({ event: "workflow totals not kept", error: ((e as Error)?.message ?? "").slice(0, 200) })); }
+    return stored?.workflow ?? null;
+  };
+  /** what the response says about the context it used */
+  const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
   const faults: Fault[] = fakeProvider && Array.isArray(body.faults) ? (body.faults as Fault[]).slice(0, 40) : [];
   /** the test seam: a scripted fault or delay in front of a model call (nothing, outside the fake provider) */
   const model = async <T,>(fn: () => Promise<T>): Promise<T> => {
@@ -319,10 +435,26 @@ export async function POST(req: NextRequest) {
     const planPrompt = planText(false);
     const planContext = () => ({ mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, messageChars: message.length, cached: false, provider: providerNote(events), ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}) });
     const maxQuestions = longBrief ? 1 : 5;
+    /*
+     * §3: THE PLAN STAGE LEAVES THE RESEARCH CONTEXT BEHIND — derived from the brief it just read whole and the
+     * plan it produced (no further model call), kept for this survey and owner, so the build's items get the
+     * context and their own passages instead of the brief.
+     */
+    const keepPlanContext = async (p: ChangePlan) => {
+      if (!longBrief || !rcStore) return;
+      try {
+        const same = !!stored && stored.context.fingerprint.brief === briefFingerprint(message);
+        const ctxNew = deriveResearchContext({ brief: message, plan: p, def, previous: stored?.context ?? null });
+        /* a new plan is a new generation: its totals start here (the plan call is added by keepWorkflow), so "cost per completed generation" is one generation's */
+        stored = await rcStore.put({ surveyId, owner, context: ctxNew, brief: message, workflow: null }, { userId: ctx.userId });
+        planRc = ctxNew; rcStatus = same ? "regenerated" : "derived";
+      } catch (e) { console.warn("[rescript:copilot]", JSON.stringify({ event: "research context not kept", surveyId, error: ((e as Error)?.message ?? "").slice(0, 200) })); }
+    };
+    const planDone = async (p: ChangePlan, extra: Record<string, unknown> = {}) => { await keepPlanContext(p); const workflow = await keepWorkflow(false); return NextResponse.json({ ok: true, stage: "plan", plan: p, context: { ...planContext(), ...extra, ...contextMeta(), ...(workflow ? { workflow } : {}) }, usage: { charge } }); };
     try {
       const pb = outputBudget("plan");
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
-        () => fitting((c) => shared("plan", planText(c), () => model(() => completeJson(...copilotCall(planText(c)), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
+      const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" }, planPrompt,
+        () => fitting((c) => shared("plan", planText(c), () => model(() => completeJson(...copilotCall(planText(c), stableExtra), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -331,7 +463,7 @@ export async function POST(req: NextRequest) {
       charge += m.event?.customerCharge ?? 0;
       const first = fake ?? m.value;
       const plan = coerceChangePlan(first, { maxQuestions });
-      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: planContext(), usage: { charge } });
+      if (plan) return planDone(plan);
       if (longBrief) {
         /*
          * A BRIEF GETS A PLAN, NOT A QUESTIONNAIRE BACK (evidence 2026-10-16 12:49). The model answered with
@@ -340,12 +472,12 @@ export async function POST(req: NextRequest) {
          * 25,000-character brief (the call most likely to be cut off and paid for twice).
          */
         const retryText = (c: boolean) => planText(c) + planRetryPrompt();
-        const m2 = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + retryText(false), maxTokens: pb.expectedTokens, operation: "copilot_plan_retry" },
-          () => fitting((c) => shared("plan_retry", retryText(c), () => model(() => completeJson(...copilotCall(retryText(c)), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan_retry", onEvent })))));
+        const m2 = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + retryText(false), maxTokens: pb.expectedTokens, operation: "copilot_plan_retry" }, retryText(false),
+          () => fitting((c) => shared("plan_retry", retryText(c), () => model(() => completeJson(...copilotCall(retryText(c), stableExtra), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan_retry", onEvent })))));
         if (m2.ok) charge += m2.event?.customerCharge ?? 0;
         const second = fakes.length ? fakes[1] ?? null : m2.ok ? m2.value : null;
         const plan2 = coerceChangePlan(second, { maxQuestions });
-        if (plan2) return NextResponse.json({ ok: true, stage: "plan", plan: plan2, context: { ...planContext(), planRetried: true }, usage: { charge } });
+        if (plan2) return planDone(plan2, { planRetried: true });
         const q = firstQuestion(second, first);
         const reply = { kind: "clarify", reply: q ? `Before I plan this brief I need one thing: ${q}` : "I could not turn this brief into a plan yet. Say which part to plan first — for example the research design and the screener — and I will plan the rest from there.", plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: q ? [q] : [], sources: [] };
         return NextResponse.json({ ok: true, reply, validation: null, passages: {}, context: { ...planContext(), planRetried: true }, usage: { charge } });
@@ -386,11 +518,14 @@ export async function POST(req: NextRequest) {
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
       if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
-      const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
+      /* §3: the item's own exact passages of the stored brief (a quota table, a hypothesis, a definitions table) — not the whole brief */
+      const hit = useBriefLayers ? itemPassagesFor(briefSections, item) : { text: "", ids: [] as string[] };
+      const itemPassages = hit.text;
+      const itemPrompt = prompt + itemPassages + executeItemPrompt(plan, item, i, approved, done);
       const t0 = Date.now();
       try {
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` },
-          () => fitting((c) => { const p = promptOf(c) + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }));
+        const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
+          () => fitting((c) => { const p = promptOf(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }), hit.ids);
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -428,7 +563,7 @@ export async function POST(req: NextRequest) {
         ok: true, stage: "progress", built: newlyBuilt, builtIds: built.map((b) => b.item.id), pending: planPending, failed: planFailures,
         ...(waiting ? { waiting: { retryAfterMs: waiting.retryAfterMs, failure: { ...waiting.failure, retryAfterMs: waiting.retryAfterMs || undefined } } } : {}),
         ...(halted ? { halted } : {}),
-        context: { mode, promptChars: prompt.length, cached: false, provider: providerNote(events), elapsedMs: Date.now() - startedAt, ...(capacityNotice() ? { notice: capacityNotice() } : {}) },
+        context: { mode, promptChars: prompt.length, cached: false, provider: providerNote(events), elapsedMs: Date.now() - startedAt, ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...contextMeta(), workflow: await keepWorkflow(false) },
         usage: { charge },
       });
     }
@@ -446,8 +581,8 @@ export async function POST(req: NextRequest) {
        * budgets); and what still cannot be read comes back as a CODE the
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` },
-        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(...copilotCall(promptOf(c)), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
+      const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` }, prompt,
+        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(...copilotCall(promptOf(c), stableExtra), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -492,8 +627,8 @@ export async function POST(req: NextRequest) {
     console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, refused: refused.map((e) => e.slice(0, 300)) }));
     try {
       const rb = outputBudget("repair");
-      const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPromptText, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` },
-        () => model(() => completeJson(...copilotCall(repairPromptText), rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
+      const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPromptText, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` }, repairPromptText,
+        () => model(() => completeJson(...copilotCall(repairPromptText, stableExtra), rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
@@ -535,8 +670,8 @@ export async function POST(req: NextRequest) {
       const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
       try {
         const cb = outputBudget("coverage");
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` },
-          () => model(() => completeJson(...copilotCall(coveragePrompt), cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
+        const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` }, coveragePrompt,
+          () => model(() => completeJson(...copilotCall(coveragePrompt, stableExtra), cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;
           const raw3 = nextFake ?? m.value;
@@ -580,7 +715,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
     usage: { charge },
   });
 }

@@ -200,7 +200,7 @@ export async function estimateAi(meter: Meter, ctx: MeterContext, eventType: str
 }
 
 export async function meteredAi<T>(meter: Meter, ctx: MeterContext, eventType: string, est: AiEstimate, fn: () => Promise<T>): Promise<Metered<T>> {
-  return meteredCore(runDeps, meter, ctx, { operation: est.operation, once: est.consent === "once", kind: "chat", reserve: () => aiSpec(eventType, est) }, fn);
+  return meteredCore(runDeps, meter, ctx, { operation: est.operation, once: est.consent === "once", kind: "chat", reserve: () => aiSpec(eventType, est), ...(est.meta ? { meta: est.meta } : {}) }, fn);
 }
 
 /** Run a text-to-speech call under the meter: priced per character, on the user's own provider when they chose one that can speak. */

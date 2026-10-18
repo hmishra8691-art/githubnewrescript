@@ -257,7 +257,7 @@ export type RequestMode = "generate" | "edit" | "review" | "question" | "ux";
 export const COPILOT_ANALYSIS_GUIDE = `ANALYSIS GUIDE.
 Roles: dependent (an outcome), independent (explains an outcome), mediator (carries an effect), moderator (changes an effect), control, segmentation (results are cut by it: demographics, markets, user groups), screening, descriptive.
 Measurement (inferred from the type; override only when the engine's reading is wrong): nominal, ordinal (an ordered scale), interval, ratio, multi (multi-select), text, rank, allocation, choice (MaxDiff / conjoint), date.
-Methods the platform runs: frequencies, mean, median, top_box, nps, crosstab, chi_square, t_test (2 groups), anova (3+ groups), mann_whitney, kruskal_wallis, correlation, regression, logistic_regression (2-category outcome), factor, reliability (multi-item scales), cluster, conjoint_utilities, maxdiff_scores, turf, driver_analysis, text_themes, ranking_scores, allocation_shares, pricing, brand_funnel. Nothing else exists — do not invent a method.
+Methods the platform runs: frequencies, mean, median, top_box, nps, crosstab, chi_square, t_test (2 groups), anova (3+ groups), mann_whitney, kruskal_wallis, correlation, regression, logistic_regression (2-category outcome), factor, reliability (multi-item scales), cluster, conjoint_utilities, maxdiff_scores, turf, driver_analysis, text_themes, ranking_scores, allocation_shares, pricing, brand_funnel. Nothing else exists — do not invent a method. Outside the plan, Data Analytics also runs hb (Hierarchical Bayes: individual CBC / MaxDiff utilities), lca (latent class) and sem (SEM / CFA) — point the researcher there; never plan them.
 Which test: groups × scale → t_test / anova (a MULTI-SELECT is never the groups of a test — its options overlap; it is a crosstab with each option a column); groups × categories → chi_square; scale × scale → correlation, and ONE regression per outcome on all its predictors (name a moderator with "moderator", a mediator with "mediator"); a two-category outcome → logistic_regression; a multi-item construct → reliability and a mean_score derived variable; an ordinal outcome → a top_box derived variable; MaxDiff → maxdiff_scores; conjoint → conjoint_utilities; nps → nps.
 Hypotheses are H1, H2… by their position in the research design (set_research's "hypotheses"). Every crosstab and test that serves one carries it in "hypotheses". Priority: 1 answers a hypothesis or the objective, 2 profiles, 3 explores. Plan the tables that matter — each outcome by the segmentation banner, each categorical independent against each outcome — not every pair.
 ACTIONS:
@@ -484,9 +484,18 @@ export function copilotUserPrompt(input: {
   longBrief?: boolean;
   /** a mixed request: what is outside the platform, said before the request */
   scopeNote?: string;
+  /** §3 LAYER 1: the structured research context of a stored long brief (renderResearchContext) — lifted into a cached system block by copilotCall */
+  researchContext?: string;
+  /** §3 LAYER 5: the stored brief stands in for the message — its size and reference; the request line says so instead of repeating the brief */
+  briefRef?: { chars: number; ref: string; request?: string };
+  /** §3 LAYER 5: exact passages of the stored brief this task needs (renderBriefPassages) */
+  briefPassages?: string;
+  /** §11: what is not available on this installation (availabilityNote) */
+  availability?: string;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
+  if (input.researchContext) parts.push(input.researchContext);
   parts.push(`CURRENT SURVEY (outline):\n${input.outline}`);
   if (input.memory?.memory) parts.push(`CONVERSATION MEMORY:\n${input.memory.memory}`);
   /* 500, as the route keeps them: a copilot line ends with what it proposed ("[proposed 4 actions: hypothesis H3 …, PRICE_1, PRICE_2]") — the referents of the next "it" */
@@ -511,7 +520,14 @@ export function copilotUserPrompt(input: {
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);
   if (input.scopeNote) parts.push(input.scopeNote);
+  if (input.availability) parts.push(input.availability);
+  if (input.briefPassages) parts.push(input.briefPassages);
   parts.push(`Request type (a hint, not a rule): ${input.mode}`);
+  if (input.briefRef) {
+    /* the brief itself is stored and summarised above (RESEARCH CONTEXT) with its exact passages quoted where this task needs them — not resent */
+    parts.push(`RESEARCHER:\n${input.briefRef.request ?? "Build the survey from my research brief"} (the brief: ${input.briefRef.chars.toLocaleString("en")} characters, stored as ref ${input.briefRef.ref}; its structured RESEARCH CONTEXT is above and the passages this task needs are quoted verbatim under BRIEF PASSAGES — keep its objectives, hypotheses, audience, method, constraints and output instructions; where it leaves a choice open, make the reasonable choice and list it under "assumptions").`);
+    return parts.join("\n\n");
+  }
   parts.push(input.longBrief
     ? `RESEARCHER — A PASTED RESEARCH BRIEF (${input.message.trim().length.toLocaleString("en")} characters; every section counts — keep its objectives, hypotheses, audience, method, constraints and output instructions; where it leaves a choice open, make the reasonable choice and list it under "assumptions" — do not answer with a list of questions):\n${input.message.trim()}`
     : `RESEARCHER:\n${input.message.trim()}`);

@@ -1269,7 +1269,7 @@ const nav = await navLabels(page);
  * two most recent additions and belong on the list for the same reason the
  * others do.
  */
-assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests", "Translation", "Usage & Wallet", "Assets"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
+assert.deepEqual(nav.filter((t) => !["Data Analytics", "Fieldwork", "Distribution", "Project", "Tests", "Translation", "Usage & Wallet", "Assets"].includes(t)), ["Questions", "Survey Settings", "Survey Flow", "Logic", "Variables", "Calculations", "Quotas", "List Fill", "Design Generators", "Qualitative", "Branding", "Scripts", "Data", "Versions & Deploy", "JSON", "Collaborators", "Internal notes", "Activity"]);
 assert.equal(nav.indexOf("Fieldwork"), nav.indexOf("Data Analytics") + 1, "Fieldwork belongs beside Data in Results");
 assert.equal(nav.indexOf("Distribution"), nav.indexOf("Versions & Deploy") - 1, "Distribution belongs beside Versions & Deploy in Management");
 /*

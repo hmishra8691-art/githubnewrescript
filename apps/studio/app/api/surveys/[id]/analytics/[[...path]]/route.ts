@@ -15,6 +15,7 @@ import { builderItems, modelInterpretation, narrateStory, parseBrief } from "@/l
 import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords } from "@/lib/analyticsAsk";
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
+import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
 
 /**
  * The environment a report is built from.
@@ -90,6 +91,8 @@ function log(ctx: ProjectContext, action: AuditEvent | null, entityId: string | 
 
 export async function GET(req: NextRequest, { params }: { params: { id: string; path?: string[] } }) {
   const [head, itemId, action] = params.path ?? [];
+  /* chunked model runs (HB): lib/modelJobs.ts, migration 0066 */
+  if (head === "models") return modelJobsGET(req, params.id, itemId);
   const surveyId = params.id;
   const db = supabaseService();
 
@@ -296,6 +299,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const surveyId = params.id;
   const db = supabaseService();
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+  /* chunked model runs (HB): lib/modelJobs.ts, migration 0066 */
+  if (head === "models") return modelJobsPOST(req, surveyId, itemId, action, body);
 
   /*
    * APPLY THE ANALYSIS PLAN (Data Analytics → Analysis plan). Validates the

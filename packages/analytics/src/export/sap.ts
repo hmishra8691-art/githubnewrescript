@@ -16,9 +16,9 @@ import { docKit, definitionStamp, samplingDesign, screeningRules, METHOD_WORDS, 
  * and marked so — the document never presents an assumption as a decision.
  * The stamp carries a hash of the definition it was read from.
  */
-export interface SapOptions { client?: string; author?: string; date?: string; title?: string }
+export interface SapOptions { client?: string; author?: string; date?: string; title?: string; /** the report theme (2026-10-18): the look only */ theme?: import("../reportThemes.js").ThemeSpec | null; logo?: import("./docx.js").DocLogo | null }
 
-const { h1, h2, label, body, lead, muted, bullet, divider, gridTable, cover, document, plain } = docKit;
+const { h1, h2, label, body, lead, muted, bullet, divider, gridTable, cover, document, plain, themed } = docKit;
 
 /** what each planned method is, in the words of a methods section (kept with the Word kit, shared with the research plan) */
 export { METHOD_WORDS };
@@ -47,7 +47,10 @@ function coding(q: Question | undefined, cap = 8): string {
 
 const findQuestion = (def: SurveyDefinition, ref: string): Question | undefined => def.questions.find((q) => q.variableName === ref || String(q.code) === ref || q.id === ref);
 
-export async function buildSapDocx(def: SurveyDefinition, opts: SapOptions = {}): Promise<Buffer> {
+export function buildSapDocx(def: SurveyDefinition, opts: SapOptions = {}): Promise<Buffer> {
+  return themed(opts, () => sapDocx(def, opts));
+}
+async function sapDocx(def: SurveyDefinition, opts: SapOptions): Promise<Buffer> {
   const r = def.research;
   const b = r?.brief;
   const date = opts.date ?? new Date().toISOString().slice(0, 10);

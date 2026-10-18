@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { describeDesignQuestion, listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
+import { questionDependencies, describeDesignQuestion, listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
 import { hypothesisLabel } from "@rescript/schema";
@@ -16,10 +16,21 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null; /** §3 task-aware selection (questionnaireScope): "none" — a theme turn, no questionnaire; "focused" — a logic edit, the named questions and their dependencies in full, the rest by code */ questionnaire?: "full" | "focused" | "none" } = {}): string {
   const n = def.questions.length;
-  const base = surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
+  const scope = opts.questionnaire ?? "full";
+  if (scope === "focused" && opts.focusIds?.length) opts = { ...opts, focusIds: withDependencies(def, opts.focusIds) };
+  const base = scope === "none"
+    ? `Survey: ${String(def.meta.title ?? "").replace(/\s+/g, " ").slice(0, 80)} (${n} questions) — the questionnaire is not listed for this request (it is about the look only).`
+    : surveyContext(def, { selectedId: opts.selectedId ?? null, focusIds: opts.focusIds ?? [], limit: scope === "focused" ? 0 : n > 150 ? 60 : 150, textWidth: n > 150 ? 70 : 110 });
   const lines = [base];
+  if (scope === "none") {
+    /* the look only: the theme and the UX items (so an existing style is changed, not duplicated) — no questions, logic, research or plan */
+    const ux = def.ux; const b = def.branding;
+    lines.push(`Theme: primary ${b.colors?.primary ?? "default"}, font ${b.typography?.fontFamily ?? "default"}, cards ${b.layout?.cardStyle ?? "card"}, buttons ${b.buttons?.style ?? "solid"}${b.customCss ? `, Branding custom CSS ${b.customCss.length} chars` : ""}`);
+    if (ux && ux.styles.length + ux.animations.length + ux.behaviors.length) lines.push(`UX configuration: ${[...ux.styles.map((s) => `style ${s.id} “${s.label}” on ${describeUxTarget(def, s.target)}`), ...ux.animations.map((a) => `animation ${a.id} “${a.label}”`), ...ux.behaviors.map((x) => `behaviour ${x.id} “${x.label}” on ${describeUxTarget(def, x.target)}`)].slice(0, 60).join("; ")}`);
+    return lines.join("\n");
+  }
   const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
   const blocks = listBlocks(def.flow as unknown[]);
   if (blocks.length) {
@@ -179,6 +190,18 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     }
   }
   return lines.join("\n");
+}
+
+/** the named questions plus what their logic reads and what reads them (one step each way) — a logic edit's working set */
+export function withDependencies(def: SurveyDefinition, ids: string[]): string[] {
+  const want = new Set(ids);
+  const out = new Set(ids);
+  for (const q of def.questions) {
+    const deps = questionDependencies(def, q);
+    if (want.has(q.id)) for (const d of deps) out.add(d);
+    else for (const d of deps) if (want.has(d)) { out.add(q.id); break; }
+  }
+  return [...out].filter((id) => def.questions.some((q) => q.id === id));
 }
 
 /** an element's key as the model addresses it: Q5, Q5.option:2, Q5.row:r1, meta:title, end:<id>, ui:required… */

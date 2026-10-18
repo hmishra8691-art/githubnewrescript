@@ -10,6 +10,7 @@ import { logistic, mediation, multinomialLogistic, ols, type Coefficient } from 
 import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, standardize } from "../stats/multivariate.js";
 import { fmtNum, fmtP, fmtPct, isOrdered, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
+import { CORRECTION_WORDS, pairwiseComparisons, type CorrectionMethod } from "../posthoc.js";
 
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
 /** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
@@ -110,9 +111,24 @@ export function statisticalTest(def: AnalysisDefinition, ds: Dataset, totalCases
       const means = g.groups.map((gr, i) => describe(gr, g.weights[i]));
       tables.push({ id: "groups", title: `${labelOf(ds, a)} by ${labelOf(ds, b)}`, columns: [{ key: "group", label: labelOf(ds, b) }, { key: "n", label: "n", type: "count" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }, { key: "median", label: "Median", type: "number", decimals: 2 }, { key: "lo", label: "95% CI low", type: "number", decimals: 2 }, { key: "hi", label: "95% CI high", type: "number", decimals: 2 }],
         rows: g.labels.map((l, i) => ({ group: l, n: means[i].n, mean: round(means[i].mean), sd: round(means[i].sd), median: round(means[i].median), lo: round(means[i].ci95?.[0]), hi: round(means[i].ci95?.[1]) })) });
+      /*
+       * POST-HOC PAIRS (gap audit 2026-10-18): an omnibus ANOVA / Kruskal–Wallis over three or more groups says THAT
+       * groups differ, not WHICH. Every pair is compared (Welch t, or Mann–Whitney after Kruskal–Wallis) and the pairs'
+       * p-values are adjusted as one family — Holm by default, `options.correction` = bonferroni | bh | none.
+       */
+      const corr = String(opt(def, "correction", "holm"));
+      let pairSummary: string | null = null;
+      if ((chosen === "anova_one_way" || chosen === "kruskal_wallis") && g.groups.length >= 3 && corr !== "none") {
+        const method: CorrectionMethod = corr === "bonferroni" || corr === "bh" ? corr : "holm";
+        const pw = pairwiseComparisons(ds, a, b, { alpha, method, nonparametric: chosen === "kruskal_wallis" });
+        if (pw.pairs.length) tables.push({ id: "pairwise", title: `Pairwise comparisons — ${pw.test === "mann_whitney" ? "Mann–Whitney" : "Welch t"}, ${CORRECTION_WORDS[method]}-adjusted`, columns: [{ key: "a", label: "Group" }, { key: "b", label: "vs" }, { key: "diff", label: "Mean difference", type: "number", decimals: 2 }, { key: "p", label: "p (raw)" }, { key: "pAdj", label: `p (${CORRECTION_WORDS[method]})` }, { key: "sig", label: `Different at α = ${alpha}` }],
+          rows: pw.pairs.map((x) => ({ a: x.a, b: x.b, diff: round(x.diff), p: fmtP(x.p), pAdj: fmtP(x.pAdj), sig: x.significant ? "yes" : "no" })), notes: [`${pw.pairs.length} pairs adjusted as one family; unweighted.`] });
+        pairSummary = pw.summary;
+      }
       const hi = means.map((m, i) => ({ m: m.mean ?? 0, l: g.labels[i] })).sort((x, y) => y.m - x.m);
       insights.push(`The difference in ${labelOf(ds, a)} across ${labelOf(ds, b)} ${sigWord(r.p, alpha)} (${TEST_LABEL[r.test] ?? r.test}, p ${fmtP(r.p)}). Highest: ${hi[0].l} (${fmtNum(hi[0].m, 2)}); lowest: ${hi[hi.length - 1].l} (${fmtNum(hi[hi.length - 1].m, 2)}).`);
       if (r.effectSize?.value != null) insights.push(`Effect size ${r.effectSize.name} = ${fmtNum(r.effectSize.value, 2)} (${effectWord(r.effectSize.name, r.effectSize.value)}).`);
+      if (pairSummary) insights.push(pairSummary);
       chart = { categories: g.labels, series: [{ name: `Mean ${labelOf(ds, a)}`, values: means.map((m) => round(m.mean)), ci: means.map((m) => (m.ci95 ? [round(m.ci95[0])!, round(m.ci95[1])!] : null)) }], points: g.groups.flatMap((gr, i) => gr.map((v) => ({ x: i, y: v, group: g.labels[i] }))) };
     }
   } else if (["t_paired", "wilcoxon_signed_rank", "friedman"].includes(chosen)) {

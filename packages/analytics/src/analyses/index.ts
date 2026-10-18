@@ -6,12 +6,13 @@ import { allocation, crosstab, descriptive, ranking, topbox } from "./basics.js"
 import { cluster, correlation, factor, quality, regression, reliability, segmentation, statisticalTest, weighting } from "./statistics.js";
 import { brand, csat, gap, nps, pricing, text, trend, turf } from "./business.js";
 import { conjoint, maxdiff } from "./choice.js";
+import { hb, lca, sem } from "./advanced.js";
 
 export type AnalysisRunner = (def: AnalysisDefinition, ds: Dataset, totalCases: number) => AnalysisResult;
 
 export const RUNNERS: Record<AnalysisDefinition["kind"], AnalysisRunner> = {
   descriptive, topbox, crosstab, test: statisticalTest, correlation, regression, segmentation, cluster, factor, reliability, trend,
-  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff,
+  nps, csat, turf, gap, pricing, brand, ranking, allocation, text, quality, weighting, conjoint, maxdiff, hb, lca, sem,
 };
 
 /**
@@ -50,7 +51,14 @@ const clock = (): number => { const p = (globalThis as { performance?: { now(): 
 /** Run one analysis. The result records what it was computed from and how long it took (audit S-14): `provenance`. */
 export function runAnalysis(def: AnalysisDefinition, dataset: Dataset): AnalysisResult {
   const t0 = clock();
-  const core = runAnalysisCore(def, dataset);
+  return finalizeResult(def, dataset, runAnalysisCore(def, dataset), t0);
+}
+
+/**
+ * What every result gets after its runner: the one chart choice and the provenance record. Exported for results
+ * computed in steps (a chunked HB run finished in a later request), so they carry exactly what `runAnalysis` adds.
+ */
+export function finalizeResult(def: AnalysisDefinition, dataset: Dataset, core: AnalysisResult, t0: number = clock()): AnalysisResult {
   /*
    * ONE CHART CHOICE (audit C-5). The question-aware advice is made here, once, from the question's structure, and travels
    * with the result: the app's gallery, a report block with no saved chart, the deck, the story, the findings and the export
@@ -83,4 +91,5 @@ export * from "./basics.js";
 export * from "./statistics.js";
 export * from "./business.js";
 export * from "./choice.js";
+export * from "./advanced.js";
 export { hashDefinition } from "./common.js";

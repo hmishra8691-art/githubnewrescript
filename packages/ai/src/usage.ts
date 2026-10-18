@@ -41,6 +41,8 @@ export interface AiUsage {
   providerId?: string;
   /** this call was answered by a fallback, not the first choice */
   usedFallback?: boolean;
+  /** §3 measurement (2026-10-18): wall time of this request at the provider, from send to the parsed answer (retries inside it included) */
+  latencyMs?: number;
 }
 
 const sink = new AsyncLocalStorage<AiUsage[]>();
@@ -63,9 +65,10 @@ export function approxTokens(text: string): number {
 }
 
 /** Totals over a collection. */
-export function sumUsage(list: AiUsage[]): { inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheWriteTokens: number; characters: number; seconds: number; requests: number; estimated: boolean; model: string | null; provider: string | null } {
-  const t = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, characters: 0, seconds: 0, requests: 0, estimated: false, model: null as string | null, provider: null as string | null };
+export function sumUsage(list: AiUsage[]): { inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheWriteTokens: number; characters: number; seconds: number; requests: number; estimated: boolean; model: string | null; provider: string | null; latencyMs: number } {
+  const t = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0, characters: 0, seconds: 0, requests: 0, estimated: false, model: null as string | null, provider: null as string | null, latencyMs: 0 };
   for (const u of list) {
+    t.latencyMs += u.latencyMs ?? 0;
     t.inputTokens += u.inputTokens ?? 0; t.outputTokens += u.outputTokens ?? 0; t.characters += u.characters ?? 0; t.seconds += u.seconds ?? 0; t.requests += u.requests;
     t.cachedInputTokens += u.cachedInputTokens ?? 0; t.cacheWriteTokens += u.cacheWriteTokens ?? 0;
     t.estimated = t.estimated || u.estimated; t.model = t.model ?? u.model; t.provider = t.provider ?? u.provider;

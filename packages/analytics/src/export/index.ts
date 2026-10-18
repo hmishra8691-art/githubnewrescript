@@ -6,3 +6,5 @@ export * from "./docx.js";
 export * from "./storyPptx.js";
 export * from "./sap.js";
 export * from "./docxCheck.js";
+export * from "./officeCheck.js";
+export * from "./qualDocx.js";

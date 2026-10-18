@@ -4,6 +4,7 @@ import { isFailure, requireUser } from "@/lib/guard";
 import { platformInfo, platformTier } from "@/lib/platform";
 import { mailConfig, sendMail } from "@/lib/mail";
 import { testEmail } from "@rescript/mail";
+import { capabilityStatusReport } from "@/lib/capabilityStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -85,6 +86,10 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0034", what: "revocable membership and the billing replay guards", table: "project_members", column: "revoked_at" },
   /* without it, custom access, access expiry and the five new roles cannot be granted (the routes say so); existing access is unaffected */
   { migration: "0062", what: "collaborator permissions and access expiry", table: "project_members", column: "expires_at" },
+  /* without it the Qualitative workspace says so: sessions, transcripts and coding cannot be stored (the guide, on the definition, still works) */
+  { migration: "0065", what: "qualitative sessions, transcripts and coding", table: "qual_codings", column: "excerpts" },
+  /* without it the research context of a long brief is kept in the server's memory only (lost on a restart; the brief is then sent whole again) */
+  { migration: "0067", what: "the research context of a long brief (Intelligent Mode)", table: "copilot_research_context", column: "survey_id" },
 ];
 
 export async function GET(_req: NextRequest) {
@@ -116,6 +121,8 @@ export async function GET(_req: NextRequest) {
   }
 
   const info = platformInfo();
+  /* §11: the capability registry's readiness from this server's environment — names and yes / no only */
+  const capabilityStatus = capabilityStatusReport(process.env);
 
   /* the migration level, probed. Each is one indexed head-count. */
   const applied: string[] = [];
@@ -165,8 +172,11 @@ export async function GET(_req: NextRequest) {
       level: !probed ? null : missing.length ? missing[0].migration : (PROBES[PROBES.length - 1]?.migration ?? null),
       complete: probed && missing.length === 0,
     },
+    capabilities: { services: capabilityStatus.services, capabilities: capabilityStatus.capabilities },
     warnings: [
       ...info.warnings,
+      /* the language model already has its own warning above (aiConfigWarning); the other critical services are said here */
+      ...capabilityStatus.warnings.filter((w) => !w.startsWith(`Language model`)),
       ...(missing.length
         ? [`${missing.length} migration${missing.length === 1 ? "" : "s"} not applied — the first is ${missing[0].migration} (${missing[0].what}).`]
         : []),
