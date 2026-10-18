@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
-import { can, isProjectRole } from "@rescript/access";
+import { isProjectRole } from "@rescript/access";
+import { analyticsPermissions } from "@/lib/analyticsAccess";
 import { useSession } from "@/lib/useSession";
 import { AnalyticsWorkspace, type WsTab } from "@/components/analytics/AnalyticsWorkspace";
 import { resolveTab } from "@/components/analytics/navigation";
@@ -35,7 +36,37 @@ export default function AnalyticsPage() {
 
   const survey = surveys?.find((s) => s.id === surveyId);
   const role = survey && isProjectRole(survey.myRole) ? survey.myRole : null;
-  const canRead = can(role, "analytics.read");
+  /*
+   * A CUSTOM member's capabilities are in the membership, not the role (the Apply audit,
+   * 2026-10-17): asked with the bare role "custom", `can()` answers from its floor
+   * (`project.read`) and the workspace — and its Apply — was never shown. The analytics
+   * route answers with the membership's own capabilities; every fixed role reads the same
+   * set either way, so it is only waited for when the role cannot answer alone.
+   */
+  /*
+   * NEVER HANG ON THE ACCESS CHECK (2026-10-18): whatever the access request does — fails, answers
+   * without capabilities, 404s on an older server, or takes too long — the page settles within 6 s on
+   * the role-based answer it always gave (the server still enforces every capability). Only a custom
+   * member waits at all, and only until the request settles.
+   */
+  const [access, setAccess] = React.useState<{ surveyId: string; capabilities: string[] | null } | null>(null);
+  React.useEffect(() => {
+    if (!survey) return;
+    let live = true;
+    const id = survey.id;
+    const settle = (capabilities: string[] | null) => { if (live) setAccess((a) => (a && a.surveyId === id && a.capabilities ? a : { surveyId: id, capabilities })); };
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = setTimeout(() => { settle(null); ctl?.abort(); }, 6000);
+    fetch(`/api/surveys/${id}/analytics/access`, { cache: "no-store", ...(ctl ? { signal: ctl.signal } : {}) })
+      .then(async (r) => { const j = await r.json().catch(() => null) as { capabilities?: unknown } | null; settle(r.ok && Array.isArray(j?.capabilities) ? (j!.capabilities as unknown[]).filter((c): c is string => typeof c === "string") : null); })
+      .catch(() => settle(null))
+      .finally(() => clearTimeout(timer));
+    return () => { live = false; clearTimeout(timer); ctl?.abort(); };
+  }, [survey?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const settled = !!(access && survey && access.surveyId === survey.id);
+  const caps = settled ? access!.capabilities : null;
+  const perms = analyticsPermissions(role, caps, { settled });
+  const { waiting, canRead } = perms;
 
   return (
     /*
@@ -60,8 +91,9 @@ export default function AnalyticsPage() {
       </div>
       {error && <div className="ax-error">{error}</div>}
       {surveys && !surveys.length && <div className="card">You have no surveys yet. Create one from the <a href="/">dashboard</a>, collect responses, and come back to analyse them.</div>}
-      {survey && !canRead && <div className="card">Your role on “{survey.title}” ({survey.myRole}) does not include analytics access. Ask the project owner for a Viewer role or higher.</div>}
-      {survey && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={can(role, "analytics.edit")} canEditPlan={can(role, "survey.edit")} canPublish={can(role, "analytics.publish")} canExport={can(role, "analytics.export")} initialTab={initialTab} />}
+      {survey && waiting && <div className="card muted" data-testid="ax-access-loading">Checking your access to this project…</div>}
+      {survey && !waiting && !canRead && <div className="card" data-testid="ax-no-access">Your role on “{survey.title}” ({survey.myRole}) does not include analytics access. Ask the project owner for a Viewer role or higher, or for Data Analytics access.</div>}
+      {survey && !waiting && canRead && <AnalyticsWorkspace key={survey.id} surveyId={survey.id} surveyTitle={survey.title} canEdit={perms.canEdit} canEditPlan={perms.canEditPlan} canPublish={perms.canPublish} canExport={perms.canExport} initialTab={initialTab} />}
     </div>
   );
 }

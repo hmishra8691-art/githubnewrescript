@@ -47,7 +47,14 @@ export function WorkflowTab({ copilot, def, onTemplate }: { copilot: Copilot; de
   /* a model step the route has not priced yet (the survey moved on since): priced once, not in a loop */
   const unpriced = modelSteps.filter((x) => !costOf(x.id)).map((x) => x.id).join(",");
   const pricedFor = React.useRef("");
-  React.useEffect(() => { if (info && unpriced && unpriced !== pricedFor.current && !copilot.workflowLoading) { pricedFor.current = unpriced; void copilot.refreshWorkflow(); } }, [info, unpriced, copilot]);
+  const pricingTries = React.useRef(0);
+  React.useEffect(() => { if (info && unpriced && unpriced !== pricedFor.current && !copilot.workflowLoading) { pricedFor.current = unpriced; pricingTries.current = 0; void copilot.refreshWorkflow(); } }, [info, unpriced, copilot]);
+  /* a pricing request that failed (a dropped connection, a server restarting) is tried again — a few times, a little apart — instead of leaving the line unpriced for good (2026-10-18) */
+  React.useEffect(() => {
+    if (!unpriced || !copilot.workflowError || copilot.workflowLoading || pricingTries.current >= 3) return;
+    const t = setTimeout(() => { pricingTries.current++; void copilot.refreshWorkflow(); }, 1500 * (pricingTries.current + 1));
+    return () => clearTimeout(t);
+  }, [unpriced, copilot]);
   const run = (step: WorkflowStep) => { void copilot.runWorkflowStep(step); };
   void def;
 
@@ -68,8 +75,9 @@ export function WorkflowTab({ copilot, def, onTemplate }: { copilot: Copilot; de
           {info && <span className="iqi-dim" data-testid="wf-model">{info.model.configured ? `${info.model.large}${info.model.small !== info.model.large ? ` · ${info.model.small} for short calls` : ""}` : "no model configured"}{!info.mode.sandbox && info.mode.project !== mode ? ` · project: ${info.mode.project}` : ""}</span>}
         </div>
         {modelSteps.length > 0 && (
-          <p className="iqi-dim" data-testid="wf-cost">
-            {mode === "cloud" ? `Model steps from here: ${modelSteps.map((x) => `${x.title.toLowerCase()} (${TIER_WORD[x.tier] ?? x.tier}${costOf(x.id) ? `, ${costOf(x.id)!.model}, ~${credits(costOf(x.id)!.charge)} credits` : ""})`).join("; ")} — about ${credits(total)} credits in all, each approved before it is made.` : `In internal mode the model is not called: ${modelSteps.length === 1 ? "one step is" : `${modelSteps.length} steps are`} yours to answer instead.`}
+          <p className="iqi-dim" data-testid="wf-cost" data-priced={unpriced ? "0" : "1"}>
+            {/* never "about 0 credits" for a step not priced yet: the line says it is being priced (the estimate arrives from the route) */}
+            {mode === "cloud" ? `Model steps from here: ${modelSteps.map((x) => `${x.title.toLowerCase()} (${TIER_WORD[x.tier] ?? x.tier}${costOf(x.id) ? `, ${costOf(x.id)!.model}, ~${credits(costOf(x.id)!.charge)} credits` : ", pricing…"})`).join("; ")} — ${unpriced ? "priced before any call" : `about ${credits(total)} credits in all`}, each approved before it is made.` : `In internal mode the model is not called: ${modelSteps.length === 1 ? "one step is" : `${modelSteps.length} steps are`} yours to answer instead.`}
           </p>
         )}
         {mode === "internal" && copilot.executionMode === "internal" && copilot.available !== false && info?.model.configured !== false && (

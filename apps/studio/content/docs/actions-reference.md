@@ -22,6 +22,8 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Research methods (MaxDiff, conjoint)** (4): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`
 
+**Qualitative (AI follow-up probes)** (1): `set_probe`
+
 ## Survey actions
 
 From `packages/engine/src/surveyActions.ts`:
@@ -63,7 +65,7 @@ export type SurveyAction =
   /* MaxDiff and conjoint as research designs — see methodActions.ts; they write def.designs and the question that renders the design */
   | MethodAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
-  | OptionAction;
+  | OptionAction
 ```
 
 Supporting types:
@@ -186,6 +188,15 @@ export type MethodAction =
   | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
   | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
   | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec);
+```
+
+## Qualitative actions (AI follow-up probes)
+
+From `packages/engine/src/researchActions.ts`:
+
+```ts
+export type ResearchAction =
+  | { op: "set_probe"; target: string; remove?: boolean; maxProbes?: number; minWords?: number; prompt?: string; instruction?: string; required?: boolean; when?: CondInput | null; stopWhen?: CondInput | null };
 ```
 
 Supporting types:

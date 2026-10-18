@@ -1,7 +1,8 @@
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat } from "docx";
-import type { SurveyDefinition, Question } from "@rescript/schema";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, PageBreak, LevelFormat, Header, Footer, PageNumber, TabStopType } from "docx";
+import type { SurveyDefinition, Question, AnalysisPlan } from "@rescript/schema";
 import { hypothesisLabel } from "@rescript/schema";
-import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText, conditionSummary } from "@rescript/engine";
+import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText, conditionSummary, buildAnalysisFramework, METHOD_CHART, MIN_READ_BASE } from "@rescript/engine";
+import * as engine from "@rescript/engine";
 import type { AnalysisResult, ResultTable } from "../types.js";
 import type { AnalysisRun, Finding } from "../findings.js";
 import { reportNarrative } from "../findingsReport.js";
@@ -36,9 +37,9 @@ const PAGE = { size: { width: 12240, height: 15840 }, margin: { top: 1080, botto
 
 type Block = Paragraph | Table;
 const plain = (s: string | undefined, n = 120) => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
-const h1 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 30, color: INK })], heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 120 } });
-const h2 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 24, color: INK })], heading: HeadingLevel.HEADING_2, spacing: { before: 220, after: 80 } });
-const label = (text: string) => new Paragraph({ children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: SUBTLE, characterSpacing: 20 })], spacing: { before: 140, after: 40 } });
+const h1 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 30, color: INK })], heading: HeadingLevel.HEADING_1, spacing: { before: 320, after: 120 }, keepNext: true, keepLines: true });
+const h2 = (text: string) => new Paragraph({ children: [new TextRun({ text, bold: true, size: 24, color: INK })], heading: HeadingLevel.HEADING_2, spacing: { before: 220, after: 80 }, keepNext: true, keepLines: true });
+const label = (text: string) => new Paragraph({ children: [new TextRun({ text: text.toUpperCase(), bold: true, size: 16, color: SUBTLE, characterSpacing: 20 })], spacing: { before: 140, after: 40 }, keepNext: true });
 const body = (text: string) => new Paragraph({ children: [new TextRun({ text, color: INK, size: 21 })], spacing: { after: 80 } });
 const lead = (text: string) => new Paragraph({ children: [new TextRun({ text, color: ACCENT, size: 24, bold: true })], spacing: { after: 120 } });
 const muted = (text: string) => new Paragraph({ children: [new TextRun({ text, color: SUBTLE, size: 19, italics: true })], spacing: { after: 60 } });
@@ -56,7 +57,8 @@ function gridTable(head: string[], rows: string[][], widths?: number[]): Table {
     margins: { top: 60, bottom: 60, left: 90, right: 90 },
     children: [new Paragraph({ children: [new TextRun({ text, bold: isHead, size: 18, color: isHead ? SUBTLE : INK })] })],
   });
-  return new Table({ width: { size: total, type: WidthType.DXA }, rows: [new TableRow({ tableHeader: true, children: head.map((h, i) => cell(h, ws[i], true)) }), ...rows.map((r) => new TableRow({ children: r.map((v, i) => cell(v, ws[i] ?? ws[0], false)) }))] });
+  /* the header row repeats on every page a table runs onto, and no row is split across a page break (2026-10-17) */
+  return new Table({ width: { size: total, type: WidthType.DXA }, columnWidths: ws, rows: [new TableRow({ tableHeader: true, cantSplit: true, children: head.map((h, i) => cell(h, ws[i], true)) }), ...rows.map((r) => new TableRow({ cantSplit: true, children: r.map((v, i) => cell(v, ws[i] ?? ws[0], false)) }))] });
 }
 const fmtCell = (v: unknown, type?: string, decimals?: number) => v == null ? "" : typeof v === "number" ? (type === "pct" ? `${v.toFixed(decimals ?? 1)}%` : type === "count" ? String(Math.round(v)) : v.toFixed(decimals ?? 2)) : String(v);
 function resultTable(t: ResultTable, maxRows = 20): Table {
@@ -66,14 +68,23 @@ function resultTable(t: ResultTable, maxRows = 20): Table {
 const fmt = (x: number | null | undefined, d = 2) => (x == null || !Number.isFinite(x) ? "—" : x.toFixed(d));
 const fmtP = (p: number | null | undefined) => (p == null ? "" : p < 0.001 ? "p < .001" : `p = ${p.toFixed(3).replace(/^0/, "")}`);
 
-function document(title: string, description: string, children: Block[]): Promise<Buffer> {
+/**
+ * Every document's frame (2026-10-17): one theme (Calibri body, the heading styles Word's navigation pane
+ * and table of contents read), a running header with the document's title and a footer with the page
+ * number, so a printed or forwarded page always says what it belongs to.
+ */
+function document(title: string, description: string, children: Block[], frame: { header?: string; footer?: string } = {}): Promise<Buffer> {
+  const small = (text: string) => new TextRun({ text, size: 16, color: SUBTLE });
+  const header = new Header({ children: [new Paragraph({ children: [small(frame.header ?? title)], border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: RULE, space: 4 } } })] });
+  const footer = new Footer({ children: [new Paragraph({ tabStops: [{ type: TabStopType.RIGHT, position: PAGE.size.width - PAGE.margin.left - PAGE.margin.right }], children: [small(frame.footer ?? "Rescript"), new TextRun({ children: ["\tPage ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES], size: 16, color: SUBTLE })] })] });
   const doc = new Document({
     creator: "Rescript", title, description,
+    styles: { default: { document: { run: { font: "Calibri", size: 21, color: INK } } } },
     numbering: { config: [
       { reference: "rs-bullets", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
       { reference: "rs-numbers", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 540, hanging: 270 } } } }] },
     ] },
-    sections: [{ properties: { page: PAGE }, children }],
+    sections: [{ properties: { page: PAGE, titlePage: true }, headers: { default: header }, footers: { default: footer }, children }],
   });
   return Packer.toBuffer(doc);
 }
@@ -163,13 +174,33 @@ export function definitionStamp(def: SurveyDefinition): { hash: string; text: st
   return { hash, text: `Definition ${hash} · survey ${def.meta.code ?? def.meta.id} v${def.meta.version ?? "1.0"}` };
 }
 
+/** what each planned method is, in the words of a methods section */
+export const METHOD_WORDS: Record<string, string> = {
+  frequencies: "Frequency distribution", mean: "Mean with confidence interval", median: "Median and quartiles", top_box: "Top-box share", nps: "Net Promoter Score (promoters − detractors)",
+  crosstab: "Crosstabulation (column percentages; significance between columns)", chi_square: "Pearson chi-square test of independence", t_test: "Independent-samples t-test (Welch)", anova: "One-way analysis of variance",
+  mann_whitney: "Mann–Whitney U test", kruskal_wallis: "Kruskal–Wallis test", correlation: "Correlation", regression: "Linear regression", logistic_regression: "Logistic regression",
+  factor: "Exploratory factor analysis", reliability: "Scale reliability (Cronbach's α)", cluster: "Cluster analysis", conjoint_utilities: "Conjoint part-worth utilities", maxdiff_scores: "MaxDiff scores",
+  turf: "TURF reach analysis", driver_analysis: "Key-driver analysis", text_themes: "Open-text theme coding", ranking_scores: "Ranking scores", allocation_shares: "Allocation shares",
+  pricing: "Price sensitivity analysis", brand_funnel: "Brand funnel",
+};
+
 /** the building blocks the sibling documents (the statistical analysis plan) are made of */
 export const docKit = { h1, h2, label, body, lead, muted, bullet, numbered, divider, pageBreak, gridTable, cover, document, plain, fmt, fmtP };
 export type DocBlock = Block;
 
 /* ------------------------------------------------------------ the proposal */
 
-export interface ProposalOptions { client?: string; author?: string; date?: string; title?: string; fieldwork?: { from?: string; to?: string }; deliverables?: string[] }
+export interface ProposalOptions {
+  client?: string; author?: string; date?: string; title?: string; fieldwork?: { from?: string; to?: string }; deliverables?: string[];
+  /**
+   * `research_plan` (2026-10-17): the WORD RESEARCH PLAN — the same document, read from the same design, with
+   * what a plan adds to a proposal: an executive summary, the hypotheses' rationale and the conceptual
+   * framework, the methodology, how each question serves the objectives and hypotheses (the traceability
+   * matrix), the variables and their scales, the hypothesis tests, the proposed tables and charts, the
+   * interpretation framework, the quality-control requirements and the limitations. One exporter, two editions.
+   */
+  edition?: "proposal" | "research_plan";
+}
 
 /** The research proposal / design document, from the survey and its research design. */
 export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOptions = {}): Promise<Buffer> {
@@ -179,9 +210,17 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   const date = opts.date ?? new Date().toISOString().slice(0, 10);
   const title = opts.title ?? (r?.objective ? plain(r.objective, 90) : b?.businessQuestion ? plain(b.businessQuestion, 90) : def.meta.title);
   const out: Block[] = [];
-  out.push(...cover("Research proposal", title, [client ? `Prepared for ${client}` : "", `${date}${opts.author ? ` · ${opts.author}` : ""}`, `Survey: ${def.meta.title}${def.meta.version ? ` v${def.meta.version}` : ""}`, b?.deadline ? `Findings due ${b.deadline}` : ""]));
+  const rp = opts.edition === "research_plan";
+  /* numbered sections: a running counter, so the proposal's numbers are what they always were and the plan's extra sections number themselves */
+  let sec = 0;
+  const H1 = (t: string) => h1(`${++sec}. ${t}`);
+  out.push(...cover(rp ? "Research plan" : "Research proposal", title, [client ? `Prepared for ${client}` : "", `${date}${opts.author ? ` · ${opts.author}` : ""}`, `Survey: ${def.meta.title}${rp && def.meta.code ? ` (${def.meta.code})` : ""}${def.meta.version ? ` v${def.meta.version}` : ""}`, b?.deadline ? `Findings due ${b.deadline}` : ""]));
+  const rpPlan = rp ? (r?.analysisPlan ?? buildAnalysisFramework(def, { now: "" })) : null;
+  /* the trace reads the plan this document prints — the saved one, else the one derived from the design — so its rows and the tests section agree */
+  const trace = rp ? traceOf(r?.analysisPlan ? def : { ...def, research: { ...r!, analysisPlan: rpPlan! } } as SurveyDefinition) : null;
+  if (rp) out.push(...researchPlanSummary(def, H1, rpPlan!, trace));
 
-  out.push(h1("1. Background and objective"));
+  out.push(H1(rp ? "Business context, problem and objectives" : "Background and objective"));
   /* Phase 8: the brief opens the document — the client's question and the decision are what the objective serves */
   if (b?.background) out.push(label("Background"), body(b.background));
   if (b?.businessQuestion) out.push(label("Business question"), lead(b.businessQuestion));
@@ -194,14 +233,15 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   if (r?.audience?.description) out.push(label("Audience"), body(`${r.audience.description}${r.audience.characteristics.length ? ` — ${r.audience.characteristics.join(", ")}` : ""}${r.audience.literacy ? ` (${r.audience.literacy} language)` : ""}`));
 
   if (r?.researchQuestions.length || r?.kpis.length) {
-    out.push(h1("2. Research questions and KPIs"));
+    out.push(H1("Research questions and KPIs"));
     for (const q of r?.researchQuestions ?? []) out.push(numbered(q));
     if (r?.kpis.length) { out.push(label("KPIs")); out.push(gridTable(["KPI", "Variable", "Measure", "Target"], r.kpis.map((k) => [k.name, k.variable ?? "", k.measure ?? "", k.target != null ? `${k.target}${k.direction ? ` (${k.direction} is better)` : ""}` : k.direction ? `${k.direction} is better` : ""]), [2600, 1800, 2600, 2000])); }
   }
 
   const hyps = structuredHypotheses(def);
-  out.push(h1(`${r?.researchQuestions.length || r?.kpis.length ? 3 : 2}. Hypotheses`));
+  out.push(H1(rp ? "Hypotheses and rationale" : "Hypotheses"));
   if (!hyps.length) out.push(muted("No hypotheses are recorded."));
+  else if (rp) out.push(...hypothesisRationale(def, hyps, trace));
   else {
     const byId = new Map(def.questions.map((q) => [q.id, q]));
     out.push(gridTable(["", "Hypothesis", "Reading", "Measured by", "Effect"], hyps.map((h) => {
@@ -215,8 +255,8 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
     out.push(gridTable(["Construct", "Role", "Definition", "Questions"], r.constructs.map((c) => [c.name, c.role, c.definition ?? "", c.questionIds.map((id) => def.questions.find((q) => q.id === id)?.code ?? id).join(", ")]), [2200, 1400, 3400, 2000]));
   }
 
-  let n = (r?.researchQuestions.length || r?.kpis.length ? 3 : 2) + 1;
-  out.push(h1(`${n++}. Questionnaire`));
+  if (rp) out.push(...conceptualFramework(def, hyps, H1));
+  out.push(H1(rp ? "Questionnaire and interview guide" : "Questionnaire"));
   const order = placedOrder(def);
   const asked = def.questions.filter((q) => order.includes(q.id) && !["html", "custom_component", "media_timeline"].includes(q.type));
   const minutes = Math.max(1, Math.round(asked.length / 4));
@@ -228,7 +268,8 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
     out.push(gridTable(["Code", "Question", "Type", "Role"], qs.map((q) => [String(q.code), plain(q.text, 90), `${q.type.replace(/_/g, " ")} (${measurementOf(q)})`, inferRole(def, q)]), [800, 4800, 1900, 1500]));
   }
 
-  out.push(h1(`${n++}. Sample and fieldwork`));
+  if (rp) out.push(...traceabilitySection(def, H1, trace), ...variablesSection(def, H1));
+  out.push(H1(rp ? "Population, sampling and fieldwork" : "Sample and fieldwork"));
   const size = planSampleSize(def);
   const exp = expectedSample(def);
   if (r?.population) out.push(body(`Population: ${r.population}.`));
@@ -265,23 +306,25 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   if (!(opts.fieldwork?.from || opts.fieldwork?.to) && !b?.deadline) out.push(muted("The survey has no fieldwork dates and the brief no deadline, so the dates above are placeholders to fill in."));
 
   const savedPlan = !!r?.analysisPlan;
-  out.push(h1(`${n++}. Analysis plan${savedPlan ? "" : " (derived from the design — not yet saved)"}`));
+  out.push(H1(`Analysis plan${savedPlan ? "" : " (derived from the design — not yet saved)"}`));
   if (!savedPlan) out.push(muted("No analysis plan has been saved for this survey. The analyses below were derived by the engine from the questionnaire and the hypotheses; they change when the questionnaire does. Save the plan in the Analysis tab to fix it."));
   const plan = explainPlan(def);
   if (!plan.length) out.push(muted("No analysis follows from the design yet."));
   else out.push(gridTable(["Analysis", "Serves", "Why this method", "Output", "Base"], plan.slice(0, 30).map((x) => [x.title, x.hypotheses.map((h) => h.label).join(", ") || x.objective.slice(0, 40), x.why, x.expectedOutput, `${x.requiredBase.minimum}`]), [2200, 900, 2900, 2200, 800]));
 
-  out.push(h1(`${n++}. Deliverables`));
+  if (rp) out.push(...hypothesisTests(def, H1, rpPlan!, hyps), ...tablesAndCharts(def, H1, rpPlan!), ...interpretationFramework(def, H1, rpPlan!), ...qualityControl(def, H1));
+  out.push(H1("Deliverables"));
   for (const d of opts.deliverables ?? (b?.deliverables.length ? b.deliverables : null) ?? ["Topline findings at the first readable base (30 completes), run automatically", "The findings report with the verdict on each hypothesis, at target and at the end of fieldwork", "The findings presentation, with the key findings, who differs, and what to do next", "The data: respondent-level export (SPSS, Excel, CSV) with the variable dictionary"]) out.push(bullet(d));
 
-  if (r?.assumptions.length || r?.sources.length) {
-    out.push(h1(`${n++}. Assumptions and sources`));
+  if (rp) out.push(...limitationsSection(def, H1, trace));
+  else if (r?.assumptions.length || r?.sources.length) {
+    out.push(H1("Assumptions and sources"));
     for (const a of r?.assumptions ?? []) out.push(bullet(a));
     if (r?.sources.length) { out.push(label("Sources")); for (const s of r.sources) out.push(bullet(s)); }
   }
 
   /* DOC-02: ethics and consent — the questionnaire's own consent statement, else the standard one, labelled as such */
-  out.push(h1(`${n++}. Ethics, consent and data protection`));
+  out.push(H1("Ethics, consent and data protection"));
   const consent = consentOf(def);
   if (consent) {
     out.push(body(`The questionnaire carries its own consent statement (${consent.code}): “${consent.text}”${consent.options.length ? ` Respondents answer: ${consent.options.join(" / ")}.` : ""}`));
@@ -296,7 +339,252 @@ export async function buildProposalDocx(def: SurveyDefinition, opts: ProposalOpt
   ]) out.push(bullet(line));
   out.push(divider());
   out.push(muted(`${definitionStamp(def).text} · generated ${date}`));
-  return document(`${title} — research proposal`, `Research proposal for ${def.meta.title}`, out);
+  return document(`${title} — ${rp ? "research plan" : "research proposal"}`, `${rp ? "Research plan" : "Research proposal"} for ${def.meta.title}`, out, { header: `${def.meta.title}${def.meta.code ? ` (${def.meta.code})` : ""} — ${rp ? "Research plan" : "Research proposal"}`, footer: `${client ? `Prepared for ${client} · ` : ""}${date}` });
+}
+
+/** The Word research plan: the proposal's research-plan edition (one exporter — see `ProposalOptions.edition`). */
+export function buildResearchPlanDocx(def: SurveyDefinition, opts: Omit<ProposalOptions, "edition"> = {}): Promise<Buffer> {
+  return buildProposalDocx(def, { ...opts, edition: "research_plan" });
+}
+
+/* ------------------------------------------------------------ the research plan edition (2026-10-17) */
+
+/**
+ * D's traceability matrix (`researchTraceability`, engine), read through the namespace so this document
+ * builds — with its own question mapping — on an engine that does not export it yet. Everything in it
+ * comes from the study as configured; nothing is a finding.
+ */
+interface TraceLike {
+  rows: { id: string; kind: string; statement: string; status: string; interpretation: string; questions: { code: string }[]; analyses: { title: string }[]; constructs: { name: string; role: string; measured: boolean }[]; visualisations: string[]; limitations: string[]; reading?: string; objective?: string }[];
+  questions: { id: string; code: string; variable: string; text: string; level: string; role: string; serves: string[] }[];
+  gaps: { severity: string; message: string; suggestion?: string }[];
+  summary: string;
+}
+interface Trace { t: TraceLike; statusWords: Record<string, string> }
+function traceOf(def: SurveyDefinition): Trace | null {
+  const e = engine as unknown as Record<string, unknown>;
+  const fn = e.researchTraceability;
+  if (typeof fn !== "function") return null;
+  try {
+    const t = (fn as (d: SurveyDefinition) => TraceLike)(def);
+    if (!t || !Array.isArray(t.rows) || !Array.isArray(t.questions)) return null;
+    return { t, statusWords: (e.TRACE_STATUS_WORDS as Record<string, string> | undefined) ?? {} };
+  } catch { return null; }
+}
+
+type H1Fn = (t: string) => Paragraph;
+type Hyp = ReturnType<typeof structuredHypotheses>[number];
+const mWords = (m: string) => METHOD_WORDS[m] ?? m.replace(/_/g, " ");
+const chartWords = (c: string | undefined) => (c ? c.replace(/_/g, " ") : "table");
+const NOT_DATA = new Set(["html", "custom_component", "media_timeline"]);
+const dataQuestions = (def: SurveyDefinition): Question[] => { const order = placedOrder(def); return def.questions.filter((q) => order.includes(q.id) && !NOT_DATA.has(q.type)); };
+const planItems = (plan: AnalysisPlan) => [...plan.tests.map((t) => ({ id: t.id, method: t.method as string, hypotheses: t.hypotheses, reads: [t.outcome, t.groupBy, ...t.variables, t.moderator, t.mediator].filter((v): v is string => !!v) })), ...plan.crosstabs.map((x) => ({ id: x.id, method: "crosstab", hypotheses: x.hypotheses, reads: [...x.rows, ...x.columns] }))];
+const readsQuestion = (q: Question, names: readonly string[]) => names.includes(q.variableName) || names.includes(String(q.code)) || names.includes(q.id);
+
+/** which hypotheses (and plan items) each question serves — from the trace when there is one, else from the design's own links */
+function questionServes(def: SurveyDefinition, plan: AnalysisPlan, trace: Trace | null): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (trace) {
+    /* the matrix lists what a question serves by hypothesis, research question and construct, and by plan item id — a reader gets the first three and a count of the rest */
+    const titles = new Map(planItems(plan).map((it) => [it.id, it]));
+    for (const q of trace.t.questions) {
+      const named = q.serves.filter((x) => !titles.has(x));
+      const items = q.serves.filter((x) => titles.has(x)).length;
+      out.set(q.id, [...named, ...(items ? [`${items} planned ${items === 1 ? "analysis" : "analyses"}`] : [])]);
+    }
+    return out;
+  }
+  const hyps = structuredHypotheses(def);
+  for (const q of dataQuestions(def)) {
+    const s = new Set<string>(q.analysis?.hypotheses ?? []);
+    for (const h of hyps) if (Object.values(h.constructs).some((c) => c?.questionIds.includes(q.id))) s.add(h.label);
+    for (const it of planItems(plan)) if (readsQuestion(q, it.reads)) for (const h of it.hypotheses) s.add(h);
+    out.set(q.id, [...s].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))));
+  }
+  return out;
+}
+
+function researchPlanSummary(def: SurveyDefinition, H1: H1Fn, plan: AnalysisPlan, trace: Trace | null): Block[] {
+  const r = def.research;
+  const qs = dataQuestions(def);
+  const minutes = Math.max(1, Math.round(qs.length / 4));
+  const hyps = structuredHypotheses(def);
+  const target = r?.analysisPlan?.sampleSize?.target ?? r?.sampleSize ?? expectedSample(def)?.n;
+  const out: Block[] = [H1("Executive summary")];
+  out.push(lead(r?.objective ?? r?.brief?.businessQuestion ?? def.meta.title));
+  out.push(body(`This plan sets out how “${plain(def.meta.title, 80)}” will answer the objective: ${hyps.length ? `${hyps.length} hypothes${hyps.length === 1 ? "is" : "es"} ` : "no recorded hypotheses (the analysis is exploratory) "}tested through ${plan.tests.length} planned test${plan.tests.length === 1 ? "" : "s"} and ${plan.crosstabs.length} crosstab${plan.crosstabs.length === 1 ? "" : "s"}, on ${target ? `a target of ${target} completes` : "a sample size not yet recorded"}${r?.population ? ` from ${r.population}` : ""}. The questionnaire has ${qs.length} question${qs.length === 1 ? "" : "s"} (about ${minutes} minute${minutes === 1 ? "" : "s"}).`));
+  if (hyps.length) { out.push(label("Hypotheses")); for (const h of hyps) out.push(bullet(`${h.label}: ${plain(h.text, 160)}`)); }
+  if (trace) {
+    const blocking = trace.t.gaps.filter((g) => g.severity === "blocking").length, warn = trace.t.gaps.filter((g) => g.severity === "warning").length;
+    out.push(label("Readiness"), body(`${trace.t.summary}${blocking || warn ? ` ${blocking} blocking gap${blocking === 1 ? "" : "s"} and ${warn} warning${warn === 1 ? "" : "s"} are listed under Limitations and recommendations.` : ""}`));
+  }
+  out.push(muted("No data has been collected for this plan to report on: every statement below is the design, and every hypothesis is untested until the analysis plan runs on the completes."));
+  return out;
+}
+
+function hypothesisRationale(def: SurveyDefinition, hyps: Hyp[], trace: Trace | null): Block[] {
+  const byId = new Map(def.questions.map((q) => [q.id, q]));
+  const rows = hyps.map((h) => {
+    const qs = [...new Set(Object.values(h.constructs).filter(Boolean).flatMap((c) => c!.questionIds.map((id) => byId.get(id)?.code).filter(Boolean)))];
+    const tagged = def.questions.filter((q) => q.analysis?.hypotheses?.includes(h.label)).map((q) => q.code);
+    const sides = [h.independent, h.dependent].filter(Boolean);
+    const rationale = h.note ? plain(h.note, 220) : sides.length === 2 ? `Links ${h.independent} to ${h.dependent}${h.moderator ? `, moderated by ${h.moderator}` : ""}${h.mediator ? `, through ${h.mediator}` : ""}. No rationale is recorded — add a note to the hypothesis.` : "No rationale is recorded — add a note to the hypothesis.";
+    const row = trace?.t.rows.find((x) => x.id === h.label);
+    const status = row ? (trace!.statusWords[row.status] ?? row.status.replace(/_/g, " ")) : "Planned — not yet tested";
+    return [h.label, plain(h.text, 200), describeHypothesis(h), rationale, [...new Set([...qs, ...tagged])].join(", ") || "—", status];
+  });
+  return [gridTable(["", "Hypothesis", "Type and reading", "Rationale", "Measured by", "Status"], rows, [500, 2200, 1600, 2400, 1000, 1300])];
+}
+
+function conceptualFramework(def: SurveyDefinition, hyps: Hyp[], H1: H1Fn): Block[] {
+  const r = def.research;
+  const out: Block[] = [h2("Conceptual framework")];
+  const links = hyps.filter((h) => h.independent || h.dependent);
+  if (!links.length) out.push(muted("The hypotheses do not name the constructs they link, so no framework can be drawn from them yet."));
+  for (const h of links) out.push(bullet(`${h.label}: ${h.independent ?? "?"} → ${h.dependent ?? "?"}${h.moderator ? ` (moderated by ${h.moderator})` : ""}${h.mediator ? ` (through ${h.mediator})` : ""}${h.direction && h.direction !== "none" ? ` · expected ${h.direction}` : ""}`));
+  const unlinked = (r?.constructs ?? []).filter((c) => !links.some((h) => [h.independent, h.dependent, h.moderator, h.mediator].some((x) => x && x.toLowerCase() === c.name.toLowerCase())));
+  if (unlinked.length) out.push(muted(`Constructs measured but named by no hypothesis: ${unlinked.map((c) => c.name).join(", ")}.`));
+  out.push(H1("Methodology"));
+  const qs = dataQuestions(def);
+  out.push(r?.methodology ? body(r.methodology) : muted("No methodology is recorded in the research design; the default below describes how the survey is programmed. Record the methodology so this section states it."));
+  out.push(gridTable(["Aspect", "In this study"], [
+    ["Design", r?.methodology ? plain(r.methodology, 120) : "Quantitative, cross-sectional survey (default — not recorded)"],
+    ["Data collection", "Self-completion questionnaire programmed and fielded in Rescript"],
+    ["Length", `${qs.length} questions in ${listBlocks(def.flow as unknown[]).length} sections, about ${Math.max(1, Math.round(qs.length / 4))} minutes`],
+    ["Languages", def.localization?.languages.length ? [def.localization.sourceLanguage, ...def.localization.languages.map((l) => (typeof l === "string" ? l : (l as { code?: string }).code ?? ""))].filter(Boolean).join(", ") : "Source language only"],
+  ], [2600, 6400]));
+  return out;
+}
+
+function codingOf(q: Question, cap = 6): string {
+  const o = q.options ?? [];
+  if (o.length) return `${o.slice(0, cap).map((x) => `${x.code} = ${plain(x.label, 24)}`).join("; ")}${o.length > cap ? `; … (${o.length} in all)` : ""}`;
+  if (/text/.test(q.type)) return "open text";
+  if (/numeric|number|slider/.test(q.type)) return "number";
+  return q.type.replace(/_/g, " ");
+}
+
+function traceabilitySection(def: SurveyDefinition, H1: H1Fn, trace: Trace | null): Block[] {
+  const plan = def.research?.analysisPlan ?? buildAnalysisFramework(def, { now: "" });
+  const serves = questionServes(def, plan, trace);
+  const out: Block[] = [H1("How each question serves the objectives and hypotheses")];
+  out.push(body("Every placed question, the hypotheses it serves and its analytic role, read from the research design, the questions' analysis tags and the analysis plan. A question that serves no hypothesis is profiling, screening or descriptive — or a candidate to cut."));
+  const qs = dataQuestions(def);
+  out.push(gridTable(["Code", "Question", "Variable", "Serves", "Role"], qs.map((q) => {
+    const role = inferRole(def, q);
+    const s = serves.get(q.id) ?? [];
+    return [String(q.code), plain(q.text, 80), q.variableName, s.length ? s.join(", ") : role === "screening" ? "eligibility (screening)" : role === "segmentation" ? "sample profile / segments" : "the objective (descriptive)", role];
+  }), [800, 3600, 1500, 1700, 1400]));
+  if (trace && trace.t.rows.length) {
+    out.push(h2("Traceability matrix"));
+    out.push(muted("Objective → hypothesis → constructs → questions → analysis → visualisation → interpretation. Status words describe the plan, never a result."));
+    out.push(gridTable(["Hypothesis / question", "Constructs", "Questions", "Analysis", "Chart", "Status"], trace.t.rows.map((row) => [
+      `${row.id}: ${plain(row.statement, 110)}`,
+      row.constructs.map((c) => `${c.name}${c.measured ? "" : " (not measured)"}`).join(", ") || "—",
+      row.questions.map((q) => q.code).join(", ") || "none",
+      row.analyses.map((a) => a.title).join("; ") || "none planned",
+      row.visualisations.map(chartWords).join(", ") || "—",
+      trace.statusWords[row.status] ?? row.status.replace(/_/g, " "),
+    ]), [2300, 1400, 900, 2200, 1000, 1200]));
+  }
+  return out;
+}
+
+function variablesSection(def: SurveyDefinition, H1: H1Fn): Block[] {
+  const qs = dataQuestions(def);
+  return [H1("Variables and scales"), body("The variable each question writes to the dataset, its type, its level of measurement and how its answers are coded — what every table and test in this plan reads."),
+    gridTable(["Variable", "Question", "Type", "Level", "Scale / coding"], qs.map((q) => [q.variableName, `${q.code} — ${plain(q.text, 60)}`, q.type.replace(/_/g, " "), measurementOf(q), codingOf(q)]), [1400, 2900, 1300, 1000, 2400])];
+}
+
+function hypothesisTests(def: SurveyDefinition, H1: H1Fn, plan: AnalysisPlan, hyps: Hyp[]): Block[] {
+  const alpha = plan.alpha ?? 0.05;
+  const correction = plan.multipleComparisons ?? "holm";
+  const corrWords = (CORRECTION_WORDS as Record<string, string>)[correction] ?? correction;
+  const out: Block[] = [H1("Hypothesis tests")];
+  out.push(body(`Each hypothesis is decided by the planned analyses that read both of its sides, at α = ${alpha} (two-sided), with ${corrWords} correction within each hypothesis's family of tests${plan.multipleComparisons ? "" : " (default)"}. A result is reported with its test statistic, p-value, effect size and base.`));
+  if (!hyps.length) { out.push(muted("No hypotheses are recorded, so nothing is tested against a prediction; the planned analyses describe and explore.")); return out; }
+  const items = planItems(plan);
+  out.push(gridTable(["", "Test(s)", "Reads", "Decision rule"], hyps.map((h) => {
+    const mine = items.filter((it) => it.hypotheses.includes(h.label));
+    const inferential = mine.filter((it) => !["frequencies", "mean", "median", "top_box", "nps", "text_themes", "ranking_scores", "allocation_shares", "turf", "brand_funnel", "pricing", "maxdiff_scores", "conjoint_utilities", "factor", "reliability", "cluster"].includes(it.method));
+    const rule = !mine.length ? "Not testable as planned: no analysis in the plan reads both sides of it. Add one (see Recommendations)."
+      : !inferential.length || h.type === "descriptive" ? "Descriptive: read as a level, share or ranking with its confidence interval; no significance test decides it."
+      : `Supported if p < ${alpha} after correction in the predicted direction${h.expectedEffect ? `, with at least a ${h.expectedEffect} effect` : ""}; not supported otherwise; inconclusive when a group has fewer than ${MIN_READ_BASE} respondents.`;
+    return [h.label, [...new Set(mine.map((it) => mWords(it.method)))].join("; ") || "—", [...new Set(mine.flatMap((it) => it.reads))].join(", ") || "—", rule];
+  }), [500, 2400, 2000, 4100]));
+  return out;
+}
+
+function tablesAndCharts(def: SurveyDefinition, H1: H1Fn, plan: AnalysisPlan): Block[] {
+  const explained = explainPlan(def, plan);
+  const methodOf = new Map(planItems(plan).map((it) => [it.id, it.method]));
+  const out: Block[] = [H1("Proposed tables and charts")];
+  if (!explained.length) { out.push(muted("No analysis follows from the design yet, so no table or chart is proposed.")); return out; }
+  out.push(body("One table and one chart per planned analysis, chosen from the method and the variables' level of measurement. When the data exist, the chart is confirmed from the result's own structure; a chart that cannot be drawn is replaced by its table and the report says why."));
+  out.push(gridTable(["Analysis", "Serves", "Table", "Chart", "Min. base"], explained.slice(0, 40).map((x) => {
+    const m = methodOf.get(x.id) ?? "";
+    return [x.title, x.hypotheses.map((h) => h.label).join(", ") || "profile", plain(x.expectedOutput, 110), chartWords((METHOD_CHART as Record<string, string>)[m]), String(x.requiredBase.minimum)];
+  }), [2300, 900, 3300, 1600, 900]));
+  if (explained.length > 40) out.push(muted(`… and ${explained.length - 40} more planned analyses.`));
+  return out;
+}
+
+function interpretationFramework(def: SurveyDefinition, H1: H1Fn, plan: AnalysisPlan): Block[] {
+  const between = plan.tests.some((t) => /between-arms/.test(t.reason ?? ""));
+  const out: Block[] = [H1("Expected outputs and interpretation framework")];
+  out.push(label("Outputs"));
+  for (const o of ["Topline at the first readable base (30 completes), run automatically", "The findings report: a verdict on each hypothesis, the key findings with their evidence, who differs, caveats", "The findings presentation for the audience chosen", "The respondent-level data with the variable dictionary"]) out.push(bullet(o));
+  out.push(label("Three kinds of evidence, never mixed"));
+  out.push(bullet("Descriptive — a level, share or ranking with its base and confidence interval. It says what is, not why."));
+  out.push(bullet("Statistical — a difference or association that a planned test finds unlikely under chance, at the plan's α and correction, read together with its effect size."));
+  out.push(bullet(between ? "Causal — only for the between-arms comparisons, where respondents were randomly assigned to what they saw; everything else is association." : "Causal — not claimed: respondents are not randomly assigned to what is compared, so a significant association is reported as association, never as cause."));
+  out.push(label("Verdicts"));
+  for (const v of ["Supported — the planned test is significant after correction, in the predicted direction.", "Not supported — the test is not significant, or the effect runs the other way.", "Mixed — the analyses serving the hypothesis disagree.", `Inconclusive — the base is too small to read (fewer than ${MIN_READ_BASE} in a group), or the analysis could not run.`, "Untested — no executed analysis serves it. An untested hypothesis is labelled as such, never reported as a finding."]) out.push(bullet(v));
+  return out;
+}
+
+function qualityControl(def: SurveyDefinition, H1: H1Fn): Block[] {
+  const q = def.quality;
+  const checks = def.questions.filter((x) => x.attentionCheck || x.settings?.onFail === "terminate");
+  const out: Block[] = [H1("Quality control requirements")];
+  out.push(gridTable(["Control", "In this survey", "Source"], [
+    ["Response-quality engine", q?.enabled === false ? "Off" : `On, ${q?.strictness ?? "standard"} strictness`, q ? "survey settings" : "default"],
+    ["Attention checks", checks.length ? checks.map((x) => x.code).join(", ") : "None programmed", checks.length ? "questionnaire" : "add one before fieldwork"],
+    ["Screening and terminations", `${screeningRules(def).length} rule${screeningRules(def).length === 1 ? "" : "s"}`, "questionnaire logic"],
+    ["Quotas", (def.quotas ?? []).length ? `${(def.quotas ?? []).length} quota${(def.quotas ?? []).length === 1 ? "" : "s"}` : "None", "quota definitions"],
+    ["Custom quality rules", String(q?.customRules?.length ?? 0), "survey settings"],
+  ], [2600, 3900, 2500]));
+  out.push(label("Before fieldwork"));
+  for (const c of ["Every route through the questionnaire tested in the preview, including each screen-out and quota-full ending", "A soft launch (about a tenth of the target sample) checked for drop-off, timings and data before the full field", "Test interviews kept in the test environment and never in the analysed data"]) out.push(bullet(c));
+  out.push(label("During and after fieldwork"));
+  for (const c of ["Speeders (well under the median interview length), straight-liners on grids, duplicates and nonsensical open ends flagged by the quality engine and removed under the data-cleaning plan", "Quota progress and the sample profile checked against the targets daily", "Every result read on the clean, live dataset, with its base shown"]) out.push(bullet(c));
+  return out;
+}
+
+function limitationsSection(def: SurveyDefinition, H1: H1Fn, trace: Trace | null): Block[] {
+  const r = def.research;
+  const out: Block[] = [H1("Limitations, assumptions and recommendations")];
+  out.push(label("Assumptions"));
+  if (r?.assumptions.length) for (const a of r.assumptions) out.push(bullet(a)); else out.push(muted("No assumptions are recorded in the research design."));
+  out.push(label("Limitations"));
+  const size = planSampleSize(def);
+  const target = r?.sampleSize ?? expectedSample(def)?.n;
+  for (const l of [
+    "Answers are self-reported: they measure what respondents say, which can differ from what they do.",
+    "A single cross-sectional survey shows associations at one point in time; it does not establish cause and effect.",
+    ...(!(def.quotas ?? []).length ? ["No quotas are defined, so the sample's composition is not controlled; findings describe the people who answered unless the data are weighted to the population."] : []),
+    ...(target && size.minimum > target ? [`The target sample (${target}) is below what the plan needs (${size.minimum}); some planned analyses will be reported as low-base.`] : []),
+  ]) out.push(bullet(l));
+  out.push(label("Recommendations"));
+  const recs = [
+    /* the gaps in words a reader acts on: a suggestion written for the copilot (action names, JSON) is left out and the gap's own message stands */
+    ...(trace ? trace.t.gaps.slice(0, 12).map((g) => `${g.severity === "blocking" ? "Before fieldwork: " : ""}${g.suggestion && !/[{}"]|\b[a-z]+_[a-z_]+\b/.test(g.suggestion) ? g.suggestion : g.message}`) : []),
+    ...(!r?.analysisPlan ? ["Save the analysis plan (Intelligent mode → Analysis) so this document is read from a fixed plan rather than one derived from the questionnaire."] : []),
+    ...(structuredHypotheses(def).some((h) => !h.note) ? ["Record the rationale of each hypothesis, so the plan says why it is expected."] : []),
+  ];
+  if (recs.length) for (const x of [...new Set(recs)]) out.push(bullet(x)); else out.push(muted("No gaps were found between the objective, the hypotheses, the questions and the analysis plan."));
+  if (r?.sources.length) { out.push(label("Sources")); for (const s of r.sources) out.push(bullet(s)); }
+  return out;
 }
 
 /* ------------------------------------------------------------ the findings report */

@@ -41,7 +41,7 @@ test("the pages: every page in the order exists, has a title and renders; a bad 
     assert.ok(doc.html.length > 500, p.slug);
     assert.ok(!doc.html.includes("<!--"), p.slug);
   }
-  assert.equal(pages.filter((p) => p.generated).map((p) => p.slug).join(","), "question-types,logic-reference,actions-reference");
+  assert.equal(pages.filter((p) => p.generated).map((p) => p.slug).join(","), "question-types,logic-reference,actions-reference,capabilities");
   // a page in the order that is not on disk is not listed (a deploy missing a file must not 404 from its own navigation)
   DOC_ORDER.push({ slug: "zzz-not-on-disk", description: "x" });
   try { assert.ok(!listDocs().some((p) => p.slug === "zzz-not-on-disk")); } finally { DOC_ORDER.pop(); }

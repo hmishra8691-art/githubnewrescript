@@ -8,6 +8,7 @@ import { useStudio } from "./store";
  * hands over, one button each, so none of them is reachable only by typing a
  * sentence to the copilot:
  *
+ *   Research plan (.docx)              the full plan: hypotheses and rationale, traceability, variables, tests, charts, QC, limitations (2026-10-17)
  *   Research proposal (.docx)          the design, the sample, the screening, the timeline, the ethics
  *   Statistical analysis plan (.docx)  what is tested, how, at what α, on whom
  *   Data-cleaning plan (.docx)         the quality rules in force for this survey
@@ -21,7 +22,7 @@ import { useStudio } from "./store";
  * is disabled and its tooltip says why; the sandbox has no database, so the
  * documents that read stored data are disabled there too.
  */
-type DocKey = "proposal_docx" | "sap_docx" | "cleaning_plan_docx" | "questionnaire_docx" | "findings_docx" | "findings_pptx";
+type DocKey = "research_plan_docx" | "proposal_docx" | "sap_docx" | "cleaning_plan_docx" | "questionnaire_docx" | "findings_docx" | "findings_pptx";
 type Audience = "executive" | "client" | "researcher";
 
 export function ResearchDocuments() {
@@ -64,12 +65,16 @@ export function ResearchDocuments() {
         return;
       }
       const blob = await res.blob();
+      /* never save a file that is not one (2026-10-17): an empty body or an error page saved as .docx is what "the Word file will not open" was */
+      const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+      if (blob.size < 100 || head[0] !== 0x50 || head[1] !== 0x4b) { s.toast(`The document could not be produced: the server sent ${blob.size ? "something that is not a document" : "an empty file"}.`, "err"); return; }
       const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? `${key.replace(/_/g, ".")}`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      /* revoked well after the browser has started the save (a large file on a slow disk read the URL after 4 s and got nothing) */
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       const said = res.headers.get("x-rescript-output");
       s.toast(said ? `${name}: ${said}` : `Downloaded ${name}`);
     } catch (e) {
@@ -80,6 +85,7 @@ export function ResearchDocuments() {
   const noData = completes === null ? "Checking for completes…" : completes === 0 ? "There are no completes to report on yet — this document is made from a run of the analysis plan on the survey's data." : "";
   const noDb = "Open a saved project to produce this document — it is made from stored survey data.";
   const docs: { key: DocKey; label: string; hint: string; disabled: string }[] = [
+    { key: "research_plan_docx", label: "Research plan (.docx)", hint: "Executive summary, objectives, hypotheses and rationale, how each question serves them, variables and scales, hypothesis tests, proposed tables and charts, interpretation framework, QC, limitations", disabled: "" },
     { key: "proposal_docx", label: "Research proposal (.docx)", hint: "Objective, hypotheses, questionnaire, sampling design, screening, timeline, analysis plan, ethics", disabled: "" },
     { key: "sap_docx", label: "Statistical analysis plan (.docx)", hint: "Variables, populations, the test for each analysis and why, α and corrections, weighting, missing data, sample size", disabled: "" },
     { key: "cleaning_plan_docx", label: "Data-cleaning plan (.docx)", hint: "The quality rules in force for this survey, their thresholds and what each does to the dataset", disabled: sandbox ? noDb : "" },

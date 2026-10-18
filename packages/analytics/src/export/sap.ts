@@ -1,7 +1,7 @@
 import type { SurveyDefinition, AnalysisPlan, PlannedTest, Question } from "@rescript/schema";
 import { buildAnalysisFramework, conditionSummary, explainPlan, expectedSample, planSampleSize, structuredHypotheses, describeHypothesis, MIN_READ_BASE, type PlanExplanation, type PlanVariable } from "@rescript/engine";
 import { ANALYTICS_ENGINE_VERSION } from "../provenance.js";
-import { docKit, definitionStamp, samplingDesign, screeningRules, type DocBlock } from "./docx.js";
+import { docKit, definitionStamp, samplingDesign, screeningRules, METHOD_WORDS, type DocBlock } from "./docx.js";
 
 /**
  * THE STATISTICAL ANALYSIS PLAN (audit DOC-03) — the standalone document a
@@ -20,15 +20,8 @@ export interface SapOptions { client?: string; author?: string; date?: string; t
 
 const { h1, h2, label, body, lead, muted, bullet, divider, gridTable, cover, document, plain } = docKit;
 
-/** what each planned method is, in the words of a methods section */
-export const METHOD_WORDS: Record<string, string> = {
-  frequencies: "Frequency distribution", mean: "Mean with confidence interval", median: "Median and quartiles", top_box: "Top-box share", nps: "Net Promoter Score (promoters − detractors)",
-  crosstab: "Crosstabulation (column percentages; significance between columns)", chi_square: "Pearson chi-square test of independence", t_test: "Independent-samples t-test (Welch)", anova: "One-way analysis of variance",
-  mann_whitney: "Mann–Whitney U test", kruskal_wallis: "Kruskal–Wallis test", correlation: "Correlation", regression: "Linear regression", logistic_regression: "Logistic regression",
-  factor: "Exploratory factor analysis", reliability: "Scale reliability (Cronbach's α)", cluster: "Cluster analysis", conjoint_utilities: "Conjoint part-worth utilities", maxdiff_scores: "MaxDiff scores",
-  turf: "TURF reach analysis", driver_analysis: "Key-driver analysis", text_themes: "Open-text theme coding", ranking_scores: "Ranking scores", allocation_shares: "Allocation shares",
-  pricing: "Price sensitivity analysis", brand_funnel: "Brand funnel",
-};
+/** what each planned method is, in the words of a methods section (kept with the Word kit, shared with the research plan) */
+export { METHOD_WORDS };
 const CORRECTION_TEXT: Record<string, string> = {
   none: "No correction: every test is read at its own p-value.",
   bonferroni: "Bonferroni: each p-value is multiplied by the number of tests in its family, so the family-wise error rate stays at α.",

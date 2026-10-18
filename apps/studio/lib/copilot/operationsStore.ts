@@ -2,7 +2,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/admin";
 import { dbConfigured, storeWithFallback } from "./durable";
 import {
-  MemoryOperationStore, fromRow, planUpdate, toRow, withChangeN,
+  LIMITS, MemoryOperationStore, fromRow, planUpdate, toRow, withChangeN,
   type OperationFields, type OperationPatch, type OperationRecord, type OperationStore, type OperationSummary, type UpdateResult,
 } from "./operations";
 
@@ -25,6 +25,8 @@ const TABLE = "intelligent_operations";
 const LIST_COLUMNS = "id, survey_id, created_by, created_at, updated_at, change_n, prompt, source, intent, detected, targets, proposed, applied, excluded, failed, warnings, engine_ops, api_calls, status, status_detail, saved_revision, has_before:before->>meta, has_after:after->>meta";
 /** Postgres unique_violation: the (survey_id, change_n) index refused a number another request took first */
 const UNIQUE_VIOLATION = "23505";
+/** Postgres check_violation: here, the prompt-length check of a database that has not had migration 0063 */
+const CHECK_VIOLATION = "23514";
 
 class SupabaseOperationStore implements OperationStore {
   durable = true;
@@ -46,7 +48,11 @@ class SupabaseOperationStore implements OperationStore {
     return data ? fromRow(data as Record<string, unknown>) : null;
   }
   async create(surveyId: string, fields: OperationFields, meta: { userId: string | null; surveyId: string }): Promise<OperationRecord> {
-    const { data, error } = await this.db.from(TABLE).insert({ ...toRow(fields), survey_id: surveyId, created_by: meta.userId }).select("*").single();
+    let { data, error } = await this.db.from(TABLE).insert({ ...toRow(fields), survey_id: surveyId, created_by: meta.userId }).select("*").single();
+    /* a database without migration 0063 still holds the prompt to 4,000 characters: the record is kept with the prompt cut there (its length and hash are in the intent) rather than lost */
+    if (error && error.code === CHECK_VIOLATION && /prompt_len/.test(error.message) && fields.prompt.length > LIMITS.legacyPrompt) {
+      ({ data, error } = await this.db.from(TABLE).insert({ ...toRow({ ...fields, prompt: fields.prompt.slice(0, LIMITS.legacyPrompt) }), survey_id: surveyId, created_by: meta.userId }).select("*").single());
+    }
     if (error) throw new Error(error.message);
     return fromRow(data as Record<string, unknown>);
   }

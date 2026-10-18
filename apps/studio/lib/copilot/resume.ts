@@ -93,6 +93,18 @@ export function waitBeforeRetry(failure: TurnFailure | { retryAfterMs?: number }
 
 /** The most automatic tries a single request gets before the card hands the decision back to the researcher (the work stays saved) */
 export const MAX_AUTO_RETRIES = 5;
+/**
+ * How many times the page resends a request by itself. The provider layer has already retried inside the
+ * request (up to four attempts within the route's clock), so a TIMEOUT means the whole call ran out of time:
+ * sending the same call again five times is fifteen minutes of spinner for the same answer. It is resent once;
+ * after that the card offers Resume (a staged build carries on from its checkpoint either way). A busy
+ * provider, a dropped connection or the platform's own time limit keep the five automatic tries.
+ */
+export function autoRetriesFor(res: TurnResponse): number {
+  const f = res.d?.failure;
+  return isTurnFailure(f) && f.code === "timeout" ? 1 : MAX_AUTO_RETRIES;
+}
+
 /** Rounds of an unfinished build that bring no new item before the card stops resuming by itself */
 export const MAX_STALLED_ROUNDS = 3;
 

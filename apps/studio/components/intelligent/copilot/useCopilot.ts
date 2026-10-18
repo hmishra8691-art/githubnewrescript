@@ -15,7 +15,7 @@ import type { OpApiCall, OpFailed, OpIntent, OpProposed, OpSource } from "../../
 import { excludedLabels, validExclusions } from "../../../lib/copilot/review";
 import { describeFailure, failureFromException, failureFromRefusal, failureFromTransport, isTurnFailure, type FailureCode, type TurnFailure } from "@/lib/copilot/failure";
 import {
-  STATUS, MAX_AUTO_RETRIES, MAX_STALLED_ROUNDS, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, waitBeforeRetry,
+  STATUS, MAX_STALLED_ROUNDS, autoRetriesFor, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, waitBeforeRetry,
   type BuiltItem, type Checkpoint, type TurnResponse,
 } from "@/lib/copilot/resume";
 import type { ChangePlan } from "@/lib/copilot/changePlan";
@@ -539,7 +539,7 @@ export function useCopilot(opts: {
       const exchange = async (): Promise<TurnResponse> => {
         for (let attempt = 0; ; attempt++) {
           const res = await send();
-          if (!isTemporary(res) || attempt >= MAX_AUTO_RETRIES) return res;
+          if (!isTemporary(res) || attempt >= autoRetriesFor(res)) return res;
           await waitFor(waitBeforeRetry(failureOfResponse(res) ?? failureFromTransport(res.status), attempt));
         }
       };
@@ -634,7 +634,8 @@ export function useCopilot(opts: {
         failTurn(d, 200, "unusable");
         return "empty";
       }
-      const doneBuilding = isBuild && !partialIds.length;
+      /* "ready for review" only when there is something to review: a build whose items came back empty is not a draft (2026-10-17) */
+      const doneBuilding = isBuild && !partialIds.length && reply.actions.length > 0;
       const patch: Partial<CopilotEntry> = { status: "ready", reply, usage: charged, ...(notice ? { notice } : {}), progress: doneBuilding ? { phase: "done", message: STATUS.ready } : partialIds.length ? { phase: "partial", message: STATUS.partial((cp.applied ?? []).length, (cp.applied ?? []).length + partialIds.length), done: (cp.applied ?? []).length, total: (cp.applied ?? []).length + partialIds.length } : undefined, ...(partialIds.length ? { work: { built: (cp.applied ?? []).length, total: (cp.applied ?? []).length + partialIds.length, pending: partialIds.length, failed: Array.isArray(d.planFailures) ? (d.planFailures as unknown[]).length : 0 } } : {}), context: d.context as CopilotEntry["context"], passages: (d.passages ?? {}) as Record<string, Passage>, ...(review ? { review } : {}) };
       if (d.coverage && typeof d.coverage === "object") patch.coverage = d.coverage as CopilotEntry["coverage"];
       if (d.stage === "executed" && d.plan) {
@@ -848,11 +849,15 @@ export function useCopilot(opts: {
     try {
       const sandbox = s.surveyDbId === "sandbox";
       const rows = sandbox ? rowsRef.current : null;
-      if (sandbox && it.output.type !== "proposal_docx" && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
+      /* the documents made from the design alone (the proposal, the research plan, the SAP) need no respondents — the sandbox used to refuse the SAP and the plan as if they were findings (2026-10-17) */
+      if (sandbox && !["proposal_docx", "research_plan_docx", "sap_docx"].includes(it.output.type) && !rows?.length) { fail("The sandbox has no respondents to report on. Open a survey with fieldwork and ask there — the report and the deck come from a run of its data."); return; }
       const fake = sandbox ? fakeRef.current.shift() : undefined;
       const r = await fetch("/api/copilot/output", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, output: it.output, ...(executionMode === "internal" ? { narrative: false } : {}), ...(sandbox ? { definition: s.def, rows, ...(fake ? { fake } : {}) } : {}) }) });
       if (!r.ok) { const d = await r.json().catch(() => null) as { error?: string } | null; fail(d?.error ?? (r.status === 401 ? "Sign in to produce documents for this survey." : `The document could not be produced (HTTP ${r.status}).`)); return; }
       const blob = await r.blob();
+      /* a document is offered only when it is one: never an empty or non-ZIP body behind a "ready" card (2026-10-17) */
+      const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+      if (blob.size < 100 || head[0] !== 0x50 || head[1] !== 0x4b) { fail(`The document could not be produced: the server sent ${blob.size ? "something that is not a Word or PowerPoint file" : "an empty file"}. Try again.`); return; }
       const name = /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? `output.${it.output.type.endsWith("pptx") ? "pptx" : "docx"}`;
       const summary = r.headers.get("x-rescript-output") ?? "";
       const narrative = r.headers.get("x-rescript-narrative") ?? undefined;
@@ -861,7 +866,7 @@ export function useCopilot(opts: {
       const said = `${it.output.words[0].toUpperCase()}${it.output.words.slice(1)} is ready: ${name} (${Math.round(blob.size / 1024)} KB). ${summary}${narrative ? ` Narrative gate: ${narrative}.` : ""}`;
       opts.patch(id, { status: "ready", output, reply: reply(said), engine: { ...engine, kind: "answer" }, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: it.category, kind: "output", engine: "output", ...(workflowStep ? { workflow: workflowStep } : {}) }, detected: it.detected, statusDetail: said.slice(0, 2000), apiCalls: [{ route: "/api/copilot/output", mode: it.output.type, charge: 0 }] }) });
       /* the workflow's own outputs are marked produced (the deck, the design document) */
-      const produced = it.output.type === "proposal_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
+      const produced = it.output.type === "proposal_docx" || it.output.type === "research_plan_docx" ? "design_document" : it.output.type === "findings_pptx" ? "deck" : null;
       if (produced && !producedRef.current.includes(produced)) { producedRef.current = [...producedRef.current, produced]; setWorkflowInfo((x) => (x ? { ...x } : x)); }
     } catch (e) {
       fail(`The document could not be produced: ${(e as Error).message || "the network request failed"}.`);

@@ -200,7 +200,10 @@ const shellRect = (page) => page.evaluate(() => {
 }
 
 // ---- content alignment: left / center / right, in contained mode so there's room to move ----
-for (const [align, expect] of [["left", "ml0"], ["center", "auto"], ["right", "mr0"]]) {
+// (2026-10-17, layout brief §12) contentAlign aligns the TEXT inside the frame; the frame is centred whatever it says.
+// It used to pin the frame to the left edge for "left" — the default stored on every survey — so any theme narrower
+// than the window threw the survey to the left. See scripts/layout-centering-test.mjs.
+for (const [align, expect] of [["left", "start"], ["center", "center"], ["right", "right"]]) {
   const def = SurveyDefinition.parse({
     meta: { id: `al-${align}`, code: `AL${align.toUpperCase()}`, title: "Align", version: "1.0" },
     questions: baseQuestions, flow: baseFlow,
@@ -208,14 +211,10 @@ for (const [align, expect] of [["left", "ml0"], ["center", "auto"], ["right", "m
   });
   const page = await openPreview(browser, RUNTIME, { definition: def }, { viewport: { width: 1600, height: 1000 } });
   const rect = await shellRect(page);
-  if (expect === "ml0") assert.equal(rect.marginLeft, "0px", `left align: margin-left should be 0, got ${rect.marginLeft}`);
-  if (expect === "mr0") assert.equal(rect.marginRight, "0px", `right align: margin-right should be 0, got ${rect.marginRight}`);
-  if (expect === "auto") {
-    // centered: roughly equidistant from both viewport edges
-    const centerGap = 1600 - rect.width;
-    assert.ok(Math.abs(rect.x - centerGap / 2) < 4, `center align: shell should be centered, x=${rect.x}, expected ~${centerGap / 2}`);
-  }
-  ok(`content align "${align}" positions the shell correctly at desktop width (x=${Math.round(rect.x)}px, width=${Math.round(rect.width)}px)`);
+  const centerGap = 1600 - rect.width;
+  assert.ok(Math.abs(rect.x - centerGap / 2) < 4, `${align} align: the frame stays centred, x=${rect.x}, expected ~${centerGap / 2}`);
+  assert.equal(await page.$eval(".rs-qtext", (e) => getComputedStyle(e).textAlign), expect, `${align} align: the question text`);
+  ok(`content align "${align}" aligns the question text (${expect}) and leaves the frame centred (x=${Math.round(rect.x)}px, width=${Math.round(rect.width)}px)`);
   await page.close();
 }
 

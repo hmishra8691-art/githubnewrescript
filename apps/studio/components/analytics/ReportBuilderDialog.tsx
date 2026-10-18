@@ -16,7 +16,7 @@ type Draft = BuilderDraft & { model: { status: string; detail: string }; truncat
 
 const ROLE_WORD: Record<string, string> = { key: "answers a key question", finding: "finding", comparison: "group comparison", difference: "tested difference" };
 
-export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void; initial?: Partial<Pick<ReportBrief, "objective" | "audience" | "tone" | "title">> & { story?: boolean } }) {
+export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial }: { api: AxApi; analyses: Row[]; onClose: () => void; onCreated: (report: Row) => void; initial?: Partial<Pick<ReportBrief, "objective" | "audience" | "tone" | "title" | "sections" | "theme">> & { story?: boolean } }) {
   const [objective, setObjective] = React.useState(initial?.objective ?? "");
   const [questions, setQuestions] = React.useState("");
   const [audience, setAudience] = React.useState<ReportBrief["audience"]>(initial?.audience ?? "client");
@@ -39,6 +39,8 @@ export function ReportBuilderDialog({ api, analyses, onClose, onCreated, initial
     ...(ids?.length ? { analysisIds: ids } : picked ? { analysisIds: [...picked] } : {}),
     ...(tests ? {} : { includeTests: false }), ...(crosstabs ? {} : { includeCrosstabs: false }),
     ...(Number(maxItems) > 0 ? { maxItems: Number(maxItems) } : {}), ...(title.trim() ? { title: title.trim() } : {}), ...(client.trim() ? { client: client.trim() } : {}),
+    /* what the sentence asked the report to contain (2026-10-17) — carried through to the draft */
+    ...(initial?.sections?.length ? { sections: initial.sections } : {}), ...(initial?.theme ? { theme: initial.theme } : {}),
   });
 
   const run = async (ids?: string[]) => {

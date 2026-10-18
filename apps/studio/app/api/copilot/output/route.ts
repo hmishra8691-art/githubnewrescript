@@ -5,7 +5,7 @@ import { keepReply, recordAiRefused, recordAiText, replyFromCache, replyKey } fr
 import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
 import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, claimsBrief, claimsFromRun, claimsHash, promptVersion, redactPrompt, redactRunForModel, hash64, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
-import { buildDeckPptx, buildFindingsDocx, buildProposalDocx, buildSapDocx } from "@rescript/analytics/export";
+import { buildDeckPptx, buildFindingsDocx, buildProposalDocx, buildResearchPlanDocx, buildSapDocx, checkDocx } from "@rescript/analytics/export";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi } from "@/lib/metering";
@@ -34,9 +34,9 @@ import { buildFor, loadDefinition, previousRun } from "@/lib/analytics";
  * narrative, so the browser suites can see the whole path.
  */
 export const dynamic = "force-dynamic";
-const TYPES = new Set(["proposal_docx", "sap_docx", "findings_docx", "findings_pptx"]);
+const TYPES = new Set(["proposal_docx", "sap_docx", "findings_docx", "findings_pptx", "research_plan_docx"]);
 /** the documents made from the survey and its research design alone — `project.read`, no data needed */
-const DESIGN_ONLY = new Set(["proposal_docx", "sap_docx"]);
+const DESIGN_ONLY = new Set(["proposal_docx", "sap_docx", "research_plan_docx"]);
 const AUDIENCES = new Set(["executive", "client", "researcher"]);
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -47,7 +47,7 @@ const ascii = (s: string) => s.replace(/[^\x20-\x7e]/g, "?").slice(0, 900);
 function readOutput(x: unknown): OutputRequest | string {
   const o = (x ?? {}) as Record<string, unknown>;
   const type = typeof o.type === "string" ? o.type : "";
-  if (!TYPES.has(type)) return "the output needs a type (proposal_docx, sap_docx, findings_docx, findings_pptx)";
+  if (!TYPES.has(type)) return "the output needs a type (research_plan_docx, proposal_docx, sap_docx, findings_docx, findings_pptx)";
   const audience = typeof o.audience === "string" && AUDIENCES.has(o.audience) ? o.audience : "client";
   const client = typeof o.client === "string" && o.client.trim() ? o.client.trim().slice(0, 80) : undefined;
   return { type: type as OutputRequest["type"], audience: audience as OutputRequest["audience"], ...(client ? { client } : {}), words: typeof o.words === "string" ? o.words.slice(0, 120) : type };
@@ -88,16 +88,33 @@ export async function POST(req: NextRequest) {
   const author = user?.email ?? undefined;
   const date = new Date().toISOString().slice(0, 10);
   const base = safeName(def.research?.objective ? def.research.objective.slice(0, 50) : def.meta.title);
+  /*
+   * NO LINK TO A FILE WORD CANNOT OPEN (2026-10-17): every Word document is checked as a package — the
+   * required parts, every XML part well-formed, every relationship resolved — before it is sent; a file
+   * that fails is refused here with what is wrong, so the copilot and the Research tab never offer it.
+   */
+  const docx = (buf: Buffer, name: string, said: string, extra: Record<string, string> = {}) => {
+    const c = checkDocx(buf);
+    if (!c.ok) { console.error("[output] a Word document failed its package check", JSON.stringify({ type: output.type, problems: c.problems.slice(0, 5) })); return json({ error: `The document was produced but failed its check, so it is not offered: ${c.problems.slice(0, 3).join("; ")}.`, code: "invalid_document" }, 500); }
+    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`, "cache-control": "no-store", "x-rescript-output": ascii(said), "x-rescript-checked": `docx ok; ${c.paragraphs} paragraphs, ${c.tables} tables`, ...extra } });
+  };
+
+  /* THE WORD RESEARCH PLAN (2026-10-17): the proposal's research-plan edition, named <SurveyCode>_Research_Plan_<date>.docx */
+  if (output.type === "research_plan_docx") {
+    const buf = await buildResearchPlanDocx(def, { client, author, date, fieldwork });
+    const plan = def.research?.analysisPlan;
+    return docx(buf, `${safeName(String(def.meta.code ?? "") || def.meta.title)}_Research_Plan_${date}.docx`, `Research plan: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${plan ? `the saved analysis plan (${plan.tests.length} tests, ${plan.crosstabs.length} crosstabs)` : "the analysis plan derived from the design (not yet saved)"}, traceability, QC and limitations`);
+  }
 
   if (output.type === "proposal_docx") {
     const buf = await buildProposalDocx(def, { client, author, date, fieldwork });
-    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-research-proposal.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Research proposal: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${def.research?.analysisPlan ? "the saved analysis plan" : "the design's analysis plan"}`) } });
+    return docx(buf, `${base}-research-proposal.docx`, `Research proposal: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${def.research?.analysisPlan ? "the saved analysis plan" : "the design's analysis plan"}`);
   }
 
   if (output.type === "sap_docx") {
     const buf = await buildSapDocx(def, { client, author, date });
     const sapPlan = def.research?.analysisPlan;
-    return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${safeName(def.meta.title)}-analysis-plan.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Statistical analysis plan: ${sapPlan ? `${sapPlan.tests.length} tests, ${sapPlan.crosstabs.length} crosstabs from the saved plan` : "derived from the design - no analysis plan is saved yet"}`) } });
+    return docx(buf, `${safeName(def.meta.title)}-analysis-plan.docx`, `Statistical analysis plan: ${sapPlan ? `${sapPlan.tests.length} tests, ${sapPlan.crosstabs.length} crosstabs from the saved plan` : "derived from the design - no analysis plan is saved yet"}`);
   }
 
   /* the findings outputs: a fresh run of the plan on the data */
@@ -179,5 +196,5 @@ export async function POST(req: NextRequest) {
     return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": PPTX, "content-disposition": `attachment; filename="${base}-findings-${output.audience}.pptx"`, "cache-control": "no-store", "x-rescript-output": ascii(`${describeDeck(deck)} - ${run.n} completes`), "x-rescript-narrative": ascii(gate) } });
   }
   const buf = await buildFindingsDocx(def, run, opts);
-  return new NextResponse(new Uint8Array(buf), { status: 200, headers: { "content-type": DOCX, "content-disposition": `attachment; filename="${base}-findings-report.docx"`, "cache-control": "no-store", "x-rescript-output": ascii(`Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes${run.since ? ` - since the last wave (${run.since.previous.computedAt.slice(0, 10)})` : ""}`), "x-rescript-narrative": ascii(gate) } });
+  return docx(buf, `${base}-findings-report.docx`, `Findings report: ${run.verdicts.length} hypotheses, ${run.findings.filter((f) => f.significant).length} significant findings - ${run.n} completes${run.since ? ` - since the last wave (${run.since.previous.computedAt.slice(0, 10)})` : ""}`, { "x-rescript-narrative": ascii(gate) });
 }

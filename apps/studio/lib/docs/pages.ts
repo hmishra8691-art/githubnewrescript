@@ -23,6 +23,7 @@ export const DOC_ORDER: { slug: string; description: string }[] = [
   { slug: "intelligent-mode", description: "Programming in sentences: the engine's reading, the model's turn, actions, approval and history, the workflow, execution modes, tiers and cost" },
   { slug: "actions-reference", description: "The closed vocabulary of operations every change goes through, with their fields (generated)" },
   { slug: "research-engine", description: "The research design, the analysis plan, coverage and enforcement, runs and findings, the proposal, report and deck, the workflow" },
+  { slug: "capabilities", description: "What is supported, partly supported and not supported: methodologies, analysis, qualitative, question types, exports (generated)" },
   { slug: "data-and-exports", description: "What each type stores, export columns, datasets, CSV/Excel/SPSS/SAS/Stata/JSON, the variable dictionary, quality" },
   { slug: "localization-and-quotas", description: "Languages, translation keys, routing, the glossary; quotas, cells, quota checks; embedded data" },
   { slug: "api", description: "Authentication, the Studio routes by area with the capability each needs, the respondent runtime endpoints" },

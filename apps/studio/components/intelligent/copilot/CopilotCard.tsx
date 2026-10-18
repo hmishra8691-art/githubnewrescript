@@ -6,7 +6,7 @@ import { linkify } from "../../../lib/copilot/client";
 import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
-import type { SurveyAction } from "@rescript/engine";
+import { validateResearch, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
 /**
@@ -133,6 +133,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
             <Icon name={entry.coverage.ok ? "check" : "warning"} size={12} /> <span className="iq-label">Coverage</span> <Linked text={entry.coverage.summary} def={def} onSelect={onSelect} />
           </p>
         )}
+        {entry.coverage && <ProposalValidation def={def} />}
         {entry.output && (
           /* a document the engine produced (Phase 5): the file to download, what it holds, what the narrative gate kept */
           <p className="cp-data cp-output" data-testid="cp-output" data-kind={entry.output.kind} data-size={entry.output.size}>
@@ -388,6 +389,20 @@ function Progress({ entry, onResumeNow }: { entry: CopilotEntry; onResumeNow?: (
       <Icon name={p.phase === "done" ? "check" : p.phase === "waiting" ? "info" : "sparkle"} size={12} /> <span data-testid="cp-progress-text">{p.message}</span>
       {secs != null && <span className="iqi-dim"> Resuming in {secs}s.</span>}
       {p.phase === "waiting" && <button type="button" className="iq-btn" onClick={() => onResumeNow?.(entry.id)} data-testid="cp-resume-now">Resume now</button>}
+    </p>
+  );
+}
+
+/**
+ * THE GENERATED STUDY, VALIDATED (research intelligence, 2026-10-17): the engine's blocking /
+ * warning / recommendation counts and the traceability's summary for the survey this card proposes
+ * (the after-state while the proposal is open). The items themselves are in the Review tab.
+ */
+function ProposalValidation({ def }: { def: SurveyDefinition }) {
+  const v = React.useMemo(() => validateResearch(def), [def]);
+  return (
+    <p className={`cp-coverage${v.counts.blocking ? " warn" : " ok"}`} data-testid="cp-proposal-validation" data-blocking={v.counts.blocking} data-warnings={v.counts.warning} data-recommendations={v.counts.recommendation}>
+      <Icon name={v.counts.blocking ? "warning" : "check"} size={12} /> <span className="iq-label">Validation</span> {v.summary} <span className="iqi-dim">Traceability: {v.traceability.summary}</span>
     </p>
   );
 }

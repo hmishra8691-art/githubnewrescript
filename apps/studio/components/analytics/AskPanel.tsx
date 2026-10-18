@@ -144,7 +144,7 @@ export function AskPanel({ api, dataset, analyses, canEdit, onChanged, focus = n
         <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>{history.map((h, i) => <li key={i} style={{ fontSize: 13 }} data-testid="ax-ask-history-item"><button type="button" className="ax-chip" onClick={() => setRequest(h.request)}>{h.request}</button> <span className="muted">— {new Date(h.at).toLocaleString()} · {h.done} applied{h.blocked ? `, ${h.blocked} not applied` : ""}</span></li>)}</ul>
         <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Kept in this browser only. Every applied change is also in the project's audit log, with the request text.</div></details>}
 
-      {builder && <ReportBuilderDialog api={api} analyses={analyses} initial={{ objective: builder.brief.objective, audience: builder.brief.audience, tone: builder.brief.tone, title: builder.brief.title, story: builder.story }} onClose={() => setBuilder(null)} onCreated={() => { setBuilder(null); setMsg("Report created — find it under Reports."); void onChanged(); }} />}
+      {builder && <ReportBuilderDialog api={api} analyses={analyses} initial={{ objective: builder.brief.objective, audience: builder.brief.audience, tone: builder.brief.tone, title: builder.brief.title, story: builder.story, ...(builder.brief.sections ? { sections: builder.brief.sections } : {}), ...(builder.brief.theme ? { theme: builder.brief.theme } : {}) }} onClose={() => setBuilder(null)} onCreated={() => { setBuilder(null); setMsg("Report created — find it under Reports."); void onChanged(); }} />}
     </div>
   );
 }

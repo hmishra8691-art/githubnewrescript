@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, ChartType, DatasetSpec, VariableMeta } from "@rescript/analytics";
+import { plannedItemReadiness } from "@rescript/analytics";
 import { ANALYSIS_METHODS, type AnalysisMethod, type PlannedCrosstab, type PlannedTest } from "@rescript/schema";
 import { timingLine } from "./runTimingText";
 import { AxApi, type ApplyResponse, type PlanPayload, type Row, type RunResult, timeAgo } from "./api";
@@ -97,7 +98,11 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
     } finally { setSaving(false); }
   }, [data, p.api, load]);
 
+  /* one apply at a time from this page: two clicks inside one render both saw `applying` false and posted twice (the second met the server's lock as a 409 error) */
+  const applyingRef = React.useRef(false);
   const apply = async (replaceReport = false) => {
+    if (applyingRef.current) return;
+    applyingRef.current = true;
     setApplying(true); setApplyResult(null);
     try {
       const r = await p.api.applyPlan({ environment: p.dataset.environment, dataset: p.dataset.dataset, replaceReport });
@@ -108,7 +113,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
       await load(true);
       p.onApplied();
     } catch (e) { setNotice({ tone: "error", text: (e as Error).message }); }
-    finally { setApplying(false); }
+    finally { applyingRef.current = false; setApplying(false); }
   };
 
   const plan = data?.plan ?? null;
@@ -449,19 +454,11 @@ function ItemEditor(p: { kind: "crosstab" | "test"; item?: Item; variables: Vari
     return out;
   }, [p.variables, p.plan]);
   const set = (patch: Partial<Draft>) => setD((s) => ({ ...s, ...patch }));
-  const validate = (): string | null => {
-    if (p.kind === "crosstab") {
-      if (!d.rows.length) return "Choose at least one row variable.";
-      if (!d.columns.length) return "Choose at least one column variable.";
-      const same = d.rows.filter((r) => d.columns.includes(r)); if (same.length) return `${same.join(", ")} cannot be both a row and a column.`;
-    } else {
-      if (!d.outcome && !d.variables.length && !d.groupBy) return "A test needs an outcome, variables or a grouping variable.";
-      if (["t_test", "anova", "mann_whitney", "kruskal_wallis"].includes(d.method) && !d.groupBy) return `A ${words(d.method)} compares groups — choose the grouping variable.`;
-      if (["regression", "logistic_regression", "driver_analysis", "correlation"].includes(d.method) && !d.outcome && d.method !== "correlation") return `A ${words(d.method)} needs an outcome.`;
-      if (d.method === "reliability" && d.variables.length < 2) return "Reliability needs at least two items.";
-    }
-    return null;
-  };
+  /* ONE RULE (the Apply audit, 2026-10-17): the analytics package's `plannedItemReadiness` — what the plan marks "invalid" and the apply skips — so the editor never accepts an item the apply then refuses */
+  const readiness = React.useMemo(() => plannedItemReadiness(p.kind === "crosstab"
+    ? { kind: "crosstab", crosstab: { rows: d.rows, columns: d.columns } }
+    : { kind: "test", test: { method: d.method, outcome: d.outcome || undefined, variables: d.variables, groupBy: d.groupBy || undefined, moderator: d.moderator || undefined, mediator: d.mediator || undefined } }, p.variables), [p.kind, d, p.variables]);
+  const validate = (): string | null => (readiness.ready ? null : readiness.missing.join(" "));
   const save = async () => {
     const v = validate(); setErr(v); if (v) return;
     const common = { priority: d.priority, hypotheses: d.hypotheses, reason: d.reason.trim() || (p.item ? null : undefined) };
@@ -517,7 +514,7 @@ function ItemEditor(p: { kind: "crosstab" | "test"; item?: Item; variables: Vari
       </div>
       {err && <p className="iq-error" data-testid="ap-ed-error"><Icon name="warning" size={12} /> {err}</p>}
       <div className="row" style={{ gap: 6, marginTop: 8 }}>
-        <button className={`btn primary small${p.saving ? " loading" : ""}`} disabled={p.saving} onClick={() => void save()} data-testid="ap-ed-save">{p.item ? "Save changes" : "Add to the plan"}</button>
+        <button className={`btn primary small${p.saving ? " loading" : ""}`} disabled={p.saving} onClick={() => void save()} data-testid="ap-ed-save" data-ready={readiness.ready ? "1" : "0"} title={readiness.ready ? undefined : readiness.missing.join(" ")}>{p.item ? "Save changes" : "Add to the plan"}</button>
         <button className="btn small" disabled={p.saving} onClick={p.onCancel} data-testid="ap-ed-cancel">Cancel</button>
         <span className="muted" style={{ fontSize: 12.5 }}>Saving writes the survey's draft; apply the plan afterwards to update the outputs.</span>
       </div>

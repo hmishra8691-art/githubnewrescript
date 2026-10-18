@@ -201,7 +201,9 @@ export function memoryFromOps(ops: readonly MemoryRecord[], lastN = 3): { memory
   for (const o of turns.slice(-lastN)) {
     const reply = typeof o.intent?.reply === "string" && o.intent.reply ? o.intent.reply : (o.statusDetail ?? "");
     history.push({ role: "user", text: o.prompt.slice(0, 500) });
-    if (reply || o.proposed.length) history.push({ role: "copilot", text: `${reply}${o.proposed.length ? ` [proposed ${o.proposed.length} actions]` : ""}`.trim().slice(0, 500) });
+    /* the proposed changes by their descriptions, after a reload as before it (client.ts memoryFrom names them the same way) — the reply is shortened, never the list */
+    const gist = o.proposed.length ? ` [proposed ${o.proposed.length} actions: ${o.proposed.slice(0, 8).map((p) => p.description.slice(0, 60)).join(", ")}]`.slice(0, 300) : "";
+    if (reply || o.proposed.length) history.push({ role: "copilot", text: `${reply.slice(0, Math.max(120, 500 - gist.length))}${gist}`.trim().slice(0, 500) });
   }
   return { ...(memory ? { memory: memory.slice(0, 1000) } : {}), history };
 }

@@ -45,10 +45,10 @@ test("coerceOperation (create): defaults, closed lists, and only the initial sta
   assert.ok(!coerceOperation(null, "update").ok);
 });
 
-test("coerceOperation bounds every field: prompt 4000, lists 200, strings 500, a flat intent, small actions", () => {
+test("coerceOperation bounds every field: prompt 20000, lists 200, strings 500, a flat intent, small actions", () => {
   const long = "x".repeat(600);
   const c = coerceOperation({
-    prompt: "p".repeat(5000),
+    prompt: "p".repeat(25_000),
     intent: { kind: "actions", nested: { a: 1 }, n: 3, ok: true, none: null, long, ...Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`k${i}`, i])) },
     detected: [{ what: "condition", value: long }, { nothing: 1 }, "x"],
     targets: Array.from({ length: 300 }, (_, i) => `q${i}`),
@@ -63,7 +63,9 @@ test("coerceOperation bounds every field: prompt 4000, lists 200, strings 500, a
   assert.ok(c.ok);
   const v = c.value;
   assert.equal(v.prompt.length, LIMITS.prompt);
-  assert.ok(c.warnings.some((w) => /cut to 4000/.test(w)));
+  assert.ok(c.warnings.some((w) => /cut to 20000/.test(w)));
+  assert.equal(v.intent.promptLength, 25_000, "a cut prompt says how long it was (2026-10-17)");
+  assert.match(String(v.intent.promptSha256), /^[0-9a-f]{64}$/);
   assert.equal(v.targets.length, LIMITS.items, "lists stop at 200");
   assert.equal(v.intent.long!.toString().length, LIMITS.text);
   assert.equal("nested" in v.intent, false, "nested values are not an intent's business");

@@ -142,7 +142,14 @@ const hyps = await page.$$('[data-testid="an-hyp"]');
 assert.equal(hyps.length, 2);
 assert.equal(await hyps[0].getAttribute("data-status"), "partly", "measured, nothing planned yet");
 const rows = await page.$$eval('[data-testid="an-crosstab"]', (es) => es.map((e) => ({ p: e.getAttribute("data-priority"), t: e.textContent })));
-assert.ok(rows.length >= 2 && rows[0].p === "1" && /Q5/.test(rows[0].t), `the most important crosstab first: ${JSON.stringify(rows[0])}`);
+/*
+ * 2026-10-17 (the Apply audit): this assertion was the suite's known-red "first planned crosstab". Since audit P-8 an
+ * item serves only the hypotheses whose two sides it READS, so Q5 by the sample profile serves none (H1 is trust →
+ * intention; the banner reads neither trust nor exposure) and the most important crosstab is Q1 by Q2, which reads both
+ * sides of H2. The expectation was stale; the behaviour is right. The reason no longer names hypotheses it lost.
+ */
+assert.ok(rows.length >= 2 && rows[0].p === "1" && /Q1/.test(rows[0].t) && /Q2/.test(rows[0].t) && /H2/.test(rows[0].t), `the most important crosstab first — the one that reads both sides of a hypothesis: ${JSON.stringify(rows[0])}`);
+assert.ok(!rows.some((r) => /Q5/.test(r.t) && /\(H1, H2\)/.test(r.t)), "no crosstab's reason names hypotheses it does not serve");
 assert.ok(await page.$('[data-testid="an-test"][data-method="regression"]'), "a regression on the outcome is planned");
 assert.ok(await page.$('[data-testid="an-test"][data-method="chi_square"]'), "awareness by exposure is a chi-square");
 assert.ok(await page.$('[data-testid="an-test"][data-method="reliability"]'), "two trust items → reliability");
@@ -158,7 +165,11 @@ assert.equal((await page.$$('[data-testid="an-crosstab-remove"]')).length, 0, "n
   assert.match(why, /A crosstab of Q5 by S2, S3 is recommended because Q5 measures purchase intention and S2, S3 profile the sample\./, why.slice(0, 300));
   for (const label of ["Objective", "Variables", "Why this method", "Expected output", "Required sample"]) assert.ok(why.includes(label), `the expander shows ${label}`);
   assert.match(await xrow.locator('[data-testid="an-why-sample"]').textContent(), /about 90 completes \(30 per column × 3 columns of S2\)/);
-  assert.match(await xrow.locator('[data-testid="an-why-objective"]').textContent(), /This serves H1 \(“Brand trust increases purchase intention”\)/);
+  assert.match(await xrow.locator('[data-testid="an-why-objective"]').textContent(), /No hypothesis is tagged on it — it profiles the results/, "the profile banner reads neither side of H1 (P-8)");
+  const first = page.locator('[data-testid="an-crosstab"]').first();
+  await first.locator('[data-testid="an-why-toggle"]').click();
+  await first.locator('[data-testid="an-why-body"]').waitFor();
+  assert.match(await first.locator('[data-testid="an-why-objective"]').textContent(), /This serves H2 \(“Advertising exposure raises awareness”\)/);
   const reg = page.locator('[data-testid="an-test"][data-method="regression"]').first();
   await reg.locator('[data-testid="an-why-toggle"]').click();
   await reg.locator('[data-testid="an-why-body"]').waitFor();

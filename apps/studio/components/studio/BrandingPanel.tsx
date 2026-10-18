@@ -558,7 +558,7 @@ export function BrandingPanel() {
             <option value="full">full width</option>
             <option value="contained">contained</option>
           </select></label>
-        <label className="f" style={{ width: 110 }} title="Where survey content sits on the page. Left is standard for LTR languages, Right for RTL, Center suits a branding-forward look.">
+        <label className="f" style={{ width: 110 }} title="How question text lines up inside the survey's column — the column itself is always centred on the page. Left follows the language's direction (right for RTL), Center suits a branding-forward look.">
           <span>Content align</span>
           <select className="select" data-testid="branding-content-align" value={b.layout.contentAlign}
             onChange={(e) => set((x) => { x.layout.contentAlign = e.target.value as any; })}>

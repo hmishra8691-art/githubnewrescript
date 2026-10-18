@@ -7,9 +7,9 @@ import { singleFlight } from "@/lib/singleFlight";
 import { aiReadyFor, connectionFor } from "@/lib/byok/connect";
 import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
-import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planStagePrompt, type ChangePlan } from "@/lib/copilot/changePlan";
+import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
-import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, type CoverageReport } from "@rescript/engine";
+import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, type CoverageReport } from "@rescript/engine";
 import { ResearchIndex } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, isSandboxProject, meteredAi, refusalResponse } from "@/lib/metering";
@@ -20,7 +20,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
@@ -79,6 +79,23 @@ const ROUTE_BUDGET_MS = 165_000;
 const GATE_RESERVE_MS = 15_000;
 /** the fewest ms left that justify starting another item (the slowest item so far, 1.5×, if more) */
 const MIN_ITEM_MS = 30_000;
+/*
+ * ONE STAGE PER REQUEST, NOT ONE GENERATION PER REQUEST (2026-10-17). A build used to keep going while the
+ * 165 s clock allowed, so a single HTTP request could stay open, silent, for almost three minutes — long
+ * enough for a phone, a proxy or the platform to drop it (evidence: 2026-10-16 13:04, a 30–35-minute survey
+ * with loops ended on "the connection was interrupted" with nothing kept). Past this many ms no new item is
+ * started: what is built is handed back as a checkpoint and the browser asks for the next batch at once.
+ */
+const STAGE_SOFT_MS = 90_000;
+
+/** the first question a non-plan answer asked (a clarify reply's, or a plan's) — the ONE question a brief may get back */
+function firstQuestion(...raws: unknown[]): string | null {
+  for (const raw of raws) {
+    const q = (raw && typeof raw === "object" ? (raw as { questions?: unknown }).questions : null);
+    if (Array.isArray(q)) for (const x of q) if (typeof x === "string" && x.trim()) return x.trim().slice(0, 300);
+  }
+  return null;
+}
 
 /** TEST SEAM, fake provider only: a scripted failure or delay for the next model call(s) — one entry per call, null to let it through */
 interface Fault { kind?: ProviderErrorKind; status?: number; retryAfterMs?: number; delayMs?: number }
@@ -92,19 +109,6 @@ function builtLine(item: { title: string }, raw: unknown): string {
   return `${item.title}${codes.length ? ` (${codes.join(", ")})` : ""}`;
 }
 
-/**
- * the items a previous request already built, as the browser kept them: by plan item id, objects only, a plan's worth at most.
- * `applied` marks an item that is already in the open proposal — told to the model as context, never merged again.
- */
-function sanitizeDone(x: unknown, allowed: Set<string>): Map<string, { raw: unknown; applied: boolean }> {
-  const out = new Map<string, { raw: unknown; applied: boolean }>();
-  if (!Array.isArray(x)) return out;
-  for (const e of x.slice(0, 80)) {
-    const r = e as { id?: unknown; raw?: unknown; applied?: unknown };
-    if (typeof r?.id === "string" && allowed.has(r.id) && r.raw && typeof r.raw === "object" && !out.has(r.id)) out.set(r.id, { raw: r.raw, applied: r.applied === true });
-  }
-  return out;
-}
 
 /** what the provider layer did on the way — retries and a fallback — for the log and the history, never a provider's words */
 function providerNote(events: ProviderEvent[]): { retries: number; fallback: boolean; recovered: boolean } {
@@ -128,9 +132,36 @@ export async function POST(req: NextRequest) {
   if (isFailure(authed)) {
     if (!(surveyId === "sandbox" && aiProviderName() === "fake")) return authed.response;
   } else user = authed;
-  if (!(await aiReadyFor(user, surveyId, "copilot_turn"))) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
-  const message = typeof body.message === "string" ? body.message.trim().slice(0, 8000) : "";
+  /*
+   * THE REQUEST, READ WHOLE (2026-10-17). It was cut at 8,000 characters without a word — a pasted 25k brief
+   * reached the model as its first third. Now: the chat tool's markdown noise removed (meaning kept), up to
+   * MAX_MESSAGE_CHARS read, and past that the researcher is told — nothing is sent, nothing is charged.
+   */
+  const message = typeof body.message === "string" ? normalizeBrief(body.message) : "";
   if (!message) return NextResponse.json({ error: "say what you want" }, { status: 400 });
+  if (message.length > MAX_MESSAGE_CHARS) {
+    const failure = { ...describeFailure("too_long"), message: `This request is ${message.length.toLocaleString("en")} characters; Intelligent Mode reads up to ${MAX_MESSAGE_CHARS.toLocaleString("en")} at once. Nothing was sent to the model and nothing was charged — your text is kept.`, next: ["Send the brief in two parts — the research design and objectives first, then the questionnaire requirements — or upload it as a research document and ask for the survey “based on the brief”.", "Tables and long reference lists can go in a research document; the plan cites them from there."] };
+    return NextResponse.json({ ok: false, error: failure.message, failure, retryable: false, saved: true, context: { mode: "generate", promptChars: 0, messageChars: message.length, cached: false }, usage: { charge: 0 } }, { status: 413 });
+  }
+  /*
+   * WHAT INTELLIGENT MODE IS FOR — read before anything is paid for. Clearly unrelated ("write me a poem", "book
+   * a flight") with nothing supported in it: the one sentence that says what the engine does, no model call, no
+   * charge (the browser's engine answers these first; this is the same rule for any other caller). A greeting
+   * gets one question. A mixed request goes on with its outside part named (below). The theme assistant and the
+   * build of an approved plan are not re-read.
+   */
+  const scope = body.scope === "theme" || body.stage === "execute" ? null : requestScope(message);
+  if (scope && (scope.scope === "unsupported" || scope.scope === "ambiguous")) {
+    const said = scope.scope === "unsupported" ? UNSUPPORTED_MESSAGE : scope.question;
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: scope.scope === "unsupported" ? "answer" : "clarify", reply: said, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: scope.scope === "ambiguous" ? [scope.question] : [], sources: [] },
+      validation: null, passages: {},
+      context: { mode: "question", scope: scope.scope, modelCalled: false, promptChars: 0, cached: false },
+      usage: { charge: 0 },
+    });
+  }
+  if (!(await aiReadyFor(user, surveyId, "copilot_turn"))) return NextResponse.json({ error: "No language model is configured on this Studio (AI_API_URL). The built-in grammar still handles common edits.", code: "ai_unconfigured", failure: describeFailure("not_configured") }, { status: 501 });
   const parsed = SurveyDefinition.safeParse(body.definition);
   if (!parsed.success) return NextResponse.json({ error: "send the survey as it is open in the editor (definition)" }, { status: 400 });
   const def = parsed.data;
@@ -149,7 +180,13 @@ export async function POST(req: NextRequest) {
   // the Branding panel's theme assistant: a look-only request by construction
   const themeScope = body.scope === "theme";
   const cls = themeScope ? { ...classified, mode: "ux" as RequestMode, ux: true, uxOnly: true } : classified;
-  const mode: RequestMode = body.mode === "review" ? "review" : body.mode === "generate" ? "generate" : cls.mode;
+  /* a pasted brief (headings, sections, tables, thousands of characters) on a survey not yet built is a request to design one, whatever its first sentence says */
+  const longBrief = !themeScope && !!scope?.longBrief;
+  const briefMode = longBrief && def.questions.length < 3 && (cls.mode === "question" || cls.mode === "edit") && !!scope?.categories.some((c) => c === "research_planning" || c === "hypotheses" || c === "survey");
+  const mode: RequestMode = body.mode === "review" ? "review" : body.mode === "generate" || briefMode ? "generate" : cls.mode;
+  /* a mixed request: the model does the supported part; the outside part is named by the Studio, not the model */
+  const outside = scope?.scope === "mixed" ? scope.outside : [];
+  const scopeNote = outside.length ? `PART OF THIS REQUEST IS OUTSIDE THE PLATFORM (${outside.map((o) => `“${o}”`).join(", ")}): do only the supported part. Do not mention the outside part in "reply" — the Studio adds that sentence itself.` : undefined;
   /* images to build the theme from — one (`themeImage`, Intelligent mode) or up to four references (`themeImages`, Branding's Design with AI): their colours go to the model, their addresses stay here */
   const okUrl = (u: unknown): u is string => typeof u === "string" && (/^https:\/\/[^\s"'()<>\\]+$/i.test(u) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(u) || /^\/[^\s"'()<>\\]+$/.test(u));
   const tis = (Array.isArray(body.themeImages) ? body.themeImages.slice(0, 4) : [body.themeImage]).filter((t): t is { url?: unknown; name?: unknown; dominant?: unknown; palette?: unknown; dark?: unknown } => !!t && typeof t === "object" && okUrl((t as { url?: unknown }).url));
@@ -196,8 +233,8 @@ export async function POST(req: NextRequest) {
     passageIds = p.ids;
   }
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
-  /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns */
-  const promptFor = (compact: boolean) => copilotUserPrompt({
+  /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns. `planOnly`: the plan stage's, without the action guides */
+  const promptFor = (compact: boolean, planOnly = false) => copilotUserPrompt({
     message, outline, surveyLanguage: surveyLanguageOf(def), mode,
     memory: compact ? undefined : sanitizeMemory(body.memory), research: compact ? undefined : research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
@@ -206,10 +243,13 @@ export async function POST(req: NextRequest) {
     analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, methods: methodsTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
+    ...(planOnly ? { planOnly: true } : {}), ...(longBrief ? { longBrief: true } : {}), ...(scopeNote ? { scopeNote } : {}),
   });
   const prompt = promptFor(false);
   let compactPrompt: string | null = null;
   const promptOf = (compact: boolean) => (compact ? (compactPrompt ??= promptFor(true)) : prompt);
+  const planPrompts: Record<"full" | "compact", string | null> = { full: null, compact: null };
+  const planPromptOf = (compact: boolean) => (compact ? (planPrompts.compact ??= promptFor(true, true)) : (planPrompts.full ??= promptFor(false, true)));
 
   /* 3: the model — or the cache, for exactly the same request. The answer is not rationed (Phase 7): the provider's ceiling, the expected size reserved */
   const budget = outputBudget(mode === "generate" ? "generate" : mode === "review" ? "review" : uxTurn ? "ux" : "edit");
@@ -229,7 +269,9 @@ export async function POST(req: NextRequest) {
    * model cannot plan (or a scripted reply that is not a plan) falls through
    * to the single-reply turn as before.
    */
-  const stage = body.stage === "execute" ? "execute" : body.stage === "plan" || (body.planFirst !== false && mode === "generate" && !(fake && (fake as { kind?: string }).kind !== "plan")) ? "plan" : null;
+  /* a pasted brief is always planned first (a reviewable plan with its assumptions — never a 100-question reply in one call); a scripted clarify on a brief stands in for a model that asked instead of planning */
+  const fakeKind = fake ? (fake as { kind?: string }).kind : undefined;
+  const stage = body.stage === "execute" ? "execute" : body.stage === "plan" || ((body.planFirst !== false || longBrief) && mode === "generate" && !(fake && fakeKind !== "plan" && !(longBrief && fakeKind === "clarify"))) ? "plan" : null;
   let planFailures: { id: string; failure: TurnFailure }[] = [];
   let planPending: string[] = [];
   let executedPlan: ChangePlan | null = null;
@@ -261,7 +303,7 @@ export async function POST(req: NextRequest) {
   };
   /** the browser is told what happened: the card, the retry and the log all read the same failure */
   const failureOfError = (e: unknown, where: string): TurnFailure => {
-    const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : failureFromError(isProviderError(e) ? e : (e as Error)?.message ?? "", { own: ownProvider });
+    const failure = isAiReplyError(e) ? failureFromReplyError(e.code, e.detail) : isProviderError(e) ? failureFromError(e, { own: ownProvider }) : failureFromError((e as Error)?.message ?? "", { own: ownProvider, studio: true });
     console.warn("[rescript:copilot]", JSON.stringify({ event: `${where} failed`, userId: user?.userId, surveyId, code: failure.code, ...(isProviderError(e) ? { kind: e.kind, status: e.status, attempts: e.attempts, retryAfterMs: e.retryAfterMs, exhausted: e.exhausted, host: e.host, said: e.detail.slice(0, 200) } : { error: ((e as Error)?.message ?? "").slice(0, 200) }), retries: events.filter((x) => x.type === "retry").length, elapsedMs: Date.now() - startedAt }));
     return failure;
   };
@@ -272,19 +314,42 @@ export async function POST(req: NextRequest) {
     return res;
   };
   if (stage === "plan") {
-    const planPrompt = prompt + planStagePrompt();
+    /* the plan stage writes no actions, so it goes without the action guides — a brief that names analysis, quotas, translation and MaxDiff sent ~40k characters of guides with it (evidence: 43,698 prompt characters) */
+    const planText = (c: boolean) => planPromptOf(c) + planStagePrompt({ longBrief });
+    const planPrompt = planText(false);
+    const planContext = () => ({ mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, messageChars: message.length, cached: false, provider: providerNote(events), ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}) });
+    const maxQuestions = longBrief ? 1 : 5;
     try {
       const pb = outputBudget("plan");
       const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" },
-        () => fitting((c) => shared("plan", promptOf(c) + planStagePrompt(), () => model(() => completeJson(...copilotCall(promptOf(c) + planStagePrompt()), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
+        () => fitting((c) => shared("plan", planText(c), () => model(() => completeJson(...copilotCall(planText(c)), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
         return NextResponse.json({ ...body, failure: failureOf(body) }, { status: r.status });
       }
       charge += m.event?.customerCharge ?? 0;
-      const plan = coerceChangePlan(fake ?? m.value);
-      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: planPrompt.length, cached: false, provider: providerNote(events) }, usage: { charge } });
+      const first = fake ?? m.value;
+      const plan = coerceChangePlan(first, { maxQuestions });
+      if (plan) return NextResponse.json({ ok: true, stage: "plan", plan, context: planContext(), usage: { charge } });
+      if (longBrief) {
+        /*
+         * A BRIEF GETS A PLAN, NOT A QUESTIONNAIRE BACK (evidence 2026-10-16 12:49). The model answered with
+         * questions: it is asked once more for the plan alone, assumptions stated. If it still has no plan, the
+         * researcher gets ONE focused question — never a list, and never a full single-reply generation of a
+         * 25,000-character brief (the call most likely to be cut off and paid for twice).
+         */
+        const retryText = (c: boolean) => planText(c) + planRetryPrompt();
+        const m2 = await meteredAi(meter, ctx, "AI_REQUEST", { ...consent, estimateText: COPILOT_SYSTEM_PROMPT + retryText(false), maxTokens: pb.expectedTokens, operation: "copilot_plan_retry" },
+          () => fitting((c) => shared("plan_retry", retryText(c), () => model(() => completeJson(...copilotCall(retryText(c)), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan_retry", onEvent })))));
+        if (m2.ok) charge += m2.event?.customerCharge ?? 0;
+        const second = fakes.length ? fakes[1] ?? null : m2.ok ? m2.value : null;
+        const plan2 = coerceChangePlan(second, { maxQuestions });
+        if (plan2) return NextResponse.json({ ok: true, stage: "plan", plan: plan2, context: { ...planContext(), planRetried: true }, usage: { charge } });
+        const q = firstQuestion(second, first);
+        const reply = { kind: "clarify", reply: q ? `Before I plan this brief I need one thing: ${q}` : "I could not turn this brief into a plan yet. Say which part to plan first — for example the research design and the screener — and I will plan the rest from there.", plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: q ? [q] : [], sources: [] };
+        return NextResponse.json({ ok: true, reply, validation: null, passages: {}, context: { ...planContext(), planRetried: true }, usage: { charge } });
+      }
       // nothing plan-shaped came back: the single-reply turn below, as before (and the scripted reply, if any, is that turn's)
     } catch (e) {
       return failedTurn(failureOfError(e, "plan"), planPrompt.length);
@@ -314,12 +379,13 @@ export async function POST(req: NextRequest) {
     let halted: TurnFailure | null = null;
     const ib = outputBudget("item");
     const itemDeadline = deadline - GATE_RESERVE_MS;
+    const softStop = startedAt + Math.min(STAGE_SOFT_MS, budgetMs);
     let slowest = 0;
     if (!finalize) for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
-      if (newlyBuilt.length && itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5)) break;
+      if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
       const itemPrompt = prompt + executeItemPrompt(plan, item, i, approved, done);
       const t0 = Date.now();
       try {
@@ -502,6 +568,11 @@ export async function POST(req: NextRequest) {
    * Studio's words.
    */
   if (reply && applied && typeof reply.memory === "string") reply = { ...reply, memory: memoryWithRefusals(reply.memory, applied.results) };
+  /* NEVER "SUCCESS" WHEN NOTHING WAS DONE: a batch the engine refused entirely, a reply that claims a change it did not propose, an approved plan whose items came back empty */
+  reply = honestReply(reply, applied?.results ?? null);
+  if (executedPlan && !reply.actions.length) reply = { ...reply, kind: "answer", reply: `Nothing was built: the approved item${executedPlan.items.length === 1 ? "" : "s"} came back without any changes to apply. Nothing was changed — press Resume to build ${executedPlan.items.length === 1 ? "it" : "them"} again, or ask for one block at a time.` };
+  /* a mixed request: the supported part was done; the Studio names the rest */
+  if (outside.length) reply = { ...reply, reply: `${reply.reply} ${outsideNote(outside)}`.slice(0, 4000) };
   return NextResponse.json({
     ok: true, reply,
     ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}), ...(planPending.length ? { planPending, partial: true } : {}) } : {}),
@@ -509,7 +580,7 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}) },
     usage: { charge },
   });
 }

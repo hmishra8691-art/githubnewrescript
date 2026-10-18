@@ -22,10 +22,10 @@ test("the memory and the last three exchanges are read back from the records of 
   assert.equal(m.memory, "Skincare, 18–35, 10 minutes max; 5-point scales.", "the newest memory of a turn that succeeded");
   assert.deepEqual(m.history.map((h) => h.role), ["user", "copilot", "user", "copilot", "user", "copilot"]);
   assert.equal(m.history[0].text, "make a skincare survey");
-  assert.equal(m.history[1].text, "I propose five blocks. [proposed 2 actions]");
+  assert.equal(m.history[1].text, "I propose five blocks. [proposed 2 actions: a, b]", "the proposed changes by name — the next turn's referents (2026-10-17)");
   assert.equal(m.history[3].text, "A 5-point scale.");
   assert.equal(m.history[4].text, "shorter please");
-  assert.equal(m.history[5].text, "Cut to 3 blocks. [proposed 1 actions]");
+  assert.equal(m.history[5].text, "Cut to 3 blocks. [proposed 1 actions: x]");
   assert.ok(!JSON.stringify(m).includes("oldest"), "only the last three");
   assert.deepEqual(memoryFromOps([]), { history: [] });
 });

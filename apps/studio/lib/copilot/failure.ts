@@ -238,7 +238,7 @@ const TOO_LONG = /too long|too large|context[ _-]?(length|window)|maximum contex
  * busy, a connection to fix, a limit reached — and never quotes the
  * provider's status code or response body (those are in the server log).
  */
-export function failureFromError(input: string | { message?: string; kind?: string; retryAfterMs?: number; status?: number; detail?: string; name?: string }, opts: { own?: string } = {}): TurnFailure {
+export function failureFromError(input: string | { message?: string; kind?: string; retryAfterMs?: number; status?: number; detail?: string; name?: string }, opts: { own?: string; /** the exception was not the provider's (no ProviderError): words that name no provider failure are the Studio's own fault, not "the AI service could not process this" */ studio?: boolean } = {}): TurnFailure {
   if (input && typeof input === "object" && typeof input.kind === "string" && input.kind in CODE_OF_KIND) {
     if (input.kind === "bad_request" && TOO_LONG.test(`${input.message ?? ""} ${input.detail ?? ""}`)) return describeFailure("too_long");
     const code = CODE_OF_KIND[input.kind];
@@ -253,6 +253,13 @@ export function failureFromError(input: string | { message?: string; kind?: stri
   if (refused) return describeFailure(refused[1] === "401" ? "auth" : refused[1] === "403" ? "forbidden" : refused[1] === "404" ? "not_found" : "provider", undefined, opts.own ? { own: opts.own } : {});
   if (/rate-limiting|is unavailable \(|overloaded/i.test(m) || status === "429") return describeFailure("capacity");
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|network|socket|ECONNRESET|TLS|certificate|could not reach/i.test(m)) return describeFailure("network", m.slice(0, 160));
+  /*
+   * AN EXCEPTION IN THE STUDIO IS NOT THE PROVIDER'S REFUSAL (2026-10-17). A route bug, a scope that was not set,
+   * a TypeError while building the call — none of these reached the AI service, yet they fell through to "THE AI
+   * SERVICE COULD NOT PROCESS THIS REQUEST … try rephrasing", which sent researchers to rephrase a sentence that
+   * was never the problem. The words stay in the server log, never on the card.
+   */
+  if (opts.studio) return describeFailure("unexpected");
   return describeFailure("provider");
 }
 

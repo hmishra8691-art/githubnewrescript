@@ -4,7 +4,7 @@ import type { AnalysisDefinition, ChartSpec, ChartType, DashboardDefinition, Das
 import type { VariableMeta } from "./dataset.js";
 import { hashDefinition } from "./analyses/common.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
-import { surveyKnownNames, validateAnalysis } from "./planCheck.js";
+import { plannedItemReadiness, surveyKnownNames, validateAnalysis } from "./planCheck.js";
 import type { AnalysisRun, Finding, RunItem } from "./findings.js";
 import { briefText } from "./findings.js";
 import { firstFreeSlot, normalizeLayout } from "./dashboardLayout.js";
@@ -251,6 +251,8 @@ export function planItemViews(def: SurveyDefinition, dataset: DatasetSpec, ctx: 
     if (missing.length) issues.unshift({ level: "critical", message: `Reads ${missing.join(", ")}, which ${missing.length === 1 ? "is" : "are"} not in this survey's data.`, suggestion: "Change the variable, or remove the item from the plan." });
     /* ONE VALIDATOR (audit P-13): what "create the planned analyses" refuses (a shape the runner cannot compute) is invalid here too, so the apply and that button agree */
     for (const i of validateAnalysis(derived, ctx.dictionary, knownNames).filter((x) => x.severity === "error" && x.code !== "unknown_variable")) issues.push({ level: "critical", message: i.message });
+    /* …and the roles its method needs (the Apply audit, 2026-10-17): the plan editor refuses exactly these, so an item it accepted is never "invalid" here for a reason it did not say */
+    for (const msg of plannedItemReadiness(kind === "crosstab" ? { kind, crosstab: item as PlannedCrosstab } : { kind, test: item as PlannedTest }, ctx.dictionary, def).missing) if (!issues.some((i) => i.message === msg)) issues.push({ level: "critical", message: msg });
     const saved = analysisByPlanned.get(item.id);
     const chartRow = saved ? (chartsByAnalysis.get(saved.id) ?? []).find((c) => c.spec?.id === `plan:${item.id}`) ?? (chartsByAnalysis.get(saved.id) ?? [])[0] : undefined;
     const runItem = runByPlanned.get(item.id);

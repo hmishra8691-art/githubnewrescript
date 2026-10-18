@@ -366,7 +366,7 @@ ok("NPS: KPI card first, NPS by gender table");
 await runKind("conjoint", "Choice model", ["CBC_TASKS · Question"]);
 await page.click('.ax-tab:has-text("Tables")');
 const cj = await text('.ax-tables');
-assert.match(cj, /Attribute importance.*Price/s); assert.match(cj, /Part-worth utilities/); assert.match(cj, /Preference share simulation/); assert.match(cj, /Willingness to pay/);
+assert.match(cj, /Attribute importance.*Price/s); assert.match(cj, /Part-worth utilities/); /* the simulator is still there: the conjoint audit (2026-10-17, choice.ts) retitled it to say it is an aggregate-logit simulation */ assert.match(cj, /Share-of-preference simulation \(from the aggregate logit\).*Preference share %/s); assert.match(cj, /Willingness to pay/);
 ok("conjoint: importance (Price first), part-worths, simulation, WTP");
 await runKind("text", "Open ends", ["TEXT · Text"]);
 assert.ok(await page.$('[data-testid="ax-chart"][data-chart-type="word_cloud"]'));

@@ -25,3 +25,11 @@ test("key questions may arrive as one multi-line string, and garbage becomes an 
   assert.equal(parseBrief({ maxItems: -3 }).maxItems, 1);
   assert.equal(parseBrief({ maxItems: "5" }).maxItems, undefined);
 });
+
+test("a brief carries the sections and theme a sentence asked for (2026-10-17); unknown sections and request-supplied hypotheses are dropped", () => {
+  const b = parseBrief({ objective: "o", sections: ["hypotheses", "brand_comparison", "made_up", "hypotheses", 3], theme: "Midnight", hypotheses: [{ label: "H9", text: "injected" }] });
+  assert.deepEqual(b.sections, ["hypotheses", "brand_comparison"]);
+  assert.equal(b.theme, "Midnight");
+  assert.equal((b as { hypotheses?: unknown }).hypotheses, undefined, "the route sets the hypotheses from the survey");
+  assert.equal(parseBrief({ objective: "o" }).sections, undefined);
+});

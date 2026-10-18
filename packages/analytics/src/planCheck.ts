@@ -1,8 +1,8 @@
 import type { AnalysisDefinition } from "./types.js";
 import type { VariableMeta } from "./dataset.js";
-import type { PlannedAnalysis } from "./planBridge.js";
+import { crosstabDefinition, testDefinition, type PlannedAnalysis } from "./planBridge.js";
 import { scaleOf } from "./questionChart.js";
-import type { SurveyDefinition } from "@rescript/schema";
+import type { PlannedCrosstab, PlannedTest, SurveyDefinition } from "@rescript/schema";
 import { isNonQuestionVariable } from "@rescript/engine";
 
 /**
@@ -16,10 +16,100 @@ import { isNonQuestionVariable } from "@rescript/engine";
  * showed as blank or wall-of-warning results. They are caught here instead,
  * with a reason the researcher can act on.
  */
-export type IssueCode = "unknown_variable" | "no_variables" | "missing_axis" | "wrong_type" | "needs_groups" | "same_variable";
+export type IssueCode = "unknown_variable" | "no_variables" | "missing_axis" | "wrong_type" | "needs_groups" | "same_variable" | "missing_input";
 export interface PlanIssue { code: IssueCode; message: string; variables?: string[]; severity: "error" | "warning" }
 
 const NUMERIC_KINDS = new Set(["regression", "correlation", "factor", "reliability", "cluster"]);
+
+/**
+ * How many items the runner will read from these names — a battery (a matrix
+ * question, a multi-select's option flags) named by its question counts each
+ * of its items, exactly as the runners' `expandBattery` reads it. A name the
+ * dictionary does not describe counts once.
+ */
+export function expandedItemCount(names: readonly string[], variables: readonly VariableMeta[]): number {
+  const byName = new Map(variables.map((v) => [v.name, v]));
+  const out = new Set<string>();
+  for (const n of names) {
+    if (!n) continue;
+    const meta = byName.get(n);
+    const isItem = meta && (meta.optionCode != null || meta.rowCode != null);
+    const siblings = meta?.questionId && !isItem ? variables.filter((v) => v.questionId === meta.questionId && (v.optionCode != null || v.rowCode != null) && !v.derived) : [];
+    if (siblings.length) for (const s of siblings) out.add(s.name); else out.add(n);
+  }
+  return out.size;
+}
+
+/** the one-sample tests read one variable; every other test compares two or more */
+const ONE_VARIABLE_TESTS = new Set(["t_one_sample", "proportion_one_sample"]);
+const THREE_VARIABLE_TESTS = new Set(["anova_two_way"]);
+
+/**
+ * WHAT EACH KIND OF ANALYSIS NEEDS BEFORE IT CAN RUN (the Apply audit, 2026-10-17).
+ * The same minimums the runners refuse below (each runner's own early return),
+ * so a definition this calls ready is one the runner computes, and one it calls
+ * not ready names the missing input in the researcher's words. Shape only:
+ * whether a name exists is `unknown_variable`, not this.
+ */
+export function missingInputs(def: AnalysisDefinition, variables: readonly VariableMeta[] = []): PlanIssue[] {
+  const vs = (def.variables ?? []).filter(Boolean);
+  const items = () => expandedItemCount(vs, variables);
+  const o = (def.options ?? {}) as Record<string, unknown>;
+  const list = (k: string) => (Array.isArray(o[k]) ? (o[k] as unknown[]).filter((x) => typeof x === "string" && x) as string[] : []);
+  const out: PlanIssue[] = [];
+  const need = (message: string) => out.push({ code: "missing_input", severity: "error", message });
+  switch (def.kind) {
+    case "correlation": if (vs.length && items() < 2) need("Correlation needs at least two numeric or scale variables — add a second variable."); break;
+    case "factor": if (vs.length && items() < 3) need("Factor analysis needs at least three numeric or scale items — add more items of the battery."); break;
+    case "reliability": if (vs.length && items() < 2) need("Reliability needs at least two items of the same scale — add the other items."); break;
+    case "cluster": if (vs.length && items() < 2) need("Cluster analysis needs at least two numeric or scale variables to cluster on — add a second variable."); break;
+    case "regression": {
+      const model = String(o.model ?? "linear");
+      if (model === "mediation" && vs.length && vs.length < 3) need("Mediation needs three variables in order: the outcome, the predictor and the mediator.");
+      else if (vs.length === 1) need("Regression needs the dependent variable first, then at least one predictor — add a predictor.");
+      break;
+    }
+    case "test": {
+      const t = String(o.test ?? "auto");
+      if (ONE_VARIABLE_TESTS.has(t)) break;
+      if (THREE_VARIABLE_TESTS.has(t) && vs.length && vs.length < 3) need("A two-way ANOVA needs the outcome and two grouping factors.");
+      break;   // fewer than two variables for a two-sample test is `needs_groups` below
+    }
+    case "brand": { const stages = Array.isArray(o.stages) ? (o.stages as unknown[]).length : 0; if (stages < 2 && vs.length === 1) need("A brand funnel needs at least two stages over the same brand list (e.g. awareness and consideration) — add the next stage's question."); break; }
+    case "gap": {
+      const imp = list("importance"), perf = list("performance");
+      if (imp.length || perf.length) {
+        if (!imp.length) need("Importance × performance needs the importance items — set them in Options.");
+        else if (!perf.length) need("Importance × performance needs the performance items (in the same order as the importance items) — set them in Options.");
+      } else if (vs.length && vs.length < 2) need("Importance × performance needs matched importance and performance items — set them in Options, or pick both sets of variables.");
+      break;
+    }
+    case "pricing": {
+      if (String(o.method ?? "van_westendorp") === "gabor_granger") {
+        const prices = Array.isArray(o.prices) ? (o.prices as unknown[]).length : 0;
+        if (prices && vs.length && prices !== items()) out.push({ code: "missing_input", severity: "warning", message: `Gabor-Granger has ${prices} price point${prices === 1 ? "" : "s"} for ${items()} purchase-intent item${items() === 1 ? "" : "s"} — give one price per item, in item order.` });
+      } else {
+        const named = ["tooCheap", "cheap", "expensive", "tooExpensive"].filter((k) => typeof o[k] === "string" && o[k]).length;
+        if (vs.length && Math.max(vs.length, named) < 4) need(`Van Westendorp needs the four price questions in order — too cheap, bargain, expensive, too expensive (${Math.max(vs.length, named)} chosen).`);
+      }
+      break;
+    }
+    case "segmentation": if (!(def.segments?.length)) need("A segment profile compares saved segments — choose at least one in Segments & weighting."); break;
+    case "weighting": if (!(def.weighting && (def.weighting.variable || def.weighting.rim?.length))) need("Weighting needs rim targets or a weight variable — add them in Segments & weighting."); break;
+    default: break;
+  }
+  return out;
+}
+
+/** the kinds whose inputs are set somewhere other than the variable list, so an empty list is not by itself "no variables" */
+const kindNeedsNoVariables = (def: AnalysisDefinition): boolean => {
+  if (def.kind === "quality" || def.kind === "weighting" || def.kind === "segmentation") return true;
+  const o = (def.options ?? {}) as Record<string, unknown>;
+  if (def.kind === "gap") return Array.isArray(o.importance) && (o.importance as unknown[]).length > 0;
+  if (def.kind === "brand") return Array.isArray(o.stages) && (o.stages as unknown[]).length >= 2;
+  if (def.kind === "pricing") return ["tooCheap", "cheap", "expensive", "tooExpensive"].every((k) => typeof o[k] === "string" && o[k]);
+  return false;
+};
 
 /** Names the analysis refers to that the dataset does not know. */
 export function unknownVariables(def: Pick<AnalysisDefinition, "variables" | "rows" | "columns" | "segments">, known: { has(n: string): boolean }): string[] {
@@ -46,9 +136,10 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
     if (!(def.rows?.length) || !(def.columns?.length)) out.push({ code: "missing_axis", severity: "error", message: "A crosstab needs at least one row variable and one column variable." });
     const same = (def.rows ?? []).filter((r) => (def.columns ?? []).includes(r));
     if (same.length) out.push({ code: "same_variable", severity: "error", variables: same, message: `${same.join(", ")} is tabulated against itself.` });
-  } else if (def.kind !== "quality" && def.kind !== "weighting" && !(def.variables?.length)) {
+  } else if (!kindNeedsNoVariables(def) && !(def.variables?.filter(Boolean).length)) {
     out.push({ code: "no_variables", severity: "error", message: "This analysis has no variables chosen." });
   }
+  out.push(...missingInputs(def, variables));
   if (NUMERIC_KINDS.has(def.kind)) {
     const bad = (def.variables ?? []).filter((v) => { const s = scaleOf(meta.get(v)); return s === "text" || s === "nominal" && def.kind !== "regression" && def.kind !== "cluster"; });
     if (bad.length && !dead.length) out.push({ code: "wrong_type", severity: "error", variables: bad, message: `${def.kind} needs numeric or scale variables; ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} categorical or text.` });
@@ -57,9 +148,27 @@ export function validateAnalysis(def: AnalysisDefinition, variables: readonly Va
     const bad = (def.variables ?? []).filter((v) => { const s = scaleOf(meta.get(v)); return s === "text" || s === "nominal" || s === "multi"; });
     if (bad.length && !dead.length) out.push({ code: "wrong_type", severity: "error", variables: bad, message: `A mean needs a numeric or scale variable; ${bad.join(", ")} ${bad.length === 1 ? "is" : "are"} not.` });
   }
-  if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) < 2) out.push({ code: "needs_groups", severity: "error", message: "A significance test compares an outcome across a grouping or a second variable — one variable is not enough." });
+  const oneSample = def.kind === "test" && ONE_VARIABLE_TESTS.has(String(def.options?.test ?? "auto"));
+  if (def.kind === "test" && !oneSample && !dead.length && (def.variables?.length ?? 0) === 1) out.push({ code: "needs_groups", severity: "error", message: "A significance test compares an outcome across a grouping or a second variable — one variable is not enough. Add the grouping variable, or choose a one-sample test in Options." });
   if (def.kind === "test" && !dead.length && (def.variables?.length ?? 0) >= 2 && new Set(def.variables).size < 2) out.push({ code: "same_variable", severity: "error", variables: [...new Set(def.variables)], message: `${def.variables![0]} is tested against itself.` });
   return out;
+}
+
+/**
+ * CAN THIS ANALYSIS BE APPLIED? — the ONE rule the builder's Run button, the
+ * run route, the plan editor and the plan's item states all read (the Apply
+ * audit, 2026-10-17). `ready` is false exactly when `validateAnalysis` has an
+ * error; `missing` lists each in the researcher's words, so a disabled button
+ * always says what to add. Names are checked only when asked (`checkNames`):
+ * the builder picks from the dictionary, and the server resolves the plan's
+ * own computed variables, so a name check there would refuse what runs.
+ */
+export interface Readiness { ready: boolean; missing: string[]; warnings: string[]; codes: IssueCode[] }
+export function analysisReadiness(def: AnalysisDefinition, variables: readonly VariableMeta[] = [], opts: { checkNames?: boolean; extraNames?: KnownNames } = {}): Readiness {
+  const issues = validateAnalysis(def, variables, opts.checkNames ? (opts.extraNames ?? []) : () => true)
+    .filter((i) => opts.checkNames || i.code !== "unknown_variable");
+  const errors = issues.filter((i) => i.severity === "error");
+  return { ready: !errors.length, missing: errors.map((i) => i.message), warnings: issues.filter((i) => i.severity === "warning").map((i) => i.message), codes: errors.map((i) => i.code) };
 }
 
 /* ------------------------------------------------------------------ duplicates */
@@ -169,4 +278,54 @@ export function reviewAgainstSaved(
     toCreate.push(it);
   }
   return { toCreate, existingFor, blocked, duplicates };
+}
+
+/* ------------------------------------------------------------------ a planned item, before it is saved */
+
+const words = (m: string) => m.replace(/_/g, " ");
+/** a method named the way a sentence starts with it: "An ANOVA", "A t-test" */
+const A_METHOD: Record<string, string> = { t_test: "A t-test", anova: "An ANOVA", mann_whitney: "A Mann–Whitney test", kruskal_wallis: "A Kruskal–Wallis test", regression: "A regression", logistic_regression: "A logistic regression", driver_analysis: "A driver analysis" };
+const aMethod = (m: string) => A_METHOD[m] ?? `${/^[aeiou]/i.test(m) ? "An" : "A"} ${words(m)}`;
+const GROUP_TESTS = new Set(["t_test", "anova", "mann_whitney", "kruskal_wallis"]);
+const MODEL_TESTS = new Set(["regression", "logistic_regression", "driver_analysis"]);
+
+/**
+ * A PLANNED crosstab or test (the plan editor, the copilot's plan actions, the
+ * plan's item states) judged by the same rule as a built analysis: the roles
+ * its method needs (an outcome, a grouping, predictors) first, in the plan's
+ * own words, then `analysisReadiness` on the analysis it becomes. The editor's
+ * "Add to the plan" and the apply's "skipped (invalid)" can no longer disagree.
+ */
+export function plannedItemReadiness(item: { kind: "crosstab"; crosstab: Pick<PlannedCrosstab, "rows" | "columns"> & Partial<PlannedCrosstab> } | { kind: "test"; test: Pick<PlannedTest, "method" | "variables"> & Partial<PlannedTest> }, variables: readonly VariableMeta[] = [], def?: SurveyDefinition): Readiness {
+  const spec = { environment: "LIVE" as const, dataset: "all" as const };
+  const missing: string[] = [];
+  if (item.kind === "crosstab") {
+    const x = item.crosstab;
+    if (!x.rows?.length) missing.push("Choose at least one row variable.");
+    if (!x.columns?.length) missing.push("Choose at least one column variable.");
+    const same = (x.rows ?? []).filter((r) => (x.columns ?? []).includes(r));
+    if (same.length) missing.push(`${same.join(", ")} cannot be both a row and a column.`);
+    if (missing.length) return { ready: false, missing, warnings: [], codes: missing.map(() => "missing_input") };
+    const r = analysisReadiness(crosstabDefinition({ id: x.id ?? "draft", rows: x.rows, columns: x.columns, measure: x.measure, priority: x.priority ?? 2, hypotheses: x.hypotheses ?? [] } as PlannedCrosstab, spec, def), variables);
+    return r;
+  }
+  const t = item.test;
+  const vars = (t.variables ?? []).filter(Boolean);
+  const m = t.method;
+  if (GROUP_TESTS.has(m)) {
+    if (!t.outcome && !vars.length) missing.push(`${aMethod(m)} compares an outcome across groups — choose the outcome.`);
+    if (!t.groupBy && !(t.outcome && vars.length)) missing.push(`${aMethod(m)} compares groups — choose the grouping variable.`);
+  } else if (m === "chi_square") {
+    const n = [t.outcome, t.groupBy, ...vars].filter(Boolean).length;
+    if (n < 2) missing.push("A chi-square test needs two categorical variables — an outcome and a grouping (or a second variable).");
+  } else if (MODEL_TESTS.has(m)) {
+    if (!t.outcome) missing.push(`${aMethod(m)} needs an outcome (the dependent variable).`);
+    if (!vars.length && !t.moderator && !t.mediator) missing.push(`${aMethod(m)} needs at least one predictor — add it under Variables.`);
+  } else if (m === "correlation") {
+    if ([t.outcome, ...vars].filter(Boolean).length < 2) missing.push("A correlation needs two or more numeric or scale variables (the outcome and a variable, or two variables).");
+  } else if (m === "reliability") {
+    if (vars.length + (t.outcome ? 1 : 0) < 2 && expandedItemCount([...(t.outcome ? [t.outcome] : []), ...vars], variables) < 2) missing.push("Reliability needs at least two items.");
+  } else if (!t.outcome && !vars.length && !t.groupBy) missing.push(`${aMethod(m)} needs the variable it reads — choose it under Variables.`);
+  if (missing.length) return { ready: false, missing, warnings: [], codes: missing.map(() => "missing_input") };
+  return analysisReadiness(testDefinition({ id: t.id ?? "draft", priority: t.priority ?? 2, hypotheses: t.hypotheses ?? [], ...t, variables: vars } as PlannedTest, spec, def), variables);
 }

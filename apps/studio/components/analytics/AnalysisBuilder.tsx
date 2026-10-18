@@ -3,7 +3,7 @@ import { stableStringify } from "@/lib/stableJson";
 import React from "react";
 import type { Condition } from "@rescript/schema";
 import type { AnalysisDefinition, AnalysisKind, ChartSpec, DatasetSpec, ReportTheme, SegmentDef, VariableMeta, VariableRole } from "@rescript/analytics";
-import { ANALYSIS_KINDS } from "@rescript/analytics";
+import { ANALYSIS_KINDS, analysisReadiness } from "@rescript/analytics";
 import { AxApi, type Row, type RunResult } from "./api";
 import { FilterBuilder, conditionText, emptyCondition, isEmptyCondition } from "./FilterBuilder";
 import { ResultView, downloadPng, downloadSvg } from "./ResultView";
@@ -295,7 +295,15 @@ export function AnalysisBuilder(p: BuilderProps) {
   const segmentsChosen = def.segments ?? [];
   const toggleSegment = (s: Row) => { const cur = segmentsChosen; update({ segments: cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, { id: s.id, name: s.name, condition: s.condition as Condition, color: s.color ?? undefined }] }); };
   const roles = ROLE_FOR_KIND[def.kind];
-  const canRun = def.kind === "quality" || def.variables.length > 0 || (def.kind === "crosstab" && (def.rows?.length ?? 0) > 0 && (def.columns?.length ?? 0) > 0) || (def.kind === "gap" && !!(def.options?.importance as string[])?.length);
+  /*
+   * ONE RULE (the Apply audit, 2026-10-17): Run is enabled exactly when the analytics package's
+   * `analysisReadiness` — the same check the run route, the plan editor and the plan's item states
+   * read — says the definition can be computed; when it cannot, the footer names what is missing.
+   * The old local rule enabled any kind with one variable (a correlation of one variable "ran" into
+   * a warning) and disabled weighting by rim targets and segment profiles, which need no variables.
+   */
+  const readiness = React.useMemo(() => analysisReadiness(def, p.variables), [def, p.variables]);
+  const canRun = readiness.ready;
   const goSection = (i: number) => { if (i === 5) { if (result) setStage("results"); else void run(); return; } setStage("builder"); setSection(i); };
   const chartHost = React.useRef<HTMLDivElement | null>(null);
   /* where a variable ticked in the picker lands: Rows until one is there, then Columns — or wherever the researcher points */
@@ -450,7 +458,9 @@ export function AnalysisBuilder(p: BuilderProps) {
         <span className="grow" />
         {stage === "builder" && section > 0 && <button className="btn small" onClick={() => setSection(section - 1)}>Back</button>}
         {stage === "builder" && section < 4 && <button className="btn small" onClick={() => setSection(section + 1)}>Next</button>}
-        <button className="btn primary" disabled={!canRun || running} onClick={run} data-testid="ax-run">{running ? "Running…" : stale ? "Run again" : "Run analysis"}</button>
+        {!canRun && <span className="ax-error" data-testid="ax-run-missing" role="status">{readiness.missing.join(" ")}</span>}
+        {canRun && readiness.warnings.length > 0 && <span className="muted" style={{ fontSize: 12.5 }} data-testid="ax-run-warning">{readiness.warnings.join(" ")}</span>}
+        <button className="btn primary" disabled={!canRun || running} onClick={run} data-testid="ax-run" data-ready={canRun ? "1" : "0"} title={canRun ? undefined : readiness.missing.join(" ")}>{running ? "Running…" : stale ? "Run again" : "Run analysis"}</button>
       </div>
     </div>
   );

@@ -47,7 +47,14 @@ export async function generate() {
     "question-types.md": questionTypes(engine, schema),
     "logic-reference.md": logicReference(engine, schema),
     "actions-reference.md": actionsReference(engine),
+    "capabilities.md": capabilities(engine),
   };
+}
+
+/* ------------------------------------------------------------ capabilities */
+
+function capabilities(engine) {
+  return [STAMP, "", "# Capabilities", "", "What ReScript supports, partly supports and does not support — methodologies, analytical procedures, qualitative research, question types and exports. Generated from the engine's capability registry (`packages/engine/src/capabilities.ts`), which reads the question-type registry and the analysis-method vocabulary, so this page and what Intelligent Mode is told cannot disagree. *Partial* says what works; *not supported* names the supported alternative.", "", engine.capabilityMarkdown()].join("\n");
 }
 
 /* ------------------------------------------------------------ question types */
@@ -122,7 +129,7 @@ function actionsReference(engine) {
   const out = [];
   out.push(STAMP, "", "# Actions reference", "", "Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of operations the engine validates and applies to a copy of the definition before anything is shown for approval. A sentence the engine reads becomes actions; a language model's answer is actions too, in the same vocabulary, through the same gate. Every action names its objects by question code (`Q7`), variable name (`AGE`), option code or label, block title or batch ref (`ref` on a `create_*` action, usable by later actions in the same batch). Conditions (`CondInput`) are the text logic language or a JSON `Condition`.", "");
   const ops = (name, list) => `**${name}** (${list.length}): ${list.map(code).join(", ")}`;
-  out.push("## The operations", "", ops("Survey", engine.SURVEY_ACTION_OPS.filter((o) => !engine.UX_ACTION_OPS.includes(o) && !engine.ANALYSIS_ACTION_OPS.includes(o) && !engine.LOCALIZATION_ACTION_OPS.includes(o) && !engine.QUOTA_ACTION_OPS.includes(o) && !engine.LIST_FILL_ACTION_OPS.includes(o) && !engine.METHOD_ACTION_OPS.includes(o) && !engine.OPTION_ACTION_OPS.includes(o))), "", ops("Options and design", engine.OPTION_ACTION_OPS), "", ops("Look and behaviour (UX)", engine.UX_ACTION_OPS), "", ops("Analysis", engine.ANALYSIS_ACTION_OPS), "", ops("Localization", engine.LOCALIZATION_ACTION_OPS), "", ops("Quotas", engine.QUOTA_ACTION_OPS), "", ops("List Fill", engine.LIST_FILL_ACTION_OPS), "", ops("Research methods (MaxDiff, conjoint)", engine.METHOD_ACTION_OPS), "");
+  out.push("## The operations", "", ops("Survey", engine.SURVEY_ACTION_OPS.filter((o) => !engine.UX_ACTION_OPS.includes(o) && !engine.ANALYSIS_ACTION_OPS.includes(o) && !engine.LOCALIZATION_ACTION_OPS.includes(o) && !engine.QUOTA_ACTION_OPS.includes(o) && !engine.LIST_FILL_ACTION_OPS.includes(o) && !engine.METHOD_ACTION_OPS.includes(o) && !engine.OPTION_ACTION_OPS.includes(o) && !(engine.RESEARCH_ACTION_OPS ?? []).includes(o))), "", ops("Options and design", engine.OPTION_ACTION_OPS), "", ops("Look and behaviour (UX)", engine.UX_ACTION_OPS), "", ops("Analysis", engine.ANALYSIS_ACTION_OPS), "", ops("Localization", engine.LOCALIZATION_ACTION_OPS), "", ops("Quotas", engine.QUOTA_ACTION_OPS), "", ops("List Fill", engine.LIST_FILL_ACTION_OPS), "", ops("Research methods (MaxDiff, conjoint)", engine.METHOD_ACTION_OPS), "", ops("Qualitative (AI follow-up probes)", engine.RESEARCH_ACTION_OPS ?? []), "");
   const block = (title, file, re, end) => { out.push(`## ${title}`, "", `From \`${file}\`:`, "", "```ts", sourceBlock(file, re, end), "```", ""); };
   block("Survey actions", "packages/engine/src/surveyActions.ts", /^export type SurveyAction =/, /^\s*\| OptionAction;?\s*$/);
   out.push("Supporting types:", "", "```ts", sourceBlock("packages/engine/src/surveyActions.ts", /^export type OptionSpec =/, /;\s*$/), sourceBlock("packages/engine/src/surveyActions.ts", /^export interface ScaleSpec/, /\}\s*$/), sourceBlock("packages/engine/src/surveyActions.ts", /^export interface ValidationSpec/, /\}\s*$/), "```", "");
@@ -132,6 +139,7 @@ function actionsReference(engine) {
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);
   block("Quota actions", "packages/engine/src/quotaActions.ts", /^export type QuotaAction =/, /;\s*$/);
   block("Research method actions (MaxDiff, conjoint)", "packages/engine/src/methodActions.ts", /^export type MethodAction =/, /;\s*$/);
+  block("Qualitative actions (AI follow-up probes)", "packages/engine/src/researchActions.ts", /^export type ResearchAction =/, /;\s*$/);
   out.push("Supporting types:", "", "```ts", ...["MethodPlacement", "MaxDiffSpec", "ConjointSpec"].map((n) => sourceBlock("packages/engine/src/methodActions.ts", new RegExp(`^export interface ${n}\\b`), /^\}\s*$/)), "```", "");
   out.push("## Friendly type names", "", "`create_question.type` and `update_question.type` accept a base type, a variant id, or one of these names:", "", "```ts", sourceBlock("packages/engine/src/surveyActions.ts", /^(export )?const ACTION_TYPES/, /^\};?\s*$/), "```", "");
   return out.join("\n");

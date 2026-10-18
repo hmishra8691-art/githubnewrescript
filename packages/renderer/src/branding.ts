@@ -58,15 +58,16 @@ export function brandingVars(b: Branding): Record<string, string> {
     "--rs-radius": b.layout.radius,
     "--rs-gap": b.layout.spacing === "compact" ? "12px" : b.layout.spacing === "relaxed" ? "28px" : "20px",
     /*
-     * Alignment (Sept 21): "left"/"right" pin the shell to that edge by
-     * zeroing the margin on that side and leaving the other `auto`; "center"
-     * is the old unconditional `margin: 0 auto`. Inert while width mode is
-     * "full" (nothing left over to shift), and takes effect the moment
-     * `maxWidth` actually constrains the shell — "contained" mode, or custom
-     * CSS narrowing a "full" survey back down.
+     * Alignment — of the TEXT inside the frame, never of the frame (2026-10-17).
+     * It used to pin the whole shell to the left/right edge by zeroing a
+     * margin, and "left" is the schema default stored on every survey: any
+     * theme that made the frame narrower than the window ("contained", a
+     * preset's maxWidth on a tablet) threw the survey against the left edge.
+     * The frame is now always centred (questions.css `.rs-shell`); these place
+     * the question text and instructions within it. "left" sets nothing, so
+     * the writing direction decides (an RTL survey stays right-aligned).
      */
-    "--rs-align-ml": b.layout.contentAlign === "left" ? "0" : "auto",
-    "--rs-align-mr": b.layout.contentAlign === "right" ? "0" : "auto",
+    ...contentAlignVars(b.layout.contentAlign),
 
     "--rs-accent": accent,
     "--rs-heading": b.colors.heading ?? b.colors.text,
@@ -108,6 +109,13 @@ export function brandingVars(b: Branding): Record<string, string> {
     vars["--rs-bg-attachment"] = b.background?.attachment ?? "fixed";
   }
   return vars;
+}
+
+/** `contentAlign` → the text-alignment variables questions.css reads on the question text (see brandingVars) */
+export function contentAlignVars(align: "left" | "center" | "right" | undefined): Record<string, string> {
+  if (align === "center") return { "--rs-content-align": "center", "--rs-align-ml": "auto", "--rs-align-mr": "auto" };
+  if (align === "right") return { "--rs-content-align": "right", "--rs-align-ml": "auto", "--rs-align-mr": "0" };
+  return {};
 }
 
 export const SHADOWS: Record<string, string> = {

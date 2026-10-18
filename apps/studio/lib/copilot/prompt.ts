@@ -2,6 +2,8 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
+import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanIntent } from "./researchGuide.ts";
+import { REPORTING_GUIDE } from "./reportingGuide.ts";
 
 /**
  * THE COPILOT'S CONTRACT WITH THE MODEL.
@@ -356,7 +358,14 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
   const t = message.toLowerCase();
   // "review my survey", "check the logic", "audit this questionnaire" — not "the literature review says…"
   const review = /^(?:please\s+|can you\s+|could you\s+)?(?:review|audit|check|critique|evaluate|assess|proofread)\b(?!.*\b(?:add|create|build)\b)|\b(?:review|audit|check|critique|evaluate|assess)\s+(?:my|the|this|our)\s+(?:survey|questionnaire|questions|logic|flow|wording|routing)\b|\bwhat(?:'s| is) wrong\b|\bany (?:problems|issues)\b|survey (?:ka )?review|review (?:karo|kar do)/.test(t);
-  const generate = /\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
+  /*
+   * A LOCALIZED EDIT IS NOT A GENERATION (2026-10-17): "Add a hypothesis about price sensitivity", "Create three
+   * questions to measure it" on a survey that exists add ONE object — they used to read as generation (any
+   * "hypothesis" did) and went to the plan-first path that rebuilds a questionnaire. A sentence that also names the
+   * whole survey ("… and create a survey to test it") is still a generation.
+   */
+  const localized = surveyQuestions >= 3 && /^(?:please\s+|now\s+|also\s+|and\s+|then\s+)*(?:add|insert|include|put|create|write|draft|make|record|update|change|edit|remove|delete|rephrase|reword|link)\b/.test(t) && !/\b(?:survey|questionnaire|study|screener|from scratch)\b/.test(t) && t.length < 400;
+  const generate = !localized && /\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
   const edit = /\b(?:add|remove|delete|change|make|move|rename|randomi[sz]e|shuffle|show|hide|skip|require|mandatory|optional|split|merge|shorten|shorter|reduce|replace|convert|turn|set|insert|put|page break|scale|option|karo|kar do|hatao|jodo)\b/.test(t);
   const research = documents > 0 && (/\b(?:literature|research|paper|papers|study|studies|brief|document|documents|report|reports|findings|evidence|source|sources|uploaded|reading|according to|based on|as per|citation|scale from|validated scale|existing measure)\b/.test(t) || (generate && surveyQuestions < 3));
   const u = uxIntent(t);
@@ -464,27 +473,48 @@ export function copilotUserPrompt(input: {
   /** the request names MaxDiff / conjoint: the methods guide goes with it */
   methods?: boolean;
   findings?: boolean;
+  /** research planning (a brief, hypotheses, methodology, mixed / advanced designs) and qualitative guides: the research / qualitative guides — absent = read from the message and the mode */
+  researchPlan?: boolean;
+  qual?: boolean;
+  /** documents and reports — sent when the request names one (reportingIntent) */
+  reporting?: boolean;
+  /** the plan stage: no action guides (the items carry them) */
+  planOnly?: boolean;
+  /** a pasted brief (isLongBrief): said as one, with the instruction to assume rather than ask */
+  longBrief?: boolean;
+  /** a mixed request: what is outside the platform, said before the request */
+  scopeNote?: string;
 }): string {
   const parts: string[] = [];
   parts.push(`Survey language: ${input.surveyLanguage}`);
   parts.push(`CURRENT SURVEY (outline):\n${input.outline}`);
   if (input.memory?.memory) parts.push(`CONVERSATION MEMORY:\n${input.memory.memory}`);
-  if (input.memory?.history.length) parts.push(`RECENT TURNS:\n${input.memory.history.slice(-6).map((h) => `${h.role === "user" ? "Researcher" : "Copilot"}: ${h.text.slice(0, 400)}`).join("\n")}`);
+  /* 500, as the route keeps them: a copilot line ends with what it proposed ("[proposed 4 actions: hypothesis H3 …, PRICE_1, PRICE_2]") — the referents of the next "it" */
+  if (input.memory?.history.length) parts.push(`RECENT TURNS:\n${input.memory.history.slice(-6).map((h) => `${h.role === "user" ? "Researcher" : "Copilot"}: ${h.text.slice(0, 500)}`).join("\n")}`);
   if (input.research) parts.push(`RESEARCH MATERIAL (only the passages this request needs; cite by id):\n${input.research}`);
   if (input.deterministicFindings?.length) parts.push(`THE ENGINE'S OWN CHECKS ALREADY FOUND (do not repeat these; add what only a reader of meaning would find — research alignment, hypothesis coverage, wording, bias, sequencing, analysis limits):\n${input.deterministicFindings.map((f) => `- ${f}`).join("\n")}`);
   if (input.selected) parts.push(`Selected in the Studio: ${input.selected}`);
-  if (input.ux) parts.push(COPILOT_UX_GUIDE);
-  if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
-  if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
-  if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
-  if (input.listFill) parts.push(COPILOT_LIST_FILL_GUIDE);
-  if (input.methods) parts.push(COPILOT_METHODS_GUIDE);
-  if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
+  /* the plan stage writes no actions: the action guides (up to ~40k characters for a brief that names everything) are for the items, not the plan */
+  if (!input.planOnly) {
+    if (input.ux) parts.push(COPILOT_UX_GUIDE);
+    if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
+    if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
+    if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
+    if (input.listFill) parts.push(COPILOT_LIST_FILL_GUIDE);
+    if (input.methods) parts.push(COPILOT_METHODS_GUIDE);
+    if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
+    if (input.researchPlan ?? researchPlanIntent(input.message, input.mode)) parts.push(COPILOT_RESEARCH_GUIDE);
+    if (input.qual ?? qualIntent(input.message)) parts.push(COPILOT_QUAL_GUIDE);
+    if (input.reporting ?? reportingIntent(input.message)) parts.push(REPORTING_GUIDE);
+  }
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, blocks, punch rules, variables) will be refused — validation that stops the respondent (an age limit, a format) is the one exception, unless the researcher said not to change anything. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");
   if (input.themeOnly) parts.push("THIS IS THE THEME: answer with one set_theme action covering everything the request implies (colours with readable contrast, fonts, background, cards, options, controls, inputs, spacing, phone sizes). Its values become the survey's Branding settings, which the researcher then adjusts by hand.");
   if (input.themeImage) parts.push(input.themeImage);
+  if (input.scopeNote) parts.push(input.scopeNote);
   parts.push(`Request type (a hint, not a rule): ${input.mode}`);
-  parts.push(`RESEARCHER:\n${input.message.trim()}`);
+  parts.push(input.longBrief
+    ? `RESEARCHER — A PASTED RESEARCH BRIEF (${input.message.trim().length.toLocaleString("en")} characters; every section counts — keep its objectives, hypotheses, audience, method, constraints and output instructions; where it leaves a choice open, make the reasonable choice and list it under "assumptions" — do not answer with a list of questions):\n${input.message.trim()}`
+    : `RESEARCHER:\n${input.message.trim()}`);
   return parts.join("\n\n");
 }
 
@@ -504,4 +534,72 @@ export function referencedQuestions(def: SurveyDefinition, message: string): str
     if (title.length >= 3 && new RegExp(`(?<![\\p{L}\\p{N}])${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "u").test(t)) for (const p of b.pages) for (const id of p.node.questionIds) if (!ids.includes(id)) ids.push(id);
   }
   return ids;
+}
+
+/* ------------------------------------------------------------ long requests, honest replies (2026-10-17) */
+
+/**
+ * How much of a request the route reads. It used to be 8,000 characters, cut
+ * silently: a 25,000-character pasted brief reached the model as its first
+ * third — no hypotheses, no questionnaire requirements, no analysis plan — and
+ * the model asked the researcher for what had been cut (production evidence,
+ * 2026-10-16). 60,000 characters (~15k tokens) is a long brief with room to
+ * spare inside any current model's context; past it the route says so instead
+ * of cutting.
+ */
+export const MAX_MESSAGE_CHARS = 60_000;
+
+/**
+ * A pasted brief, without the chat tool's markdown noise and with its meaning
+ * intact: bold and italic markers, heading hashes, horizontal rules, code
+ * fences, table alignment rows, link syntax, HTML comments and decorative
+ * emoji go; headings, numbered and bulleted lists, table rows (as `| a | b |`)
+ * and every word stay. Unicode is NFC (one spelling of each Devanagari
+ * syllable) and the joiners Indic scripts need (U+200C, U+200D) are kept —
+ * only zero-width spaces and byte-order marks go.
+ */
+export function normalizeBrief(text: string): string {
+  let t = String(text ?? "").normalize("NFC").replace(/\r\n?/g, "\n").replace(/[​﻿⁠]/g, "").replace(/ /g, " ");
+  t = t.replace(/<!--[\s\S]*?-->/g, "");
+  t = t.replace(/^[ \t]*```[\w-]*[ \t]*$/gm, "");
+  t = t.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,}|={3,})[ \t]*$/gm, "");
+  t = t.replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gm, "$1");
+  t = t.replace(/^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)+\|?[ \t]*$/gm, "");
+  t = t.replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, (_m, row: string) => `| ${row.split("|").map((c) => c.trim()).join(" | ")} |`);
+  t = t.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*|__(?=\S)([\s\S]*?\S)__/g, (_m, a?: string, b?: string) => a ?? b ?? "");
+  t = t.replace(/(^|[\s(])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?=[\s).,;:!?]|$)/gm, "$1$2");
+  t = t.replace(/`([^`\n]+)`/g, "$1");
+  t = t.replace(/!?\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, "$1 ($2)");
+  t = t.replace(/[\p{Extended_Pictographic}️]/gu, "");
+  t = t.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n");
+  return t.trim();
+}
+
+const CLAIMS_DONE = /\b(?:i(?:'ve| have)(?: now| just| already)?|we(?:'ve| have))\s+(?:added|created|built|updated|applied|changed|saved|removed|deleted|programmed|generated|made|set up)\b|\b(?:has|have) been (?:added|created|built|updated|applied|saved|programmed|generated)\b|^done\b/i;
+
+/**
+ * NEVER "SUCCESS" WHEN NOTHING WAS DONE. A reply's words are the model's, written
+ * before the Studio judged its actions: "I've added the screener" over a batch
+ * the engine refused entirely, or over no batch at all, read as done. When every
+ * proposed action was refused, the reply says so first; when there were no
+ * actions but the words claim a change, the reply says nothing has changed yet.
+ */
+export function honestReply(reply: CopilotReply, results: readonly { ok: boolean; description: string; error?: string }[] | null): CopilotReply {
+  const total = reply.actions.length;
+  if (total && results && results.length && !results.some((r) => r.ok)) {
+    const why = results.filter((r) => !r.ok).slice(0, 3).map((r) => `${r.description}${r.error ? ` — ${r.error.slice(0, 140)}` : ""}`).join("; ");
+    return { ...reply, reply: `Nothing was changed: none of the ${total} proposed change${total === 1 ? "" : "s"} could be applied${why ? ` (${why})` : ""}. ${reply.reply}`.slice(0, 4000) };
+  }
+  if (!total && reply.kind !== "review" && CLAIMS_DONE.test(reply.reply)) return { ...reply, reply: `${reply.reply} (Nothing has been changed yet — this answer proposed no changes to apply.)` };
+  return reply;
+}
+
+
+/**
+ * Does the request name a document or a report (Word/PowerPoint, research plan, proposal, SAP, findings report,
+ * deck, executive summary, charts in a report)? Then the reporting guide goes with it, so the model neither
+ * claims to have made a file nor writes a report's numbers itself (engineer B's guide, wired 2026-10-17).
+ */
+export function reportingIntent(text: string): boolean {
+  return /\b(?:word|docx?|power ?point|pptx|deck|slides|slide deck|presentation|report(?:s|ing)?|research plan|proposal|statistical analysis plan|sap|findings|executive summary|dashboard|charts?|graphs?|visuali[sz]\w*|download)\b|रिपोर्ट|डॉक्यूमेंट|चार्ट/i.test(text);
 }

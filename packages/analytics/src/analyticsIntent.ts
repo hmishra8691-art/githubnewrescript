@@ -4,7 +4,7 @@ import { adviseChart, checkChartChoice } from "./questionChart.js";
 import { analysisSignature, crosstabCarriesChiSquare, findExistingDuplicate, validateAnalysis, type KnownNames } from "./planCheck.js";
 import { reportAnalysisIds } from "./blockRefs.js";
 import { CHART_CATALOG } from "./recommend.js";
-import { tokens, wordsMatch, type ReportBrief } from "./reportBuilder.js";
+import { reportBriefFromText, tokens, wordsMatch, type ReportBrief } from "./reportBuilder.js";
 
 /**
  * INTELLIGENT MODE FOR ANALYTICS (Data Analytics audit, Phase 5).
@@ -305,9 +305,12 @@ export function proposeFromText(request: string, ctx: AskContext): AskProposal {
       const story = /\b(animated|animation|video|story|storytelling|story-driven)\b/.test(c);
       const exec = /\b(management|executive|leadership|board)\b/.test(c);
       if (/\bvideo\b/.test(c)) notes.push("Video files (MP4) cannot be generated here. The animated report is a self-contained HTML story that plays in any browser — it can be screen-recorded if a video is required.");
-      const brief: ReportBrief = { objective: orig.replace(/^(create|build|make|generate|write|draft|prepare)\s+(me\s+)?(an?\s+|the\s+)?/i, "").trim() || (exec ? "Management summary of the survey findings" : "Survey findings"), audience: exec ? "executive" : "client", tone: exec ? "concise" : "plain", keyQuestions: [] };
-      const title = exec ? "Management summary" : story ? "Animated report" : "Survey report";
-      items.push(item({ op: "build_report", name: title, brief: { ...brief, title }, story }, ctx, `Build “${title}”${story ? " with an animated story" : ""}`, `${exec ? "A short, executive-audience report" : "A report"} drafted only from your saved analyses and their results; you review it before it is created.`, "creates a report"));
+      /* the sections, the audience, the tone and the theme the sentence asks for (2026-10-17): "a premium executive report with hypothesis-wise findings, brand comparison charts…" */
+      const asked = reportBriefFromText(orig);
+      const brief: ReportBrief = { objective: orig.replace(/^(create|build|make|generate|write|draft|prepare)\s+(me\s+)?(an?\s+|the\s+)?/i, "").trim() || (exec ? "Management summary of the survey findings" : "Survey findings"), audience: exec ? "executive" : "client", tone: exec ? "concise" : "plain", keyQuestions: [], ...(asked.sections.some((k) => k !== "executive_summary") ? { audience: asked.brief.audience, tone: asked.brief.tone, sections: asked.sections } : {}), ...(asked.brief.theme ? { theme: asked.brief.theme } : {}) };
+      notes.push(...asked.unsupported);
+      const title = exec ? (asked.sections.some((k) => k !== "executive_summary") ? "Executive report" : "Management summary") : story ? "Animated report" : "Survey report";
+      items.push(item({ op: "build_report", name: title, brief: { ...brief, title }, story }, ctx, `Build “${title}”${story ? " with an animated story" : ""}`, `${exec ? "A short, executive-audience report" : "A report"} drafted only from your saved analyses and their results; you review it before it is created.${asked.sections.some((k) => k !== "executive_summary") ? ` It will have ${asked.understood.slice(1).join(", ")}.` : ""}`, "creates a report"));
       read.push(orig); handled = true;
     }
 

@@ -44,7 +44,50 @@ export interface ReportBrief {
   includeCrosstabs?: boolean;
   title?: string;
   client?: string;
+  /**
+   * What the report must contain, read from the researcher's words (`reportBriefFromText`, 2026-10-17):
+   * each section is built only from the saved analyses and their computed results, and a section the
+   * analyses cannot fill says what is missing instead of appearing empty or invented.
+   */
+  sections?: ReportSectionKey[];
+  /** a theme preset asked for by name or feel ("premium" → Midnight); applied as the report's one theme */
+  theme?: string;
+  /** the study's hypotheses (set by the server from the survey, never from the request) — for the hypothesis-wise findings */
+  hypotheses?: { label: string; text: string }[];
 }
+
+export const REPORT_SECTIONS = ["executive_summary", "hypotheses", "brand_comparison", "segments", "recommendations", "methodology"] as const;
+export type ReportSectionKey = (typeof REPORT_SECTIONS)[number];
+
+/**
+ * A REPORT FROM A SENTENCE (2026-10-17): "premium executive report with executive summary, hypothesis-wise
+ * findings, brand comparison charts, demographic segments, consistent theme, actionable recommendations" read
+ * into the report builder's own brief — the audience and tone, the sections, the theme — and the asks it
+ * cannot honour listed in words. Deterministic; nothing is computed here.
+ */
+export function reportBriefFromText(text: string): { brief: Pick<ReportBrief, "audience" | "tone"> & Partial<ReportBrief>; sections: ReportSectionKey[]; unsupported: string[]; understood: string[] } {
+  const t = text.toLowerCase();
+  const exec = /\b(executive|management|leadership|board|c-suite|premium)\b/.test(t);
+  const researcher = /\b(technical|researchers?|analysts?|statistician|methodolog)/.test(t) && !exec;
+  const audience: Audience = exec ? "executive" : researcher ? "researcher" : "client";
+  const tone: ReportTone = /\b(formal|board|premium)\b/.test(t) ? "formal" : exec ? "concise" : "plain";
+  const sections: ReportSectionKey[] = [];
+  const add = (k: ReportSectionKey) => { if (!sections.includes(k)) sections.push(k); };
+  if (/\b(executive|management)\s+summary\b|\bsummary\b/.test(t)) add("executive_summary");
+  if (/\bhypothes[ie]s(?:[-\s]wise|[-\s]by[-\s]hypothesis)?\b|\bby\s+hypothesis\b|\bhypothesis[-\s]wise\b/.test(t)) add("hypotheses");
+  if (/\bbrands?\b.*\b(comparison|compare|comparing|versus|vs\.?|funnel|charts?)\b|\b(compar\w*)\b.*\bbrands?\b/.test(t)) add("brand_comparison");
+  if (/\b(demographic|segment\w*|subgroups?|by\s+(?:age|gender|region|country)|who\s+differs)\b/.test(t)) add("segments");
+  if (/\b(recommendations?|next\s+steps|actions?|actionable|implications)\b/.test(t)) add("recommendations");
+  if (/\b(method(?:ology)?|technical\s+appendix|sample\s+details)\b/.test(t)) add("methodology");
+  const theme = /\bpremium|luxury|dark|elegant\b/.test(t) ? "Midnight" : /\bwarm|paper|print\b/.test(t) ? "Warm paper" : /\bgraphite|corporate|neutral\b/.test(t) ? "Graphite" : undefined;
+  const unsupported: string[] = [];
+  if (/\b(video|mp4|voice[-\s]?over)\b/.test(t)) unsupported.push("A video file cannot be produced; the animated report (HTML story) is the nearest — it can be screen-recorded.");
+  if (/\b(forecast|predict(?:ion)?s?|projection)\b/.test(t)) unsupported.push("Forecasts are not produced: the report shows what the data say now, from the saved analyses.");
+  if (/\b(causal|cause|caused|impact of)\b/.test(t)) unsupported.push("Causal claims are not made from survey associations; findings are labelled descriptive or statistical.");
+  const understood = [`for ${audience === "executive" ? "executives" : audience === "researcher" ? "researchers" : "the client"} (${tone})`, ...sections.map((k) => SECTION_WORDS[k]), ...(theme ? [`the ${theme} theme`] : []), ...(/\bconsistent\s+theme|one\s+theme|same\s+theme\b/.test(t) ? ["one theme across every block"] : [])];
+  return { brief: { audience, tone, ...(sections.length ? { sections } : {}), ...(theme ? { theme } : {}) }, sections, unsupported, understood };
+}
+const SECTION_WORDS: Record<ReportSectionKey, string> = { executive_summary: "an executive summary", hypotheses: "findings hypothesis by hypothesis", brand_comparison: "brand comparison charts", segments: "demographic segments", recommendations: "recommendations", methodology: "the methodology" };
 
 export interface BuilderItem { id: string; name: string; definition: AnalysisDefinition; result: AnalysisResult }
 export type ItemRole = "key" | "finding" | "comparison" | "difference";
@@ -238,6 +281,9 @@ export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], v
   section(H.key, ranked.filter((r) => r.role === "key"));
   section(H.comparison, ranked.filter((r) => r.role === "comparison" || r.role === "finding"));
   section(H.difference, ranked.filter((r) => r.role === "difference"));
+  if (brief.sections?.length) blocks.push(...requestedSections(brief, items, ranked, variables, notes));
+  if (brief.sections?.includes("recommendations") && !(opts.interpretation?.recommendations.length)) notes.push("Recommendations: none are written. They come only from the interpretation step (a model reading the results above, gated sentence by sentence) — ask for the interpretation when you build, or add them by hand. The report does not invent them.");
+  if (brief.theme) notes.push(`Theme: the ${brief.theme} preset fits this report — apply it under Theme so every chart and block shares it.`);
   if (opts.interpretation && (opts.interpretation.implications.length || opts.interpretation.recommendations.length)) {
     blocks.push({ id: bid("sec"), type: "section", title: "Interpretation", subtitle: "What the findings may mean — these are readings of the results above, not results themselves" });
     const md = [...opts.interpretation.implications.map((s) => `- ${s}`), ...(opts.interpretation.recommendations.length ? ["", "**Suggested next steps**", ...opts.interpretation.recommendations.map((s) => `- ${s}`)] : [])].join("\n");
@@ -390,4 +436,54 @@ export function gateInterpretation(items: readonly BuilderItem[], candidate: unk
     return true;
   }).map((it) => it.text);
   return { implications: pass("implications", offeredSentences(c.implications, 4)), recommendations: pass("recommendations", offeredSentences(c.recommendations, 4)), rejected, offered: count, sentences };
+}
+
+/* ------------------------------------------------------------ the requested sections (2026-10-17) */
+
+const BRANDISH = /\bbrands?\b|\bfunnel\b|\bawareness\b|\bconsideration\b|\bpreference\b/i;
+const DEMOGRAPHIC = /\b(age|gender|sex|region|country|income|education|city|state|province|household|occupation|segment)\b/i;
+const labelsOf = (it: BuilderItem, variables: readonly VariableMeta[]) => [it.name, ...(it.definition.variables ?? []), ...(it.definition.rows ?? []), ...(it.definition.columns ?? [])].map((n) => variables.find((v) => v.name === n)?.label ?? n).join(" ");
+const executed = (it: BuilderItem) => !it.result.error && it.result.tables.length > 0;
+/** what kind of evidence a result is: a test with a p-value is statistical, anything else describes */
+export const evidenceKind = (r: AnalysisResult): "statistical" | "descriptive" => (r.tests.some((t) => t.p != null) ? "statistical" : "descriptive");
+
+/**
+ * The sections a brief asked for, from EXECUTED analyses only. Hypothesis-wise: each hypothesis with the analyses
+ * tagged to it that ran, labelled descriptive or statistical (never causal), and an untested hypothesis labelled
+ * untested. Brand comparison and demographic segments: the analyses that read brands / a demographic banner, each
+ * charted as the result's structure advises; when none exists the section is not drawn and a note says what to add.
+ */
+function requestedSections(brief: ReportBrief, items: readonly BuilderItem[], ranked: readonly Ranked[], variables: readonly VariableMeta[], notes: string[]): ReportBlock[] {
+  const out: ReportBlock[] = [];
+  const ran = items.filter(executed);
+  const chart = (it: BuilderItem, caption: string): ReportBlock => {
+    const advice = ranked.find((r) => r.item.id === it.id)?.advice ?? adviseChart(it.definition, it.result, [...variables]);
+    return { id: bid("ch"), type: "chart", title: it.name, analysisId: it.id, chart: { type: advice.type, options: { title: it.name, dataLabels: true } }, caption };
+  };
+  const evidenceLine = (it: BuilderItem) => { const kind = evidenceKind(it.result); const tl = testLine(it.result); return `${kind === "statistical" ? "Statistical evidence" : "Descriptive evidence"}${tl ? ` — ${tl}` : ""} · base n = ${it.result.base.n}. Not a causal claim.`; };
+  if (brief.sections?.includes("hypotheses")) {
+    const hyps = brief.hypotheses ?? [];
+    if (!hyps.length) notes.push("Hypothesis-wise findings: the survey records no hypotheses, so there is nothing to report hypothesis by hypothesis.");
+    else {
+      out.push({ id: bid("sec"), type: "section", title: "Findings by hypothesis", subtitle: "Only analyses that ran on the data; an untested hypothesis is labelled as such" });
+      for (const h of hyps) {
+        const mine = ran.filter((it) => Array.isArray(it.definition.options?.hypotheses) && (it.definition.options!.hypotheses as string[]).includes(h.label));
+        if (!mine.length) { out.push({ id: bid("hyp"), type: "text", title: `${h.label}: ${clip(h.text, 120)}`, markdown: "**Untested** — no executed analysis serves this hypothesis. Apply the analysis plan (or add an analysis tagged to it) and rebuild." }); continue; }
+        out.push({ id: bid("hyp"), type: "text", title: `${h.label}: ${clip(h.text, 120)}`, markdown: mine.map((it) => `- ${it.name}: ${evidenceLine(it)}`).join("\n") });
+        for (const it of mine.slice(0, 3)) out.push(chart(it, evidenceLine(it)));
+      }
+    }
+  }
+  const pick = (re: RegExp, also: (it: BuilderItem) => boolean = () => true) => ran.filter((it) => re.test(labelsOf(it, variables)) && also(it));
+  if (brief.sections?.includes("brand_comparison")) {
+    const brands = pick(BRANDISH);
+    if (brands.length) { out.push({ id: bid("sec"), type: "section", title: "Brand comparison" }); for (const it of brands.slice(0, 6)) out.push(chart(it, evidenceLine(it))); }
+    else notes.push("Brand comparison charts: no saved analysis reads a brand question, so none is drawn. Add a crosstab of the brand question by the key measure, or a brand funnel (awareness → consideration → preference) — or, if brands are not asked, compare the products or offers the survey does ask about.");
+  }
+  if (brief.sections?.includes("segments")) {
+    const segs = pick(DEMOGRAPHIC, (it) => it.definition.kind === "crosstab" || it.definition.kind === "test" || !!it.definition.segments?.length);
+    if (segs.length) { out.push({ id: bid("sec"), type: "section", title: "Demographic segments", subtitle: "Who differs — by the survey's demographic variables" }); for (const it of segs.slice(0, 6)) out.push(chart(it, evidenceLine(it))); }
+    else notes.push("Demographic segments: no saved analysis breaks a result down by a demographic (age, gender, region…). Add a crosstab of the key measure by the demographic banner and rebuild; nothing is drawn without it.");
+  }
+  return out;
 }

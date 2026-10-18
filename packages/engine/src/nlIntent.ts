@@ -24,6 +24,9 @@ import { measurementOf } from "./analysisFramework.js";
 import { objectChoices, semanticReading, stripPreamble, type SemanticCandidate } from "./nlSemanticMatch.js";
 import { researchBlockers } from "./researchBlockers.js";
 import { reviewSurvey, type ReviewFinding } from "./surveyReview.js";
+import { requestScope, UNSUPPORTED_MESSAGE } from "./requestScope.js";
+/* the scope reading (supported / mixed / unsupported / ambiguous) is the engine's too: the Studio's route reads the same */
+export * from "./requestScope.js";
 
 /**
  * THE SENTENCE INTERPRETER (Intelligent Mode Phase 3) — what the researcher
@@ -76,13 +79,15 @@ export type IntentCategory =
   | "survey_creation" | "survey_editing" | "question_creation" | "question_modification" | "option_modification"
   | "logic" | "validation" | "randomization" | "masking" | "variables" | "calculations" | "translation"
   | "analysis" | "findings" | "research_design" | "quality_control" | "data_cleaning" | "reporting"
-  | "visualization" | "export" | "debugging" | "dependency_analysis" | "impact_analysis";
+  | "visualization" | "export" | "debugging" | "dependency_analysis" | "impact_analysis"
+  /** clearly outside the platform ("write me a poem", "book a flight"): answered with UNSUPPORTED_MESSAGE, no model call */
+  | "unsupported";
 
 export const INTENT_CATEGORIES: readonly IntentCategory[] = [
   "survey_creation", "survey_editing", "question_creation", "question_modification", "option_modification",
   "logic", "validation", "randomization", "masking", "variables", "calculations", "translation",
   "analysis", "findings", "research_design", "quality_control", "data_cleaning", "reporting",
-  "visualization", "export", "debugging", "dependency_analysis", "impact_analysis",
+  "visualization", "export", "debugging", "dependency_analysis", "impact_analysis", "unsupported",
 ] as const;
 
 /** what the interpreter resolved: { what: "condition", value: "Q7 = 2 (No)" }, { what: "skip range", value: "Q8–Q12 → Q13" } */
@@ -129,7 +134,8 @@ export interface InterpretContext {
 
 /** what the Studio produces for an output request (Phase 5) */
 export interface OutputRequest {
-  type: "proposal_docx" | "sap_docx" | "findings_docx" | "findings_pptx";
+  /** `research_plan_docx` (2026-10-17): the Word research plan — the proposal's design edition with the analysis plan, the traceability matrix and the QC requirements */
+  type: "proposal_docx" | "sap_docx" | "findings_docx" | "findings_pptx" | "research_plan_docx";
   audience: "executive" | "client" | "researcher";
   client?: string;
   /** the words that named the document, for the card */
@@ -1170,6 +1176,8 @@ const research: Recogniser = (r) => {
   const t = r.text;
   const h = /^(?:add|record|new|log|note)\s+(?:a\s+|another\s+|the\s+|this\s+)?(?:new\s+)?hypothes[ie]s\s*(?::|-|—|–|that|saying)?\s*(.+)$/i.exec(t) ?? /^hypothesis\s*:\s*(.+)$/i.exec(t);
   if (h) {
+    /* "add a hypothesis ABOUT price sensitivity" names a topic, not the hypothesis: the statement has to be written — the model's (recorded verbatim it read "About price sensitivity") */
+    if (/^(?:about|on|regarding|around|concerning|covering|related to|for|to (?:test|check|measure))\b/i.test(h[1].trim()) && !/^hypothesis\s*:/i.test(t)) return { kind: "model", category: "research_design", reason: "the hypothesis has to be written from the topic named — the language model drafts the statement, then it is recorded with add_hypothesis through the same gate", detected: [det("hypothesis topic", plain(h[1], 80))] };
     const text = cap(unquote(h[1]));
     const n = (r.def.research?.hypotheses.length ?? 0);
     return act(r, "research_design", `Record hypothesis ${hypothesisLabel(n)}: “${text}”.`, [{ op: "add_hypothesis", text }], [det("hypothesis", `${hypothesisLabel(n)}: ${plain(text, 60)}`)]);
@@ -2203,7 +2211,24 @@ const outputRequest: Recogniser = (r) => {
   let type: OutputRequest["type"] | null = null;
   let tail = "";
   const lead = String.raw`^${OUTPUT_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|our\s+|my\s+)?${OUTPUT_MOD}`;
-  if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
+  /*
+   * THE WORD RESEARCH PLAN (2026-10-17): "prepare a Word research plan", "download the research plan as a
+   * Word document", "a Word document with the hypotheses, the research plan and the analytical
+   * recommendations", "update the Word document". These went to the model, which can describe a document
+   * but cannot make one — the copilot said it had made a file and there was nothing to download.
+   */
+  const RP_VERB = String.raw`(?:${OUTPUT_VERB.slice(3, -1)}|download|export|get|send|share)`;
+  const WORDDOC = String.raw`(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file|version))?`;
+  const RP_MOD = String.raw`(?:(?:full|complete|detailed|professional|formal|client[-\s]ready|final|updated|new|revised|polished)\s+)*`;
+  let update = false;
+  if ((m = new RegExp(String.raw`^${RP_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+|our\s+|my\s+)?${RP_MOD}(?:(?:word|docx|ms\s+word)\s+)?research\s+plan(?:\s+(?:document|doc|report|file))?(?:\s+(?:as|in|to|into)\s+(?:a\s+)?${WORDDOC})?(.*)$`, "i").exec(t))
+    || (m = new RegExp(String.raw`^${RP_VERB}\s+(?:me\s+)?(?:the\s+|a\s+|an\s+)?${RP_MOD}(?:word|docx|ms\s+word)\s+(?:document|doc|file|report)\s+(?:with|of|containing|covering|including|for)\s+(?:the\s+|our\s+)?(?:hypothes[ie]s|research\s+(?:plan|design|questions|objectives?)|analysis\s+plan|analytical\s+recommendations|methodology)(.*)$`, "i").exec(t))) { type = "research_plan_docx"; tail = m[1]; }
+  else if ((m = /^(?:update|refresh|regenerate|redo|rebuild|revise)\s+(?:the\s+|my\s+|our\s+|that\s+)?(?:word\s+(?:document|doc|file)|docx(?:\s+file)?|research\s+plan(?:\s+(?:document|doc|file))?(?:\s+(?:in|as)\s+word)?)(.*)$/i.exec(t))) { type = "research_plan_docx"; tail = m[1]; update = true; }
+  if (type === "research_plan_docx") {
+    /* what the plan contains is what this document is anyway: "with the hypotheses and recommendations", "for this survey" */
+    tail = tail.replace(/^,?\s*(?:(?:with|containing|covering|including|that\s+(?:has|includes|covers))\b.*|(?:and|,)\s+(?:the\s+)?(?:research\s+plan|hypothes[ie]s|analysis\s+plan|(?:analytical\s+)?recommendations)\b.*|to\s+(?:match|reflect)\s+.*|(?:now|again|please))$/i, "");
+  }
+  else if ((m = new RegExp(String.raw`${lead}(?:proposal|research\s+design\s+(?:document|doc|report|write-?up)|design\s+document|study\s+design(?:\s+document)?)(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "proposal_docx"; tail = m[1]; }
   /* the statistical analysis plan as a document (DOC-03): "create the statistical analysis plan", "write the SAP", "draft the analysis framework document" */
   else if ((m = new RegExp(String.raw`${lead}(?:statistical\s+analysis\s+plan|sap|analysis\s+(?:framework|plan)\s+(?:document|doc|write-?up))(?:\s+(?:document|doc))?(?:\s+(?:as|in)\s+(?:a\s+)?(?:word|docx|ms\s+word)(?:\s+(?:document|doc|file))?)?(.*)$`, "i").exec(t))) { type = "sap_docx"; tail = m[1]; }
   else if ((m = new RegExp(String.raw`${lead}(?:findings\s+|results\s+)?(?:presentation|deck|slide\s+deck|slides|powerpoint|pptx)(?:\s+of\s+(?:the\s+)?(?:findings|results))?(.*)$`, "i").exec(t))) { type = "findings_pptx"; tail = m[1]; }
@@ -2225,10 +2250,11 @@ const outputRequest: Recogniser = (r) => {
     else if ((n = /^for\s+(.+)$/i.exec(rest)) && !/\b(?:survey|study|questionnaire|this|that|it|them|us|me)\b/i.test(n[1])) client = unquote(n[1]).slice(0, 80);
     else return null;
   }
-  const words = type === "proposal_docx" ? "the research proposal (Word)" : type === "sap_docx" ? "the statistical analysis plan (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
+  const words = type === "research_plan_docx" ? "the research plan (Word)" : type === "proposal_docx" ? "the research proposal (Word)" : type === "sap_docx" ? "the statistical analysis plan (Word)" : type === "findings_docx" ? "the findings report (Word)" : `the findings presentation (PowerPoint, ${audience} edition)`;
   const hasDesign = !!(r.def.research?.objective || r.def.research?.hypotheses.length);
-  if (type === "proposal_docx" && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, "There is nothing to write a proposal from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.", []);
-  return { kind: "output", category: "reporting", understood: `Produce ${words}${client ? ` for ${client}` : ""}${type !== "proposal_docx" && type !== "sap_docx" ? " from the latest analysis run" : " from the research design"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
+  if ((type === "proposal_docx" || type === "research_plan_docx") && !hasDesign && !r.def.questions.length) return refused("reporting", `Produce ${words}.`, `There is nothing to write a ${type === "research_plan_docx" ? "research plan" : "proposal"} from yet — no research objective, hypotheses or questions. Record the objective (“set the objective to …”) or build the questionnaire first.`, []);
+  const fromDesign = type === "proposal_docx" || type === "sap_docx" || type === "research_plan_docx";
+  return { kind: "output", category: "reporting", understood: `${update ? "Regenerate" : "Produce"} ${words}${client ? ` for ${client}` : ""}${fromDesign ? ` from the research design${update ? " as it is now" : ""}` : " from the latest analysis run"}.`, output: { type, audience, ...(client ? { client } : {}), words }, detected: [det("document", words), det("audience", audience), ...(client ? [det("client", client)] : [])] };
 };
 
 /* ---------------------------------------------------------- data questions (Phase 4) */
@@ -2977,12 +3003,24 @@ function semantic(r: Run): Interpretation | null {
 export function interpretRequest(def: SurveyDefinition, text: string, ctx: InterpretContext = {}): Interpretation {
   const clean = String(text ?? "").trim().replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
   /*
+   * OUTSIDE THE PLATFORM, SAID WITHOUT A MODEL (Intelligent engine reliability, 2026-10-17). "Write me a poem", "book
+   * a flight", "what's the weather" — with no research or survey word in them — are answered here with the one
+   * sentence that says what Intelligent Mode is for: no model call, no charge. A greeting or a bare "help" gets one
+   * focused question. A request with a supported part goes on (the model does that part, and the route names the
+   * rest). Conservative: see requestScope — a long brief, or anything with a survey cue, is never refused here.
+   */
+  const scope = requestScope(String(text ?? ""));
+  if (scope.scope === "unsupported") return { kind: "refused", category: "unsupported", understood: "A request outside what Intelligent Mode does.", reason: UNSUPPORTED_MESSAGE, detected: scope.outside.map((o) => ({ what: "outside the platform", value: o.slice(0, 120) })) };
+  if (scope.scope === "ambiguous") return { kind: "clarify", category: "research_design", understood: "Nothing to act on yet.", question: scope.question, choices: scope.choices.map((c) => ({ label: c, text: c })), detected: [] };
+  if (scope.scope === "mixed") return { kind: "model", category: null, reason: "part of this request is outside the platform — the language model does the supported part, and the answer names the rest", detected: scope.outside.map((o) => ({ what: "outside the platform", value: o.slice(0, 120) })) };
+  /*
    * A MAXDIFF / CONJOINT DESIGN TO CONFIGURE (Priority 5, 2026-10-17) is the design actions' (create_maxdiff,
    * create_conjoint, update_*) with the methods guide — the grammar has no design actions, and read
    * "add a None option to the conjoint" as an option for a question called "the conjoint" (refused). A
    * question about the method ("why MaxDiff scores?", "explain the conjoint utilities") stays here.
    */
-  if (DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean)) {
+  /* …but a pasted brief that mentions a MaxDiff among everything else is a brief (the long-brief recogniser below), not a design to configure */
+  if (!scope.longBrief && DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean)) {
     return { kind: "model", category: null, reason: "a MaxDiff / conjoint design is configured by the design actions and the methods guide — the language model takes it, and the engine generates and checks the design", detected: [] };
   }
   try {

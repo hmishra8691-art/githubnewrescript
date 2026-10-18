@@ -143,6 +143,8 @@ if (!(await page.evaluate(() => typeof window.__rescriptCopilotFake === "functio
 /* ------------------------------------------------ 3. the model step, priced; internal mode */
 {
   await tab("workflow");
+  /* the price arrives from the workflow route after the step became a model step (the assumptions were just applied): wait for it, then read it */
+  await page.waitForSelector('[data-testid="wf-cost"][data-priced="1"]', { timeout: 20000 });
   assert.match(await page.textContent('[data-testid="wf-cost"]'), /Model steps from here: structured hypotheses \(drafting call, fake|gpt|[\w.-]+, ~[\d.]+ credits\) — about [\d.]+ credits in all, each approved before it is made\./);
   const ask = await page.$('[data-testid="wf-ask-hypotheses"]');
   assert.ok(ask, "the model step has its button");

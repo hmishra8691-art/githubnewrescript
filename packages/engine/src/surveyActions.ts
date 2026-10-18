@@ -29,6 +29,7 @@ import { authoringQuestionView } from "./carryforward.js";
 import { resolveOptionValue, describeOptions, type OptionList } from "./optionCodes.js";
 import { diffUx, type UxDiff } from "./ux.js";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
+import { applyResearchAction, coerceResearchAction, describeResearchAction, isResearchOp, RESEARCH_ACTION_OPS, type ResearchAction } from "./researchActions.js";
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
@@ -123,7 +124,9 @@ export type SurveyAction =
   /* MaxDiff and conjoint as research designs — see methodActions.ts; they write def.designs and the question that renders the design */
   | MethodAction
   /* options one at a time, masks, duplication, survey settings, embedded fields, hypotheses, custom code — see optionActions.ts */
-  | OptionAction;
+  | OptionAction
+  /* qualitative: AI follow-up probes on open ends — see researchActions.ts; they write question.probe and nothing else */
+  | ResearchAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -132,7 +135,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -377,6 +380,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (ma !== null) return ma;
       const oa = op ? coerceOptionAction(op, o) : null;
       if (oa !== null) return oa;
+      const ra = op ? coerceResearchAction(op, o) : null;
+      if (ra !== null) return ra;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -435,6 +440,7 @@ type PageNode = Extract<FlowNode, { type: "page" }>;
  * a script, and the UX guide tells the model so; refusing it left the request half done (2026-10-16
  * 21:23: "popup when the age is 18+" → the min-18 validation refused, the popup kept).
  */
+const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypothesis"]);
 export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
@@ -443,7 +449,9 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // the research design names the questions that measure each construct, and UX targets name questions: both after the questions exist
   // …and the analysis framework names questions and constructs: after both
   // …and translations name the question texts as they will be: last of all
-  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) ? 0.5 : 0);
+  // …and a hypothesis's own actions read the list set_research writes (research intelligence, 2026-10-17: "set_hypothesis per
+  // hypothesis" beside set_research in one generation ran first and was refused — "the research design has no hypotheses")
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -988,6 +996,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
+      // qualitative: an AI follow-up probe on an open end — question.probe only, every condition through the gate
+      if (isResearchOp(a.op)) {
+        const r = applyResearchAction(def, a as ResearchAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)) });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // MaxDiff / conjoint: the design configured, checked by its generator, generated, pinned in def.designs and rendered by its question
       if (isMethodOp(a.op)) {
         const r = applyMethodAction(def, a as MethodAction, {
@@ -1434,7 +1448,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 

@@ -169,10 +169,41 @@ export function memoryFrom(turns: MemoryTurn[], seed?: TurnMemory): TurnMemory {
   const history: TurnMemory["history"] = [];
   for (const t of turns.slice(-3)) {
     history.push({ role: "user", text: t.user.slice(0, 500) });
-    if (t.reply) history.push({ role: "copilot", text: `${t.reply.reply}${t.reply.actions.length ? ` [proposed ${t.reply.actions.length} actions]` : ""}`.slice(0, 500) });
+    /* WHAT IT PROPOSED, BY NAME — the referents of the next turn's "it" ("Create three questions to measure it" after a hypothesis; "add display logic" after those questions). The reply is shortened, never the list. */
+    if (t.reply) {
+      const gist = t.reply.actions.length ? ` [proposed ${t.reply.actions.length} actions: ${actionGist(t.reply.actions)}]` : "";
+      history.push({ role: "copilot", text: `${t.reply.reply.slice(0, Math.max(120, 500 - gist.length))}${gist}`.slice(0, 500) });
+    }
   }
   const memory = withMemory?.reply?.memory ?? seed?.memory;
   return { ...(memory ? { memory } : {}), history };
+}
+
+/**
+ * The objects a batch of actions names, in a few words: "hypothesis “Price-sensitive shoppers switch…”,
+ * block “Pricing”, PRICE_1, PRICE_2, display logic on PRICE_2". Codes and refs, as the model will see them
+ * in the outline; at most ~260 characters.
+ */
+export function actionGist(actions: readonly SurveyAction[]): string {
+  const out: string[] = [];
+  const q = (v: unknown, n = 50) => { const t = String(v ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+  for (const a of actions as unknown as Record<string, unknown>[]) {
+    const op = String(a.op ?? "");
+    const target = a.target ?? a.from ?? a.question ?? a.quota ?? a.name;
+    if (op === "add_hypothesis") out.push(`hypothesis “${q(a.text)}”`);
+    else if (op === "set_research") out.push(`research design${Array.isArray(a.hypotheses) ? ` (${a.hypotheses.length} hypotheses${a.hypotheses.length ? `: “${q(a.hypotheses[a.hypotheses.length - 1], 40)}”` : ""})` : ""}`);
+    else if (op === "create_block") out.push(`block “${q(a.title, 30)}”`);
+    else if (op === "create_question") out.push(String(a.ref ?? `question “${q(a.text, 30)}”`));
+    else if (op === "set_display_logic") out.push(`display logic on ${String(target ?? "?")}${a.expression ? ` (${q(a.expression, 30)})` : ""}`);
+    else if (op === "add_skip") out.push(`skip from ${String(a.from ?? "?")}`);
+    else if (op === "set_question_analysis") out.push(`analysis tag on ${String(target ?? "?")}${Array.isArray(a.hypotheses) && a.hypotheses.length ? ` (${a.hypotheses.join(", ")})` : ""}`);
+    else if (/^(?:add_crosstab|add_analysis_test|set_analysis_plan|propose_analysis_plan)$/.test(op)) out.push(op.replace(/_/g, " "));
+    else out.push(`${op}${target ? ` ${String(target)}` : ""}`);
+  }
+  const uniq = [...new Set(out)];
+  let s = "";
+  for (const x of uniq) { const next = s ? `${s}, ${x}` : x; if (next.length > 260) { s += `, +${uniq.length - uniq.indexOf(x)} more`; break; } s = next; }
+  return s;
 }
 
 /* ------------------------------------------------------------ links */

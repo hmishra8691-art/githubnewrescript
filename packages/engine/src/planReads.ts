@@ -107,6 +107,8 @@ export function retagPlanHypotheses(def: SurveyDefinition, plan: AnalysisPlan): 
     if (after.join() === before.join()) return;
     const priorityBefore = item.priority;
     item.hypotheses = after;
+    /* the reason names the hypotheses it was written for ("Q5 by Q2 (H1, H2)"): keep it saying what the item now serves, never a tag it lost */
+    if (item.reason && before.length) { const was = ` (${before.join(", ")})`; if (item.reason.includes(was)) item.reason = item.reason.replace(was, after.length ? ` (${after.join(", ")})` : ""); }
     if (before.length && !after.length && item.priority === 1) item.priority = 2;
     if (!before.length && after.length && item.priority > 1) item.priority = 1;
     changes.push({ id: item.id, kind, before, after, priorityBefore, priorityAfter: item.priority });

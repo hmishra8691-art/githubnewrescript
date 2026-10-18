@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
-import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describeUxTarget, diffSurveys, isMethodOp, replayCorpus, reviewUx, type DependencyIndex, type ObjectKey, type SurveyAction } from "@rescript/engine";
+import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describeUxTarget, diffSurveys, isMethodOp, replayCorpus, researchOnlyItems, reviewUx, validateResearch, type DependencyIndex, type ObjectKey, type ResearchValidation, type SurveyAction } from "@rescript/engine";
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
@@ -320,6 +320,8 @@ function UxTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefini
 
 function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDefinition; onSelect(id: string): void }) {
   const rv = copilot.review;
+  /* the research validation (2026-10-17): the review above, classed blocking / warning / recommendation, plus the research checks and the traceability */
+  const validation = React.useMemo(() => (rv ? validateResearch(def, { review: rv.rules }) : null), [def, rv]);
   if (!rv) return (
     <div className="cp-empty">
       <p>Ask for a review — “review my survey” — or press Review. The engine checks the logic, reachability, options, scales, duplicates and length at once; the copilot reads for research alignment, hypothesis coverage, wording and bias.</p>
@@ -330,6 +332,7 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
   const all = [
     ...rv.rules.findings.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questionIds, fix: f.fix, source: "engine" as const, blocks: f.blocks })),
     ...rv.ai.map((f) => ({ severity: f.severity, message: f.message, suggestion: f.suggestion, questionIds: f.questions.map((c) => byCode.get(c.toUpperCase())).filter((x): x is string => !!x), fix: undefined as SurveyAction[] | undefined, source: "copilot" as const, blocks: false })),
+    ...(validation ? researchOnlyItems(validation) : []).map((i) => ({ severity: i.class === "blocking" ? "critical" as const : i.class === "warning" ? "warning" as const : "suggestion" as const, message: i.message, suggestion: i.suggestion, questionIds: i.questionIds, fix: i.fix, source: "research" as const, blocks: false })),
   ];
   const groups = (["critical", "warning", "suggestion"] as const).map((sv) => ({ sv, items: all.filter((f) => f.severity === sv) }));
   return (
@@ -344,6 +347,7 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
           <Icon name={rv.rules.blockers ? "warning" : "check"} size={12} /> The research design is enforced: {rv.rules.blockers ? `${rv.rules.blockers} research gap${rv.rules.blockers === 1 ? " is a blocker" : "s are blockers"} — a change that widens one is refused; close them, or ask “stop enforcing the research design”.` : "no research gaps — a change that would open one is refused at the change."}
         </p>
       )}
+      {validation && <ResearchValidationView v={validation} def={def} onSelect={onSelect} />}
       {groups.map(({ sv, items }) => (
         <section key={sv} data-testid={`cp-review-${sv}`}>
           <div className={`iq-label cp-sev-head v-${sv}`}>{sv === "critical" ? "Critical" : sv === "warning" ? "Warning" : "Suggestion"} · {items.length}</div>
@@ -365,6 +369,51 @@ function ReviewTab({ copilot, def, onSelect }: { copilot: Copilot; def: SurveyDe
         </section>
       ))}
     </div>
+  );
+}
+
+/**
+ * THE RESEARCH VALIDATION AND THE TRACEABILITY, in the Review tab (2026-10-17): how many items block,
+ * warn or recommend (the research checks are listed with the review's own findings below, marked
+ * "research"), and the matrix objective → hypothesis → constructs → questions → analysis → chart →
+ * status, with its gaps. Read from the engine; nothing here decides.
+ */
+function ResearchValidationView({ v, def, onSelect }: { v: ResearchValidation; def: SurveyDefinition; onSelect(id: string): void }) {
+  const t = v.traceability;
+  return (
+    <>
+      <p className={v.counts.blocking ? "iq-error" : "iqi-dim"} data-testid="cp-validation" data-kind={v.kind} data-blocking={v.counts.blocking} data-warnings={v.counts.warning} data-recommendations={v.counts.recommendation}>
+        <Icon name={v.counts.blocking ? "warning" : "check"} size={12} /> <span className="iq-label">Research validation</span> {v.summary}
+      </p>
+      {(t.rows.length > 0 || t.gaps.length > 0) && (
+        <details className="cp-doc" data-testid="cp-trace" data-executed={t.executed ? "1" : "0"} open={t.gaps.some((g) => g.severity === "blocking")}>
+          <summary><span className="iq-label">Traceability</span> <span className="iqi-dim">{t.summary}</span></summary>
+          {t.rows.length > 0 && (
+            <table className="iqi-table">
+              <tbody>
+                {t.rows.map((r) => (
+                  <tr key={r.id} data-testid="cp-trace-row" data-id={r.id} data-status={r.status}>
+                    <td><b>{r.id}</b> <Linked text={r.statement} def={def} onSelect={onSelect} />{r.reading ? <div className="iqi-dim">{r.reading}</div> : null}</td>
+                    <td>{r.constructs.map((c) => c.name).join(", ") || "—"}<div className="iqi-dim">{r.questions.map((q) => q.code).join(", ") || "no question"}</div></td>
+                    <td>{r.analyses.map((a) => `${a.title}${a.compatible ? "" : " ⚠"}`).join("; ") || "no analysis"}<div className="iqi-dim">{r.visualisations.join(", ")}</div></td>
+                    <td data-testid="cp-trace-status">{r.interpretation}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {t.gaps.length > 0 && (
+            <ul className="cp-review-list">
+              {t.gaps.map((g, i) => (
+                <li key={i} data-testid="cp-trace-gap" data-code={g.code} data-severity={g.severity === "blocking" ? "critical" : g.severity === "warning" ? "warning" : "suggestion"}>
+                  <Linked text={g.message} def={def} onSelect={onSelect} />{g.suggestion && <div className="iqi-dim">→ {g.suggestion}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
+    </>
   );
 }
 

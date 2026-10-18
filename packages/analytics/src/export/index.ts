@@ -5,3 +5,4 @@ export * from "./deck.js";
 export * from "./docx.js";
 export * from "./storyPptx.js";
 export * from "./sap.js";
+export * from "./docxCheck.js";

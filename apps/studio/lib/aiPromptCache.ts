@@ -1,6 +1,8 @@
 import { COPILOT_ANALYSIS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_SYSTEM_PROMPT, COPILOT_TRANSLATION_GUIDE, COPILOT_UX_GUIDE } from "./copilot/prompt.ts";
 import { COPILOT_LIST_FILL_GUIDE } from "./copilot/listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./copilot/methodsGuide.ts";
+import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE } from "./copilot/researchGuide.ts";
+import { REPORTING_GUIDE } from "./copilot/reportingGuide.ts";
 
 /**
  * THE STABLE PREFIX OF A COPILOT CALL (AI cost audit, 2026-10-17).
@@ -23,7 +25,7 @@ import { COPILOT_METHODS_GUIDE } from "./copilot/methodsGuide.ts";
  */
 
 /** the guides, in the order `copilotUserPrompt` adds them */
-export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE];
+export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE, REPORTING_GUIDE];
 
 /** Lift each of `guides` found verbatim in `text` out of it: the guides found (in the list's order) and what is left. */
 export function splitStable(text: string, guides: readonly string[]): { stable: string[]; variable: string } {

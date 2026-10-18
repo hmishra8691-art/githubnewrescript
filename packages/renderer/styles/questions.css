@@ -96,10 +96,23 @@
  * this change; only the respondent runtime's `Runner.tsx` adds one of the
  * two modifier classes, from `branding.layout.widthMode`.
  */
+/*
+ * THE FRAME IS ALWAYS CENTRED (2026-10-17, layout brief §12: "when a theme or
+ * layout is applied or updated, the content can shift toward the left side of
+ * the screen"). The margins used to read `--rs-align-ml/-mr`, i.e. Branding's
+ * `contentAlign` — and "left" is the schema DEFAULT, materialised onto every
+ * stored survey. So the moment a theme made the frame narrower than the window
+ * the whole survey jumped to the left edge: a "contained" 640px theme sat at
+ * x=0 on a 1600px screen (480px off centre), the Gen-Z preset (640px) was 64px
+ * off centre on a 768px tablet. `contentAlign` now does what its own help text
+ * and the full-width rule below already said it is for — where the TEXT sits
+ * inside the frame (`--rs-content-align`, the question text and instructions) —
+ * and never moves the frame. Measured by scripts/layout-centering-test.mjs.
+ */
 .rs-shell {
   max-width: var(--rs-max-width);
-  margin-left: var(--rs-align-ml, auto);
-  margin-right: var(--rs-align-mr, auto);
+  margin-left: auto;
+  margin-right: auto;
   padding: 24px 16px 80px;
 }
 /*
@@ -188,8 +201,17 @@
   .rs-width-full .rs-qtext,
   .rs-width-full .rs-qinstruction {
     max-width: var(--rs-measure);
+    /* the measured text block follows contentAlign inside the card ("center" / "right"); unset = where the
+       writing direction puts it, so an RTL survey's default "left" never pins Arabic text to the left */
+    margin-left: var(--rs-align-ml, 0);
+    margin-right: var(--rs-align-mr, 0);
   }
 }
+/* contentAlign: where the question text and its instructions sit within the frame (never the frame itself) */
+.rs-qtext, .rs-qinstruction { text-align: var(--rs-content-align, start); }
+/* a word longer than the card (a URL, a pasted code) wraps inside it: at 390px one 400-character word made the page 3,720px wide.
+   break-word, not anywhere: it leaves min-content alone, so a question's own HTML table still scrolls in .rs-qhtml as before */
+.rs-qtext, .rs-qinstruction { overflow-wrap: break-word; }
 .rs-header { display: flex; align-items: center; padding: 14px 0; }
 .rs-header img { max-height: var(--rs-logo-h, 44px); }
 .rs-header.center { justify-content: center; }

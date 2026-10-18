@@ -639,8 +639,8 @@ test("the model's sentences: generation, rewording, look and feel, briefs — wi
 
 test("the contract: never throws, empty asks, every category is listed, every edit is validated", () => {
   const def = survey();
-  assert.equal(INTENT_CATEGORIES.length, 23);
-  assert.equal(new Set(INTENT_CATEGORIES).size, 23);
+  assert.equal(INTENT_CATEGORIES.length, 24, "23 + unsupported (2026-10-17)");
+  assert.equal(new Set(INTENT_CATEGORIES).size, 24);
   assert.equal(say(def, "").kind, "clarify");
   assert.equal(say(def, "   ").kind, "clarify");
   const broken = { ...def, questions: null } as unknown as SurveyDefinition;
@@ -763,7 +763,9 @@ test("queries at their edges: a question's own skip rules, a partial wording mat
   assert.equal(several.reason, "There is no question “the car colour question” in this survey — did you mean Q7, Q8, Q9, Q14?", "did-you-means are not a clarification: none of them fits every word");
   assert.equal(several.suggestion, undefined);
   assert.equal(as(say(def, "which questions are untranslated in Klingon"), "model").category, null, "not a language: handed on, not answered for every language");
-  assert.notEqual(as(say(def, "what is the weather"), "model").reason, DEFER_TO_GRAMMAR, "“what is …” is the grammar's only when it names a question");
+  assert.notEqual(as(say(def, "what is the purpose of life"), "model").reason, DEFER_TO_GRAMMAR, "“what is …” is the grammar's only when it names a question");
+  /* 2026-10-17: a question clearly outside the platform is answered by the engine with the unsupported sentence — neither the grammar nor a model */
+  assert.equal(as(say(def, "what is the weather"), "refused").category, "unsupported");
 });
 
 test("the long brief at its edges, and compound sentences: each clause reads the survey the clauses before it leave", () => {

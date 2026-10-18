@@ -1038,11 +1038,19 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
    INTELLIGENT MODE (.iq-*) — describe, review, apply
    ====================================================================== */
 .center:has(> .iq) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
-.iq { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
+/*
+ * THE CONVERSATION COLUMN (layout brief §12, 2026-10-17): one measure for the
+ * welcome, every turn and the ask bar, centred in the conversation pane
+ * whatever the side panes take. It was 760px for the welcome, 860px for the
+ * turns and the full pane for the ask bar — three left edges down one column.
+ */
+.iq { --iq-column: 860px; flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); background: var(--c-bg); font-size: 13px; }
 .iq-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--c-surface); }
-.iq-toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; min-height: 44px; }
+/* the toolbar WRAPS in a narrow pane: with the structure and the panel open at 1024px it was 787px of buttons in a 418px
+   pane, and "Plan first" and the Panel toggle sat under the panel, unreachable. The hint takes only what is left (basis 0). */
+.iq-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; padding: 8px 14px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); flex: none; min-height: 44px; }
 .iq-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--c-text); white-space: nowrap; }
-.iq-hint { color: var(--c-text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.iq-hint { flex: 1 1 0; color: var(--c-text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .iq-spacer { flex: 1 1 auto; }
 .iq-provider { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-4); border: 1px solid var(--c-border); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
 .iq-provider[data-ai="on"] { color: var(--c-primary-600); border-color: var(--c-primary-100); }
@@ -1054,7 +1062,7 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .iq-btn:disabled { opacity: .45; cursor: not-allowed; }
 
 .iq-log { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 18px; }
-.iq-welcome { max-width: 760px; margin: 24px auto 0; text-align: center; }
+.iq-welcome { max-width: var(--iq-column); width: 100%; margin: 24px auto 0; text-align: center; }
 .iq-welcome h2 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; color: var(--c-text); }
 .iq-welcome p { color: var(--c-text-3); margin: 0 0 20px; }
 .iq-examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; text-align: left; }
@@ -1063,9 +1071,13 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .iq-example-text { font-size: 13px; }
 .iq-example-about { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-4); }
 
-.iq-turn { display: flex; flex-direction: column; gap: 8px; max-width: 860px; width: 100%; margin: 0 auto; }
-.iq-said { display: flex; align-items: center; gap: 8px; color: var(--c-text-2); font-size: 13px; }
-.iq-said > span { background: var(--c-surface-2); border-radius: 10px; padding: 6px 10px; }
+/* a turn never scrolls sideways: an unbroken 400-character URL, variable name or code in a reply, a plan or a table wraps
+   inside the card (it made the log 3,182px wide in a 994px pane) */
+.iq-turn { display: flex; flex-direction: column; gap: 8px; max-width: var(--iq-column); width: 100%; min-width: 0; margin: 0 auto; overflow-wrap: anywhere; }
+.iq-said { display: flex; align-items: flex-start; gap: 8px; color: var(--c-text-2); font-size: 13px; min-width: 0; }
+.iq-said > .ico { flex: none; margin-top: 7px; }
+/* the researcher's own words, echoed: a 25,000-character brief scrolls in its bubble instead of pushing the answer pages down */
+.iq-said > span { min-width: 0; background: var(--c-surface-2); border-radius: 10px; padding: 6px 10px; max-height: min(320px, 40vh); overflow-y: auto; white-space: pre-wrap; }
 .iq-card { border: 1px solid var(--c-border); border-left: 3px solid var(--c-primary-600); border-radius: 10px; background: var(--c-surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--sh-1, none); }
 .iq-card.answer { border-left-color: var(--c-border-strong); }
 .iq-card.blocked { border-left-color: var(--c-error); }
@@ -1106,7 +1118,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .iq-dot:nth-child(2) { animation-delay: .15s; } .iq-dot:nth-child(3) { animation-delay: .3s; }
 @keyframes iq-pulse { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 
-.iq-ask { display: flex; gap: 8px; align-items: flex-end; padding: 10px 14px 14px; border-top: 1px solid var(--c-border); background: var(--c-surface); flex: none; }
+/* the ask bar's hairline spans the pane; its controls line up with the conversation column above (percent padding = the pane's width) */
+.iq-ask { display: flex; gap: 8px; align-items: flex-end; padding: 10px max(14px, calc((100% - var(--iq-column)) / 2)) 14px; border-top: 1px solid var(--c-border); background: var(--c-surface); flex: none; }
 .iq-input { flex: 1 1 auto; min-width: 0; resize: none; border: 1px solid var(--c-border); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 13.5px; line-height: 1.4; color: var(--c-text); background: var(--c-bg); }
 .iq-input:focus { outline: none; border-color: var(--c-primary-600); box-shadow: 0 0 0 3px var(--c-primary-100); }
 .iq-send { appearance: none; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-primary-600); border-radius: 10px; background: var(--c-primary-600); color: #fff; font: inherit; font-size: 13px; font-weight: 600; padding: 9px 14px; cursor: pointer; white-space: nowrap; }
@@ -1272,7 +1285,10 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
   background: var(--c-surface); border-bottom: var(--ide-hairline); user-select: none;
 }
 .menubar-groups { display: flex; align-items: stretch; gap: 2px; min-width: 0; flex: 1 1 auto; }
-.menubar-measure { position: absolute; visibility: hidden; pointer-events: none; top: 0; left: 0; display: flex; gap: 2px; white-space: nowrap; }
+/* the probe has no width of its own: invisible, but at 594px it was still scrollable overflow — the whole Studio scrolled
+   sideways on a phone (390px). Its groups keep their natural width (flex: none), which is all MenuBar reads (offsetWidth). */
+.menubar-measure { position: absolute; visibility: hidden; pointer-events: none; top: 0; left: 0; display: flex; gap: 2px; white-space: nowrap; width: 0; overflow: hidden; }
+.menubar-measure > * { flex: none; }
 .menubar-group { position: relative; display: flex; align-items: stretch; }
 .menubar-btn {
   appearance: none; display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0 10px; margin: 5px 0;
@@ -1353,7 +1369,9 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 @media (max-width: 1400px) { .menubar-btn-detail { display: none; } }
 @media (max-width: 1180px) { .here-group, .here-sep { display: none; } .menubar-grid { grid-template-columns: minmax(220px, 1fr); } }
 @media (max-width: 900px) {
-  .menubar { padding: 0 6px; }
+  /* what still does not fit (Mode, the project's spend) scrolls inside the bar, as the top bar does — never the page;
+     the menus are position: fixed at this width, so the bar's own overflow does not clip them */
+  .menubar { padding: 0 6px; overflow-x: auto; scrollbar-width: none; }
   .menubar-here { display: none; }
   .menubar-menu { position: fixed; left: 8px !important; right: 8px !important; top: calc(var(--topbar-h) + var(--menubar-h)); max-width: none; max-height: calc(100vh - var(--topbar-h) - var(--menubar-h) - 12px); overflow: auto; border-radius: var(--ide-r); }
 }
@@ -2055,7 +2073,8 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .wallet-menu-balance { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
 
 /* ============================================================ the project's spend beside Mode (dashboard brief §2C) */
-.project-spend { display: inline-flex; align-items: baseline; gap: 6px; margin-left: 6px; }
+/* centred like every other menubar item: baseline alignment parked the pair at the top of the 28px button, above "Mode" */
+.project-spend { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
 .project-spend .menubar-btn-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-3); }
 .project-spend .menubar-btn-detail { font-weight: 600; }
 .project-spend.stopped .menubar-btn-detail { color: var(--c-error-fg); }

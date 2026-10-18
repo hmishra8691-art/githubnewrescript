@@ -3,10 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, projectLookup, recordUsage } from "@/lib/metering";
 import type { Environment } from "@rescript/billing";
 import type { AuditEvent, Capability } from "@rescript/access";
+import { capabilitiesOf } from "@rescript/access";
 import { buildPptx, buildXlsx, ExportUnsupportedError, isEmbeddableImage } from "@rescript/analytics/export";
 import {
   DEFAULT_THEME, BUILT_IN_REPORT_TEMPLATES, applyTemplate, describeTemplate,
-  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, type StoryDefinition } from "@rescript/analytics";
+  type AnalysisDefinition, type AnalysisResult, type ChartSpec, type DatasetSpec, type ReportDefinition, type ReportTemplate, type ReportTheme, BUILT_IN_DASHBOARD_TEMPLATES, applyDashboardTemplate, dashboardAsTemplate, describeDashboardTemplate, templateKind, plannedAnalyses, reportAnalysisIds, failedResult, checkSnapshot, normalizeReportDefinition, draftReport, regenerateScene, storyHtml, variableMetadata, parseAskOps, parseUndo, analysisReadiness, type StoryDefinition } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { audit, isFailure, requireEditRight, requireProject, type ProjectContext } from "@/lib/guard";
@@ -92,6 +93,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   const surveyId = params.id;
   const db = supabaseService();
 
+  /*
+   * WHAT THIS MEMBER MAY DO HERE (the Apply audit, 2026-10-17). The /analytics page asked
+   * `can(role, …)` with the bare role from the survey list, so a CUSTOM member — whose
+   * capabilities live in the membership's per-module permissions, not the role — was told
+   * "no analytics access" even with Data Analytics: Edit, and could never apply. The same
+   * membership the routes authorise against (`ctx.grant`) answers here.
+   */
+  if (head === "access") {
+    const ctx = await gate(req, surveyId, "project.read"); if (isFailure(ctx)) return ctx.response;
+    return json({ role: ctx.role, capabilities: capabilitiesOf(ctx.grant) });
+  }
   if (head === "variables") {
     const ctx = await gate(req, surveyId, "analytics.read"); if (isFailure(ctx)) return ctx.response;
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
@@ -334,6 +346,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const ctx = await gate(req, surveyId, "analytics.edit"); if (isFailure(ctx)) return ctx.response;
       const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
       const brief = parseBrief(body.brief);
+      /* hypothesis-wise findings read the survey's own hypotheses, never the request's (2026-10-17) */
+      if (brief.sections?.includes("hypotheses")) brief.hypotheses = ((loaded.def as SurveyDefinition).research?.hypotheses ?? []).map((text, i) => ({ label: `H${i + 1}`, text }));
       if (!brief.objective && !brief.keyQuestions.length) return bad("State the objective or at least one key question — the report is built around what you want to learn.");
       const { items, truncated } = await builderItems(db, surveyId, loaded, brief.analysisIds);
       if (!items.length) return bad("This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report.", 409);
@@ -431,6 +445,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     const def = body.definition as AnalysisDefinition | undefined;
     if (!def || !def.kind || !def.dataset) return bad("A definition with kind and dataset is required.");
     if (!["TEST", "LIVE", "ALL"].includes(def.dataset.environment)) return bad("dataset.environment must be TEST, LIVE or ALL.");
+    /* the ONE readiness rule the builder's Run button reads (the Apply audit, 2026-10-17): an incomplete definition is refused with what is missing, never computed into a wall of warnings */
+    const ready = analysisReadiness({ ...def, variables: Array.isArray(def.variables) ? def.variables : [] });
+    if (!ready.ready) return json({ error: ready.missing.join(" "), code: "incomplete_definition", missing: ready.missing }, 422);
     const loaded = await loadDefinition(db, surveyId); if ("error" in loaded) return bad(loaded.error, loaded.status);
     try {
       const result = await compute(db, surveyId, loaded, { ...def, name: def.name || def.kind }, { fresh: body.fresh === true });
