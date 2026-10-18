@@ -1,6 +1,6 @@
 import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
 import { resolveUxTarget, validateUxItem, scopeCss } from "./ux.js";
-import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
+import { SCRIPT_CHECKED, exfiltrationProblems } from "./uxScriptGuard.js";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -244,6 +244,62 @@ const fail = (m: string): never => { throw new ActionError(m); };
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const plain = (s: string | undefined, n = 40): string => { const t = stripHtmlText(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const questionOrFail = (env: OptionEnv, ref: string): Question => env.question(ref) ?? fail(`there is no question “${ref}”`);
+
+/** the survey as a whole, as a model names it for set_custom_code */
+export const SURVEY_CODE_TARGET = /^(?:_*survey_*|the survey|whole survey|the whole survey|all|all pages|global|_*theme_*|the theme|branding|page_all|shell|\*)$/i;
+const SURVEY_CSS_LABEL = "Survey custom CSS";
+/**
+ * SURVEY-WIDE CUSTOM CODE (production intents, 2026-10-18). A model asked for "a 3D background" wrote
+ * set_custom_code on "__survey__", and the follow-up "undo it" wrote "Remove the custom code of survey":
+ * both were refused with "there is no question …". The survey's code is one script on target "survey"
+ * (as the old Branding custom JavaScript became, `branding_custom_js`) and one scoped stylesheet on the
+ * survey — the same items Styles, animations & scripts lists, through the same gates.
+ */
+function surveyCustomCode(def: SurveyDefinition, a: Extract<OptionAction, { op: "set_custom_code" }>, env: OptionEnv, warnings: string[]): OptionApplied {
+  const ux = (def.ux ??= { styles: [], animations: [], behaviors: [] });
+  const changed: string[] = [], lossy: string[] = [];
+  const surveyScripts = () => ux.behaviors.filter((b) => b.target.kind === "survey" && (b.source === "copilot_custom_code" || b.source === "branding_custom_js"));
+  if (a.js !== undefined) {
+    const mine = surveyScripts();
+    if (a.js === null) {
+      for (const b of mine) { ux.behaviors.splice(ux.behaviors.indexOf(b), 1); changed.push(`script “${b.label}” removed`); lossy.push(`removes the survey-wide script “${b.label}” (${(b.script ?? "").length} characters)`); }
+    } else {
+      const target = resolveUxTarget(def, "survey");
+      if (typeof target === "string") fail(target);
+      const had = mine.find((b) => b.source === "copilot_custom_code") ?? mine[0];
+      const next: UxBehavior = { id: had?.id ?? env.ids("uxb"), label: "Survey script", target: target as UxTarget, effects: [], script: a.js, source: "copilot_custom_code", createdAt: had?.createdAt ?? env.now };
+      const v = validateUxItem(def, "behavior", next, { authoring: true });
+      if (v.errors.length) fail(v.errors.map((e) => e.replace(/^“[^”]*”: /, "")).join("; "));
+      warnings.push(...v.warnings.map((w) => w.replace(/^“[^”]*”: /, "")));
+      if (had?.script !== a.js) {
+        if (had) { ux.behaviors[ux.behaviors.indexOf(had)] = next; lossy.push(`replaces the survey-wide script “${had.label}” (${(had.script ?? "").length} characters)`); } else ux.behaviors.push(next);
+        changed.push(`a survey-wide script (${a.js.split("\n").length} line${a.js.split("\n").length === 1 ? "" : "s"}) in Styles, animations & scripts — ${SCRIPT_CHECKED}`);
+      }
+    }
+  }
+  if (a.css !== undefined) {
+    const had = ux.styles.find((s) => s.target.kind === "survey" && s.label === SURVEY_CSS_LABEL);
+    if (a.css === null) {
+      if (had) { ux.styles.splice(ux.styles.indexOf(had), 1); changed.push("survey custom CSS removed"); lossy.push(`removes the survey's custom CSS (${(had.css ?? "").length} characters)`); }
+    } else {
+      const target = resolveUxTarget(def, "survey");
+      if (typeof target === "string") fail(target);
+      const next = { id: had?.id ?? env.ids("uxs"), label: SURVEY_CSS_LABEL, target: target as UxTarget, rules: [], css: a.css, createdAt: had?.createdAt ?? env.now };
+      const v = validateUxItem(def, "style", next, { authoring: true });
+      if (v.errors.length) fail(`the survey's custom CSS was refused — ${v.errors.map((e) => e.replace(/^“[^”]*”: /, "")).slice(0, 3).join("; ")}. Colours, fonts and the background are the theme (set_theme); scoped rules go in create_style.`);
+      warnings.push(...v.warnings.map((w) => w.replace(/^“[^”]*”: /, "")));
+      if (had?.css !== a.css) {
+        if (had) { ux.styles[ux.styles.indexOf(had)] = next; lossy.push(`replaces the survey's custom CSS (${(had.css ?? "").length} characters)`); } else ux.styles.push(next);
+        changed.push(`survey custom CSS (${a.css.length} characters)`);
+      }
+    }
+  }
+  if (!changed.length) {
+    if (a.js === null || a.css === null) fail("the survey has no survey-wide custom code to remove — its theme is the Branding (set_theme), and each style, animation and script is listed in the outline by id (remove_style / remove_behavior)");
+    fail("the survey's custom code is already as asked");
+  }
+  return { description: `The survey: ${changed.join(", ")}`, ...(lossy.length ? { destructive: lossy.join("; ") } : {}), warnings, touched: [] };
+}
 
 type Flag = Option["flags"][number];
 /** an option, a row or a column — anything with a label, usually a code, and flags */
@@ -720,6 +776,8 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       return { description: `${hypothesisLabel(i)}: ${a.text && a.text.trim() !== r.hypotheses[i] ? "restated; " : ""}${detailWords(next)}`, warnings, touched: [] };
     }
     case "set_custom_code": {
+      /* the SURVEY's code ("__survey__", "survey", "theme"): a survey-wide script / stylesheet, not a question's (production, 2026-10-13: "there is no question “__survey__”") */
+      if (SURVEY_CODE_TARGET.test(a.target.trim())) return surveyCustomCode(def, a, env, warnings);
       const q = questionOrFail(env, a.target);
       const changed: string[] = [], lossy: string[] = [];
       const editCss = (next: string | null | undefined) => {
@@ -755,6 +813,9 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
        * A Custom Component is the exception: its JavaScript is the component.
        */
       if (a.js !== undefined && q.type === "custom_component") {
+        /* a component's JavaScript runs on the respondent's page itself (not in the sandbox): nothing that sends data off it (prompt-injection audit, 2026-10-18) */
+        const exfil = a.js ? exfiltrationProblems(a.js) : [];
+        if (exfil.length) fail(`the component script for ${q.code} was refused — ${exfil.slice(0, 3).join("; ")}.`);
         const had = q.customJs;
         if (a.js === null) { if (had !== undefined) { delete q.customJs; changed.push("component JS removed"); lossy.push(`removes the component script of ${q.code} (${had.length} characters)`); } }
         else if (had !== a.js) { q.customJs = a.js; changed.push(`component JS (${a.js.length} characters)`); if (had !== undefined) lossy.push(`replaces the component script of ${q.code} (${had.length} characters)`); }

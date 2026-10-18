@@ -7,7 +7,7 @@ import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
 import { DocumentOutput, ThemeTurnCard, type DocumentActions } from "./DocumentCards";
-import { validateResearch, type SurveyAction } from "@rescript/engine";
+import { validateResearch, PROVENANCE_REASON, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
 /**
@@ -64,6 +64,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   onRetrySave?(): void;
 }) {
   const r = entry.reply;
+  /* the model's actions the Studio could not read (the provenance gate's exclusions are shown apart) */
+  const shapeRejected = (r?.rejected ?? []).filter((x) => !x.reason?.endsWith(PROVENANCE_REASON));
   const u = r?.understanding;
   const state = entry.proposal;
   /* an applied card says what is true: APPLIED once the editor has it, then the number, then SAVED / NOT SAVED / SANDBOX */
@@ -88,6 +90,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           {entry.usage && entry.usage.charge > 0 && <span className="iqi-dim" data-testid="cp-charge">{formatCharge(entry.usage.charge)}</span>}
         </div>
         {entry.status === "thinking" && <div className="iq-thinking"><span className="iq-dot" /><span className="iq-dot" /><span className="iq-dot" /></div>}
+        {/* streamed (2026-10-18): the reply as the model writes it — a preview; the result replaces it */}
+        {entry.status === "thinking" && entry.live?.text && <p className="cp-live iqi-dim" data-testid="cp-live" data-part={entry.live.part ?? ""} aria-live="polite" style={{ whiteSpace: "pre-wrap" }}>{entry.live.text}</p>}
         {entry.progress && (entry.status === "thinking" || entry.status === "ready") && <Progress entry={entry} onResumeNow={onResumeNow} />}
         {entry.notice && <p className="iqi-dim cp-notice" data-testid="cp-notice"><Icon name="info" size={11} /> {entry.notice}</p>}
         {entry.error && <p className="iq-error" role="alert" data-testid="cp-error"><Icon name="warning" size={12} /> {entry.error}</p>}
@@ -219,10 +223,16 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
                 {r.questions.map((q, i) => <button key={i} type="button" className="iq-example cp-q" onClick={() => onAnswer(q)}><span className="iq-example-text">{q}</span><span className="iq-example-about">answer this</span></button>)}
               </div>
             )}
-            {r.rejected.length > 0 && (
-              <div className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {r.rejected.length} action{r.rejected.length === 1 ? "" : "s"} from the model {r.rejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {r.rejected.length === 1 ? "was" : "were"} dropped.
+            {/* prompt-injection audit (2026-10-18): what the provenance gate left out is said as such, apart from shape refusals */}
+            {r.rejected.some((x) => x.reason?.endsWith(PROVENANCE_REASON)) && (
+              <div className="iq-warning" data-testid="cp-provenance"><Icon name="warning" size={12} /> Not included — not requested by you:
+                <ul style={{ margin: "4px 0 0 16px" }}>{r.rejected.filter((x) => x.reason?.endsWith(PROVENANCE_REASON)).slice(0, 8).map((x, i) => <li key={i} data-testid="cp-provenance-reason">{x.reason}</li>)}</ul>
+              </div>
+            )}
+            {r.rejected.some((x) => !x.reason?.endsWith(PROVENANCE_REASON)) && (
+              <div className="iq-warning" data-testid="cp-rejected"><Icon name="warning" size={12} /> {shapeRejected.length} action{shapeRejected.length === 1 ? "" : "s"} from the model {shapeRejected.length === 1 ? "was" : "were"} not in a shape the Studio accepts and {shapeRejected.length === 1 ? "was" : "were"} dropped.
                 {/* the reason, when the gate gave one — "wizardry is not an analysis method the platform runs" is actionable; a count is not */}
-                {r.rejected.some((x) => x.reason) && <ul style={{ margin: "4px 0 0 16px" }}>{r.rejected.filter((x) => x.reason).slice(0, 5).map((x, i) => <li key={i} data-testid="cp-rejected-reason">{x.reason}</li>)}</ul>}
+                {shapeRejected.some((x) => x.reason) && <ul style={{ margin: "4px 0 0 16px" }}>{shapeRejected.filter((x) => x.reason).slice(0, 5).map((x, i) => <li key={i} data-testid="cp-rejected-reason">{x.reason}</li>)}</ul>}
               </div>
             )}
             {r.actions.length > 0 && state === "open" && refused.length > 0 && (
@@ -386,6 +396,7 @@ function Progress({ entry, onResumeNow }: { entry: CopilotEntry; onResumeNow?: (
   return (
     <p className={`cp-progress cp-progress-${p.phase}`} data-testid="cp-progress" data-phase={p.phase} data-done={p.done ?? ""} data-total={p.total ?? ""} role="status" aria-live="polite">
       <Icon name={p.phase === "done" ? "check" : p.phase === "waiting" ? "info" : "sparkle"} size={12} /> <span data-testid="cp-progress-text">{p.message}</span>
+      {p.step && <span className="iqi-dim" data-testid="cp-progress-step"> {p.step}</span>}
       {secs != null && <span className="iqi-dim"> Resuming in {secs}s.</span>}
       {p.phase === "waiting" && <button type="button" className="iq-btn" onClick={() => onResumeNow?.(entry.id)} data-testid="cp-resume-now">Resume now</button>}
     </p>

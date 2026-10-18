@@ -14,10 +14,25 @@ export type DocBlock =
   | { kind: "para"; text: string; style?: string; list?: { numId: string; level: number; index: number }; bold?: boolean; pageBreakBefore?: boolean }
   | { kind: "table"; rows: string[][] };
 
-export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: string[] } {
+/**
+ * Text Word does not show — a hidden run (`w:vanish`), white text, or text at 1pt or less. Kept in the
+ * blocks as before (an importer must not lose content), and ALSO listed, so a reader that hands the text
+ * to a model can say a document carries text its author could not see (prompt-injection audit, 2026-10-18).
+ */
+function runHidden(rpr: XmlNode | undefined): boolean {
+  if (!rpr) return false;
+  const on = (n: string) => kids(rpr, n).some((x) => x.attrs["w:val"] !== "0" && x.attrs["w:val"] !== "false");
+  if (on("w:vanish") || on("w:specVanish") || on("w:webHidden")) return true;
+  const color = kids(rpr, "w:color")[0]?.attrs["w:val"]?.toLowerCase();
+  if (color && /^(?:fff|ffffff|fefefe|fdfdfd|white)$/.test(color)) return true;
+  const sz = Number(kids(rpr, "w:sz")[0]?.attrs["w:val"]);
+  return Number.isFinite(sz) && sz > 0 && sz <= 2;
+}
+
+export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: string[]; hidden: string[] } {
   const zip = readZip(bytes);
   const xml = zipText(zip, "word/document.xml");
-  if (!xml) return { blocks: [], errors: ["word/document.xml is missing"] };
+  if (!xml) return { blocks: [], errors: ["word/document.xml is missing"], hidden: [] };
   const doc = parseXml(xml);
   const errors = doc.errors.slice(0, 5);
   // style ids → names ("Heading1" → "heading 1")
@@ -28,6 +43,7 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
   const blocks: DocBlock[] = [];
   const counters = new Map<string, number>();
   let pendingBreak = false;
+  const hidden: string[] = [];
   const runText = (p: XmlNode): { text: string; bold: boolean; pageBreak: boolean } => {
     let text = ""; let boldChars = 0; let chars = 0; let pageBreak = false;
     const walk = (n: XmlNode, bold: boolean) => {
@@ -35,6 +51,7 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
         if (c.name === "w:r") {
           const rpr = kids(c, "w:rPr")[0];
           const b = bold || !!(rpr && kids(rpr, "w:b").some((x) => x.attrs["w:val"] !== "0" && x.attrs["w:val"] !== "false"));
+          if (runHidden(rpr)) { const ht = c.children.filter((r) => r.name === "w:t").map((r) => r.text).join(""); if (ht.trim() && hidden.length < 200) hidden.push(ht); }
           for (const r of c.children) {
             if (r.name === "w:t") { text += r.text; chars += r.text.length; if (b) boldChars += r.text.length; }
             else if (r.name === "w:tab") text += "\t";
@@ -76,5 +93,5 @@ export function readDocx(bytes: Uint8Array): { blocks: DocBlock[]; errors: strin
     else if (c.name === "w:tbl") table(c);
     else if (c.name === "w:sdt") for (const x of kids(c, "w:sdtContent")[0]?.children ?? []) { if (x.name === "w:p") para(x); else if (x.name === "w:tbl") table(x); }
   }
-  return { blocks, errors };
+  return { blocks, errors, hidden };
 }

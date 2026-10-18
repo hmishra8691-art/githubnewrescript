@@ -447,6 +447,21 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       return { description: `Remove ${what}`, destructive: `Removes the ${what}`, warnings: [], touched: [] };
     }
     case "create_behavior": {
+      /*
+       * EFFECTS AND A SCRIPT IN ONE BEHAVIOUR (production intents, 2026-10-18): two things to do on one event —
+       * the effects as one behaviour, the script (wrapped in the same event) as a second, instead of refusing
+       * both ("has both a script and effects — use one"). The action is applied on a snapshot, so either both
+       * are written or neither.
+       */
+      if (a.script && a.effects?.length && a.on) {
+        const first = applyUxAction(def, { ...a, script: undefined }, env);
+        /* the script's half: its own item on the same event, asked for together with the effects — so not refused as a second behaviour for that event (refuseDuplicate guards against an UNasked twin) */
+        const t2 = resolveTarget(def, a.target, env);
+        const b2: UxBehavior = { id: env.ids("uxb"), label: `${a.label} (script)`.slice(0, 160), target: t2, effects: [], script: scriptOnEvent(a.script, a.on, a.options).script, ...(a.once ? { once: true } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };
+        const w2 = gate(def, "behavior", b2);
+        ux.behaviors.push(b2);
+        return { description: `${first.description}; and its script as “${b2.label}” on the same event — ${SCRIPT_CHECKED}`, warnings: [...first.warnings, ...w2], touched: [...new Set([...first.touched, ...(t2.questionId ? [t2.questionId] : [])])] };
+      }
       if (a.script && (a.on || a.options?.length) && !a.effects?.length) a = { ...a, ...scriptOnEvent(a.script, a.on, a.options), on: undefined, options: undefined };
       const t = resolveTarget(def, a.target, env);
       const b: UxBehavior = { id: env.ids("uxb"), label: a.label, target: t, ...(a.on ? { on: oneOf(UX_EVENTS, a.on === "select" ? "select_option" : a.on === "deselect" ? "deselect_option" : a.on === "complete" ? "page_complete" : a.on, "event")! } : {}), ...(a.options?.length ? { options: optionCodes(def, t, a.options) } : {}), effects: a.effects ? buildEffects(def, a.effects, env) : [], ...(a.script ? { script: a.script } : {}), ...(a.once ? { once: true } : {}), ...(a.when ? { when: parseGuard(def, a.when) } : {}), createdAt: env.now };

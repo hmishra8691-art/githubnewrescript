@@ -162,3 +162,8 @@ export * from "./qualActions.js";
 export * from "./researchSuitability.js";
 export * from "./researchTraceability.js";
 export * from "./researchValidation.js";
+/* prompt-injection audit (2026-10-18): untrusted text in prompts — fences, the scanner, the provenance gate */
+export * from "./untrusted.js";
+export * from "./provenance.js";
+/* production intents (2026-10-18): a calculation written in the condition language spelling (GRID.R1, IF … THEN … ELSE) */
+export * from "./calcRewrite.js";

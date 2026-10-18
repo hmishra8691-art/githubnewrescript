@@ -75,3 +75,18 @@ export function sumUsage(list: AiUsage[]): { inputTokens: number; outputTokens: 
   }
   return t;
 }
+
+/**
+ * THE TOKEN FIELDS OF A CHAT CALL'S USAGE SPEC (2026-10-18) — one function for every producer (the Studio's
+ * meter core, the runtime's session meter, the Interviews analysis meter), so the prompt-cache split reaches the
+ * meter on EVERY AI path: `inputUnits` is ALL the input, `cacheReadUnits` / `cacheWriteUnits` the parts of it the
+ * provider read from / wrote to its cache (omitted when zero). The meter prices them at the model's cache rates and
+ * records them as `metadata.tokens` ({ input, cachedInput, cacheWrite, uncachedInput, output }).
+ */
+export function chatUsageUnits(list: AiUsage[]): { inputUnits: number; outputUnits: number; quantity: number; cacheReadUnits?: number; cacheWriteUnits?: number } {
+  const t = sumUsage(list.filter((u) => u.kind === "chat"));
+  return {
+    inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens,
+    ...(t.cachedInputTokens ? { cacheReadUnits: t.cachedInputTokens } : {}), ...(t.cacheWriteTokens ? { cacheWriteUnits: t.cacheWriteTokens } : {}),
+  };
+}

@@ -1,9 +1,12 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { coerceSurveyActions, listBlocks, type SurveyAction } from "@rescript/engine";
+import { coerceSurveyActions, isLongBrief, listBlocks, type SurveyAction } from "@rescript/engine";
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanIntent } from "./researchGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
+/* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
+import { NOTICES, type ReplyLanguage } from "./notices.ts";
+import { QUESTION_WORD, SPOKEN_POPUP, SPOKEN_SCRIPT, SPOKEN_SCRIPT_LATIN, spokenQuestionNumbers, spokenTranslation } from "./spoken.ts";
 
 /**
  * THE COPILOT'S CONTRACT WITH THE MODEL.
@@ -267,6 +270,7 @@ ACTIONS:
 {"op":"add_crosstab","rows":["Q6"],"columns":["S2","S3"],"priority":1,"hypotheses":["H1"],"reason":"..."}  /  {"op":"remove_crosstab","id":"xt_3"}   // ids are in the outline
 {"op":"add_analysis_test","method":"chi_square","outcome":"AWARE","variables":["AD_EXPOSE"],"hypotheses":["H3"]}  /  {"op":"remove_analysis_test","id":"t_2"}
 {"op":"add_derived_variable","name":"TRUST_SCORE","kind":"mean_score|sum_score|top_box|bottom_box|recode|count|flag|index","from":["TRUST_1","TRUST_2"],"expression":"optional calc expression"}  /  {"op":"remove_derived_variable","name":"TRUST_SCORE"}
+CALCULATIONS (create_calculation, a derived variable's "expression") are arithmetic over variables: + - * / ( ), sum() avg() min() max() round(); a case inside one is if(test, then, else), nested for more cases — if(AGE <= 27, 1, if(AGE <= 43, 2, 3)), never IF … THEN … ELSE; a grid ROW is that row's own variable, VARIABLE_<row code> (rows r1, r2 in the outline → PERC_r1 + PERC_r2), never PERC.R1.
 {"op":"update_crosstab","id":"xt_3","columns":["S2","S3"],"measure":"mean","priority":1,"hypotheses":["H1"],"reason":null}  /  {"op":"update_analysis_test","id":"t_2","method":"kruskal_wallis","groupBy":"COUNTRY","outcome":null}   // change a planned item IN PLACE by its id (any subset of fields; null clears one) — prefer this to remove + add, so its saved analysis, chart and dashboard widget stay linked
 {"op":"reorder_analysis_plan","crosstabs":["xt_3","xt_1"],"tests":["t_2"]}   // the ids named come first, in that order; the rest keep their order after them
 "Why this analysis?", "why a t-test on Q5?", "explain the analysis plan", "what sample size do I need?" are answered by the Studio's engine itself (objective, variables, the rule that chose the method, output, required base vs the quotas' target or set_research's "sampleSize", limitations) — if one reaches you, answer from the plan in the outline the same way and invent no rule. A monadic randomizer (one block of N shown) is compared across the arm only when an embedded variable records it. "Show me the most important crosstabs" is a question: answer from the outline's plan (priority 1, hypothesis-linked first), no actions. "Which method should I use for X" is a question: weigh rating, ranking, MaxDiff, conjoint, TURF, pricing, driver analysis and trade-offs; propose a change only if asked.`;
@@ -285,6 +289,7 @@ The survey has ONE source language (given above). A language version is translat
 Targets (in set_translations entries): "Q5" (its text), "Q5.instruction", "Q5.option:2" or "Q5.option:<label>", "Q5.row:r1" / "Q5.row:<label>", "Q5.column:<label>", "Q5.scale:low|high", "Q5.validation:1", "meta:title", "meta:description", "block:<title>", "end:complete", "ui:required", "ui:review_errors", "button:next|back|submit".
 Rules you must keep, or the engine refuses the entry: every {{pipe}}, {placeholder} (including {label}), \${var} and [[loop]] token exactly as in the source (same count, same spelling), and every question code the source names (Q7, Q7.R1); written in the target language's own script (no Russian in Latin letters, no Japanese in romaji); the same HTML tags, balanced; never an empty text; glossary terms marked do-not-translate (brand names) exactly as written; the glossary's preferred wording for a term. Translate for a questionnaire: natural, the register the language's notes ask for (formal "Sie" / "usted" unless told otherwise), the same meaning and the same scale anchors in order, options kept distinct from each other, units and date/number conventions as the locale writes them. Do not "localize" the research meaning — a 5-point agreement scale stays a 5-point agreement scale.
 Scope: "translate this section / block" means every element of every question in it; "translate the survey" means every element the outline shows; "translate Q5" means its text, instruction, options and rows. The outline lists the languages the survey has, their completion, and — on a translation turn — each named question's elements with any existing translation and status (approved ones are kept unless the researcher asks to overwrite: add "overwriteApproved": true only then). Translate the OUTDATED ones when asked to re-translate; confirm_translations when the researcher says the old wording still fits.
+REPLACE THE WORDING OR ADD A VERSION — decide, never ask: when the researcher wants THIS survey's own wording in the language ("make all the questions Marathi", "मराठी में कर दो", "इसे ही पूरा मराठी कर दो", "change the text to English", "update it", "nothing separate") rewrite the source wording in place — update_question (text, options, rows, scale labels) and rename_block for every element in scope, codes and logic unchanged; when respondents are to be OFFERED the language, or a version / translation is named ("add Marathi", "a Marathi version", "let respondents choose") → add_language + set_translations. Neither said ("ask the questions in Marathi", "मराठी मदे विचारा") → add the language version (the source stays as it is) and say in one sentence that the source wording can be replaced instead.
 ACTIONS:
 {"op":"add_language","code":"de","locale":"de-DE","country":"DE","notes":"formal register"}
 {"op":"set_translations","language":"de","entries":[{"target":"Q5","text":"Wie wahrscheinlich ist es, dass Sie {{BRAND}} kaufen?"},{"target":"Q5.option:1","text":"Sehr unwahrscheinlich"},{"target":"Q5.instruction","text":"Bitte eine Antwort auswählen"}],"status":"ai"}
@@ -339,13 +344,22 @@ export function quotaIntent(text: string): boolean {
 
 /** a request about languages, translation or localization — the guide goes with it */
 export function translationIntent(text: string): boolean {
+  /* "मराठी मदे विचारा", "मराठी में कर दो", "इंग्लिस्ट लैंग्वेज में चाहिए", "اردو میں ترجمہ": a language named in another script with a translation cue (production, 2026-10-17: the model asked instead of acting, without the guide) */
+  if (spokenTranslation(text)) return true;
   return /\b(?:translat\w*|localis\w*|localiz\w*|languages?|multilingual|bilingual|glossary|do[- ]not[- ]translate|spanish|french|german|hindi|japanese|arabic|chinese|portuguese|italian|dutch|korean|russian|turkish|welsh|tamil|telugu|bengali|marathi|gujarati|urdu|polish|swedish|in (?:german|spanish|french|hindi)|routing|rout(?:e|ing)\b.*\b(?:language|to (?:en|es|fr|de|hi|pt|it|nl|ja|zh|ar|ko|ru|tr|pl|sv)\b)|respondents? (?:get|see) (?:the )?(?:english|spanish|french|german)|language (?:selector|switch)|rtl)\b/i.test(text);
 }
 
 /** a request about the analysis framework — the guide goes with it */
 export function analysisIntent(text: string): boolean {
-  return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text);
+  return /\b(?:analy[sz]\w*|crosstabs?|cross[- ]tabs?|banner|hypothes\w*|dependent|independent|moderat\w*|mediat\w*|regression|correlat\w*|chi[- ]?square|t[- ]tests?|anova|significan\w*|drivers?|top[- ]?2?[- ]?box|derived variables?|segment(?:ation)? variables?|variable roles?|measurement levels?|statistical|which (?:test|method)|methodolog\w*|maxdiff or|conjoint or)\b/i.test(text) || /हाइपोथीसिस|हाइपोथिसिस|आइपोथीसिस|परिकल्पना|विश्लेषण|एनालिसिस|क्रॉसटैब/.test(text);
 }
+
+/** "design a survey", "survey design करना चाहता हूँ", "सर्वे डिजाइन करके दो", "survey ही create करना है" — building a survey, in English, Hinglish and Devanagari */
+const SURVEY_CREATE_SRC = String.raw`\bdesign(?:ing)?\s+(?:(?:a|an|the|my|this|our|me|us|one)\s+)*(?:(?:new|full|complete|whole|separate|short|quick|small|proper|qualitative|quantitative)\s+)*(?:survey|questionnaire|screener)\b|(?:सर्वे|सर्वेक्षण|प्रश्नावली|survey|questionnaire)\s*(?:\S+\s+){0,2}?(?:डिज़ाइन|डिजाइन|डिज़ाईन|डिजाईन|design|बना|बनाना|बनाओ|बनानी|तैयार|create|banao|banana)\s*(?:कर|करके|करने|करना|करनी|करो|करें|करिए|दो|दीजिए|चाहिए|चाहता|चाहती|chahiye|kar|karo|karna|karke)|(?:डिज़ाइन|डिजाइन|बनाओ|बना\s+दो|create|design)\s+(?:करके\s+|कर\s+|करो\s+)?(?:\S+\s+){0,2}?(?:सर्वे|सर्वेक्षण|प्रश्नावली)`;
+const SURVEY_CREATE = new RegExp(SURVEY_CREATE_SRC, "iu");
+const SURVEY_CREATE_G = new RegExp(SURVEY_CREATE_SRC, "giu");
+/** "next question", "नेक्स कुष्ण", "नेक्स्ट क्वेश्चन" — the next question, not the Next button */
+const NEXT_QUESTION = new RegExp(String.raw`(?:\bnext|नेक्स्ट|नेक्स|नेक्ट्स)\s+(?:${QUESTION_WORD})`, "giu");
 
 /**
  * What kind of request this is, and whether it needs the research documents
@@ -365,11 +379,14 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
    * whole survey ("… and create a survey to test it") is still a generation.
    */
   const localized = surveyQuestions >= 3 && /^(?:please\s+|now\s+|also\s+|and\s+|then\s+)*(?:add|insert|include|put|create|write|draft|make|record|update|change|edit|remove|delete|rephrase|reword|link)\b/.test(t) && !/\b(?:survey|questionnaire|study|screener|from scratch)\b/.test(t) && t.length < 400;
-  const generate = !localized && /\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
-  const edit = /\b(?:add|remove|delete|change|make|move|rename|randomi[sz]e|shuffle|show|hide|skip|require|mandatory|optional|split|merge|shorten|shorter|reduce|replace|convert|turn|set|insert|put|page break|scale|option|karo|kar do|hatao|jodo)\b/.test(t);
+  const generate = !localized && (/\b(?:create|build|design|generate|draft|make|write|prepare|develop|banana|bana do|banao)\b.{0,60}\b(?:survey|questionnaire|study|screener)\b|\b(?:survey|questionnaire|screener)\b.{0,30}\b(?:banana|banao|bana do|banani|chahiye|tayyar)\b|\bhypothes[ie]s\b|\bresearch (?:objective|question|design)\b|\btest (?:this|it|the hypothesis)\b/.test(t) || SURVEY_CREATE.test(t)) && (surveyQuestions < 3 || /\b(?:new|another|from scratch|whole|complete|full)\b/.test(t) || /\bhypothes/.test(t));
+  /* create / compute / derive a calculation, a variable, a score — and the same in Hindi / Hinglish — are edits (E4's eval, 2026-10-18: "Create a calculation SUPPORT_SCORE as the average of the Q5 rows" read as a question) */
+  const edit = /\b(?:add|remove|delete|change|make|move|rename|randomi[sz]e|shuffle|show|hide|skip|require|mandatory|optional|split|merge|shorten|shorter|reduce|replace|convert|turn|set|insert|put|page break|scale|option|karo|kar do|hatao|jodo|create|build|define|compute|calculate|derive|recode|banao|bana do|banaiye|nikalo|nikal do|lagao|laga do|calculate kar\w*|compute kar\w*)\b/.test(t)
+    || /बनाओ|बना\s*दो|बनाइए|बनाएं|बनाएँ|जोड़ो|जोड़\s*दो|जोडो|जोड\s*दो|कैलकुलेट|कैलक्युलेट|कैल्कुलेट|गणना\s*कर|निकालो|निकाल\s*दो|लगाओ|लगा\s*दो|डिराइव|कॅल्क्युलेट|तयार\s*करा|जोडा|काढा|بناؤ|بنا\s*دو|شامل\s*کرو|کیلکولیٹ|نکالو/.test(t);
   const research = documents > 0 && (/\b(?:literature|research|paper|papers|study|studies|brief|document|documents|report|reports|findings|evidence|source|sources|uploaded|reading|according to|based on|as per|citation|scale from|validated scale|existing measure)\b/.test(t) || (generate && surveyQuestions < 3));
   const u = uxIntent(t);
-  const mode: RequestMode = review ? "review" : generate ? "generate" : u.ux ? "ux" : edit ? "edit" : "question";
+  /* a pasted brief that mentions a design, a dashboard or the mobile layout among everything else is a brief, never a look-and-behaviour turn (the route plans it first) — production intents, 2026-10-18 */
+  const mode: RequestMode = review ? "review" : generate ? "generate" : u.ux && !isLongBrief(message) ? "ux" : edit ? "edit" : "question";
   return { mode, research, ux: u.ux, uxOnly: u.ux && u.only && !generate };
 }
 
@@ -381,7 +398,13 @@ export function classifyRequest(message: string, surveyQuestions: number, docume
  * request that says "don't change the logic" / "only the UI" is look-only
  * whatever else it names.
  */
-export function uxIntent(text: string): { ux: boolean; only: boolean; said?: boolean } {
+export function uxIntent(raw: string): { ux: boolean; only: boolean; said?: boolean } {
+  /*
+   * NOT THE LOOK (production intents, 2026-10-18): "design a survey", "सर्वे डिजाइन करके दो" are a request to BUILD a
+   * survey, and "नेक्स कुष्ण" / "next question" is the next question, not the Next button — read as look-and-behaviour
+   * they went to the model as UX turns (2026-10-17 10:02: a Hindi survey-design request logged mode "ux").
+   */
+  const text = raw.replace(SURVEY_CREATE_G, " ").replace(NEXT_QUESTION, " ");
   const t = text.toLowerCase();
   // strong: only ever about the look and behaviour; weak: usually is, but can be a topic ("mobile banking", "credit cards")
   const strong = /\b(?:themes?|branding|default (?:value|answer)s?|pre-?fill(?:ed|s)?|pre-?populate[ds]?|dark (?:mode|theme)|light theme|colou?r scheme|palette|background image|custom html|html|look like this|css|styl(?:e|es|ing|ish)|look(?:s)? (?:better|nicer|cleaner|modern|premium|different|more)|look and feel|visual(?:ly)?|colou?rs?|font|typography|spacing|padding|margins?|borders?|rounded|shadows?|animat(?:e|ed|es|ion|ions)|fade(?:s|-in| in| up|-up)?|transitions?|hover|glow|pulse|bounce|shake|highlight(?:ed|s)?|smooth(?:ly)?|prettier|beautiful|ui|ux|responsive|javascript|js|scripts?|event handlers?|interactions?|interactive|dynamic ui|one at a time|overlap(?:s|ping)?|countdown|confirmation animation)\b/.test(t);
@@ -394,16 +417,22 @@ export function uxIntent(text: string): { ux: boolean; only: boolean; said?: boo
    * went to the model with no UX guide, and the model wrote generic browser code that could not
    * work on a survey page. Words, not grammar: a hint for choosing the guide, never a decision.
    */
-  const intl = /जाव[ाअ]?\s?स|स्क्रिप्ट|सीएसएस|एनिमेशन|ऐनिमेशन|स्टाइल|थीम|ब्रांडिंग|हाइलाइट|हाईलाइट|बटन|नेक्स्ट|नेक्स|मैसेज|मेसेज|डिसेबल|डिसीबल|डिसएबल|इनेबल|एनेबल|डिज़ाइन|डिजाइन|लेआउट|जावा ?स्क्रिप्ट|جاوا ?اسکریپت|جافا ?سكريبت/.test(text);
-  const ux = strong || weak || behaviour || intl;
+  /* production intents (2026-10-18): Urdu جاوا سکرپٹ / پاپ اپ and Devanagari पॉप अप / एलेट were missed — SPOKEN_SCRIPT, SPOKEN_POPUP (spoken.ts) */
+  const intl = /जाव[ाअ]?\s?स|स्क्रिप्ट|सीएसएस|एनिमेशन|ऐनिमेशन|स्टाइल|थीम|ब्रांडिंग|हाइलाइट|हाईलाइट|बटन|नेक्स्ट|नेक्स|मैसेज|मेसेज|डिसेबल|डिसीबल|डिसएबल|इनेबल|एनेबल|डिज़ाइन|डिजाइन|लेआउट|जावा ?स्क्रिप्ट|جاوا ?اسکریپت|جافا ?سكريبت/.test(text) || SPOKEN_SCRIPT.test(text) || SPOKEN_POPUP.test(text);
+  const ux = strong || weak || behaviour || intl || SPOKEN_SCRIPT_LATIN.test(t);
   if (!ux) return { ux: false, only: false };
   const negated = /\b(?:don'?t|do not|without|never|no)\s+(?:change|changing|touch|touching|modify|modifying|alter|altering|break|breaking)\b[^.]{0,50}\b(?:logic|structure|questions?|wording|survey|codes?|options?|anything else|data)\b|\bonly\s+(?:the\s+|improve\s+the\s+|change\s+the\s+)?(?:ui|ux|look|looks|design|styling|style|visuals?|appearance|css)\b|\b(?:ux|ui|visual|styling|design|css)[- ]only\b|\bux changes? only\b/.test(t);
   const stripped = t.replace(/\b(?:don'?t|do not|without|never|no)\s+(?:change|changing|touch|touching|modify|modifying|alter|altering|break|breaking)\b[^.]{0,60}/g, " ");
   const structural = /\b(?:add|create|insert|new)\s+(?:a |an |another |two |three |some )?(?:new )?(?:questions?|blocks?|page breaks?|options? (?:called|named|for|“|")|choices? (?:called|named))\b|\b(?:delete|remove)\s+(?:the\s+)?(?:questions?|blocks?|options? \d|page)\b|\b(?:reword|rephrase|rewrite|wording|question text|translate)\b|\b(?:display|skip|branch(?:ing)?)\s+(?:logic|rules?|conditions?)\b|\bskip\b|\bvalidation\b|\b(?:required|mandatory|optional)\b|\brandomi[sz]e\b|\bquotas?\b|\bchange (?:the )?type\b|\bconvert\b.{0,30}\b(?:matrix|grid|dropdown|single|multi|ranking|slider)\b|\b(?:recode|variable name)\b|\bpunch(?:es|ing|ed)?\b|\bauto[- ]?punch\b|\b(?:hidden|derived|calculated)\s+variables?\b|\bembedded\s+data\b|\bsegment(?:ation|s)?\b|\b(?:code|assign|tag)\s+(?:the\s+)?(?:\w+\s+)?(?:as|to)\s+["“]?\w|\b(?:change|turn|make)\s+\S+\s+(?:in)?to\s+(?:a|an)\s+(?:card sort|matrix|grid|dropdown|ranking|slider|nps|star|single|multi|open|text|numeric)\b/.test(stripped);
   // stopping the respondent is validation (structure), so such a request is never look-only
-  const stops = /\b(?:disabl|block|prevent|stop|lock)\w*\b.{0,30}\b(?:next|proceed|continu|submit)\w*|\b(?:next|submit|continue)\b.{0,30}\b(?:disabl|block|lock)\w*|\b(?:can(?:not|'t)|not be able to|shouldn'?t|should not|unable to|not allowed to|until)\b.{0,40}\b(?:proceed|continue|go (?:on|ahead|next|forward)|move (?:on|ahead|next|forward)|next)\b/.test(stripped);
+  const stops = /\b(?:disabl|block|prevent|stop|lock)\w*\b.{0,30}\b(?:next|proceed|continu|submit)\w*|\b(?:next|submit|continue)\b.{0,30}\b(?:disabl|block|lock)\w*|\b(?:can(?:not|'t)|not be able to|shouldn'?t|should not|unable to|not allowed to|until)\b.{0,40}\b(?:proceed|continue|go (?:on|ahead|next|forward)|move (?:on|ahead|next|forward)|next)\b|\b(?:jab tak|tab tak|jabtak)\b.{0,60}\b(?:next|aage|proceed|continue)\b|\b(?:next|aage)\b.{0,40}\b(?:band|disable|disabled|na (?:badh|ja|jaye|jaaye)|nahi (?:badh|ja|jaye|jaaye))\w*/.test(stripped);
   // a request in another script cannot be read for "only the look": it is never look-only
-  return { ux: true, only: !intl && (negated || (strong && !structural && !stops)), ...(negated ? { said: true } : {}) };
+  /*
+   * Said look-only AND asked to stop the respondent ("only the UI, but keep Next disabled until age ≥ 18"): the
+   * stopping is what they asked for, so it is not said-look-only for validation — the one structural action the
+   * look-only rule lets through when it is only inferred (production intents, 2026-10-18).
+   */
+  return { ux: true, only: !intl && (negated || (strong && !structural && !stops)), ...(negated && !stops ? { said: true } : {}) };
 }
 
 /**
@@ -542,6 +571,8 @@ export function surveyLanguageOf(def: SurveyDefinition): string {
 /** question codes and variables a message names — the outline shows these in full */
 export function referencedQuestions(def: SurveyDefinition, message: string): string[] {
   const words = new Set((message.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).map((w) => w.toLowerCase()));
+  /* "quotient 9", "ख्योशन 3", "क्यू फाय", "क्यूबन", "सवाल 3" — the question numbers speech-to-text wrote (spoken.ts), read as Q9, Q3, Q5, Q1, Q3 */
+  for (const n of spokenQuestionNumbers(message)) words.add(`q${n}`);
   const ids = def.questions.filter((q) => words.has(String(q.code).toLowerCase()) || words.has(q.variableName.toLowerCase())).map((q) => q.id);
   // a named block or section ("translate the Brand section into German") focuses every question in it
   const t = message.toLowerCase();
@@ -600,15 +631,18 @@ const CLAIMS_DONE = /\b(?:i(?:'ve| have)(?: now| just| already)?|we(?:'ve| have)
  * proposed action was refused, the reply says so first; when there were no
  * actions but the words claim a change, the reply says nothing has changed yet.
  */
-export function honestReply(reply: CopilotReply, results: readonly { ok: boolean; description: string; error?: string }[] | null): CopilotReply {
+export function honestReply(reply: CopilotReply, results: readonly { ok: boolean; description: string; error?: string }[] | null, lang: ReplyLanguage = "en"): CopilotReply {
   const total = reply.actions.length;
   if (total && results && results.length && !results.some((r) => r.ok)) {
     const why = results.filter((r) => !r.ok).slice(0, 3).map((r) => `${r.description}${r.error ? ` — ${r.error.slice(0, 140)}` : ""}`).join("; ");
-    return { ...reply, reply: `Nothing was changed: none of the ${total} proposed change${total === 1 ? "" : "s"} could be applied${why ? ` (${why})` : ""}. ${reply.reply}`.slice(0, 4000) };
+    /* in the researcher's language (notices.ts): a Hindi / Hinglish / Marathi / Urdu conversation is not told this in English */
+    return { ...reply, reply: `${NOTICES.nothingChanged(lang, total, why)} ${reply.reply}`.slice(0, 4000) };
   }
-  if (!total && reply.kind !== "review" && CLAIMS_DONE.test(reply.reply)) return { ...reply, reply: `${reply.reply} (Nothing has been changed yet — this answer proposed no changes to apply.)` };
+  if (!total && reply.kind !== "review" && (CLAIMS_DONE.test(reply.reply) || CLAIMS_DONE_INDIC.test(reply.reply))) return { ...reply, reply: `${reply.reply} ${NOTICES.notChangedYet(lang)}` };
   return reply;
 }
+/** "मैंने … जोड़ दिया है", "add kar diya hai", "تبدیل کر دیا ہے" — a claim of a change, in Hindi / Hinglish / Marathi / Urdu */
+const CLAIMS_DONE_INDIC = /(?:जोड़|बना|बदल|लगा|हटा|अपडेट|लागू|सेट)\s*(?:दिया|दिए|दी|दिये)\s+(?:है|हैं|गया|गए)|(?:जोडले|बदलले|लागू केले|तयार केले)\s+आहे|\b(?:add|update|apply|set|change|bana|laga|hata|jod)\s+(?:kar\s+)?(?:diya|diye|di)\s+(?:hai|hain|gaya)\b|(?:شامل|تبدیل|لاگو|اپڈیٹ)\s+کر\s+(?:دیا|دی|دیے)\s+(?:ہے|ہیں|گیا)/i;
 
 
 /**

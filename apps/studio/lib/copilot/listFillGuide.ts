@@ -45,8 +45,11 @@ export function listFillIntent(text: string): boolean {
   if (/\bpriorit(?:y|ise|ize|ised|ized)\s+(?:to|for|on)\b|\b(?:always|hamesha)\s+(?:be\s+)?(?:shown|show|included|include|dikh\w*)\b.{0,40}\b(?:top|first|upar)\b/i.test(t)) return true;
   // Devanagari: रैंडमली / रैंडम … असाइन, लिस्ट फिल, प्राथमिकता (priority)
   if (/लिस्ट\s*फ\u093C?िल/.test(t)) return true;
-  if (/(?:रैंडमली|रैंडम|यादृच्छिक)[\s\S]{0,40}(?:असाइन|चुन|दिखा|सेलेक्ट|सिलेक्ट)/.test(t)) return true;
-  if (/(?:असाइन|चुन)[\s\S]{0,20}(?:रैंडमली|रैंडम)/.test(t)) return true;
-  if (/प्राथमिकता|प्रायोरिटी/.test(t)) return true;
+  /* production intents (2026-10-18): speech-to-text writes रेंडमली (े) and प्रायॉरिटी (ॉ) as often as the dictionary spellings */
+  if (/(?:रैंडमली|रैंडम|रेंडमली|रेंडम|रैन्डमली|रेन्डमली|यादृच्छिक)[\s\S]{0,40}(?:असाइन|चुन|दिखा|सेलेक्ट|सिलेक्ट)/.test(t)) return true;
+  if (/(?:असाइन|चुन)[\s\S]{0,20}(?:रैंडमली|रैंडम|रेंडमली|रेंडम)/.test(t)) return true;
+  if (/प्राथमिकता|प्रायोरिटी|प्रायॉरिटी|प्रायरिटी|प्रॉयोरिटी/.test(t)) return true;
+  /* "अगर चार से जादा ब्रांड selected है … कोई चार" — more than N selected, N passed on (2026-10-14, a grid → carry-forward request) */
+  if (/(?:\d+|एक|दो|तीन|चार|पांच|पाँच|छह|सात|आठ)\s+से\s+(?:ज़्यादा|ज्यादा|जादा|जास्त|अधिक|ज़्यादह)[\s\S]{0,40}(?:selected|select|सेलेक्ट|सिलेक्ट|सेलेक्टेड|सेलेक्टेट|चुने|चुना)/i.test(t)) return true;
   return false;
 }

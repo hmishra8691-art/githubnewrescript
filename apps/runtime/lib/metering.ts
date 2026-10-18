@@ -1,6 +1,6 @@
 import "server-only";
 import { Meter, MemoryMeterStore, SupabaseMeterStore, estimateTokens, type MeterContext, type UsageEvent, type UsageSpec, type Environment } from "@rescript/billing";
-import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
+import { aiModelName, chatUsageUnits, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
 import { supabaseAdmin } from "@/lib/admin";
 
 /**
@@ -66,7 +66,8 @@ function usageToSpec(usage: AiUsage[]): Partial<UsageSpec> {
   if ((usage[0]?.kind ?? "chat") === "stt") {
     return { provider: meterProvider(provider, "stt"), service: "stt", model: meterModel(provider, t.model, "stt"), quantity: (t.seconds ?? 0) / 60, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, seconds: t.seconds ?? 0 } };
   }
-  return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens, metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider } };
+  /* the token fields through the shared function (2026-10-18): the cache split reaches the meter here too, as in the Studio */
+  return { provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model), ...chatUsageUnits(usage), metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, ...(t.latencyMs ? { providerLatencyMs: t.latencyMs } : {}) } };
 }
 
 /**

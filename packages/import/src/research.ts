@@ -38,6 +38,8 @@ export interface ExtractedResearch {
   images: PdfImage[];
   chars: number;
   warnings: string[];
+  /** text the document hides from its reader (Word: hidden, white or 1pt runs) — still in `pages`; listed for the injection scan */
+  hidden?: string[];
 }
 
 const dec = new TextDecoder("utf-8", { fatal: false });
@@ -58,7 +60,7 @@ export async function extractResearchDocument(bytes: Uint8Array, name: string): 
     return { ...base, format: "pdf", pages, scanned: textless.length > 0, images, chars: pages.reduce((n, p) => n + p.text.length, 0), warnings };
   }
   if (fmt === "docx") {
-    const { blocks, errors } = readDocx(bytes);
+    const { blocks, errors, hidden } = readDocx(bytes);
     const pages: ResearchPage[] = [];
     const tables: ResearchTable[] = [];
     let cur: string[] = [];
@@ -77,7 +79,7 @@ export async function extractResearchDocument(bytes: Uint8Array, name: string): 
       lastPara = b.text;
     }
     flush();
-    return { ...base, format: "docx", pages, tables, chars: pages.reduce((k, p) => k + p.text.length, 0), warnings: errors.slice(0, 3) };
+    return { ...base, format: "docx", pages, tables, chars: pages.reduce((k, p) => k + p.text.length, 0), warnings: errors.slice(0, 3), ...(hidden.length ? { hidden } : {}) };
   }
   if (fmt === "xlsx") {
     const wb = new ExcelJS.Workbook();

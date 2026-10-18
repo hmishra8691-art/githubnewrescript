@@ -131,8 +131,9 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
       const w = (() => this)();
       try { w["par" + "ent"]["docu" + "ment"].title = "pwned"; rs.log("page OPEN"); } catch (e) { rs.log("page blocked: " + e.name); }
       try { w["local" + "Storage"].setItem("x", "1"); rs.log("storage OPEN"); } catch (e) { rs.log("storage blocked: " + e.name); }
-      try { w["fe" + "tch"]("https://example.com/steal").then(() => rs.log("network OPEN"), () => rs.log("network blocked")); } catch (e) { rs.log("network blocked"); }
-      try { const I = w["Ima" + "ge"]; const img = new I(); img.src = "https://example.com/pixel"; } catch (e) {}` },
+      try { w["fe" + "tch"]("https://example.com/steal").then(() => rs.log("network OPEN"), () => rs.log("network blocked")); } catch (e) { rs.log("network blocked"); }` },
+    // an address set from code is refused by the gate itself since the prompt-injection audit (2026-10-18)
+    { id: "pixel", label: "Pixel", target: { kind: "question", questionId: q1 }, effects: [], script: `try { const I = this["Ima" + "ge"]; const img = new I(); img.src = "https://example.com/pixel"; } catch (e) {}` },
     { id: "flood", label: "Flood", target: { kind: "question", questionId: q1 }, effects: [], script: `const flood = () => { [...Array(60)].forEach(() => rs.addClass("self", "x")); rs.after(0, flood); }; flood();` },
     { id: "loop", label: "Loop", target: { kind: "question", questionId: q1 }, effects: [], script: `while (true) rs.log("spin");` },
     { id: "bounded", label: "Bounded loop", target: { kind: "question", questionId: q1 }, effects: [], script: `while (true) { }` },
@@ -145,6 +146,7 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
   assert.equal(evReq.filter((u) => u.includes("example.com")).length, 0, "no request left the sandbox");
   assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="flood"]')), false, "a script flooding commands is stopped and its frame removed");
   assert.ok(!!(await ev.$('iframe[data-rs-ux-sandbox="evil"]')), "the escape attempt ran — in its frame");
+  assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="pixel"]')), false, "a script that sets an address from code (img.src) fails the gate and never runs");
   assert.equal(!!(await ev.$('iframe[data-rs-ux-sandbox="loop"]')), false, "a script that fails the gate (a loop with no braces) never runs");
   assert.equal(await ev.evaluate(() => 1 + 1), 2, "a braced endless loop is bounded by the runtime: the page stays responsive");
   assert.equal(await ev.evaluate(() => localStorage.getItem("x")), null, "the page's storage untouched");

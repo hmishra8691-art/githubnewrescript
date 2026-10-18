@@ -9,6 +9,9 @@ import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
+/* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
+import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
+import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* §3 (2026-10-18): a long brief read once — the structured research context, its store, the brief's exact passages, task-aware selection, per-call measurement */
 import { addCalls, briefFingerprint, contextLayersFor, contextOwner, deriveResearchContext, itemPassagesFor, questionnaireScope, reconcileContext, renderBriefPassages, renderResearchContext, retrieveBriefPassages, sectionBrief, withProgress, workflowIdFor, type CallMeasure, type ResearchContext, type StoredResearchContext } from "@/lib/copilot/researchContext";
@@ -23,8 +26,12 @@ import type { AiEstimate } from "@/lib/aiEstimate";
 import { latestRun } from "@/lib/analytics";
 import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
+/* prompt-injection audit (2026-10-18): untrusted text fenced, scanned, and the provenance gate on high-risk actions */
+import { assessTurn, carryProvenance, fenceResearch, gateReply, provenanceRejections, turnNotice } from "@/lib/copilot/injection";
+import { fenceNonceFor, neutralizeUntrusted, UNTRUSTED_DATA_RULE } from "@rescript/ai";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
+import { NOTICES, replyLanguage } from "@/lib/copilot/notices";
 import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, reportingIntent, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
@@ -123,11 +130,29 @@ function providerNote(events: ProviderEvent[]): { retries: number; fallback: boo
 /** the scripted replies an executed plan consumed: one per approved item */
 const approvedCount = (plan: { items: unknown[] }) => plan.items.length;
 
+/*
+ * TWO TRANSPORTS, ONE TURN (2026-10-18). A request with `Accept: application/x-ndjson` gets the turn as a
+ * stream of events — heartbeats, progress, the reply text as the model writes it, each built plan item —
+ * ending in one terminal event that carries exactly the JSON below. Without the header (older pages, every
+ * other caller) the response is the JSON, unchanged. Everything answered before the first model call (auth,
+ * refusals, the wallet, the cache) is the same JSON with the same HTTP status on both.
+ */
 export async function POST(req: NextRequest) {
   const authed = await requireUser(req);
+  /* signed out: refused here exactly as below (only the fake provider's sandbox may continue, which needs the body) */
+  if (isFailure(authed) && aiProviderName() !== "fake") return authed.response;
+  if (!wantsStream(req.headers.get("accept"))) return turn(req, authed, null);
+  /* a crash after streaming began reads as one before it did: a 500 with no JSON (the page's "temporary, resend") */
+  return streamTurn((sink) => turn(req, authed, sink), { crash: (e) => { console.warn("[rescript:copilot]", JSON.stringify({ event: "turn crashed while streaming", error: ((e as Error)?.message ?? "").slice(0, 200) })); return { status: 500, body: null }; } });
+}
+
+async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireUser>>, sink: TurnSink | null): Promise<Response> {
   const startedAt = Date.now();
   let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; themeImages?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
+  /* TEST SEAM, fake provider only: how the stand-in streams (chunks, pauses, a failure part-way) and how the stream itself behaves (heartbeat interval, a scripted drop) */
+  const fakeStreamSeam = aiProviderName() === "fake" ? streamSeam((body as { fakeStream?: unknown }).fakeStream) : null;
+  sink?.configure({ enabled: streamingAllowed(process.env, aiProviderName() === "fake", !!fakeStreamSeam), ...(fakeStreamSeam ? { heartbeatMs: fakeStreamSeam.heartbeatMs, dropAfterCheckpoints: fakeStreamSeam.dropAfterCheckpoints, dropAfterMs: fakeStreamSeam.dropAfterMs } : {}) });
   const surveyId = typeof body.surveyId === "string" ? body.surveyId : "";
   /* the researcher chose "send this once" while the project runs Internal: that one request may reach the model (audit A-2); nothing else may */
   const consent: { consent?: "once" } = body.aiOnce === true ? { consent: "once" } : {};
@@ -143,6 +168,8 @@ export async function POST(req: NextRequest) {
    * MAX_MESSAGE_CHARS read, and past that the researcher is told — nothing is sent, nothing is charged.
    */
   const message = typeof body.message === "string" ? normalizeBrief(body.message) : "";
+  /* the Studio's own sentences in the reply follow the researcher's language (notices.ts) */
+  const lang = replyLanguage(message);
   if (!message) return NextResponse.json({ error: "say what you want" }, { status: 400 });
   if (message.length > MAX_MESSAGE_CHARS) {
     const failure = { ...describeFailure("too_long"), message: `This request is ${message.length.toLocaleString("en")} characters; Intelligent Mode reads up to ${MAX_MESSAGE_CHARS.toLocaleString("en")} at once. Nothing was sent to the model and nothing was charged — your text is kept.`, next: ["Send the brief in two parts — the research design and objectives first, then the questionnaire requirements — or upload it as a research document and ask for the survey “based on the brief”.", "Tables and long reference lists can go in a research document; the plan cites them from there."] };
@@ -157,7 +184,7 @@ export async function POST(req: NextRequest) {
    */
   const scope = body.scope === "theme" || body.stage === "execute" ? null : requestScope(message);
   if (scope && (scope.scope === "unsupported" || scope.scope === "ambiguous")) {
-    const said = scope.scope === "unsupported" ? UNSUPPORTED_MESSAGE : scope.question;
+    const said = scope.scope === "unsupported" ? NOTICES.unsupported(lang, UNSUPPORTED_MESSAGE) : scope.question;
     return NextResponse.json({
       ok: true,
       reply: { kind: scope.scope === "unsupported" ? "answer" : "clarify", reply: said, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: scope.scope === "ambiguous" ? [scope.question] : [], sources: [] },
@@ -215,7 +242,7 @@ export async function POST(req: NextRequest) {
   const okUrl = (u: unknown): u is string => typeof u === "string" && (/^https:\/\/[^\s"'()<>\\]+$/i.test(u) || /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(u) || /^\/[^\s"'()<>\\]+$/.test(u));
   const tis = (Array.isArray(body.themeImages) ? body.themeImages.slice(0, 4) : [body.themeImage]).filter((t): t is { url?: unknown; name?: unknown; dominant?: unknown; palette?: unknown; dark?: unknown } => !!t && typeof t === "object" && okUrl((t as { url?: unknown }).url));
   const themeImageUrl: string[] | null = tis.length ? tis.map((t) => t.url as string) : null;
-  const themeImageText = tis.length ? describeThemeImages(tis.map((ti) => ({ name: typeof ti.name === "string" ? ti.name.slice(0, 80) : undefined, dominant: Array.isArray(ti.dominant) ? ti.dominant.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [], palette: ti.palette && typeof ti.palette === "object" ? Object.fromEntries(Object.entries(ti.palette as Record<string, unknown>).filter(([k, v]) => /^[a-z]{2,20}$/i.test(k) && typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v)).slice(0, 16)) as Record<string, string> : {}, dark: ti.dark === true }))) : undefined;
+  const themeImageText = tis.length ? describeThemeImages(tis.map((ti) => ({ name: typeof ti.name === "string" ? neutralizeUntrusted(ti.name, { maxChars: 80 }).replace(/[\r\n"⟦⟧]/g, " ") : undefined, dominant: Array.isArray(ti.dominant) ? ti.dominant.filter((c): c is string => typeof c === "string" && /^#[0-9a-f]{3,8}$/i.test(c)).slice(0, 8) : [], palette: ti.palette && typeof ti.palette === "object" ? Object.fromEntries(Object.entries(ti.palette as Record<string, unknown>).filter(([k, v]) => /^[a-z]{2,20}$/i.test(k) && typeof v === "string" && /^#[0-9a-f]{3,8}$/i.test(v)).slice(0, 16)) as Record<string, string> : {}, dark: ti.dark === true }))) : undefined;
   const selectedId = typeof body.selectedId === "string" ? body.selectedId : null;
   // a request about the look and behaviour gets the UX guide, the theme and the UX of the questions it names
   const uxTurn = cls.ux || mode === "ux";
@@ -288,7 +315,8 @@ export async function POST(req: NextRequest) {
   const useBriefLayers = briefStage && !!rc && !!stored && stored.context.fingerprint.brief === briefFingerprint(message);
   /* outside the build of its own brief, a context is used only once the design built from that brief is in the survey (adopted): a survey started over from scratch — or the shared sandbox — is not given an earlier brief's context */
   const layers = useBriefLayers ? { researchContext: "full" as const } : longBrief ? { researchContext: "none" as const } : contextLayersFor({ mode, themeOnly: themeScope, uxOnly: cls.uxOnly, stage: null, hasContext: !!rc && !rc.fingerprint.designEmpty, stale: !rc });
-  const researchContextText = rc && layers.researchContext !== "none" ? renderResearchContext(rc, { compact: layers.researchContext === "compact" }) : undefined;
+  /* neutralised (deterministic, so the cached block stays the same bytes): a brief's role markers or fence look-alikes never reach a system block as structure */
+  const researchContextText = rc && layers.researchContext !== "none" ? neutralizeUntrusted(renderResearchContext(rc, { compact: layers.researchContext === "compact" })) : undefined;
   const briefSections = useBriefLayers ? sectionBrief(stored!.brief) : rc && stored && layers.researchContext === "compact" ? sectionBrief(stored.brief) : [];
   /* an ordinary turn that names something in the stored brief (its quota table, a definition) gets that passage verbatim */
   const turnPassages = !useBriefLayers && briefSections.length ? retrieveBriefPassages(briefSections, message, { k: 2, maxChars: 3000, minScore: 6 }) : [];
@@ -313,6 +341,15 @@ export async function POST(req: NextRequest) {
     research = `${cards}${p.text ? `\n\nPASSAGES:\n${p.text}` : ""}`;
     passageIds = p.ids;
   }
+  /*
+   * PROMPT INJECTION (2026-10-18). The research material is the documents' authors' text, not the researcher's:
+   * scanned, then sent as fenced data (the rule in a cached block, the fence's keyed nonce in the user text — the
+   * same request gets the same prompt, so the reply cache and single-flight still work). A pasted brief, the
+   * survey's own text and image names are scanned too. The provenance gate below reads `provenance`.
+   */
+  const provenance = assessTurn({ message, longBrief, research, docs, def, extra: tis.map((t) => ({ source: "theme image names", text: typeof t.name === "string" ? t.name : "" })) });
+  if (research) { research = fenceResearch(research, fenceNonceFor(`${surveyId}\u0000${user?.userId ?? "sandbox"}\u0000${message}`)); stableExtra.push(UNTRUSTED_DATA_RULE); }
+  const guard = <R extends NonNullable<ReturnType<typeof coerceCopilotReply>>>(r: R | null): R | null => (r ? gateReply(r, def, provenance, { allowUrls: themeImageUrl ?? [] }).reply : r);
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
   /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns. `planOnly`: the plan stage's, without the action guides */
   const promptFor = (compact: boolean, planOnly = false) => copilotUserPrompt({
@@ -383,8 +420,9 @@ export async function POST(req: NextRequest) {
     const r0 = retriesNow(); const t0 = Date.now();
     const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...est, meta: () => ({ workflowId, promptChars: chars, retries: retriesNow() - r0, ...(rc ? { researchContextVersion: rc.version } : {}) }) }, fn);
     if (m.ok) {
-      const md = (m.event?.metadata ?? {}) as { tokens?: { cachedInput?: number }; requests?: number };
-      calls.push({ operation: est.operation, promptChars: chars, inputTokens: m.event?.inputUnits ?? 0, outputTokens: m.event?.outputUnits ?? 0, cachedInputTokens: Number(md.tokens?.cachedInput ?? 0), requests: Number(md.requests ?? 1), retries: retriesNow() - r0, latencyMs: Date.now() - t0, charge: m.event?.customerCharge ?? 0 });
+      const md = (m.event?.metadata ?? {}) as { tokens?: { cachedInput?: number; cacheWrite?: number }; requests?: number };
+      /* the cache WRITE too (2026-10-18): the per-call measure carries both halves of the prompt cache, so the eval and the cost card need not read the meter */
+      calls.push({ operation: est.operation, promptChars: chars, inputTokens: m.event?.inputUnits ?? 0, outputTokens: m.event?.outputUnits ?? 0, cachedInputTokens: Number(md.tokens?.cachedInput ?? 0), cacheWriteTokens: Number(md.tokens?.cacheWrite ?? 0), requests: Number(md.requests ?? 1), retries: retriesNow() - r0, latencyMs: Date.now() - t0, charge: m.event?.customerCharge ?? 0 });
     }
     return m;
   };
@@ -396,18 +434,35 @@ export async function POST(req: NextRequest) {
     return stored?.workflow ?? null;
   };
   /** what the response says about the context it used */
-  const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
+  const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, cacheWriteTokens: c.cacheWriteTokens ?? 0, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
   const faults: Fault[] = fakeProvider && Array.isArray(body.faults) ? (body.faults as Fault[]).slice(0, 40) : [];
   /** the test seam: a scripted fault or delay in front of a model call (nothing, outside the fake provider) */
   const model = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    /* the first model call commits a streaming request to the stream (heartbeats from here on); a no-op otherwise */
+    sink?.start();
     const f = faults.shift();
     if (f?.delayMs) await sleepMs(Math.min(5000, f.delayMs));
     if (f?.kind) throw new ProviderError({ kind: f.kind, status: f.status, retryAfterMs: f.retryAfterMs, detail: "scripted", host: "fake", exhausted: true });
     return fn();
   };
+  /**
+   * STREAMED TEXT (2026-10-18): the options that make one model call report its readable field (`reply`, a
+   * plan's `summary`) to the stream as the model writes it — only once this request is streaming (the
+   * provider is asked to stream then and only then). `part` names what the text belongs to; a compact retry
+   * is a new part, so the page replaces what it showed instead of appending a second copy. With the fake
+   * provider the scripted reply is what the stand-in "writes".
+   */
+  const live = (field: "reply" | "summary", part: string, scripted?: unknown): { onText?: (d: string) => void; fakeStream?: FakeStreamScript } => {
+    const fs = fakeStreamSeam ? { ...fakeStreamSeam.script, ...(scripted != null && typeof scripted === "object" ? { text: JSON.stringify(scripted) } : {}) } : undefined;
+    const out = sink;
+    if (!out?.streaming) return fs ? { fakeStream: fs } : {};
+    const x = new JsonTextExtractor([field], (d) => out.text(d, part));
+    return { onText: (d: string) => x.push(d), ...(fs ? { fakeStream: fs } : {}) };
+  };
   /** one provider call, once: a request that repeats an identical call still running (a double click, a refresh while the first is in flight) shares it instead of paying for a second */
   const shared = <T,>(label: string, text: string, fn: () => Promise<T>): Promise<T> =>
-    fakeProvider ? fn() : flights(`${user?.userId ?? "sandbox"}|${surveyId}|${aiIdentity()}|${label}|${createHash("sha256").update(text).digest("hex")}`, fn as () => Promise<unknown>) as Promise<T>;
+    /* a request that waits on another's identical call is streaming too: heartbeats while it waits (its text deltas go to the first request) */
+    (sink?.start(), fakeProvider ? fn() : flights(`${user?.userId ?? "sandbox"}|${surveyId}|${aiIdentity()}|${label}|${createHash("sha256").update(text).digest("hex")}`, fn as () => Promise<unknown>) as Promise<T>);
   /** a prompt the provider says is longer than the model's context window is sent once more in compact form — a bulk job is not lost to its own size */
   const fitting = async <T,>(run: (compact: boolean) => Promise<T>): Promise<T> => {
     try { return await run(false); }
@@ -453,8 +508,9 @@ export async function POST(req: NextRequest) {
     const planDone = async (p: ChangePlan, extra: Record<string, unknown> = {}) => { await keepPlanContext(p); const workflow = await keepWorkflow(false); return NextResponse.json({ ok: true, stage: "plan", plan: p, context: { ...planContext(), ...extra, ...contextMeta(), ...(workflow ? { workflow } : {}) }, usage: { charge } }); };
     try {
       const pb = outputBudget("plan");
+      sink?.progress({ stage: "plan", label: "Planning" });
       const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + planPrompt, maxTokens: pb.expectedTokens, operation: "copilot_plan" }, planPrompt,
-        () => fitting((c) => shared("plan", planText(c), () => model(() => completeJson(...copilotCall(planText(c), stableExtra), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent })))));
+        () => fitting((c) => shared("plan", planText(c), () => model(() => completeJson(...copilotCall(planText(c), stableExtra), pb.maxTokens, { timeoutMs: pb.timeoutMs, deadline, schema: CHANGE_PLAN_SCHEMA, continuations: pb.continuations, operation: "copilot_plan", onEvent, ...live("summary", c ? "summary:compact" : "summary", fake) })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -479,7 +535,7 @@ export async function POST(req: NextRequest) {
         const plan2 = coerceChangePlan(second, { maxQuestions });
         if (plan2) return planDone(plan2, { planRetried: true });
         const q = firstQuestion(second, first);
-        const reply = { kind: "clarify", reply: q ? `Before I plan this brief I need one thing: ${q}` : "I could not turn this brief into a plan yet. Say which part to plan first — for example the research design and the screener — and I will plan the rest from there.", plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: q ? [q] : [], sources: [] };
+        const reply = { kind: "clarify", reply: NOTICES.briefQuestion(lang, q), plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: q ? [q] : [], sources: [] };
         return NextResponse.json({ ok: true, reply, validation: null, passages: {}, context: { ...planContext(), planRetried: true }, usage: { charge } });
       }
       // nothing plan-shaped came back: the single-reply turn below, as before (and the scripted reply, if any, is that turn's)
@@ -518,6 +574,9 @@ export async function POST(req: NextRequest) {
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
       if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
+      /* streaming, and the page has gone (or the stream was dropped): nothing more is started for nobody — what is built was already sent as checkpoints */
+      if (sink?.cancelled) break;
+      sink?.progress({ stage: "item", item: i + 1, of: approved.length, id: item.id, label: item.title });
       /* §3: the item's own exact passages of the stored brief (a quota table, a hypothesis, a definitions table) — not the whole brief */
       const hit = useBriefLayers ? itemPassagesFor(briefSections, item) : { text: "", ids: [] as string[] };
       const itemPassages = hit.text;
@@ -525,7 +584,7 @@ export async function POST(req: NextRequest) {
       const t0 = Date.now();
       try {
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
-          () => fitting((c) => { const p = promptOf(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent }))); }), hit.ids);
+          () => fitting((c) => { const p = promptOf(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids);
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -537,6 +596,8 @@ export async function POST(req: NextRequest) {
         const itemRaw = fakes[newlyBuilt.length] ?? m.value;
         built.push({ item, raw: itemRaw });
         newlyBuilt.push({ id: item.id, raw: itemRaw });
+        /* the item, kept by the page the moment it exists: a connection lost after this costs only the item in flight */
+        sink?.checkpoint(item.id, itemRaw);
         slowest = Math.max(slowest, Date.now() - t0);
         done.push(builtLine(item, itemRaw));
       } catch (e) {
@@ -581,8 +642,9 @@ export async function POST(req: NextRequest) {
        * budgets); and what still cannot be read comes back as a CODE the
        * researcher is told, not as "nothing I could use" (Phase 1).
        */
+      sink?.progress({ stage: "turn" });
       const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + prompt, maxTokens: budget.expectedTokens, operation: `copilot_${mode}` }, prompt,
-        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(...copilotCall(promptOf(c), stableExtra), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent })))));
+        () => fitting((c) => shared("turn", promptOf(c), () => model(() => completeJson(...copilotCall(promptOf(c), stableExtra), maxTokens, { timeoutMs: budget.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: budget.continuations, operation: `copilot_${mode}`, onEvent, ...live("reply", c ? "reply:compact" : "reply", fake) })))));
       if (!m.ok) {
         const r = refusalResponse(m);
         const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -597,8 +659,9 @@ export async function POST(req: NextRequest) {
   }
 
   /* 4: the gate, and the engine's validation on a clone */
+  sink?.progress({ stage: "gate", label: "Checking the proposal" });
   const coerced = coerceCopilotReply(raw);
-  let reply = coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced;
+  let reply = guard(coerced && themeImageUrl ? { ...coerced, actions: withThemeImage(coerced.actions, themeImageUrl) } : coerced);
   if (!reply) {
     const failure = aiProviderName() === "fake"
       ? describeFailure("unusable", "The FAKE provider cannot reason about surveys; configure a real model to use the copilot.")
@@ -620,20 +683,21 @@ export async function POST(req: NextRequest) {
   // a refusal the model cannot change (said look-only, the enforced research design) is not worth a paid call
   const repairable = refused.filter((r) => !policyRefusal(r));
   if (applied && refused.length && !repairable.length) repair = { refused, fixed: false, skipped: "policy" };
-  if (applied && repairable.length && !cached && !executedPlan && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
+  if (applied && repairable.length && !cached && !executedPlan && !sink?.cancelled && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
     const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, methodsGuideSent: methodsTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
     const repairPromptText = rp.text;
     // what was refused, for whoever reads the server log: the request did not reach the guide, or the model ignored it
     console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, refused: refused.map((e) => e.slice(0, 300)) }));
     try {
       const rb = outputBudget("repair");
+      sink?.progress({ stage: "repair", label: "Correcting refused actions" });
       const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + repairPromptText, maxTokens: rb.expectedTokens, operation: `copilot_${mode}_repair` }, repairPromptText,
         () => model(() => completeJson(...copilotCall(repairPromptText, stableExtra), rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
         const raw2 = fakes[1] ?? m.value;
         const c2 = coerceCopilotReply(raw2);
-        const r2 = c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2;
+        const r2 = guard(c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2);
         /*
          * TARGETED: the model returns only the corrections; the accepted actions are kept as they were
          * (not regenerated, not paid for twice). A model that repeats an accepted action keeps it once.
@@ -643,7 +707,7 @@ export async function POST(req: NextRequest) {
         const a2 = r2 && merged.length ? applySurveyActions(def, merged, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
         const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
         if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
-          reply = { ...r2, actions: merged }; applied = a2;
+          reply = carryProvenance(reply, { ...r2, actions: merged }); applied = a2;
           if (!fakes.length && !kept.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
           repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok), uxGuide: rp.addedUxGuide };
         } else repair = { refused, fixed: false, uxGuide: rp.addedUxGuide };
@@ -666,22 +730,23 @@ export async function POST(req: NextRequest) {
     const nextFake = executedPlan ? fakes[approvedCount(executedPlan)] : fakes[repair ? 2 : 1];
     /* a partial build is not sent round again to connect what is not there yet; and a pass is only started with time to finish it */
     const partialBuild = !!executedPlan && (planPending.length > 0 || planFailures.length > 0);
-    if (!coverage.ok && !cached && !partialBuild && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || nextFake)) {
+    if (!coverage.ok && !cached && !partialBuild && !sink?.cancelled && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || nextFake)) {
       const coveragePrompt = `${prompt}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(executedPlan ? raw : raw).slice(0, 14_000)}\n\nTHE STUDIO CHECKED THE RESEARCH COVERAGE OF THAT ANSWER: ${coverage.summary}.\n\nAnswer again in the same JSON shape with the SAME actions, plus what connects the loose ends: set_question_analysis tags (hypotheses) on the questions that measure each unmeasured hypothesis, constructs in set_research that name the measuring questions, a question for a hypothesis none measures, and a tag or construct for each unconnected question — or remove a question that serves nothing. Every hypothesis must be measured and every question must serve one, a construct, the plan or a KPI (screeners and demographics are exempt).`;
       try {
         const cb = outputBudget("coverage");
+        sink?.progress({ stage: "coverage", label: "Connecting the research coverage" });
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + coveragePrompt, maxTokens: cb.expectedTokens, operation: `copilot_${mode}_coverage` }, coveragePrompt,
           () => model(() => completeJson(...copilotCall(coveragePrompt, stableExtra), cb.maxTokens, { timeoutMs: cb.timeoutMs, deadline, schema: COPILOT_REPLY_SCHEMA, continuations: cb.continuations, operation: `copilot_${mode}_coverage`, onEvent })));
         if (m.ok) {
           charge += m.event?.customerCharge ?? 0;
           const raw3 = nextFake ?? m.value;
           const c3 = coerceCopilotReply(raw3);
-          const r3 = c3 && themeImageUrl ? { ...c3, actions: withThemeImage(c3.actions, themeImageUrl) } : c3;
+          const r3 = guard(c3 && themeImageUrl ? { ...c3, actions: withThemeImage(c3.actions, themeImageUrl) } : c3);
           const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
           if (r3 && a3?.valid) {
             const cov3 = coverageReport(a3.def);
             const better = cov3.ok || cov3.unmeasured.length + cov3.unconnected.length < coverage.unmeasured.length + coverage.unconnected.length;
-            if (better && a3.results.filter((x) => x.ok).length >= applied.results.filter((x) => x.ok).length) { reply = r3; applied = a3; coverage = { ...cov3, summary: `${cov3.summary} (connected on a second pass)` }; }
+            if (better && a3.results.filter((x) => x.ok).length >= applied.results.filter((x) => x.ok).length) { reply = carryProvenance(reply, r3); applied = a3; coverage = { ...cov3, summary: `${cov3.summary} (connected on a second pass)` }; }
           }
         }
       } catch (e) {
@@ -704,10 +769,13 @@ export async function POST(req: NextRequest) {
    */
   if (reply && applied && typeof reply.memory === "string") reply = { ...reply, memory: memoryWithRefusals(reply.memory, applied.results) };
   /* NEVER "SUCCESS" WHEN NOTHING WAS DONE: a batch the engine refused entirely, a reply that claims a change it did not propose, an approved plan whose items came back empty */
-  reply = honestReply(reply, applied?.results ?? null);
-  if (executedPlan && !reply.actions.length) reply = { ...reply, kind: "answer", reply: `Nothing was built: the approved item${executedPlan.items.length === 1 ? "" : "s"} came back without any changes to apply. Nothing was changed — press Resume to build ${executedPlan.items.length === 1 ? "it" : "them"} again, or ask for one block at a time.` };
+  reply = honestReply(reply, applied?.results ?? null, lang);
+  if (executedPlan && !reply.actions.length && !provenanceRejections(reply).length) reply = { ...reply, kind: "answer", reply: NOTICES.nothingBuilt(lang, executedPlan.items.length) };
+  /* the turn's notice: the provider's capacity, and what the injection scan and the provenance gate said */
+  const injectionNotice = turnNotice(provenance, provenanceRejections(reply).length);
+  const noticeOf = () => [capacityNotice(), injectionNotice].filter(Boolean).join(" ") || undefined;
   /* a mixed request: the supported part was done; the Studio names the rest */
-  if (outside.length) reply = { ...reply, reply: `${reply.reply} ${outsideNote(outside)}`.slice(0, 4000) };
+  if (outside.length) reply = { ...reply, reply: `${reply.reply} ${NOTICES.outside(lang, outside, outsideNote(outside))}`.slice(0, 4000) };
   return NextResponse.json({
     ok: true, reply,
     ...(executedPlan ? { stage: "executed", plan: executedPlan, ...(planFailures.length ? { planFailures } : {}), ...(planPending.length ? { planPending, partial: true } : {}) } : {}),
@@ -715,9 +783,22 @@ export async function POST(req: NextRequest) {
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...(repair ? { repair } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(noticeOf() ? { notice: noticeOf() } : {}), ...(provenance.untrusted ? { injection: { untrusted: true, flagged: provenance.flagged, sources: provenance.sources, signals: provenance.signals.slice(0, 5).map((x) => ({ kind: x.kind, excerpt: x.excerpt })), excluded: provenanceRejections(reply).map((x) => x.reason) } } : {}), ...(repair ? { repair } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
     usage: { charge },
   });
+}
+
+/** TEST SEAM (fake provider only): `fakeStream` — `true`, or { chunkChars, delayMs, failAfterChars, failKind } for the stand-in's writing and { heartbeatMs, dropAfterCheckpoints, dropAfterMs } for the stream */
+interface StreamSeam { script: FakeStreamScript; heartbeatMs?: number; dropAfterCheckpoints?: number; dropAfterMs?: number }
+const SEAM_KINDS: ProviderErrorKind[] = ["rate_limited", "quota_exhausted", "overloaded", "server", "network", "timeout", "auth", "forbidden", "not_found", "bad_request", "busy"];
+function streamSeam(v: unknown): StreamSeam | null {
+  if (v === true) return { script: {} };
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : undefined);
+  const kind = SEAM_KINDS.find((k) => k === o.failKind);
+  const script: FakeStreamScript = { ...(num(o.chunkChars) ? { chunkChars: num(o.chunkChars) } : {}), ...(num(o.delayMs) != null ? { delayMs: num(o.delayMs) } : {}), ...(num(o.failAfterChars) != null ? { failAfterChars: num(o.failAfterChars) } : {}), ...(kind ? { failKind: kind } : {}) };
+  return { script, heartbeatMs: num(o.heartbeatMs), dropAfterCheckpoints: num(o.dropAfterCheckpoints), dropAfterMs: num(o.dropAfterMs) };
 }
 
 function sanitizeMemory(m: TurnMemory | undefined): TurnMemory | undefined {

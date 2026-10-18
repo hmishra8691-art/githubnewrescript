@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { aiConfigured, aiProviderName, completeJson, ocrImage, embedTexts, aiEmbeddingsModelName } from "@rescript/ai";
+import { aiConfigured, aiProviderName, completeJson, ocrImage, embedTexts, aiEmbeddingsModelName, fenceUntrusted, neutralizeUntrusted, scanUntrusted, INJECTION_WARNING, UNTRUSTED_DATA_RULE } from "@rescript/ai";
 import { extractResearchDocument, chunkResearchDocument } from "@rescript/import/research";
 import { isFailure, requireUser, type AuthedUser } from "@/lib/guard";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
@@ -103,6 +103,14 @@ export async function POST(req: NextRequest) {
         if (!ocrPages) warnings.push(fake ? "The FAKE provider cannot read images; the scanned pages have no text." : "OCR found no legible text on the scanned pages.");
       }
     }
+    /*
+     * PROMPT INJECTION (2026-10-18): the document is scanned once, here, for text that talks to the AI (and for
+     * text Word hides from its reader). Never refused — the warning is kept with the document, its passages are
+     * fenced as data in every prompt, and a turn that uses them tightens the provenance gate.
+     */
+    const scan = scanUntrusted([file.name, ...doc.pages.map((p) => p.text)].join("\n"), { hidden: doc.hidden });
+    if (scan.flagged) warnings.push(`${INJECTION_WARNING} (${[...new Set(scan.signals.map((x) => x.kind))].join(", ")}): it is treated as data — the copilot will not act on it.`);
+    else if (doc.hidden?.length) warnings.push(`Contains ${doc.hidden.length} run${doc.hidden.length === 1 ? "" : "s"} of hidden text (white, hidden or tiny) that a reader of the document cannot see.`);
     const ref = await store.nextRef(surveyId);
     const chunks: StoredChunk[] = chunkResearchDocument(ref, doc);
     if (!chunks.length) { added.push({ name: file.name, error: warnings[0] ?? "No text could be read from this document." }); continue; }
@@ -120,10 +128,12 @@ export async function POST(req: NextRequest) {
     let summary = null;
     if (await aiReadyFor(user, surveyId, "copilot_document_summary")) {
       const input = summaryInput(chunks);
-      const prompt = `Document: ${file.name}\n\n${input.text}`;
+      /* the document is data from its author, fenced (its passage ids stay readable for citation); the rule goes with the system prompt */
+      const prompt = `Document: ${neutralizeUntrusted(file.name, { maxChars: 200 })}\n\n${fenceUntrusted(input.text, { source: "an uploaded research document" })}`;
+      const system = `${DOC_SUMMARY_SYSTEM_PROMPT}\n\n${UNTRUSTED_DATA_RULE}`;
       try {
         const sb = outputBudget("summary");
-        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: DOC_SUMMARY_SYSTEM_PROMPT + prompt, maxTokens: sb.expectedTokens, operation: "copilot_document_summary" }, () => completeJson(DOC_SUMMARY_SYSTEM_PROMPT, prompt, sb.maxTokens, { timeoutMs: sb.timeoutMs, continuations: sb.continuations }));
+        const m = await meteredAi(meter, ctx, "AI_REQUEST", { estimateText: system + prompt, maxTokens: sb.expectedTokens, operation: "copilot_document_summary" }, () => completeJson(system, prompt, sb.maxTokens, { timeoutMs: sb.timeoutMs, continuations: sb.continuations }));
         if (!m.ok) return refusalResponse(m);
         charge += m.event?.customerCharge ?? 0;
         summary = coerceDocSummary(fakeSummary ?? m.value, chunks.map((c) => c.id));

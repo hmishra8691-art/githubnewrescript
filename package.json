@@ -11,6 +11,8 @@
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm typecheck && pnpm test && pnpm audit:code",
     "verify:browser": "node scripts/verify-browser.mjs",
+    "eval:ai": "node --experimental-strip-types --no-warnings scripts/eval-ai.mjs",
+    "report:ai-cache": "node --experimental-strip-types --no-warnings scripts/ai-cache-report.mjs",
     "verify:all": "pnpm verify && pnpm verify:browser",
     "audit:code": "node scripts/auth-guard-audit.mjs && node scripts/dependency-boundaries.mjs --self-test && node scripts/dependency-boundaries.mjs",
     "pretest": "pnpm -r --filter \"./packages/*\" build"

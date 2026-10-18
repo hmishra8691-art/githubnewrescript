@@ -427,6 +427,8 @@ export interface CallMeasure {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  /** of the input: written into the provider's prompt cache (2026-10-18; absent on measures made before) */
+  cacheWriteTokens?: number;
   requests: number;
   retries: number;
   latencyMs: number;
@@ -443,6 +445,8 @@ export interface WorkflowTotals {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  /** cache writes summed (2026-10-18; absent on totals kept before) */
+  cacheWriteTokens?: number;
   retries: number;
   latencyMs: number;
   charge: number;
@@ -460,7 +464,7 @@ export function addCalls(totals: WorkflowTotals | null | undefined, id: string, 
   const t: WorkflowTotals = totals && totals.id === id ? { ...totals, byOperation: { ...totals.byOperation } } : { id, calls: 0, requests: 0, promptChars: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, retries: 0, latencyMs: 0, charge: 0, byOperation: {}, completed: false, startedAt: now, updatedAt: now };
   for (const c of calls) {
     t.calls++; t.requests += c.requests; t.promptChars += c.promptChars; t.inputTokens += c.inputTokens; t.outputTokens += c.outputTokens;
-    t.cachedInputTokens += c.cachedInputTokens; t.retries += c.retries; t.latencyMs += c.latencyMs; t.charge = Math.round((t.charge + c.charge) * 1e6) / 1e6;
+    t.cachedInputTokens += c.cachedInputTokens; t.cacheWriteTokens = (t.cacheWriteTokens ?? 0) + (c.cacheWriteTokens ?? 0); t.retries += c.retries; t.latencyMs += c.latencyMs; t.charge = Math.round((t.charge + c.charge) * 1e6) / 1e6;
     const k = c.operation.replace(/^copilot_(?:generate|edit|ux|review|question)_item$/, "copilot_item");
     const o = t.byOperation[k] ?? { calls: 0, promptChars: 0, inputTokens: 0, charge: 0 };
     t.byOperation[k] = { calls: o.calls + 1, promptChars: o.promptChars + c.promptChars, inputTokens: o.inputTokens + c.inputTokens, charge: Math.round((o.charge + c.charge) * 1e6) / 1e6 };

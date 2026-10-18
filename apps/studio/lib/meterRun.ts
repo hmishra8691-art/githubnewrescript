@@ -1,5 +1,5 @@
 import type { Meter, MeterContext, MeterRefusal, UsageEvent, UsageSpec } from "@rescript/billing";
-import { collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope, type SttScope, type TranslateScope } from "@rescript/ai";
+import { chatUsageUnits, collectUsage, sumUsage, withAiScope, type AiUsage, type ChatScope, type SttScope, type TranslateScope } from "@rescript/ai";
 import { meterModel, meterProvider } from "./aiEstimate.ts";
 import { aiAllowed, aiRefusal, type AiRefusal, type AiSource } from "./aiPolicy.ts";
 import type { Resolution } from "./byok/resolve.ts";
@@ -40,8 +40,9 @@ export function usageToSpec(usage: AiUsage[], fallback: { kind: "chat" | "tts" |
    * priced by the meter at the model's cache rates. `inputUnits` stays ALL the input.
    */
   return {
-    provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"), inputUnits: t.inputTokens, outputUnits: t.outputTokens, quantity: t.inputTokens + t.outputTokens,
-    ...(t.cachedInputTokens ? { cacheReadUnits: t.cachedInputTokens } : {}), ...(t.cacheWriteTokens ? { cacheWriteUnits: t.cacheWriteTokens } : {}),
+    provider: meterProvider(provider, "chat"), service: "chat", model: meterModel(provider, t.model, "chat"),
+    /* the shared token fields (2026-10-18): the same function the runtime and Interviews meters use, so the cache split is on every AI path */
+    ...chatUsageUnits(usage),
     metadata: { requests: t.requests, estimated: t.estimated, actualProvider: provider, ...(t.latencyMs ? { providerLatencyMs: t.latencyMs } : {}) },
   };
 }

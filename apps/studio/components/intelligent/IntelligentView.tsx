@@ -25,6 +25,7 @@ import { importRequest, importReviewAnswer, codeFromTitle } from "../../lib/impo
 import { ImportCard, ReviewCard, type ImportJob, type ReviewEntry, type ReviewScript } from "./ImportCard";
 import type { QuotaImportNote } from "./copilot/QuotasTab";
 import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
+import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
 import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { StructurePane } from "./copilot/StructurePane";
@@ -193,6 +194,7 @@ export function IntelligentView() {
     setApplyNote(r.ok ? null : r.reason ?? null);
     if (r.ok) toastApplied(s, r.n ?? null, r.save, r.message);
     else if (r.reason) s.toast(r.reason, "err");
+    return r;
   }, [copilot, s, selectKey]);
   const selectQuestion = React.useCallback((id: string) => selectKey(`question:${id}` as ObjectKey), [selectKey]);
   /*
@@ -238,6 +240,21 @@ export function IntelligentView() {
      * engine's "defer to the grammar" goes to the grammar's read-only
      * answers (explain, diagnose, screening) without a model either.
      */
+    /*
+     * SAID, NOT TYPED INTO A BUTTON (production intents, 2026-10-18): "undo / revert / roll back what you just
+     * did" ("reward back कर दो" by voice) is History's undo, and "it is good, apply it" with a proposal open is
+     * the Apply button — the Studio's own, no model call. Before, both went to the model: the undo became a
+     * refused "Remove the custom code of survey", the "apply" a second, duplicate proposal.
+     */
+    if (undoIntent(t)) {
+      await copilot.undoLast(t, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    if (copilot.proposal && applyIntent(t)) {
+      const r = await applyCopilot();
+      copilot.local(t, { kind: "answer", category: "survey_editing", understood: "Apply the open proposal.", answer: r.ok ? "Applied the open proposal as it stood in Changes — the same as its Apply button. History has it, with Restore." : `Not applied: ${r.reason ?? "the proposal could not be applied."} Nothing was changed — review it in Changes.`, sections: [], detected: [{ what: "read as", value: "apply the open proposal" }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     const ids = (sel?.keys ?? []).filter((k) => k.startsWith("question:")).map((k) => k.slice(9));
     const interp = interpretRequest(copilot.working, t, { selectedId, ...(ids.length > 1 ? { selectedIds: ids } : {}) });
     // a question about the data (Phase 4): the engine read it into a query; the answer is on the server's respondent data
@@ -370,7 +387,7 @@ export function IntelligentView() {
     setBusy(false);
     inputRef.current?.focus();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot, sel, selectedId]);
+  }, [busy, primary, s.def, s.surveyDbId, deps, aiAvailable, selectKey, copilot, sel, selectedId, applyCopilot]);
 
   /* -------------------------------------------------------------- apply */
   /*

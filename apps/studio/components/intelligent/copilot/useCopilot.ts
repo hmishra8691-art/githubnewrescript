@@ -2,11 +2,14 @@
 import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
-import { reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
+import { UNSUPPORTED_MESSAGE, reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
 import type { WorkflowResponse } from "../../../app/api/copilot/workflow/route";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
 import { evaluateProposal, rebaseProposal, sameSurvey, changeRecord, changeLabel, memoryFrom, type Proposal, type ProposalState, type ChangeRecord } from "../../../lib/copilot/client";
+/* production intents (2026-10-18): a repeated step is one step; "undo" / "apply it" said in words */
+import { foldPrompt, lastUndoable, repeatsTail, withStep } from "../../../lib/copilot/proposalSteps";
+import { NOTICES, replyLanguage } from "../../../lib/copilot/notices";
 import {
   OpsRecorder, memoryFromOps, saveFailure, observeUndo, reapplyActions, sameSurveyCanonical,
   type NewOp, type OpUpdate, type SaveView, type Send,
@@ -21,6 +24,8 @@ import {
 import type { ChangePlan } from "@/lib/copilot/changePlan";
 import type { HeardTranscript } from "../../../lib/intelligent/voice";
 import { prepareThemeImage, type ThemeImage } from "../../../lib/copilot/themeImage";
+/* response streaming (2026-10-18): the turn read as events — text, progress, checkpoints — or as JSON from an older server */
+import { NDJSON, clientStreaming, readTurnResponse } from "../../../lib/copilot/stream";
 import { isArtifactType, editionOf, mimeOf, ARTIFACT_LABEL, type ArtifactType } from "../../../lib/artifacts/core";
 import { fetchArtifactLines, fetchArtifactLink, sandboxFingerprint, saveBytes, saveUrl, sessionStore } from "../../../lib/artifacts/client";
 import { sandboxFind, sandboxGet, sandboxLines, sandboxPut, sandboxTheme, fromBase64 } from "../../../lib/artifacts/sandboxStore";
@@ -91,7 +96,9 @@ export interface CopilotEntry {
    * spinner without a reason: generating, waiting for AI capacity (with when it
    * resumes), resuming, or done. No status codes, no provider text.
    */
-  progress?: { phase: "planning" | "generating" | "waiting" | "resuming" | "done" | "partial"; message: string; done?: number; total?: number; until?: number };
+  progress?: { phase: "planning" | "generating" | "waiting" | "resuming" | "done" | "partial"; message: string; done?: number; total?: number; until?: number; /** streamed (2026-10-18): the step the server is on — "Item 2 of 5: Screener", "Checking the proposal" */ step?: string };
+  /** streamed (2026-10-18): the reply text as the model writes it, shown in the pending card until the result replaces it; `part` is what it belongs to (the reply, a plan's summary, a plan item) */
+  live?: { part?: string; text: string };
   /** the work kept for a build that stopped: items built, items still to build, items that failed — what Resume and Review-what's-ready act on */
   work?: { built: number; total: number; pending: number; failed: number };
   /** a heads-up from the AI service, only when its allowance is nearly spent */
@@ -235,8 +242,10 @@ export function useCopilot(opts: {
   const recordProposal = React.useCallback((text: string, actions: SurveyAction[], meta: { source: OpSource; intent?: OpIntent; detected?: { what: string; value: string }[]; targets?: string[]; apiCalls?: OpApiCall[]; warnings?: string[] }, openKey: string | null): string => {
     const open = openKey ? recorder.get(openKey) : undefined;
     if (open && open.status === "proposed") {
+      /* the same request again (a chip pressed twice): one step, one record line — not "Plan the analysis → Plan the analysis" (production intents, 2026-10-18) */
+      if (foldPrompt(open.prompt, text) === open.prompt.slice(0, 4000) && repeatsTail(actionsByOp.get(open.key) ?? [], actions)) return open.key;
       void recorder.update(open.key, {
-        prompt: `${open.prompt} → ${text}`.slice(0, 4000), proposed: [...open.proposed, ...proposedOf(actions)],
+        prompt: foldPrompt(open.prompt, text), proposed: [...open.proposed, ...proposedOf(actions)],
         detected: [...open.detected, ...(meta.detected ?? [])], targets: union(open.targets, meta.targets ?? []),
         apiCalls: [...open.apiCalls, ...(meta.apiCalls ?? [])], warnings: union(open.warnings, meta.warnings ?? []),
       });
@@ -360,6 +369,20 @@ export function useCopilot(opts: {
     setThemeImageError(null);
     try { setThemeImage(await prepareThemeImage(file, s.surveyDbId)); } catch (e) { setThemeImageError((e as Error).message); }
   }, [s.surveyDbId]);
+
+  /*
+   * STREAMING (2026-10-18). Requests ask for the streamed protocol unless switched off
+   * (`localStorage["rescript.copilot.stream"] = "off"`, or NEXT_PUBLIC_COPILOT_STREAMING=off at build).
+   * TEST SEAM: `window.__rescriptCopilotStream(cfg | [cfg1, cfg2, …] | null)` sends `fakeStream` with every
+   * turn until reset (a list: one per request, the last one kept) — the fake provider streams (and the route
+   * streams to the fake) only with it.
+   */
+  const streamSeamRef = React.useRef<unknown>(null);
+  React.useEffect(() => {
+    const w = window as unknown as { __rescriptCopilotStream?: (cfg: unknown) => void };
+    w.__rescriptCopilotStream = (cfg) => { streamSeamRef.current = cfg ?? null; };
+    return () => { delete w.__rescriptCopilotStream; };
+  }, []);
 
   // the browser suites stand in for the model through this hook, as the voice suite does for the microphone
   React.useEffect(() => {
@@ -541,21 +564,57 @@ export function useCopilot(opts: {
       let chargeAcc = 0;
       const workOf = () => (isBuild ? { built: cp.built.length, total, pending: pendingIds(items ?? [], cp.built, cp.failed).length, failed: cp.failed.length } : undefined);
       /* the words on the card for this moment — only where there is a generation to describe */
-      const say = (progress: CopilotEntry["progress"] | undefined) => opts.patch(id, { progress });
+      let lastSaid: CopilotEntry["progress"] | undefined;
+      const say = (progress: CopilotEntry["progress"] | undefined) => { lastSaid = progress; opts.patch(id, { progress }); };
       if (isBuild && !finalize) say({ phase: "generating", message: STATUS.building(cp.built.length, total), done: cp.built.length, total });
       else if (mode === "generate") say({ phase: "planning", message: planFirst ? STATUS.planning : STATUS.generating });
       /* one round trip. A scripted fault (browser suites) rides along; a request that never gets a JSON answer is status 0 */
+      /*
+       * STREAMED (2026-10-18): the reply text as the model writes it (shown in the pending card, at most every
+       * 60 ms), the step the server is on, and — building a plan — each item the moment it is built, kept in the
+       * checkpoint at once, so a connection lost mid-request costs only the item in flight. Heartbeats only keep
+       * the reader's idle clock from running out; a stream that breaks before its result is status 0, the
+       * dropped connection the resume logic below already handles.
+       */
+      let live: { part?: string; text: string } | null = null;
+      let liveTimer: ReturnType<typeof setTimeout> | null = null;
+      const showLive = () => { liveTimer = null; opts.patch(id, { live: live ? { ...live } : undefined }); };
+      const streamHandlers = {
+        onText: (delta: string, part: string | undefined) => {
+          if (!live || live.part !== part) live = { ...(part ? { part } : {}), text: "" };
+          live.text += delta;
+          if (!liveTimer) liveTimer = setTimeout(showLive, 60);
+        },
+        onProgress: (e: { stage: string; item?: number; of?: number; label?: string }) => {
+          if (e.stage === "item") say({ phase: "generating", message: STATUS.building(cp.built.length, total), done: cp.built.length, total, step: `Item ${e.item ?? "?"} of ${e.of ?? "?"}${e.label ? `: ${e.label}` : ""}` });
+          else if (e.stage === "plan") say({ phase: "planning", message: STATUS.planning, ...(e.label ? { step: e.label } : {}) });
+          else if (lastSaid && e.label) say({ ...lastSaid, step: e.label });
+        },
+        onCheckpoint: (itemId: string, raw: unknown) => {
+          if (!isBuild || typeof itemId !== "string") return;
+          cp.built = mergeBuilt(cp.built, [{ id: itemId, raw }]);
+          remember();
+          say({ phase: "generating", message: STATUS.building(cp.built.length, total), done: cp.built.length, total, ...(lastSaid?.step ? { step: lastSaid.step } : {}) });
+        },
+      };
       const send = async (): Promise<TurnResponse> => {
         const f = faultRef.current.shift();
         const sentFake = Array.isArray(fake) ? fake.slice(cp.built.length - startBuilt) : fake;
+        let stored: string | null = null; try { stored = window.localStorage.getItem("rescript.copilot.stream"); } catch { /* a private window */ }
+        const streamOn = clientStreaming(stored, process.env.NEXT_PUBLIC_COPILOT_STREAMING);
+        /* the seam: one config for every request, or a list — one per request, the last one kept */
+        const seamCfg = streamSeamRef.current;
+        const seam: unknown = Array.isArray(seamCfg) ? (seamCfg.length > 1 ? seamCfg.shift() : seamCfg[0]) : seamCfg;
+        if (live) { live = null; showLive(); }
         try {
           const r = await fetch("/api/copilot/turn", {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply })), memoryFromOps(recorder.list())), ...(mode ? { mode } : {}), ...(sentFake ? { fake: sentFake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra, ...(isBuild ? { done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {}), ...(f?.faults ? { faults: f.faults } : {}), ...(f?.budgetMs ? { budgetMs: f.budgetMs } : {}) }),
+            method: "POST", headers: { "content-type": "application/json", ...(streamOn ? { accept: `${NDJSON}, application/json` } : {}) },
+            body: JSON.stringify({ surveyId: s.surveyDbId, message: text, definition: working, selectedId: opts.selectedId, memory: memoryFrom(copilotTurns.map((t) => ({ user: t.text, reply: t.reply })), memoryFromOps(recorder.list())), ...(mode ? { mode } : {}), ...(sentFake ? { fake: sentFake } : {}), ...(themeImage ? { themeImage } : {}), ...(quotaCounts ? { quotaCounts } : {}), ...(runForTurn ? { analysisRun: runForTurn } : {}), planFirst, ...(usedOnce ? { aiOnce: true } : {}), ...extra, ...(isBuild ? { done: [...cp.built, ...(cp.applied ?? []).map((a) => ({ ...a, applied: true }))] } : {}), ...(f?.faults ? { faults: f.faults } : {}), ...(f?.budgetMs ? { budgetMs: f.budgetMs } : {}), ...(seam ? { fakeStream: seam } : {}) }),
           });
-          const d = await r.json().catch(() => null) as Record<string, unknown> | null;
-          return { status: r.status, ok: r.ok, d };
+          const t = await readTurnResponse(r, streamHandlers);
+          return { status: t.status, ok: t.ok, d: t.d };
         } catch { return { status: 0, ok: false, d: null }; }
+        finally { if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; } }
       };
       /* a wait the researcher can end with "Resume now" */
       const pause = (ms: number) => new Promise<void>((resolve) => { const end = () => { clearTimeout(t); wakeRef.current.delete(id); resolve(); }; const t = setTimeout(end, ms); wakeRef.current.set(id, end); });
@@ -601,6 +660,8 @@ export function useCopilot(opts: {
         if (wf) await waitFor(waitBeforeRetry({ retryAfterMs: wf.retryAfterMs }, stalls));
       }
       const r = { status: res.status, ok: res.ok };
+      /* the streamed text was a preview: the result (or the failure) replaces it */
+      if (live) { live = null; opts.patch(id, { live: undefined }); }
       if (themeImage) setThemeImage(null);
       /* every model turn is in the history with the call it made and what it cost — a failed one too */
       const call = (d: Record<string, unknown> | null, error?: string): OpApiCall => {
@@ -683,7 +744,7 @@ export function useCopilot(opts: {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
           const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
           const uxOnlyInferred = !!(d.context as { uxOnlyInferred?: boolean } | undefined)?.uxOnlyInferred;
-          return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}) }] }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
+          return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}) }) }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
         });
         patch.proposal = "open";
       }
@@ -796,7 +857,8 @@ export function useCopilot(opts: {
     const actions = it.kind === "actions" ? it.actions : [];
     const reply: CopilotReply = {
       kind: it.kind === "actions" ? "proposal" : it.kind === "clarify" ? "clarify" : "answer",
-      reply: it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? it.reason : it.understood,
+      /* the engine's "outside Intelligent Mode" sentence in the researcher's language (notices.ts) */
+      reply: it.kind === "answer" ? it.answer : it.kind === "clarify" ? it.question : it.kind === "refused" ? (it.reason === UNSUPPORTED_MESSAGE ? NOTICES.unsupported(replyLanguage(text), it.reason) : it.reason) : it.understood,
       plan: [], actions, rejected: [], findings: [], assumptions: [], questions: [], sources: [],
     };
     const engine: EngineTurn = {
@@ -815,7 +877,7 @@ export function useCopilot(opts: {
       opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
       setSession((x) => {
         const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-        return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: text, actions }] }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
+        return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions }) }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
       });
     }
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "ready", reply, engine, opKey, ...(actions.length ? { proposal: "open" as const } : {}) });
@@ -1101,7 +1163,7 @@ export function useCopilot(opts: {
     opts.patchAll((e) => (e.proposal === "open" ? { proposal: "superseded" } : null));
     setSession((x) => {
       const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
-      return { ...x, proposal: { base: base.base, steps: [...base.steps, { request: label, actions }] }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
+      return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: label, actions }) }, openOp: opKey, confirmed: false, excluded: [], tab: "changes" };
     });
   }, [s.def, stale, setSession, opts, recordProposal, session.openOp]);
 
@@ -1200,6 +1262,34 @@ export function useCopilot(opts: {
     return { ok: true };
   }, [session.history, s, setSession, recorder, auditChange]);
 
+  /**
+   * "UNDO WHAT YOU JUST DID", SAID IN WORDS (production intents, 2026-10-18). "जो changes अभी आपने किया उसे
+   * reward back कर दो" reached the model, which proposed "Remove the custom code of survey" (refused). Undo is
+   * the Studio's own: an open proposal is set aside (nothing was applied); otherwise the last change is
+   * restored exactly as the toolbar's "Undo AI change" restores it — and when later edits would go with it,
+   * nothing is done and History says so, where Restore… asks first. No model call, nothing charged.
+   */
+  const undoLast = React.useCallback(async (text: string, heard?: HeardTranscript): Promise<{ ok: boolean; reason?: string }> => {
+    const detected = [{ what: "read as", value: "undo the last Intelligent Mode change" }];
+    const say = (understood: string, answer: string) => local(text, { kind: "answer", category: "survey_editing", understood, answer, sections: [], detected }, heard);
+    if (session.proposal) {
+      cancel();
+      say("Undo: the open proposal, which was not applied.", "Nothing had been applied yet, so the open proposal was set aside and the survey is as it was. It stays in History, where Reapply proposes it again.");
+      return { ok: true };
+    }
+    const k = lastUndoable(session.history, recorder.list());
+    if (!k) { say("Undo: there is no change to undo.", "There is no Intelligent Mode change to undo in this survey's history — nothing was changed."); return { ok: false, reason: "nothing to undo" }; }
+    const op = recorder.get(k);
+    const tag = op?.changeN ? changeLabel(op.changeN).replace("AI Change", "AI change") : "the last AI change";
+    const r = await restore(k);
+    if (r.ok) say(`Undo: ${tag}${op?.prompt ? ` (“${op.prompt.slice(0, 80)}”)` : ""}.`, `Undone: ${tag} — the survey is back to how it was before it. Reapply it from History if you change your mind.`);
+    else {
+      setSession((x) => ({ ...x, tab: "history" }));
+      say(`Undo: ${tag} — not done.`, `${r.reason ?? "It could not be undone."} Nothing was changed. History is open: Restore… on that change goes back anyway, after asking.`);
+    }
+    return r;
+  }, [session.proposal, session.history, cancel, recorder, restore, local, setSession]);
+
   /** REAPPLY: the entry's actions, re-proposed against the survey as it is NOW — through the review again, never written blind */
   const reapply = React.useCallback((k: string): boolean => {
     const op = recorder.get(k);
@@ -1284,7 +1374,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
-    ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, uploadDocs, deleteDoc, refreshDocs,
+    ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, undoLast, uploadDocs, deleteDoc, refreshDocs,
     downloadOutput, regenerateOutput, themeRequest, themeCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,

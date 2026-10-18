@@ -1,5 +1,8 @@
 "use client";
 import React from "react";
+/* platform administrators: prompt caching measured from billing, and the Intelligent Mode evaluation (2026-10-18) */
+import { AiCachePanel } from "@/components/platform/AiCachePanel";
+import { AiEvalPanel } from "@/components/platform/AiEvalPanel";
 
 /**
  * /platform — WHAT THIS INSTANCE IS (§45).
@@ -284,6 +287,10 @@ export default function PlatformPage() {
           </>
         )}
       </div>
+
+      {/* AI COST AND THE EVALUATION — platform administrators only (the APIs refuse anyone else, too) */}
+      {info.viewer.isPlatformAdmin && <AiCachePanel />}
+      {info.viewer.isPlatformAdmin && <AiEvalPanel />}
 
       <h3 className="sec">Database migrations</h3>
       <div className="card" data-testid="platform-migrations">

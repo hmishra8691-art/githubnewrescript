@@ -3,7 +3,7 @@ import {
   Meter, MemoryMeterStore, SupabaseMeterStore,
   type Environment, type MeterContext, type UsageSpec,
 } from "@rescript/billing";
-import { aiModelName, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
+import { aiModelName, chatUsageUnits, collectUsage, sumUsage, type AiUsage } from "@rescript/ai";
 import { supabaseAdmin } from "./admin";
 
 /**
@@ -199,9 +199,8 @@ function chatToSpec(usage: AiUsage[]): Partial<UsageSpec> {
     provider: process.env.AI_API_URL === "fake:" ? "fake" : "openai-compatible",
     service: "chat",
     model: String(chat[0].model ?? aiModelName()),
-    inputUnits: Number(total.inputTokens ?? 0),
-    outputUnits: Number(total.outputTokens ?? 0),
-    quantity: Number(total.inputTokens ?? 0) + Number(total.outputTokens ?? 0),
+    /* the token fields through the shared function (2026-10-18): the prompt-cache split reaches the meter, as in the Studio */
+    ...chatUsageUnits(chat),
     unit: "token",
     metadata: { requests: total.requests ?? chat.length },
   };

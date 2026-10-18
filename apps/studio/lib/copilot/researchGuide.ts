@@ -57,10 +57,10 @@ ${COPILOT_QUAL_STUDY_GUIDE}`;
  */
 export function researchPlanIntent(text: string, mode?: string): boolean {
   if (mode === "generate") return true;
-  return /\bresearch (?:brief|plan|design|objectives?|questions?|proposal)\b|\b(?:study|survey) design\b|\bhypothes[ie]s\b|\bmethodolog\w*|\bsampl(?:e size|ing)\b|\bobjectives?\b|\bpropositions?\b|\bconstructs?\b|\bconfound\w*|\btraceab\w*|\bmixed[\s-]?methods?\b|\bqualitative\b|\bquantitative\b|\bconcept test\w*|\bmonadic\b|\bvan[\s-]?westendorp\b|\bgabor[\s-]?granger\b|\bturf\b|\bsegmentation\b|\bbrand (?:funnel|equity)\b|\bpricing (?:study|research)\b|\banalysis plan\b|\bwhich (?:test|method|methodology)\b|\bvalidate (?:the|my|this) (?:study|research|design|plan)\b/i.test(text);
+  return /\bresearch (?:brief|plan|design|objectives?|questions?|proposal)\b|\b(?:study|survey) design\b|\bhypothes[ie]s\b|\bmethodolog\w*|\bsampl(?:e size|ing)\b|\bobjectives?\b|\bpropositions?\b|\bconstructs?\b|\bconfound\w*|\btraceab\w*|\bmixed[\s-]?methods?\b|\bqualitative\b|\bquantitative\b|\bconcept test\w*|\bmonadic\b|\bvan[\s-]?westendorp\b|\bgabor[\s-]?granger\b|\bturf\b|\bsegmentation\b|\bbrand (?:funnel|equity)\b|\bpricing (?:study|research)\b|\banalysis plan\b|\bwhich (?:test|method|methodology)\b|\bvalidate (?:the|my|this) (?:study|research|design|plan)\b/i.test(text) || /हाइपोथीसिस|हाइपोथिसिस|आइपोथीसिस|परिकल्पना|रिसर्च\s+(?:डिज़ाइन|डिजाइन|प्लान)|क्वालिटेटिव|क्वांटिटेटिव|गुणात्मक|मात्रात्मक/.test(text);
 }
 
 /** a request about qualitative research — an interview guide, probes, open-ended exploration, a mixed design */
 export function qualIntent(text: string): boolean {
-  return /\bqualitative\b|\bqual\b|\binterview guide\b|\bdiscussion guide\b|\bin[\s-]depth interviews?\b|\bidis?\b|\bfocus groups?\b|\bprob(?:e|es|ing)\b|\bfollow[\s-]?up questions?\b|\bopen[\s-]ended\b|\bexplorator\w*\b|\bethnograph\w*|\bdiary stud\w*|\bmixed[\s-]?methods?\b|\bthemes? (?:analysis|coding)\b|\bverbatims?\b|\bmoderat\w*|\btranscripts?\b|\bcodebook\b|\bthematic\b/i.test(text);
+  return /\bqualitative\b|\bqual\b|\binterview guide\b|\bdiscussion guide\b|\bin[\s-]depth interviews?\b|\bidis?\b|\bfocus groups?\b|\bprob(?:e|es|ing)\b|\bfollow[\s-]?up questions?\b|\bopen[\s-]ended\b|\bexplorator\w*\b|\bethnograph\w*|\bdiary stud\w*|\bmixed[\s-]?methods?\b|\bthemes? (?:analysis|coding)\b|\bverbatims?\b|\bmoderat\w*|\btranscripts?\b|\bcodebook\b|\bthematic\b/i.test(text) || /क्वालिटेटिव|क्वालीटेटिव|गुणात्मक|इंटरव्यू\s+गाइड|फोकस\s+ग्रुप|کوالیٹیٹو/.test(text);
 }

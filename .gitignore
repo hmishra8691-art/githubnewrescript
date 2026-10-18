@@ -17,3 +17,6 @@ coverage/
 
 # R2 credentials for scripts/r2-check.mjs — never committed
 .env.r2
+
+# AI evaluation harness reports (pnpm eval:ai) — uploaded as a CI artifact, not committed
+eval-reports/

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { completeJson } from "@rescript/ai";
+import { completeJson, UNTRUSTED_DATA_RULE } from "@rescript/ai";
 import { requireAiCaller } from "@/lib/aiGate";
 import { billingProjectFor, meteredAi, refusalResponse } from "@/lib/metering";
-import { CUSTOM_LOGIC_SYSTEM_PROMPT, customLogicUserPrompt, coerceCustomLogic, type CustomLogicItem } from "@/lib/import/customLogic";
+import { CUSTOM_LOGIC_SYSTEM_PROMPT, customLogicUserPrompt, coerceCustomLogic, guardCustomLogic, type CustomLogicItem } from "@/lib/import/customLogic";
 
 export const dynamic = "force-dynamic";
 
@@ -34,11 +34,14 @@ export async function POST(req: NextRequest) {
   const billing = await billingProjectFor(gate.user, body.surveyId);
   if ("response" in billing) return billing.response;
   const user = customLogicUserPrompt(context, item);
+  /* prompt-injection audit (2026-10-18): the imported code is fenced data; the rule goes with the system prompt; a script that talks to the AI proposes nothing */
+  const system = `${CUSTOM_LOGIC_SYSTEM_PROMPT}\n\n${UNTRUSTED_DATA_RULE}`;
   try {
-    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: CUSTOM_LOGIC_SYSTEM_PROMPT + user, maxTokens: 700, operation: "import_custom_logic" },
-      () => completeJson(CUSTOM_LOGIC_SYSTEM_PROMPT, user, 700, { timeoutMs: 45_000 }));
+    const m = await meteredAi(billing.meter, billing.ctx, "AI_REQUEST", { estimateText: system + user, maxTokens: 700, operation: "import_custom_logic" },
+      () => completeJson(system, user, 700, { timeoutMs: 45_000 }));
     if (!m.ok) return refusalResponse(m);
-    return NextResponse.json({ ok: true, analysis: coerceCustomLogic(m.value), usage: m.event ? { charge: m.event.customerCharge } : null });
+    const g = guardCustomLogic(coerceCustomLogic(m.value), item);
+    return NextResponse.json({ ok: true, analysis: g.analysis, ...(g.flagged ? { injection: { flagged: true, notice: "This code contains text that looks like instructions to the AI; it was treated as data and no rebuild is proposed from it." } } : {}), usage: m.event ? { charge: m.event.customerCharge } : null });
   } catch (e) {
     console.warn("[rescript:ai] custom logic analysis failed", JSON.stringify({ error: (e as Error).message }));
     return NextResponse.json({ ok: false, error: "The analysis could not be completed. Nothing was changed." }, { status: 502 });

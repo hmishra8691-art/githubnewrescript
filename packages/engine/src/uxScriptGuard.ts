@@ -287,3 +287,33 @@ export function popupProblems(code: string): string[] {
  * generated script is never presented as a tested one.
  */
 export const SCRIPT_CHECKED = "checked before it was added (it parses, uses the survey's real page hooks and the sandbox's rules); not run yet — try it in Preview";
+
+/**
+ * EXFILTRATION, REFUSED WHATEVER ASKED FOR IT (prompt-injection audit, 2026-10-18).
+ *
+ * The behaviour sandbox already has no network (its frame's CSP is `default-src 'none'`) and the
+ * forbidden identifiers in `validateUxScript` cover fetch, XHR, WebSocket, storage, cookies, eval
+ * and import. What was left: `new Image().src = "https://…?" + answer` and `el.src = …` (a request
+ * by attribute), `document["coo"+"kie"]` (computed access past the identifier check),
+ * `document.domain`, `navigator.sendBeacon` written through an alias, and a link or form pointed at
+ * another origin with piped data. And a Custom Component's JavaScript runs on the respondent's page
+ * itself, unsandboxed (`new Function`), so for it every one of these is a real request.
+ *
+ * Read on the raw code (strings included — the address is usually a string). An empty list means
+ * nothing that could send a respondent's data off the page was found.
+ */
+export function exfiltrationProblems(code: string): string[] {
+  const src = withoutComments(String(code ?? ""));
+  const out: string[] = [];
+  const say = (what: string) => out.push(`${what} — survey code may not send anything off the page (respondent data stays in the survey)`);
+  if (/\b(?:fetch|XMLHttpRequest|EventSource|importScripts)\s*\(|\bnew\s+(?:XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker)\b|\bsendBeacon\b|\bWebSocket\s*\(/.test(src)) say("a network request (fetch / XMLHttpRequest / WebSocket / sendBeacon)");
+  if (/\bnew\s+Image\b|\bImage\s*\(\s*\)|\.\s*src\s*=|\.\s*srcset\s*=|\bsetAttribute\s*\(\s*["'`](?:src|srcset|href|action|formaction|ping|background|poster|data)["'`]|\.\s*(?:href|action)\s*=\s*[^=]/.test(src)) say("an address set from code (an image, link or form request)");
+  if (/document\s*\.\s*(?:cookie|domain)\b|\bcookieStore\b/.test(src)) say("cookie or document.domain access");
+  if (/\b(?:local|session)Storage\b|\bindexedDB\b|\bcaches\s*\./.test(src)) say("browser storage");
+  if (/\b(?:document|window|globalThis|self|top|parent)\s*\[/.test(src)) say("computed access on the page's globals (document[…])");
+  if (/\beval\s*\(|\bnew\s+Function\b|\bFunction\s*\(|\bimport\s*\(|\bsetTimeout\s*\(\s*["'`]|\bsetInterval\s*\(\s*["'`]/.test(src)) say("code built from strings (eval / Function / dynamic import)");
+  if (/\bpostMessage\s*\(/.test(src) && !/\bpostMessage\s*\([^)]*,\s*(?:location\.origin|window\.location\.origin)\s*\)/.test(src)) say("postMessage to another window");
+  if (/\b(?:window\s*\.\s*)?(?:location\s*(?:\.\s*(?:href|assign|replace)\s*[=(]|=)|open\s*\(\s*["'`]https?:)/.test(src)) say("navigation to another address");
+  if (/https?:\/\/[^"'`\s]*(?:\{\{|\$\{)/.test(src)) say("an external address carrying piped or computed data");
+  return [...new Set(out)];
+}

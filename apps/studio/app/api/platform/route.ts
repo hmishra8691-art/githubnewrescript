@@ -90,6 +90,8 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0065", what: "qualitative sessions, transcripts and coding", table: "qual_codings", column: "excerpts" },
   /* without it the research context of a long brief is kept in the server's memory only (lost on a restart; the brief is then sent whole again) */
   { migration: "0067", what: "the research context of a long brief (Intelligent Mode)", table: "copilot_research_context", column: "survey_id" },
+  /* without it a /platform evaluation run is kept in the server's memory only (the panel says so); the cap still holds within the instance */
+  { migration: "0068", what: "AI evaluation runs started from /platform", table: "ai_eval_runs", column: "spent_usd" },
 ];
 
 export async function GET(_req: NextRequest) {

@@ -1,4 +1,4 @@
-import { guardScriptLoops, scriptAuthoringProblems, selectorGuesses } from "./uxScriptGuard.js";
+import { exfiltrationProblems, guardScriptLoops, scriptAuthoringProblems, selectorGuesses } from "./uxScriptGuard.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxConfig, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { UX_BUTTONS, UX_EFFECTS, UX_EVENTS, UX_PARTS, UX_PRESETS, UX_STATES, UX_TARGET_KINDS, UX_MEDIA, UX_ANIMATION_TRIGGERS, UX_POPUP_PLACEMENTS, UX_POPUP_DISMISS } from "@rescript/schema";
 import { resolveVariant } from "@rescript/schema";
@@ -716,6 +716,8 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
   errors.push(...guardScriptLoops(code).errors);
   for (const id of FORBIDDEN_IDENTIFIERS) if (new RegExp(`(^|[^\\w$])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document`);
   for (const id of FORBIDDEN_WHEN_BARE) if (new RegExp(`(^|[^\\w$.])${id}(?![\\w$])`).test(bare)) errors.push(`${id} is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document`);
+  /* prompt-injection audit (2026-10-18): what the identifier list cannot see — new Image().src, document["cookie"], an address built from answers */
+  if (!errors.some((e) => e.includes("is not available to survey scripts"))) errors.push(...exfiltrationProblems(code));
   warnings.push(...selectorGuesses(code));
   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
   // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting

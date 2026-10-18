@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions } from "@rescript/engine";
 import { BRIEF_HYPOTHESES, MASTER_PROMPT_BRIEF } from "./fixtures/masterPromptBrief.mjs";
@@ -196,4 +197,18 @@ test("registry readiness from the server environment, for an administrator: crit
   assert.equal(r.capabilities.find((c) => c.id === "platform:intelligent_mode")!.ready, true);
   const blob = JSON.stringify(r);
   for (const v of ["sk-ant-very-secret", "service-very-secret", "abc.supabase.co"]) assert.ok(!blob.includes(v), `leaked ${v}`);
+});
+
+test("measurement: cache writes are summed too, and totals kept before the field existed still add up (2026-10-18)", () => {
+  const c = (w?: number) => ({ operation: "copilot_question", promptChars: 400, inputTokens: 9000, outputTokens: 100, cachedInputTokens: 4000, ...(w === undefined ? {} : { cacheWriteTokens: w }), requests: 1, retries: 0, latencyMs: 10, charge: 0.01 });
+  const t = addCalls(null, "wf_w", [c(4171), c(0), c()]);
+  assert.equal(t.cacheWriteTokens, 4171); assert.equal(t.cachedInputTokens, 12000);
+  const old = { ...t, cacheWriteTokens: undefined };
+  assert.equal(addCalls(old, "wf_w", [c(10)]).cacheWriteTokens, 10, "an older stored total without the field");
+});
+
+test("the turn route's per-call measure carries the cache write next to the cache read", () => {
+  const src = readFileSync(new URL("../../app/api/copilot/turn/route.ts", import.meta.url), "utf8");
+  assert.match(src, /cacheWriteTokens: Number\(md\.tokens\?\.cacheWrite \?\? 0\)/);
+  assert.match(src, /cachedInputTokens: c\.cachedInputTokens, cacheWriteTokens: c\.cacheWriteTokens \?\? 0/);
 });

@@ -1,0 +1,1891 @@
+{
+ "about": "Production regression corpus for Intelligent Mode intent routing (E3, 2026-10-18). Every prompt in intelligent_operations 2026-10-06..17 (43 operations; three folded records split into their requests), redacted (none carried personal names, emails or phones) and long briefs truncated to their first 1,500 characters. `expect` is the DETERMINISTIC routing (no model): scope (engine requestScope), mode / ux / uxOnly / lookOnlySaid (classifyRequest, uxIntent), guides sent (prompt.ts intents), refs (referencedQuestions on `survey`), undo / apply (spoken.ts), engine (interpretRequest kind, for engine and chip turns). `context.questions` is the survey size the request is classified against (0 = an empty survey, 30 = `survey`). `variants` are speech-to-text spellings and their negatives. Reused by the real-model eval (E4): send `prompt` with the same context and measure what the model does.",
+ "survey": [
+  {
+   "ref": "CONSENT_INFO",
+   "type": "descriptive",
+   "text": "Welcome to the survey"
+  },
+  {
+   "ref": "CITIZEN",
+   "type": "yes_no",
+   "text": "Are you a citizen of India?"
+  },
+  {
+   "ref": "AGE_SCR",
+   "type": "numeric",
+   "text": "How old are you?"
+  },
+  {
+   "ref": "BRANDS",
+   "type": "multi",
+   "text": "Which brands do you know?",
+   "options": [
+    "Apple",
+    "Samsung",
+    "Xiaomi",
+    "OnePlus",
+    "Vivo",
+    "Oppo",
+    "Realme",
+    "Motorola",
+    "Nokia",
+    "Google"
+   ]
+  },
+  {
+   "ref": "BRAND_LOOP",
+   "type": "single",
+   "text": "How often do you use it?",
+   "options": [
+    "Daily",
+    "Weekly",
+    "Rarely"
+   ]
+  },
+  {
+   "ref": "VOTE_INTENT",
+   "type": "single",
+   "text": "Will you vote in 2029?",
+   "options": [
+    "Yes",
+    "No",
+    "Not sure"
+   ]
+  },
+  {
+   "ref": "Q7_OPT",
+   "type": "single",
+   "text": "Pick one",
+   "options": [
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five"
+   ]
+  },
+  {
+   "ref": "LOC_TYPE",
+   "type": "single",
+   "text": "Where do you live?",
+   "options": [
+    "Slum pocket",
+    "High-rise pocket"
+   ]
+  },
+  {
+   "ref": "TARIFF_SEV",
+   "type": "single",
+   "text": "How severe are tariff barriers?",
+   "options": [
+    "Low",
+    "Medium",
+    "High"
+   ]
+  },
+  {
+   "ref": "TARIFF_IMPACT",
+   "type": "single",
+   "text": "How much did tariffs change your business?",
+   "options": [
+    "Not at all",
+    "A little",
+    "A lot"
+   ]
+  },
+  {
+   "ref": "ITEM_11",
+   "type": "numeric",
+   "text": "Item 11"
+  },
+  {
+   "ref": "ITEM_12",
+   "type": "single",
+   "text": "Item 12",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_13",
+   "type": "text",
+   "text": "Item 13"
+  },
+  {
+   "ref": "ITEM_14",
+   "type": "numeric",
+   "text": "Item 14"
+  },
+  {
+   "ref": "ITEM_15",
+   "type": "single",
+   "text": "Item 15",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_16",
+   "type": "text",
+   "text": "Item 16"
+  },
+  {
+   "ref": "ITEM_17",
+   "type": "numeric",
+   "text": "Item 17"
+  },
+  {
+   "ref": "ITEM_18",
+   "type": "single",
+   "text": "Item 18",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_19",
+   "type": "text",
+   "text": "Item 19"
+  },
+  {
+   "ref": "ITEM_20",
+   "type": "numeric",
+   "text": "Item 20"
+  },
+  {
+   "ref": "ITEM_21",
+   "type": "single",
+   "text": "Item 21",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_22",
+   "type": "text",
+   "text": "Item 22"
+  },
+  {
+   "ref": "ITEM_23",
+   "type": "numeric",
+   "text": "Item 23"
+  },
+  {
+   "ref": "ITEM_24",
+   "type": "single",
+   "text": "Item 24",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_25",
+   "type": "text",
+   "text": "Item 25"
+  },
+  {
+   "ref": "ITEM_26",
+   "type": "numeric",
+   "text": "Item 26"
+  },
+  {
+   "ref": "ITEM_27",
+   "type": "single",
+   "text": "Item 27",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  },
+  {
+   "ref": "ITEM_28",
+   "type": "text",
+   "text": "Item 28"
+  },
+  {
+   "ref": "ITEM_29",
+   "type": "numeric",
+   "text": "Item 29"
+  },
+  {
+   "ref": "ITEM_30",
+   "type": "single",
+   "text": "Item 30",
+   "options": [
+    "Yes",
+    "No"
+   ]
+  }
+ ],
+ "cases": [
+  {
+   "id": "b8fee20f",
+   "date": "2026-10-06",
+   "logged": {
+    "source": "grammar",
+    "status": "failed"
+   },
+   "prompt": "My hypothesis is in India many people believe in Gods and the newer generation is an atheist and they do not believe in God, they believe in scientific theory but this is true that God exists and miracle happens and because of God there is scientific thing happening so this is my hypothesis and I want to do a research on this in India please help me frame a survey with questions",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "before the copilot was configured: the grammar could not read a hypothesis",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "05290f42",
+   "date": "2026-10-06",
+   "logged": {
+    "source": "model",
+    "status": "failed"
+   },
+   "prompt": "My hypothesis is in India many people believe in Gods and the newer generation is an atheist and they do not believe in God, they believe in scientific theory but this is true that God exists and miracle happens and because of God there is scientific thing happening so this is my hypothesis and I want to do a research on this in India please help me frame a survey with questions",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "the model's answer was empty (fixed by the plan-first path, 10-14)",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "002b2f6f",
+   "date": "2026-10-08",
+   "logged": {
+    "source": "engine",
+    "status": "saved"
+   },
+   "prompt": "Make Q1 required",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "engine"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q1"
+    ],
+    "undo": false,
+    "apply": false,
+    "engine": "actions"
+   }
+  },
+  {
+   "id": "ee222bb4",
+   "date": "2026-10-08",
+   "logged": {
+    "source": "engine",
+    "status": "saved"
+   },
+   "prompt": "Create an embedded variable called country and set it to India",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "engine"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "actions"
+   }
+  },
+  {
+   "id": "782b4fdc",
+   "date": "2026-10-08",
+   "logged": {
+    "source": "fix",
+    "status": "proposed"
+   },
+   "prompt": "Plan the analysis",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "chip"
+   ],
+   "note": "a Review chip's label — recorded as the request of a fix",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "actions"
+   }
+  },
+  {
+   "id": "4fa13d01",
+   "date": "2026-10-08",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "My hypothesis is in India many people believe in Gods and the newer generation is an atheist and they do not believe in God, they believe in scientific theory is it right or wrong, please design survey",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation",
+    "#7 calc IF THEN ELSE"
+   ],
+   "note": "AGE_GROUP = IF AGE <= 27 THEN 1 ELSE IF … was refused; now written as nested if()",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "cd0151ba",
+   "date": "2026-10-08",
+   "logged": {
+    "source": "fix",
+    "status": "proposed"
+   },
+   "prompt": "Add the engine's analysis plan",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "chip"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "model"
+   }
+  },
+  {
+   "id": "04f4d019",
+   "date": "2026-10-09",
+   "logged": {
+    "source": "engine",
+    "status": "answered"
+   },
+   "prompt": "What depends on Q6?",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "engine"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q6"
+    ],
+    "undo": false,
+    "apply": false,
+    "engine": "answer"
+   }
+  },
+  {
+   "id": "75def4c7",
+   "date": "2026-10-09",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "Q7 में अगर मैं Option 5 सिलेक्ट करूं तो मुझे एक warning message दिखे पहले फिर इसके बाद अगर मैं Next लिए करूं तो फिर वो प्रोसीड करनी के नुमधी दे तो ये ऐसा मुझे JavaScript में चाहिए और वो message हो You have selected 5",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "ux"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": true,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q7"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "e1def5f0",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "clarify"
+   },
+   "prompt": "मैं मुंबई में रहता हूँ और यहाँ पे पानी की समस्या बहुत सारी है और यहाँ पे जो एक demographic population है, कुछ slum में रहते हैं और कुछ अच्छे residential apartments में तो पानी एलग-एलग तरीके से बढ़ रहा है तो मेरा मानना ही है कि slums में रहने वारे लोगों को मतलब कि जहाँ तर अच्छे से purified पानी नहीं मिलता है तो मैं जानना चाहता हूँ कि यह बात सच है या नहीं तो इससे related में एक survey design करना चाहता हूँ तो please help me design a survey",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "logged as clarify: it is the change plan (kind plan), not a question back",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "a928679c",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "failed"
+   },
+   "prompt": "मैं मुंबई में रहता हूँ और यहाँ पे पानी की समस्या बहुत सारी है और यहाँ पे जो एक demographic population है, कुछ slum में रहते हैं और कुछ अच्छे residential apartments में तो पानी एलग-एलग तरीके से बढ़ रहा है तो मेरा मानना ही है कि slums में रहने वारे लोगों को मतलब कि जहाँ तर अच्छे से purified पानी नहीं मिलता है तो मैं जानना चाहता हूँ कि यह बात सच है या नहीं तो इससे related में एक survey design करना चाहता हूँ तो please help me design a survey",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "pre-10-14 single-call generation cut off and mislabelled a refusal (fixed 10-17)",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "64fc4917",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "For now only program the survey, rest we will do later.",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "follow-up"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "e051f267",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "सारे कोशन सेपरेट पेज़ पे चाहिए।",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt"
+   ],
+   "note": "all questions on separate pages: the model did it (17 page breaks)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "3da1e920",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "fix",
+    "status": "saved"
+   },
+   "prompt": "Plan the analysis",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "chip"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "actions"
+   }
+  },
+  {
+   "id": "2e0ca1da",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मैं चाहता हूँ कि मेरे सर्वे का जो बैग्क्राउंड थीम है वो चेंज हो जाया और वो 3D में हो और काफी एफेक्टिव हो और इसमें जो कलर कॉंडिनेशन हो वो डार्क लू, वाइट, रेड, यलो इसका हो ये कलर पहले इसमें यूज़ हो तो इसका से इसके से अपड़ेट करो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "ux",
+    "#4 survey custom code"
+   ],
+   "note": "set_custom_code on “__survey__” was refused (there is no question); now a survey-wide script/stylesheet",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "f5c4b002",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "जो changes अभी आपने किया उसे reward back कर दो क्योंकि ये worthless है",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "#3 undo",
+    "stt"
+   ],
+   "note": "“reward back” = roll back: undone by History, no model call",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": true,
+    "apply": false
+   }
+  },
+  {
+   "id": "587bf539",
+   "date": "2026-10-13",
+   "logged": {
+    "source": "fix",
+    "status": "proposed"
+   },
+   "prompt": "Reapply AI change #004: मैं चाहता हूँ कि मेरे सर्वे का जो बैग्क्राउंड थीम है वो चेंज हो जाया और वो 3D में हो और काफी एफेक्टिव हो और इसमें जो कलर कॉंडिनेशन हो वो डार्क लू, वाइट, रेड, यलो इसका हो ये कलर पहले इसमें यूज़ हो तो इसका से इसके से अपड़ेट करो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "chip"
+   ],
+   "note": "History's Reapply",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "model"
+   }
+  },
+  {
+   "id": "81b4b0b2",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "failed"
+   },
+   "prompt": "So, question number two as a men's flip-flop mode.",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt"
+   ],
+   "note": "a garbled transcript; the failure was the provider (10-14 credit), the reference is Q2",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q2"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "74d36ab0a",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "Q4 के जो भी option select है, वो मुझे Q5 में, loop में दिखने चाहिए मतलब वो question repeat होना चाहिए एक-एक loop के लिए",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "loop"
+   ],
+   "note": "first part of a folded record (“… → …”)",
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q4",
+     "Q5"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "74d36ab0b",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "नीचे दो कुष्ण वनाओ, पहले कुष्ण में दस आप्शन्स रखो और नेक्स कुष्ण में वो दस आप्शन को लूप में चलाओ",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "loop",
+    "stt"
+   ],
+   "note": "second part of the same record — a revision of the open proposal",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "cc95b02b",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "clarify"
+   },
+   "prompt": "एक क्यू फाय से क्यू सिक्स में लगाओ",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "#9 clarify"
+   ],
+   "note": "“a [loop] from Q5 to Q6”: the outline now shows Q5 and Q6 in full; whether the model still asks is E4's to measure",
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q5",
+     "Q6"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "c7ccdf3a",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "दो क्वेशन बनाओ पहला क्वेशन ग्रीड बनाओ जिसमें 10 ब्रांड रहेगा और फैमिलियारिटी रहेगी 5-6 स्केलिंग दे दो और वहाँ पे जैसे की I never heard of never familiar ये सब और familiar strong familiar और next question में carry forward करो जो की अगर पहला जो पहला ब्रांड है always present होना चाहिए और अगर चार से जादा ब्रांड selected है very familiar की लिए पहले क्वेशन में तो मुझे कोई चारी ब्रांड देखना चाहिए पर पहला वाला",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "list fill"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "edit",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "listFill": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "31eb34b9",
+   "date": "2026-10-14",
+   "logged": {
+    "source": "model",
+    "status": "proposed"
+   },
+   "prompt": "प्रेशन तो सही क्रेट किया है आपने, पर लॉजिक सही तरीके से नहीं लगा जैसा मैं चाहता था. मैं चाहता था कि familiar, very familiar, and somewhat familiar. ये तीनों के लिए जितने भी ब्रांड सेलेक्टेट हैं, वो ब्रांड next question में दिखने चाहिए थे, Q36 में. और अगर ये तीनों में से 5 से ज़्यादा ब्रांड सेलेक्टेट हैं, तो कोई रेंडमली 4 असाइन होना चाहिए था, Q36 में. और हमेसा Apple ही दिखना चाहिए टॉप पे. अगर Apple सेलेक्टेट हैं, उन चारों में टॉप. और अगर नहीं सेलेक्टेट हैं, तो चारों कोई भी दिखा दो, पर प्रायॉरिटी Apple में.",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "list fill"
+   ],
+   "note": "Q36 is not in the fixture survey (it had 36+ questions)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "listFill": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "c7b1f0d1",
+   "date": "2026-10-15",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मैं इंडिया में अभी एक रीसेंटली सीजीपी कॉकरेज जंता पार्टी करके आई है जो काफी जैंजी ग्रूप को लेकर प्रोटेस्ट कर रही है और आने वाले 20-29 इलेक्शन से लग रहा है कि इससे बीजेपी को जो रूलिंग पार्टी काफी जाता फ़रक पड़ेगा तो मैं लोगों से सवाल पूछने जाता हूं जो एलिजिबल वोटर्स हैं कि वो सीजीपी के प्रोटेस्ट को किस नजरिये से देखते हैं और आने वाले कल में इसका क्या impact होगा तो इस basis में मुझे एक सर्वे डिजाइन करने में help करो",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation",
+    "#7 calc grid rows"
+   ],
+   "note": "PERC_BATTERY.R1 … in two calculations was refused; now the row variables",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "94681237",
+   "date": "2026-10-15",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "क्यूबन कोश्यन पर जब मैं नेक्स बटन वहाँ पर क्लिएप करूँ तो जावास्क्रिप्ट का एलेट हलो करके मुझे मैसेज आएगा वहाँ पर और सारे कोश्यन में पेज ब्रेक लगा दो जोके भी मिसिंग है",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux"
+   ],
+   "note": "क्यूबन = Q1, एलेट = alert",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q1"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "e495c6a3",
+   "date": "2026-10-15",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मुझे जावस्रिप लगाना है Q2 पे अगर मैं यस सिलेक्ट करता हूँ तो लिख कर आए यू आर्जीबल वोटर ये जावस्रिप इंप्लिमेंट करना है मुझे Q2 पे फ्लीज इंप्लिमेंट",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q2"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "37ef6add",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "Q2 पे एक जावस्ट्रिप्ट लगानी है अगर मैं येस् सेलेक्ट करता हूँ तो वहाँ पे मुझे लिखेंगे येस आप अलिजीबल वोटर हैं तो प्लीज अप्लाइब वोटर हैं",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q2"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "d4e85632",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "proposed"
+   },
+   "prompt": "मुझे एक पॉप अप चाहिए ये सिलेक्ट करने पर लिख करा ये आप अलजीबल वोट अगर मैं आप्शन वाल सिलेक्ट करता हूँ क्यूटू पे तो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux"
+   ],
+   "note": "पॉप अप and क्यूटू (Q2) were both missed: no UX guide, no Q2 in full",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q2"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "9ef5958d",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "clarify"
+   },
+   "prompt": "# Master Prompt: Global Market Research Industry Survey, Technology Stack & End-to-End Research Workflow Analysis\n\n## 1. Your Role\n\nAct as a senior market research consultant, survey methodologist, quantitative and qualitative research expert, research operations specialist, data analyst, and B2B market intelligence strategist.\n\nYour task is to design a comprehensive, methodologically sound, logically connected market research survey and an end-to-end analysis framework to understand how research professionals and organizations conduct, manage, outsource, analyze, validate, and deliver research projects.\n\nThe study will support the launch and strategic positioning of a new company offering professional survey programming, research technology, data quality and cleaning, analytics, and end-to-end market research services.\n\nThe questionnaire must be suitable for global respondents, including the United States, United Kingdom, Europe, India, and other major research markets.\n\nDo not assume that any particular platform dominates the market. Discover actual usage, unmet needs, and differences across respondent segments.\n\n## 2. Primary Research Objectives\n\nInvestigate the following areas in depth.\n\n### A. Respondent Profile and Organization Classification\n\nDetermine:\n\n- Job title, seniority, department, and decision-making authority.\n- Years of experience in market research.\n- Primary industry and research specialization.\n- Organization type:\n  - Independent freelancer or consultant",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "long brief",
+    "#9 clarify"
+   ],
+   "note": "TRUNCATED: the stored prompt is the first 4,000 of ~25,000 characters; this is its first 1,500. The full brief is planned first (long-brief path, 10-17); the corpus checks only the routing of this excerpt",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true,
+     "qual": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "1b9f0bc7",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "failed"
+   },
+   "prompt": "I want to design a full survey, a new separate survey, yes, please add some screening criteria and yes, please also turn with 30, 35 minutes, yeah, that's good, yeah, you can add more list if you have, you can also ask certain loops, keep things manageable, yeah.",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "the connection dropped (staged generation, 10-17; streaming, E1)",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "64d87536",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मुझे ख्योशन 3 पे जावस्यूप लगाना अगर एज एटिन के ऊपर मैं टाइप करता हूँ तो यहाँ पर लिख कर रहा है येस आप एलिजिबल वोटर हैं ऐसा उसके बाद मैं नेक्स बटन क्लिक कर पाँ तब तक नेक्स बटन डिसीबल रहा है जब तक मैं एटिन या उसके ऊपर टाइप ना करूं वैल्यू तो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux",
+    "#6 stop the respondent"
+   ],
+   "note": "the P0 of 10-16: never look-only; ख्योशन 3 = Q3",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q3"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "41fac26c",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "Q3 pe mujhe javascript lagana hai, agar age ki value 18 ke upar dalta hu to wahan pe automatic popup hokar aana chahiye ki you are eligible voter",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "ux",
+    "#6 stop the respondent"
+   ],
+   "note": "look-only INFERRED: set_validation allowed since P0-2 (uxOnlyInferred)",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": true,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q3"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "ab39e1baa",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मुझे अभी क्यूँ एन को पे लगाना है पॉप अप खुड़ा आए की वैलकुम अमेरीकनस और क्यूँ टू पे या सलेक करूगी तो फिर लिख कर आए you are eligible to proceed जावसक्रिप्ट",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux",
+    "#5 script and effects"
+   ],
+   "note": "क्यूँ एन = Q1, क्यूँ टू = Q2; the two behaviours (script + on) are now wrapped by the event",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q1",
+     "Q2"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "ab39e1bab",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "Please apply the changes. It is good.",
+   "context": {
+    "questions": 30,
+    "proposalOpen": true
+   },
+   "tags": [
+    "#2 apply",
+    "follow-up"
+   ],
+   "note": "with the proposal open: the Apply button's, no model call (it was a second paid call that re-proposed the same behaviours)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": true
+   }
+  },
+  {
+   "id": "a7aef125",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "clarify"
+   },
+   "prompt": "मैं क्वालिटेटिव रीसर्चर हूँ और मैं इंडिया के स्लम्स में स्लम्स के कुछ पॉकेट में और मतलब की कुछ हाई राइस बिल्डिंग्स वाले पॉकेट में मैं यह जानना चाहता हूँ जो करण्ड एई ट्रेंड है यह जानना चाहता हूँ जो करण्ड एई ट्रेंड है",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "#9 clarify"
+   ],
+   "note": "the transcript stopped mid-sentence (no objective yet): the one clarify that was warranted",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "research": true,
+     "qual": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "ec796b49",
+   "date": "2026-10-16",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "नहीं मुझे qualitative survey ही create करना है direct और मैं ये जाना चाहता हूँ कि क्या उनके life में चीज़े आसान हुए है या नहीं या फिर jobs वगरा में गिरावट आई है या फिर क्या चीज़े ये सारी चीज़े जाना चाहता हूँ awareness, usage सारी चीज़े, attitudes को लेके compare भी करना चाहूँगा मैं दोनों चीज़ों में उस तरीके से",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true,
+     "qual": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "ec98384b",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "مجھے Q3 میں ایک جاوا سکرپٹ لگانی ہے یہ اگر میں اپشنل ون سیلیکٹ کرتا ہوں تو وہاں پر مجھے لکھ کر رہا ہے یورلو انکم پروفائل کر کے پاپ اپ ایسا انیمیشن یا سکرپٹ لگانا ہے",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "ux",
+    "urdu"
+   ],
+   "note": "Urdu جاوا سکرپٹ / پاپ اپ were missed: no UX guide",
+   "expect": {
+    "scope": "supported",
+    "mode": "ux",
+    "ux": true,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q3"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "9372e9d8",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "सारा कोशंट टेक्स्ट अभी हिंदी लैंग्वेज में है मुझे ये सबी के सब इंग्लिस्ट लैंग्वेज में चाहिए सो वो अपडेएट कर दो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "#1 translation"
+   ],
+   "note": "इंग्लिस्ट = English; replace the wording in place (“update it”)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "translation": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "e4d34ad9",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "मैं इंटरनेशनल मार्केड में इंपोर्ट एकसपोर्ट किस बेसस पे होता है तो उस कैटेगरी में कर रहे लोग जो काम है एकसेक्यूटिव लेवल पे तो मैं उनसे ये जानना चाहता हूँ कि चेलेंजर्स क्या-क्या फेस करना पड़ता है, टैरिप्स वगेरा क्या है, गॉर्वर्मन्ट के प्लैन चेंज होता है, उनको क्या-क्या तकलीफ होती है इस बेसस पे मुझे कुछ जानकाजी कठा करनी है तो इस से रिलेटेड मुझे एक सर्वे डिजाइन करके दो",
+   "context": {
+    "questions": 0
+   },
+   "tags": [
+    "generation"
+   ],
+   "note": "logged mode ux: the repair turn's",
+   "expect": {
+    "scope": "supported",
+    "mode": "generate",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "01c268a5",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "fix",
+    "status": "saved"
+   },
+   "prompt": "Plan the analysis",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "chip"
+   ],
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false,
+    "engine": "actions"
+   }
+  },
+  {
+   "id": "2ea48d82",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "हाइपोथीसिस में जो चीज़े मेंचन है उसे कैप्चर करने के लिए कोई कॉष्णस वगरा नहीं है तो मैं जाँता हूँ कि सारे उन ताइप के कॉष्णस भी आएड की जाएं जो हाइपोथीसिस को चेक टेस्ट करने में मदद करेगा आइपोथीसिस के लिए कॉष्णस वगरा नहीं है",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt"
+   ],
+   "note": "कॉष्णस = questions (plural, no number: not a reference)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "analysis": true,
+     "research": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "a2a2bc91",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "answered"
+   },
+   "prompt": "tariff thread ko quotient 9 ke baad hi rakho wo sahi rahega comp dot effort ko isko 16 ke baad rakhenge sahi rahega aur jo matlab jis targis aapne mention kiya usko ussi order me rakho waha pe mujhe koi dikkat nahi hai sari cheeze sahi lag rahi hai uss basis pe so lets do that and implement",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "stt",
+    "#9 answered"
+   ],
+   "note": "“quotient 9” = Q9; the answer “already implemented” was verified correct (not a bug)",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [
+     "Q9"
+    ],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "67e11f25",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "answered"
+   },
+   "prompt": "मुझे कोई और चेंजस नहीं करना है लेट्स इंप्लिमेंट",
+   "context": {
+    "questions": 30,
+    "proposalOpen": false
+   },
+   "tags": [
+    "#2 apply",
+    "#9 answered"
+   ],
+   "note": "nothing was open: the model answered “already implemented” (correct). With a proposal open this is Apply",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {},
+    "refs": [],
+    "undo": false,
+    "apply": true
+   }
+  },
+  {
+   "id": "60462222a",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "fix",
+    "status": "saved"
+   },
+   "prompt": "Plan the analysis → Plan the analysis → यही सारे question text और answer options मराठी में कर दो सभी को, block titles वगड़ा सब कुछ मराठी में कर दो इस particular कुछ अलग से नहीं मनाना है इसे ही पूरा मराठी कर दो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "#2 composition"
+   ],
+   "note": "the RECORD's prompt: the chip pressed twice, then the Marathi request folded into the open proposal; the duplicate step is no longer added",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "translation": true,
+     "analysis": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "60462222b",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "saved"
+   },
+   "prompt": "यही सारे question text और answer options मराठी में कर दो सभी को, block titles वगड़ा सब कुछ मराठी में कर दो इस particular कुछ अलग से नहीं मनाना है इसे ही पूरा मराठी कर दो",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "#1 translation"
+   ],
+   "note": "the request inside that record: replace the wording with Marathi",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "translation": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  },
+  {
+   "id": "fb4460c8",
+   "date": "2026-10-17",
+   "logged": {
+    "source": "model",
+    "status": "clarify"
+   },
+   "prompt": "मला हाँ पाइजे कि सारे कोश्ण टेक्सलातो मी मराठीला विचारा मराठी मदे विचारा",
+   "context": {
+    "questions": 30
+   },
+   "tags": [
+    "#1 translation",
+    "stt",
+    "#9 clarify"
+   ],
+   "note": "Marathi, garbled: “I want all the question texts asked in Marathi”. The model asked replace-or-version without the guide; the guide now says how to decide",
+   "expect": {
+    "scope": "supported",
+    "mode": "question",
+    "ux": false,
+    "uxOnly": false,
+    "lookOnlySaid": false,
+    "guides": {
+     "translation": true
+    },
+    "refs": [],
+    "undo": false,
+    "apply": false
+   }
+  }
+ ],
+ "variants": {
+  "questionRefs": [
+   [
+    "tariff thread ko quotient 9 ke baad hi rakho",
+    [
+     9
+    ]
+   ],
+   [
+    "मुझे ख्योशन 3 पे जावस्यूप लगाना",
+    [
+     3
+    ]
+   ],
+   [
+    "एक क्यू फाय से क्यू सिक्स में लगाओ",
+    [
+     5,
+     6
+    ]
+   ],
+   [
+    "क्यूबन कोश्यन पर जब मैं नेक्स बटन",
+    [
+     1
+    ]
+   ],
+   [
+    "मुझे अभी क्यूँ एन को पे लगाना है",
+    [
+     1
+    ]
+   ],
+   [
+    "और क्यूँ टू पे या सलेक करूगी",
+    [
+     2
+    ]
+   ],
+   [
+    "क्यूटू पे तो",
+    [
+     2
+    ]
+   ],
+   [
+    "कोश्यन 4 में",
+    [
+     4
+    ]
+   ],
+   [
+    "कोशन 7 को हटाओ",
+    [
+     7
+    ]
+   ],
+   [
+    "कॉष्णस 2 देखो",
+    [
+     2
+    ]
+   ],
+   [
+    "कुष्ण 6 में",
+    [
+     6
+    ]
+   ],
+   [
+    "क्वेशन 12 required करो",
+    [
+     12
+    ]
+   ],
+   [
+    "कोश्ण 8",
+    [
+     8
+    ]
+   ],
+   [
+    "So, question number two as a men's flip-flop mode.",
+    [
+     2
+    ]
+   ],
+   [
+    "question no. 5 is wrong",
+    [
+     5
+    ]
+   ],
+   [
+    "सवाल 3 का text",
+    [
+     3
+    ]
+   ],
+   [
+    "سوال 3 میں",
+    [
+     3
+    ]
+   ],
+   [
+    "q 7 ko required karo",
+    [
+     7
+    ]
+   ],
+   [
+    "प्रश्न ३ बदलो",
+    [
+     3
+    ]
+   ],
+   [
+    "Q-4 ke baad",
+    [
+     4
+    ]
+   ],
+   [
+    "क्यू सेवन पे popup",
+    [
+     7
+    ]
+   ],
+   [
+    "क्यू १० पे",
+    [
+     10
+    ]
+   ]
+  ],
+  "questionRefNegatives": [
+   "what is the quotient of 9 and 3",
+   "the quotient 9/3 is 3",
+   "क्यूँ ये काम नहीं कर रहा",
+   "add a question about price",
+   "add a question for students",
+   "दो कुष्ण बनाओ",
+   "सारा कोशंट टेक्स्ट अभी हिंदी में है",
+   "show the faq 3 times",
+   "send Q to the end",
+   "हाइपोथीसिस के लिए कॉष्णस वगरा नहीं है"
+  ],
+  "script": [
+   "Q2 पे जावस्यूप लगाओ",
+   "जावसक्रिप्ट से popup",
+   "Q2 पे एक जावस्ट्रिप्ट लगानी है",
+   "मुझे जावस्रिप लगाना है",
+   "Q3 पर जावास्क्रिप्ट लगाओ",
+   "مجھے Q3 میں ایک جاوا سکرپٹ لگانی ہے",
+   "Q3 میں جاوا اسکرپٹ",
+   "java script lagao Q2 pe",
+   "jawa script chahiye Q4 pe"
+  ],
+  "popup": [
+   "मुझे एक पॉप अप चाहिए",
+   "Q2 पे पाप अप दिखाओ",
+   "پاپ اپ ایسا انیمیشن",
+   "जावास्क्रिप्ट का एलेट हलो"
+  ],
+  "uxNegatives": [
+   "Design a survey on water access in Mumbai slums",
+   "इससे related में मुझे एक सर्वे डिजाइन करके दो",
+   "survey design करना चाहता हूँ",
+   "next question में carry forward करो",
+   "नेक्स कुष्ण में वो दस आप्शन को लूप में चलाओ",
+   "what is the quotient of 9 and 3"
+  ],
+  "translation": [
+   "मला हाँ पाइजे कि सारे कोश्ण टेक्सलातो मी मराठीला विचारा मराठी मदे विचारा",
+   "सगळे प्रश्न मराठीत करा",
+   "यही सारे question text मराठी में कर दो",
+   "सारा टेक्स्ट इंग्लिस्ट लैंग्वेज में चाहिए",
+   "हिंदी में ट्रांसलेट करो",
+   "पूरा सर्वे गुजराती में कर दो",
+   "اردو میں ترجمہ کر دو",
+   "survey ko tamil me karo",
+   "isko marathi mein karo",
+   "सारे सवाल अंग्रेज़ी में बदल दो"
+  ],
+  "translationNegatives": [
+   "हिंदी भाषी लोगों पर एक सर्वे",
+   "मैं मराठी हूँ",
+   "मराठी लोगों के लिए survey बनाओ",
+   "Q5 में हाँ और नहीं के ऑप्शन जोड़ो"
+  ],
+  "undo": [
+   "जो changes अभी आपने किया उसे reward back कर दो क्योंकि ये worthless है",
+   "undo",
+   "undo that",
+   "Revert the changes you just made",
+   "roll back the last change",
+   "rollback",
+   "please revert",
+   "पहले जैसा कर दो",
+   "वापस कर दो",
+   "जो अभी किया उसे हटा दो",
+   "हटा दो जो अभी किया",
+   "undo kar do",
+   "wapas kar do",
+   "revert kar do",
+   "इसे रिवर्ट करो",
+   "रोलबैक करो",
+   "पूर्ववत करा",
+   "واپس کر دو",
+   "take those changes back"
+  ],
+  "undoNegatives": [
+   "add an undo button",
+   "revert Q5 to single select",
+   "Q5 के बाद वापस Q3 पर जाओ",
+   "respondents can go back",
+   "show the back button",
+   "Rollback the price question to 99",
+   "undo the randomization on Q4",
+   "add a back button that lets respondents go back to how it was"
+  ],
+  "apply": [
+   "Please apply the changes. It is good.",
+   "ok apply",
+   "apply it",
+   "go ahead",
+   "lets implement",
+   "हाँ लागू कर दो",
+   "इसे अप्लाई कर दो",
+   "ठीक है इंप्लिमेंट करो",
+   "मुझे कोई और चेंजस नहीं करना है लेट्स इंप्लिमेंट",
+   "theek hai apply karo",
+   "looks good, apply",
+   "do it"
+  ],
+  "modes": [
+   [
+    "Create a calculation SUPPORT_SCORE as the average of the Q5 rows",
+    "edit"
+   ],
+   [
+    "Compute TOTAL as Q3 + Q4",
+    "edit"
+   ],
+   [
+    "Derive an age group variable from Q3",
+    "edit"
+   ],
+   [
+    "Define a derived variable HEAVY = Q6 = 1",
+    "edit"
+   ],
+   [
+    "Q5 के rows का average निकालो और SUPPORT_SCORE बनाओ",
+    "edit"
+   ],
+   [
+    "Q3 से age group का calculation बना दो",
+    "edit"
+   ],
+   [
+    "Q5 ke rows ka average SUPPORT_SCORE naam se bana do",
+    "edit"
+   ],
+   [
+    "SUPPORT_SCORE calculate karo Q5 ke rows se",
+    "edit"
+   ],
+   [
+    "Q5 च्या rows ची सरासरी काढा",
+    "edit"
+   ],
+   [
+    "Q5 کی rows کا اوسط نکالو",
+    "edit"
+   ],
+   [
+    "एक क्यू फाय से क्यू सिक्स में लगाओ",
+    "edit"
+   ],
+   [
+    "What does Q3 measure?",
+    "question"
+   ],
+   [
+    "Which questions are untranslated?",
+    "question"
+   ],
+   [
+    "Make Q1 required",
+    "edit"
+   ]
+  ],
+  "applyNegatives": [
+   "don't apply",
+   "apply मत करो",
+   "apply the theme to Q5 only",
+   "ok",
+   "yes",
+   "lets implement a loop on Q5",
+   "tariff thread ko quotient 9 ke baad hi rakho wo sahi rahega so lets do that and implement",
+   "apply a dark theme",
+   "wait, don't apply it yet"
+  ]
+ }
+}

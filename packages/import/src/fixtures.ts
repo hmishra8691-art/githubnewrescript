@@ -209,6 +209,20 @@ export function docxFixture(): Uint8Array {
   });
 }
 
+/**
+ * A research brief in Word with text its reader cannot see: a white run, a hidden (`w:vanish`) run and a
+ * 1pt run beside ordinary paragraphs (prompt-injection audit, 2026-10-18).
+ */
+export function hiddenTextDocxFixture(visible: string[], hidden: string): Uint8Array {
+  const para = (t: string) => `<w:p><w:r><w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p>`;
+  const run = (rpr: string, t: string) => `<w:p><w:r><w:rPr>${rpr}</w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r></w:p>`;
+  const body = [...visible.map(para), run('<w:color w:val="FFFFFF"/>', hidden), run("<w:vanish/>", hidden), run('<w:sz w:val="2"/>', hidden)].join("");
+  return makeZip({
+    "[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+    "word/document.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`,
+  });
+}
+
 /* ------------------------------------------------------------ a real PDF */
 
 /** a two-page PDF: page 1 an uncompressed content stream, page 2 FlateDecode; Helvetica, WinAnsi */

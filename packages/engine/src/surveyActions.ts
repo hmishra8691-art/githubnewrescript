@@ -37,6 +37,9 @@ import { applyRename } from "./variableUsage.js";
 import { parseSetExpression, formatSetExpression } from "./setExpression.js";
 import { withoutPresentation, diffTheme } from "./theme.js";
 import { relabelHypotheses } from "./hypotheses.js";
+import { normalizeCalcExpression, calcNameHint } from "./calcRewrite.js";
+import { buildVariableDictionary } from "./variables.js";
+import { questionCodeAlias } from "./calcContext.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -822,11 +825,15 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(a.name)) fail(`${a.name} is not a valid variable name`);
       if ((def.calculations ?? []).some((c) => c.targetVariable.toLowerCase() === a.name.toLowerCase()) || def.questions.some((q) => q.variableName.toLowerCase() === a.name.toLowerCase())) fail(`${a.name} is already a variable`);
       // the names it reads must exist: a calculation over a question that is not there computes nothing
-      const expression = withRefs(ctx, a.expression);
-      const unknown = identifiers(expression).filter((n) => !getQuestionByCodeOrVar(def, n) && !(def.calculations ?? []).some((c) => c.targetVariable === n) && !KNOWN_FUNCTIONS.has(n.toUpperCase()));
-      if (unknown.length) fail(`the expression reads ${unknown.join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not in the survey`);
+      /* production intents (2026-10-18): `GRID.R1` and `IF … THEN … ELSE` have one meaning each — written the way the calculation engine reads them (calcRewrite.ts) */
+      const norm = normalizeCalcExpression(def, withRefs(ctx, a.expression));
+      const expression = norm.expression;
+      /* a grid row's own variable (`GRID_r1`, the Variable Dictionary's name) is a name the calculation reads too — it used to be refused as "not in the survey" */
+      const dict = new Set(buildVariableDictionary(def).map((v) => v.name));
+      const unknown = identifiers(expression).filter((n) => !getQuestionByCodeOrVar(def, n) && !(def.calculations ?? []).some((c) => c.targetVariable === n) && !KNOWN_FUNCTIONS.has(n.toUpperCase()) && !dict.has(n) && questionCodeAlias(def, n, (k) => dict.has(k)) === undefined);
+      if (unknown.length) fail(`the expression reads ${unknown.join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not in the survey${calcNameHint(def, unknown)}`);
       def.calculations = [...(def.calculations ?? []), { id: ctx.ids("calc"), targetVariable: a.name, expression, ...(a.label ? { label: a.label } : {}), trigger: "on_page_submit", dataType: a.dataType ?? "numeric" } as never];
-      return { description: `Calculation ${a.name} = ${expression}`, touched: [] };
+      return { description: `Calculation ${a.name} = ${expression}${norm.rewrites.length ? ` (read as the calculation language writes it: ${norm.rewrites.join("; ")})` : ""}`, touched: [] };
     }
     case "create_randomizer": {
       const ids = a.blocks.map((b) => resolveTop(ctx, b));
