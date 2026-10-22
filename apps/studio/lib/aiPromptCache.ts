@@ -2,6 +2,7 @@ import { COPILOT_ANALYSIS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_QUOTA_GUIDE, CO
 import { COPILOT_LIST_FILL_GUIDE } from "./copilot/listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./copilot/methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE } from "./copilot/researchGuide.ts";
+import { COPILOT_AI_INTERVIEW_GUIDE } from "./copilot/aiInterviewGuide.ts";
 import { REPORTING_GUIDE } from "./copilot/reportingGuide.ts";
 
 /**
@@ -25,7 +26,7 @@ import { REPORTING_GUIDE } from "./copilot/reportingGuide.ts";
  */
 
 /** the guides, in the order `copilotUserPrompt` adds them */
-export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE, REPORTING_GUIDE];
+export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE, COPILOT_AI_INTERVIEW_GUIDE, REPORTING_GUIDE];
 
 /** Lift each of `guides` found verbatim in `text` out of it: the guides found (in the list's order) and what is left. */
 export function splitStable(text: string, guides: readonly string[]): { stable: string[]; variable: string } {

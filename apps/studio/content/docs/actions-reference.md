@@ -6,7 +6,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (22): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`
+**Survey** (23): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`
 
 **Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
 
@@ -20,7 +20,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **List Fill** (3): `create_list_fill`, `update_list_fill`, `remove_list_fill`
 
-**Research methods (MaxDiff, conjoint)** (4): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`
+**Research methods (MaxDiff, conjoint)** (5): `create_maxdiff`, `update_maxdiff`, `create_conjoint`, `update_conjoint`, `simulate_conjoint`
 
 **Qualitative (AI follow-up probes)** (1): `set_probe`
 
@@ -134,16 +134,16 @@ From `packages/engine/src/analysisActions.ts`:
 export type AnalysisAction =
   | { op: "set_question_analysis"; target: string; role?: AnalysisRole | null; measurement?: MeasurementLevel | null; primary?: AnalysisMethod[]; crosstabBy?: string[]; modeling?: AnalysisMethod[]; relatedTo?: string[]; hypotheses?: string[]; construct?: string | null; notes?: string | null }
   | { op: "propose_analysis_plan"; merge?: boolean }
-  | { op: "set_analysis_plan"; merge?: boolean; crosstabs?: CrosstabSpec[]; tests?: TestSpec[]; derived?: DerivedSpec[]; segments?: SegmentSpec[] }
+  | { op: "set_analysis_plan"; merge?: boolean; crosstabs?: CrosstabSpec[]; tests?: TestSpec[]; derived?: DerivedSpec[]; segments?: SegmentSpec[]; /** when the advanced models re-run on new completes (2026-10-22); null = back to manual */ advancedRerun?: { mode: "manual" | "threshold"; newResponses?: number } | null }
   | { op: "add_crosstab"; rows: string[]; columns: string[]; measure?: PlannedCrosstab["measure"]; priority?: number; hypotheses?: string[]; reason?: string }
   | { op: "remove_crosstab"; id: string }
-  | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string }
+  | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string; options?: Record<string, unknown> }
   | { op: "remove_analysis_test"; id: string }
   | { op: "add_derived_variable"; name: string; kind: PlannedDerived["kind"]; from: string[]; expression?: string; reason?: string }
   | { op: "remove_derived_variable"; name: string }
   /** every field optional: only what is given changes; `hypotheses: []` clears them, `reason: null` clears the reason */
   | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
-  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null; /** merged into the item's options; a key set to null is removed */ options?: Record<string, unknown> | null }
   /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
   | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
 ```
@@ -187,7 +187,8 @@ export type MethodAction =
   | ({ op: "create_maxdiff" } & MethodPlacement & MaxDiffSpec)
   | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
   | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
-  | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec);
+  | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec)
+  | { op: "simulate_conjoint"; target: string; scenario: SimulationScenarioInput; remove?: boolean };
 ```
 
 ## Qualitative actions (AI follow-up probes)
@@ -235,6 +236,15 @@ export interface ConjointSpec {
   items?: MenuItemInput[]; requiredItems?: string[]; minSelections?: number; maxSelections?: number; currency?: string;
   /* adaptive (ACBC) */
   screeningTasks?: number; conceptsPerScreen?: number; tournamentAlternatives?: number; maxAttributesVaried?: number; minTournamentConcepts?: number;
+  /* F4 2026-10-22 — ACBC summed price: base + per-level increments ({"Brand":[0,50,120]}), ± variation % */
+  priceBase?: number | null; priceIncrements?: Record<string, number[]> | null; priceVariation?: number; priceCurrency?: string;
+  /* F4 2026-10-22 — CBC dual-response None, alternative-specific / labelled designs */
+  dualResponse?: boolean; dualResponsePrompt?: string | null;
+  labelled?: boolean; brandAttribute?: string | null; alternativeSpecific?: { attribute: string; appliesTo: string[] }[] | null;
+  /* F4 2026-10-22 — menu: mutually exclusive sections */
+  exclusiveGroups?: { name: string; items: string[] }[] | null;
+  /* F4 2026-10-22 — rating-based (CVA) */
+  mode?: "single" | "paired"; profiles?: number | null; scaleMin?: number | null; scaleMax?: number | null; minLabel?: string | null; maxLabel?: string | null; monotone?: Record<string, "increasing" | "decreasing"> | null;
   seed?: number; name?: string;
 }
 ```

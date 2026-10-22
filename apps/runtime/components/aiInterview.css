@@ -1,0 +1,47 @@
+/* AI-moderated interview (2026-10-22) — the participant's page. Phone first; the survey theme's
+   variables when present (--rs-*), sensible defaults otherwise; reduced motion respected. */
+.ai-shell { min-height: 100vh; display: flex; justify-content: center; padding: 16px; background: var(--rs-bg, #f6f7f9); color: var(--rs-text, #111827); font-family: var(--rs-font, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Devanagari", sans-serif); }
+.ai-card, .ai-chat { width: 100%; max-width: 720px; background: var(--rs-card, #fff); border-radius: 14px; box-shadow: 0 2px 14px rgba(15, 23, 42, .08); padding: 20px; }
+.ai-chat { display: flex; flex-direction: column; padding: 0; height: calc(100vh - 32px); min-height: 480px; }
+.ai-h1 { font-size: 1.35rem; margin: 0 0 6px; }
+.ai-h2 { font-size: 1.05rem; margin: 18px 0 6px; }
+.ai-muted { color: var(--rs-subtle, #4b5563); font-size: .95em; }
+.ai-test { background: #fef3c7; color: #78350f; padding: 6px 10px; border-radius: 8px; font-weight: 600; }
+.ai-check { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; line-height: 1.4; cursor: pointer; }
+.ai-check input { width: 20px; height: 20px; margin-top: 1px; flex: none; }
+.ai-fieldset { border: 0; padding: 0; margin: 12px 0; }
+.ai-fieldset legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+.ai-field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
+.ai-input { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; color: inherit; resize: vertical; }
+.ai-input:focus-visible, .ai-btn:focus-visible { outline: 3px solid var(--rs-primary, #2563eb); outline-offset: 2px; }
+.ai-btn { font: inherit; border: 1px solid #cbd5e1; background: #fff; color: inherit; padding: 10px 16px; border-radius: 10px; cursor: pointer; min-height: 44px; }
+.ai-btn.small { padding: 6px 12px; min-height: 36px; }
+.ai-btn.primary { background: var(--rs-primary, #2563eb); border-color: var(--rs-primary, #2563eb); color: #fff; font-weight: 600; text-decoration: none; display: inline-block; }
+.ai-btn.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+.ai-btn:disabled { opacity: .55; cursor: not-allowed; }
+.ai-error { color: #b91c1c; }
+.ai-head { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
+.ai-grow { flex: 1; }
+.ai-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.ai-turn { max-width: 85%; padding: 10px 14px; border-radius: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ai-turn p { margin: 0; }
+.ai-turn.moderator { align-self: flex-start; background: #eef2ff; border-bottom-left-radius: 4px; }
+.ai-turn.participant { align-self: flex-end; background: var(--rs-primary, #2563eb); color: #fff; border-bottom-right-radius: 4px; }
+.ai-turn.pending { opacity: .85; }
+.ai-stim { margin: 10px 0 0; }
+.ai-stim img, .ai-stim video { max-width: 100%; max-height: 50vh; border-radius: 10px; display: block; }
+.ai-stim figcaption { font-size: .85em; color: var(--rs-subtle, #4b5563); margin-top: 4px; }
+.ai-stim.text { background: #fff; border-left: 4px solid var(--rs-primary, #2563eb); padding: 8px 12px; border-radius: 6px; }
+.ai-compose { border-top: 1px solid #e5e7eb; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.ai-row { display: flex; align-items: center; gap: 8px; }
+.ai-voice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-camera { width: 160px; border-radius: 10px; align-self: flex-end; background: #000; }
+.ai-done { border-top: 1px solid #e5e7eb; padding: 16px; text-align: center; }
+.ai-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 560px) {
+  .ai-shell { padding: 0; }
+  .ai-card { border-radius: 0; min-height: 100vh; }
+  .ai-chat { border-radius: 0; height: 100vh; }
+  .ai-turn { max-width: 92%; }
+}
+@media (prefers-reduced-motion: reduce) { .ai-log { scroll-behavior: auto; } }

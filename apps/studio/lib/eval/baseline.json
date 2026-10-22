@@ -1,7 +1,7 @@
 {
   "fake:fake": {
     "key": "fake:fake",
-    "recordedAt": "2026-10-18T14:42:55.625Z",
+    "recordedAt": "2026-10-22T09:58:01.664Z",
     "summary": {
       "passRate": 1,
       "byCategory": {
@@ -31,18 +31,18 @@
           "passRate": 1
         },
         "analysis_plan": {
-          "cases": 1,
-          "passed": 1,
+          "cases": 6,
+          "passed": 6,
           "passRate": 1
         },
         "methods": {
-          "cases": 3,
-          "passed": 3,
+          "cases": 7,
+          "passed": 7,
           "passRate": 1
         },
         "qualitative": {
-          "cases": 1,
-          "passed": 1,
+          "cases": 2,
+          "passed": 2,
           "passRate": 1
         },
         "scope": {
@@ -78,12 +78,12 @@
       },
       "costUsd": 0,
       "latencyMs": {
-        "p50": 19,
-        "p95": 115,
-        "max": 170
+        "p50": 39,
+        "p95": 352,
+        "max": 972
       },
-      "repairRate": 0.022,
-      "clarifyRate": 0
+      "repairRate": 0.017,
+      "clarifyRate": 0.017
     },
     "passed": {
       "edit-required": true,
@@ -99,10 +99,20 @@
       "brief-plan-first": true,
       "staged-build": true,
       "analysis-plan": true,
+      "advanced-omega": true,
+      "advanced-latent-class": true,
+      "advanced-mediation-bootstrap": true,
+      "advanced-hb-refused": true,
+      "advanced-lca-covariates-refused": true,
       "method-maxdiff": true,
       "method-conjoint": true,
+      "method-cva": true,
+      "method-cva-clarify": true,
+      "method-dual-response": true,
+      "method-menu-simulator": true,
       "method-list-fill": true,
       "qual-guide": true,
+      "qual-ai-interviews": true,
       "scope-unsupported": true,
       "scope-greeting": true,
       "scope-mixed": true,

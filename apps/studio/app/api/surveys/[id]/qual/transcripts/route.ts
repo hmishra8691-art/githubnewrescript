@@ -7,6 +7,7 @@ import { loadDefinition } from "@/lib/analytics";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { codingState, importTranscript, openEndsTranscript, parseSpeakerEdit, sessionView, speakerMap, type TranscriptFields } from "@/lib/qual/qualWorkspace";
 import { checkRow, json, loadWorkspace, recordEvents, refuse, saveCoding, sessionRow, storeFailure, transcriptRow, UUID } from "@/lib/qual/qualStore";
+import { enqueueAutoCode } from "@/lib/qual/autoCode";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -65,6 +66,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if (!t.ok) return json({ error: t.error }, 400);
         t.value.meta.environment = test ? "TEST" : "LIVE";
         const id = await insert(db, params.id, gate.user.userId, t.value);
+        /* F2 2026-10-22: the study may code new sources automatically — queued here, coded by the jobs route (no model call now) */
+        await enqueueAutoCode(db, params.id, id, gate.user.userId).catch(() => null);
         await recordEvents(db, gate, [{ actor: gate.user.userId, action: "source.open_ends", detail: `Added ${t.value.segments.length} open-ended answers (${questions.map((q) => q.code).join(", ")}, ${test ? "test" : "live"} completes) as a source`, ids: [id] }]);
         return json({ ok: true, id, warnings: t.value.meta.warnings, workspace: await loadWorkspace(db, gate) });
       }
@@ -80,6 +83,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const t = importTranscript({ ...input, participants });
     if (!t.ok) return json({ error: t.error }, 400);
     const id = await insert(db, params.id, gate.user.userId, t.value);
+    await enqueueAutoCode(db, params.id, id, gate.user.userId).catch(() => null);
     await recordEvents(db, gate, [{ actor: gate.user.userId, action: "transcript.imported", detail: `Imported “${t.value.title}” (${t.value.format}, ${t.value.segments.length} turns, ${Object.keys(t.value.speakers).length} speakers)`, ids: [id] }]);
     return json({ ok: true, id, warnings: t.value.meta.warnings, workspace: await loadWorkspace(db, gate) });
   } catch (e) { return storeFailure(e); }

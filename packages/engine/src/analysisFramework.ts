@@ -6,6 +6,7 @@ import { listBlocks } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
 import { getQuestionByCodeOrVar } from "./state.js";
 import { stripHtmlText } from "./html.js";
+import { ADVANCED_RULES, advancedOptionsFor, advancedPlanItems } from "./advancedMethods.js";
 
 /**
  * THE ANALYSIS FRAMEWORK — planned from the questionnaire, before fieldwork.
@@ -440,6 +441,22 @@ export function buildAnalysisFramework(def: SurveyDefinition, opts: { now?: stri
     if (tests.some((t) => t.outcome === dv.name && t.moderator === mod.name && (t.variables.includes(iv.name) || constructsRead(def, sofar, t.variables).has(h.constructs.independent!.name)))) continue;
     tests.push({ id: id("t"), method: !dv.scale ? "logistic_regression" : "regression", outcome: dv.name, variables: [iv.name], moderator: mod.name, priority: 1, hypotheses: [h.label], reason: `${h.label} says ${mod.name} changes how ${iv.name} affects ${dv.name} — tests that interaction` });
   }
+
+  /*
+   * A MEDIATED HYPOTHESIS GETS A MEDIATION TEST (2026-10-22), the way a moderated one gets its interaction: "trust
+   * mediates the effect of price on intent" — all three sides resolved to something the run computes — becomes a
+   * regression of the outcome on the predictor through the mediator, with the indirect effect bootstrapped.
+   */
+  for (const h of structuredHypotheses(def)) {
+    const iv = sideVariable(h.constructs.independent), dv = sideVariable(h.constructs.dependent), med = sideVariable(h.constructs.mediator);
+    if (!iv || !dv || !med || new Set([iv.name, dv.name, med.name]).size < 3) continue;
+    if (!dv.scale || !med.scale || !(iv.scale || iv.binary)) continue;
+    if (tests.some((t) => t.outcome === dv.name && t.mediator === med.name && t.variables.includes(iv.name))) continue;
+    tests.push({ id: id("t"), method: "regression", outcome: dv.name, variables: [iv.name], mediator: med.name, priority: 1, hypotheses: [h.label], reason: `${h.label} says ${med.name} carries the effect of ${iv.name} on ${dv.name} — the indirect effect, bootstrapped` });
+  }
+  /* the advanced options of items already planned — a bootstrap on every mediation, ω on every scale of three or more items — and the advanced models the design calls for (advancedMethods.ts) */
+  for (const t of tests) { const o = advancedOptionsFor(def, t); if (o) t.options = o; }
+  for (const p of advancedPlanItems(def, { tests })) tests.push({ id: id("t"), ...p.test });
 
   const segs: PlannedSegment[] = segments.map((s) => ({ name: stripHtmlText(s.text).slice(0, 60) || s.variableName, by: [by(s)] }));
   const built: AnalysisPlan = { crosstabs, tests, derived, segments: segs, source: "engine", updatedAt: opts.now ?? new Date().toISOString() };
@@ -915,6 +932,16 @@ export function requiredBase(def: SurveyDefinition, item: PlanItem, opts: { plan
           return { minimum: 200, note: "200 respondents", rule: "at least 200 respondents (Orme's rule of thumb for stable aggregate utilities; 200 per subgroup to compare segments) — the design's tasks per respondent and its versions set the rest" };
         case "turf": case "pricing": case "brand_funnel":
           return { minimum: 100, note: "100 respondents", rule: "at least 100 (rule of thumb for a stable reach or price curve)" };
+        /* advanced models (2026-10-22): the same numbers advancedSuitability refuses and warns at */
+        case "hb":
+          return { minimum: ADVANCED_RULES.hbWarn, note: `${ADVANCED_RULES.hbWarn} respondents`, rule: `at least ${ADVANCED_RULES.hbMin} to estimate the population distribution at all and about ${ADVANCED_RULES.hbWarn} for stable individual utilities (with ${ADVANCED_RULES.cbcTasksWarn}+ CBC tasks, or each MaxDiff item shown ${ADVANCED_RULES.maxdiffShowsWarn}+ times, per respondent)` };
+        case "latent_class":
+          return { minimum: ADVANCED_RULES.lcaWarn, note: `${ADVANCED_RULES.lcaWarn} respondents`, rule: `at least ${ADVANCED_RULES.lcaMin}; about ${ADVANCED_RULES.lcaWarn} for BIC to choose the number of classes reliably (Nylund, Asparouhov & Muthén 2007)` };
+        case "sem": {
+          const q = typeof t.options?.freeParameters === "number" ? t.options.freeParameters : Math.max(1, t.variables.length * 2);
+          const n = Math.max(ADVANCED_RULES.semWarn, ADVANCED_RULES.semPerParamWarn * q);
+          return { minimum: n, note: `max(${ADVANCED_RULES.semWarn}, ${ADVANCED_RULES.semPerParamWarn} × ${q} free parameters)`, rule: `at least ${ADVANCED_RULES.semPerParamWarn} cases per free parameter and never fewer than ${ADVANCED_RULES.semWarn} (Kline 2016; ${ADVANCED_RULES.semPerParamMin} per parameter / ${ADVANCED_RULES.semMin} is the floor below which the model is refused)` };
+        }
         default:
           return floor;
       }
@@ -950,6 +977,7 @@ const METHOD_WORDS: Partial<Record<AnalysisMethod, string>> = {
   t_test: "t-test", anova: "ANOVA", chi_square: "chi-square test", mann_whitney: "Mann–Whitney test", kruskal_wallis: "Kruskal–Wallis test", correlation: "correlation",
   regression: "regression", logistic_regression: "logistic regression", factor: "factor analysis", reliability: "reliability analysis", cluster: "cluster analysis",
   conjoint_utilities: "conjoint utilities", maxdiff_scores: "MaxDiff scores", driver_analysis: "driver analysis", nps: "NPS", top_box: "top-2-box", turf: "TURF analysis",
+  hb: "hierarchical Bayes model", latent_class: "latent class analysis", sem: "structural equation model",
 };
 
 /** "Q18–Q23" for a run in the survey's order, "Q18, Q20" otherwise */
@@ -1256,11 +1284,35 @@ export function explainPlanItem(def: SurveyDefinition, item: PlanItem, plan: Ana
           output = "the NPS with the shares of promoters, passives and detractors; a stacked bar";
           lead = `NPS is recommended because ${predList} asks how likely respondents are to recommend.`;
           break;
+        /* advanced models from the plan (2026-10-22) */
+        case "hb":
+          why = `${predList} is a ${resolve(def, t.variables[0])?.type === "maxdiff_task" ? "MaxDiff" : "CBC"} exercise: hierarchical Bayes estimates every respondent's own utilities (a multinomial logit per respondent, pooled through a normal population distribution) where the aggregate model gives one set for everyone.`;
+          output = "population mean utilities with credible intervals and heterogeneity, individual utilities and importances, preference-share simulation on individual utilities, and the convergence diagnostics (R̂, effective sample size, RLH) — estimates are withheld when the chains did not converge";
+          lead = `Hierarchical Bayes is recommended because ${predList} is a choice exercise and individual utilities show how much respondents differ.`;
+          limitations.push("HB runs as a background job (minutes for large samples); its result joins the plan's run when the chains have finished.", "Normal heterogeneity only; survey weights are not used; with few tasks per respondent the individual estimates lean on the prior.");
+          break;
+        case "latent_class":
+          why = `${predList} are categorical answers; latent class analysis finds groups of respondents who answer them alike, comparing ${String(t.options?.minClasses ?? 1)}–${String(t.options?.maxClasses ?? 4)} classes by BIC.`;
+          output = "the fit of each number of classes (LL, AIC, BIC, SABIC, entropy), class sizes, item-response probabilities per class and each respondent's class membership";
+          lead = `Latent class analysis is recommended because the study looks for segments and ${predList} describe them.`;
+          limitations.push("The choice of the number of classes is guided by BIC, not automatic; respondents missing an indicator are left out; no covariates are estimated in the model.");
+          break;
+        case "sem": {
+          const paths = Object.entries((t.options?.hypothesisPaths ?? {}) as Record<string, string>);
+          why = `The hypotheses ${paths.map(([h, p]) => `${h} (${p})`).join(", ") || "planned"} relate constructs measured by several items; a structural equation model estimates each path with the scales' measurement error separated out (a regression on mean scores would attenuate it).`;
+          output = "fit indices (χ², CFI, TLI, RMSEA with its interval, SRMR), the measurement model (loadings), each structural path (estimate, standardised β, p) and the indirect effects; a path diagram";
+          lead = `A structural equation model is recommended because the hypotheses link multi-item constructs.`;
+          limitations.push("ML on complete cases (listwise), indicators treated as continuous; a model that does not converge or is improper reports no estimates.", "A path is an association under the model's assumptions — a cross-sectional survey does not show causation.");
+          break;
+        }
         default:
           why = `${METHOD_WORDS[t.method] ?? t.method.replace(/_/g, " ")} is what ${O || predList} calls for at ${out ? L(out) : "its"} level.`;
           output = "the method's tables and its recommended chart";
           lead = `${(METHOD_WORDS[t.method] ?? t.method.replace(/_/g, " ")).replace(/^./, (c) => c.toUpperCase())} is recommended for ${O || predList}.`;
       }
+      if (t.options?.bootstrap && t.mediator) { output += `; the indirect effect's 95% percentile and BCa intervals from ${t.options.bootstrap === true ? 5000 : String(t.options.bootstrap)} seeded bootstrap resamples`; why += " The indirect effect is a product of two paths, so its interval comes from a bootstrap rather than the normal approximation (Sobel)."; }
+      if (t.options?.omega === true) { output += "; McDonald's ω from a one-factor model beside α"; why += " McDonald's ω is reported beside α because it does not assume every item loads equally."; }
+      if (t.method === "pricing" && t.options?.method === "gabor_granger") { why = `${predList} ask purchase intent at ${Array.isArray(t.options.prices) ? t.options.prices.length : "several"} price points, so demand is read as a Gabor–Granger curve.`; output = "the share who would buy at each price, the revenue index and the revenue-maximising price, and arc elasticities between points; a demand curve"; lead = "Gabor–Granger is recommended because the survey asks purchase intent at a ladder of prices."; }
       // item-specific cautions
       const meanBased = ["t_test", "anova", "regression", "driver_analysis", "correlation"].includes(t.method);
       for (const v of [out, ...(t.method === "correlation" || regression ? preds : [])]) if (v && meanBased && v.level === "ordinal") limitations.push(`${v.code} is an ordinal ${resolve(def, v.name)?.options?.length ?? ""}-point scale treated as interval — equal distances between its points are assumed${t.method === "t_test" ? "; the Mann–Whitney test makes no such assumption" : t.method === "anova" ? "; the Kruskal–Wallis test makes no such assumption" : ""}.`.replace(/ -point/, " "));
@@ -1324,6 +1376,7 @@ export function explainPlanItem(def: SurveyDefinition, item: PlanItem, plan: Ana
 /** the methodology card behind a test method, for its trade-offs */
 const METHOD_CARD: Partial<Record<AnalysisMethod, keyof typeof METHODS>> = {
   regression: "drivers", driver_analysis: "drivers", logistic_regression: "drivers", maxdiff_scores: "maxdiff", conjoint_utilities: "conjoint", nps: "nps", cluster: "segmentation", turf: "turf", brand_funnel: "funnel",
+  hb: "conjoint", latent_class: "segmentation",
 };
 
 /** Every item of the plan (saved, else the engine's), explained. */

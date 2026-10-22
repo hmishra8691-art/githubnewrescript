@@ -193,6 +193,8 @@ const SMALL_PLAN = {
   questions: [], assumptions: ["Ten questions at most."],
 };
 
+const AGREE5 = ["Strongly disagree", "Disagree", "Neither", "Agree", "Strongly agree"];
+
 export const GOLDEN_CASES: EvalCase[] = [
   /* ---------------------------------------------------------------- single edits */
   {
@@ -288,6 +290,42 @@ export const GOLDEN_CASES: EvalCase[] = [
       fake: { kind: "edit", reply: "Proposed the analysis plan and added the crosstab of Q1 by Q6.", actions: [{ op: "propose_analysis_plan", merge: true }, { op: "add_crosstab", rows: ["Q1"], columns: ["Q6"], priority: 1, reason: "Does the score differ by segment?" }] },
       expect: { modelCalled: true, opsPresent: ["add_crosstab"], appliedMin: 1, valid: true, language: "en" } }],
   },
+  /* advanced models in the plan (2026-10-22): planned with their options through the gate; what the design cannot carry is refused, nothing applied */
+  {
+    id: "advanced-omega", category: "analysis_plan", title: "Reliability with McDonald's omega", fixture: "spec", tags: ["advanced"],
+    fixtureSpec: [{ ref: "TR1", type: "single_select", text: "I trust the brand", options: AGREE5 }, { ref: "TR2", type: "single_select", text: "The brand keeps its promises", options: AGREE5 }, { ref: "TR3", type: "single_select", text: "The brand is honest", options: AGREE5 }],
+    turns: [{ message: "Check the reliability of the trust scale with omega",
+      fake: { kind: "edit", reply: "Planned a reliability analysis of TR1–TR3 with Cronbach's alpha and McDonald's omega.", actions: [{ op: "add_analysis_test", method: "reliability", variables: ["TR1", "TR2", "TR3"], options: { omega: true }, priority: 1, reason: "is the trust scale reliable" }] },
+      expect: { modelCalled: true, opsPresent: ["add_analysis_test"], appliedMin: 1, valid: true } }],
+  },
+  {
+    id: "advanced-latent-class", category: "analysis_plan", title: "Latent class segmentation from four indicators", fixture: "spec", tags: ["advanced"],
+    fixtureSpec: [1, 2, 3, 4].map((k) => ({ ref: `U${k}`, type: "single_select", text: `How often do you use feature ${k}?`, options: ["Never", "Sometimes", "Often"] })),
+    turns: [{ message: "Segment respondents with latent class using U1 to U4, between 2 and 5 classes",
+      fake: { kind: "edit", reply: "Planned a latent class model on U1–U4 with 2 to 5 classes, chosen by BIC.", actions: [{ op: "add_analysis_test", method: "latent_class", variables: ["U1", "U2", "U3", "U4"], options: { minClasses: 2, maxClasses: 5 }, priority: 1 }] },
+      expect: { modelCalled: true, opsPresent: ["add_analysis_test"], appliedMin: 1, valid: true } }],
+  },
+  {
+    id: "advanced-mediation-bootstrap", category: "analysis_plan", title: "A mediation with a bootstrapped indirect effect", fixture: "spec", tags: ["advanced"],
+    fixtureSpec: [{ ref: "PRICE", type: "single_select", text: "The price is fair", options: AGREE5 }, { ref: "TRUST", type: "single_select", text: "I trust the brand", options: AGREE5 }, { ref: "INTENT", type: "single_select", text: "I will buy it", options: AGREE5 }],
+    turns: [{ message: "Test whether trust mediates the effect of price on intent, with a bootstrap",
+      fake: { kind: "edit", reply: "Planned the mediation of PRICE → INTENT through TRUST with 5,000 bootstrap resamples (percentile and BCa intervals).", actions: [{ op: "add_analysis_test", method: "regression", outcome: "INTENT", variables: ["PRICE"], mediator: "TRUST", options: { bootstrap: 5000, seed: 7 }, priority: 1 }] },
+      expect: { modelCalled: true, opsPresent: ["add_analysis_test"], appliedMin: 1, valid: true } }],
+  },
+  {
+    id: "advanced-hb-refused", category: "analysis_plan", title: "HB on a question that is not a choice exercise is refused", fixture: "spec", tags: ["advanced", "refusal"],
+    fixtureSpec: [{ ref: "SAT", type: "single_select", text: "How satisfied are you?", options: AGREE5 }],
+    turns: [{ message: "Run HB on SAT",
+      fake: { kind: "edit", reply: "Planned hierarchical Bayes on SAT.", actions: [{ op: "add_analysis_test", method: "hb", variables: ["SAT"] }] },
+      expect: { modelCalled: true, appliedExactly: 0 } }],
+  },
+  {
+    id: "advanced-lca-covariates-refused", category: "analysis_plan", title: "Latent class with covariates is refused in words", fixture: "spec", tags: ["advanced", "refusal"],
+    fixtureSpec: [1, 2, 3].map((k) => ({ ref: `U${k}`, type: "single_select", text: `Usage ${k}`, options: ["Never", "Sometimes", "Often"] })).concat([{ ref: "AGE", type: "numeric", text: "Age" }] as never),
+    turns: [{ message: "Latent class on U1-U3 with age as a covariate",
+      fake: { kind: "edit", reply: "Planned latent class with AGE as a covariate.", actions: [{ op: "add_analysis_test", method: "latent_class", variables: ["U1", "U2", "U3"], options: { covariates: ["AGE"] } }] },
+      expect: { modelCalled: true, appliedExactly: 0 } }],
+  },
 
   /* ---------------------------------------------------------------- MaxDiff, conjoint, List Fill */
   {
@@ -301,6 +339,41 @@ export const GOLDEN_CASES: EvalCase[] = [
     turns: [{ message: "Add a choice-based conjoint with brand (Alpha, Beta, Gamma), storage (64 GB, 128 GB, 256 GB) and price (₹14,999, ₹19,999, ₹24,999)",
       fake: { kind: "edit", reply: "Added the CBC exercise.", actions: [{ op: "create_conjoint", ref: "PHONE_CBC", method: "cbc", text: "If these were your only options, which would you choose?", attributes: [{ name: "Brand", levels: ["Alpha", "Beta", "Gamma"] }, { name: "Storage", levels: ["64 GB", "128 GB", "256 GB"] }, { name: "Price", levels: ["₹14,999", "₹19,999", "₹24,999"] }] }] },
       expect: { modelCalled: true, opsPresent: ["create_conjoint"], appliedMin: 1, valid: true } }],
+  },
+  /* F4 2026-10-22 — the conjoint suite: rating-based (CVA), dual-response None, the menu simulator */
+  {
+    id: "method-cva", category: "methods", title: "A rating-based conjoint with four attributes", fixture: "nps_relationship",
+    turns: [{ message: "Make a rating-based conjoint with 4 attributes: brand (Alpha, Beta, Gamma), screen (5 in, 6 in), battery (1 day, 2 days, 3 days) and price (₹14,999, ₹19,999, ₹24,999)",
+      fake: { kind: "edit", reply: "Added a rating-based (CVA) conjoint.", actions: [{ op: "create_conjoint", ref: "PHONE_CVA", method: "cva", attributes: [{ name: "Brand", levels: ["Alpha", "Beta", "Gamma"] }, { name: "Screen", levels: ["5 in", "6 in"] }, { name: "Battery", levels: ["1 day", "2 days", "3 days"] }, { name: "Price", levels: ["₹14,999", "₹19,999", "₹24,999"] }] }] },
+      expect: { modelCalled: true, opsPresent: ["create_conjoint"], appliedMin: 1, valid: true, context: { methods: true } } }],
+  },
+  {
+    id: "method-cva-clarify", category: "methods", title: "A rating-based conjoint with no attributes named → a question back", fixture: "nps_relationship",
+    turns: [{ message: "make a rating-based conjoint with 4 attributes",
+      fake: { kind: "clarify", reply: "To build the rating-based conjoint I need the attributes.", questions: ["What are the four attributes and their levels?"] },
+      expect: { modelCalled: true, clarify: "required", appliedExactly: 0 } }],
+  },
+  {
+    id: "method-dual-response", category: "methods", title: "“Add a none option as dual response” changes only that", fixture: "nps_relationship",
+    turns: [
+      { message: "Add a choice-based conjoint with brand (Alpha, Beta, Gamma), storage (64 GB, 128 GB, 256 GB) and price (₹14,999, ₹19,999, ₹24,999)",
+        fake: { kind: "edit", reply: "Added the CBC exercise.", actions: [{ op: "create_conjoint", ref: "PHONE_CBC", method: "cbc", attributes: [{ name: "Brand", levels: ["Alpha", "Beta", "Gamma"] }, { name: "Storage", levels: ["64 GB", "128 GB", "256 GB"] }, { name: "Price", levels: ["₹14,999", "₹19,999", "₹24,999"] }] }] },
+        expect: { opsPresent: ["create_conjoint"], appliedMin: 1 } },
+      { message: "add a none option as dual response",
+        fake: { kind: "edit", reply: "The conjoint now asks “Would you actually buy it?” after each choice.", actions: [{ op: "update_conjoint", target: "PHONE_CBC", dualResponse: true }] },
+        expect: { opsPresent: ["update_conjoint"], opsAbsent: ["create_conjoint", "create_question"], appliedMin: 1, clarify: "forbidden" } },
+    ],
+  },
+  {
+    id: "method-menu-simulator", category: "methods", title: "“Run the menu simulator with the premium bundle at ₹499”", fixture: "nps_relationship",
+    turns: [
+      { message: "Add a menu-based conjoint: data pack (₹99, ₹149, ₹199), insurance (₹149, ₹199, ₹249), streaming (₹199, ₹299), cloud (₹49, ₹99)",
+        fake: { kind: "edit", reply: "Added the menu exercise.", actions: [{ op: "create_conjoint", ref: "PLAN_MENU", method: "menu", items: [{ name: "Data pack", prices: ["₹99", "₹149", "₹199"] }, { name: "Insurance", prices: ["₹149", "₹199", "₹249"] }, { name: "Streaming", prices: ["₹199", "₹299"] }, { name: "Cloud", prices: ["₹49", "₹99"] }] }] },
+        expect: { opsPresent: ["create_conjoint"], appliedMin: 1 } },
+      { message: "run the menu simulator with the premium bundle at ₹499",
+        fake: { kind: "edit", reply: "Saved the scenario: the premium bundle (insurance + streaming + cloud) at ₹499. Data Analytics → Conjoint simulates it once responses are in.", actions: [{ op: "simulate_conjoint", target: "PLAN_MENU", scenario: { name: "Premium bundle at ₹499", bundles: [{ name: "Premium", items: ["Insurance", "Streaming", "Cloud"], price: "₹499" }] } }] },
+        expect: { opsPresent: ["simulate_conjoint"], opsAbsent: ["create_conjoint"], appliedMin: 1, clarify: "forbidden", context: { methods: true } } },
+    ],
   },
   {
     id: "method-list-fill", category: "methods", title: "A List Fill from an awareness question", fixture: "brand_tracker",
@@ -316,6 +389,17 @@ export const GOLDEN_CASES: EvalCase[] = [
     turns: [{ message: "Create a 45-minute in-depth interview guide about why customers switch broadband providers", planFirst: false,
       fake: { kind: "edit", reply: "Created the interview guide.", actions: [{ op: "create_qual_guide", kind: "interview", title: "Why customers switch broadband", durationMinutes: 45, objectives: ["Understand what triggers switching"], consent: { recordingDisclosure: "The interview is recorded (audio) for the research team only." }, sections: [{ title: "Introduction", kind: "opening", minutes: 5, script: "Thank you for joining. There are no right or wrong answers. May I record?" }, { title: "Switching triggers", minutes: 30, questions: [{ text: "Tell me about the last time you thought about changing provider.", probes: ["What happened next?"], conditionalProbes: [{ ifMentions: "price", ask: "What would a fair price be?" }] }] }, { title: "Close", kind: "closing", minutes: 5, questions: ["Is there anything else you would like to add?"] }] }] },
       expect: { modelCalled: true, opsPresent: ["create_qual_guide"], appliedMin: 1 } }],
+  },
+
+  /* F1 2026-10-22 — the guide run as AI-moderated interviews (configure_ai_interviews); never "launched" by the copilot */
+  {
+    id: "qual-ai-interviews", category: "qualitative", title: "An interview guide run as AI voice interviews (50 people, Hindi + English, 20 min, deep probing)", fixture: "blank",
+    turns: [{ message: "Create a 20-minute interview guide about why customers switch broadband and run it as AI voice interviews with 50 people in Hindi and English, deep probing", planFirst: false,
+      fake: { kind: "edit", reply: "GENERATED (awaiting your approval): the interview guide, set up for AI-moderated voice interviews — 50 participants, Hindi and English, 20 minutes, deep probing. Launch it from Research Tools → Qualitative → AI interviews; about one model call per answer.", actions: [
+        { op: "create_qual_guide", kind: "interview", title: "Why customers switch broadband", durationMinutes: 20, objectives: ["Understand what triggers switching"], consent: { statement: "Taking part is voluntary; you can stop at any time.", recordingDisclosure: "Your voice is recorded for the research team only." }, sections: [{ title: "Introduction", kind: "opening", minutes: 2 }, { title: "Switching triggers", minutes: 15, questions: [{ text: "Tell me about the last time you thought about changing provider.", probes: ["What happened next?"] }] }, { title: "Close", kind: "closing", minutes: 3, questions: ["Is there anything else you would like to add?"] }] },
+        { op: "configure_ai_interviews", modes: ["voice", "text"], targetCompletes: 50, languages: ["Hindi", "English"], targetMinutes: 20, defaultProbing: "deep" },
+      ] },
+      expect: { modelCalled: true, opsPresent: ["create_qual_guide", "configure_ai_interviews"], appliedMin: 2, valid: true, replyNotMatches: ["\\b(?:is|are|now) (?:live|launched)\\b", "\\bI (?:have )?launched\\b"] } }],
   },
 
   /* ---------------------------------------------------------------- unsupported, greeting, mixed */

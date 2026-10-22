@@ -11,6 +11,8 @@ import { cronbachAlpha, factorAnalysis, hierarchical, kMeans, standardize } from
 import { fmtNum, fmtP, fmtPct, isOrdered, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
 import { CORRECTION_WORDS, pairwiseComparisons, type CorrectionMethod } from "../posthoc.js";
+import { bootstrapIndirect } from "../stats/bootstrap.js";
+import { mcdonaldOmega } from "../models/omega.js";
 
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
 /** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
@@ -296,6 +298,39 @@ export function regression(def: AnalysisDefinition, ds: Dataset, totalCases: num
       rows: [{ path: `a: ${labelOf(ds, x)} → ${labelOf(ds, m)}`, estimate: round(r.a.estimate, 3), se: round(r.a.se, 3), p: fmtP(r.a.p) }, { path: `b: ${labelOf(ds, m)} → ${labelOf(ds, y)} (controlling X)`, estimate: round(r.b.estimate, 3), se: round(r.b.se, 3), p: fmtP(r.b.p) }, { path: `c′: direct ${labelOf(ds, x)} → ${labelOf(ds, y)}`, estimate: round(r.cPrime.estimate, 3), se: round(r.cPrime.se, 3), p: fmtP(r.cPrime.p) }, { path: "c: total effect", estimate: round(r.total.estimate, 3), se: round(r.total.se, 3), p: fmtP(r.total.p) }, { path: "a×b: indirect effect", estimate: round(r.indirect, 3), se: null, p: fmtP(r.sobelP) }, { path: "Proportion mediated", estimate: round(r.proportionMediated, 3), se: null, p: "" }] });
     tests.push({ test: "sobel", statistic: r.sobelZ, p: r.sobelP, note: "Indirect effect" });
     insights.push(`The indirect effect of ${labelOf(ds, x)} on ${labelOf(ds, y)} through ${labelOf(ds, m)} is ${fmtNum(r.indirect, 3)} (Sobel z = ${fmtNum(r.sobelZ, 2)}, p ${fmtP(r.sobelP)}); ${r.proportionMediated != null ? `${fmtPct(r.proportionMediated * 100)} of the total effect is mediated` : "the proportion mediated could not be computed"}.`);
+    /*
+     * BOOTSTRAP INDIRECT EFFECT (2026-10-22): asked for with `options.bootstrap` (the number of resamples; `true` = 5,000).
+     * Seeded, percentile and BCa intervals; appended as its own table so a mediation without it is exactly what it was.
+     * When it is there it is the reading of the indirect effect (the Sobel test's normal approximation is too narrow
+     * on one side of a skewed product): the finding reads the BCa interval.
+     */
+    const bootOpt = opt<unknown>(def, "bootstrap", null);
+    const draws = bootOpt === true ? 5000 : typeof bootOpt === "number" && bootOpt > 0 ? bootOpt : 0;
+    if (draws) {
+      const level = 0.95;
+      const bs = bootstrapIndirect(numericColumn(ds, x), numericColumn(ds, m), numericColumn(ds, y), { draws, seed: opt(def, "seed", 1) as number, level });
+      if ("error" in bs) warnings.push(`Bootstrap of the indirect effect not computed: ${bs.error}`);
+      else {
+        const ci = (c: { low: number; high: number }) => `[${fmtNum(c.low, 3)}, ${fmtNum(c.high, 3)}]`;
+        tables.push({ id: "mediation_bootstrap", title: `Bootstrap of the indirect effect (${bs.draws.toLocaleString("en")} resamples, seed ${bs.seed})`, columns: [{ key: "stat", label: "Statistic" }, { key: "value", label: "Value" }],
+          rows: [
+            { stat: "Indirect effect a×b", value: round(bs.indirect, 3) },
+            { stat: "Bootstrap SE", value: round(bs.se, 3) },
+            { stat: "Bootstrap bias", value: round(bs.bias, 4) },
+            { stat: "95% percentile CI", value: ci(bs.percentile) },
+            { stat: "95% BCa CI", value: ci(bs.bca) },
+            { stat: "BCa bias correction z0", value: Number.isFinite(bs.bca.z0) ? round(bs.bca.z0, 3) : "—" },
+            { stat: "BCa acceleration", value: round(bs.bca.acceleration, 4) },
+            { stat: "Complete cases", value: bs.n },
+            ...(bs.failed ? [{ stat: "Resamples that could not be fitted", value: bs.failed }] : []),
+          ],
+          notes: ["Respondents resampled with replacement; each resample refits both regressions and keeps a×b. The BCa interval corrects the percentile interval for median bias (z0) and skewness (the jackknife acceleration). The indirect effect differs from zero when the interval excludes zero — there is no p-value."] });
+        tests.push({ test: "bootstrap_indirect", statistic: bs.indirect, p: null, detail: { ciLow: bs.bca.low, ciHigh: bs.bca.high, percentileLow: bs.percentile.low, percentileHigh: bs.percentile.high, excludesZero: bs.excludesZero.bca, draws: bs.draws, seed: bs.seed, se: bs.se }, note: "Indirect effect, bootstrap BCa" });
+        insights.push(`Bootstrap (${bs.draws.toLocaleString("en")} resamples): the 95% BCa interval of the indirect effect is ${ci(bs.bca)} (percentile ${ci(bs.percentile)}) — ${bs.excludesZero.bca ? "it excludes zero, so the indirect path is supported" : "it includes zero, so the indirect path is not supported"}.`);
+        if (bs.excludesZero.bca !== bs.excludesZero.percentile) warnings.push("The percentile and BCa bootstrap intervals disagree about zero — the indirect effect is borderline; read it as inconclusive.");
+        if (!Number.isFinite(bs.bca.z0)) warnings.push("Every bootstrap resample fell on one side of the estimate, so the BCa correction is undefined and the percentile interval is shown in its place.");
+      }
+    }
     chart = { nodes: [{ id: "x", label: labelOf(ds, x) }, { id: "m", label: labelOf(ds, m) }, { id: "y", label: labelOf(ds, y) }], links: [{ source: "x", target: "m", value: r.a.estimate }, { source: "m", target: "y", value: r.b.estimate }, { source: "x", target: "y", value: r.cPrime.estimate }] };
     return makeResult(def, ds, { tables, chart, tests, insights, warnings, recommendedCharts: ["network", "coefficient_plot", "table"], totalCases });
   }
@@ -394,11 +429,31 @@ export function reliability(def: AnalysisDefinition, ds: Dataset, totalCases: nu
   const insights = [`Cronbach's α = ${fmtNum(r.alpha, 3)} (${word}) across ${vars.length} items, n = ${r.n}; standardized α = ${fmtNum(r.standardizedAlpha, 3)}; mean inter-item correlation ${fmtNum(r.meanInterItem, 2)}.`];
   const weak = r.itemTotal.filter((it) => it.correlation != null && it.correlation < 0.3);
   if (weak.length) insights.push(`Items with weak item-total correlation (< .30): ${weak.map((w) => w.name).join(", ")}${weak.some((w) => r.alpha != null && w.alphaIfDeleted != null && w.alphaIfDeleted > r.alpha) ? " — dropping them would raise α." : "."}`);
+  /* McDONALD'S ω (2026-10-22), asked for with `options.omega`: a one-factor CFA on the same items, appended after the item table so a reliability without it is exactly what it was */
+  const extra: ResultTable[] = [];
+  const omegaWarnings: string[] = [];
+  let omegaValue: number | null = null;
+  if (opt<unknown>(def, "omega", false) === true) {
+    const cols: Record<string, (number | null)[]> = {};
+    for (const v of vars) cols[v] = numericColumn(ds, v);
+    const om = mcdonaldOmega(cols, vars);
+    omegaWarnings.push(...om.warnings);
+    if (!om.result) omegaWarnings.push(om.reason ?? "McDonald's ω could not be computed.");
+    else {
+      omegaValue = om.result.omega;
+      const ow = omegaValue >= 0.9 ? "excellent" : omegaValue >= 0.8 ? "good" : omegaValue >= 0.7 ? "acceptable" : omegaValue >= 0.6 ? "questionable" : "poor";
+      extra.push({ id: "omega", title: "McDonald's ω (one-factor model)", columns: [{ key: "stat", label: "Statistic" }, { key: "value", label: "Value", type: "number", decimals: 3 }],
+        rows: [{ stat: "McDonald's ω (total)", value: round(om.result.omega, 3) }, { stat: "Cronbach's α (for comparison)", value: round(r.alpha, 3) }, ...(om.fit ? [{ stat: "One-factor χ²", value: round(om.fit.chisq, 3) }, { stat: "df", value: om.fit.df }, ...(om.fit.df > 0 ? [{ stat: "CFI", value: round(om.fit.cfi, 3) }, { stat: "RMSEA", value: round(om.fit.rmsea, 3) }, { stat: "SRMR", value: round(om.fit.srmr, 3) }] : []), { stat: "n (complete cases)", value: om.fit.n }] : [])],
+        notes: ["ω = (Σλ)² / ((Σλ)² + Σθ) from a one-factor CFA (ML, latent variance 1). Unlike α it does not assume the items load equally. With three items the model is just-identified (df = 0), so its fit cannot be tested."] });
+      extra.push({ id: "omega_loadings", title: "One-factor loadings", columns: [{ key: "item", label: "Item" }, { key: "est", label: "Loading", type: "number", decimals: 3 }, { key: "std", label: "Standardised", type: "number", decimals: 3 }], rows: om.result.loadings.map((l) => ({ item: labelOf(ds, l.item), est: round(l.est, 3), std: round(l.std, 3) })) });
+      insights.push(`McDonald's ω = ${fmtNum(omegaValue, 3)} (${ow}) from a one-factor model of the ${vars.length} items${r.alpha != null ? `, beside α = ${fmtNum(r.alpha, 3)}` : ""}.`);
+    }
+  }
   return makeResult(def, ds, {
-    tables: [{ id: "alpha", title: "Scale reliability", columns: [{ key: "stat", label: "Statistic" }, { key: "value", label: "Value", type: "number", decimals: 3 }], rows: [{ stat: "Cronbach's α", value: round(r.alpha, 3) }, { stat: "Standardized α", value: round(r.standardizedAlpha, 3) }, { stat: "Items", value: vars.length }, { stat: "n (complete cases)", value: r.n }, { stat: "Mean inter-item r", value: round(r.meanInterItem, 3) }] },
-      { id: "items", title: "Item statistics", columns: [{ key: "name", label: "Item" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }, { key: "r", label: "Item-total r", type: "number", decimals: 3 }, { key: "aid", label: "α if deleted", type: "number", decimals: 3 }], rows: r.itemTotal.map((it) => ({ name: it.name, mean: round(it.mean), sd: round(it.sd), r: round(it.correlation, 3), aid: round(it.alphaIfDeleted, 3) })) }],
-    chart: { categories: r.itemTotal.map((it) => it.name), series: [{ name: "Item-total correlation", values: r.itemTotal.map((it) => round(it.correlation, 3)) }, { name: "α if deleted", values: r.itemTotal.map((it) => round(it.alphaIfDeleted, 3)) }], matrix: { rows: r.itemTotal.map((it) => it.name), columns: r.itemTotal.map((it) => it.name), values: r.interItem.map((row) => row.map((x) => round(x, 2))) }, kpis: [{ label: "Cronbach's α", value: round(r.alpha, 3) ?? 0 }] },
-    insights, recommendedCharts: ["bar_horizontal", "heatmap_correlation", "kpi_card", "dot_plot"], variablesUsed: vars, totalCases,
+    tables: [...[{ id: "alpha", title: "Scale reliability", columns: [{ key: "stat", label: "Statistic" }, { key: "value", label: "Value", type: "number", decimals: 3 }], rows: [{ stat: "Cronbach's α", value: round(r.alpha, 3) }, { stat: "Standardized α", value: round(r.standardizedAlpha, 3) }, { stat: "Items", value: vars.length }, { stat: "n (complete cases)", value: r.n }, { stat: "Mean inter-item r", value: round(r.meanInterItem, 3) }] },
+      { id: "items", title: "Item statistics", columns: [{ key: "name", label: "Item" }, { key: "mean", label: "Mean", type: "number", decimals: 2 }, { key: "sd", label: "SD", type: "number", decimals: 2 }, { key: "r", label: "Item-total r", type: "number", decimals: 3 }, { key: "aid", label: "α if deleted", type: "number", decimals: 3 }], rows: r.itemTotal.map((it) => ({ name: it.name, mean: round(it.mean), sd: round(it.sd), r: round(it.correlation, 3), aid: round(it.alphaIfDeleted, 3) })) }] as ResultTable[], ...extra],
+    chart: { categories: r.itemTotal.map((it) => it.name), series: [{ name: "Item-total correlation", values: r.itemTotal.map((it) => round(it.correlation, 3)) }, { name: "α if deleted", values: r.itemTotal.map((it) => round(it.alphaIfDeleted, 3)) }], matrix: { rows: r.itemTotal.map((it) => it.name), columns: r.itemTotal.map((it) => it.name), values: r.interItem.map((row) => row.map((x) => round(x, 2))) }, kpis: [{ label: "Cronbach's α", value: round(r.alpha, 3) ?? 0 }, ...(omegaValue != null ? [{ label: "McDonald's ω", value: round(omegaValue, 3) ?? 0 }] : [])] },
+    insights, ...(omegaWarnings.length ? { warnings: omegaWarnings } : {}), recommendedCharts: ["bar_horizontal", "heatmap_correlation", "kpi_card", "dot_plot"], variablesUsed: vars, totalCases,
   });
 }
 

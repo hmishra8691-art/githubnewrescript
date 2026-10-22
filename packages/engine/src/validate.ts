@@ -14,6 +14,7 @@ import { createScriptCtx, runScript, type ScriptRunResult } from "./scripts.js";
 import { resolvePiping } from "./piping.js";
 import { geoAnswered, geoProblems } from "./geo.js";
 import { acbcDone, isAcbcAnswer } from "./acbc.js";
+import { conjointMethodOf, dualKey, DUAL_SUFFIX, isDualKey } from "./conjointSuite.js";
 import { shapeHasAxis } from "./questionShape.js";
 import { videoCompleted, interviewAnswered, interviewProblems, requiresAudioAnswer } from "./interview.js";
 import { isEmptyAnswer } from "./answers.js";
@@ -773,11 +774,37 @@ export function validateQuestion(
   if (q.type === "conjoint_task" && value && typeof value === "object" && !Array.isArray(value)) {
     const design = def.designs.find((d) => d.id === q.settings.designRef);
     const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
-    if (design?.kind !== "menu" && allRows.length && allRows.every((r) => r.alt != null)) {
+    if (design?.kind !== "menu" && design?.kind !== "cva" && allRows.length && allRows.every((r) => r.alt != null)) {
       const mine = designRowsFor(q, allRows, ctx.state.seed);
+      /* F4 2026-10-22: a dual-response design stores "would you buy it?" beside the choice, under <task>_buy */
+      const dual = (design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
       const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) =>
-        v != null && v !== "" && !mine.some((r) => String(r.task) === t && String(r.alt) === String(v)));
+        v != null && v !== "" && !(dual && isDualKey(t)) && !mine.some((r) => String(r.task) === t && String(r.alt) === String(v)));
       if (bad.length) push(`Task ${bad[0][0]}: that choice is not one of the options shown.`);
+      if (dual) {
+        const badBuy = Object.entries(value as Record<string, unknown>).filter(([t, v]) => isDualKey(t) && v != null && v !== "" && v !== "yes" && v !== "no");
+        if (badBuy.length) push(`Task ${badBuy[0][0].slice(0, -DUAL_SUFFIX.length)}: please answer whether you would buy it with yes or no.`);
+      }
+    }
+    /* F4 2026-10-22: a rating-based (CVA) answer is a number on the design's scale, for a task of this version */
+    if (design?.kind === "cva" && allRows.length) {
+      const info = conjointMethodOf(def, q);
+      const lo = info?.cva?.min ?? 0, hi = info?.cva?.max ?? 10;
+      const mine = new Set(designRowsFor(q, allRows, ctx.state.seed).map((r) => String(r.task)));
+      const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) => v != null && v !== "" && (!mine.has(t) || !Number.isFinite(Number(v)) || Number(v) < lo || Number(v) > hi));
+      if (bad.length) push(`Task ${bad[0][0]}: please give a rating from ${lo} to ${hi}.`);
+    }
+    /* F4 2026-10-22: a menu with exclusive sections — at most one item of each section per task */
+    if (design?.kind === "menu" && allRows.some((r) => r.group)) {
+      const mine = designRowsFor(q, allRows, ctx.state.seed);
+      for (const [t, v] of Object.entries(value as Record<string, unknown>)) {
+        if (!Array.isArray(v)) continue;
+        const picked = mine.filter((r) => String(r.task) === t && r.group && v.map(String).includes(String(r.item)));
+        const byGroup = new Map<string, number>();
+        for (const r of picked) byGroup.set(String(r.group), (byGroup.get(String(r.group)) ?? 0) + 1);
+        const over = [...byGroup.entries()].find(([, n]) => n > 1);
+        if (over) { push(`Task ${t}: choose at most one item from “${over[0]}”.`); break; }
+      }
     }
   }
   if (q.type === "conjoint_task" && q.required && !hasNoAnswerableItems(q, ctx)) {
@@ -788,12 +815,18 @@ export function validateQuestion(
       const vals = (value ?? {}) as Record<string, unknown>;
       // a menu with a required base: an empty tick-list is "just the base", a decision; without one it is no decision
       const requiredOn = (t: string) => rows.filter((r) => String(r.task) === t && Number(r.required) === 1).length;
+      const dual = design?.kind === "conjoint" && (design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
       const missing = tasks.filter((t) => {
         const v = vals[t];
         if (design?.kind === "menu") return !Array.isArray(v) || (v.length === 0 && requiredOn(t) === 0);
+        /* F4 2026-10-22: a dual-response task is answered when the choice AND the buy question are */
+        if (dual) return v == null || v === "" || (vals[dualKey(t)] !== "yes" && vals[dualKey(t)] !== "no");
         return v == null || v === "";
       });
-      if (missing.length && !isEmpty(value)) push(`Please answer ${missing.length === 1 ? `task ${missing[0]}` : `every task (${missing.length} left)`}.`);
+      if (missing.length && !isEmpty(value)) {
+        const onlyBuy = dual && missing.every((t) => vals[t] != null && vals[t] !== "");
+        push(onlyBuy ? `Please say whether you would buy the option you chose${missing.length === 1 ? ` in task ${missing[0]}` : " in every task"}.` : `Please answer ${missing.length === 1 ? `task ${missing[0]}` : `every task (${missing.length} left)`}.`);
+      }
       if (design?.kind === "menu") {
         const cfg = (design.config ?? {}) as { minSelections?: number; maxSelections?: number };
         for (const t of tasks) {

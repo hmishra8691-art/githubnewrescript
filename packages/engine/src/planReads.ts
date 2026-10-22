@@ -1,5 +1,6 @@
 import type { AnalysisPlan, PlannedCrosstab, PlannedTest, SurveyDefinition } from "@rescript/schema";
 import { structuredHypotheses, type StructuredHypothesis } from "./hypotheses.js";
+import { rowColumn } from "./derivedNames.js";
 
 /**
  * WHAT A PLAN ITEM READS, WHICH HYPOTHESIS IT SERVES, AND HOW MUCH IT MATTERS
@@ -28,6 +29,11 @@ export function planItemReads(item: PlanItem): string[] {
   return [...new Set(names.filter((v): v is string => !!v))];
 }
 
+/** the grid question a row variable belongs to (`Q5_r2` → Q5's variable), when it is one */
+function gridQuestionOf(def: SurveyDefinition, name: string): string | undefined {
+  if (def.questions.some((q) => q.variableName === name)) return undefined;
+  return def.questions.find((q) => (q.type === "matrix_single" || q.type === "matrix_dropdown") && (q.rows ?? []).some((r) => rowColumn(q.variableName, r.code, def.variableNaming) === name))?.variableName;
+}
 const resolveQuestion = (def: SurveyDefinition, ref: string) => def.questions.find((q) => q.variableName === ref || q.code === ref || q.id === ref);
 
 /** the constructs one variable measures: those listing its question, the one its analysis names; a derived variable measures what its sources do */
@@ -72,7 +78,8 @@ export type HypothesisFit = "fits" | "misses" | "unknown";
  * the old tag is then kept rather than guessed away.
  */
 export function hypothesisFit(def: SurveyDefinition, plan: AnalysisPlan | undefined, h: StructuredHypothesis, item: PlanItem): { fit: HypothesisFit; /** both the independent and dependent side are resolved and read */ complete: boolean } {
-  const reads = planItemReads(item);
+  /* an SEM item reads the ROWS of rating grids (TRUST_r1 …): each is read as its grid question, whose construct it measures (2026-10-22) */
+  const reads = "method" in item && item.method === "sem" ? [...new Set(planItemReads(item).map((r) => gridQuestionOf(def, r) ?? r))] : planItemReads(item);
   const read = constructsRead(def, plan, reads);
   const need = [h.constructs.independent, h.constructs.dependent].filter((c): c is NonNullable<typeof c> => !!c);
   const groupQ = h.type === "difference" ? groupQuestionOf(def, h.group) : undefined;

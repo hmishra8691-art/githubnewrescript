@@ -37,10 +37,21 @@ export interface QualApi {
   aiCode(req: { mode: "inductive" | "deductive"; framework?: string; sourceIds?: string[] }): Promise<{ ws: WorkspaceView; report: CodingReport }>;
   op(op: QualOp): Promise<WorkspaceView>;
   settings(redactNames: string[]): Promise<WorkspaceView>;
-  exportDocx(type: "guide" | "report", opts?: { interpretation?: string; compare?: { a: string; b: string } | null }): Promise<{ blob: Blob; name: string }>;
+  exportDocx(type: "guide" | "report" | "deck", opts?: { interpretation?: string; compare?: { a: string; b: string } | null; compareGroups?: [string, string] | null }): Promise<{ blob: Blob; name: string }>;
   uploadRecording(sessionId: string, file: File, onProgress: (p: number, phase: string) => void): Promise<WorkspaceView>;
   recordingUrl(mediaId: string, download: boolean): Promise<string>;
   transcribe(sessionId: string): Promise<{ ws: WorkspaceView; warnings: string[] }>;
+  /** the sandbox's rows, for the synthesis / double-coding / highlights / correction / groups client (F2 2026-10-22); saved projects have none */
+  sandboxHandle?: SandboxHandle;
+}
+
+export interface SandboxHandle {
+  rows: { sessions: SessionRow[]; transcripts: TranscriptRow[]; coding: CodingRow | null; events: EventRow[] };
+  view(): WorkspaceView;
+  setState(s: QualState): void;
+  event(action: string, detail: string, ids?: string[], actor?: string): void;
+  addTranscript(t: ReturnType<typeof importTranscript>): { ws: WorkspaceView; warnings: string[] };
+  addSession(input: Record<string, unknown>): string;
 }
 
 export class QualApiError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); } }
@@ -102,7 +113,13 @@ export function httpQualApi(surveyId: string): QualApi {
       return merge((out.reply as { workspace: QualWorkspace }).workspace);
     },
     async recordingUrl(mediaId, download) { const r = await call<{ url: string }>(`${base}/recordings?mediaId=${encodeURIComponent(mediaId)}${download ? "&download=1" : ""}`); return r.url; },
-    async transcribe(sessionId) { const r = await call<{ workspace: QualWorkspace; warnings?: string[] }>(`${base}/recordings/transcribe`, jsonInit("POST", { sessionId })); return { ws: merge(r.workspace), warnings: r.warnings ?? [] }; },
+    async transcribe(sessionId) {
+      /* a long recording is transcribed in parts: the route answers 202 { continue: true } until it is done (F2 2026-10-22) */
+      let r = await call<{ workspace?: QualWorkspace; warnings?: string[]; continue?: boolean }>(`${base}/recordings/transcribe`, jsonInit("POST", { sessionId }));
+      for (let i = 0; r.continue && i < 60; i++) { await new Promise((ok) => setTimeout(ok, r.workspace ? 0 : 1500)); r = await call(`${base}/recordings/transcribe`, jsonInit("POST", { sessionId })); }
+      if (!r.workspace) throw new QualApiError("The transcription is still running — press Transcribe again to continue it.", 202);
+      return { ws: merge(r.workspace), warnings: r.warnings ?? [] };
+    },
   };
   return api;
 }
@@ -129,8 +146,11 @@ export function sandboxQualApi(getDef: () => SurveyDefinition): QualApi {
     event(v.source === "open_ends" ? "source.open_ends" : "transcript.imported", `Imported “${v.title}” (${v.format}, ${v.segments.length} turns)`, [tid]);
     return { ws: view(), warnings: v.meta.warnings };
   };
+  let sandboxHandleRef: SandboxHandle | null = null;
+  const addSession = (input: Record<string, unknown>): string => { const f = parseSessionInput(input, true); if (!f.ok) throw new QualApiError(f.error, 400); const v = f.value; const nid = id(); rows.sessions.push({ id: nid, kind: v.kind ?? "interview", title: v.title!, scheduled_at: v.scheduled_at ?? null, moderator: v.moderator ?? null, participants: v.participants ?? [], consent: v.consent ?? {}, notes: v.notes ?? null, observations: v.observations ?? [], status: v.status ?? "planned", recording_media_id: null }); event("session.created", `Recorded the session “${v.title}”`, [nid]); return nid; };
   return {
     sandbox: true,
+    get sandboxHandle() { return (sandboxHandleRef ??= { rows, view, setState, event, addTranscript, addSession }); },
     async load() { return view(); },
     async saveSession(input, sid) {
       const f = parseSessionInput(input, !sid);
@@ -181,7 +201,9 @@ export function sandboxQualApi(getDef: () => SurveyDefinition): QualApi {
     async exportDocx(type, opts = {}) {
       const ws = toWorkspace(rows, { pii: true });
       const sources = ws.transcripts.map((t: QualTranscriptView) => ({ id: t.id, title: t.title, kind: t.source === "open_ends" ? "open_ends" : "transcript", segments: t.segments.length }));
-      return docx(`/api/surveys/sandbox/qual/export`, { type, definition: getDef(), state: ws.state, segments: allSegments(ws), sources, history: ws.history, ...opts }, `${type}.docx`);
+      /* F2 2026-10-22: the sandbox's AI synthesis records travel with the report (the route re-checks staleness) */
+      const { sandboxReportExtras } = await import("./synthesisApi");
+      return docx(`/api/surveys/sandbox/qual/export`, { type, definition: getDef(), state: ws.state, segments: allSegments(ws), sources, history: ws.history, ...sandboxReportExtras(sandboxHandleRef), ...opts }, `${type}.docx`);
     },
     async uploadRecording() { throw new QualApiError("Recordings need a saved project (private storage).", 400); },
     async recordingUrl() { throw new QualApiError("Recordings need a saved project.", 400); },
@@ -191,3 +213,15 @@ export function sandboxQualApi(getDef: () => SurveyDefinition): QualApi {
 
 /** two coders' agreement, computed where the data already are */
 export const agreementOf = (ws: QualWorkspace, a: string, b: string) => computeAgreement(ws.state, a, b, { allUnits: allSegments(ws).filter((s) => s.role !== "moderator").map((s) => `${s.sourceId}|${s.id}`) });
+
+/*
+ * ONE SANDBOX WORKSPACE PER PAGE (F2 2026-10-22): the Qualitative panel and Intelligent Mode's qualitative cards
+ * ("summarise the themes", "make a highlight reel …") read and write the same sandbox data, and switching tabs no
+ * longer empties it. A saved project's data are in the database and need no such sharing.
+ */
+let sharedSandbox: { api: QualApi; getDef: { current: () => SurveyDefinition } } | null = null;
+export function sharedSandboxQualApi(getDef: () => SurveyDefinition): QualApi {
+  if (!sharedSandbox) { const ref = { current: getDef }; sharedSandbox = { api: sandboxQualApi(() => ref.current()), getDef: ref }; }
+  else sharedSandbox.getDef.current = getDef;
+  return sharedSandbox.api;
+}

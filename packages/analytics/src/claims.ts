@@ -2,6 +2,7 @@ import { canonicalJson, hash64 } from "./canonical.js";
 import type { AnalysisRun, Finding, Strength } from "./findings.js";
 import type { AnalysisResult } from "./types.js";
 import { waveNumbers } from "./waves.js";
+import { PER_RESPONDENT_TABLES } from "./advancedNarrative.js";
 
 /**
  * CLAIMS AND THE CLAIM-BOUND CHECKER (Data Analytics audit A-1, Phase 2).
@@ -93,6 +94,8 @@ const WORD_RE = new RegExp(`\\b(${Object.keys(WORDS).join("|")})(?:[- ](${Object
  * numbers. "One" alone is a pronoun and is not read as a count.
  */
 export function printedTokens(text: string): { norm: string; raw: string }[] {
+  /* digits of any script are digits (2026-10-22): a narrative in Hindi or Arabic writes १२.५ or ١٢٫٥ and is checked like 12.5 */
+  text = asciiDigits(text);
   const t = text.replace(/\b[A-Za-z]+\d+[A-Za-z0-9]*\b/g, " ").replace(/\b\d+(?:st|nd|rd|th)\b/gi, " ").replace(/(\d)-(?=\d)/g, "$1 ");
   const out: { norm: string; raw: string }[] = (t.match(NUM) ?? []).map((m) => ({ norm: normNumber(m), raw: m }));
   for (const m of t.matchAll(WORD_RE)) {
@@ -102,6 +105,12 @@ export function printedTokens(text: string): { norm: string; raw: string }[] {
     if (m[2] && !whole) out.push({ norm: String(unit), raw: String(unit) });
   }
   return out;
+}
+/** the zero of each script's decimal digits (Unicode Nd blocks of ten) */
+const DIGIT_ZEROS = [0x0660, 0x06f0, 0x07c0, 0x0966, 0x09e6, 0x0a66, 0x0ae6, 0x0b66, 0x0be6, 0x0c66, 0x0ce6, 0x0d66, 0x0de6, 0x0e50, 0x0ed0, 0x0f20, 0x1040, 0x17e0, 0x1810, 0xff10];
+/** every decimal digit as its ASCII digit, and the Arabic decimal separator (٫) as a point */
+export function asciiDigits(text: string): string {
+  return text.replace(/\p{Nd}/gu, (ch) => { const cp = ch.codePointAt(0)!; const z = DIGIT_ZEROS.find((x) => cp >= x && cp < x + 10); return z === undefined ? ch : String(cp - z); }).replace(/(\d)\u066b(\d)/g, "$1.$2");
 }
 export const printedNumbers = (text: string): string[] => printedTokens(text).map((x) => x.norm);
 
@@ -119,7 +128,8 @@ function findingClaim(f: Finding, id: string): Claim {
   for (const g of e.groups ?? []) { addAll(nums, numberForms(g.mean)); addAll(nums, numberForms(g.n)); }
   for (const p of e.pairwise?.pairs ?? []) for (const x of [p.meanA, p.meanB, p.p, p.pAdj]) addAll(nums, numberForms(x));
   const groups: ClaimGroup[] = (e.groups ?? []).map((g) => ({ label: g.label, value: g.mean, n: g.n }));
-  const sig = e.p == null && !e.adjusted ? null : f.significant && (!e.adjusted || e.adjusted.significant);
+  /* a bootstrap interval has no p, but it does decide (2026-10-22): its claim is significant exactly when the interval excludes zero */
+  const sig = e.test === "bootstrap_indirect" ? f.significant : e.p == null && !e.adjusted ? null : f.significant && (!e.adjusted || e.adjusted.significant);
   const kind: Claim["kind"] = groups.length >= 2 ? "comparison" : e.direction ? "association" : "other";
   return {
     id, kind, text: [f.headline, f.detail].filter(Boolean).join(" ").trim(),
@@ -171,7 +181,8 @@ export function claimsFromItems(items: readonly { id: string; name: string; resu
     for (const t of r.warnings) addAll(nums, textNumbers(t));
     for (const s of r.chart.series ?? []) { for (const v of s.values) addAll(nums, numberForms(v)); for (const v of s.errors ?? []) addAll(nums, numberForms(v)); }
     for (const k of r.chart.kpis ?? []) { addAll(nums, numberForms(typeof k.value === "number" ? k.value : NaN)); addAll(nums, numberForms(k.delta)); }
-    for (const t of r.tables) for (const row of t.rows) for (const v of Object.values(row)) { if (typeof v === "number") addAll(nums, numberForms(v)); else addAll(nums, textNumbers(v)); }
+    /* a table with one row per respondent (HB individual utilities, LCA membership — 2026-10-22) is not a claim: its thousands of numbers would excuse almost any figure */
+    for (const t of r.tables) { if (PER_RESPONDENT_TABLES.has(t.id)) continue; for (const row of t.rows) for (const v of Object.values(row)) { if (typeof v === "number") addAll(nums, numberForms(v)); else addAll(nums, textNumbers(v)); } }
     for (const t of r.tests) { for (const x of [t.statistic, t.p, t.effectSize?.value]) addAll(nums, numberForms(x)); if (typeof t.df === "number") addAll(nums, numberForms(t.df)); else if (Array.isArray(t.df)) for (const d of t.df) addAll(nums, numberForms(d)); }
     /* a single-series bar chart is a comparison: each category's value is a group */
     const cats = r.chart.categories; const one = r.chart.series?.length === 1 ? r.chart.series[0] : null;

@@ -92,10 +92,66 @@ export interface AcbcConfig {
   tournamentAlternatives?: number;
   /** concepts to carry into the tournament when fewer were accepted (padded with near concepts); default 6 */
   minTournamentConcepts?: number;
+  /*
+   * SUMMED PRICE (F4 2026-10-22), Sawtooth's ACBC price: a base price plus a price increment per level
+   * of the attributes that carry one ("Brand: 0, 50, 120" — one number per level, in level order), and
+   * a random variation of ±priceVariation % on every screened / tournament concept so price is not
+   * confounded with the levels. The BYO shows each level's increment and the running total, without
+   * variation. Absent → no price is shown or stored and every concept is exactly as before.
+   */
+  priceBase?: number;
+  priceIncrements?: string[];
+  /** ± percent, 0–50; default 30 */
+  priceVariation?: number;
+  /** round shown prices to a multiple of this; default 1 */
+  priceRound?: number;
+  priceCurrency?: string;
+  /** the row label; default "Price" */
+  priceLabel?: string;
+}
+
+export interface AcbcSummedPrice { base: number; increments: Record<string, number[]>; variation: number; round: number; currency: string; label: string }
+
+/** "Brand: 0, 50, 120" lines → attribute → per-level increments (numbers parsed from labels like "+₹50") */
+export function parsePriceIncrements(lines: unknown): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  if (!Array.isArray(lines)) return out;
+  for (const l of lines) {
+    const m = /^\s*([^:=]+?)\s*[:=]\s*(.+)$/.exec(String(l ?? ""));
+    if (!m) continue;
+    out[m[1].trim()] = m[2].split(/\s*[|;,]\s*/).map((x) => {
+      const t = x.trim();
+      const n = /\d+(?:\.\d+)?/.exec(t);
+      return n ? (/^-|^[^\d+]*-/.test(t) ? -Number(n[0]) : Number(n[0])) : NaN;
+    });
+  }
+  return out;
+}
+
+function summedPriceOf(c: AcbcConfig, attributes: AcbcAttribute[]): AcbcSummedPrice | null {
+  if (c.priceBase == null && !c.priceIncrements?.length) return null;
+  const raw = parsePriceIncrements(c.priceIncrements);
+  const increments: Record<string, number[]> = {};
+  for (const [k, v] of Object.entries(raw)) { const a = attributes.find((x) => x.name === k || x.name.toLowerCase() === k.toLowerCase()); increments[a?.name ?? k] = v; }
+  return { base: Number(c.priceBase ?? 0), increments, variation: Math.min(50, Math.max(0, Number(c.priceVariation ?? 30))) / 100, round: Math.max(0.01, Number(c.priceRound ?? 1)), currency: c.priceCurrency ?? "", label: c.priceLabel?.trim() || "Price" };
+}
+
+/** the summed price of a profile before variation */
+export function acbcListPrice(sp: AcbcSummedPrice, attributes: AcbcAttribute[], p: Profile): number {
+  let t = sp.base;
+  for (const a of attributes) { const inc = sp.increments[a.name]; const k = a.levels.indexOf(p[a.name]); if (inc && k >= 0 && Number.isFinite(inc[k])) t += inc[k]; }
+  return t;
+}
+/** the price a screened / tournament concept shows: list price × (1 ± variation), seeded per concept, rounded */
+export function acbcConceptPrice(sp: AcbcSummedPrice, attributes: AcbcAttribute[], p: Profile, seed: number, key: string): number {
+  const u = mulberry32(subSeed(seed, `acbc:price:${key}`))();
+  const v = acbcListPrice(sp, attributes, p) * (1 + sp.variation * (2 * u - 1));
+  return Math.round(Math.round(v / sp.round) * sp.round * 100) / 100;
 }
 
 export type Profile = Record<string, string>;
-export interface AcbcConcept { id: string; profile: Profile }
+/** `price`: the summed price shown with the concept (only when the design has a summed price) */
+export interface AcbcConcept { id: string; profile: Profile; price?: number }
 export interface AcbcRule { attribute: string; level: string; confirmed: boolean }
 
 export interface AcbcAnswer {
@@ -123,6 +179,8 @@ export function normalizeAcbc(c: AcbcConfig) {
     mustHaveThreshold: Math.max(2, c.mustHaveThreshold ?? 3),
     tournamentAlternatives: Math.max(2, c.tournamentAlternatives ?? 3),
     minTournamentConcepts: Math.max(2, c.minTournamentConcepts ?? 6),
+    /** F4 2026-10-22: null unless the design sets a summed price */
+    summedPrice: summedPriceOf(c, c.attributes ?? []),
   };
 }
 export type AcbcNormalized = ReturnType<typeof normalizeAcbc>;
@@ -180,7 +238,8 @@ export function nearConcepts(cfg: AcbcNormalized, a: AcbcAnswer, seed: number, s
     if (seen.has(key) || violates(p, cfg.prohibitions)) continue;
     seen.add(key);
     for (const [k, v] of Object.entries(p)) used.set(`${k}${v}`, (used.get(`${k}${v}`) ?? 0) + 1);
-    out.push({ id: `s${screenIndex}c${out.length + 1}`, profile: p });
+    const cid = `s${screenIndex}c${out.length + 1}`;
+    out.push(cfg.summedPrice ? { id: cid, profile: p, price: acbcConceptPrice(cfg.summedPrice, cfg.attributes, p, seed, cid) } : { id: cid, profile: p });
   }
   return out;
 }
@@ -232,7 +291,7 @@ export function tournamentPool(cfg: AcbcNormalized, a: AcbcAnswer, seed: number)
     pool.push(...extra);
   }
   // the BYO itself is always in the tournament — it is the respondent's own ideal
-  pool.push({ id: "byo", profile: { ...a.byo } });
+  pool.push(cfg.summedPrice ? { id: "byo", profile: { ...a.byo }, price: acbcByoPrice(cfg, a.byo) } : { id: "byo", profile: { ...a.byo } });
   return pool;
 }
 
@@ -300,6 +359,12 @@ export function chooseInTournament(cfg: AcbcNormalized, a: AcbcAnswer, seed: num
   // move the chosen concept to the back so it meets fresh opponents next
   next.remaining = [...next.remaining.filter((id) => id !== conceptId), conceptId];
   return nextTournamentRound(cfg, next, seed);
+}
+
+/** the BYO's summed price (no variation), rounded as the concepts are */
+export function acbcByoPrice(cfg: AcbcNormalized, byo: Profile): number | undefined {
+  if (!cfg.summedPrice) return undefined;
+  return Math.round(Math.round(acbcListPrice(cfg.summedPrice, cfg.attributes, byo) / cfg.summedPrice.round) * cfg.summedPrice.round * 100) / 100;
 }
 
 /** Is the exercise complete? */

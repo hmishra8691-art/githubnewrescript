@@ -9,6 +9,7 @@ import { planTrace,
 } from "@rescript/analytics";
 import type { LoadedContext, StoredRun } from "./analytics";
 import type { AnalysisRun } from "@rescript/analytics";
+import type { ModelJobView } from "./modelJobState.ts";
 
 /**
  * What the service needs from the server-only analytics module, injected so
@@ -19,6 +20,12 @@ export interface PlanDeps {
   latestRun(db: SupabaseClient, surveyId: string, environment?: DatasetSpec["environment"]): Promise<StoredRun | null>;
   runPlanFor(db: SupabaseClient, surveyId: string, ctx: LoadedContext, opts: { environment?: DatasetSpec["environment"]; dataset?: "all" | "clean"; trigger?: string; userId?: string | null; exclude?: Set<string>; skipEmpty?: boolean }): Promise<{ run: AnalysisRun; stored: StoredRun | null; error?: string }>;
   reportFacts(db: SupabaseClient, surveyId: string, def: SurveyDefinition): Promise<{ client?: string; fieldwork?: { from?: string; to?: string } }>;
+  /**
+   * Start (or find) the background job of a model the run does not wait for — hierarchical Bayes (2026-10-22).
+   * Its finished result is cached under the item's input hash, which the next run of the plan reads. Optional:
+   * without it a pending item stays pending and says so.
+   */
+  startModelJob?(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition, analysisId: string | null, userId: string | null): Promise<{ job?: ModelJobView; error?: string }>;
 }
 
 /**
@@ -358,6 +365,8 @@ export interface ApplyPlanOutcome {
   summary?: ApplySummary; applyId?: string | null; runId?: string | null; reportId?: string | null; dashboardId?: string | null;
   report?: { action: "created" | "updated" | "kept_edited" | "none" }; dashboard?: { action: "created" | "updated" | "none" };
   warnings?: string[];
+  /** the background jobs this apply started or found (hierarchical Bayes, 2026-10-22): the page follows their progress */
+  jobs?: { planned: string; title: string; analysisId: string | null; job: ModelJobView }[];
 }
 
 /** a run item that produced nothing usable */
@@ -388,6 +397,7 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
     const runnable = items.filter((i) => idFor.has(i.id));
     let stored: StoredRun | null = null;
     let runItems: { definition: AnalysisDefinition; chart?: ChartSpec["type"]; result?: { warnings: string[] } }[] = [];
+    const jobs: NonNullable<ApplyPlanOutcome["jobs"]> = [];
     let n = 0;
     if (available > 0 && runnable.length) {
       const exclude = new Set(items.filter((i) => !idFor.has(i.id)).map((i) => i.id));
@@ -398,6 +408,16 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
       for (const it of r.run.items) {
         const id = plannedIdOf(it.definition); if (!id || it.adaptedFrom) continue;
         const cur = results.get(id); if (!cur) continue;
+        /* a model that runs as a background job (HB): the apply starts it; the next run reads its result (2026-10-22) */
+        if (n > 0 && it.error?.code === "job_pending") {
+          const started: { job?: ModelJobView; error?: string } = deps.startModelJob ? await deps.startModelJob(db, surveyId, ctx, it.definition, idFor.get(id) ?? null, input.userId).catch((e: unknown) => ({ error: (e as Error).message })) : { error: "background jobs are not available here" };
+          if (started.job) {
+            jobs.push({ planned: id, title: cur.title, analysisId: idFor.get(id) ?? null, job: started.job });
+            const j = started.job;
+            results.set(id, { ...cur, status: j.status === "refused" || j.status === "failed" ? "failed" : "job_running", reason: j.status === "refused" || j.status === "failed" ? (j.error ?? "The model could not be run.") : j.status === "done" ? "Hierarchical Bayes has finished — apply again (or run the plan) to bring its result into the findings." : `Hierarchical Bayes is running as a background job (${j.progress.pct}% of ${j.progress.total.toLocaleString("en")} iterations per chain).` });
+          } else results.set(id, { ...cur, status: "failed", reason: `The background job could not be started: ${started.error ?? "unknown error"}` });
+          continue;
+        }
         /* an item the run refused (a variable the dataset does not have, audit ANALYTICS-05/06) carries `error`; the others are read from their warnings */
         const failed = n === 0 ? null : (it.error?.message ?? it.result.error?.message ?? failedResult(it.result.warnings));
         results.set(id, failed ? { ...cur, status: "failed", reason: failed } : n === 0 ? { ...cur, status: "pending_data" } : { ...cur, status: "run" });
@@ -461,7 +481,7 @@ export async function applyPlan(db: SupabaseClient, surveyId: string, ctx: Loade
 
     const summary = summarizeApply(dataset.environment, n, [...results.values()], { charts: chartCount, planned: items.length, relinked: sync.relinked, adopted: sync.adopted });
     await finish({ status: summary.status === "nothing_planned" ? "failed" : summary.status, run_id: stored?.id ?? null, report_id: reportId, dashboard_id: dashboardId, summary: { ...summary, warnings, report: reportAction, dashboard: dashboardAction } });
-    return { ok: true, status: 200, summary, applyId: lock.id, runId: stored?.id ?? null, reportId, dashboardId, report: { action: reportAction }, dashboard: { action: dashboardAction }, warnings };
+    return { ok: true, status: 200, summary, applyId: lock.id, runId: stored?.id ?? null, reportId, dashboardId, report: { action: reportAction }, dashboard: { action: dashboardAction }, warnings, ...(jobs.length ? { jobs } : {}) };
   } catch (e) {
     const message = (e as Error).message;
     await finish({ status: "failed", error: message });

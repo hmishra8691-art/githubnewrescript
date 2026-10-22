@@ -8,6 +8,7 @@ import { setExpressionSummary } from "./setExpression.js";
 import { formatPunchExpression } from "./autoPunch.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
+import { aiModerationWords } from "./aiInterviewActions.js";
 import { quotaDiff } from "./quotaActions.js";
 import { diffTheme } from "./theme.js";
 import { diffUx } from "./ux.js";
@@ -537,6 +538,8 @@ function qualGuideItems(t: Tree, before: SurveyDefinition, after: SurveyDefiniti
     ["consent and recording", (s) => [s?.consent.statement, s?.consent.recordingDisclosure, s?.consent.dataUse].filter(Boolean).map((x) => plain(x, 80)).join(" | ")],
     ["segments", (s) => (s?.segments ?? []).map((g) => `${g.name}${g.target != null ? ` (${g.target})` : ""}`).join("; ")],
     ["session plan", (s) => { const p = s?.sessionPlan; return p ? [p.sessions ? `${p.sessions} sessions` : "", p.participantsPerSession ? `${p.participantsPerSession} each` : "", p.mode ?? "", p.notes ? plain(p.notes, 60) : ""].filter(Boolean).join(", ") : ""; }],
+    /* 2026-10-22 */
+    ["AI-moderated interviews", (s) => aiModerationWords(s?.aiModeration)],
   ];
   for (const [name, read] of fields) {
     const from = read(b), to = read(a);

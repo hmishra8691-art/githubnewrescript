@@ -1,7 +1,7 @@
 /**
  * @rescript/designs — built-in design generator plugins.
  *
- * Registers conjoint, maxdiff, menu (MBC), acbc and custom generators into the shared
+ * Registers conjoint, maxdiff, menu (MBC), acbc, cva (rating-based conjoint) and custom generators into the shared
  * designGeneratorRegistry from @rescript/schema at module load.
  */
 import { designGeneratorRegistry } from "@rescript/schema";
@@ -11,6 +11,7 @@ import { maxdiffPlugin } from "./maxdiff.js";
 import { customPlugin } from "./custom.js";
 import { menuPlugin } from "./menu.js";
 import { acbcPlugin } from "./acbc.js";
+import { cvaPlugin } from "./cva.js";
 
 export * from "./conjoint.js";
 export * from "./conjointEfficiency.js";
@@ -18,6 +19,8 @@ export * from "./maxdiff.js";
 export * from "./custom.js";
 export * from "./menu.js";
 export * from "./acbc.js";
+export * from "./cva.js";
+export * from "./conjointAltSpecific.js";
 export * from "./export.js";
 export * from "./diagnostics.js";
 
@@ -29,6 +32,7 @@ export function registerBuiltinDesignGenerators(): void {
     customPlugin,
     menuPlugin,
     acbcPlugin,
+    cvaPlugin,
   ] as unknown as DesignGeneratorPlugin[];
   for (const plugin of plugins) {
     if (!designGeneratorRegistry.has(plugin.kind)) {

@@ -49,7 +49,7 @@ export function cbcQuestions(def: SurveyDefinition): Question[] {
   return def.questions.filter((q) => {
     if (q.type !== "conjoint_task") return false;
     const d = def.designs.find((x) => x.id === q.settings?.designRef);
-    return !!d && d.kind !== "menu" && !!d.file?.rows?.length;
+    return !!d && d.kind !== "menu" && d.kind !== "cva" && !!d.file?.rows?.length;
   });
 }
 
@@ -77,10 +77,13 @@ export function stackedChoiceData(def: SurveyDefinition, states: StackedChoiceSt
     levelsByQ.set(q.id, attrs);
     for (const a of attrs) if (!attrNames.includes(a.name)) attrNames.push(a.name);
   }
+  /* F4 2026-10-22: a dual-response design adds the follow-up, on every row of its task (1 = would buy the chosen option) */
+  const dualQ = new Set(questions.filter((q) => (def.designs.find((x) => x.id === q.settings?.designRef)?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true).map((q) => q.id));
   const columns = [
     "respondent", "session_id", "question", "version", "task", "is_holdout",
     "alt", "concept_id", "position", "none", "chosen",
     ...attrNames, ...attrNames.map((a) => `${a}_code`),
+    ...(dualQ.size ? ["buy"] : []),
   ];
   const rows: Record<string, unknown>[] = [];
   let skippedNoSeed = 0;
@@ -123,8 +126,10 @@ export function stackedChoiceData(def: SurveyDefinition, states: StackedChoiceSt
             const spec = attrs.find((x) => x.name === a);
             const level = none || !spec ? "" : String(r[a] ?? "");
             row[a] = level;
-            row[`${a}_code`] = none || !spec ? 0 : spec.levels.indexOf(level) + 1;
+            /* a not-applicable cell (alternative-specific design) is "" and code 0, like the None row */
+            row[`${a}_code`] = none || !spec || level === "" ? 0 : spec.levels.indexOf(level) + 1;
           }
+          if (dualQ.size) { const b = (ans as Record<string, unknown>)[`${t}_buy`]; row.buy = dualQ.has(q.id) ? (b === "yes" ? 1 : b === "no" ? 0 : "") : ""; }
           rows.push(row);
         });
       }

@@ -1,0 +1,1027 @@
+{
+ "cbc": {
+  "tables": [
+   {
+    "id": "importance",
+    "title": "Attribute importance",
+    "columns": [
+     {
+      "key": "attribute",
+      "label": "Attribute"
+     },
+     {
+      "key": "importance",
+      "label": "Relative importance %",
+      "type": "pct",
+      "decimals": 1
+     },
+     {
+      "key": "range",
+      "label": "Utility range",
+      "type": "number",
+      "decimals": 3
+     }
+    ],
+    "rows": [
+     {
+      "attribute": "Price",
+      "importance": 45.4,
+      "range": 2.112
+     },
+     {
+      "attribute": "Battery",
+      "importance": 22.5,
+      "range": 1.047
+     },
+     {
+      "attribute": "Brand",
+      "importance": 20.5,
+      "range": 0.954
+     },
+     {
+      "attribute": "Screen",
+      "importance": 11.6,
+      "range": 0.542
+     }
+    ],
+    "base": {
+     "n": 240,
+     "label": "240 respondents, 2880 choice tasks"
+    }
+   },
+   {
+    "id": "partworths",
+    "title": "Part-worth utilities — aggregate multinomial logit (effects-coded, zero-centred)",
+    "notes": [
+     "One set of utilities for the whole sample (pooled conditional logit, Newton–Raphson). Not individual-level: no hierarchical Bayes or latent-class model is estimated here — the Hierarchical Bayes analysis (Advanced models) estimates individual utilities from the same answers."
+    ],
+    "columns": [
+     {
+      "key": "attribute",
+      "label": "Attribute"
+     },
+     {
+      "key": "level",
+      "label": "Level"
+     },
+     {
+      "key": "utility",
+      "label": "Utility",
+      "type": "number",
+      "decimals": 3
+     },
+     {
+      "key": "se",
+      "label": "SE",
+      "type": "number",
+      "decimals": 3
+     },
+     {
+      "key": "p",
+      "label": "p-value"
+     }
+    ],
+    "rows": [
+     {
+      "attribute": "Brand",
+      "level": "Alpha",
+      "utility": 0.489,
+      "se": null,
+      "p": "(reference)"
+     },
+     {
+      "attribute": "Brand",
+      "level": "Beta",
+      "utility": -0.024,
+      "se": 0.033,
+      "p": ".474"
+     },
+     {
+      "attribute": "Brand",
+      "level": "Gamma",
+      "utility": -0.465,
+      "se": 0.036,
+      "p": "< .001"
+     },
+     {
+      "attribute": "Screen",
+      "level": "5in",
+      "utility": -0.299,
+      "se": null,
+      "p": "(reference)"
+     },
+     {
+      "attribute": "Screen",
+      "level": "6in",
+      "utility": 0.055,
+      "se": 0.033,
+      "p": ".093"
+     },
+     {
+      "attribute": "Screen",
+      "level": "7in",
+      "utility": 0.243,
+      "se": 0.032,
+      "p": "< .001"
+     },
+     {
+      "attribute": "Battery",
+      "level": "1 day",
+      "utility": -0.55,
+      "se": null,
+      "p": "(reference)"
+     },
+     {
+      "attribute": "Battery",
+      "level": "2 days",
+      "utility": 0.053,
+      "se": 0.033,
+      "p": ".108"
+     },
+     {
+      "attribute": "Battery",
+      "level": "3 days",
+      "utility": 0.497,
+      "se": 0.032,
+      "p": "< .001"
+     },
+     {
+      "attribute": "Price",
+      "level": "$199",
+      "utility": 0.98,
+      "se": null,
+      "p": "(reference)"
+     },
+     {
+      "attribute": "Price",
+      "level": "$299",
+      "utility": 0.152,
+      "se": 0.035,
+      "p": "< .001"
+     },
+     {
+      "attribute": "Price",
+      "level": "$399",
+      "utility": -1.132,
+      "se": 0.047,
+      "p": "< .001"
+     }
+    ]
+   },
+   {
+    "id": "fit",
+    "title": "Model fit",
+    "columns": [
+     {
+      "key": "m",
+      "label": "Statistic"
+     },
+     {
+      "key": "v",
+      "label": "Value"
+     }
+    ],
+    "rows": [
+     {
+      "m": "Respondents",
+      "v": 240
+     },
+     {
+      "m": "Choice tasks",
+      "v": 2880
+     },
+     {
+      "m": "Log-likelihood",
+      "v": -2847.75
+     },
+     {
+      "m": "Null log-likelihood",
+      "v": -3992.53
+     },
+     {
+      "m": "McFadden R²",
+      "v": 0.287
+     },
+     {
+      "m": "In-sample hit rate",
+      "v": "61.2%"
+     },
+     {
+      "m": "“None” chosen",
+      "v": "8.5%"
+     },
+     {
+      "m": "Converged",
+      "v": "yes"
+     },
+     {
+      "m": "Model",
+      "v": "Aggregate multinomial logit, effects-coded, None constant, 4 Newton–Raphson iterations"
+     }
+    ]
+   },
+   {
+    "id": "simulation",
+    "title": "Share-of-preference simulation (from the aggregate logit)",
+    "columns": [
+     {
+      "key": "profile",
+      "label": "Profile"
+     },
+     {
+      "key": "description",
+      "label": "Levels"
+     },
+     {
+      "key": "utility",
+      "label": "Total utility",
+      "type": "number",
+      "decimals": 3
+     },
+     {
+      "key": "share",
+      "label": "Preference share %",
+      "type": "pct",
+      "decimals": 1
+     }
+    ],
+    "rows": [
+     {
+      "profile": "Best profile",
+      "description": "Brand: Alpha; Screen: 7in; Battery: 3 days; Price: $199",
+      "utility": 2.209,
+      "share": 94.7
+     },
+     {
+      "profile": "Worst profile",
+      "description": "Brand: Gamma; Screen: 5in; Battery: 1 day; Price: $399",
+      "utility": -2.445,
+      "share": 0.9
+     },
+     {
+      "profile": "None",
+      "description": "No purchase",
+      "utility": -0.858,
+      "share": 4.4
+     }
+    ],
+    "notes": [
+     "Shares follow the logit rule over the listed profiles plus the none option."
+    ]
+   },
+   {
+    "id": "wtp",
+    "title": "Willingness to pay (vs. reference level, in Price units)",
+    "columns": [
+     {
+      "key": "attribute",
+      "label": "Attribute"
+     },
+     {
+      "key": "level",
+      "label": "Level"
+     },
+     {
+      "key": "wtp",
+      "label": "WTP",
+      "type": "number",
+      "decimals": 2
+     }
+    ],
+    "rows": [
+     {
+      "attribute": "Brand",
+      "level": "Alpha",
+      "wtp": 0
+     },
+     {
+      "attribute": "Brand",
+      "level": "Beta",
+      "wtp": -48.56
+     },
+     {
+      "attribute": "Brand",
+      "level": "Gamma",
+      "wtp": -90.33
+     },
+     {
+      "attribute": "Screen",
+      "level": "5in",
+      "wtp": 0
+     },
+     {
+      "attribute": "Screen",
+      "level": "6in",
+      "wtp": 33.51
+     },
+     {
+      "attribute": "Screen",
+      "level": "7in",
+      "wtp": 51.35
+     },
+     {
+      "attribute": "Battery",
+      "level": "1 day",
+      "wtp": 0
+     },
+     {
+      "attribute": "Battery",
+      "level": "2 days",
+      "wtp": 57.07
+     },
+     {
+      "attribute": "Battery",
+      "level": "3 days",
+      "wtp": 99.12
+     }
+    ]
+   },
+   {
+    "id": "counts",
+    "title": "Counts — choice share of each level (raw, not a model)",
+    "columns": [
+     {
+      "key": "attribute",
+      "label": "Attribute"
+     },
+     {
+      "key": "level",
+      "label": "Level"
+     },
+     {
+      "key": "shown",
+      "label": "Times shown",
+      "type": "number",
+      "decimals": 0
+     },
+     {
+      "key": "chosen",
+      "label": "Times chosen",
+      "type": "number",
+      "decimals": 0
+     },
+     {
+      "key": "share",
+      "label": "Chosen when shown %",
+      "type": "pct",
+      "decimals": 1
+     }
+    ],
+    "rows": [
+     {
+      "attribute": "Brand",
+      "level": "Alpha",
+      "shown": 2880,
+      "chosen": 1209,
+      "share": 42
+     },
+     {
+      "attribute": "Brand",
+      "level": "Beta",
+      "shown": 2880,
+      "chosen": 831,
+      "share": 28.9
+     },
+     {
+      "attribute": "Brand",
+      "level": "Gamma",
+      "shown": 2880,
+      "chosen": 596,
+      "share": 20.7
+     },
+     {
+      "attribute": "Screen",
+      "level": "5in",
+      "shown": 2880,
+      "chosen": 691,
+      "share": 24
+     },
+     {
+      "attribute": "Screen",
+      "level": "6in",
+      "shown": 2880,
+      "chosen": 871,
+      "share": 30.2
+     },
+     {
+      "attribute": "Screen",
+      "level": "7in",
+      "shown": 2880,
+      "chosen": 1074,
+      "share": 37.3
+     },
+     {
+      "attribute": "Battery",
+      "level": "1 day",
+      "shown": 2880,
+      "chosen": 575,
+      "share": 20
+     },
+     {
+      "attribute": "Battery",
+      "level": "2 days",
+      "shown": 2880,
+      "chosen": 853,
+      "share": 29.6
+     },
+     {
+      "attribute": "Battery",
+      "level": "3 days",
+      "shown": 2880,
+      "chosen": 1208,
+      "share": 41.9
+     },
+     {
+      "attribute": "Price",
+      "level": "$199",
+      "shown": 2880,
+      "chosen": 1580,
+      "share": 54.9
+     },
+     {
+      "attribute": "Price",
+      "level": "$299",
+      "shown": 2880,
+      "chosen": 803,
+      "share": 27.9
+     },
+     {
+      "attribute": "Price",
+      "level": "$399",
+      "shown": 2880,
+      "chosen": 253,
+      "share": 8.8
+     }
+    ],
+    "notes": [
+     "Counts are descriptive: a level's share also reflects the levels it happened to be shown with. The part-worths table is the estimated model."
+    ]
+   }
+  ],
+  "warnings": [],
+  "insights": [
+   "Price is the most important attribute (45% of total utility range), followed by Battery (22%); Screen matters least (12%).",
+   "Preferred Brand: Alpha (utility 0.49).",
+   "Preferred Screen: 7in (utility 0.24).",
+   "Preferred Battery: 3 days (utility 0.5).",
+   "Model fit: McFadden R² 0.29, hit rate 61%."
+  ]
+ },
+ "maxdiff": {
+  "tables": [
+   {
+    "id": "maxdiff",
+    "title": "MaxDiff item scores",
+    "columns": [
+     {
+      "key": "rank",
+      "label": "Rank"
+     },
+     {
+      "key": "item",
+      "label": "Item"
+     },
+     {
+      "key": "shown",
+      "label": "Times shown",
+      "type": "number",
+      "decimals": 0
+     },
+     {
+      "key": "best",
+      "label": "Best",
+      "type": "number",
+      "decimals": 0
+     },
+     {
+      "key": "worst",
+      "label": "Worst",
+      "type": "number",
+      "decimals": 0
+     },
+     {
+      "key": "bw",
+      "label": "B−W score %",
+      "type": "number",
+      "decimals": 1
+     },
+     {
+      "key": "utility",
+      "label": "Logit utility",
+      "type": "number",
+      "decimals": 3
+     },
+     {
+      "key": "se",
+      "label": "SE",
+      "type": "number",
+      "decimals": 3
+     },
+     {
+      "key": "share",
+      "label": "Preference share %",
+      "type": "pct",
+      "decimals": 1
+     },
+     {
+      "key": "relative",
+      "label": "Relative to top %",
+      "type": "pct",
+      "decimals": 1
+     }
+    ],
+    "rows": [
+     {
+      "rank": 1,
+      "item": "Battery",
+      "best": 702,
+      "worst": 38,
+      "shown": 1200,
+      "bw": 55.3,
+      "utility": 1.412,
+      "se": 0.05,
+      "share": 26,
+      "relative": 100
+     },
+     {
+      "rank": 2,
+      "item": "Camera",
+      "best": 515,
+      "worst": 106,
+      "shown": 1200,
+      "bw": 34.1,
+      "utility": 0.868,
+      "se": 0.047,
+      "share": 19.9,
+      "relative": 76.6
+     },
+     {
+      "rank": 3,
+      "item": "Screen",
+      "best": 351,
+      "worst": 138,
+      "shown": 1200,
+      "bw": 17.8,
+      "utility": 0.433,
+      "se": 0.046,
+      "share": 15.3,
+      "relative": 58.8
+     },
+     {
+      "rank": 4,
+      "item": "Price",
+      "best": 262,
+      "worst": 213,
+      "shown": 1200,
+      "bw": 4.1,
+      "utility": 0.126,
+      "se": 0.046,
+      "share": 12.4,
+      "relative": 47.5
+     },
+     {
+      "rank": 5,
+      "item": "Speed",
+      "best": 226,
+      "worst": 295,
+      "shown": 1200,
+      "bw": -5.7,
+      "utility": -0.188,
+      "se": 0.046,
+      "share": 9.8,
+      "relative": 37.5
+     },
+     {
+      "rank": 6,
+      "item": "Design",
+      "best": 146,
+      "worst": 455,
+      "shown": 1200,
+      "bw": -25.7,
+      "utility": -0.658,
+      "se": 0.046,
+      "share": 6.6,
+      "relative": 25.5
+     },
+     {
+      "rank": 7,
+      "item": "Storage",
+      "best": 113,
+      "worst": 510,
+      "shown": 1200,
+      "bw": -33.1,
+      "utility": -0.834,
+      "se": 0.047,
+      "share": 5.7,
+      "relative": 21.9
+     },
+     {
+      "rank": 8,
+      "item": "Support",
+      "best": 85,
+      "worst": 645,
+      "shown": 1200,
+      "bw": -46.7,
+      "utility": -1.16,
+      "se": null,
+      "share": 4.3,
+      "relative": 16.4
+     }
+    ],
+    "base": {
+     "n": 240,
+     "label": "240 respondents, 4800 choices"
+    },
+    "notes": [
+     "Utilities from an aggregate (pooled) conditional logit (best choices plus worst choices with reversed sign — the sequential best-worst model), zero-centred. Preference share = rescaled choice probability summing to 100.",
+     "“B−W score %” is a descriptive COUNT — (times best − times worst) / times shown — not a model estimate; it is shown beside the logit utilities, which account for which items each one was shown with. The model is pooled across respondents: individual-level (HB) utilities are not estimated here — the Hierarchical Bayes analysis (Advanced models) estimates them.",
+     "This scale is RELATIVE: it ranks the items against each other and cannot say whether any of them matter. Generate the design as anchored (dual-response) if that question matters."
+    ]
+   },
+   {
+    "id": "fit",
+    "title": "Model fit",
+    "columns": [
+     {
+      "key": "m",
+      "label": "Statistic"
+     },
+     {
+      "key": "v",
+      "label": "Value"
+     }
+    ],
+    "rows": [
+     {
+      "m": "Respondents",
+      "v": 240
+     },
+     {
+      "m": "Choices modelled",
+      "v": 4800
+     },
+     {
+      "m": "McFadden R²",
+      "v": 0.168
+     },
+     {
+      "m": "Hit rate",
+      "v": "54.9%"
+     },
+     {
+      "m": "Converged",
+      "v": "yes"
+     }
+    ]
+   }
+  ],
+  "warnings": []
+ },
+ "menuCounts": {
+  "id": "menu_counts",
+  "title": "Menu-based conjoint — take rate by item and price (counts, not a model)",
+  "columns": [
+   {
+    "key": "item",
+    "label": "Item"
+   },
+   {
+    "key": "price",
+    "label": "Price"
+   },
+   {
+    "key": "shown",
+    "label": "Times offered",
+    "type": "number",
+    "decimals": 0
+   },
+   {
+    "key": "taken",
+    "label": "Times chosen",
+    "type": "number",
+    "decimals": 0
+   },
+   {
+    "key": "rate",
+    "label": "Take rate %",
+    "type": "pct",
+    "decimals": 1
+   }
+  ],
+  "rows": [
+   {
+    "item": "Base",
+    "price": "$14",
+    "shown": 635,
+    "taken": 589,
+    "rate": 92.8
+   },
+   {
+    "item": "Base",
+    "price": "$10",
+    "shown": 650,
+    "taken": 589,
+    "rate": 90.6
+   },
+   {
+    "item": "Base",
+    "price": "$12",
+    "shown": 635,
+    "taken": 582,
+    "rate": 91.7
+   },
+   {
+    "item": "Data",
+    "price": "$2",
+    "shown": 960,
+    "taken": 662,
+    "rate": 69
+   },
+   {
+    "item": "Data",
+    "price": "$4",
+    "shown": 960,
+    "taken": 236,
+    "rate": 24.6
+   },
+   {
+    "item": "Cloud",
+    "price": "$3",
+    "shown": 635,
+    "taken": 284,
+    "rate": 44.7
+   },
+   {
+    "item": "Cloud",
+    "price": "$5",
+    "shown": 650,
+    "taken": 0,
+    "rate": 0
+   },
+   {
+    "item": "Cloud",
+    "price": "$7",
+    "shown": 635,
+    "taken": 0,
+    "rate": 0
+   }
+  ],
+  "base": {
+   "n": 240,
+   "label": "240 respondents, 1920 menu tasks"
+  },
+  "notes": [
+   "Raw counts. Required (base) items count as chosen whenever the respondent did not choose None."
+  ]
+ },
+ "hb": {
+  "mean": [
+   {
+    "attribute": "Brand",
+    "level": "Alpha",
+    "mean": 0.659,
+    "sd": 0.048,
+    "lo": 0.568,
+    "hi": 0.748,
+    "popSd": 0.519,
+    "rhat": 1.01,
+    "ess": 237
+   },
+   {
+    "attribute": "Brand",
+    "level": "Beta",
+    "mean": -0.023,
+    "sd": 0.049,
+    "lo": -0.121,
+    "hi": 0.073,
+    "popSd": 0.478,
+    "rhat": 1.005,
+    "ess": 179
+   },
+   {
+    "attribute": "Brand",
+    "level": "Gamma",
+    "mean": -0.635,
+    "sd": 0.053,
+    "lo": -0.74,
+    "hi": -0.536,
+    "popSd": 0.536,
+    "rhat": 1.006,
+    "ess": 219
+   },
+   {
+    "attribute": "Screen",
+    "level": "5in",
+    "mean": -0.417,
+    "sd": 0.053,
+    "lo": -0.522,
+    "hi": -0.312,
+    "popSd": 0.574,
+    "rhat": 1.017,
+    "ess": 305
+   },
+   {
+    "attribute": "Screen",
+    "level": "6in",
+    "mean": 0.086,
+    "sd": 0.053,
+    "lo": -0.013,
+    "hi": 0.198,
+    "popSd": 0.494,
+    "rhat": 1.01,
+    "ess": 165
+   },
+   {
+    "attribute": "Screen",
+    "level": "7in",
+    "mean": 0.331,
+    "sd": 0.05,
+    "lo": 0.238,
+    "hi": 0.427,
+    "popSd": 0.503,
+    "rhat": 1.018,
+    "ess": 235
+   },
+   {
+    "attribute": "Battery",
+    "level": "1 day",
+    "mean": -0.745,
+    "sd": 0.058,
+    "lo": -0.871,
+    "hi": -0.63,
+    "popSd": 0.57,
+    "rhat": 1.005,
+    "ess": 136
+   },
+   {
+    "attribute": "Battery",
+    "level": "2 days",
+    "mean": 0.08,
+    "sd": 0.055,
+    "lo": -0.024,
+    "hi": 0.186,
+    "popSd": 0.535,
+    "rhat": 0.999,
+    "ess": 203
+   },
+   {
+    "attribute": "Battery",
+    "level": "3 days",
+    "mean": 0.666,
+    "sd": 0.051,
+    "lo": 0.564,
+    "hi": 0.764,
+    "popSd": 0.5,
+    "rhat": 1.014,
+    "ess": 129
+   },
+   {
+    "attribute": "Price",
+    "level": "$199",
+    "mean": 1.321,
+    "sd": 0.055,
+    "lo": 1.215,
+    "hi": 1.432,
+    "popSd": 0.468,
+    "rhat": 1.011,
+    "ess": 66
+   },
+   {
+    "attribute": "Price",
+    "level": "$299",
+    "mean": 0.19,
+    "sd": 0.056,
+    "lo": 0.084,
+    "hi": 0.3,
+    "popSd": 0.518,
+    "rhat": 1.003,
+    "ess": 133
+   },
+   {
+    "attribute": "Price",
+    "level": "$399",
+    "mean": -1.511,
+    "sd": 0.074,
+    "lo": -1.658,
+    "hi": -1.374,
+    "popSd": 0.598,
+    "rhat": 1.01,
+    "ess": 80
+   },
+   {
+    "attribute": "None",
+    "level": "None",
+    "mean": -0.623,
+    "sd": 0.096,
+    "lo": -0.807,
+    "hi": -0.428,
+    "popSd": 0.675,
+    "rhat": 1.006,
+    "ess": 68
+   }
+  ],
+  "fit": [
+   {
+    "m": "Respondents",
+    "v": 240
+   },
+   {
+    "m": "Choice tasks",
+    "v": 2880
+   },
+   {
+    "m": "Root likelihood (RLH), at posterior means",
+    "v": 0.484
+   },
+   {
+    "m": "Percent certainty",
+    "v": "47.6%"
+   },
+   {
+    "m": "Mean respondent RLH",
+    "v": 0.497
+   },
+   {
+    "m": "Chance RLH (1 / alternatives)",
+    "v": 0.25
+   },
+   {
+    "m": "Log-likelihood at posterior means",
+    "v": -2091.6
+   },
+   {
+    "m": "Mean log-likelihood of the draws",
+    "v": -2521
+   }
+  ],
+  "diagnostics": [
+   {
+    "m": "Model",
+    "v": "Hierarchical Bayes multinomial logit (CBC, effects-coded, None constant)"
+   },
+   {
+    "m": "Verdict",
+    "v": "Converged — estimates below are valid"
+   },
+   {
+    "m": "Chains",
+    "v": 2
+   },
+   {
+    "m": "Burn-in iterations (per chain)",
+    "v": 3000
+   },
+   {
+    "m": "Iterations kept from (per chain)",
+    "v": 2000
+   },
+   {
+    "m": "Thinning",
+    "v": 5
+   },
+   {
+    "m": "Draws used (all chains)",
+    "v": 800
+   },
+   {
+    "m": "Largest R̂ (population means)",
+    "v": 1.018
+   },
+   {
+    "m": "Smallest effective sample size",
+    "v": 66
+   },
+   {
+    "m": "Chain 1: acceptance after burn-in / jump size",
+    "v": "27.4% / 0.593"
+   },
+   {
+    "m": "Chain 2: acceptance after burn-in / jump size",
+    "v": "27.3% / 0.593"
+   },
+   {
+    "m": "Chain 1: largest |Geweke z|",
+    "v": "3.18 (Screen: 5in)"
+   },
+   {
+    "m": "Chain 2: largest |Geweke z|",
+    "v": "1.91 (Price: $199)"
+   },
+   {
+    "m": "Prior",
+    "v": "μ flat; Σ ~ inverse-Wishart(df = 9 + 5, scale = df × 1 × effects-coding shape: every level, reference included, has prior variance (k−1)/k × 1)"
+   },
+   {
+    "m": "Seed",
+    "v": 3
+   },
+   {
+    "m": "Data fingerprint",
+    "v": "2edaef20654e4f65"
+   }
+  ],
+  "warnings": [
+   "The smallest effective sample size of a population mean is 66 — fewer than 100 effectively independent draws; credible intervals are rough. Run more draws."
+  ]
+ }
+}

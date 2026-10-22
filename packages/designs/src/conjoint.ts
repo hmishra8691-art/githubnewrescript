@@ -29,6 +29,7 @@ import type { DesignGeneratorPlugin } from "@rescript/schema";
 import { mulberry32, subSeed } from "@rescript/engine";
 import { twoWayBalance } from "./diagnostics.js";
 import { measureConjointDesign, swapImprove } from "./conjointEfficiency.js";
+import { applicabilityOf, appliesTo, brandAttributeOf, generateAltSpecificRows, isAlternativeSpecific, parseAlternativeSpecific, validateAltSpecific } from "./conjointAltSpecific.js";
 
 export interface ConjointAttribute {
   name: string;
@@ -119,6 +120,22 @@ export interface ConjointConfig {
   method?: "balanced" | "efficient";
   /** Text of the None alternative shown to respondents. Default "None of these". */
   noneLabel?: string;
+  /**
+   * DUAL-RESPONSE NONE (F4 2026-10-22): no None alternative inside the task — the respondent makes a
+   * forced choice among the concepts, then answers "would you actually buy it?" (stored per task as
+   * `<task>_buy` = "yes" | "no"). Replaces `noneOption`; the rows are the forced-choice tasks.
+   */
+  dualResponseNone?: boolean;
+  /** the follow-up question (render time); default "Would you actually buy the option you chose?" */
+  dualResponsePrompt?: string;
+  /**
+   * ALTERNATIVE-SPECIFIC / LABELLED designs (conjointAltSpecific.ts): the brand attribute, rules
+   * "Attribute: BrandLevel, …" for attributes that apply only to some brands, and `labelled` (each
+   * task shows every brand once, alternative k = brand level k).
+   */
+  brandAttribute?: string;
+  labelled?: boolean;
+  alternativeSpecific?: (string | { attribute: string; appliesTo: string[] })[];
 }
 
 /** The design-file columns a CBC design writes besides its attributes — an attribute may not be named after one. */
@@ -285,6 +302,18 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       type: "number",
       default: 1,
     },
+    /* F4 2026-10-22 — appended so the form's existing fields keep their order */
+    {
+      name: "dualResponseNone",
+      label: "Dual-response None (forced choice, then “would you buy it?”)",
+      type: "boolean",
+      default: false,
+      help: "Replaces the None alternative: respondents choose among the concepts, then say whether they would actually buy the one they chose. Turn off “Include a None option”.",
+    },
+    { name: "dualResponsePrompt", label: "Dual-response question text", type: "text", help: "Blank = “Would you actually buy the option you chose?”" },
+    { name: "brandAttribute", label: "Brand attribute (alternative-specific / labelled designs)", type: "text", help: "The attribute whose level decides which other attributes a concept carries, e.g. Brand. Blank = an attribute named Brand, else the first." },
+    { name: "labelled", label: "Labelled design (each brand once per task)", type: "boolean", default: false, help: "Alternatives per task must equal the number of brand levels; option k is always brand k." },
+    { name: "alternativeSpecific", label: "Brand-specific attributes", type: "list", help: "One per line: Attribute: BrandLevel, BrandLevel — the attribute applies only to concepts of those brands (shown as — elsewhere)." },
   ],
 
   validateConfig(config: ConjointConfig): string[] {
@@ -337,7 +366,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
      * with no prohibition at all: two attributes of two levels have four
      * concepts, and a task of five used to be generated with a duplicate.
      */
-    if (errors.length === 0 && c.prohibitions.length === 0) {
+    if (errors.length === 0 && c.prohibitions.length === 0 && !isAlternativeSpecific(config)) {
       const space = c.attributes.reduce((n, a) => n * Math.max(1, a.levels.length), 1);
       if (space < c.alternativesPerTask) {
         errors.push(`These attributes make only ${space} different concepts, and each task needs ${c.alternativesPerTask}. Add levels or attributes, or show fewer alternatives per task.`);
@@ -384,7 +413,7 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
           );
         }
         /* a level that survives in no legal concept cannot be estimated */
-        for (const attr of c.attributes) {
+        for (const attr of isAlternativeSpecific(config) ? [] : c.attributes) {
           for (const level of attr.levels) {
             if (!legal.some((p) => p[attr.name] === level)) {
               errors.push(
@@ -393,6 +422,19 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
             }
           }
         }
+      }
+    }
+    /* F4 2026-10-22: dual-response None and alternative-specific designs (absent → nothing checked) */
+    if (config.dualResponseNone === true && c.noneOption) {
+      errors.push("Dual-response None replaces the None alternative inside the task — turn off “Include a None option”, or turn off dual-response.");
+    }
+    if (errors.length === 0) errors.push(...validateAltSpecific({ ...config, attributes: c.attributes, alternativesPerTask: c.alternativesPerTask }));
+    if (errors.length === 0 && isAlternativeSpecific(config) && c.prohibitions.length) {
+      const brand = brandAttributeOf({ ...config, attributes: c.attributes })!;
+      const legal = generateAltSpecificLegal(c, config, brand);
+      if (legal && legal.length < c.alternativesPerTask) errors.push(`These prohibitions leave only ${legal.length} legal concepts, and each task needs ${c.alternativesPerTask} different ones.`);
+      if (legal) for (const attr of c.attributes) for (const level of attr.levels) {
+        if (!legal.some((p) => p[attr.name] === level)) errors.push(`"${level}" (${attr.name}) appears in no legal concept, so its utility could never be estimated. Relax a prohibition or remove the level.`);
       }
     }
     return errors;
@@ -412,6 +454,8 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
       const problems = conjointPlugin.validateConfig!(config);
       if (problems.length) throw new Error(problems[0]);
     }
+    /* F4 2026-10-22: brand-specific / labelled designs are built by their own module (generic configurations never are) */
+    if (isAlternativeSpecific(config)) return generateAlternativeSpecific(c, config, seed);
     /* the legal space, for the fallback when redraws cannot find a concept */
     const legalPool = c.prohibitions.length ? enumerateLegal(c) : null;
     const columns = [
@@ -635,7 +679,90 @@ export const conjointPlugin: DesignGeneratorPlugin<ConjointConfig> = {
         holdoutTasksPerVersion: c.holdoutTasks,
         alternativesPerTask: c.alternativesPerTask,
         noneOption: c.noneOption,
+        ...(config.dualResponseNone === true ? { dualResponseNone: true } : {}),
       },
     };
   },
 };
+
+/** the legal alternative-specific concepts (for validation) */
+function generateAltSpecificLegal(c: NormalizedConjoint, config: ConjointConfig, brand: string): Record<string, string>[] | null {
+  const rules = applicabilityOf({ ...config, attributes: c.attributes });
+  const out: Record<string, string>[] = [];
+  const B = c.attributes.find((a) => a.name === brand);
+  if (!B) return null;
+  for (const b of B.levels) {
+    let partial: Record<string, string>[] = [{ [brand]: b }];
+    for (const a of c.attributes) {
+      if (a.name === brand) continue;
+      if (!appliesTo(rules, a.name, b)) { partial = partial.map((p) => ({ ...p, [a.name]: "" })); continue; }
+      const next: Record<string, string>[] = [];
+      for (const p of partial) for (const l of a.levels) next.push({ ...p, [a.name]: l });
+      partial = next;
+      if (partial.length + out.length > ENUMERATION_CAP) return null;
+    }
+    out.push(...partial);
+  }
+  return out.filter((p) => !violates(p, c.prohibitions));
+}
+
+/**
+ * ALTERNATIVE-SPECIFIC / LABELLED CBC (F4 2026-10-22): rows from conjointAltSpecific.ts, the
+ * efficient method's swaps over the attributes every brand carries (the brand is never swapped,
+ * a not-applicable cell never), the same summary a generic design reports, plus the rules.
+ */
+function generateAlternativeSpecific(c: NormalizedConjoint, config: ConjointConfig, seed: number) {
+  const brand = brandAttributeOf({ ...config, attributes: c.attributes })!;
+  const rules = applicabilityOf({ ...config, attributes: c.attributes });
+  const built = generateAltSpecificRows({ ...c, ...config, attributes: c.attributes, noneOption: c.noneOption }, seed, (p) => violates(p, c.prohibitions));
+  const { rows, levelCounts } = built;
+  const columns = ["version", "task", "alt", "is_holdout", ...c.attributes.map((a) => a.name), "none_option"];
+  let optimisation: Record<string, unknown> | undefined;
+  if (c.method === "efficient") {
+    const budget = Math.max(SWAP_MIN_PER_VERSION, Math.floor(SWAP_EVALUATION_BUDGET / c.versions));
+    let swaps = 0, evaluations = 0, exhausted = 0;
+    for (let version = 1; version <= c.versions; version++) {
+      const taskRows: Record<string, unknown>[][] = [];
+      for (let task = 1; task <= c.tasks; task++) taskRows.push(rows.filter((r) => r.version === version && r.task === task && Number(r.none_option) !== 1));
+      const profiles = taskRows.map((ts) => ts.map((r) => Object.fromEntries(c.attributes.map((a) => [a.name, String(r[a.name] ?? "")]))));
+      const res = swapImprove(c.attributes, profiles, (pr) => !violates(pr, c.prohibitions), mulberry32(subSeed(seed, `conjoint:as:swap:v${version}`)), { maxEvaluations: budget, fixed: [brand] });
+      swaps += res.swaps; evaluations += res.evaluations; if (res.exhausted) exhausted++;
+      taskRows.forEach((ts, t) => ts.forEach((r, j) => Object.assign(r, profiles[t][j])));
+    }
+    optimisation = { algorithm: "level swapping (Huber & Zwerina 1996) over the attributes every brand carries", swaps, evaluations, versionsStoppedAtBudget: exhausted };
+  }
+  const levelFrequencies: Record<string, Record<string, number>> = {};
+  const balanceScores: Record<string, number> = {};
+  for (const attr of c.attributes) {
+    const counts = levelCounts.get(attr.name)!;
+    levelFrequencies[attr.name] = Object.fromEntries(counts);
+    const values = [...counts.values()];
+    balanceScores[attr.name] = Math.min(...values) === 0 ? Infinity : Math.max(...values) / Math.min(...values);
+  }
+  const estimationProfiles = rows.filter((r) => Number(r.is_holdout) !== 1 && Number(r.none_option) !== 1).map((r) => Object.fromEntries(c.attributes.map((a) => [a.name, String(r[a.name] ?? "")])));
+  const possible = (a: string, la: string, b: string, lb: string) => {
+    if (a === brand) return appliesTo(rules, b, la);
+    if (b === brand) return appliesTo(rules, a, lb);
+    const B = c.attributes.find((x) => x.name === brand)!;
+    return B.levels.some((bl) => appliesTo(rules, a, bl) && appliesTo(rules, b, bl)) && (!built.legal || built.legal.some((p) => p[a] === la && p[b] === lb));
+  };
+  const diagnostics = twoWayBalance(c.attributes, estimationProfiles, possible);
+  const efficiency = measureConjointDesign(c.attributes, rows);
+  const warnings = [...diagnostics.warnings];
+  return {
+    columns, rows,
+    summary: {
+      method: c.method, levelFrequencies, balanceScores, diagnostics, efficiency,
+      ...(optimisation ? { optimisation } : {}),
+      ...(warnings.length ? { warnings } : {}),
+      alternativeSpecific: {
+        brandAttribute: brand, labelled: config.labelled === true,
+        rules: parseAlternativeSpecific(config.alternativeSpecific),
+        legalConcepts: built.legal?.length ?? null,
+        note: "D-efficiency is measured against the generic-design bound, so a brand-specific design reads lower than it is: an attribute a concept does not carry adds no information by construction.",
+      },
+      versions: c.versions, tasksPerVersion: c.tasks, holdoutTasksPerVersion: c.holdoutTasks, alternativesPerTask: c.alternativesPerTask, noneOption: c.noneOption,
+      ...(config.dualResponseNone === true ? { dualResponseNone: true } : {}),
+    },
+  };
+}

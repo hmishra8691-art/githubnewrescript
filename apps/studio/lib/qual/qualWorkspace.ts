@@ -30,7 +30,7 @@ export interface QualSessionView {
   notes: string | null; observations: { at?: string; text: string }[]; status: string; recordingMediaId: string | null;
 }
 export interface QualTranscriptView {
-  id: string; sessionId: string | null; title: string; source: "import" | "stt" | "open_ends"; format: string | null; language: string | null;
+  id: string; sessionId: string | null; title: string; source: "import" | "stt" | "open_ends" | "ai_interview"; format: string | null; language: string | null;
   status: string; error: string | null; charCount: number; mediaId: string | null; createdAt?: string;
   speakers: Record<string, SpeakerInfo>; segments: QualSegment[]; warnings: string[];
 }
@@ -110,7 +110,7 @@ export function toWorkspace(rows: { sessions: SessionRow[]; transcripts: Transcr
   const sessions = rows.sessions.map(sessionView);
   const participantsOf = (sessionId: string | null) => sessions.find((s) => s.id === sessionId)?.participants ?? [];
   const transcripts: QualTranscriptView[] = rows.transcripts.map((t) => ({
-    id: t.id, sessionId: t.session_id, title: t.title, source: (t.source === "stt" || t.source === "open_ends" ? t.source : "import") as QualTranscriptView["source"], format: t.format, language: t.language,
+    id: t.id, sessionId: t.session_id, title: t.title, source: (t.source === "stt" || t.source === "open_ends" || t.source === "ai_interview" ? t.source : "import") as QualTranscriptView["source"], format: t.format, language: t.language,
     status: t.status, error: t.error, charCount: t.char_count, mediaId: t.media_id, ...(t.created_at ? { createdAt: t.created_at } : {}),
     speakers: speakerMap(t, participantsOf(t.session_id)), segments: segmentsOf(t, participantsOf(t.session_id)), warnings: arr<string>(obj(t.meta).warnings).filter((w) => typeof w === "string"),
   }));

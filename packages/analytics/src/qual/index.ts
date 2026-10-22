@@ -6,3 +6,15 @@ export * from "./codebook.js";
 export * from "./kappa.js";
 export * from "./analysis.js";
 export * from "./aiCoding.js";
+/* F2 2026-10-22: AI synthesis, insights, ask, blind double-coding, transcript correction, highlights, auto-coding, group sessions */
+export * from "./evidence.js";
+export * from "./synthesis.js";
+export * from "./insights.js";
+export * from "./ask.js";
+export * from "./doubleCoding.js";
+export * from "./transcriptEdit.js";
+export * from "./highlights.js";
+export * from "./autoCode.js";
+export * from "./groups.js";
+export * from "./groupService.js";
+export * from "./groupStoreDb.js";

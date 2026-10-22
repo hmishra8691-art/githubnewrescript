@@ -1,10 +1,11 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { analysisReadiness, inputHashOf, CHUNKED_KINDS, type AnalysisDefinition } from "@rescript/analytics";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { analysisReadiness, CHUNKED_KINDS, type AnalysisDefinition } from "@rescript/analytics";
 import { supabaseService } from "@/lib/authServer";
 import { isFailure, requireProject } from "@/lib/guard";
-import { buildFor, datasetStamp, loadDefinition, resolveSaved } from "@/lib/analytics";
-import { cachePut, surveyStamp } from "@/lib/resultCache";
+import { buildFor, loadDefinition, modelInputKey, resolveSaved, type LoadedContext } from "@/lib/analytics";
+import { cachePut } from "@/lib/resultCache";
 import { cancelJob, continueJob, getJob, listJobs, startJob, type JobDeps } from "./modelJobsCore.ts";
 
 /**
@@ -21,26 +22,25 @@ import { cancelJob, continueJob, getJob, listJobs, startJob, type JobDeps } from
  */
 const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "cache-control": "no-store" } });
 
+/** the job service's dependencies for an already-authorised caller (the routes below; the plan's Apply, which starts HB jobs — 2026-10-22) */
+export function jobDepsFor(db: SupabaseClient, surveyId: string, loaded: LoadedContext, userId: string | null, opts: { chunkMs?: number } = {}): JobDeps {
+  return {
+    db, surveyId, userId,
+    dataset: async (def) => buildFor(db, surveyId, loaded, await resolveSaved(db, surveyId, def)),
+    /* the very key compute() caches under, so a finished run is what reports, exports and the plan's run are served */
+    inputHash: (definition) => modelInputKey(db, surveyId, loaded, definition),
+    cachePut: (key, payload) => cachePut(db, surveyId, key, payload),
+    ...(opts.chunkMs ? { chunkMs: opts.chunkMs } : {}),
+  };
+}
+
 async function depsFor(req: NextRequest, surveyId: string): Promise<{ deps: JobDeps } | { response: NextResponse }> {
   const ctx = await requireProject(req, surveyId, "analytics.read");
   if (isFailure(ctx)) return { response: ctx.response as NextResponse };
   const db = supabaseService();
   const loaded = await loadDefinition(db, surveyId);
   if ("error" in loaded) return { response: json({ error: loaded.error }, loaded.status) };
-  return {
-    deps: {
-      db, surveyId, userId: ctx.user.userId,
-      dataset: async (def) => buildFor(db, surveyId, loaded, await resolveSaved(db, surveyId, def)),
-      /* the very key compute() caches under, so a finished run is what reports and exports are served */
-      inputHash: async (definition) => {
-        const resolved = await resolveSaved(db, surveyId, definition);
-        const def: AnalysisDefinition = { ...resolved, surveyVersion: resolved.surveyVersion ?? loaded.version ?? undefined };
-        const dataVersion = await datasetStamp(db, surveyId, def.dataset);
-        return { def, key: inputHashOf(def, { dataVersion, surveyVersion: surveyStamp(loaded) }) };
-      },
-      cachePut: (key, payload) => cachePut(db, surveyId, key, payload),
-    },
-  };
+  return { deps: jobDepsFor(db, surveyId, loaded, ctx.user.userId) };
 }
 
 export async function modelJobsGET(req: NextRequest, surveyId: string, jobId?: string): Promise<NextResponse> {

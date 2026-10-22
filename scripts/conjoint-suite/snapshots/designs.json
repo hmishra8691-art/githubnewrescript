@@ -1,0 +1,103 @@
+{
+ "cbc_balanced": {
+  "columns": [
+   "version",
+   "task",
+   "alt",
+   "is_holdout",
+   "Brand",
+   "Screen",
+   "Battery",
+   "Price",
+   "none_option"
+  ],
+  "rows": 120,
+  "rowsHash": "b02946df",
+  "summaryHash": "66bb8bad"
+ },
+ "cbc_efficient_none": {
+  "columns": [
+   "version",
+   "task",
+   "alt",
+   "is_holdout",
+   "Brand",
+   "Screen",
+   "Battery",
+   "Price",
+   "none_option"
+  ],
+  "rows": 288,
+  "rowsHash": "9f315d91",
+  "summaryHash": "09c8ec1f"
+ },
+ "cbc_holdout_prohibit": {
+  "columns": [
+   "version",
+   "task",
+   "alt",
+   "is_holdout",
+   "Brand",
+   "Screen",
+   "Battery",
+   "Price",
+   "none_option"
+  ],
+  "rows": 108,
+  "rowsHash": "b2398b60",
+  "summaryHash": "0fd063f0"
+ },
+ "cbc_mixed": {
+  "columns": [
+   "version",
+   "task",
+   "alt",
+   "is_holdout",
+   "A",
+   "B",
+   "C",
+   "none_option"
+  ],
+  "rows": 64,
+  "rowsHash": "e0dca670",
+  "summaryHash": "8ad17dd6"
+ },
+ "maxdiff": {
+  "columns": [
+   "version",
+   "task",
+   "position",
+   "item_index",
+   "item_label"
+  ],
+  "rows": 160,
+  "rowsHash": "bd9ea5ab",
+  "summaryHash": "8774c122"
+ },
+ "menu": {
+  "columns": [
+   "version",
+   "task",
+   "item",
+   "item_label",
+   "price",
+   "price_index",
+   "price_value",
+   "required"
+  ],
+  "rows": 72,
+  "rowsHash": "84a4e45d",
+  "summaryHash": "625228fa"
+ },
+ "acbc": {
+  "columns": [
+   "stage",
+   "step",
+   "items",
+   "note"
+  ],
+  "rows": 8,
+  "rowsHash": "8dd04fc5",
+  "summaryHash": "2d71c227"
+ }
+}

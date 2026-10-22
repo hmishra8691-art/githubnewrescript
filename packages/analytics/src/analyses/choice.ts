@@ -2,6 +2,16 @@ import type { AnalysisDefinition, AnalysisResult, ResultTable } from "../types.j
 import { categoricalColumn, categoriesOf, labelOf, type Dataset } from "../dataset.js";
 import { conditionalLogit, logitShares, type ChoiceSet } from "../stats/choice.js";
 import { fmtNum, fmtP, fmtPct, makeResult, opt, pct, round } from "./common.js";
+/* F4 2026-10-22: the conjoint suite — ACBC, menu and CVA estimators, dual-response None, the simulator */
+import { acbcAnalysis } from "../conjoint/acbc.js";
+import { cvaAnalysis } from "../conjoint/cva.js";
+import { menuModelTables, menuTasks } from "../conjoint/menu.js";
+import { scenariosFor, simulatorTables } from "../conjoint/simulatorTables.js";
+import { numericValues, type UtilityModel } from "../conjoint/simulator.js";
+
+/** dual-response None codings (F4): "dual" = forced choice + a buy/no-buy task (Sawtooth's default); "single_none" = one task with None chosen when they would not buy; "forced" = the forced choice only (no None) */
+export type DualCoding = "dual" | "single_none" | "forced";
+export const dualCodingOf = (v: unknown): DualCoding => (v === "single_none" || v === "forced" ? v : "dual");
 
 const DESIGN_COLS = new Set(["version", "task", "alt", "is_holdout", "none_option", "position", "item_index", "item_label"]);
 
@@ -29,18 +39,21 @@ function designIndex(rows: Record<string, unknown>[]) {
  * every level column of its attribute, so part-worths sum to zero per
  * attribute), then a None constant when the design has a None row.
  */
-export function cbcCoding(rows: Record<string, unknown>[], columns: string[], config: unknown) {
+export function cbcCoding(rows: Record<string, unknown>[], columns: string[], config: unknown, opts: { dual?: DualCoding } = {}) {
   const attrs = columns.filter((c) => !DESIGN_COLS.has(c));
   const levels: Record<string, string[]> = {};
   // levels in the order the design was configured with (the file's first-appearance order otherwise)
   const configured = ((config as { attributes?: { name: string; levels: string[] }[] } | undefined)?.attributes ?? []);
   for (const a of attrs) {
-    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a])))];
+    /* "" is a not-applicable cell of a brand-specific design (F4): never a level, coded as zeros */
+    const seen = [...new Set(rows.filter((r) => Number(r.none_option) !== 1).map((r) => String(r[a] ?? "")).filter((l) => l !== ""))];
     const cfg = configured.find((x) => x.name === a)?.levels?.map(String).filter((l) => seen.includes(l));
     levels[a] = cfg && cfg.length === seen.length ? cfg : seen;
   }
   // parameter layout: for each attribute, levels[1..] (first = reference, effects-coded so utilities sum to zero per attribute), then none constant if present
-  const hasNone = rows.some((r) => Number(r.none_option) === 1);
+  /* a dual-response design has no None row but a None constant (unless the forced-choice-only coding is asked for) — F4 */
+  const dualDesign = (config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
+  const hasNone = rows.some((r) => Number(r.none_option) === 1) || (dualDesign && (opts.dual ?? "dual") !== "forced");
   const idx: { attr: string; level: string; i: number }[] = [];
   let p = 0;
   for (const a of attrs) for (const l of levels[a].slice(1)) idx.push({ attr: a, level: l, i: p++ });
@@ -68,7 +81,21 @@ export function cbcCoding(rows: Record<string, unknown>[], columns: string[], co
     if (noneIdx >= 0) { const r = new Array(p).fill(0); r[noneIdx] = 1; names.push("None"); attr.push(null); level.push("None"); out.push(r); }
     return { names, attr, level, rows: out };
   };
-  return { attrs, levels, idx, p, hasNone, noneIdx, featuresOf, levelRows };
+  const noneVector = (): number[] => { const x = new Array(p).fill(0); if (noneIdx >= 0) x[noneIdx] = 1; return x; };
+  return { attrs, levels, idx, p, hasNone, noneIdx, featuresOf, levelRows, noneVector, dualDesign, dual: dualDesign ? (opts.dual ?? "dual") : null };
+}
+
+/**
+ * DUAL-RESPONSE NONE (F4 2026-10-22): one answered task's choice sets under the chosen coding.
+ * `alts` are the task's design rows (no None row), `chosen` the forced choice, `buy` the follow-up.
+ */
+export function dualResponseSets(coding: ReturnType<typeof cbcCoding>, alts: Record<string, unknown>[], chosen: number, buy: unknown, weight?: number): ChoiceSet[] {
+  const X = alts.map(coding.featuresOf);
+  const w = weight != null ? { weight } : {};
+  const b = buy === "yes" ? true : buy === "no" ? false : null;
+  if (coding.dual === "forced" || coding.noneIdx < 0) return [{ alternatives: X, chosen, ...w }];
+  if (coding.dual === "single_none") return b == null ? [{ alternatives: X, chosen, ...w }] : [{ alternatives: [...X, coding.noneVector()], chosen: b ? chosen : X.length, ...w }];
+  return [{ alternatives: X, chosen, ...w }, ...(b == null ? [] : [{ alternatives: [X[chosen], coding.noneVector()], chosen: b ? 0 : 1, ...w }])];
 }
 
 /**
@@ -77,10 +104,10 @@ export function cbcCoding(rows: Record<string, unknown>[], columns: string[], co
  * alternatives sorted, the chosen alternative located, holdouts set aside) —
  * grouped per respondent for an individual-level model.
  */
-export function cbcRespondentSets(ds: Dataset, qid: string, opts: { includeHoldouts?: boolean } = {}) {
+export function cbcRespondentSets(ds: Dataset, qid: string, opts: { includeHoldouts?: boolean; dual?: DualCoding } = {}) {
   const { q, design, rows, columns } = designFor(ds, qid);
-  if (!design || !rows.length || design.kind === "menu") return null;
-  const coding = cbcCoding(rows, columns, design.config);
+  if (!design || !rows.length || design.kind === "menu" || design.kind === "cva") return null;
+  const coding = cbcCoding(rows, columns, design.config, { dual: opts.dual });
   const altsOf = designIndex(rows);
   const respondents: { ci: number; id: string; sets: ChoiceSet[] }[] = [];
   let holdoutTasks = 0;
@@ -97,6 +124,7 @@ export function cbcRespondentSets(ds: Dataset, qid: string, opts: { includeHoldo
       const chosenIdx = alts.findIndex((r) => String(r.alt) === String(choice));
       if (chosenIdx < 0) continue;
       if (Number(alts[0].is_holdout) === 1 && !opts.includeHoldouts) { holdoutTasks++; continue; }
+      if (coding.dual) { sets.push(...dualResponseSets(coding, alts, chosenIdx, ans[`${task}_buy`])); continue; }
       sets.push({ alternatives: alts.map(coding.featuresOf), chosen: chosenIdx });
     }
     if (sets.length) respondents.push({ ci, id: String(c.id ?? ci), sets });
@@ -176,18 +204,19 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
     const meta = ds.byName.get(def.variables[0]!);
     return ds.def.questions.find((x) => x.id === meta?.questionId || x.id === def.variables[0] || x.code === def.variables[0] || x.variableName === def.variables[0]);
   })() : undefined;
+  /* F4 2026-10-22: ACBC is estimated (BYO + screening + rules + tournament) */
+  if (named && named.type === "acbc_task") return acbcAnalysis(def, ds, totalCases, named.id);
   if (named && named.type !== "conjoint_task") {
-    const what = named.type === "acbc_task"
-      ? `${named.code} is an Adaptive CBC (ACBC) exercise. No ACBC estimator exists on this platform (it needs individual-level HB over the screening and tournament stages); the transcripts are exported in ${named.variableName}_JSON and the BYO / winner columns for tabulation.`
-      : `${named.code} is not a conjoint question (${named.type}).`;
-    return makeResult(def, ds, { tables: [], chart: {}, warnings: [what], recommendedCharts: ["attribute_importance"], totalCases });
+    return makeResult(def, ds, { tables: [], chart: {}, warnings: [`${named.code} is not a conjoint question (${named.type}).`], recommendedCharts: ["attribute_importance"], totalCases });
   }
   const qid = named?.id ?? questionIdFor(ds, def.variables[0] ?? "", "conjoint_task");
   if (!qid) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["No conjoint task question found in this survey."], recommendedCharts: ["attribute_importance"], totalCases });
   const { q, design, rows, columns } = designFor(ds, qid);
   if (!design || !rows.length) return makeResult(def, ds, { tables: [], chart: {}, warnings: ["The conjoint design file has not been generated."], recommendedCharts: ["attribute_importance"], totalCases });
   if (design.kind === "menu") return menuCounts(def, ds, totalCases, qid);
-  const { attrs, levels, idx, p, hasNone, noneIdx, featuresOf } = cbcCoding(rows, columns, design.config);
+  if (design.kind === "cva") return cvaAnalysis(def, ds, totalCases, qid);
+  const coding = cbcCoding(rows, columns, design.config, { dual: dualCodingOf(opt(def, "dualCoding", "dual")) });
+  const { attrs, levels, idx, p, hasNone, noneIdx, featuresOf } = coding;
   const altsOf = designIndex(rows);
   const sampleStep = Math.max(1, Math.ceil(ds.cases.length / MAX_MODEL_RESPONDENTS));
   const includeHoldout = opt(def, "includeHoldouts", false) as boolean;
@@ -212,6 +241,8 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       if (chosenIdx < 0) continue;
       const isNone = Number(alts[chosenIdx].none_option) === 1 || String(choice) === noneCode && Number(alts[chosenIdx].none_option) === 1;
       if (isNone) noneChosen++;
+      /* dual-response None: "would not buy" is the None answer (F4) */
+      if (coding.dualDesign && ans[`${task}_buy`] === "no") noneChosen++;
       if (Number(alts[0].is_holdout) !== 1) {
         for (let k = 0; k < alts.length; k++) {
           if (Number(alts[k].none_option) === 1) continue;
@@ -224,13 +255,16 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
       }
       if (ci % sampleStep === 0) {
         const set: ChoiceSet = { alternatives: alts.map(featuresOf), chosen: chosenIdx, weight: wOf(ci) };
-        if (Number(alts[0].is_holdout) === 1 && !includeHoldout) holdouts.push(set); else sets.push(set);
+        if (Number(alts[0].is_holdout) === 1 && !includeHoldout) holdouts.push(set);
+        else if (coding.dual) sets.push(...dualResponseSets(coding, alts, chosenIdx, ans[`${task}_buy`], wOf(ci)));
+        else sets.push(set);
       }
       tasksAnswered++; any = true;
     }
     if (any) respondents++;
   });
   if (sets.length < p * 3) return makeResult(def, ds, { tables: [], chart: {}, warnings: [`Only ${sets.length} choice tasks answered — too few to estimate ${p} parameters.`], recommendedCharts: ["attribute_importance"], totalCases });
+  const dualWords = coding.dual === "dual" ? "dual-response None coded as a forced choice plus a buy / no-buy task" : coding.dual === "single_none" ? "dual-response None coded as one task with None chosen when they would not buy" : coding.dual === "forced" ? "dual-response design, forced choices only (None not estimated)" : "";
   const fit = conditionalLogit(sets, p);
   // part-worths per level (reference = −Σ others)
   const partWorths = attrs.map((a) => {
@@ -270,19 +304,43 @@ export function conjoint(def: AnalysisDefinition, ds: Dataset, totalCases: numbe
   const tables: ResultTable[] = [
     { id: "importance", title: "Attribute importance", columns: [{ key: "attribute", label: "Attribute" }, { key: "importance", label: "Relative importance %", type: "pct", decimals: 1 }, { key: "range", label: "Utility range", type: "number", decimals: 3 }], rows: importance.map((a) => ({ ...a, importance: pct(a.importance), range: round(a.range, 3) })), base: { n: respondents, label: `${respondents} respondents, ${sets.length} choice tasks` } },
     { id: "partworths", title: "Part-worth utilities — aggregate multinomial logit (effects-coded, zero-centred)", notes: ["One set of utilities for the whole sample (pooled conditional logit, Newton–Raphson). Not individual-level: no hierarchical Bayes or latent-class model is estimated here — the Hierarchical Bayes analysis (Advanced models) estimates individual utilities from the same answers."], columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "utility", label: "Utility", type: "number", decimals: 3 }, { key: "se", label: "SE", type: "number", decimals: 3 }, { key: "p", label: "p-value" }], rows: partWorths.flatMap((a) => a.levels.map((l) => ({ attribute: a.attribute, level: l.level, utility: round(l.utility, 3), se: round(l.se, 3), p: l.p == null ? "(reference)" : fmtP(l.p) }))) },
-    { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choice tasks", v: sets.length }, { m: "Log-likelihood", v: round(fit.logLikelihood, 2) }, { m: "Null log-likelihood", v: round(fit.nullLogLikelihood, 2) }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "In-sample hit rate", v: fmtPct(fit.hitRate * 100, 1) }, ...(holdouts.length ? [{ m: `Holdout hit rate (${holdouts.length} tasks)`, v: fmtPct((holdoutHits / holdouts.length) * 100, 1) }] : []), ...(hasNone ? [{ m: "“None” chosen", v: fmtPct(tasksAnswered ? (noneChosen / tasksAnswered) * 100 : 0, 1) }] : []), { m: "Converged", v: fit.converged ? "yes" : "no" }, { m: "Model", v: `Aggregate multinomial logit, effects-coded${hasNone ? ", None constant" : ""}, ${fit.iterations} Newton–Raphson iterations` }] },
+    { id: "fit", title: "Model fit", columns: [{ key: "m", label: "Statistic" }, { key: "v", label: "Value" }], rows: [{ m: "Respondents", v: respondents }, { m: "Choice tasks", v: sets.length }, { m: "Log-likelihood", v: round(fit.logLikelihood, 2) }, { m: "Null log-likelihood", v: round(fit.nullLogLikelihood, 2) }, { m: "McFadden R²", v: round(fit.mcFaddenR2, 3) }, { m: "In-sample hit rate", v: fmtPct(fit.hitRate * 100, 1) }, ...(holdouts.length ? [{ m: `Holdout hit rate (${holdouts.length} tasks)`, v: fmtPct((holdoutHits / holdouts.length) * 100, 1) }] : []), ...(hasNone ? [{ m: "“None” chosen", v: fmtPct(tasksAnswered ? (noneChosen / tasksAnswered) * 100 : 0, 1) }] : []), { m: "Converged", v: fit.converged ? "yes" : "no" }, { m: "Model", v: `Aggregate multinomial logit, effects-coded${hasNone ? ", None constant" : ""}${dualWords ? ` (${dualWords})` : ""}, ${fit.iterations} Newton–Raphson iterations` }] },
     { id: "simulation", title: "Share-of-preference simulation (from the aggregate logit)", columns: [{ key: "profile", label: "Profile" }, { key: "description", label: "Levels" }, { key: "utility", label: "Total utility", type: "number", decimals: 3 }, { key: "share", label: "Preference share %", type: "pct", decimals: 1 }], rows: simRows, notes: ["Shares follow the logit rule over the listed profiles" + (hasNone ? " plus the none option." : ".")] },
   ];
   if (wtp.length) tables.push({ id: "wtp", title: `Willingness to pay (vs. reference level, in ${priceAttr} units)`, columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "wtp", label: "WTP", type: "number", decimals: 2 }], rows: wtp.map((x) => ({ ...x, wtp: round(x.wtp, 2) })) });
   // raw counts last, so the model's tables keep their places (importance, part-worths, fit, simulation)
+  const countsAt = tables.length;
   tables.push({ id: "counts", title: "Counts — choice share of each level (raw, not a model)", columns: [{ key: "attribute", label: "Attribute" }, { key: "level", label: "Level" }, { key: "shown", label: "Times shown", type: "number", decimals: 0 }, { key: "chosen", label: "Times chosen", type: "number", decimals: 0 }, { key: "share", label: "Chosen when shown %", type: "pct", decimals: 1 }], rows: attrs.flatMap((a) => levels[a].map((l) => { const sh = shownN.get(lk(a, l)) ?? 0, ch = chosenN.get(lk(a, l)) ?? 0; return { attribute: a, level: l, shown: round(sh, 0), chosen: round(ch, 0), share: pct(sh ? (ch / sh) * 100 : 0) }; })), notes: ["Counts are descriptive: a level's share also reflects the levels it happened to be shown with. The part-worths table is the estimated model."] });
+  void countsAt;
   const insights = [`${importance[0].attribute} is the most important attribute (${fmtPct(importance[0].importance, 0)} of total utility range)${importance.length > 1 ? `, followed by ${importance[1].attribute} (${fmtPct(importance[1].importance, 0)})` : ""}; ${importance[importance.length - 1].attribute} matters least (${fmtPct(importance[importance.length - 1].importance, 0)}).`];
+  /*
+   * THE MARKET SIMULATOR (F4 2026-10-22) — only when asked (options.simulator) or when scenarios are saved on the design
+   * (simulate_conjoint), appended after the counts, so an existing analysis's tables are exactly what they were.
+   */
+  const simSpecs = scenariosFor(def.options, design.config as Record<string, unknown>);
+  const simWarnings: string[] = [];
+  if (simSpecs.length) {
+    const model = cbcUtilityModel(partWorths.map((a) => ({ name: a.attribute, levels: a.levels.map((l) => l.level), utils: a.levels.map((l) => l.utility) })), hasNone && noneIdx >= 0 ? fit.beta[noneIdx] : undefined, priceAttr ?? undefined, "aggregate multinomial logit");
+    for (const [k, sp] of simSpecs.entries()) { const st = simulatorTables(model, sp, ds, { idPrefix: k ? `sim${k + 1}` : "sim" }); tables.push(...st.tables); insights.push(...st.insights); simWarnings.push(...st.warnings); }
+  }
   for (const a of partWorths.slice(0, 3)) { const best = a.levels.reduce((b, l) => (l.utility > b.utility ? l : b)); insights.push(`Preferred ${a.attribute}: ${best.level} (utility ${fmtNum(best.utility, 2)}).`); }
   insights.push(`Model fit: McFadden R² ${fmtNum(fit.mcFaddenR2, 2)}, hit rate ${fmtPct(fit.hitRate * 100, 0)}${holdouts.length ? `, holdout hit rate ${fmtPct((holdoutHits / holdouts.length) * 100, 0)}` : ""}.`);
   return makeResult(def, ds, {
     tables, chart: { categories: importance.map((a) => a.attribute), series: [{ name: "Importance %", values: importance.map((a) => pct(a.importance)) }], tree: partWorths.map((a) => ({ name: a.attribute, children: a.levels.map((l) => ({ name: l.level, value: round(l.utility, 3) ?? 0 })) })), kpis: [{ label: "Respondents", value: respondents }, { label: "McFadden R²", value: round(fit.mcFaddenR2, 2) ?? 0 }, { label: "Hit rate", value: round(fit.hitRate * 100, 0) ?? 0, unit: "%" }], valueFormat: "pct" },
-    insights, warnings: [...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []), ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."])], recommendedCharts: ["attribute_importance", "part_worth", "utility_by_level", "preference_share", "wtp"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
+    insights, warnings: [...(sampleStep > 1 ? [samplingWarning(respondents, sampleStep)] : []), ...(fit.converged ? [] : ["The choice model did not fully converge — utilities are approximate."]), ...simWarnings], recommendedCharts: ["attribute_importance", "part_worth", "utility_by_level", "preference_share", "wtp"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
   });
+}
+
+/** a CBC utility model for the simulator: one respondent (the aggregate) or many (HB individual means) — F4 */
+export function cbcUtilityModel(attributes: { name: string; levels: string[]; utils: number[] }[], none: number | undefined, priceAttribute: string | undefined, source: string, individuals?: { id: string; levels: Record<string, number[]>; none?: number }[]): UtilityModel {
+  const price = priceAttribute && attributes.find((a) => a.name === priceAttribute);
+  const values = price ? numericValues(price.levels) : undefined;
+  return {
+    kind: "choice", source,
+    attributes: attributes.map((a) => ({ name: a.name, levels: a.levels, ...(a === price && values ? { values } : {}) })),
+    ...(price && values ? { priceAttribute: price.name } : {}),
+    respondents: individuals ?? [{ id: "aggregate", levels: Object.fromEntries(attributes.map((a) => [a.name, a.utils])), ...(none != null ? { none } : {}) }],
+  };
 }
 
 /**
@@ -330,11 +388,14 @@ function menuCounts(def: AnalysisDefinition, ds: Dataset, totalCases: number, qi
     const sh = shown.get(`${it}\u0000${pr}`) ?? 0, tk = taken.get(`${it}\u0000${pr}`) ?? 0;
     return { item: label, price: pr, shown: round(sh, 0), taken: round(tk, 0), rate: pct(sh ? (tk / sh) * 100 : 0) };
   }));
+  /* F4 2026-10-22: the menu choice model and simulator follow the counts table (which keeps its place and numbers) */
+  const mt = menuTasks(ds, qid);
+  const model = mt ? menuModelTables(def, ds, mt) : { tables: [], insights: [], warnings: [] };
   return makeResult(def, ds, {
-    tables: [{ id: "menu_counts", title: "Menu-based conjoint — take rate by item and price (counts, not a model)", columns: [{ key: "item", label: "Item" }, { key: "price", label: "Price" }, { key: "shown", label: "Times offered", type: "number", decimals: 0 }, { key: "taken", label: "Times chosen", type: "number", decimals: 0 }, { key: "rate", label: "Take rate %", type: "pct", decimals: 1 }], rows: tableRows, base: { n: respondents, label: `${respondents} respondents, ${tasks} menu tasks` }, notes: ["Raw counts. Required (base) items count as chosen whenever the respondent did not choose None."] }],
+    tables: [{ id: "menu_counts", title: "Menu-based conjoint — take rate by item and price (counts, not a model)", columns: [{ key: "item", label: "Item" }, { key: "price", label: "Price" }, { key: "shown", label: "Times offered", type: "number", decimals: 0 }, { key: "taken", label: "Times chosen", type: "number", decimals: 0 }, { key: "rate", label: "Take rate %", type: "pct", decimals: 1 }], rows: tableRows, base: { n: respondents, label: `${respondents} respondents, ${tasks} menu tasks` }, notes: ["Raw counts. Required (base) items count as chosen whenever the respondent did not choose None."] }, ...model.tables],
     chart: { categories: tableRows.map((r) => `${r.item} @ ${r.price}`), series: [{ name: "Take rate %", values: tableRows.map((r) => r.rate) }], valueFormat: "pct" },
-    insights: tasks ? [`“None” was chosen in ${fmtPct((none / tasks) * 100, 1)} of menu tasks.`] : [],
-    warnings: ["Menu-based conjoint: no choice model is estimated on this platform — these are take-rate counts. For price sensitivity, fit per-item logits on the exported VAR_T<n>_<item> columns."],
+    insights: [...(tasks ? [`“None” was chosen in ${fmtPct((none / tasks) * 100, 1)} of menu tasks.`] : []), ...model.insights],
+    warnings: [...(model.tables.length ? [] : ["Menu-based conjoint: these are take-rate counts — the choice model needs more answered menus (see below)."]), ...model.warnings],
     recommendedCharts: ["bar_horizontal"], variablesUsed: [q?.variableName ?? qid], baseLabel: `${respondents} respondents`, totalCases,
   });
 }

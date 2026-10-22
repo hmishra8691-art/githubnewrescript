@@ -5,6 +5,7 @@ import type { AnalysisDefinition, AnalysisResult, ChartType, DatasetSpec, Result
 import type { Dataset } from "./dataset.js";
 import type { TestResult } from "./stats/tests.js";
 import { failedResult, runAnalysis } from "./analyses/index.js";
+import { provenanceOf } from "./provenance.js";
 import { MIN_BASE } from "./analyses/common.js";
 import { recommendCharts } from "./recommend.js";
 import { plannedAnalyses, type PlannedAnalysis } from "./planBridge.js";
@@ -267,7 +268,20 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
         });
       }
       const med = result.tables.find((x) => x.id === "mediation");
-      if (med) {
+      /* a bootstrap of the indirect effect (2026-10-22) is THE reading of the indirect path when it was run: its BCa interval, not the Sobel p */
+      const boot = result.tests.find((t) => t.test === "bootstrap_indirect");
+      if (med && boot) {
+        const d = boot.detail as { ciLow: number; ciHigh: number; excludesZero: boolean; draws: number };
+        const est = boot.statistic ?? 0;
+        const where = med.title.replace(/^Mediation: /, "");
+        push({ kind: "mediation", strength: d.excludesZero ? "moderate" : "none", significant: d.excludesZero,
+          headline: d.excludesZero
+            ? `${where}: the indirect effect is ${fmt(est, 3)} and its 95% bootstrap BCa interval [${fmt(d.ciLow, 3)}, ${fmt(d.ciHigh, 3)}] excludes zero — part of the association runs through the mediator.`
+            : `${where}: the indirect effect is ${fmt(est, 3)} and its 95% bootstrap BCa interval [${fmt(d.ciLow, 3)}, ${fmt(d.ciHigh, 3)}] includes zero — no indirect path is supported.`,
+          detail: `${d.draws} bootstrap resamples (seeded); the Sobel test is in the table for comparison.`,
+          evidence: { test: "bootstrap_indirect", statistic: est, p: null, n, direction: est >= 0 ? "positive" : "negative" }, variables: vars });
+      }
+      else if (med) {
         const ind = med.rows.find((r) => /indirect/i.test(String(r.path ?? "")));
         const p = parseP(ind?.p);
         if (ind && p != null) push({ kind: "mediation", strength: p < alpha ? "moderate" : "none", significant: p < alpha, headline: p < alpha ? `${med.title.replace(/^Mediation: /, "")}: the indirect path is significant (${fmtP(p)}) — part of the effect runs through the mediator.` : `${med.title.replace(/^Mediation: /, "")}: no significant indirect path (${fmtP(p)}).`, evidence: { test: "mediation", statistic: typeof ind.estimate === "number" ? ind.estimate : null, p, n }, variables: vars });
@@ -288,7 +302,43 @@ export function findingsFor(def: AnalysisDefinition, result: AnalysisResult, ext
     case "reliability": {
       const a = result.tables.find((x) => x.id === "alpha")?.rows.find((r) => /α/.test(String(r.stat ?? "")) && !/standard/i.test(String(r.stat ?? "")));
       const alphaVal = typeof a?.value === "number" ? a.value : null;
-      if (alphaVal != null) push({ kind: "reliability", strength: alphaVal >= 0.8 ? "strong" : alphaVal >= 0.7 ? "moderate" : alphaVal >= 0.6 ? "weak" : "none", significant: alphaVal >= 0.7, headline: `${def.name}: Cronbach's α = ${fmt(alphaVal)} — ${alphaVal >= 0.8 ? "a reliable scale" : alphaVal >= 0.7 ? "acceptable reliability" : "the items do not hang together well"}.`, evidence: { statistic: alphaVal, effect: { name: "alpha", value: alphaVal }, n }, variables: vars });
+      /* McDonald's ω beside α when it was asked for (2026-10-22) */
+      const om = result.tables.find((x) => x.id === "omega")?.rows.find((r) => /ω/.test(String(r.stat ?? "")));
+      const omegaVal = typeof om?.value === "number" ? om.value : null;
+      if (alphaVal != null) push({ kind: "reliability", strength: alphaVal >= 0.8 ? "strong" : alphaVal >= 0.7 ? "moderate" : alphaVal >= 0.6 ? "weak" : "none", significant: alphaVal >= 0.7, headline: `${def.name}: Cronbach's α = ${fmt(alphaVal)}${omegaVal != null ? `, McDonald's ω = ${fmt(omegaVal)}` : ""} — ${alphaVal >= 0.8 ? "a reliable scale" : alphaVal >= 0.7 ? "acceptable reliability" : "the items do not hang together well"}.`, evidence: { statistic: alphaVal, effect: { name: "alpha", value: alphaVal }, n }, variables: vars });
+      break;
+    }
+    case "sem": {
+      /*
+       * A STRUCTURAL MODEL'S PATHS ARE ITS TESTS (2026-10-22): each regression path is a driver finding with its
+       * standardised coefficient and p, each defined / indirect effect a mediation finding. When the plan linked
+       * hypotheses to paths (`hypothesisPaths`: {H2: "INTENT ~ TRUST"}), each finding serves only its own
+       * hypothesis — a structural model serving three hypotheses must not judge H1 by H3's path. A model that
+       * was refused (not identified, not converged, improper) has no tables and so no findings.
+       */
+      const hp = (def.options?.hypothesisPaths && typeof def.options.hypothesisPaths === "object" ? def.options.hypothesisPaths : {}) as Record<string, string>;
+      const linked = Object.keys(hp).length > 0;
+      const tagsFor = (key: string) => (linked ? Object.entries(hp).filter(([, path]) => String(path).replace(/\s+/g, "") === key.replace(/\s+/g, "")).map(([h]) => h).filter((h) => hypotheses.includes(h) || !hypotheses.length) : hypotheses);
+      const pushTagged = (f: Omit<Finding, "id" | "analysis" | "hypotheses" | "chart">, hs: string[]) => out.push({ id: `${result.definitionHash}:${k++}`, analysis, hypotheses: hs, ...(chart ? { chart } : {}), ...f });
+      for (const row of result.tables.find((x) => x.id === "sem_structural")?.rows ?? []) {
+        const lhs = String(row.lhs ?? ""), rhs = String(row.rhs ?? "");
+        const p = parseP(row.p); const est = typeof row.est === "number" ? row.est : null; const std = typeof row.std === "number" ? row.std : null;
+        if (!lhs || !rhs || p == null || est == null) continue;
+        const effect = std != null ? { name: "standardized β", value: std } : undefined;
+        const strength = strengthOf(effect, p, alpha);
+        const sig = p < alpha;
+        pushTagged({ kind: sig ? "driver" : "no_driver", strength, significant: sig,
+          headline: sig ? `${rhs} → ${lhs} (structural path): ${WORD[strength]} ${est > 0 ? "positive" : "negative"} association (β = ${fmt(std)}, ${fmtP(p)}).` : `${rhs} → ${lhs} (structural path): not significant (β = ${fmt(std)}, ${fmtP(p)}).`,
+          evidence: { test: "sem_path", statistic: est, p, ...(effect ? { effect } : {}), n, direction: est > 0 ? "positive" : "negative" }, variables: [lhs, rhs] }, tagsFor(`${lhs}~${rhs}`));
+      }
+      for (const row of result.tables.find((x) => x.id === "sem_indirect")?.rows ?? []) {
+        const name = String(row.name ?? ""); const p = parseP(row.p); const est = typeof row.est === "number" ? row.est : null;
+        if (!name || p == null || est == null) continue;
+        const sig = p < alpha;
+        pushTagged({ kind: "mediation", strength: sig ? "moderate" : "none", significant: sig,
+          headline: sig ? `${name} (${String(row.expr ?? "")}): the indirect effect is ${fmt(est, 3)} (${fmtP(p)}, delta method${row.ci ? `, 95% CI ${String(row.ci)}` : ""}).` : `${name} (${String(row.expr ?? "")}): no significant indirect effect (${fmt(est, 3)}, ${fmtP(p)}).`,
+          evidence: { test: "sem_indirect", statistic: est, p, n, direction: est >= 0 ? "positive" : "negative" }, variables: [name] }, tagsFor(`:=${name}`));
+      }
       break;
     }
     default: {
@@ -340,6 +390,8 @@ export function rankFindings(fs: Finding[]): Finding[] {
 /* ------------------------------------------------------------ verdicts */
 
 const TESTED: FindingKind[] = ["difference", "no_difference", "driver", "no_driver", "correlation", "no_correlation", "mediation"];
+/** the model kinds whose refusal is itself the reason a hypothesis is inconclusive (2026-10-22) */
+const ADVANCED_KINDS = new Set(["sem", "hb", "lca"]);
 
 /** does the hypothesis name this variable — by variable name, code, the question's words or its option labels? */
 function mentions(def: SurveyDefinition, text: string, variable: string): boolean {
@@ -428,6 +480,8 @@ function sideOf(def: SurveyDefinition, text: string, dir: HypothesisDirection, f
   if (!d) return "unread";
   // a moderation's interaction term has a sign, but not the one the hypothesis states
   if (f.variables.some((v) => / × /.test(v))) return "unread";
+  /* a structural path is already the hypothesis's own path (hypothesisPaths tags it): its sign is the reading (2026-10-22) */
+  if (item?.definition.kind === "sem" && f.evidence.test === "sem_path") return d === dir.kind ? "agree" : "contradict";
   // judge only the predictors the hypothesis names, when it names any of the item's (a control variable's sign is not the hypothesis's)
   const preds = item ? item.definition.variables.slice(1) : [];
   const named = preds.filter((p) => mentions(def, text, p));
@@ -486,6 +540,13 @@ export function hypothesisVerdicts(def: SurveyDefinition, items: RunItem[]): Hyp
     let verdict: Verdict; let reason: string;
     const against = (f: Finding) => `significant, but in the opposite direction (${directionEvidence(f)})`;
     if (!mine.length) { verdict = "untested"; reason = "No analysis in the plan serves this hypothesis."; }
+    /* every analysis for it could not be estimated (an SEM that did not converge, a model refused): say why, not "describes the data" (2026-10-22) */
+    else if (!tested.length && mine.every((it) => it.error) && mine.some((it) => ADVANCED_KINDS.has(it.definition.kind))) {
+      verdict = "inconclusive";
+      const why = String(mine[0].error?.message ?? "no result").replace(/^Not run — /, "");
+      reason = mine.every((it) => it.error?.code === "job_pending") ? `${mine.length === 1 ? `“${mine[0].definition.name}” is` : `The ${mine.length} models planned for it are`} still running as a background job — the verdict comes with the next run once it has finished.`
+        : mine.length === 1 ? `“${mine[0].definition.name}” could not be estimated: ${why}` : `None of the ${mine.length} analyses planned for it could be estimated: ${why}`;
+    }
     else if (lowBase) { verdict = "inconclusive"; reason = `Only ${Math.max(...mine.map((it) => it.result.base.n))} respondents so far — below the ${MIN_BASE} needed to read a test.`; }
     else if (!tested.length) { verdict = "inconclusive"; reason = `${mine.length === 1 ? "The analysis" : `The ${mine.length} analyses`} planned for it describe${mine.length === 1 ? "s" : ""} the data but test${mine.length === 1 ? "s" : ""} nothing — add a test or a crosstab with significance.`; }
     else if (contra.length && !agree.length) {
@@ -572,6 +633,13 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
    * The caller builds one dataset per distinct weighting and hands them out here; `undefined` means the run's dataset.
    */
   datasetFor?: (item: PlannedAnalysis) => Dataset | undefined;
+  /**
+   * A result already computed for an item (2026-10-22): a hierarchical Bayes run finishes as a background job
+   * (chunked, migration 0066) and is cached under its input hash; the caller looks it up and hands it in here.
+   */
+  precomputed?: (item: PlannedAnalysis) => AnalysisResult | undefined;
+  /** run a chunked model (HB) inside the plan run when nothing was precomputed — off by default: a plan run never waits on a long chain */
+  inlineJobs?: boolean;
 } = {}): AnalysisRun {
   /*
    * The plan's derived variables and segments first, as columns of this run's
@@ -596,7 +664,13 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   };
   const runOne = (p: PlannedAnalysis, adaptedFrom?: string): RunItem => {
     const ds = datasetOf(p);
-    const result = runAnalysis(p.definition, ds);
+    const pre = opts.precomputed?.(p);
+    const pending = (): AnalysisResult => {
+      const r = failedResult(p.definition.name, "hb", "Hierarchical Bayes runs as a background job with progress — it starts when the plan is applied, and its result joins the next run of the plan once the chains have finished.", "job_pending");
+      /* its provenance names the inputs (and so the input hash the finished job is cached under), though nothing was computed */
+      try { return { ...r, provenance: provenanceOf(p.definition, ds, r, 0) }; } catch { return r; }
+    };
+    const result = pre ?? (p.definition.kind === "hb" && !opts.inlineJobs ? pending() : runAnalysis(p.definition, ds));
     const findings = findingsFor(p.definition, result, { hypotheses: p.hypotheses, ...(p.definition.id ? { id: p.definition.id } : {}), label: (v) => ds.byName.get(v)?.label ?? v });
     const chart = result.advice?.type ?? adviseChart(p.definition, result, [...ds.byName.values()]).type ?? recommendCharts(result, 1)[0]?.type ?? result.recommendedCharts[0];
     /* which pairs differ, when a significant comparison had three or more groups (Phase 4) */
@@ -650,6 +724,7 @@ export function runPlan(def: SurveyDefinition, input: Dataset, opts: { trigger?:
   const warnings = [...new Set([
     ...prepared.warnings,
     ...(notRun.length ? [`${notRun.length === 1 ? "1 planned analysis was" : `${notRun.length} planned analyses were`} not run: ${notRun.slice(0, 4).map((x) => `“${x.name}” (${x.reason.replace(/\.$/, "")})`).join("; ")}${notRun.length > 4 ? ` and ${notRun.length - 4} more` : ""}.`] : []),
+    ...((() => { const pending = items.filter((it) => it.error?.code === "job_pending"); return pending.length ? [`${pending.length === 1 ? "1 model runs" : `${pending.length} models run`} as a background job and ${pending.length === 1 ? "is" : "are"} not in this run yet: ${pending.map((it) => `“${it.definition.name}”`).join(", ")}.`] : []; })()),
     ...items.filter((it) => !it.error).flatMap((it) => it.result.warnings),
   ])];
   const kpis = kpiSnapshot(def, dataset);

@@ -169,7 +169,8 @@ test("the respondent's answers: validated against their own version, flattened t
 test("ACBC and menu through the real generators: feasible configs attach, an impossible one is refused", () => {
   const acbc = run(empty(), [{ op: "create_conjoint", method: "acbc", attributes: ATTRS }]);
   assert.deepEqual(acbc.errors, []);
-  assert.match(acbc.results[0].description, /Adaptive: each respondent's concepts are generated at interview time .* no ACBC estimator/);
+  /* F4 2026-10-22: ACBC is estimated now — the description says how, instead of "no ACBC estimator" */
+  assert.match(acbc.results[0].description, /Adaptive: each respondent's concepts are generated at interview time .* estimates utilities from BYO, screening and tournament together/);
   const menu = run(empty(), [{ op: "create_conjoint", method: "menu", items: [{ name: "Extra storage", prices: ["$2", "$4"] }, { name: "Insurance", prices: ["$5", "$8"] }, { name: "Case", prices: ["$10", "$15"] }] }]);
   assert.deepEqual(menu.errors, []);
   assert.match(menu.results[0].description, /3 menu items .* 8 tasks, 10 versions, “buy nothing” offered.* take rates/);

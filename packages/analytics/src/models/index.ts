@@ -5,3 +5,4 @@ export { latentClass, type LcaInput, type LcaOptions, type LcaFit, type LcaOutpu
 export { fitSem, checkSemSyntax, buildSemModel, noncentralChiSquareCdf, type SemInput, type SemOptions, type SemOutput, type SemFit, type SemEstimate, type SemBuild } from "./sem.js";
 export { parseSemSyntax, semNames, type SemParse, type SemStatement } from "./semSyntax.js";
 export { modelJobStep, CHUNKED_KINDS, type ModelJobStep } from "../analyses/modelJob.js";
+export { mcdonaldOmega, omegaFromSem, type OmegaResult, type OmegaRun } from "./omega.js";

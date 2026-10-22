@@ -92,6 +92,9 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0067", what: "the research context of a long brief (Intelligent Mode)", table: "copilot_research_context", column: "survey_id" },
   /* without it a /platform evaluation run is kept in the server's memory only (the panel says so); the cap still holds within the instance */
   { migration: "0068", what: "AI evaluation runs started from /platform", table: "ai_eval_runs", column: "spent_usd" },
+  /* without it AI-moderated interviews cannot be launched (the AI interviews tab says so); the guide's AI settings still work */
+  { migration: "0069", what: "AI-moderated interviews (studies, participants, turns)", table: "ai_interview_sessions", column: "token_hash" },
+  { migration: "0070", what: "qualitative synthesis, double-coding, highlights, transcript corrections, auto-coding jobs, text group sessions", table: "qual_group_participants", column: "token_hash" },
 ];
 
 export async function GET(_req: NextRequest) {

@@ -2188,6 +2188,17 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["design_ref"], validations: ["required"],
     defaults: { instruction: "First build the product you would most like. Then tell us which of the alternatives could work for you." },
   }),
+  /*
+   * RATING-BASED CONJOINT (CVA, F4 2026-10-22) is the `conjoint_task` base type with a CVA design
+   * (`packages/designs/cva.ts`): every task is one full profile to RATE (or a pair to rate on a
+   * preference scale). The answer per task is a number, not an alternative — its own renderer, hence
+   * its own variant, exactly as the menu is.
+   */
+  stable(F.conjoint, "cva", "Rating-based conjoint (CVA)", "Respondents rate full-profile concepts (0–10 or likelihood to buy), or pairs on a preference scale; utilities per respondent by least squares. Needs a Rating-based conjoint (CVA) design (Design Generators).", {
+    baseType: "conjoint_task", renderer: "cvatasks", responseModel: "tasks",
+    capabilities: ["design_ref"], validations: ["required"],
+    defaults: { instruction: "Rate each product: how likely would you be to buy it?" },
+  }),
 
   /* ------------------------------------------------------------ ALLOCATION */
   /*

@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-172 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+173 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -271,6 +271,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `conjoint.menu` | Menu-Based Conjoint (MBC) | `conjoint_task` | design_ref | required | renderer menutasks |
 | `conjoint.pricing_configurator` | Pricing / Configurator Choice | `conjoint_task` | design_ref | required | preset of conjoint.menu; renderer menutasks |
 | `conjoint.acbc` | Adaptive CBC (ACBC) | `acbc_task` | design_ref | required | renderer acbctasks |
+| `conjoint.cva` | Rating-based conjoint (CVA) | `conjoint_task` | design_ref | required | renderer cvatasks |
 
 ### Constant Sum / Allocation (`allocation`)
 

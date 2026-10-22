@@ -5,7 +5,7 @@ import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
-  interpretRequest, DEFER_TO_GRAMMAR, diffSurveys,
+  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, diffSurveys,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -184,7 +184,7 @@ export function IntelligentView() {
     patchAll: (fn) => setTurns((ts) => ts.map((x) => { if (!("kind" in x) || x.kind !== "copilot") return x; const p = fn(x); return p ? { ...x, ...p } : x; })),
   });
   /* kept documents and report themes on the copilot's cards (2026-10-18) */
-  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction]);
+  const documentActions = React.useMemo(() => ({ download: copilot.downloadOutput, regenerate: copilot.regenerateOutput, theme: copilot.themeCardAction, qual: copilot.qualCardAction }), [copilot.downloadOutput, copilot.regenerateOutput, copilot.themeCardAction, copilot.qualCardAction]);
   const [applyNote, setApplyNote] = React.useState<string | null>(null);
   const applyCopilot = React.useCallback(async () => {
     // what the change is about — the first question it adds, else the first it modifies — becomes the selection once applied, as a grammar Apply always did
@@ -253,6 +253,12 @@ export function IntelligentView() {
     if (copilot.proposal && applyIntent(t)) {
       const r = await applyCopilot();
       copilot.local(t, { kind: "answer", category: "survey_editing", understood: "Apply the open proposal.", answer: r.ok ? "Applied the open proposal as it stood in Changes — the same as its Apply button. History has it, with Restore." : `Not applied: ${r.reason ?? "the proposal could not be applied."} Nothing was changed — review it in Changes.`, sections: [], detected: [{ what: "read as", value: "apply the open proposal" }] }, heard);
+      setBusy(false); inputRef.current?.focus(); return;
+    }
+    /* a request about the qualitative DATA (F2 2026-10-22): "summarise the themes", "make a highlight reel of …" — a preview card, run on approval */
+    const qualReq = interpretQualRequest(t);
+    if (qualReq) {
+      await copilot.qualRequest(t, qualReq, heard);
       setBusy(false); inputRef.current?.focus(); return;
     }
     const ids = (sel?.keys ?? []).filter((k) => k.startsWith("question:")).map((k) => k.slice(9));

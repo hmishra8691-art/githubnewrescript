@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import {
-  normalizeAcbc, emptyAcbcAnswer, isAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament,
+  normalizeAcbc, emptyAcbcAnswer, isAcbcAnswer, submitByo, submitScreen, answerRule, chooseInTournament, acbcByoPrice,
   type AcbcAnswer, type AcbcConcept, type AcbcConfig, type AcbcNormalized,
 } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
@@ -22,8 +22,10 @@ import { registerVariantRenderer } from "./registry";
  * resumes mid-exercise, and the analysis can replay the whole thing.
  */
 
-function ConceptCard({ c, attrs, byo, children, selected, testId }: {
+function ConceptCard({ c, attrs, byo, children, selected, testId, sp }: {
   c: AcbcConcept; attrs: AcbcNormalized["attributes"]; byo: Record<string, string>; children?: React.ReactNode; selected?: boolean; testId?: string;
+  /** F4 2026-10-22: the design's summed price (label, currency), when it has one */
+  sp?: AcbcNormalized["summedPrice"];
 }) {
   return (
     <div className={`rs-acbc-concept${selected ? " selected" : ""}`} data-testid={testId ?? "rs-acbc-concept"} data-concept={c.id}>
@@ -35,6 +37,7 @@ function ConceptCard({ c, attrs, byo, children, selected, testId }: {
               <td>{c.profile[a.name]}</td>
             </tr>
           ))}
+          {sp && c.price != null && <tr className="rs-acbc-price"><th>{sp.label}</th><td data-testid="rs-acbc-price">{sp.currency}{c.price.toLocaleString()}</td></tr>}
         </tbody>
       </table>
       {children}
@@ -67,12 +70,13 @@ export function AcbcTasks(p: QRProps) {
                 <label key={l} className={`rs-option${byoDraft[at.name] === l ? " selected" : ""}`}>
                   <input type="radio" name={`${p.q.id}_byo_${at.name}`} value={l} checked={byoDraft[at.name] === l} disabled={readOnly}
                     onChange={() => setByoDraft((d) => ({ ...d, [at.name]: l }))} />
-                  <span>{l}</span>
+                  <span>{l}{cfg.summedPrice?.increments[at.name] && Number.isFinite(cfg.summedPrice.increments[at.name][at.levels.indexOf(l)]) && cfg.summedPrice.increments[at.name][at.levels.indexOf(l)] !== 0 ? <span className="rs-acbc-inc" data-testid="rs-acbc-inc"> (+{cfg.summedPrice.currency}{cfg.summedPrice.increments[at.name][at.levels.indexOf(l)].toLocaleString()})</span> : null}</span>
                 </label>
               ))}
             </div>
           </fieldset>
         ))}
+        {cfg.summedPrice && byoComplete && <div className="rs-acbc-total" data-testid="rs-acbc-byo-total" aria-live="polite">{cfg.summedPrice.label}: {cfg.summedPrice.currency}{(acbcByoPrice(cfg, byoDraft) ?? 0).toLocaleString()}</div>}
         <div className="rs-acbc-actions">
           <button type="button" className="rs-btn" data-testid="rs-acbc-continue" disabled={!byoComplete || readOnly}
             onClick={() => set(submitByo(cfg, a, seed, byoDraft))}>Continue</button>
@@ -94,7 +98,7 @@ export function AcbcTasks(p: QRProps) {
         <div className="rs-acbc-lead">Screen {a.screens.length} of {cfg.screeningTasks} — for each of these, could it work for you?</div>
         <div className="rs-acbc-grid">
           {s.concepts.map((c) => (
-            <ConceptCard key={c.id} c={c} attrs={cfg.attributes} byo={a.byo}>
+            <ConceptCard key={c.id} c={c} attrs={cfg.attributes} byo={a.byo} sp={cfg.summedPrice}>
               <div className="rs-acbc-verdict" role="group" aria-label="Your verdict">
                 <button type="button" className={`rs-btn-mini${s.verdicts[c.id] === "yes" ? " on" : ""}`} data-testid="rs-acbc-yes" aria-pressed={s.verdicts[c.id] === "yes"} disabled={readOnly} onClick={() => judge(c.id, "yes")}>A possibility</button>
                 <button type="button" className={`rs-btn-mini${s.verdicts[c.id] === "no" ? " on" : ""}`} data-testid="rs-acbc-no" aria-pressed={s.verdicts[c.id] === "no"} disabled={readOnly} onClick={() => judge(c.id, "no")}>Won't work for me</button>
@@ -142,7 +146,7 @@ export function AcbcTasks(p: QRProps) {
         <div className="rs-acbc-lead">Round {a.tournament.length} — of these, which would you choose?</div>
         <div className="rs-acbc-grid">
           {round.concepts.map((c) => (
-            <ConceptCard key={c.id} c={c} attrs={cfg.attributes} byo={a.byo} selected={round.chosen === c.id}>
+            <ConceptCard key={c.id} c={c} attrs={cfg.attributes} byo={a.byo} selected={round.chosen === c.id} sp={cfg.summedPrice}>
               <button type="button" className="rs-btn" data-testid="rs-acbc-choose" disabled={readOnly || !!round.chosen}
                 onClick={() => set(chooseInTournament(cfg, a, seed, c.id))}>Choose this one</button>
             </ConceptCard>
@@ -156,7 +160,7 @@ export function AcbcTasks(p: QRProps) {
   return (
     <div className="rs-acbc" data-testid="rs-acbc" data-stage="done">
       <div className="rs-acbc-lead">Thank you — this is the option you ended up preferring.</div>
-      {a.winner && <ConceptCard c={a.winner} attrs={cfg.attributes} byo={a.byo} testId="rs-acbc-winner" />}
+      {a.winner && <ConceptCard c={a.winner} attrs={cfg.attributes} byo={a.byo} testId="rs-acbc-winner" sp={cfg.summedPrice} />}
       {!readOnly && (
         <div className="rs-acbc-actions">
           <button type="button" className="rs-hotspot-clear" data-testid="rs-acbc-restart" onClick={() => { setByoDraft({}); p.onChange(emptyAcbcAnswer()); }}>start over</button>

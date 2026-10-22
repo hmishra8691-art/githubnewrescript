@@ -30,3 +30,8 @@
 .ql-report { margin-top: 8px; }
 .ql-speakers { margin: 8px 0; }
 .ql-oe { margin-top: 10px; }
+/* F2 2026-10-22: synthesis citations, reels, group console */
+.ql-cites { margin: 2px 0 6px 12px; }
+.ql-quote-small { font-size: 12px; margin: 2px 0; padding-left: 8px; border-left: 2px solid var(--border, #d0d5dd); }
+.ql-picker label { gap: 6px; font-size: 13px; }
+.chip.on { outline: 2px solid var(--accent, #2f6fde); }

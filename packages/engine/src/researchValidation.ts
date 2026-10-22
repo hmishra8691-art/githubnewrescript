@@ -5,6 +5,7 @@ import { questionOrder } from "./dependencies.js";
 import { stripHtmlText } from "./html.js";
 import { lintProbes, PROBE_TYPES } from "./probe.js";
 import { planSuitability } from "./researchSuitability.js";
+import { advancedSuitability } from "./advancedMethods.js";
 import { isFramingQuestion, researchTraceability, type ResearchTraceability, type TraceabilityResults, type TraceGap } from "./researchTraceability.js";
 import { reviewSurvey, type ReviewFinding, type SurveyReview } from "./surveyReview.js";
 import type { SurveyAction } from "./surveyActions.js";
@@ -136,6 +137,17 @@ export function validateResearch(def: SurveyDefinition, opts: { review?: SurveyR
   if (counts.length) {
     const most = Math.max(...counts.map((c) => Number(/about (\d+) completes/.exec(c.message)?.[1] ?? 0)));
     add({ class: "recommendation", area: "feasibility", message: `${counts.length} planned table${counts.length === 1 ? "" : "s"} or test${counts.length === 1 ? "" : "s"} need${counts.length === 1 ? "s" : ""} enough completes for a chi-square's expected counts (≥ 5 a cell; the largest needs about ${most}), but the study names no sample, so the bases cannot be checked.`, questionIds: [...new Set(counts.flatMap((c) => c.questionIds))], suggestion: "Record the planned sample (set_research sampleSize) or the quotas' targets.", source: "research" });
+  }
+
+  /* 3b — the advanced models planned (2026-10-22): can the design carry them? sample size, indicators, identification, tasks per respondent */
+  for (const t of r?.analysisPlan?.tests ?? []) {
+    const advanced = t.method === "hb" || t.method === "latent_class" || t.method === "sem" || !!t.options?.bootstrap || t.options?.omega === true || t.options?.method === "gabor_granger";
+    if (!advanced) continue;
+    const s = advancedSuitability(def, t);
+    const qs = def.questions.filter((q) => [t.outcome, ...t.variables].includes(q.variableName)).map((q) => q.id);
+    const label = `${t.method.replace(/_/g, " ")} (${t.id})`;
+    for (const b of s.blocking) add({ class: "blocking", area: "method", message: `The planned ${label} cannot run as designed: ${b}`, questionIds: qs, source: "research" });
+    for (const w of s.warnings) add({ class: "warning", area: "method", message: `The planned ${label}: ${w}`, questionIds: qs, source: "research" });
   }
 
   /* 4 — what the platform does not run, named in the design */

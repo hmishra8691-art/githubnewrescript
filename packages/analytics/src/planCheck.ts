@@ -62,12 +62,22 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
   switch (def.kind) {
     case "correlation": if (vs.length && items() < 2) need("Correlation needs at least two numeric or scale variables — add a second variable."); break;
     case "factor": if (vs.length && items() < 3) need("Factor analysis needs at least three numeric or scale items — add more items of the battery."); break;
-    case "reliability": if (vs.length && items() < 2) need("Reliability needs at least two items of the same scale — add the other items."); break;
+    case "reliability":
+      if (vs.length && items() < 2) need("Reliability needs at least two items of the same scale — add the other items.");
+      /* ω (2026-10-22) is read from a one-factor model: two items do not identify it */
+      else if (o.omega === true && vs.length && items() < 3) need(`McDonald's ω needs at least three items (a one-factor model of ${items()} items is not identified) — add an item, or ask for α only.`);
+      break;
     case "cluster": if (vs.length && items() < 2) need("Cluster analysis needs at least two numeric or scale variables to cluster on — add a second variable."); break;
     case "regression": {
       const model = String(o.model ?? "linear");
       if (model === "mediation" && vs.length && vs.length < 3) need("Mediation needs three variables in order: the outcome, the predictor and the mediator.");
       else if (vs.length === 1) need("Regression needs the dependent variable first, then at least one predictor — add a predictor.");
+      /* the bootstrap of the indirect effect (2026-10-22) */
+      if (o.bootstrap !== undefined && o.bootstrap !== null && o.bootstrap !== false) {
+        const draws = o.bootstrap === true ? 5000 : Number(o.bootstrap);
+        if (model !== "mediation") out.push({ code: "missing_input", severity: "warning", message: "A bootstrap is run for the indirect effect of a mediation only; this regression has no mediator, so it is ignored." });
+        else if (!(Number.isFinite(draws) && draws >= 200 && draws <= 20_000)) need(`The bootstrap needs between 200 and 20,000 resamples (${String(o.bootstrap)} asked) — 5,000 is the usual choice.`);
+      }
       break;
     }
     case "test": {
@@ -88,7 +98,13 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
     case "pricing": {
       if (String(o.method ?? "van_westendorp") === "gabor_granger") {
         const prices = Array.isArray(o.prices) ? (o.prices as unknown[]).length : 0;
-        if (prices && vs.length && prices !== items()) out.push({ code: "missing_input", severity: "warning", message: `Gabor-Granger has ${prices} price point${prices === 1 ? "" : "s"} for ${items()} purchase-intent item${items() === 1 ? "" : "s"} — give one price per item, in item order.` });
+        /* from the plan (2026-10-22) the prices are required and must match: a planned demand curve on the positions 1, 2, 3 would name a "revenue-maximising price" that is not a price */
+        const planned = typeof o.planned === "string" && !!o.planned;
+        const bad = Array.isArray(o.prices) ? (o.prices as unknown[]).filter((p) => !(typeof p === "number" && Number.isFinite(p) && p > 0)) : [];
+        if (planned && vs.length && items() < 2) need("Gabor–Granger needs a purchase-intent question at two or more price points.");
+        else if (planned && vs.length && !prices) need(`Gabor–Granger from the plan needs the price of each of the ${items()} purchase-intent questions (options.prices, in question order).`);
+        else if (bad.length) need("Every Gabor–Granger price must be a positive number.");
+        else if (prices && vs.length && prices !== items()) out.push({ code: "missing_input", severity: planned ? "error" : "warning", message: `Gabor-Granger has ${prices} price point${prices === 1 ? "" : "s"} for ${items()} purchase-intent item${items() === 1 ? "" : "s"} — give one price per item, in item order.` });
       } else {
         const named = ["tooCheap", "cheap", "expensive", "tooExpensive"].filter((k) => typeof o[k] === "string" && o[k]).length;
         if (vs.length && Math.max(vs.length, named) < 4) need(`Van Westendorp needs the four price questions in order — too cheap, bargain, expensive, too expensive (${Math.max(vs.length, named)} chosen).`);
@@ -99,9 +115,10 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
     case "weighting": if (!(def.weighting && (def.weighting.variable || def.weighting.rim?.length))) need("Weighting needs rim targets or a weight variable — add them in Segments & weighting."); break;
     /* advanced models (2026-10-18) — the same minimums the runners in analyses/advanced.ts refuse */
     case "hb": {
-      if (vs.length > 1) need("Hierarchical Bayes reads one CBC or MaxDiff question — choose only that question.");
+      if (vs.length > 1) need("Hierarchical Bayes reads one CBC, ACBC, menu or MaxDiff question — choose only that question.");
       const meta = variables.find((v) => v.name === vs[0]);
-      if (vs.length === 1 && meta?.questionType && meta.questionType !== "conjoint_task" && meta.questionType !== "maxdiff_task") need(`Hierarchical Bayes needs a CBC (conjoint) or MaxDiff question; ${vs[0]} is a ${meta.questionType.replace(/_/g, " ")} question.`);
+      /* F4 2026-10-22: ACBC (acbc_task) and menu-based conjoint are estimated by HB too */
+      if (vs.length === 1 && meta?.questionType && meta.questionType !== "conjoint_task" && meta.questionType !== "maxdiff_task" && meta.questionType !== "acbc_task") need(`Hierarchical Bayes needs a CBC, ACBC, menu-based (conjoint) or MaxDiff question; ${vs[0]} is a ${meta.questionType.replace(/_/g, " ")} question.`);
       const iters = (Number(o.burnIn ?? 5000) || 0) + (Number(o.draws ?? 5000) || 0);
       if (iters > 200_000) need(`Burn-in plus draws is ${iters.toLocaleString()} iterations per chain — the limit is 200,000.`);
       break;
@@ -109,6 +126,8 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
     case "lca": {
       if (vs.length && items() < 2) need("Latent class analysis needs at least two categorical indicators — add more variables.");
       const minK = Number(o.minClasses ?? 1), maxK = Number(o.maxClasses ?? 4);
+      /* covariates (2026-10-22): asked for by name, refused in words — the estimator has no covariate (one- or three-step) model */
+      if (Array.isArray(o.covariates) && (o.covariates as unknown[]).length) need(`Latent class with covariates (${(o.covariates as unknown[]).map(String).join(", ")}) is not estimated here — the model has no covariate step. Run it on the indicators alone, then profile the classes by ${(o.covariates as unknown[]).length === 1 ? "that variable" : "those variables"} with a crosstab of the assigned class.`);
       if (!(minK >= 1 && maxK <= 8 && minK <= maxK)) need("The class range must run from 1 to at most 8 classes, the smallest first.");
       else if (vs.length && items() >= 2) {
         const metas = vs.map((n) => variables.find((v) => v.name === n));
@@ -131,6 +150,13 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
       const b = checkSemSyntax(syntax, { scaling: o.scaling === "unit_variance" ? "unit_variance" : "marker", ...(known ? { available: (n: string) => known.has(n) } : {}) });
       for (const e of b.errors) out.push({ code: /not identified|t-rule|no scale|single indicator|two indicators/.test(e) ? "not_identified" : "invalid_model", severity: "error", message: e });
       for (const w of b.warnings) out.push({ code: "not_identified", severity: "warning", message: w });
+      /* the hypotheses' paths (2026-10-22): each must be a path the model estimates, or its verdict could never be read */
+      const hp = o.hypothesisPaths && typeof o.hypothesisPaths === "object" ? Object.entries(o.hypothesisPaths as Record<string, unknown>) : [];
+      for (const [h, path] of hp) {
+        const pm = /^\s*([\w.]+)\s*~\s*([\w.]+)\s*$/.exec(String(path)), dm = /^\s*:=\s*([\w.]+)\s*$/.exec(String(path));
+        const known = pm ? b.parse.statements.some((s) => s.op === "~" && s.lhs === pm[1] && s.rhs.name === pm[2]) : dm ? b.parse.defined.some((d) => d.name === dm[1]) : false;
+        if (!known) out.push({ code: "invalid_model", severity: "warning", message: `${h} is linked to “${String(path)}”, which is not a path in the model — its verdict will read nothing.` });
+      }
       if (!b.errors.length && known) {
         const metas = new Map(variables.map((v) => [v.name, v]));
         const observed = b.model?.observed ?? [];
@@ -330,7 +356,7 @@ export function reviewAgainstSaved(
 
 const words = (m: string) => m.replace(/_/g, " ");
 /** a method named the way a sentence starts with it: "An ANOVA", "A t-test" */
-const A_METHOD: Record<string, string> = { t_test: "A t-test", anova: "An ANOVA", mann_whitney: "A Mann–Whitney test", kruskal_wallis: "A Kruskal–Wallis test", regression: "A regression", logistic_regression: "A logistic regression", driver_analysis: "A driver analysis" };
+const A_METHOD: Record<string, string> = { t_test: "A t-test", anova: "An ANOVA", mann_whitney: "A Mann–Whitney test", kruskal_wallis: "A Kruskal–Wallis test", regression: "A regression", logistic_regression: "A logistic regression", driver_analysis: "A driver analysis", hb: "A hierarchical Bayes model", latent_class: "A latent class analysis", sem: "A structural equation model" };
 const aMethod = (m: string) => A_METHOD[m] ?? `${/^[aeiou]/i.test(m) ? "An" : "A"} ${words(m)}`;
 const GROUP_TESTS = new Set(["t_test", "anova", "mann_whitney", "kruskal_wallis"]);
 const MODEL_TESTS = new Set(["regression", "logistic_regression", "driver_analysis"]);
@@ -371,7 +397,18 @@ export function plannedItemReadiness(item: { kind: "crosstab"; crosstab: Pick<Pl
     if ([t.outcome, ...vars].filter(Boolean).length < 2) missing.push("A correlation needs two or more numeric or scale variables (the outcome and a variable, or two variables).");
   } else if (m === "reliability") {
     if (vars.length + (t.outcome ? 1 : 0) < 2 && expandedItemCount([...(t.outcome ? [t.outcome] : []), ...vars], variables) < 2) missing.push("Reliability needs at least two items.");
+  } else if (m === "hb") {
+    /* advanced models from the plan (2026-10-22): the roles first, in the plan's words; the model-level rules in missingInputs */
+    const n = new Set([...(t.outcome ? [t.outcome] : []), ...vars]).size;
+    if (!n) missing.push("Hierarchical Bayes reads one CBC (conjoint) or MaxDiff question — choose it under Variables.");
+    else if (n > 1) missing.push("Hierarchical Bayes reads exactly one CBC or MaxDiff question — plan one item per exercise.");
+  } else if (m === "latent_class") {
+    if (!vars.length) missing.push("Latent class analysis needs its indicators — choose two or more categorical questions under Variables.");
+  } else if (m === "sem") {
+    if (!(typeof t.options?.syntax === "string" && t.options.syntax.trim())) missing.push("A structural equation model needs its model (the measurement model of each construct and the paths of the hypotheses) — plan it from the research design, or write it in the item's options.");
   } else if (!t.outcome && !vars.length && !t.groupBy) missing.push(`${aMethod(m)} needs the variable it reads — choose it under Variables.`);
+  /* a mediation with a bootstrap needs all three roles */
+  if (MODEL_TESTS.has(m) && t.options?.bootstrap && !t.mediator) missing.push("The bootstrap is for the indirect effect of a mediation — name the mediator (or drop the bootstrap).");
   if (missing.length) return { ready: false, missing, warnings: [], codes: missing.map(() => "missing_input") };
   return analysisReadiness(testDefinition({ id: t.id ?? "draft", priority: t.priority ?? 2, hypotheses: t.hypotheses ?? [], ...t, variables: vars } as PlannedTest, spec, def), variables);
 }

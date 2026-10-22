@@ -78,8 +78,13 @@ const openInterview = async (def) => {
   const pv = await ctx.newPage();
   pv.on("pageerror", (e) => console.error("PREVIEW ERROR:", e.message));
   await pv.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
-  await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
-  await pv.waitForSelector('[data-testid="interview"]', { timeout: 15000 });
+  /* The preview listens from a hydration effect; "networkidle" can come first on a loaded dev server,
+     and a single post is then lost. Re-post until it renders (the page reloads the same definition). */
+  for (let i = 0; i < 30; i++) {
+    await pv.evaluate((d) => window.postMessage({ type: "rescript:preview", definition: d }, "*"), def);
+    if (await pv.waitForSelector('[data-testid="interview"]', { timeout: 500 }).catch(() => null)) return pv;
+  }
+  await pv.waitForSelector('[data-testid="interview"]', { timeout: 1000 });
   return pv;
 };
 

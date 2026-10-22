@@ -2,6 +2,8 @@
 import type { AnalysisDefinition, AnalysisResult, AskOp, AskProposal, BuilderDraft, ChartAdvice, ChartRecommendation, ReportTemplate, StoryScene, UndoRecord, VariableMeta } from "@rescript/analytics";
 import type { planPayload, ApplyPlanOutcome } from "@/lib/analysisPlanService";
 import type { ModelJobView } from "@/lib/modelJobState";
+import type { AdvancedItemStatus } from "@/lib/advancedModelsCore";
+import type { AdvancedNarrative } from "@rescript/analytics";
 
 /** Thin client for `/api/surveys/<id>/analytics/*`. Every call is server-authorised; the client never computes. */
 /** an API failure that keeps its status and body — a 409 "not published" carries the reasons and whether it may be forced */
@@ -68,6 +70,10 @@ export class AxApi {
   plan(dataset: { environment: string; dataset: string }) { return this.req<PlanPayload>(`plan?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
   editPlan(body: { actions: unknown[]; baseRevision: number | null }) { return this.req<{ ok: true; plan: unknown; revision: number | null; results: { op: string; ok: boolean; description: string; error?: string }[]; warnings: string[]; savedAt: string }>("plan", { method: "PUT", body: JSON.stringify(body) }); }
   applyPlan(body: { environment: string; dataset: string; replaceReport?: boolean }) { return this.req<ApplyResponse>("plan/apply", { method: "POST", body: JSON.stringify(body) }); }
+  /* the plan's advanced models (HB, latent class, SEM, bootstrapped mediation, ω, Gabor–Granger — 2026-10-22): live state, reading, re-run */
+  advancedStatus(dataset: { environment: string; dataset: string }) { return this.req<{ items: AdvancedItemStatus[]; policy: { mode: "manual" | "threshold"; newResponses?: number } }>(`advanced?environment=${encodeURIComponent(dataset.environment)}&dataset=${encodeURIComponent(dataset.dataset)}`); }
+  advancedNarrative(body: { planned: string; environment: string; dataset: string; interpretation?: boolean; language?: string }) { return this.req<AdvancedReading>("advanced/narrative", { method: "POST", body: JSON.stringify(body) }); }
+  advancedRerun(body: { environment: string; dataset: string }) { return this.req<{ status: AdvancedItemStatus[]; jobs: { planned: string; title: string; analysisId: string | null; job: ModelJobView }[]; continued: number; runId: string | null }>("advanced/rerun", { method: "POST", body: JSON.stringify(body) }); }
   /** returns the notes the server attached — what the file does NOT contain — so the caller can say so beside "downloaded" */
   async export(body: Record<string, unknown>): Promise<{ notes: string[] }> {
     const r = await fetch(`${this.base()}/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -92,6 +98,13 @@ export type Row = Record<string, any>; // eslint-disable-line @typescript-eslint
 export type PlanPayload = Awaited<ReturnType<typeof planPayload>>;
 export type ApplyResponse = ApplyPlanOutcome;
 export type RunResult = AnalysisResult & { recommendations: ChartRecommendation[]; advice?: ChartAdvice };
+export type { AdvancedItemStatus };
+/** what `POST advanced/narrative` answers: the engine's reading (numbers only from the result), the SEM diagram, the gated model interpretation */
+export interface AdvancedReading {
+  planned: string; title: string; narrative: AdvancedNarrative; markdown: string; svg: string | null; pending: boolean;
+  interpretation: { implications: string[]; recommendations: string[]; rejected: { text: string; reason: string }[] } | null;
+  model: { status: string; detail: string };
+}
 
 export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);

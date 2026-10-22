@@ -3,6 +3,8 @@ import { coerceSurveyActions, isLongBrief, listBlocks, type SurveyAction } from 
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanIntent } from "./researchGuide.ts";
+import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
+import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthesisGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 /* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
 import { NOTICES, type ReplyLanguage } from "./notices.ts";
@@ -260,8 +262,15 @@ export type RequestMode = "generate" | "edit" | "review" | "question" | "ux";
 export const COPILOT_ANALYSIS_GUIDE = `ANALYSIS GUIDE.
 Roles: dependent (an outcome), independent (explains an outcome), mediator (carries an effect), moderator (changes an effect), control, segmentation (results are cut by it: demographics, markets, user groups), screening, descriptive.
 Measurement (inferred from the type; override only when the engine's reading is wrong): nominal, ordinal (an ordered scale), interval, ratio, multi (multi-select), text, rank, allocation, choice (MaxDiff / conjoint), date.
-Methods the platform runs: frequencies, mean, median, top_box, nps, crosstab, chi_square, t_test (2 groups), anova (3+ groups), mann_whitney, kruskal_wallis, correlation, regression, logistic_regression (2-category outcome), factor, reliability (multi-item scales), cluster, conjoint_utilities, maxdiff_scores, turf, driver_analysis, text_themes, ranking_scores, allocation_shares, pricing, brand_funnel. Nothing else exists — do not invent a method. Outside the plan, Data Analytics also runs hb (Hierarchical Bayes: individual CBC / MaxDiff utilities), lca (latent class) and sem (SEM / CFA) — point the researcher there; never plan them.
-Which test: groups × scale → t_test / anova (a MULTI-SELECT is never the groups of a test — its options overlap; it is a crosstab with each option a column); groups × categories → chi_square; scale × scale → correlation, and ONE regression per outcome on all its predictors (name a moderator with "moderator", a mediator with "mediator"); a two-category outcome → logistic_regression; a multi-item construct → reliability and a mean_score derived variable; an ordinal outcome → a top_box derived variable; MaxDiff → maxdiff_scores; conjoint → conjoint_utilities; nps → nps.
+Methods the platform runs: frequencies, mean, median, top_box, nps, crosstab, chi_square, t_test (2 groups), anova (3+ groups), mann_whitney, kruskal_wallis, correlation, regression, logistic_regression (2-category outcome), factor, reliability (multi-item scales), cluster, conjoint_utilities, maxdiff_scores, turf, driver_analysis, text_themes, ranking_scores, allocation_shares, pricing, brand_funnel, hb, latent_class, sem. Nothing else exists — do not invent a method.
+ADVANCED MODELS (planned like any test, with "options"; the engine checks suitability and refuses with the reason — relay it, never work around it):
+- hb: Hierarchical Bayes individual utilities for ONE CBC / ACBC / menu / MaxDiff exercise — "variables":["<exercise question code>"], options {"draws":1000,"burnIn":1000,"seed":7}. Runs after fielding as a background job (needs 50+ respondents, 4+ CBC tasks each).
+- latent_class: segments from 2+ categorical indicators (3+ is better) — "variables":["Q5",…,"Q12"], options {"minClasses":2,"maxClasses":6}; K is chosen by BIC. Covariates are not estimated — say so if asked.
+- sem: SEM / CFA from the research design's constructs (each with 3+ items) and hypotheses — "variables" = the items, options {"syntax":"TRUST =~ M1 + M2 + M3\\nINTENT =~ Y1 + Y2 + Y3\\nINTENT ~ TRUST","hypothesisPaths":{"H1":"INTENT ~ TRUST"}}; leave syntax out to have the engine write it from the constructs.
+- mediation: a regression with "mediator" and options {"bootstrap":5000} (percentile + BCa interval of the indirect effect, seeded).
+- reliability with options {"omega":true} adds McDonald's ω (3+ items). pricing with options {"method":"gabor_granger","prices":[9.99,14.99,19.99]} (one price per purchase-intent question, in order).
+Re-run policy: {"op":"set_analysis_plan","advancedRerun":{"mode":"threshold","newResponses":100}} re-runs stale advanced models after that many new completes; "manual" only flags them.
+Which test (plan an advanced model only when the design calls for it or the researcher asks: a CBC/MaxDiff exercise → hb; a segmentation objective with categorical indicators → latent_class; 2+ multi-item constructs linked by hypotheses on a large base → sem; a mediated hypothesis → bootstrap): groups × scale → t_test / anova (a MULTI-SELECT is never the groups of a test — its options overlap; it is a crosstab with each option a column); groups × categories → chi_square; scale × scale → correlation, and ONE regression per outcome on all its predictors (name a moderator with "moderator", a mediator with "mediator"); a two-category outcome → logistic_regression; a multi-item construct → reliability and a mean_score derived variable; an ordinal outcome → a top_box derived variable; MaxDiff → maxdiff_scores; conjoint → conjoint_utilities; nps → nps.
 Hypotheses are H1, H2… by their position in the research design (set_research's "hypotheses"). Every crosstab and test that serves one carries it in "hypotheses". Priority: 1 answers a hypothesis or the objective, 2 profiles, 3 explores. Plan the tables that matter — each outcome by the segmentation banner, each categorical independent against each outcome — not every pair.
 ACTIONS:
 {"op":"set_question_analysis","target":"Q6","role":"dependent","measurement":"ordinal","primary":["frequencies","top_box","mean"],"crosstabBy":["AGE","GENDER","COUNTRY"],"relatedTo":["TRUST_1","PRICE_PERC"],"modeling":["regression"],"hypotheses":["H1","H2"],"construct":"Purchase intention","notes":"..."}   // any subset; null clears a field
@@ -505,6 +514,8 @@ export function copilotUserPrompt(input: {
   /** research planning (a brief, hypotheses, methodology, mixed / advanced designs) and qualitative guides: the research / qualitative guides — absent = read from the message and the mode */
   researchPlan?: boolean;
   qual?: boolean;
+  /** 2026-10-22: the AI-interview guide (configure_ai_interviews) — absent = read from the message */
+  aiInterview?: boolean;
   /** documents and reports — sent when the request names one (reportingIntent) */
   reporting?: boolean;
   /** the plan stage: no action guides (the items carry them) */
@@ -543,6 +554,10 @@ export function copilotUserPrompt(input: {
     if (input.findings) parts.push(COPILOT_FINDINGS_GUIDE);
     if (input.researchPlan ?? researchPlanIntent(input.message, input.mode)) parts.push(COPILOT_RESEARCH_GUIDE);
     if (input.qual ?? qualIntent(input.message)) parts.push(COPILOT_QUAL_GUIDE);
+    /* 2026-10-22: the guide run as AI-moderated interviews (configure_ai_interviews) */
+    if (input.aiInterview ?? aiInterviewIntent(input.message)) parts.push(COPILOT_AI_INTERVIEW_GUIDE);
+    /* 2026-10-22 (F2): writing up the coded data, double-coding, reels, text group sessions — the Studio's cards do it; the guide names the sentence */
+    if (qualSynthesisIntent(input.message)) parts.push(COPILOT_QUAL_SYNTHESIS_GUIDE);
     if (input.reporting ?? reportingIntent(input.message)) parts.push(REPORTING_GUIDE);
   }
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, blocks, punch rules, variables) will be refused — validation that stops the respondent (an age limit, a format) is the one exception, unless the researcher said not to change anything. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");

@@ -343,7 +343,8 @@ export function planOverview(def: SurveyDefinition, items: PlanItemView[], varia
 /** what the apply did to the item's saved analysis */
 export type ApplySyncStatus = "created" | "updated" | "repointed" | "unchanged" | "kept_refined" | "skipped_invalid" | "not_applied";
 /** what happened to it on the data: run, failed to compute, waiting for data, or not run at all (skipped) */
-export type ApplyItemStatus = "run" | "failed" | "pending_data" | "skipped";
+/** `job_running` (2026-10-22): a hierarchical Bayes item whose chains run as a background job — started by the apply, read by the next run */
+export type ApplyItemStatus = "run" | "failed" | "pending_data" | "skipped" | "job_running";
 export interface ApplyItemResult { id: string; title: string; sync: ApplySyncStatus; status: ApplyItemStatus; reason?: string; analysisId?: string; chartId?: string }
 
 /** what the apply has to do to one planned item's saved analysis, before anything runs */
@@ -563,14 +564,14 @@ export interface ApplySummary {
   n: number;
   environment: DatasetSpec["environment"];
   items: ApplyItemResult[];
-  counts: { created: number; updated: number; repointed: number; unchanged: number; keptRefined: number; skipped: number; notApplied: number; run: number; failed: number; charts: number };
+  counts: { created: number; updated: number; repointed: number; unchanged: number; keptRefined: number; skipped: number; notApplied: number; run: number; failed: number; charts: number; /** running as background jobs (HB) — absent on applies before 2026-10-22 */ jobs?: number };
   message: string;
 }
 
 export function summarizeApply(env: DatasetSpec["environment"], n: number, items: ApplyItemResult[], extra: { charts: number; planned: number; relinked?: number; adopted?: number }): ApplySummary {
   const sync = (s: ApplySyncStatus) => items.filter((i) => i.sync === s).length;
   const count = (s: ApplyItemStatus) => items.filter((i) => i.status === s).length;
-  const counts = { created: sync("created"), updated: sync("updated"), repointed: sync("repointed"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), notApplied: sync("not_applied"), run: count("run"), failed: count("failed"), charts: extra.charts };
+  const counts = { created: sync("created"), updated: sync("updated"), repointed: sync("repointed"), unchanged: sync("unchanged"), keptRefined: sync("kept_refined"), skipped: sync("skipped_invalid"), notApplied: sync("not_applied"), run: count("run"), failed: count("failed"), charts: extra.charts, jobs: count("job_running") };
   const words: string[] = [];
   if (counts.created) words.push(`${counts.created} created`);
   if (counts.updated) words.push(`${counts.updated} updated from the plan`);
@@ -584,7 +585,7 @@ export function summarizeApply(env: DatasetSpec["environment"], n: number, items
   const configured = `${extra.planned} planned ${extra.planned === 1 ? "analysis" : "analyses"}${words.length ? ` — ${words.join(", ")}` : ""}`;
   if (!extra.planned) return { status: "nothing_planned", n, environment: env, items, counts, message: "Nothing is planned yet." };
   if (n === 0) return { status: "no_data", n, environment: env, items, counts, message: `${configured}. No complete ${env === "ALL" ? "" : env.toLowerCase() + " "}responses yet, so nothing was computed: the outputs are configured and will fill when data arrives.` };
-  const runWord = `${counts.run} run on ${n} completes${counts.charts ? `, ${counts.charts} chart${counts.charts === 1 ? "" : "s"}` : ""}`;
+  const runWord = `${counts.run} run on ${n} completes${counts.charts ? `, ${counts.charts} chart${counts.charts === 1 ? "" : "s"}` : ""}${counts.jobs ? `; ${counts.jobs} running as a background job (hierarchical Bayes) — ${counts.jobs === 1 ? "its" : "their"} results join the findings when the chains finish` : ""}`;
   if (counts.failed || counts.skipped) return { status: "partial", n, environment: env, items, counts, message: `${configured}. ${runWord}.` };
   return { status: "applied", n, environment: env, items, counts, message: `${configured}. ${runWord}.` };
 }

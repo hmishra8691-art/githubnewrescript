@@ -6,6 +6,7 @@ import { directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariablePrefi
 import { designFor, designVersionFor, shuffleAlternatives } from "./designVersion.js";
 import { isGeoAnswer, hasCoordinates, geoText, round6 } from "./geo.js";
 import { isAcbcAnswer } from "./acbc.js";
+import { DUAL_SUFFIX, isDualKey } from "./conjointSuite.js";
 
 export type FlatVars = Record<string, unknown>;
 
@@ -184,11 +185,16 @@ function flattenTasks(def: SurveyDefinition, q: Question, value: unknown, varNam
   const design = def.designs.find((d) => d.id === q.settings.designRef);
   const vals = value as Record<string, unknown>;
   const isMenu = design?.kind === "menu";
+  /* F4 2026-10-22: rating-based (CVA) tasks hold a rating; a dual-response CBC holds "<task>_buy" beside the choice */
+  const isCva = design?.kind === "cva";
+  const isDual = design?.kind === "conjoint" && (design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
   const rows = (design?.file?.rows ?? []) as Record<string, unknown>[];
   // the version this respondent answered was written above from the seed (designVersion.ts)
   const version = String(out[`${varName}_VERSION`] ?? out[`${q.variableName}_VERSION`] ?? "1");
   for (const [task, v] of Object.entries(vals)) {
     if (v == null || v === "") continue;
+    if (isDual && isDualKey(task)) { out[`${varName}_T${task.slice(0, -DUAL_SUFFIX.length)}_BUY`] = v === "yes" ? 1 : v === "no" ? 0 : String(v); continue; }
+    if (isCva) { const n = Number(v); out[`${varName}_T${task}`] = Number.isFinite(n) ? n : String(v); continue; }
     if (q.type === "maxdiff_task") {
       const bw = v as { best?: unknown; worst?: unknown };
       if (bw.best != null) out[`${varName}_T${task}_BEST`] = Number(bw.best);
@@ -378,6 +384,8 @@ function flattenQuestion(q: Question, value: unknown, varName: string, out: Flat
       out[`${varName}_SCREENED`] = value.screens.reduce((n, s) => n + s.concepts.length, 0);
       out[`${varName}_ACCEPTED`] = value.screens.reduce((n, s) => n + Object.values(s.verdicts).filter((v) => v === "yes").length, 0);
       out[`${varName}_ROUNDS`] = value.tournament.filter((r) => r.chosen).length;
+      /* F4 2026-10-22: the winner's summed price, when the design shows one */
+      if (value.winner && typeof value.winner.price === "number") out[`${varName}_WINNER_PRICE`] = value.winner.price;
       out[`${varName}_JSON`] = JSON.stringify(value);
       break;
     }

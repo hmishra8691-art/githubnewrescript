@@ -8,6 +8,7 @@ import { sttPrecheck } from "@/lib/byok/connect";
 import { billingProjectFor, meteredSttCall, refusalResponse } from "@/lib/metering";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
 import { sessionView, sttTranscript } from "@/lib/qual/qualWorkspace";
+import { transcribeLong } from "@/lib/qual/longAudio";
 import { checkRow, json, loadWorkspace, recordEvents, refuse, sessionRow, storeFailure, UUID } from "@/lib/qual/qualStore";
 
 export const dynamic = "force-dynamic";
@@ -25,10 +26,11 @@ export const maxDuration = 300;
  *
  * LIMITS, stated rather than discovered: the provider reads at most 25 MB of
  * audio in one request (`STT_MAX_BYTES`) — about 50 minutes of 64 kbps audio,
- * much less for video. Recordings are NOT split here (splitting a compressed
- * recording needs re-encoding, which the Studio does not do); a longer one is
- * refused with that sentence, and the transcript can be made elsewhere and
- * imported (.vtt / .srt keep the timings). One transcript per recording: a
+ * much less for video. Since 2026-10-22 a longer WAV or MP3 recording (≤ 200 MB)
+ * is split without re-encoding and transcribed in parts (`lib/qual/longAudio.ts`,
+ * a resumable job answering 202 { continue: true } until done); any other format
+ * is refused with that reason (cutting it safely needs re-encoding, which the
+ * Studio does not do) — transcribe it elsewhere and import the .vtt / .srt. One transcript per recording: a
  * retry after success returns the existing one; a failure leaves the
  * recording stored and the button retryable.
  */
@@ -56,9 +58,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { data: media } = await handle.db.from("media_objects").select("id, bucket, path, storage_provider, mime_type, bytes, duration_seconds, status, original_filename").eq("id", session.recording_media_id).maybeSingle();
     if (!media || media.status !== "stored") return json({ error: "the recording has not finished uploading" }, 409);
     const tooBig = (n: number) => json({ error: `The recording is ${Math.round(n / 1024 / 1024)} MB and the transcription service reads at most ${STT_MAX_BYTES / 1024 / 1024} MB of audio in one request (about 50 minutes at 64 kbps). Split it into parts before uploading, or transcribe it elsewhere and import the .vtt / .srt file — the timings are kept.`, code: "stt_too_large" }, 413);
-    if (Number(media.bytes) > STT_MAX_BYTES) return tooBig(Number(media.bytes));
     const billing = await billingProjectFor(gate.user, params.id, "responses.manage");
     if ("response" in billing) return billing.response;
+    /* F2 2026-10-22: over 25 MB — WAV and MP3 are split without re-encoding and transcribed in parts (a resumable job, 202 + continue); other formats are refused with the reason */
+    if (Number(media.bytes) > STT_MAX_BYTES) return transcribeLong({ db, mediaDb: handle.db, gate, surveyId: params.id, session: { id: session.id, title: session.title }, participants: sessionView(session).participants, media: { ...media, bytes: Number(media.bytes) }, language, billing });
     const bytes = await readObject(handle.db, { bucket: media.bucket, path: media.path, storage_provider: media.storage_provider });
     if (bytes.length > STT_MAX_BYTES) return tooBig(bytes.length);
     const seconds = Number(media.duration_seconds) > 0 ? Math.round(Number(media.duration_seconds)) : Math.max(1, Math.round(bytes.length / 8_000));

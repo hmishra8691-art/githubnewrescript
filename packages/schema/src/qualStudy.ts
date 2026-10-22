@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AiModeration } from "./aiInterview.js";
 
 /**
  * THE QUALITATIVE STUDY (2026-10-18) — the plan of a moderated in-depth
@@ -122,6 +123,8 @@ export const QualStudy = z.object({
   segments: z.array(QualParticipantSegment).default([]),
   sessionPlan: QualSessionPlan.default({}),
   sections: z.array(QualGuideSection).default([]),
+  /** 2026-10-22: run this interview guide as AI-moderated 1:1 interviews (aiInterview.ts); absent = not configured */
+  aiModeration: AiModeration.optional(),
   updatedAt: z.string().optional(),
 });
 export type QualStudy = z.infer<typeof QualStudy>;

@@ -30,3 +30,4 @@ import "./geo";
 import "./interview";
 import "./conjoint";
 import "./acbc";
+import "./conjointSuite";

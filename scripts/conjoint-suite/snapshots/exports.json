@@ -1,0 +1,1438 @@
+{
+ "flat": [
+  {
+   "CBC_VERSION": "2",
+   "MD_VERSION": "3",
+   "MENU_VERSION": "1",
+   "CBC_T1": 2,
+   "CBC_T1_ORDER": "2|3|1|4",
+   "CBC_T2": 3,
+   "CBC_T2_ORDER": "1|2|3|4",
+   "CBC_T3": 2,
+   "CBC_T3_ORDER": "2|1|3|4",
+   "CBC_T4": 1,
+   "CBC_T4_ORDER": "1|2|3|4",
+   "CBC_T5": 3,
+   "CBC_T5_ORDER": "2|3|1|4",
+   "CBC_T6": 3,
+   "CBC_T6_ORDER": "3|2|1|4",
+   "CBC_T7": 2,
+   "CBC_T7_ORDER": "3|1|2|4",
+   "CBC_T8": 2,
+   "CBC_T8_ORDER": "3|2|1|4",
+   "CBC_T9": 3,
+   "CBC_T9_ORDER": "2|3|1|4",
+   "CBC_T10": 4,
+   "CBC_T10_ORDER": "2|3|1|4",
+   "CBC_T11": 2,
+   "CBC_T11_ORDER": "1|3|2|4",
+   "CBC_T12": 3,
+   "CBC_T12_ORDER": "3|1|2|4",
+   "MD_T1_BEST": 4,
+   "MD_T1_WORST": 5,
+   "MD_T1_ORDER": "1|5|3|4",
+   "MD_T2_BEST": 2,
+   "MD_T2_WORST": 8,
+   "MD_T2_ORDER": "6|8|2|7",
+   "MD_T3_BEST": 1,
+   "MD_T3_WORST": 5,
+   "MD_T3_ORDER": "1|8|5|2",
+   "MD_T4_BEST": 4,
+   "MD_T4_WORST": 7,
+   "MD_T4_ORDER": "4|7|6|3",
+   "MD_T5_BEST": 5,
+   "MD_T5_WORST": 7,
+   "MD_T5_ORDER": "5|4|7|8",
+   "MD_T6_BEST": 2,
+   "MD_T6_WORST": 6,
+   "MD_T6_ORDER": "1|2|3|6",
+   "MD_T7_BEST": 6,
+   "MD_T7_WORST": 5,
+   "MD_T7_ORDER": "2|5|4|6",
+   "MD_T8_BEST": 1,
+   "MD_T8_WORST": 7,
+   "MD_T8_ORDER": "3|1|8|7",
+   "MD_T9_BEST": 1,
+   "MD_T9_WORST": 8,
+   "MD_T9_ORDER": "4|8|1|5",
+   "MD_T10_BEST": 3,
+   "MD_T10_WORST": 7,
+   "MD_T10_ORDER": "7|6|3|2",
+   "MENU_T1_1": 1,
+   "MENU_T1_2": 1,
+   "MENU_T1_3": 0,
+   "MENU_T1_NONE": 0,
+   "MENU_T1_TOTAL": 16,
+   "MENU_T2_1": 1,
+   "MENU_T2_2": 1,
+   "MENU_T2_3": 0,
+   "MENU_T2_NONE": 0,
+   "MENU_T2_TOTAL": 14,
+   "MENU_T3_1": 1,
+   "MENU_T3_2": 1,
+   "MENU_T3_3": 0,
+   "MENU_T3_NONE": 0,
+   "MENU_T3_TOTAL": 14,
+   "MENU_T4_1": 1,
+   "MENU_T4_2": 0,
+   "MENU_T4_3": 0,
+   "MENU_T4_NONE": 0,
+   "MENU_T4_TOTAL": 14,
+   "MENU_T5_1": 1,
+   "MENU_T5_2": 1,
+   "MENU_T5_3": 0,
+   "MENU_T5_NONE": 0,
+   "MENU_T5_TOTAL": 14,
+   "MENU_T6_1": 1,
+   "MENU_T6_2": 0,
+   "MENU_T6_3": 0,
+   "MENU_T6_NONE": 0,
+   "MENU_T6_TOTAL": 10,
+   "MENU_T7_1": 0,
+   "MENU_T7_2": 0,
+   "MENU_T7_3": 0,
+   "MENU_T7_NONE": 1,
+   "MENU_T7_TOTAL": 0,
+   "MENU_T8_1": 0,
+   "MENU_T8_2": 0,
+   "MENU_T8_3": 0,
+   "MENU_T8_NONE": 1,
+   "MENU_T8_TOTAL": 0
+  },
+  {
+   "CBC_VERSION": "5",
+   "MD_VERSION": "4",
+   "MENU_VERSION": "1",
+   "CBC_T1": 2,
+   "CBC_T1_ORDER": "1|3|2|4",
+   "CBC_T2": 3,
+   "CBC_T2_ORDER": "3|1|2|4",
+   "CBC_T3": 3,
+   "CBC_T3_ORDER": "3|2|1|4",
+   "CBC_T4": 2,
+   "CBC_T4_ORDER": "2|3|1|4",
+   "CBC_T5": 2,
+   "CBC_T5_ORDER": "3|2|1|4",
+   "CBC_T6": 3,
+   "CBC_T6_ORDER": "2|3|1|4",
+   "CBC_T7": 1,
+   "CBC_T7_ORDER": "1|2|3|4",
+   "CBC_T8": 1,
+   "CBC_T8_ORDER": "2|3|1|4",
+   "CBC_T9": 2,
+   "CBC_T9_ORDER": "1|3|2|4",
+   "CBC_T10": 1,
+   "CBC_T10_ORDER": "1|2|3|4",
+   "CBC_T11": 3,
+   "CBC_T11_ORDER": "3|1|2|4",
+   "CBC_T12": 2,
+   "CBC_T12_ORDER": "3|2|1|4",
+   "MD_T1_BEST": 3,
+   "MD_T1_WORST": 7,
+   "MD_T1_ORDER": "3|8|4|7",
+   "MD_T2_BEST": 1,
+   "MD_T2_WORST": 6,
+   "MD_T2_ORDER": "6|1|2|5",
+   "MD_T3_BEST": 2,
+   "MD_T3_WORST": 7,
+   "MD_T3_ORDER": "4|7|1|2",
+   "MD_T4_BEST": 5,
+   "MD_T4_WORST": 8,
+   "MD_T4_ORDER": "3|6|5|8",
+   "MD_T5_BEST": 2,
+   "MD_T5_WORST": 8,
+   "MD_T5_ORDER": "5|8|7|2",
+   "MD_T6_BEST": 1,
+   "MD_T6_WORST": 6,
+   "MD_T6_ORDER": "6|4|3|1",
+   "MD_T7_BEST": 6,
+   "MD_T7_WORST": 7,
+   "MD_T7_ORDER": "6|5|4|7",
+   "MD_T8_BEST": 2,
+   "MD_T8_WORST": 8,
+   "MD_T8_ORDER": "8|1|3|2",
+   "MD_T9_BEST": 2,
+   "MD_T9_WORST": 4,
+   "MD_T9_ORDER": "3|2|4|5",
+   "MD_T10_BEST": 1,
+   "MD_T10_WORST": 6,
+   "MD_T10_ORDER": "1|7|8|6",
+   "MENU_T1_1": 1,
+   "MENU_T1_2": 1,
+   "MENU_T1_3": 1,
+   "MENU_T1_NONE": 0,
+   "MENU_T1_TOTAL": 19,
+   "MENU_T2_1": 1,
+   "MENU_T2_2": 0,
+   "MENU_T2_3": 0,
+   "MENU_T2_NONE": 0,
+   "MENU_T2_TOTAL": 10,
+   "MENU_T3_1": 1,
+   "MENU_T3_2": 1,
+   "MENU_T3_3": 0,
+   "MENU_T3_NONE": 0,
+   "MENU_T3_TOTAL": 14,
+   "MENU_T4_1": 1,
+   "MENU_T4_2": 0,
+   "MENU_T4_3": 0,
+   "MENU_T4_NONE": 0,
+   "MENU_T4_TOTAL": 14,
+   "MENU_T5_1": 1,
+   "MENU_T5_2": 0,
+   "MENU_T5_3": 0,
+   "MENU_T5_NONE": 0,
+   "MENU_T5_TOTAL": 10,
+   "MENU_T6_1": 1,
+   "MENU_T6_2": 1,
+   "MENU_T6_3": 0,
+   "MENU_T6_NONE": 0,
+   "MENU_T6_TOTAL": 12,
+   "MENU_T7_1": 0,
+   "MENU_T7_2": 0,
+   "MENU_T7_3": 0,
+   "MENU_T7_NONE": 1,
+   "MENU_T7_TOTAL": 0,
+   "MENU_T8_1": 1,
+   "MENU_T8_2": 0,
+   "MENU_T8_3": 0,
+   "MENU_T8_NONE": 0,
+   "MENU_T8_TOTAL": 14
+  },
+  {
+   "CBC_VERSION": "5",
+   "MD_VERSION": "2",
+   "MENU_VERSION": "1",
+   "CBC_T1": 1,
+   "CBC_T1_ORDER": "3|2|1|4",
+   "CBC_T2": 3,
+   "CBC_T2_ORDER": "3|1|2|4",
+   "CBC_T3": 3,
+   "CBC_T3_ORDER": "1|2|3|4",
+   "CBC_T4": 2,
+   "CBC_T4_ORDER": "3|1|2|4",
+   "CBC_T5": 2,
+   "CBC_T5_ORDER": "1|3|2|4",
+   "CBC_T6": 1,
+   "CBC_T6_ORDER": "3|1|2|4",
+   "CBC_T7": 2,
+   "CBC_T7_ORDER": "1|3|2|4",
+   "CBC_T8": 1,
+   "CBC_T8_ORDER": "2|1|3|4",
+   "CBC_T9": 2,
+   "CBC_T9_ORDER": "3|2|1|4",
+   "CBC_T10": 1,
+   "CBC_T10_ORDER": "1|2|3|4",
+   "CBC_T11": 2,
+   "CBC_T11_ORDER": "2|3|1|4",
+   "CBC_T12": 4,
+   "CBC_T12_ORDER": "1|3|2|4",
+   "MD_T1_BEST": 1,
+   "MD_T1_WORST": 7,
+   "MD_T1_ORDER": "6|7|1|4",
+   "MD_T2_BEST": 2,
+   "MD_T2_WORST": 3,
+   "MD_T2_ORDER": "8|5|2|3",
+   "MD_T3_BEST": 3,
+   "MD_T3_WORST": 7,
+   "MD_T3_ORDER": "3|7|2|6",
+   "MD_T4_BEST": 4,
+   "MD_T4_WORST": 5,
+   "MD_T4_ORDER": "1|8|5|4",
+   "MD_T5_BEST": 8,
+   "MD_T5_WORST": 5,
+   "MD_T5_ORDER": "3|5|6|8",
+   "MD_T6_BEST": 1,
+   "MD_T6_WORST": 7,
+   "MD_T6_ORDER": "7|2|1|4",
+   "MD_T7_BEST": 1,
+   "MD_T7_WORST": 8,
+   "MD_T7_ORDER": "1|8|6|4",
+   "MD_T8_BEST": 3,
+   "MD_T8_WORST": 7,
+   "MD_T8_ORDER": "2|7|5|3",
+   "MD_T9_BEST": 1,
+   "MD_T9_WORST": 6,
+   "MD_T9_ORDER": "7|1|6|5",
+   "MD_T10_BEST": 2,
+   "MD_T10_WORST": 8,
+   "MD_T10_ORDER": "4|3|2|8",
+   "MENU_T1_1": 1,
+   "MENU_T1_2": 0,
+   "MENU_T1_3": 1,
+   "MENU_T1_NONE": 0,
+   "MENU_T1_TOTAL": 17,
+   "MENU_T2_1": 0,
+   "MENU_T2_2": 0,
+   "MENU_T2_3": 0,
+   "MENU_T2_NONE": 1,
+   "MENU_T2_TOTAL": 0,
+   "MENU_T3_1": 1,
+   "MENU_T3_2": 0,
+   "MENU_T3_3": 0,
+   "MENU_T3_NONE": 0,
+   "MENU_T3_TOTAL": 12,
+   "MENU_T4_1": 1,
+   "MENU_T4_2": 1,
+   "MENU_T4_3": 0,
+   "MENU_T4_NONE": 0,
+   "MENU_T4_TOTAL": 18,
+   "MENU_T5_1": 1,
+   "MENU_T5_2": 1,
+   "MENU_T5_3": 1,
+   "MENU_T5_NONE": 0,
+   "MENU_T5_TOTAL": 17,
+   "MENU_T6_1": 1,
+   "MENU_T6_2": 0,
+   "MENU_T6_3": 0,
+   "MENU_T6_NONE": 0,
+   "MENU_T6_TOTAL": 10,
+   "MENU_T7_1": 1,
+   "MENU_T7_2": 1,
+   "MENU_T7_3": 0,
+   "MENU_T7_NONE": 0,
+   "MENU_T7_TOTAL": 14,
+   "MENU_T8_1": 1,
+   "MENU_T8_2": 1,
+   "MENU_T8_3": 0,
+   "MENU_T8_NONE": 0,
+   "MENU_T8_TOTAL": 18
+  },
+  {
+   "CBC_VERSION": "2",
+   "MD_VERSION": "1",
+   "MENU_VERSION": "3",
+   "CBC_T1": 3,
+   "CBC_T1_ORDER": "2|3|1|4",
+   "CBC_T2": 3,
+   "CBC_T2_ORDER": "1|3|2|4",
+   "CBC_T3": 1,
+   "CBC_T3_ORDER": "2|3|1|4",
+   "CBC_T4": 3,
+   "CBC_T4_ORDER": "1|3|2|4",
+   "CBC_T5": 3,
+   "CBC_T5_ORDER": "2|1|3|4",
+   "CBC_T6": 1,
+   "CBC_T6_ORDER": "3|2|1|4",
+   "CBC_T7": 3,
+   "CBC_T7_ORDER": "3|1|2|4",
+   "CBC_T8": 1,
+   "CBC_T8_ORDER": "1|3|2|4",
+   "CBC_T9": 3,
+   "CBC_T9_ORDER": "3|1|2|4",
+   "CBC_T10": 1,
+   "CBC_T10_ORDER": "3|1|2|4",
+   "CBC_T11": 2,
+   "CBC_T11_ORDER": "3|2|1|4",
+   "CBC_T12": 3,
+   "CBC_T12_ORDER": "2|3|1|4",
+   "MD_T1_BEST": 2,
+   "MD_T1_WORST": 8,
+   "MD_T1_ORDER": "2|8|7|4",
+   "MD_T2_BEST": 1,
+   "MD_T2_WORST": 3,
+   "MD_T2_ORDER": "3|1|6|5",
+   "MD_T3_BEST": 3,
+   "MD_T3_WORST": 1,
+   "MD_T3_ORDER": "7|8|1|3",
+   "MD_T4_BEST": 4,
+   "MD_T4_WORST": 6,
+   "MD_T4_ORDER": "6|2|5|4",
+   "MD_T5_BEST": 1,
+   "MD_T5_WORST": 7,
+   "MD_T5_ORDER": "2|1|5|7",
+   "MD_T6_BEST": 4,
+   "MD_T6_WORST": 8,
+   "MD_T6_ORDER": "3|6|4|8",
+   "MD_T7_BEST": 1,
+   "MD_T7_WORST": 2,
+   "MD_T7_ORDER": "3|4|2|1",
+   "MD_T8_BEST": 7,
+   "MD_T8_WORST": 6,
+   "MD_T8_ORDER": "7|5|8|6",
+   "MD_T9_BEST": 3,
+   "MD_T9_WORST": 7,
+   "MD_T9_ORDER": "4|5|7|3",
+   "MD_T10_BEST": 1,
+   "MD_T10_WORST": 8,
+   "MD_T10_ORDER": "6|2|1|8",
+   "MENU_T1_1": 1,
+   "MENU_T1_2": 0,
+   "MENU_T1_3": 0,
+   "MENU_T1_NONE": 0,
+   "MENU_T1_TOTAL": 12,
+   "MENU_T2_1": 1,
+   "MENU_T2_2": 1,
+   "MENU_T2_3": 0,
+   "MENU_T2_NONE": 0,
+   "MENU_T2_TOTAL": 12,
+   "MENU_T3_1": 1,
+   "MENU_T3_2": 1,
+   "MENU_T3_3": 1,
+   "MENU_T3_NONE": 0,
+   "MENU_T3_TOTAL": 17,
+   "MENU_T4_1": 1,
+   "MENU_T4_2": 0,
+   "MENU_T4_3": 0,
+   "MENU_T4_NONE": 0,
+   "MENU_T4_TOTAL": 14,
+   "MENU_T5_1": 1,
+   "MENU_T5_2": 1,
+   "MENU_T5_3": 0,
+   "MENU_T5_NONE": 0,
+   "MENU_T5_TOTAL": 14,
+   "MENU_T6_1": 1,
+   "MENU_T6_2": 1,
+   "MENU_T6_3": 1,
+   "MENU_T6_NONE": 0,
+   "MENU_T6_TOTAL": 19,
+   "MENU_T7_1": 1,
+   "MENU_T7_2": 0,
+   "MENU_T7_3": 0,
+   "MENU_T7_NONE": 0,
+   "MENU_T7_TOTAL": 12,
+   "MENU_T8_1": 1,
+   "MENU_T8_2": 1,
+   "MENU_T8_3": 0,
+   "MENU_T8_NONE": 0,
+   "MENU_T8_TOTAL": 12
+  },
+  {
+   "CBC_VERSION": "4",
+   "MD_VERSION": "1",
+   "MENU_VERSION": "3",
+   "CBC_T1": 3,
+   "CBC_T1_ORDER": "3|1|2|4",
+   "CBC_T2": 2,
+   "CBC_T2_ORDER": "3|2|1|4",
+   "CBC_T3": 1,
+   "CBC_T3_ORDER": "2|3|1|4",
+   "CBC_T4": 1,
+   "CBC_T4_ORDER": "1|3|2|4",
+   "CBC_T5": 1,
+   "CBC_T5_ORDER": "2|3|1|4",
+   "CBC_T6": 2,
+   "CBC_T6_ORDER": "1|2|3|4",
+   "CBC_T7": 2,
+   "CBC_T7_ORDER": "2|1|3|4",
+   "CBC_T8": 3,
+   "CBC_T8_ORDER": "1|3|2|4",
+   "CBC_T9": 3,
+   "CBC_T9_ORDER": "2|1|3|4",
+   "CBC_T10": 3,
+   "CBC_T10_ORDER": "2|3|1|4",
+   "CBC_T11": 3,
+   "CBC_T11_ORDER": "1|3|2|4",
+   "CBC_T12": 1,
+   "CBC_T12_ORDER": "3|1|2|4",
+   "MD_T1_BEST": 8,
+   "MD_T1_WORST": 7,
+   "MD_T1_ORDER": "2|7|8|4",
+   "MD_T2_BEST": 3,
+   "MD_T2_WORST": 6,
+   "MD_T2_ORDER": "6|1|3|5",
+   "MD_T3_BEST": 1,
+   "MD_T3_WORST": 7,
+   "MD_T3_ORDER": "7|1|8|3",
+   "MD_T4_BEST": 2,
+   "MD_T4_WORST": 6,
+   "MD_T4_ORDER": "6|5|2|4",
+   "MD_T5_BEST": 1,
+   "MD_T5_WORST": 2,
+   "MD_T5_ORDER": "2|5|1|7",
+   "MD_T6_BEST": 6,
+   "MD_T6_WORST": 8,
+   "MD_T6_ORDER": "4|3|6|8",
+   "MD_T7_BEST": 2,
+   "MD_T7_WORST": 4,
+   "MD_T7_ORDER": "4|2|3|1",
+   "MD_T8_BEST": 5,
+   "MD_T8_WORST": 7,
+   "MD_T8_ORDER": "8|5|7|6",
+   "MD_T9_BEST": 5,
+   "MD_T9_WORST": 7,
+   "MD_T9_ORDER": "4|7|5|3",
+   "MD_T10_BEST": 1,
+   "MD_T10_WORST": 6,
+   "MD_T10_ORDER": "6|1|2|8",
+   "MENU_T1_1": 1,
+   "MENU_T1_2": 0,
+   "MENU_T1_3": 0,
+   "MENU_T1_NONE": 0,
+   "MENU_T1_TOTAL": 12,
+   "MENU_T2_1": 1,
+   "MENU_T2_2": 1,
+   "MENU_T2_3": 0,
+   "MENU_T2_NONE": 0,
+   "MENU_T2_TOTAL": 12,
+   "MENU_T3_1": 1,
+   "MENU_T3_2": 1,
+   "MENU_T3_3": 0,
+   "MENU_T3_NONE": 0,
+   "MENU_T3_TOTAL": 14,
+   "MENU_T4_1": 1,
+   "MENU_T4_2": 1,
+   "MENU_T4_3": 0,
+   "MENU_T4_NONE": 0,
+   "MENU_T4_TOTAL": 18,
+   "MENU_T5_1": 1,
+   "MENU_T5_2": 0,
+   "MENU_T5_3": 0,
+   "MENU_T5_NONE": 0,
+   "MENU_T5_TOTAL": 10,
+   "MENU_T6_1": 1,
+   "MENU_T6_2": 1,
+   "MENU_T6_3": 1,
+   "MENU_T6_NONE": 0,
+   "MENU_T6_TOTAL": 19,
+   "MENU_T7_1": 1,
+   "MENU_T7_2": 0,
+   "MENU_T7_3": 0,
+   "MENU_T7_NONE": 0,
+   "MENU_T7_TOTAL": 12,
+   "MENU_T8_1": 1,
+   "MENU_T8_2": 1,
+   "MENU_T8_3": 0,
+   "MENU_T8_NONE": 0,
+   "MENU_T8_TOTAL": 12
+  }
+ ],
+ "dict": [
+  {
+   "name": "CBC_TASKS",
+   "label": "Q1 — task responses",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_VERSION",
+   "label": "Q1 — design version shown",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T1",
+   "label": "Q1 — task 1 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T1_ORDER",
+   "label": "Q1 — task 1 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T2",
+   "label": "Q1 — task 2 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T2_ORDER",
+   "label": "Q1 — task 2 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T3",
+   "label": "Q1 — task 3 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T3_ORDER",
+   "label": "Q1 — task 3 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T4",
+   "label": "Q1 — task 4 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T4_ORDER",
+   "label": "Q1 — task 4 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T5",
+   "label": "Q1 — task 5 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T5_ORDER",
+   "label": "Q1 — task 5 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T6",
+   "label": "Q1 — task 6 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T6_ORDER",
+   "label": "Q1 — task 6 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T7",
+   "label": "Q1 — task 7 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T7_ORDER",
+   "label": "Q1 — task 7 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T8",
+   "label": "Q1 — task 8 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T8_ORDER",
+   "label": "Q1 — task 8 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T9",
+   "label": "Q1 — task 9 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T9_ORDER",
+   "label": "Q1 — task 9 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T10",
+   "label": "Q1 — task 10 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T10_ORDER",
+   "label": "Q1 — task 10 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T11",
+   "label": "Q1 — task 11 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T11_ORDER",
+   "label": "Q1 — task 11 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T12",
+   "label": "Q1 — task 12 choice (alternative)",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "CBC_T12_ORDER",
+   "label": "Q1 — task 12 shown order (design alternatives, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_TASKS",
+   "label": "Q2 — task responses",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_VERSION",
+   "label": "Q2 — design version shown",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T1_BEST",
+   "label": "Q2 — task 1 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T1_WORST",
+   "label": "Q2 — task 1 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T1_ORDER",
+   "label": "Q2 — task 1 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T2_BEST",
+   "label": "Q2 — task 2 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T2_WORST",
+   "label": "Q2 — task 2 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T2_ORDER",
+   "label": "Q2 — task 2 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T3_BEST",
+   "label": "Q2 — task 3 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T3_WORST",
+   "label": "Q2 — task 3 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T3_ORDER",
+   "label": "Q2 — task 3 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T4_BEST",
+   "label": "Q2 — task 4 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T4_WORST",
+   "label": "Q2 — task 4 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T4_ORDER",
+   "label": "Q2 — task 4 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T5_BEST",
+   "label": "Q2 — task 5 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T5_WORST",
+   "label": "Q2 — task 5 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T5_ORDER",
+   "label": "Q2 — task 5 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T6_BEST",
+   "label": "Q2 — task 6 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T6_WORST",
+   "label": "Q2 — task 6 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T6_ORDER",
+   "label": "Q2 — task 6 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T7_BEST",
+   "label": "Q2 — task 7 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T7_WORST",
+   "label": "Q2 — task 7 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T7_ORDER",
+   "label": "Q2 — task 7 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T8_BEST",
+   "label": "Q2 — task 8 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T8_WORST",
+   "label": "Q2 — task 8 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T8_ORDER",
+   "label": "Q2 — task 8 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T9_BEST",
+   "label": "Q2 — task 9 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T9_WORST",
+   "label": "Q2 — task 9 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T9_ORDER",
+   "label": "Q2 — task 9 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MD_T10_BEST",
+   "label": "Q2 — task 10 best (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T10_WORST",
+   "label": "Q2 — task 10 worst (item index)",
+   "dataType": "numeric",
+   "valueCodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "name": "MD_T10_ORDER",
+   "label": "Q2 — task 10 shown order (item indices, top to bottom)",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_TASKS",
+   "label": "Q3 — task responses",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_VERSION",
+   "label": "Q3 — design version shown",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T1_1",
+   "label": "Q3 — task 1: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T1_2",
+   "label": "Q3 — task 1: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T1_3",
+   "label": "Q3 — task 1: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T1_NONE",
+   "label": "Q3 — task 1: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T1_TOTAL",
+   "label": "Q3 — task 1: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T2_1",
+   "label": "Q3 — task 2: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T2_2",
+   "label": "Q3 — task 2: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T2_3",
+   "label": "Q3 — task 2: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T2_NONE",
+   "label": "Q3 — task 2: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T2_TOTAL",
+   "label": "Q3 — task 2: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T3_1",
+   "label": "Q3 — task 3: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T3_2",
+   "label": "Q3 — task 3: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T3_3",
+   "label": "Q3 — task 3: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T3_NONE",
+   "label": "Q3 — task 3: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T3_TOTAL",
+   "label": "Q3 — task 3: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T4_1",
+   "label": "Q3 — task 4: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T4_2",
+   "label": "Q3 — task 4: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T4_3",
+   "label": "Q3 — task 4: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T4_NONE",
+   "label": "Q3 — task 4: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T4_TOTAL",
+   "label": "Q3 — task 4: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T5_1",
+   "label": "Q3 — task 5: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T5_2",
+   "label": "Q3 — task 5: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T5_3",
+   "label": "Q3 — task 5: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T5_NONE",
+   "label": "Q3 — task 5: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T5_TOTAL",
+   "label": "Q3 — task 5: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T6_1",
+   "label": "Q3 — task 6: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T6_2",
+   "label": "Q3 — task 6: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T6_3",
+   "label": "Q3 — task 6: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T6_NONE",
+   "label": "Q3 — task 6: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T6_TOTAL",
+   "label": "Q3 — task 6: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T7_1",
+   "label": "Q3 — task 7: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T7_2",
+   "label": "Q3 — task 7: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T7_3",
+   "label": "Q3 — task 7: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T7_NONE",
+   "label": "Q3 — task 7: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T7_TOTAL",
+   "label": "Q3 — task 7: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "MENU_T8_1",
+   "label": "Q3 — task 8: Base chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T8_2",
+   "label": "Q3 — task 8: Data chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T8_3",
+   "label": "Q3 — task 8: Cloud chosen",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T8_NONE",
+   "label": "Q3 — task 8: bought nothing",
+   "dataType": "numeric",
+   "valueCodes": [
+    0,
+    1
+   ]
+  },
+  {
+   "name": "MENU_T8_TOTAL",
+   "label": "Q3 — task 8: bundle total",
+   "dataType": "numeric",
+   "valueCodes": []
+  },
+  {
+   "name": "RESP_ID",
+   "label": "Respondent ID",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "SESSION_ID",
+   "label": "Session ID",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "SURVEY_VERSION",
+   "label": "Survey version",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "START_TIME",
+   "label": "Start time",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "END_TIME",
+   "label": "End time",
+   "dataType": "text",
+   "valueCodes": []
+  },
+  {
+   "name": "STATUS",
+   "label": "Completion status",
+   "dataType": "text",
+   "valueCodes": []
+  }
+ ],
+ "stacked": {
+  "columns": [
+   "respondent",
+   "session_id",
+   "question",
+   "version",
+   "task",
+   "is_holdout",
+   "alt",
+   "concept_id",
+   "position",
+   "none",
+   "chosen",
+   "Brand",
+   "Screen",
+   "Battery",
+   "Price",
+   "Brand_code",
+   "Screen_code",
+   "Battery_code",
+   "Price_code"
+  ],
+  "rows": 960,
+  "hash": "4583c8ab"
+ }
+}

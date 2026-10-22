@@ -34,6 +34,8 @@ test("the brief's three requests: MaxDiff and CBC get the methods guide, LEAST L
     "build a CBC with brand, price and battery", "I need choice tasks with 3 concepts each", "menu-based conjoint for the add-ons", "an ACBC study for laptops",
     "discrete choice experiment on fares", "4 attributes and 3 levels each", "pricing configurator with a base plan",
     "maxdiff banao in 12 features ke saath", "conjoint chahiye price aur brand pe", "मैक्सडिफ बनाओ फीचर्स के लिए", "कंजॉइंट स्टडी बनाओ",
+    /* F4 2026-10-22 */
+    "make a rating-based conjoint with 4 attributes", "add a none option as dual response", "run the menu simulator with the premium bundle at ₹499", "a CVA study of laptops", "brand-specific attributes for the 5G phones",
   ];
   for (const m of yes) assert.ok(methodsIntent(m), m);
   const no = ["make Q7 a 5-point scale", "rank the features in Q5", "add a question about the most important feature", "randomize the options of Q5", "set up quotas: 500 completes, 50/50 gender", "translate Q5 into Hindi", "show Q10 only to people who chose Apple"];
@@ -44,7 +46,8 @@ test("the brief's three requests: MaxDiff and CBC get the methods guide, LEAST L
 
 test("sizes and caching: the system prompt is unchanged and under its cap; the guide is small and rides in the cached prefix", () => {
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
-  assert.ok(COPILOT_METHODS_GUIDE.length < 4_600, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  /* F4 2026-10-22: + CVA, dual-response None, labelled / brand-specific CBC, summed price, menu sections, simulate_conjoint (was < 4,600) */
+  assert.ok(COPILOT_METHODS_GUIDE.length < 7_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);
@@ -58,13 +61,14 @@ const exampleLines = (guide: string) => guide.split("\n").filter((l) => l.starts
 
 test("the guide's worked examples pass the engine's gate and apply as written, with the measured diagnostics", () => {
   const examples = exampleLines(COPILOT_METHODS_GUIDE);
-  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint"]);
-  const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_"));
+  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint"]);
+  const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_")).slice(0, 2);
   const c1 = coerceSurveyActions(creates);
   assert.deepEqual(c1.rejected, []);
   const made = applySurveyActions(empty(), c1.actions);
   assert.deepEqual(made.errors, []);
-  assert.deepEqual(made.def.designs.map((d) => d.kind), ["maxdiff", "conjoint", "menu", "acbc"]);
+  assert.deepEqual(made.def.designs.map((d) => d.kind), ["maxdiff", "conjoint", "menu", "acbc", "cva"]);
+  assert.match(made.results[4].description, /rating-based conjoint \(CVA\).*D-optimal/);
   assert.match(made.results[0].description, /8 items, 4 per task, 6 tasks, 10 versions; each respondent sees every item 3 times/);
   assert.match(made.results[1].description, /D-efficiency \d+(\.\d)?% per version/);
   const c2 = coerceSurveyActions(updates);
@@ -74,11 +78,18 @@ test("the guide's worked examples pass the engine's gate and apply as written, w
   assert.equal(changed.def.designs[0].config.itemsPerTask, 5);
   assert.equal(changed.def.designs[1].config.noneOption, true);
   assert.deepEqual(changed.def.questions.map((q) => [q.code, q.text, q.required]), made.def.questions.map((q) => [q.code, q.text, q.required]), "the questions are untouched");
+  /* F4 2026-10-22: "add a none option as dual response" replaces the None; the menu scenario is checked and saved */
+  const [dual, sim] = examples.slice(7);
+  const d2 = applySurveyActions(changed.def, coerceSurveyActions([dual, sim]).actions);
+  assert.deepEqual(d2.errors, []);
+  assert.equal(d2.def.designs[1].config.dualResponseNone, true);
+  assert.equal(d2.def.designs[1].config.noneOption, false, "the None alternative is replaced by the dual-response question");
+  assert.equal((d2.def.designs[2].config.simulations as { name: string }[])[0].name, "Premium bundle at $12");
   // the clarify replies: a question back, no actions
   const clarify = coerceCopilotReply({ kind: "clarify", reply: "To build the conjoint I need the attributes.", questions: ["What are the four attributes and their three levels?"] });
   assert.equal(clarify!.kind, "clarify");
   assert.deepEqual(clarify!.actions, []);
-  for (const w of ["NEVER SUBSTITUTE", "NOT AVAILABLE", "rating- or ranking-based conjoint", "HB", "ASK", "INFER", "\"kind\":\"clarify\"", "itemsFrom", "update_maxdiff", "update_conjoint", "Designs:"]) assert.ok(COPILOT_METHODS_GUIDE.includes(w), w);
+  for (const w of ["NEVER SUBSTITUTE", "NOT AVAILABLE", "ranking-based conjoint", "HB", "simulate_conjoint", "dualResponse", "\"method\":\"cva\"", "ASK", "INFER", "\"kind\":\"clarify\"", "itemsFrom", "update_maxdiff", "update_conjoint", "Designs:"]) assert.ok(COPILOT_METHODS_GUIDE.includes(w), w);
 });
 
 test("the List Fill guide teaches least fill (basis, ties, onChange) and its examples apply", () => {

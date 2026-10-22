@@ -30,6 +30,8 @@ import { isArtifactType, editionOf, mimeOf, ARTIFACT_LABEL, type ArtifactType } 
 import { fetchArtifactLines, fetchArtifactLink, sandboxFingerprint, saveBytes, saveUrl, sessionStore } from "../../../lib/artifacts/client";
 import { sandboxFind, sandboxGet, sandboxLines, sandboxPut, sandboxTheme, fromBase64 } from "../../../lib/artifacts/sandboxStore";
 import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCard } from "../../../lib/copilot/reportThemeTurn";
+import { qualTurn, runQualCard, type QualCard } from "./qualTurn";
+import type { QualRequest } from "@rescript/engine";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -87,6 +89,8 @@ export interface CopilotEntry {
   };
   /** a report theme turn (2026-10-18): the preview, and what was applied or saved */
   theme?: ThemeCard;
+  /** a qualitative synthesis request (F2 2026-10-22): the preview card, then the result once Run was pressed */
+  qual?: QualCard;
   /** a data question's answer, read on the respondent data (Phase 4): the base, the test behind it, the caveats */
   data?: { n: number; environment: string; dataset: string; source: "data" | "sandbox"; evidence?: { test: string; p: number | null; significant: boolean; effect?: { name: string; value: number } }; caveats: string[]; fromRun?: string };
   error?: string;
@@ -1089,6 +1093,25 @@ export function useCopilot(opts: {
     /* the kept documents' cards now say whether a new version is available under the new look */
     if (action.kind !== "model" && r.card.status !== "preview") opts.patchAll((x) => (x.output?.artifactId && x.output.fingerprint && x.output.type && isArtifactType(x.output.type) && s.surveyDbId === "sandbox" ? { output: { ...x.output, stale: sandboxFingerprint({ type: x.output.type, audience: x.output.edition, def: s.def, theme: sandboxTheme(sessionStore()).theme, structure: sandboxTheme(sessionStore()).structure, rows: rowsRef.current }) !== x.output.fingerprint } } : x.output?.artifactId && s.surveyDbId !== "sandbox" ? { output: { ...x.output, stale: true } } : null));
   }, [copilotTurns, s.surveyDbId, s.def, opts]);
+  /* ------------------------------------------------------------ qualitative synthesis requests (F2 2026-10-22) */
+  const qualRequest = React.useCallback(async (text: string, req: QualRequest, heard?: HeardTranscript): Promise<void> => {
+    const id = uid("copilot");
+    const engine: EngineTurn = { kind: "answer", category: "analysis", understood: req.text, detected: [{ what: "qualitative request", value: req.op }] };
+    const reply = (r: string): CopilotReply => ({ kind: "answer", reply: r, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] });
+    opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), status: "thinking", reply: reply("Reading the coded data…"), engine });
+    const t = await qualTurn(req, { surveyId: s.surveyDbId, def: s.def });
+    opts.patch(id, { status: "ready", qual: t.card, reply: reply(t.said), engine, opKey: recordOp({ prompt: text, source: "engine", status: "answered", intent: { category: "analysis", kind: "qual", engine: "qual", ops: req.op }, detected: engine.detected, statusDetail: t.said.slice(0, 2000) }) });
+  }, [opts, s.surveyDbId, s.def, recordOp]);
+  const qualCardAction = React.useCallback(async (entryId: string): Promise<void> => {
+    const e = copilotTurns.find((t) => t.id === entryId);
+    if (!e?.qual || !(e.qual.status === "preview" || (e.qual.status === "failed" && e.qual.runnable))) return;
+    /* a retry of a failed run starts from the preview again (the old error goes) */
+    const { error: _old, ...ready } = e.qual;
+    void _old;
+    opts.patch(entryId, { qual: { ...ready, status: "running" } });
+    const r = await runQualCard({ ...ready, status: "preview" }, { surveyId: s.surveyDbId, def: s.def });
+    opts.patch(entryId, { qual: r.card, reply: { kind: "answer", reply: r.said, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] } });
+  }, [copilotTurns, s.surveyDbId, s.def, opts]);
   /** the survey a new request is read against: the open proposal's result, so a revision builds on what is proposed */
   const working: SurveyDefinition = React.useMemo(() => (session.proposal ? (stale ? evaluateProposal(rebaseProposal(session.proposal, s.def)).after : full?.after ?? s.def) : s.def), [session.proposal, stale, full, s.def]);
   /*
@@ -1375,7 +1398,7 @@ export function useCopilot(opts: {
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, undoLast, uploadDocs, deleteDoc, refreshDocs,
-    downloadOutput, regenerateOutput, themeRequest, themeCardAction,
+    downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),

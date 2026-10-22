@@ -60,7 +60,7 @@ export interface MaxDiffSpec {
   practice?: boolean; itemsPerVersion?: number | null; balance?: "optimized" | "greedy";
   seed?: number; name?: string;
 }
-export type ConjointMethodName = "cbc" | "menu" | "acbc";
+export type ConjointMethodName = "cbc" | "menu" | "acbc" | "cva";
 export interface LevelRef { attribute: string; level: string }
 export interface ConjointProhibitionInput { a: LevelRef; b: LevelRef; also?: LevelRef[]; alsoOp?: "and" | "or" }
 export interface MenuItemInput { name: string; prices: string[]; required?: boolean }
@@ -79,16 +79,46 @@ export interface ConjointSpec {
   items?: MenuItemInput[]; requiredItems?: string[]; minSelections?: number; maxSelections?: number; currency?: string;
   /* adaptive (ACBC) */
   screeningTasks?: number; conceptsPerScreen?: number; tournamentAlternatives?: number; maxAttributesVaried?: number; minTournamentConcepts?: number;
+  /* F4 2026-10-22 — ACBC summed price: base + per-level increments ({"Brand":[0,50,120]}), ± variation % */
+  priceBase?: number | null; priceIncrements?: Record<string, number[]> | null; priceVariation?: number; priceCurrency?: string;
+  /* F4 2026-10-22 — CBC dual-response None, alternative-specific / labelled designs */
+  dualResponse?: boolean; dualResponsePrompt?: string | null;
+  labelled?: boolean; brandAttribute?: string | null; alternativeSpecific?: { attribute: string; appliesTo: string[] }[] | null;
+  /* F4 2026-10-22 — menu: mutually exclusive sections */
+  exclusiveGroups?: { name: string; items: string[] }[] | null;
+  /* F4 2026-10-22 — rating-based (CVA) */
+  mode?: "single" | "paired"; profiles?: number | null; scaleMin?: number | null; scaleMax?: number | null; minLabel?: string | null; maxLabel?: string | null; monotone?: Record<string, "increasing" | "decreasing"> | null;
   seed?: number; name?: string;
+}
+
+/**
+ * A SIMULATOR SCENARIO saved on a conjoint design (F4 2026-10-22): "run the menu simulator with the
+ * premium bundle at ₹499". The engine has no respondent data, so the action checks the scenario
+ * against the design (items, levels, prices that parse) and stores it on the design's
+ * `config.simulations` (never a generation key — the tasks do not change); the Conjoint analysis of
+ * the question (Data Analytics) simulates every saved scenario: shares or take rates, revenue, and
+ * for a menu the bundle's take rate.
+ */
+export interface SimulationScenarioInput {
+  name: string;
+  /** CBC / ACBC / CVA: the products in the market (attribute → level; `price` for a summed or linear price) */
+  products?: { name: string; levels: Record<string, string>; price?: number; cost?: number }[];
+  /** menu: item → price (as shown, "₹499" or a number); items not named keep their middle price */
+  prices?: Record<string, string | number>;
+  /** menu: bundles offered at one price */
+  bundles?: { name: string; items: string[]; price: string | number }[];
+  rule?: "logit" | "first_choice" | "rfc" | "btl";
+  none?: boolean;
 }
 
 export type MethodAction =
   | ({ op: "create_maxdiff" } & MethodPlacement & MaxDiffSpec)
   | ({ op: "update_maxdiff"; target: string; text?: string; required?: boolean } & MaxDiffSpec)
   | ({ op: "create_conjoint" } & MethodPlacement & ConjointSpec)
-  | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec);
+  | ({ op: "update_conjoint"; target: string; text?: string; required?: boolean } & ConjointSpec)
+  | { op: "simulate_conjoint"; target: string; scenario: SimulationScenarioInput; remove?: boolean };
 
-export const METHOD_ACTION_OPS = ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint"] as const;
+export const METHOD_ACTION_OPS = ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "simulate_conjoint"] as const;
 const OPS = new Set<string>(METHOD_ACTION_OPS);
 export const isMethodOp = (op: string): boolean => OPS.has(op);
 
@@ -181,32 +211,49 @@ function attributesOf(v: unknown, what: string): { name: string; levels: string[
   return out;
 }
 
+/** brand-specific rules: [{attribute, appliesTo}] or ["Storage: Alpha, Beta"] or {"Storage": ["Alpha","Beta"]} */
+function altSpecOf(v: unknown): { attribute: string; appliesTo: string[] }[] | string {
+  const out: { attribute: string; appliesTo: string[] }[] = [];
+  const bad = "alternativeSpecific lists the attributes that apply only to some brands, e.g. [{\"attribute\":\"5G\",\"appliesTo\":[\"Alpha\",\"Beta\"]}]";
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) { const l = strList(x, 40); if (!l?.length) return bad; out.push({ attribute: k, appliesTo: l }); }
+    return out;
+  }
+  if (!Array.isArray(v)) return bad;
+  for (const x of v) {
+    if (typeof x === "string") { const m = /^\s*([^:=]+?)\s*[:=]\s*(.+)$/.exec(x); if (!m) return bad; out.push({ attribute: m[1], appliesTo: m[2].split(/\s*[,|;]\s*/).filter(Boolean) }); continue; }
+    const r = (x ?? {}) as Record<string, unknown>;
+    const attribute = str(r.attribute ?? r.name, 80), appliesTo = strList(r.appliesTo ?? r.brands ?? r.levels, 40);
+    if (!attribute || !appliesTo?.length) return bad;
+    out.push({ attribute, appliesTo });
+  }
+  return out;
+}
+
 const CONJOINT_METHODS: Record<string, ConjointMethodName> = {
   cbc: "cbc", choice: "cbc", choice_based: "cbc", choice_based_conjoint: "cbc", discrete_choice: "cbc", dce: "cbc", conjoint: "cbc",
   menu: "menu", menu_based: "menu", mbc: "menu", configurator: "menu", pricing_configurator: "menu", build_your_own_menu: "menu",
   acbc: "acbc", adaptive: "acbc", adaptive_cbc: "acbc", adaptive_choice_based: "acbc",
+  /* F4 2026-10-22: rating-based (CVA) and the CBC variants are implemented */
+  cva: "cva", rating: "cva", ratings: "cva", rating_based: "cva", ratings_based: "cva", full_profile: "cva", full_profile_rating: "cva", traditional: "cva", likelihood_to_buy: "cva",
+  labelled: "cbc", labeled: "cbc", alternative_specific: "cbc", brand_specific: "cbc", dual_response: "cbc",
 };
+/** method words that imply a CBC option */
+const IMPLIED: Record<string, Partial<ConjointSpec>> = { labelled: { labelled: true }, labeled: { labelled: true }, dual_response: { dualResponse: true } };
 const NOT_IMPLEMENTED: Record<string, string> = {
-  rating: "rating-based (ratings) conjoint is not implemented",
-  ratings: "rating-based (ratings) conjoint is not implemented",
-  rating_based: "rating-based (ratings) conjoint is not implemented",
   ranking: "ranking-based conjoint is not implemented",
   ranking_based: "ranking-based conjoint is not implemented",
-  full_profile: "full-profile rating conjoint is not implemented",
-  cva: "CVA (ratings-based full-profile) conjoint is not implemented",
   aca: "ACA (adaptive conjoint analysis, self-explicated) is not implemented",
-  labelled: "labelled (alternative-specific) designs are not implemented",
-  labeled: "labelled (alternative-specific) designs are not implemented",
-  alternative_specific: "labelled (alternative-specific) designs are not implemented",
+  self_explicated: "self-explicated conjoint is not implemented",
 };
-const SUPPORTED = "Rescript runs choice-based (cbc), menu-based (menu) and adaptive (acbc) conjoint";
+const SUPPORTED = "Rescript runs choice-based (cbc — with dual-response None and brand-specific / labelled designs), menu-based (menu), adaptive (acbc) and rating-based (cva) conjoint";
 
 /** shared by create and update: every field checked, or the reason it is refused */
 function maxdiffSpecOf(o: Record<string, unknown>, partial: boolean): MaxDiffSpec | string {
   const spec: MaxDiffSpec = {};
   if (o.method !== undefined || o.estimation !== undefined) {
     const e = str(o.estimation ?? o.method)?.toLowerCase().replace(/[\s-]+/g, "_");
-    if (e && /hb|hierarchical|individual|latent/.test(e)) return "HB / individual-level MaxDiff utilities are not available — the analysis is a pooled (aggregate) logit with B−W counts; the MaxDiff choice file (Data → More formats) is the hand-off for HB elsewhere";
+    if (e && /hb|hierarchical|individual|latent/.test(e)) return "HB / individual-level estimation is not a design setting and is not available here — it runs after fielding in Data Analytics (Hierarchical Bayes); the MaxDiff analysis is the pooled logit with B−W counts. Create the MaxDiff without an estimation field";
   }
   const items = strList(o.items, 200);
   if (o.items !== undefined && !items) return "items is a list of the items to scale";
@@ -258,11 +305,85 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
     if (NOT_IMPLEMENTED[rawMethod]) return `${NOT_IMPLEMENTED[rawMethod]}. ${SUPPORTED} — say so and propose cbc instead (only if the researcher agrees)`;
     if (!CONJOINT_METHODS[rawMethod]) return `“${rawMethod}” is not a conjoint method here — ${SUPPORTED}`;
     spec.method = CONJOINT_METHODS[rawMethod];
+    Object.assign(spec, IMPLIED[rawMethod] ?? {});
   }
   const est = str(o.estimation ?? o.estimator ?? o.analysis)?.toLowerCase();
-  if (est && /hb|hierarchical|individual|latent|mixed/.test(est)) return "HB / latent-class / individual-level estimation is not available — the analysis is an aggregate (pooled) multinomial logit; the stacked CBC file (Data → More formats) is the hand-off for HB elsewhere";
-  if (o.dualNone !== undefined || o.dualResponseNone !== undefined || /dual/.test(String(o.none ?? ""))) return "dual-response None is not implemented — a None alternative inside each task (none: true) is";
-  if (o.labels !== undefined || o.alternativeNames !== undefined || o.alternativeSpecific !== undefined) return "labelled (alternative-specific) designs are not implemented — alternatives are unlabelled (Option A/B/C by position)";
+  if (est && /hb|hierarchical|individual|latent|mixed/.test(est)) return "estimation is not a design setting — individual-level (hierarchical Bayes) utilities are estimated after fielding in Data Analytics (kind hb, CBC / ACBC / menu); latent-class choice models are not available. Create the design without an estimation field";
+  /* F4 2026-10-22: dual-response None — none:"dual", dualResponse / dualResponseNone / dualNone: true */
+  const dualRaw = o.dualResponse ?? o.dualResponseNone ?? o.dualNone;
+  if (dualRaw !== undefined) { if (typeof dualRaw !== "boolean") return "dualResponse is true or false"; spec.dualResponse = dualRaw; }
+  if (typeof o.none === "string" && /dual/i.test(o.none)) { spec.dualResponse = true; }
+  if (o.dualResponsePrompt === null || o.dualResponsePrompt === "") spec.dualResponsePrompt = null;
+  else if (str(o.dualResponsePrompt)) spec.dualResponsePrompt = str(o.dualResponsePrompt, 300);
+  /* F4 2026-10-22: labelled / brand-specific designs */
+  if (o.labels !== undefined || o.alternativeNames !== undefined) return "alternatives are named by the brand attribute in a labelled design — give labelled: true (and brandAttribute if it is not called Brand), not a list of names";
+  if (bool(o.labelled ?? o.labeled) !== undefined) spec.labelled = bool(o.labelled ?? o.labeled);
+  if (o.brandAttribute === null) spec.brandAttribute = null; else if (str(o.brandAttribute, 80)) spec.brandAttribute = str(o.brandAttribute, 80);
+  if (o.alternativeSpecific !== undefined || o.brandSpecific !== undefined) {
+    const v = o.alternativeSpecific ?? o.brandSpecific;
+    if (v === null) spec.alternativeSpecific = null;
+    else {
+      const rules = altSpecOf(v);
+      if (typeof rules === "string") return rules;
+      spec.alternativeSpecific = rules;
+    }
+  }
+  /* F4 2026-10-22: menu sections */
+  if (o.exclusiveGroups !== undefined || o.sections !== undefined) {
+    const v = o.exclusiveGroups ?? o.sections;
+    if (v === null) spec.exclusiveGroups = null;
+    else {
+      if (!Array.isArray(v)) return "exclusiveGroups is a list of {name, items} — the respondent picks at most one item of each";
+      const gs: { name: string; items: string[] }[] = [];
+      for (const g of v) {
+        const r = (g ?? {}) as Record<string, unknown>;
+        const items = strList(Array.isArray(g) ? g : r.items, 40);
+        if (!items || items.length < 2) return "each exclusive section is {\"name\":\"Plan\",\"items\":[\"Basic\",\"Plus\"]} with at least two items";
+        gs.push({ name: str(r.name, 80) ?? `Section ${gs.length + 1}`, items });
+      }
+      spec.exclusiveGroups = gs;
+    }
+  }
+  /* F4 2026-10-22: ACBC summed price */
+  if (o.priceBase !== undefined || o.basePrice !== undefined) { const v = o.priceBase ?? o.basePrice; if (v === null) spec.priceBase = null; else { const n = num(typeof v === "string" ? v.replace(/[^\d.-]/g, "") : v); if (n === undefined) return "priceBase is a number (the price before the level increments)"; spec.priceBase = n; } }
+  if (o.priceIncrements !== undefined) {
+    if (o.priceIncrements === null) spec.priceIncrements = null;
+    else {
+      if (!o.priceIncrements || typeof o.priceIncrements !== "object" || Array.isArray(o.priceIncrements)) return "priceIncrements maps an attribute to one price increment per level, e.g. {\"Brand\":[0,50,120]}";
+      const m: Record<string, number[]> = {};
+      for (const [k, v] of Object.entries(o.priceIncrements as Record<string, unknown>)) {
+        if (!Array.isArray(v)) return `priceIncrements of “${k}” is a list of numbers, one per level`;
+        const xs = v.map((x) => num(typeof x === "string" ? x.replace(/[^\d.-]/g, "") : x));
+        if (xs.some((x) => x === undefined)) return `priceIncrements of “${k}” must be numbers`;
+        m[k] = xs as number[];
+      }
+      spec.priceIncrements = m;
+    }
+  }
+  if (o.priceVariation !== undefined) { const n = num(o.priceVariation); if (n === undefined || n < 0 || n > 50) return "priceVariation is a percentage from 0 to 50"; spec.priceVariation = n; }
+  if (str(o.priceCurrency, 8)) spec.priceCurrency = str(o.priceCurrency, 8);
+  /* F4 2026-10-22: rating-based (CVA) */
+  if (o.mode !== undefined || o.task !== undefined || o.cvaMode !== undefined) {
+    const m = str(o.mode ?? o.cvaMode ?? o.task)?.toLowerCase().replace(/[\s-]+/g, "_");
+    const M: Record<string, "single" | "paired"> = { single: "single", profile: "single", profiles: "single", single_profile: "single", rate: "single", paired: "paired", pairs: "paired", pairwise: "paired", paired_comparison: "paired" };
+    if (!m || !M[m]) return "mode is single (rate each profile) or paired (rate a pair on a preference scale)";
+    spec.mode = M[m];
+  }
+  if (o.scale !== undefined) {
+    const sc = Array.isArray(o.scale) ? o.scale.map(num) : typeof o.scale === "string" ? (/(-?\d+)\s*(?:-|–|to)\s*(-?\d+)/.exec(o.scale) ?? []).slice(1).map(num) : [];
+    if (sc.length !== 2 || sc.some((x) => x === undefined)) return "scale is [min, max] or \"0-10\"";
+    spec.scaleMin = sc[0]!; spec.scaleMax = sc[1]!;
+  }
+  for (const k of ["minLabel", "maxLabel"] as const) { if (o[k] === null || o[k] === "") spec[k] = null; else if (str(o[k])) spec[k] = str(o[k], 120); }
+  if (o.monotone !== undefined) {
+    if (o.monotone === null) spec.monotone = null;
+    else {
+      if (!o.monotone || typeof o.monotone !== "object" || Array.isArray(o.monotone)) return "monotone maps an attribute to increasing or decreasing, e.g. {\"Price\":\"decreasing\"}";
+      const m: Record<string, "increasing" | "decreasing"> = {};
+      for (const [k, v] of Object.entries(o.monotone as Record<string, unknown>)) { const d = str(v)?.toLowerCase(); if (d !== "increasing" && d !== "decreasing") return `monotone “${k}” is increasing or decreasing`; m[k] = d; }
+      spec.monotone = m;
+    }
+  }
   for (const k of ["attributes", "addAttributes"] as const) { const a = attributesOf(o[k], k); if (typeof a === "string") return a; if (a) spec[k] = a; }
   if (o.removeAttributes !== undefined) { const l = strList(o.removeAttributes); if (!l?.length) return "removeAttributes is a list of attribute names"; spec.removeAttributes = l; }
   if (o.levels !== undefined) {
@@ -283,6 +404,9 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
     ["tournamentAlternatives", ["tournamentAlternatives"], "tournamentAlternatives", 2, false],
     ["maxAttributesVaried", ["maxAttributesVaried"], "maxAttributesVaried", 1, false],
     ["minTournamentConcepts", ["minTournamentConcepts"], "minTournamentConcepts", 2, false],
+    ["profiles", ["profiles", "profilesPerVersion", "pairs"], "profiles (per version)", 2, true],
+    ["scaleMin", ["scaleMin"], "scaleMin", 0, true],
+    ["scaleMax", ["scaleMax"], "scaleMax", 1, true],
     ["seed", ["seed"], "seed", 0, false],
   ];
   for (const [key, keys, what, min, nullable] of fields) {
@@ -292,7 +416,7 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
   }
   const none = o.none ?? o.noneOption;
   if (typeof none === "boolean") spec.none = none;
-  else if (typeof none === "string" && none.trim()) { spec.none = true; spec.noneLabel = none.trim().slice(0, 200); }
+  else if (typeof none === "string" && none.trim() && !/dual/i.test(none)) { spec.none = true; spec.noneLabel = none.trim().slice(0, 200); }
   if (o.noneLabel === null || o.noneLabel === "") spec.noneLabel = null;
   else if (str(o.noneLabel)) { spec.noneLabel = str(o.noneLabel, 200); if (spec.none === undefined && !partial) spec.none = true; }
   for (const k of ["prohibitions", "addProhibitions", "removeProhibitions"] as const) { const p = prohibitionsOf(o[k], k); if (typeof p === "string") return p; if (p) spec[k] = p; }
@@ -319,6 +443,7 @@ function conjointSpecOf(o: Record<string, unknown>, partial: boolean): ConjointS
   if (!partial) {
     const m = spec.method ?? "cbc";
     if (m === "menu" && !spec.items?.length) return "a menu-based conjoint needs the menu: items with their price points (items: [{name, prices}]) — ask the researcher for them rather than inventing them";
+    if (spec.dualResponse && spec.none) return "dual-response None replaces the None alternative inside the task — give dualResponse: true without none: true";
     if (m !== "menu" && !spec.attributes?.length) return `create_conjoint (${m}) needs the attributes and their levels (attributes: [{name, levels}]) — ask the researcher for them rather than inventing them`;
     if (spec.addAttributes || spec.removeAttributes || spec.levels || spec.addProhibitions || spec.removeProhibitions) return "addAttributes / removeAttributes / levels / addProhibitions / removeProhibitions belong to update_conjoint — give the whole list to create_conjoint";
   }
@@ -333,9 +458,59 @@ function placementOf(o: Record<string, unknown>): MethodPlacement {
   };
 }
 
+/** a simulator scenario: named, and either products (CBC/ACBC/CVA) or menu prices / bundles */
+function scenarioOf(v: unknown): SimulationScenarioInput | string {
+  const o = (v ?? {}) as Record<string, unknown>;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "scenario is {name, products} (CBC / ACBC / CVA) or {name, prices, bundles} (menu)";
+  const name = str(o.name, 120) ?? "Scenario";
+  const sc: SimulationScenarioInput = { name };
+  if (o.products !== undefined) {
+    if (!Array.isArray(o.products) || !o.products.length) return "products is a list of {name, levels: {attribute: level}, price?, cost?}";
+    sc.products = [];
+    for (const p of o.products) {
+      const r = (p ?? {}) as Record<string, unknown>;
+      const pname = str(r.name, 120) ?? `Product ${sc.products.length + 1}`;
+      const lv = r.levels && typeof r.levels === "object" && !Array.isArray(r.levels) ? Object.fromEntries(Object.entries(r.levels as Record<string, unknown>).map(([k, x]) => [k, str(x, 120) ?? ""]).filter(([, x]) => x)) : {};
+      const price = r.price === undefined ? undefined : num(typeof r.price === "string" ? r.price.replace(/[^\d.-]/g, "") : r.price);
+      const cost = r.cost === undefined ? undefined : num(typeof r.cost === "string" ? r.cost.replace(/[^\d.-]/g, "") : r.cost);
+      if (r.price !== undefined && price === undefined) return `the price of ${pname} is not a number`;
+      sc.products.push({ name: pname, levels: lv as Record<string, string>, ...(price !== undefined ? { price } : {}), ...(cost !== undefined ? { cost } : {}) });
+    }
+  }
+  if (o.prices !== undefined) {
+    if (!o.prices || typeof o.prices !== "object" || Array.isArray(o.prices)) return "prices maps a menu item to its price, e.g. {\"Insurance\":\"₹99\"}";
+    sc.prices = Object.fromEntries(Object.entries(o.prices as Record<string, unknown>).map(([k, x]) => [k, typeof x === "number" ? x : String(x ?? "")]));
+  }
+  if (o.bundles !== undefined) {
+    if (!Array.isArray(o.bundles)) return "bundles is a list of {name, items, price}";
+    sc.bundles = [];
+    for (const b of o.bundles) {
+      const r = (b ?? {}) as Record<string, unknown>;
+      const items = strList(r.items, 40);
+      if (!items || items.length < 2 || r.price === undefined) return "each bundle is {\"name\":\"Premium\",\"items\":[\"A\",\"B\"],\"price\":\"₹499\"} with at least two items";
+      sc.bundles.push({ name: str(r.name, 120) ?? `Bundle ${sc.bundles.length + 1}`, items, price: typeof r.price === "number" ? r.price : String(r.price) });
+    }
+  }
+  const rule = str(o.rule)?.toLowerCase().replace(/[\s-]+/g, "_");
+  if (rule) {
+    const R: Record<string, SimulationScenarioInput["rule"]> = { logit: "logit", share_of_preference: "logit", first_choice: "first_choice", max_utility: "first_choice", maximum_utility: "first_choice", rfc: "rfc", randomized_first_choice: "rfc", randomised_first_choice: "rfc", btl: "btl" };
+    if (!R[rule]) return "rule is logit (share of preference), first_choice, rfc (randomized first choice) or btl";
+    sc.rule = R[rule];
+  }
+  if (bool(o.none) !== undefined) sc.none = bool(o.none);
+  if (!sc.products && !sc.prices && !sc.bundles) return "a scenario needs products (CBC / ACBC / CVA) or menu prices / bundles";
+  return sc;
+}
+
 export function coerceMethodAction(op: string, o: Record<string, unknown>): MethodAction | string | null {
   if (!isMethodOp(op)) return null;
   switch (op) {
+    case "simulate_conjoint": {
+      const target = str(o.target ?? o.question, 80); if (!target) return "simulate_conjoint needs the target question (its code)";
+      if (o.remove === true) { const name = str((o.scenario as Record<string, unknown> | undefined)?.name ?? o.name, 120); if (!name) return "removing a scenario needs its name"; return { op, target, scenario: { name }, remove: true }; }
+      const sc = scenarioOf(o.scenario ?? o);
+      return typeof sc === "string" ? sc : { op, target, scenario: sc };
+    }
     case "create_maxdiff": { const s = maxdiffSpecOf(o, false); return typeof s === "string" ? s : { op, ...placementOf(o), ...s }; }
     case "create_conjoint": { const s = conjointSpecOf(o, false); return typeof s === "string" ? s : { op, ...placementOf(o), ...s }; }
     case "update_maxdiff": case "update_conjoint": {
@@ -368,15 +543,16 @@ const pct = (x: unknown) => (typeof x === "number" ? `${Math.round(x * 1000) / 1
 type Cfg = Record<string, unknown>;
 type DesignFile = { columns: string[]; rows: Record<string, unknown>[]; summary?: Record<string, unknown> };
 
-const KIND_OF: Record<ConjointMethodName, string> = { cbc: "conjoint", menu: "menu", acbc: "acbc" };
-const METHOD_OF_KIND: Record<string, ConjointMethodName> = { conjoint: "cbc", menu: "menu", acbc: "acbc" };
-const LABEL: Record<string, string> = { maxdiff: "MaxDiff", conjoint: "choice-based conjoint (CBC)", menu: "menu-based conjoint", acbc: "adaptive CBC (ACBC)" };
+const KIND_OF: Record<ConjointMethodName, string> = { cbc: "conjoint", menu: "menu", acbc: "acbc", cva: "cva" };
+const METHOD_OF_KIND: Record<string, ConjointMethodName> = { conjoint: "cbc", menu: "menu", acbc: "acbc", cva: "cva" };
+const LABEL: Record<string, string> = { maxdiff: "MaxDiff", conjoint: "choice-based conjoint (CBC)", menu: "menu-based conjoint", acbc: "adaptive CBC (ACBC)", cva: "rating-based conjoint (CVA)" };
 /** the config keys whose change changes the generated rows (others — labels, instructions, the None text — are read at render time) */
 const GENERATION_KEYS: Record<string, string[]> = {
   maxdiff: ["items", "itemsPerTask", "tasks", "versions", "appearancesPerItem", "itemsPerVersion", "balance", "prohibitedPairs", "practiceTask"],
-  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "holdoutTasks", "versions", "method"],
-  menu: ["items", "requiredItems", "tasks", "versions", "noneOption"],
-  acbc: ["attributes", "prohibitions", "screeningTasks", "conceptsPerScreen", "maxAttributesVaried", "unacceptableThreshold", "mustHaveThreshold", "tournamentAlternatives", "minTournamentConcepts"],
+  conjoint: ["attributes", "prohibitions", "tasks", "alternativesPerTask", "noneOption", "holdoutTasks", "versions", "method", "dualResponseNone", "brandAttribute", "labelled", "alternativeSpecific"],
+  menu: ["items", "requiredItems", "tasks", "versions", "noneOption", "exclusiveGroups"],
+  acbc: ["attributes", "prohibitions", "screeningTasks", "conceptsPerScreen", "maxAttributesVaried", "unacceptableThreshold", "mustHaveThreshold", "tournamentAlternatives", "minTournamentConcepts", "priceBase", "priceIncrements", "priceVariation", "priceRound"],
+  cva: ["attributes", "prohibitions", "mode", "profiles", "versions", "holdouts"],
 };
 
 /** MaxDiff items per task when the request does not say: about a third of the list, 3–5 (never more than items − 1) */
@@ -549,12 +725,19 @@ function resolveLevel(attrs: { name: string; levels: string[] }[], r: LevelRef, 
 }
 const proKey = (p: ConjointProhibitionInput) => [p.a, p.b, ...(p.also ?? [])].map((x) => `${norm(x.attribute)}=${norm(x.level)}`).sort().join("&");
 
+/* F4 2026-10-22: fields that belong to one method only */
+const CBC_ONLY = ["dualResponse", "dualResponsePrompt", "labelled", "brandAttribute", "alternativeSpecific"] as const;
+const CVA_ONLY = ["mode", "profiles", "scaleMin", "scaleMax", "minLabel", "maxLabel", "monotone"] as const;
+const ACBC_PRICE = ["priceBase", "priceIncrements", "priceVariation", "priceCurrency"] as const;
+const MENU_ONLY = ["exclusiveGroups"] as const;
+const lineOf = (name: string, xs: (string | number)[], sep = ", ") => `${name}: ${xs.join(sep)}`;
+
 function conjointConfig(method: ConjointMethodName, s: ConjointSpec, prev?: Cfg): { config: Cfg; assumed: string[] } {
   const assumed: string[] = [];
   const c: Cfg = prev ? structuredClone(prev) : {};
   if (method === "menu") {
-    for (const k of ["attributes", "addAttributes", "removeAttributes", "levels", "prohibitions", "addProhibitions", "removeProhibitions", "alternatives", "holdouts", "design", "screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts"] as const) {
-      if (s[k] !== undefined) fail(`“${k}” does not apply to a menu-based conjoint (every task shows the whole menu at varying prices) — use items, requiredItems, tasks, versions, none, minSelections, maxSelections`);
+    for (const k of ["attributes", "addAttributes", "removeAttributes", "levels", "prohibitions", "addProhibitions", "removeProhibitions", "alternatives", "holdouts", "design", "screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts", ...CBC_ONLY, ...CVA_ONLY, ...ACBC_PRICE] as const) {
+      if (s[k] !== undefined) fail(`“${k}” does not apply to a menu-based conjoint (every task shows the whole menu at varying prices) — use items, requiredItems, exclusiveGroups, tasks, versions, none, minSelections, maxSelections`);
     }
     if (s.items) c.items = s.items.map((i) => ({ name: i.name, levels: i.prices, ...(i.required ? { required: true } : {}) }));
     if (s.requiredItems) {
@@ -567,6 +750,13 @@ function conjointConfig(method: ConjointMethodName, s: ConjointSpec, prev?: Cfg)
     if (s.none !== undefined) c.noneOption = s.none;
     for (const k of ["minSelections", "maxSelections", "currency"] as const) if (s[k] !== undefined) c[k] = s[k];
     if (s.noneLabel !== undefined) { if (s.noneLabel === null) delete c.noneLabel; else c.noneLabel = s.noneLabel; }
+    if (s.exclusiveGroups !== undefined) {
+      if (s.exclusiveGroups === null || !s.exclusiveGroups.length) delete c.exclusiveGroups;
+      else {
+        const names = ((c.items as { name: string }[]) ?? []).map((i) => i.name);
+        c.exclusiveGroups = s.exclusiveGroups.map((g) => lineOf(g.name, g.items.map((it) => names.find((x) => norm(x) === norm(it)) ?? fail(`exclusiveGroups: “${it}” is not a menu item (${names.join(", ")})`)), " | "));
+      }
+    }
     return { config: c, assumed };
   }
   let attrs = ((c.attributes as { name: string; levels: string[] }[] | undefined) ?? []).map((a) => ({ name: a.name, levels: [...a.levels] }));
@@ -594,15 +784,67 @@ function conjointConfig(method: ConjointMethodName, s: ConjointSpec, prev?: Cfg)
   if (gone.length) { pros = pros.filter((p) => !gone.includes(p)); assumed.push(`dropped ${plural(gone.length, "prohibition")} naming a level that is no longer in the design`); }
   if (pros.length) c.prohibitions = pros; else delete c.prohibitions;
   if (method === "acbc") {
-    for (const k of ["alternatives", "tasks", "versions", "holdouts", "none", "noneLabel", "design", "items", "requiredItems", "minSelections", "maxSelections", "currency"] as const) {
-      if (s[k] !== undefined) fail(`“${k}” does not apply to ACBC — its concepts are built around each respondent's build-your-own answer at interview time (no fixed tasks or versions). Use screeningTasks, conceptsPerScreen, tournamentAlternatives, maxAttributesVaried, minTournamentConcepts`);
+    for (const k of ["alternatives", "tasks", "versions", "holdouts", "none", "noneLabel", "design", "items", "requiredItems", "minSelections", "maxSelections", "currency", ...CBC_ONLY, ...CVA_ONLY, ...MENU_ONLY] as const) {
+      if (s[k] !== undefined) fail(`“${k}” does not apply to ACBC — its concepts are built around each respondent's build-your-own answer at interview time (no fixed tasks or versions). Use screeningTasks, conceptsPerScreen, tournamentAlternatives, maxAttributesVaried, minTournamentConcepts, priceBase / priceIncrements (summed price)`);
     }
     for (const k of ["screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts"] as const) if (s[k] !== undefined) c[k] = s[k];
+    /* F4 2026-10-22: summed price — increments stored as the panel's lines, attribute names resolved */
+    if (s.priceBase !== undefined) { if (s.priceBase === null) delete c.priceBase; else c.priceBase = s.priceBase; }
+    if (s.priceIncrements !== undefined) {
+      if (s.priceIncrements === null) delete c.priceIncrements;
+      else c.priceIncrements = Object.entries(s.priceIncrements).map(([k, xs]) => { const a = resolveAttribute(attrs, k, "priceIncrements"); if (xs.length !== a.levels.length) fail(`priceIncrements: ${a.name} has ${a.levels.length} levels (${a.levels.join(", ")}) but ${xs.length} increments — give one per level`); return lineOf(a.name, xs); });
+    }
+    if (s.priceVariation !== undefined) c.priceVariation = s.priceVariation;
+    if (s.priceCurrency !== undefined) c.priceCurrency = s.priceCurrency;
+    if ((c.priceIncrements || c.priceBase != null) && c.priceBase == null) { c.priceBase = 0; assumed.push("base price 0 (the increments are the whole price)"); }
+    if ((c.priceIncrements || c.priceBase != null) && c.priceVariation === undefined && !prev) { c.priceVariation = 30; assumed.push("price variation ±30%"); }
     return { config: c, assumed };
   }
-  for (const k of ["items", "requiredItems", "minSelections", "maxSelections", "currency", "screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts"] as const) {
-    if (s[k] !== undefined) fail(`“${k}” does not apply to a choice-based conjoint (CBC)${k === "items" || k === "requiredItems" ? " — a menu of priced items is method menu" : " — those are ACBC settings"}`);
+  if (method === "cva") {
+    for (const k of ["alternatives", "tasks", "none", "noneLabel", "design", "items", "requiredItems", "minSelections", "maxSelections", "currency", "screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts", ...CBC_ONLY, ...ACBC_PRICE, ...MENU_ONLY] as const) {
+      if (s[k] !== undefined) fail(`“${k}” does not apply to a rating-based conjoint (CVA) — respondents rate full profiles (or pairs). Use attributes, prohibitions, mode (single | paired), profiles, versions, holdouts, scale, minLabel, maxLabel, monotone`);
+    }
+    if (s.mode) c.mode = s.mode; else if (!prev && c.mode === undefined) { c.mode = "single"; assumed.push("single profiles rated 0–10"); }
+    if (s.profiles !== undefined) { if (s.profiles === null) delete c.profiles; else c.profiles = s.profiles; }
+    if (!prev && c.profiles === undefined) {
+      const params = attrs.reduce((t, a) => t + a.levels.length - 1, 0) + (c.mode === "paired" ? 0 : 1);
+      assumed.push(`${Math.max(params + 3, Math.ceil(1.5 * params))} ${c.mode === "paired" ? "pairs" : "profiles"} per version (1.5 × the ${params} parameters)`);
+    }
+    if (s.versions !== undefined) c.versions = s.versions; else if (!prev && c.versions === undefined) { c.versions = 4; assumed.push("4 versions"); }
+    if (s.holdouts !== undefined) c.holdouts = s.holdouts;
+    for (const k of ["scaleMin", "scaleMax", "minLabel", "maxLabel"] as const) { if (s[k] === null) delete c[k]; else if (s[k] !== undefined) c[k] = s[k]; }
+    if (s.monotone !== undefined) {
+      if (s.monotone === null) delete c.monotone;
+      else c.monotone = Object.entries(s.monotone).map(([k, d]) => `${resolveAttribute(attrs, k, "monotone").name}: ${d}`);
+    }
+    return { config: c, assumed };
   }
+  for (const k of ["items", "requiredItems", "minSelections", "maxSelections", "currency", "screeningTasks", "conceptsPerScreen", "tournamentAlternatives", "maxAttributesVaried", "minTournamentConcepts", ...CVA_ONLY, ...ACBC_PRICE, ...MENU_ONLY] as const) {
+    if (s[k] !== undefined) fail(`“${k}” does not apply to a choice-based conjoint (CBC)${k === "items" || k === "requiredItems" || k === "exclusiveGroups" ? " — a menu of priced items is method menu" : (CVA_ONLY as readonly string[]).includes(k) ? " — rated profiles are method cva" : " — those are ACBC settings"}`);
+  }
+  /* F4 2026-10-22: brand-specific / labelled designs — names resolved to the attributes' spellings */
+  if (s.brandAttribute !== undefined) { if (s.brandAttribute === null) delete c.brandAttribute; else c.brandAttribute = resolveAttribute(attrs, s.brandAttribute, "brandAttribute").name; }
+  const brandName = (c.brandAttribute as string | undefined) ?? attrs.find((a) => /^brand|^make|^label|^provider|^operator/i.test(a.name))?.name ?? attrs[0]?.name;
+  if (s.labelled !== undefined) c.labelled = s.labelled;
+  if (s.alternativeSpecific !== undefined) {
+    if (s.alternativeSpecific === null || !s.alternativeSpecific.length) delete c.alternativeSpecific;
+    else {
+      const brand = resolveAttribute(attrs, brandName ?? "", "alternativeSpecific (brand attribute)");
+      c.alternativeSpecific = s.alternativeSpecific.map((r) => lineOf(resolveAttribute(attrs, r.attribute, "alternativeSpecific").name, r.appliesTo.map((b) => resolveLevel(attrs, { attribute: brand.name, level: b }, "alternativeSpecific").level)));
+    }
+  }
+  if ((c.labelled === true || c.alternativeSpecific) && !c.brandAttribute && brandName) { c.brandAttribute = brandName; if (!prev || s.labelled !== undefined || s.alternativeSpecific !== undefined) assumed.push(`${brandName} is the brand attribute`); }
+  if (c.labelled === true && s.alternatives === undefined) {
+    const nb = attrs.find((a) => a.name === c.brandAttribute)?.levels.length;
+    if (nb && c.alternativesPerTask !== nb) { c.alternativesPerTask = nb; assumed.push(`${nb} alternatives per task (one per ${c.brandAttribute} level — labelled)`); }
+  }
+  /* F4 2026-10-22: dual-response None replaces the None alternative */
+  if (s.dualResponse !== undefined) {
+    if (s.dualResponse) { c.dualResponseNone = true; if (c.noneOption && s.none === undefined) { c.noneOption = false; assumed.push("the None alternative is replaced by the dual-response question"); } }
+    else delete c.dualResponseNone;
+  }
+  if (s.dualResponsePrompt !== undefined) { if (s.dualResponsePrompt === null) delete c.dualResponsePrompt; else c.dualResponsePrompt = s.dualResponsePrompt; }
+  if (s.none === true && c.dualResponseNone === true && s.dualResponse === undefined) { delete c.dualResponseNone; assumed.push("dual-response None turned off (a None alternative is shown in the task instead)"); }
   if (s.alternatives !== undefined) c.alternativesPerTask = s.alternatives;
   else if (!prev && c.alternativesPerTask === undefined) { c.alternativesPerTask = 3; assumed.push("3 alternatives per task"); }
   if (s.tasks !== undefined) { if (s.tasks === null) delete c.tasks; else c.tasks = s.tasks; }
@@ -620,12 +862,20 @@ export function conjointDesignWords(kind: string, config: Cfg, file: DesignFile)
   const s = (file.summary ?? {}) as Record<string, any>;
   if (kind === "acbc") {
     const attrs = (config.attributes as { name: string; levels: string[] }[]) ?? [];
-    return `${attrs.length} attributes (${attrs.map((a) => a.levels.length).join("×")} levels, ${s.conceptSpace ?? "?"} possible concepts); build-your-own → ${s.screeningTasks ?? 6} screens of ${s.conceptsPerScreen ?? 4} concepts → unacceptable / must-have questions → a choice tournament in sets of ${(config.tournamentAlternatives as number) ?? 3}. Adaptive: each respondent's concepts are generated at interview time from their own answers, so there is no fixed task table; there is no ACBC estimator in the platform (the transcripts are exported).`;
+    const sp = s.summedPrice as { base: number; variationPct: number; currency: string } | undefined;
+    return `${attrs.length} attributes (${attrs.map((a) => a.levels.length).join("×")} levels, ${s.conceptSpace ?? "?"} possible concepts)${sp ? `, summed price from ${sp.currency}${sp.base} plus level increments, varied ±${sp.variationPct}%` : ""}; build-your-own → ${s.screeningTasks ?? 6} screens of ${s.conceptsPerScreen ?? 4} concepts → unacceptable / must-have questions → a choice tournament in sets of ${(config.tournamentAlternatives as number) ?? 3}. Adaptive: each respondent's concepts are generated at interview time from their own answers, so there is no fixed task table. The analysis estimates utilities from BYO, screening and tournament together (Conjoint: aggregate logit and counts; Hierarchical Bayes: individual utilities)${sp ? " with price as a linear term" : ""}.`;
+  }
+  if (kind === "cva") {
+    const attrs = (config.attributes as { name: string; levels: string[] }[]) ?? [];
+    const e = (s.efficiency as { perVersion?: { mean?: number; min?: number } } | undefined)?.perVersion;
+    const sc = s.scale as { min: number; max: number } | undefined;
+    return `${attrs.length} attributes (${attrs.map((a) => `${a.name} ${a.levels.length}`).join(", ")} levels); ${s.mode === "paired" ? `${s.profilesPerVersion} pairs rated on a ${sc?.min ?? 1}–${sc?.max ?? 9} preference scale` : `${s.profilesPerVersion} profiles rated ${sc?.min ?? 0}–${sc?.max ?? 10}`} per version, ${plural(Number(s.versions ?? 1), "version")}${s.holdouts ? ` + ${s.holdouts} holdout${s.holdouts === 1 ? "" : "s"}` : ""}; D-optimal (exchange): D-efficiency ${pct(e?.mean)} per version (worst ${pct(e?.min)}); ${s.degreesOfFreedom} degrees of freedom per respondent for ${s.parameters} part-worths${s.mode === "paired" ? "" : " and an intercept"}. Utilities are estimated per respondent by least squares (fit R² per respondent; flat raters flagged).${Array.isArray(s.warnings) && s.warnings.length ? ` Warnings: ${s.warnings.join(" ")}` : ""}`;
   }
   if (kind === "menu") {
     const items = (config.items as { name: string; levels: string[]; required?: boolean }[]) ?? [];
     const req = new Set([...(config.requiredItems as string[] | undefined) ?? [], ...items.filter((i) => i.required).map((i) => i.name)]);
-    return `${items.length} menu items (${items.map((i) => `${i.name} ${i.levels.length} price${i.levels.length === 1 ? "" : "s"}`).join(", ")})${req.size ? `, always included: ${[...req].join(", ")}` : ""}; ${s.tasksPerVersion ?? config.tasks} tasks, ${plural(Number(s.versions ?? config.versions ?? 1), "version")}${config.noneOption === false ? "" : ", “buy nothing” offered"}. The analysis reports take rates by item and price (counts, not a choice model).${Array.isArray(s.warnings) && s.warnings.length ? ` Warnings: ${s.warnings.join(" ")}` : ""}`;
+    const groups = (s.exclusiveGroups as { name: string; items: string[] }[] | undefined) ?? [];
+    return `${items.length} menu items (${items.map((i) => `${i.name} ${i.levels.length} price${i.levels.length === 1 ? "" : "s"}`).join(", ")})${req.size ? `, always included: ${[...req].join(", ")}` : ""}${groups.length ? `; one-of sections: ${groups.map((g) => `${g.name} (${g.items.join(" / ")})`).join(", ")}` : ""}; ${s.tasksPerVersion ?? config.tasks} tasks, ${plural(Number(s.versions ?? config.versions ?? 1), "version")}${config.noneOption === false ? "" : ", “buy nothing” offered"}. The analysis reports take rates by item and price (counts) and fits per-item logits on own and cross prices${groups.length ? " (a multinomial choice per section)" : ""}, with a menu simulator (take rates, revenue, bundles).${Array.isArray(s.warnings) && s.warnings.length ? ` Warnings: ${s.warnings.join(" ")}` : ""}`;
   }
   const attrs = (config.attributes as { name: string; levels: string[] }[]) ?? [];
   const e = s.efficiency as Record<string, any> | undefined;
@@ -641,6 +891,9 @@ export function conjointDesignWords(kind: string, config: Cfg, file: DesignFile)
     e && typeof e.avoidableOverlapPct === "number" ? `avoidable overlap ${e.avoidableOverlapPct}%` : "",
     e && typeof e.duplicateConceptTasks === "number" ? `${e.duplicateConceptTasks} tasks with a duplicate concept` : "",
     s.legalConcepts != null ? `the prohibitions leave ${s.legalConcepts} of ${s.totalConcepts} concepts (${s.spaceRemaining}%)` : "",
+    /* F4 2026-10-22 */
+    s.dualResponseNone ? `dual-response None: a forced choice, then “${(config.dualResponsePrompt as string | undefined) ?? "Would you actually buy the option you chose?"}”` : "",
+    s.alternativeSpecific ? `${(s.alternativeSpecific as { labelled?: boolean }).labelled ? "labelled (each " + (s.alternativeSpecific as { brandAttribute: string }).brandAttribute + " once per task)" : "brand-specific"}${((s.alternativeSpecific as { rules?: { attribute: string; appliesTo: string[] }[] }).rules ?? []).map((r) => `; ${r.attribute} only for ${r.appliesTo.join("/")}`).join("")}` : "",
   ].filter(Boolean);
   return `${parts.join("; ")}.${Array.isArray(s.warnings) && s.warnings.length ? ` Warnings: ${s.warnings.join(" ")}` : ""}`;
 }
@@ -652,20 +905,23 @@ function variantFor(kind: string, config: Cfg): string {
   if (kind === "maxdiff") return "maxdiff.best_worst";
   if (kind === "menu") return ((config.requiredItems as string[] | undefined)?.length || ((config.items as { required?: boolean }[]) ?? []).some((i) => i.required)) ? "conjoint.pricing_configurator" : "conjoint.menu";
   if (kind === "acbc") return "conjoint.acbc";
+  if (kind === "cva") return "conjoint.cva";
   return "conjoint.cbc";
 }
 function defaultText(kind: string, config: Cfg): string {
   if (kind === "maxdiff") return config.responseMode === "best_only" ? "In each set, which item is the most important to you?" : "In each set, which item is the most important to you, and which is the least important?";
   if (kind === "menu") return "Which of these would you buy at these prices?";
   if (kind === "acbc") return "First build the product you would most like. Then tell us which of the alternatives could work for you.";
+  if (kind === "cva") return config.mode === "paired" ? "Which of these two would you prefer, and how strongly?" : "How likely would you be to buy this product?";
   return "If these were your only options, which would you choose?";
 }
 /** what the respondent sees and what is recorded, in words */
 function dataWords(kind: string, q: Question, config: Cfg): string {
   const v = q.variableName;
   if (kind === "maxdiff") return `${q.code} shows the tasks on its own page${q.required ? ", every task required" : ""}; item order is shuffled per respondent and task (recorded in _ORDER); data: ${v}_VERSION, ${v}_T<n>_BEST${config.responseMode === "best_only" ? "" : `, ${v}_T<n>_WORST`}${config.anchored ? `, ${v}_T<n>_ANCHOR` : ""}, ${v}_T<n>_ORDER`;
-  if (kind === "conjoint") return `${q.code} shows the tasks on its own page${q.required ? ", every task required" : ""}; alternatives are shown in a per-respondent random order (Option A/B/C by position${config.noneOption ? ", None last" : ""}); data: ${v}_VERSION, ${v}_T<n> (the chosen design alternative), ${v}_T<n>_ORDER, and the stacked CBC file`;
+  if (kind === "conjoint") return `${q.code} shows the tasks on its own page${q.required ? ", every task required" : ""}; alternatives are shown in a per-respondent random order (${config.labelled ? "labelled by brand" : "Option A/B/C by position"}${config.noneOption ? ", None last" : ""}${config.dualResponseNone ? ", then “would you buy it?”" : ""}); data: ${v}_VERSION, ${v}_T<n> (the chosen design alternative), ${v}_T<n>_ORDER${config.dualResponseNone ? `, ${v}_T<n>_BUY` : ""}, and the stacked CBC file`;
   if (kind === "menu") return `${q.code} shows each menu on its own task; data: ${v}_VERSION and the items chosen per task`;
+  if (kind === "cva") return `${q.code} shows each ${config.mode === "paired" ? "pair" : "profile"} with a rating scale${q.required ? ", every rating required" : ""}; data: ${v}_VERSION, ${v}_T<n> (the rating)`;
   return `${q.code} runs the adaptive stages; the full transcript is stored (${v}_JSON)`;
 }
 
@@ -692,6 +948,7 @@ export function applyMethodAction(def: SurveyDefinition, a: MethodAction, env: M
   def.designs = def.designs ?? [];
   const warnings: string[] = [];
   switch (a.op) {
+    case "simulate_conjoint": return applySimulation(def, a, env);
     case "create_maxdiff": case "create_conjoint": {
       const kind = a.op === "create_maxdiff" ? "maxdiff" : KIND_OF[(a as ConjointSpec).method ?? "cbc"];
       const built = a.op === "create_maxdiff" ? maxdiffConfig(def, env, a) : conjointConfig((a as ConjointSpec).method ?? "cbc", a as ConjointSpec);
@@ -756,12 +1013,58 @@ export function applyMethodAction(def: SurveyDefinition, a: MethodAction, env: M
   }
 }
 
+/**
+ * SAVE A SIMULATOR SCENARIO on the design (F4 2026-10-22). Checked against the design — a menu's items
+ * and prices that parse, a product's attributes and levels — and stored in `config.simulations` by name
+ * (replacing a scenario of the same name). Never regenerates the tasks.
+ */
+function applySimulation(def: SurveyDefinition, a: Extract<MethodAction, { op: "simulate_conjoint" }>, env: MethodEnv): MethodApplied {
+  const q = targetQuestion(def, env, a.target);
+  const d = designOf(def, q) ?? fail(`${q.code} is not a conjoint question with a design`);
+  if (!METHOD_OF_KIND[d.kind]) fail(`${q.code} is a ${LABEL[d.kind] ?? d.kind} question — the simulator runs on conjoint designs (CBC, ACBC, menu, CVA)`);
+  const c = (d.config ?? {}) as Cfg;
+  const list = ((c.simulations as SimulationScenarioInput[] | undefined) ?? []).filter((x) => norm(x.name) !== norm(a.scenario.name));
+  if (a.remove) {
+    if (list.length === ((c.simulations as unknown[] | undefined) ?? []).length) fail(`${q.code} has no simulator scenario “${a.scenario.name}”`);
+    d.config = { ...c, simulations: list };
+    if (!list.length) delete (d.config as Cfg).simulations;
+    return { description: `Removed simulator scenario “${a.scenario.name}” from ${q.code}; the design and its tasks are unchanged.`, warnings: [], touched: [q.id] };
+  }
+  const sc = structuredClone(a.scenario);
+  const parts: string[] = [];
+  const warnings: string[] = [];
+  if (d.kind === "menu") {
+    if (sc.products) fail("a menu scenario sets item prices and bundles (prices, bundles), not products");
+    const items = ((c.items as { name: string; levels: string[] }[]) ?? []);
+    const item = (n: string) => items.find((i) => norm(i.name) === norm(n)) ?? fail(`“${n}” is not on the menu (${items.map((i) => i.name).join(", ")})`);
+    const money = (v: string | number, what: string) => { const n = typeof v === "number" ? v : Number(String(v).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/)?.[0]); if (!Number.isFinite(n)) fail(`${what}: “${v}” is not a price`); return n; };
+    if (sc.prices) sc.prices = Object.fromEntries(Object.entries(sc.prices).map(([k, v]) => { const it = item(k); const n = money(v, it.name); const tested = it.levels.map((l) => Number(String(l).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/)?.[0])).filter(Number.isFinite); if (tested.length && (n < Math.min(...tested) || n > Math.max(...tested))) warnings.push(`${it.name} at ${v} is outside the tested prices (${it.levels.join(", ")}) — the simulator extrapolates the price slope, which is less reliable.`); return [it.name, n]; }));
+    if (sc.bundles) sc.bundles = sc.bundles.map((b) => ({ name: b.name, items: b.items.map((x) => item(x).name), price: money(b.price, b.name) }));
+    if (sc.prices) parts.push(`prices ${Object.entries(sc.prices).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+    if (sc.bundles) parts.push(sc.bundles.map((b) => `bundle “${b.name}” (${b.items.join(" + ")}) at ${b.price}`).join("; "));
+  } else {
+    if (sc.prices || sc.bundles) fail("prices and bundles belong to a menu scenario — give products: [{name, levels}]");
+    const attrs = ((c.attributes as { name: string; levels: string[] }[]) ?? []);
+    sc.products = (sc.products ?? []).map((p) => ({ ...p, levels: Object.fromEntries(Object.entries(p.levels).map(([k, v]) => { const r = resolveLevel(attrs, { attribute: k, level: v }, `product ${p.name}`); return [r.attribute, r.level]; })) }));
+    const missing = sc.products.flatMap((p) => attrs.filter((x) => !(x.name in p.levels)).map((x) => `${p.name}: ${x.name}`));
+    if (missing.length) warnings.push(`Not every product names every attribute (${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "; …" : ""}) — the simulator uses the attribute's first level for those.`);
+    if (d.kind === "acbc" && c.priceBase == null && sc.products.some((p) => p.price !== undefined)) warnings.push("This ACBC design has no summed price, so a product's price is ignored (price is one of its attributes, if any).");
+    parts.push(sc.products.map((p) => `${p.name} (${Object.values(p.levels).join(", ")}${p.price !== undefined ? `, price ${p.price}` : ""})`).join(" vs "));
+  }
+  d.config = { ...c, simulations: [...list, sc] };
+  return {
+    description: `Simulator scenario “${sc.name}” saved on ${q.code} (${LABEL[d.kind] ?? d.kind}): ${parts.join("; ")}${sc.rule ? `; rule ${sc.rule}` : ""}. The tasks are unchanged. Data Analytics → Conjoint on ${q.code} simulates it from the respondents' utilities (${d.kind === "menu" ? "take rate per item and of each bundle, revenue per respondent" : "share of preference, revenue where products carry prices"}); results appear once responses are in.`,
+    warnings, touched: [q.id],
+  };
+}
+
 export function describeMethodAction(a: MethodAction): string {
   switch (a.op) {
     case "create_maxdiff": return `Create a MaxDiff${a.items ? ` of ${a.items.length} items` : a.itemsFrom ? ` of ${a.itemsFrom}'s items` : ""}`;
     case "create_conjoint": return `Create a ${LABEL[KIND_OF[a.method ?? "cbc"]]}`;
     case "update_maxdiff": return `Change the MaxDiff ${a.target}`;
     case "update_conjoint": return `Change the conjoint ${a.target}`;
+    case "simulate_conjoint": return a.remove ? `Remove simulator scenario “${a.scenario.name}” from ${a.target}` : `Simulator scenario “${a.scenario.name}” on ${a.target}`;
   }
 }
 
@@ -774,13 +1077,16 @@ export function describeDesignQuestion(def: SurveyDefinition, q: Question): stri
     const pairs = (c.prohibitedPairs as MaxDiffPair[] | undefined) ?? [];
     return `${q.code} MaxDiff [design ${d.name}, v${d.version}, seed ${d.seed}]: ${(c.items as string[] ?? []).length} items (${(c.items as string[] ?? []).slice(0, 25).join(" | ")}), ${c.itemsPerTask ?? "?"} per task, ${c.tasks ?? "auto"} tasks, ${c.versions ?? 1} versions, ${c.responseMode ?? "best_worst"}${c.anchored ? ", anchored" : ""}${c.practiceTask ? ", practice task" : ""}${pairs.length ? `, prohibited ${pairs.map((p) => `${p[0]}/${p[1]}`).join(", ")}` : ""}${c.bestLabel || c.worstLabel ? `, labels ${c.bestLabel ?? "Most"}/${c.worstLabel ?? "Least"}` : ""}`;
   }
-  if (d.kind === "menu") return `${q.code} menu-based conjoint [design ${d.name}, v${d.version}]: ${((c.items as { name: string; levels: string[] }[]) ?? []).map((i) => `${i.name} (${i.levels.join("/")})`).join("; ")}, ${c.tasks ?? 8} tasks, ${c.versions ?? 1} versions${c.noneOption === false ? "" : ", buy-nothing offered"}`;
-  if (d.kind === "conjoint" || d.kind === "acbc") {
+  if (d.kind === "menu") return `${q.code} menu-based conjoint [design ${d.name}, v${d.version}]: ${((c.items as { name: string; levels: string[] }[]) ?? []).map((i) => `${i.name} (${i.levels.join("/")})`).join("; ")}, ${c.tasks ?? 8} tasks, ${c.versions ?? 1} versions${c.noneOption === false ? "" : ", buy-nothing offered"}${Array.isArray(c.exclusiveGroups) && c.exclusiveGroups.length ? `; one-of sections ${(c.exclusiveGroups as string[]).join("; ")}` : ""}${((c.simulations as { name: string }[] | undefined) ?? []).length ? `; simulator scenarios: ${((c.simulations as { name: string }[]) ?? []).map((x) => x.name).join(", ")}` : ""}`;
+  if (d.kind === "conjoint" || d.kind === "acbc" || d.kind === "cva") {
     const attrs = ((c.attributes as { name: string; levels: string[] }[]) ?? []).map((x) => `${x.name} (${x.levels.join("/")})`).join("; ");
     const pros = ((c.prohibitions as { a: LevelRef; b: LevelRef; when?: unknown }[] | undefined) ?? []).map((p) => (p.when ? "a combination rule" : `${p.a.attribute} ${p.a.level} × ${p.b.attribute} ${p.b.level}`));
+    const sims = ((c.simulations as { name: string }[] | undefined) ?? []).map((x) => x.name);
+    const simTail = sims.length ? `; simulator scenarios: ${sims.join(", ")}` : "";
+    if (d.kind === "cva") return `${q.code} rating-based conjoint (CVA) [design ${d.name}, v${d.version}, seed ${d.seed}]: ${attrs}; ${c.mode === "paired" ? "pairs" : "profiles"} ${c.profiles ?? "auto"}, ${c.versions ?? 1} versions, scale ${c.scaleMin ?? (c.mode === "paired" ? 1 : 0)}–${c.scaleMax ?? (c.mode === "paired" ? 9 : 10)}${pros.length ? `; prohibited ${pros.join(", ")}` : ""}${simTail}`;
     return d.kind === "acbc"
-      ? `${q.code} ACBC [design ${d.name}, v${d.version}]: ${attrs}${pros.length ? `; prohibited ${pros.join(", ")}` : ""}`
-      : `${q.code} CBC [design ${d.name}, v${d.version}, seed ${d.seed}]: ${attrs}; ${c.alternativesPerTask ?? 3} alternatives${c.noneOption ? " + None" : ""}, ${c.tasks ?? 10} tasks, ${c.versions ?? 1} versions, ${c.method ?? "balanced"}${pros.length ? `; prohibited ${pros.join(", ")}` : ""}`;
+      ? `${q.code} ACBC [design ${d.name}, v${d.version}]: ${attrs}${c.priceBase != null ? `; summed price base ${c.priceBase}, increments ${((c.priceIncrements as string[]) ?? []).join(" / ")}` : ""}${pros.length ? `; prohibited ${pros.join(", ")}` : ""}${simTail}`
+      : `${q.code} CBC [design ${d.name}, v${d.version}, seed ${d.seed}]: ${attrs}; ${c.alternativesPerTask ?? 3} alternatives${c.noneOption ? " + None" : ""}${c.dualResponseNone ? " + dual-response None" : ""}, ${c.tasks ?? 10} tasks, ${c.versions ?? 1} versions, ${c.method ?? "balanced"}${c.labelled ? `, labelled by ${c.brandAttribute ?? "brand"}` : ""}${Array.isArray(c.alternativeSpecific) && c.alternativeSpecific.length ? `, brand-specific ${(c.alternativeSpecific as string[]).join("; ")}` : ""}${pros.length ? `; prohibited ${pros.join(", ")}` : ""}${simTail}`;
   }
   return `${q.code} [design ${d.name}, ${d.kind}]`;
 }

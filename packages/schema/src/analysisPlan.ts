@@ -34,8 +34,25 @@ export const ANALYSIS_METHODS = [
   "correlation", "regression", "logistic_regression", "factor", "reliability", "cluster",
   "conjoint_utilities", "maxdiff_scores", "turf", "driver_analysis", "text_themes",
   "ranking_scores", "allocation_shares", "pricing", "brand_funnel",
+  /* advanced models from the plan (2026-10-22): hierarchical Bayes for a CBC / MaxDiff exercise, latent class segmentation, SEM / CFA */
+  "hb", "latent_class", "sem",
 ] as const;
 export type AnalysisMethod = (typeof ANALYSIS_METHODS)[number];
+
+/**
+ * THE SETTINGS A PLANNED TEST CARRIES BEYOND ITS VARIABLES (2026-10-22) — each
+ * method reads only its own keys (`planBridge.testDefinition` passes a
+ * whitelist per method), so a key another method uses is ignored, never run.
+ *   hb            chains, burnIn, draws, thin, seed, priorVariance, priorDf
+ *   latent_class  minClasses, maxClasses, starts, seed, classes, covariates (refused: not estimated)
+ *   sem           syntax (lavaan-style), scaling ("marker" | "unit_variance"), hypothesisPaths {H2: "TRUST ~ PRICE"}
+ *   regression    bootstrap (draws for the indirect effect of a mediation, 200–10,000), seed
+ *   reliability   omega (McDonald's ω from a one-factor CFA beside α)
+ *   pricing       method ("gabor_granger"), prices (one per purchase-intent question, ascending), acceptCodes
+ * Absent = the method's defaults, exactly as before this field existed.
+ */
+export const PlannedTestOptions = z.record(z.string(), z.unknown());
+export type PlannedTestOptions = z.infer<typeof PlannedTestOptions>;
 
 /** `question.analysis` — what this question is for */
 export const QuestionAnalysis = z.object({
@@ -100,6 +117,8 @@ export const PlannedTest = z.object({
   tier: z.enum(["essential", "recommended", "exploratory"]).optional(),
   hypotheses: z.array(z.string()).default([]),
   reason: z.string().optional(),
+  /** method settings (see PlannedTestOptions) — absent on every item planned before 2026-10-22 */
+  options: PlannedTestOptions.optional(),
 });
 export type PlannedTest = z.infer<typeof PlannedTest>;
 
@@ -167,6 +186,14 @@ export const AnalysisPlan = z.object({
   interimAnalyses: z.string().optional(),
   /** the software the analyses are run in ("Rescript analytics engine v…", "SPSS 29") */
   software: z.string().optional(),
+  /**
+   * LIVE UPDATING OF THE ADVANCED MODELS (2026-10-22). New responses make an
+   * executed HB / latent class / SEM result STALE — it is flagged and a re-run
+   * is offered, never overwritten silently. "threshold" re-runs it by itself
+   * once `newResponses` more completes are in (checked by the fieldwork cron);
+   * absent or "manual" = flag and offer only.
+   */
+  advancedRerun: z.object({ mode: z.enum(["manual", "threshold"]).default("manual"), newResponses: z.number().int().min(1).max(100_000).optional() }).optional(),
 });
 export type AnalysisPlan = z.infer<typeof AnalysisPlan>;
 

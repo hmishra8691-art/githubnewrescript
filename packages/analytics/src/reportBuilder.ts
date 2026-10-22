@@ -8,6 +8,7 @@ import { checkSentence, claimsFromItems, sentenceLabel, type ClaimLabel } from "
 import { mentionsVariable } from "./analyses/index.js";
 import { adjustP } from "./posthoc.js";
 import { REPORT_THEMES, themeNameKey } from "./reportThemes.js";
+import { advancedFacts, advancedNarrative, narrativeMarkdown, type AdvancedMethod } from "./advancedNarrative.js";
 
 /**
  * THE INTELLIGENT REPORT BUILDER (Data Analytics audit, Oct 2026).
@@ -55,6 +56,8 @@ export interface ReportBrief {
   theme?: string;
   /** the study's hypotheses (set by the server from the survey, never from the request) — for the hypothesis-wise findings */
   hypotheses?: { label: string; text: string }[];
+  /** the language the interpretation is written in (a BCP-47 tag or a language name; absent = English) — 2026-10-22 */
+  language?: string;
 }
 
 export const REPORT_SECTIONS = ["executive_summary", "hypotheses", "brand_comparison", "segments", "recommendations", "methodology"] as const;
@@ -258,7 +261,10 @@ const HEAD: Record<ReportTone, { key: string; comparison: string; difference: st
   concise: { key: "Key findings", comparison: "Group comparisons", difference: "Significant differences" },
 };
 
-export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], variables: readonly VariableMeta[], opts: { story?: boolean; interpretation?: GatedInterpretation | null; now?: Date } = {}): BuilderDraft {
+/** the table that carries each advanced model's structure in a report (the first one the result has) */
+const ADVANCED_KEY_TABLE: Record<AdvancedMethod, string[]> = { hb: ["hb_importance", "hb_shares", "hb_mean"], latent_class: ["lca_sizes", "lca_fit"], sem: ["sem_structural", "sem_measurement", "sem_fit"], mediation_bootstrap: ["mediation_bootstrap"], omega: ["omega"], gabor_granger: ["gg"] };
+
+export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], variables: readonly VariableMeta[], opts: { story?: boolean; interpretation?: GatedInterpretation | null; now?: Date; /** per analysis id: the gated interpretation of that one advanced result (2026-10-22) */ advancedInterpretations?: Record<string, { implications: string[]; recommendations: string[] }> } = {}): BuilderDraft {
   const { ranked, skipped, uncovered } = rankItems(items, variables, brief);
   const notes: string[] = [];
   const title = brief.title?.trim() || clip(brief.objective.trim() || "Survey findings", 90);
@@ -285,6 +291,21 @@ export function draftReport(brief: ReportBrief, items: readonly BuilderItem[], v
   section(H.comparison, ranked.filter((r) => r.role === "comparison" || r.role === "finding"));
   section(H.difference, ranked.filter((r) => r.role === "difference"));
   if (brief.sections?.length) blocks.push(...requestedSections(brief, items, ranked, variables, notes));
+  /*
+   * THE ADVANCED MODELS, READ (2026-10-22): each executed HB, latent class, SEM, bootstrap mediation, ω or
+   * Gabor–Granger result gets the engine's plain-language reading (facts, diagnostics with a status, caveats —
+   * numbers only from its own tables), its key table, and — when the gated interpretation step wrote one for it —
+   * what it may mean. A model that gave no valid estimates is said to, never charted as if it had.
+   */
+  const advanced = ranked.map((r) => ({ r, n: advancedNarrative(r.item.definition, r.item.result, { objective: brief.objective, hypotheses: brief.hypotheses }) })).filter((x): x is { r: Ranked; n: NonNullable<ReturnType<typeof advancedNarrative>> } => !!x.n);
+  if (advanced.length) {
+    blocks.push({ id: bid("sec"), type: "section", title: "Advanced models — what they show", subtitle: "The engine's reading of each model, its diagnostics and caveats; numbers only from the model's own results" });
+    for (const { r, n } of advanced) {
+      blocks.push({ id: bid("adv"), type: "text", title: n.title, markdown: narrativeMarkdown(n, opts.advancedInterpretations?.[r.item.id] ?? null) });
+      const keyTable = ADVANCED_KEY_TABLE[n.method].find((id) => r.item.result.tables.some((t) => t.id === id));
+      if (keyTable && n.valid) blocks.push({ id: bid("advt"), type: "table", title: r.item.result.tables.find((t) => t.id === keyTable)!.title, analysisId: r.item.id, tableId: keyTable });
+    }
+  }
   if (brief.sections?.includes("recommendations") && !(opts.interpretation?.recommendations.length)) notes.push("Recommendations: none are written. They come only from the interpretation step (a model reading the results above, gated sentence by sentence) — ask for the interpretation when you build, or add them by hand. The report does not invent them.");
   /* 2026-10-18: the theme is APPLIED when the report is created (the builder resolves the name to a saved theme, saving the preset first if needed), no longer only suggested */
   if (brief.theme) notes.push(`Theme: the ${brief.theme} theme is applied to this report when you create it, so every chart and block shares it.`);
@@ -422,8 +443,13 @@ export function interpretationBrief(brief: ReportBrief, items: readonly BuilderI
   items.forEach((it, i) => {
     const r = it.result;
     const tested = r.tests.find((t) => t.p != null);
+    /* an advanced model (2026-10-22) is described by the engine's facts and diagnostics, not its first insight lines — the model reads what the result means from what the engine states */
+    const adv = advancedFacts(it.definition, r);
+    if (adv) { lines.push(`- [C${i + 1}]${adv.valid ? "" : " (no valid estimates)"} ${it.name} — ${adv.methodName} (n = ${r.base.n}): ${adv.summary.join(" ")} DIAGNOSTICS: ${adv.diagnostics.map((d) => `${d.label} ${d.value}${d.status === "ok" ? "" : ` (${d.status})`}`).join("; ") || "none"}.`); return; }
     lines.push(`- [C${i + 1}]${tested && (tested.p as number) >= 0.05 ? " (not significant)" : ""} ${it.name} (n = ${r.base.n}): ${r.insights.slice(0, 3).join(" ") || "no finding text"}${testLine(r) ? ` [${testLine(r)}]` : ""}`);
   });
+  /* the researcher's language (2026-10-22): the sentences are written in it; the numbers are checked the same in any script */
+  if (brief.language && !/^en\b/i.test(brief.language)) lines.push(`LANGUAGE: write every sentence in ${brief.language}; keep each number exactly as printed above.`);
   return lines.filter(Boolean).join("\n");
 }
 

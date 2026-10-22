@@ -382,6 +382,8 @@ export function qualGuideDiff(before: SurveyDefinition, after: SurveyDefinition)
   if (changed.length) out.push(`Change guide section${changed.length === 1 ? "" : "s"} ${changed.map((s) => `“${s.title}”`).join(", ")}`);
   const top = (["kind", "title", "objectives", "protocol", "durationMinutes", "groundRules", "screening", "consent", "segments", "sessionPlan"] as const).filter((k) => JSON.stringify(a![k]) !== JSON.stringify(b![k]));
   if (top.length) out.push(`Change the ${what(b!)}'s ${top.join(", ")}`);
+  /* 2026-10-22: the guide run as AI-moderated interviews (aiInterviewActions.ts) */
+  if (JSON.stringify(a!.aiModeration) !== JSON.stringify(b!.aiModeration)) out.push(b!.aiModeration ? `${a!.aiModeration ? "Change" : "Set up"} AI-moderated interviews for the ${what(b!)}` : "Remove the AI-moderated interview settings");
   return out;
 }
 

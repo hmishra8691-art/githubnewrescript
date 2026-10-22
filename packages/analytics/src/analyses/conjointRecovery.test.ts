@@ -130,15 +130,18 @@ test("raw counts are reported separately and labelled as counts, not utilities",
   assert.equal(r.tables[1].id, "partworths");
 });
 
-test("a menu question gets take-rate counts, said to be counts; an ACBC question is refused in words, never swapped for another question", () => {
+test("a menu question gets take-rate counts, said to be counts — first, with the menu choice model after them (F4); an ACBC question is analysed as ACBC, never swapped for another question", () => {
   const m = runAnalysis(D(["MENU"]), ds);
   const t = m.tables.find((x) => x.id === "menu_counts")!;
   assert.ok(t, JSON.stringify(m.warnings));
+  assert.equal(m.tables[0].id, "menu_counts", "the counts keep their place");
   assert.match(t.title, /counts, not a model/);
-  assert.ok(m.warnings.some((w) => /no choice model is estimated/.test(w)));
+  /* F4 2026-10-22: the menu now has a choice model (packages/analytics/src/conjoint/menu.ts) after the counts */
+  assert.ok(m.tables.some((x) => x.id === "menu_model"), JSON.stringify(m.warnings));
   const extra = t.rows.find((x) => x.item === "Extra" && x.price === "$2")!;
   assert.equal(extra.shown, 900);
+  /* F4 2026-10-22: ACBC is estimated (conjoint/acbc.ts); with no ACBC answers it says so, and never analyses the CBC instead */
   const a = runAnalysis(D(["ACBC"]), ds);
   assert.equal(a.tables.length, 0);
-  assert.ok(a.warnings.some((w) => /Adaptive CBC/.test(w) && /No ACBC estimator/.test(w)), JSON.stringify(a.warnings));
+  assert.ok(a.error && /No ACBC answers recorded yet/.test(a.error.message), JSON.stringify(a.warnings));
 });

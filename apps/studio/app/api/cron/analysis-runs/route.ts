@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { SurveyDefinition } from "@rescript/schema";
 import { supabaseService } from "@/lib/authServer";
 import { loadDefinition, dueMilestone, runPlanFor, draftFindingsReport, hasFindingsReport } from "@/lib/analytics";
+import { advancedTick } from "@/lib/advancedModels";
 
 /**
  * THE PLAN RUNS BY ITSELF (research-intelligence Phase 5).
@@ -51,6 +52,7 @@ async function run(req: Request): Promise<NextResponse> {
   const surveyIds = (withPlan ?? []).map((r) => String((r as { id: string }).id));
   const ran: { surveyId: string; trigger: string; n: number; findings: number; report?: string }[] = [];
   const skipped: { surveyId: string; reason: string }[] = [];
+  const advanced: { surveyId: string; jobsStarted: number; jobsAdvanced: number; run: string | null }[] = [];
   let checked = 0;
   for (const surveyId of surveyIds) {
     if (Date.now() - startedAt > BUDGET_MS) { skipped.push({ surveyId, reason: "time budget spent — next hour" }); continue; }
@@ -59,6 +61,17 @@ async function run(req: Request): Promise<NextResponse> {
     if ("error" in loaded) { skipped.push({ surveyId, reason: loaded.error }); continue; }
     const def = loaded.def as SurveyDefinition;
     if (!def.research?.analysisPlan) continue;
+    /*
+     * ADVANCED MODELS ON THE THRESHOLD POLICY (2026-10-22): when the plan asks for it (advancedRerun.mode
+     * "threshold"), the HB / latent-class / SEM / … items stale by that many new completes are re-run — HB as a
+     * job, advanced a chunk at a time each hour — and a finished job joins a new run. A manual plan is only flagged.
+     */
+    if (def.research.analysisPlan.advancedRerun?.mode === "threshold") {
+      try {
+        const t = await advancedTick(db, surveyId, loaded, startedAt + BUDGET_MS);
+        if (t && (t.jobs.length || t.continued || t.runId)) advanced.push({ surveyId, jobsStarted: t.jobs.length, jobsAdvanced: t.continued, run: t.runId });
+      } catch (e) { skipped.push({ surveyId, reason: `advanced models: ${e instanceof Error ? e.message : String(e)}` }); }
+    }
     const due = await dueMilestone(db, surveyId, def);
     if (!due) continue;
     /* on the CLEAN dataset (Phase 1): the automatic findings should not count respondents the quality engine flagged or the researcher removed */
@@ -72,5 +85,5 @@ async function run(req: Request): Promise<NextResponse> {
     }
     ran.push({ surveyId, trigger: due, n: r.run.n, findings: r.run.findings.length, ...(report ? { report } : {}) });
   }
-  return NextResponse.json({ ok: true, checked, ran, skipped, elapsedMs: Date.now() - startedAt });
+  return NextResponse.json({ ok: true, checked, ran, advanced, skipped, elapsedMs: Date.now() - startedAt });
 }

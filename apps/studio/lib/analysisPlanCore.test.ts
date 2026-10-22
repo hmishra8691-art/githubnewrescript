@@ -57,7 +57,8 @@ function setup(plan = true, completes = 120) {
 }
 
 /** a runner that computes nothing: one run item per planned (non-excluded) item, stored like the real one */
-const deps = (opts: { fail?: string[]; /** items the run refuses with `error` set (audit ANALYTICS-05/06) */ refuse?: string[] } = {}): PlanDeps => ({
+const deps = (opts: { fail?: string[]; /** items the run refuses with `error` set (audit ANALYTICS-05/06) */ refuse?: string[]; /** items that run as a background job (HB, 2026-10-22) */ pending?: string[]; startModelJob?: PlanDeps["startModelJob"] } = {}): PlanDeps => ({
+  ...(opts.startModelJob ? { startModelJob: opts.startModelJob } : {}),
   latestRun: async (db, surveyId, environment) => {
     const rows = (db as unknown as FakeDb).tables.analytics_runs.filter((r) => r.survey_id === surveyId && (!environment || r.environment === environment)).sort((a, b) => String(b.computed_at).localeCompare(String(a.computed_at)));
     const r = rows[0]; if (!r) return null;
@@ -70,7 +71,7 @@ const deps = (opts: { fail?: string[]; /** items the run refuses with `error` se
     const items = plannedAnalyses(ctx.def, spec).filter((p) => !o.exclude?.has(String(p.definition.options?.planned)));
     const run: AnalysisRun = {
       computedAt: stamp(), trigger: o.trigger ?? "manual", environment: spec.environment, n,
-      items: items.map((p) => ({ definition: p.definition, result: { tables: [], chart: {}, tests: [], insights: [], warnings: opts.fail?.includes(String(p.definition.options?.planned)) ? ["The analysis could not be computed: boom"] : [], recommendedCharts: ["bar_vertical"], computedAt: "", definitionHash: "", variablesUsed: [] } as never, findings: [], chart: p.definition.kind === "crosstab" ? "bar_grouped" : "bar_vertical", source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(opts.refuse?.includes(String(p.definition.options?.planned)) ? { error: { code: "unknown_variable" as const, message: "Not run — GHOST is not in this survey's data." } } : {}) })),
+      items: items.map((p) => ({ definition: p.definition, result: { tables: [], chart: {}, tests: [], insights: [], warnings: opts.fail?.includes(String(p.definition.options?.planned)) ? ["The analysis could not be computed: boom"] : [], recommendedCharts: ["bar_vertical"], computedAt: "", definitionHash: "", variablesUsed: [] } as never, findings: [], chart: p.definition.kind === "crosstab" ? "bar_grouped" : "bar_vertical", source: p.source, priority: p.priority, hypotheses: p.hypotheses, ...(opts.refuse?.includes(String(p.definition.options?.planned)) ? { error: { code: "unknown_variable" as const, message: "Not run — GHOST is not in this survey's data." } } : {}), ...(opts.pending?.includes(String(p.definition.options?.planned)) ? { error: { code: "job_pending" as const, message: "runs as a background job" } } : {}) })),
       findings: [], verdicts: [{ label: "H1", text: "Trust raises intent", verdict: "untested", reason: "no test ran", findings: [], analyses: 0 }, { label: "H2", text: "Country changes intent", verdict: "untested", reason: "no test ran", findings: [], analyses: 0 }], warnings: [],
     };
     if (o.skipEmpty && n === 0) return { run, stored: null };
@@ -411,4 +412,28 @@ test("P-11: a version row that cannot be written is said in the item, not swallo
   const failing = new Proxy(real, { get: (t, k) => k === "from" ? (name: string) => name === "analytics_analysis_versions" ? { insert: async () => ({ error: { message: "boom" } }) } : (t as never as { from: (n: string) => unknown }).from(name) : (t as never)[k] }) as unknown as SupabaseClient;
   const r = await applyPlan(failing, SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps());
   assert.ok(r.summary!.items.some((i) => /version history entry was not/.test(i.reason ?? "")));
+});
+
+test("a model that runs as a background job (HB): the apply starts it, reports it as running with its progress, never as run or skipped; a refused job is a failure in words", async () => {
+  const db = setup();
+  const started: string[] = [];
+  const view = (status: string) => ({ id: "job1", kind: "hb", status, progress: { done: 1200, total: 10000, unit: "iterations", pct: 12, projectedMs: 30_000 }, result: null, error: status === "refused" ? "Hierarchical Bayes needs at least 50 respondents with choices." : null, seed: 1, dataFingerprint: null, engineVersion: "x", createdAt: stamp(), updatedAt: stamp(), finishedAt: null });
+  const r = await applyPlan(db.as(), SURVEY, ctxOf(db), { dataset: LIVE, userId: "u1" }, deps({ pending: ["t_2"], startModelJob: async (_db, _s, _c, def, analysisId) => { started.push(`${def.options?.planned}:${analysisId ? "saved" : "none"}`); return { job: view("running") as never }; } }));
+  assert.equal(r.ok, true);
+  assert.deepEqual(started, ["t_2:saved"], "started once, for the job item, with its saved analysis");
+  const it = r.summary!.items.find((i) => i.id === "t_2")!;
+  assert.equal(it.status, "job_running");
+  assert.match(it.reason ?? "", /running as a background job \(12% of 10,000 iterations per chain\)/);
+  assert.equal(r.summary!.counts.jobs, 1);
+  assert.equal(r.jobs?.length, 1); assert.equal(r.jobs![0].planned, "t_2");
+  assert.ok(r.summary!.items.filter((i) => i.id !== "t_2" && i.id !== "xt_2").every((i) => i.status === "run"), "the other items ran inline");
+
+  const db2 = setup();
+  const refused = await applyPlan(db2.as(), SURVEY, ctxOf(db2), { dataset: LIVE, userId: "u1" }, deps({ pending: ["t_2"], startModelJob: async () => ({ job: view("refused") as never }) }));
+  const it2 = refused.summary!.items.find((i) => i.id === "t_2")!;
+  assert.equal(it2.status, "failed"); assert.match(it2.reason ?? "", /at least 50 respondents/);
+
+  const db3 = setup();
+  const none = await applyPlan(db3.as(), SURVEY, ctxOf(db3), { dataset: LIVE, userId: "u1" }, deps({ pending: ["t_2"] }));
+  assert.match(none.summary!.items.find((i) => i.id === "t_2")!.reason ?? "", /background job could not be started: background jobs are not available here/);
 });

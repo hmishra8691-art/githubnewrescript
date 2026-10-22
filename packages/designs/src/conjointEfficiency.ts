@@ -222,7 +222,13 @@ export function swapImprove(
   tasks: Record<string, string>[][],
   isLegal: ((profile: Record<string, string>) => boolean) | null,
   rng: () => number,
-  opts: { maxPasses?: number; maxEvaluations?: number } = {},
+  /*
+   * `fixed` (F4 2026-10-22, alternative-specific designs): attributes never swapped — the brand of a
+   * labelled or alternative-specific design decides which other attributes a concept carries. A level
+   * of "" means NOT APPLICABLE (an attribute that does not apply to that concept's brand): it codes as
+   * zeros and is never swapped. Neither occurs in a generic design, so its swaps are exactly as before.
+   */
+  opts: { maxPasses?: number; maxEvaluations?: number; fixed?: string[] } = {},
 ): { passes: number; swaps: number; evaluations: number; exhausted: boolean } {
   const maxPasses = opts.maxPasses ?? 8;
   const maxEvaluations = opts.maxEvaluations ?? Infinity;
@@ -234,11 +240,12 @@ export function swapImprove(
   if (p === 0 || tasks.length === 0) return { passes: 0, swaps: 0, evaluations: 0, exhausted: false };
   const levelIndex = attributes.map((a) => new Map(a.levels.map((l, i) => [l, i])));
   /* concepts as level indices; a concept's key is its mixed-radix number */
-  const L: number[][][] = tasks.map((ts) => ts.map((pr) => attributes.map((a, q) => levelIndex[q].get(pr[a.name]) ?? 0)));
+  const L: number[][][] = tasks.map((ts) => ts.map((pr) => attributes.map((a, q) => (pr[a.name] === "" ? -1 : levelIndex[q].get(pr[a.name]) ?? 0))));
+  const fixedQ = new Set((opts.fixed ?? []).map((n) => attributes.findIndex((a) => a.name === n)).filter((q) => q >= 0));
   const radix: number[] = [];
-  { let r = 1; for (const a of attributes) { radix.push(r); r *= Math.max(1, a.levels.length); } }
-  const keyOf = (lv: number[]) => { let k = 0; for (let q = 0; q < Q; q++) k += lv[q] * radix[q]; return k; };
-  const profileOf = (lv: number[]) => Object.fromEntries(attributes.map((a, q) => [a.name, a.levels[lv[q]]]));
+  { let r = 1; for (const a of attributes) { radix.push(r); r *= Math.max(1, a.levels.length) + 1; } }
+  const keyOf = (lv: number[]) => { let k = 0; for (let q = 0; q < Q; q++) k += (lv[q] + 1) * radix[q]; return k; };
+  const profileOf = (lv: number[]) => Object.fromEntries(attributes.map((a, q) => [a.name, lv[q] < 0 ? "" : a.levels[lv[q]]]));
   const maxM = Math.max(...tasks.map((t) => t.length));
   const X = new Float64Array(maxM * p), xb = new Float64Array(p);
   /** information of task t (with concept j1/j2 replaced), written into out */
@@ -251,6 +258,7 @@ export function swapImprove(
     for (let j = 0; j < m; j++) {
       const lv = j === j1 ? c1! : j === j2 ? c2! : L[t][j];
       for (let q = 0; q < Q; q++) {
+        if (lv[q] < 0) { for (let k = 0; k < codes[q][0].length; k++) X[j * p + offsets[q] + k] = 0; continue; }
         const row = codes[q][lv[q]], o = offsets[q];
         for (let k = 0; k < row.length; k++) { X[j * p + o + k] = row[k]; xb[o + k] += row[k] * inv; }
       }
@@ -289,7 +297,7 @@ export function swapImprove(
       const [ta, ja] = concepts[ca], [tb, jb] = concepts[cb];
       for (let q = 0; q < Q; q++) {
         const A = L[ta][ja], B = L[tb][jb];
-        if (A[q] === B[q]) continue;
+        if (A[q] === B[q] || A[q] < 0 || B[q] < 0 || fixedQ.has(q)) continue;
         const A2 = A.slice(), B2 = B.slice();
         A2[q] = B[q]; B2[q] = A[q];
         if (isLegal && (!isLegal(profileOf(A2)) || !isLegal(profileOf(B2)))) continue;

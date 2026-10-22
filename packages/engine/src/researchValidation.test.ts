@@ -42,8 +42,10 @@ test("document consistency and unsupported configurations: a 'supported' hypothe
   const def = pricingStudy({ methodology: "Online survey, n=400; conjoint utilities by hierarchical Bayes", hypothesisDetails: [{ status: "supported" }, {}], analysis: ["regression of switching on price"] });
   const v = validateResearch(def);
   assert.ok(v.items.some((i) => i.area === "document" && i.class === "warning" && /H1 is recorded as “supported”, but no analysis run says so/.test(i.message)));
-  /* E4 2026-10-18: HB is now estimated in Data Analytics (partial: not a plan method) — a recommendation, not a warning */
-  assert.ok(v.items.some((i) => i.area === "unsupported" && i.class === "recommendation" && /Hierarchical Bayes .* only partly supported here: Data Analytics only/.test(i.message)), JSON.stringify(v.items.filter((i) => i.area === "unsupported")));
+  /* F3 2026-10-22: HB is a plan method now (supported) — naming it in the methodology is no longer flagged; a procedure that is still not run (multilevel) is */
+  assert.ok(!v.items.some((i) => i.area === "unsupported" && /Hierarchical Bayes/.test(i.message)), JSON.stringify(v.items.filter((i) => i.area === "unsupported")));
+  const ml = validateResearch(pricingStudy({ methodology: "Online survey, n=400; a multilevel model of stores" }));
+  assert.ok(ml.items.some((i) => i.area === "unsupported" && /Multilevel/.test(i.message)), JSON.stringify(ml.items.filter((i) => i.area === "unsupported")));
   const ran = validateResearch(def, { results: { verdicts: [{ label: "H1", verdict: "supported" }] } });
   assert.ok(!ran.items.some((i) => i.area === "document" && /H1 is recorded/.test(i.message)), "a run says so — no warning");
   assert.equal(ran.traceability.rows[0].status, "tested_supported");

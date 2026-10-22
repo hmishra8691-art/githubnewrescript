@@ -8,7 +8,15 @@ import {
 } from "@rescript/analytics";
 import { useStudio } from "../store";
 import { allSegments } from "@/lib/qual/qualWorkspace";
-import { httpQualApi, sandboxQualApi, agreementOf, QualApiError, type QualApi, type WorkspaceView, type CodingReport } from "./qualApi";
+import { httpQualApi, sharedSandboxQualApi, agreementOf, QualApiError, type QualApi, type WorkspaceView, type CodingReport } from "./qualApi";
+import { AiInterviewsTab } from "./AiInterviewsTab";
+/* F2 2026-10-22: AI synthesis, blind double-coding, highlight reels, text group sessions, transcript correction, auto-coding */
+import { httpSynthesisApi, sandboxSynthesisApi, type SynthesisApi } from "./synthesisApi";
+import { SynthesisTab } from "./SynthesisTab";
+import { DoubleCodingTab } from "./DoubleCodingTab";
+import { HighlightsTab } from "./HighlightsTab";
+import { GroupsTab } from "./GroupsTab";
+import { AutoCodePanel, CorrectableText, SynApiContext } from "./TranscriptTools";
 
 /**
  * THE QUALITATIVE WORKSPACE (2026-10-18) — Research Tools → Qualitative.
@@ -30,10 +38,10 @@ import { httpQualApi, sandboxQualApi, agreementOf, QualApiError, type QualApi, t
  * Nothing here runs a live session: there is no conferencing or real-time moderation.
  */
 
-type Tab = "guide" | "sessions" | "transcripts" | "coding" | "themes" | "report";
+type Tab = "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups";
 const TABS: { key: Tab; label: string }[] = [
-  { key: "guide", label: "Guide" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
-  { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "report", label: "Report" },
+  { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
+  { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "synthesis", label: "Synthesis" }, { key: "double", label: "Double coding" }, { key: "highlights", label: "Highlights" }, { key: "groups", label: "Group sessions" }, { key: "report", label: "Report" },
 ];
 const STATUS_BADGE: Record<string, string> = { ai_suggested: "warning", human_reviewed: "success", rejected: "error" };
 const STATUS_WORD: Record<string, string> = { ai_suggested: "AI-suggested", human_reviewed: "Reviewed", rejected: "Rejected" };
@@ -50,9 +58,10 @@ export function QualPanel() {
   const s = useStudio();
   const defRef = React.useRef(s.def);
   defRef.current = s.def;
-  const api = React.useMemo<QualApi>(() => (s.surveyDbId === "sandbox" ? sandboxQualApi(() => defRef.current) : httpQualApi(s.surveyDbId)), [s.surveyDbId]);
+  const api = React.useMemo<QualApi>(() => (s.surveyDbId === "sandbox" ? sharedSandboxQualApi(() => defRef.current) : httpQualApi(s.surveyDbId)), [s.surveyDbId]);
   const [tab, setTab] = React.useState<Tab>("guide");
   const [ws, setWs] = React.useState<WorkspaceView | null>(null);
+  const syn = React.useMemo<SynthesisApi>(() => (api.sandbox ? sandboxSynthesisApi(api, () => defRef.current, setWs) : httpSynthesisApi(s.surveyDbId, setWs, () => api.load())), [api, s.surveyDbId]);
   const [error, setError] = React.useState<{ text: string; status?: number } | null>(null);
   const [note, setNote] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -81,15 +90,20 @@ export function QualPanel() {
         <span className="grow" />
         {busy && <span className="chip" data-testid="qual-busy">{busy}…</span>}
       </div>
-      <p className="ql-muted">Plan moderated interviews and focus groups, keep session records and recordings, import or transcribe transcripts, and code them with AI assistance and human review. Rescript does not run live sessions: there is no video conferencing or real-time moderation.</p>
+      <p className="ql-muted">Plan moderated interviews and focus groups, keep session records and recordings, import or transcribe transcripts, and code them with AI assistance and human review. Rescript does not run live human-moderated sessions: there is no video conferencing. One-to-one interviews can be run by an AI moderator (AI interviews).</p>
       {error && <div className={`alert ${error.status === 403 ? "warning" : "error"}`} data-testid="qual-error" data-status={error.status ?? ""}>{error.text}</div>}
       {note && <div className="alert success" data-testid="qual-note">{note}</div>}
       {forbidden ? <div className="empty" data-testid="qual-forbidden">Qualitative data belong to the Data module, and your access does not include it. The guide can still be exported from Intelligent Mode.</div>
         : tab === "guide" ? <GuideTab api={api} run={run} />
+        : tab === "ai" ? <AiInterviewsTab qualApi={api} setWs={setWs} setNote={setNote} />
         : !ws ? <div className="sk" style={{ height: 120 }} />
         : !ws.available ? <div className="alert warning" data-testid="qual-unavailable">{ws.note}</div>
         : tab === "sessions" ? <SessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} />
-        : tab === "transcripts" ? <TranscriptsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} />
+        : tab === "transcripts" ? <SynApiContext.Provider value={syn}><AutoCodePanel ws={ws} api={syn} run={run} setWs={setWs} /><TranscriptsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} /></SynApiContext.Provider>
+        : tab === "synthesis" ? <SynthesisTab ws={ws} api={syn} run={run} />
+        : tab === "double" ? <DoubleCodingTab ws={ws} api={syn} run={run} setWs={setWs} />
+        : tab === "highlights" ? <HighlightsTab ws={ws} api={syn} run={run} />
+        : tab === "groups" ? <GroupsTab ws={ws} api={syn} run={run} setWs={setWs} />
         : tab === "coding" ? <CodingTab ws={ws} api={api} run={run} setWs={setWs} />
         : tab === "themes" ? <ThemesTab ws={ws} />
         : <ReportTab ws={ws} api={api} run={run} />}
@@ -233,7 +247,7 @@ function TranscriptsTab({ ws, api, run, setWs, setNote }: { ws: WorkspaceView; a
       {ws.transcripts.map((t) => (
         <div key={t.id} className="card ql-section" data-testid="qual-transcript" data-title={t.title}>
           <div className="ql-row">
-            <b>{t.title}</b><span className="chip">{t.source === "stt" ? "Transcribed" : t.source === "open_ends" ? "Open-ended answers" : "Imported"}</span>
+            <b>{t.title}</b><span className="chip">{t.source === "stt" ? "Transcribed" : t.source === "open_ends" ? "Open-ended answers" : t.source === "ai_interview" ? "AI interview" : "Imported"}</span>
             {t.format && <span className="badge neutral">{t.format}</span>}
             <span className="ql-muted">{t.segments.length} segments · {Object.keys(t.speakers).length} speakers</span>
             {!ws.pii && <span className="badge warning">Redacted</span>}
@@ -291,7 +305,7 @@ function TranscriptDetail({ t, ws, api, run, setWs }: { t: WorkspaceView["transc
         </div>
       )}
       <div className="table-wrap"><table className="grid ql-segments"><thead><tr><th>#</th><th>Speaker</th><th>Time</th><th>Text</th></tr></thead><tbody>
-        {t.segments.slice(0, 400).map((g) => <tr key={g.id} data-testid="qual-segment" data-role={g.role ?? ""}><td>{g.id}</td><td>{g.speaker ?? ""}{g.role === "moderator" ? " (mod)" : ""}{g.group ? <div className="ql-muted">{g.group}</div> : null}</td><td>{formatTimestamp(g.start)}</td><td>{g.text}</td></tr>)}
+        {t.segments.slice(0, 400).map((g) => <tr key={g.id} data-testid="qual-segment" data-role={g.role ?? ""}><td>{g.id}</td><td>{g.speaker ?? ""}{g.role === "moderator" ? " (mod)" : ""}{g.group ? <div className="ql-muted">{g.group}</div> : null}</td><td>{formatTimestamp(g.start)}</td><td><CorrectableText ws={ws} run={run} transcriptId={t.id} segmentId={g.id} text={g.text} setWs={setWs} /></td></tr>)}
       </tbody></table></div>
       {t.segments.length > 400 && <p className="ql-muted">Showing the first 400 of {t.segments.length} segments.</p>}
     </div>
@@ -534,6 +548,8 @@ function ReportTab({ ws, api, run }: { ws: WorkspaceView; api: QualApi; run: Run
       <label className="f"><span>Interpretation (yours — the engine does not interpret)</span><textarea className="ta" rows={6} value={interpretation} data-testid="qual-interpretation" onChange={(e) => setInterpretation(e.target.value)} /></label>
       {coders.length >= 2 && <div className="ql-row"><span>Include agreement between</span><select className="select small" value={pair.a} onChange={(e) => setPair({ ...pair, a: e.target.value })}><option value="">—</option>{coders.map((c) => <option key={c} value={c}>{ws.people[c] ?? c}</option>)}</select><span>and</span><select className="select small" value={pair.b} onChange={(e) => setPair({ ...pair, b: e.target.value })}><option value="">—</option>{coders.map((c) => <option key={c} value={c}>{ws.people[c] ?? c}</option>)}</select></div>}
       <button type="button" className="btn primary small" data-testid="qual-export-report" disabled={!ws.can.report} title={ws.can.report ? "" : "needs Data: View and report downloads"} onClick={() => run("Exporting the report", () => api.exportDocx("report", { interpretation: interpretation || undefined, compare: pair.a && pair.b && pair.a !== pair.b ? pair : null }), (r) => save(r.blob, r.name))}>Export qualitative report (.docx)</button>
+      {/* F2 2026-10-22: the qualitative deck (PowerPoint): key findings, theme summaries, groups, method — AI-written lines labelled */}
+      <button type="button" className="btn small" data-testid="qual-export-deck" disabled={!ws.can.report} onClick={() => run("Exporting the deck", () => api.exportDocx("deck"), (r) => save(r.blob, r.name))}>Export qualitative deck (.pptx)</button>
     </div>
   );
 }

@@ -25,6 +25,7 @@ import { objectChoices, semanticReading, stripPreamble, type SemanticCandidate }
 import { researchBlockers } from "./researchBlockers.js";
 import { reviewSurvey, type ReviewFinding } from "./surveyReview.js";
 import { requestScope, UNSUPPORTED_MESSAGE } from "./requestScope.js";
+import { readAdvancedRequest } from "./advancedIntent.js";
 /* the scope reading (supported / mixed / unsupported / ambiguous) is the engine's too: the Studio's route reads the same */
 export * from "./requestScope.js";
 
@@ -2978,7 +2979,24 @@ function fallback(r: Run): Interpretation {
  * question's, options before questions ("remove option Canada from Q11"
  * before "remove Q11"), skips before display ("if Q7 is no, skip …").
  */
+/*
+ * ADVANCED MODELS BY SENTENCE (2026-10-22): "run HB on the conjoint", "segment respondents with latent class using
+ * Q5–Q12", "test H2 as a mediation through trust", "check reliability with omega" — read in advancedIntent.ts, then
+ * through the same gate as every edit (act), so an item the design cannot carry is refused with the rule's reason.
+ */
+const advancedModels: Recogniser = (r) => {
+  const out = readAdvancedRequest(r.def, r.text, r.ctx);
+  if (!out) return null;
+  if (out.kind === "actions") { const res = act(r, "analysis", out.understood, out.actions, out.detected); return res.kind === "refused" ? { ...res, understood: out.short, reason: res.reason.replace(/^.*? — not applied: /, "Not planned: ") } : res; }
+  if (out.kind === "clarify") return { kind: "clarify", category: "analysis", understood: out.understood, question: out.question, choices: out.choices, detected: out.detected };
+  return out.noop ? alreadySo("analysis", out.understood, out.reason, out.detected) : refused("analysis", out.understood, out.reason, out.detected);
+};
+
+/** an advanced model OF an exercise — an analysis, not a design to configure */
+const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]level\s+(?:utilit(?:y|ies)|estimation|scores)|latent[\s-]class|gabor[\s\-–]granger)\b/i;
+
 const RECOGNISERS: Recogniser[] = [
+  advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
   deferred, uxLook, longBrief,
   surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
@@ -3085,7 +3103,8 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
    * question about the method ("why MaxDiff scores?", "explain the conjoint utilities") stays here.
    */
   /* …but a pasted brief that mentions a MaxDiff among everything else is a brief (the long-brief recogniser below), not a design to configure */
-  if (!scope.longBrief && DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean)) {
+  /* …and an ANALYSIS of the exercise ("run HB on the conjoint", 2026-10-22) is the analysis plan's, read by the grammar below */
+  if (!scope.longBrief && DESIGN_METHOD.test(clean) && DESIGN_CONFIG.test(clean) && !/^(?:why|what|which|how|explain|tell me|describe|is|are|does|do|should)\b/i.test(clean) && !ADVANCED_ANALYSIS.test(clean)) {
     return { kind: "model", category: null, reason: "a MaxDiff / conjoint design is configured by the design actions and the methods guide — the language model takes it, and the engine generates and checks the design", detected: [] };
   }
   try {
@@ -3100,8 +3119,9 @@ export function interpretRequest(def: SurveyDefinition, text: string, ctx: Inter
   }
 }
 
-const DESIGN_METHOD = /\b(?:max[\s-]?diff|best[\s-]?(?:and[\s-]?|\/\s?)?worst|conjoint|cbc|acbc|choice[\s-]?(?:tasks?|sets?|based)|menu[\s-]?based|discrete[\s-]?choice)\b/i;
-const DESIGN_CONFIG = /\b(?:create|build|set\s?up|configure|design|add|make|change|use|prohibit\w*|exclude|remove|drop|regenerate|increase|reduce|lower|raise|allow|items?\s+per\s+task|tasks?|versions?|alternatives?|concepts?|attributes?|levels?|none\s+option|labels?)\b/i;
+/* F4 2026-10-22: + rating-based conjoint (CVA), dual-response None, brand-specific / labelled designs, the conjoint / menu simulator */
+const DESIGN_METHOD = /\b(?:max[\s-]?diff|best[\s-]?(?:and[\s-]?|\/\s?)?worst|conjoint|cbc|acbc|cva|choice[\s-]?(?:tasks?|sets?|based)|menu[\s-]?based|discrete[\s-]?choice|dual[\s-]?response(?:\s+none)?|(?:menu|conjoint|market|share|bundle|cbc|acbc|cva|pricing)\s+simulat\w*)\b/i;
+const DESIGN_CONFIG = /\b(?:create|build|set\s?up|configure|design|add|make|change|use|prohibit\w*|exclude|remove|drop|regenerate|increase|reduce|lower|raise|allow|items?\s+per\s+task|tasks?|versions?|alternatives?|concepts?|attributes?|levels?|none\s+option|labels?|run|simulate|bundles?|scenarios?|profiles?|pairs?)\b/i;
 
 /*
  * MORE THAN ONE INSTRUCTION IN A SENTENCE. "Remove the trust block and make

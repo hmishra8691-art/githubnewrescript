@@ -12,7 +12,7 @@
  * even though no two see the same concepts.
  */
 import type { DesignGeneratorPlugin } from "@rescript/schema";
-import { normalizeAcbc, type AcbcConfig } from "@rescript/engine";
+import { normalizeAcbc, parsePriceIncrements, type AcbcConfig } from "@rescript/engine";
 import { effectiveProhibition, type ConjointLevelCondition, type ConjointProhibition } from "./conjoint.js";
 
 export type { AcbcConfig } from "@rescript/engine";
@@ -32,6 +32,12 @@ export const acbcPlugin: DesignGeneratorPlugin<AcbcConfig> = {
     { name: "mustHaveThreshold", label: "Accepted concepts before a shared level is asked as must-have", type: "number", default: 3 },
     { name: "tournamentAlternatives", label: "Concepts per tournament set", type: "number", default: 3 },
     { name: "minTournamentConcepts", label: "Minimum concepts in the tournament (padded if fewer were accepted)", type: "number", default: 6 },
+    /* F4 2026-10-22: summed price (optional; absent → no price shown, as before) */
+    { name: "priceBase", label: "Summed price: base price (blank = no summed price)", type: "number", help: "The price of a concept with every attribute at its cheapest level, before the increments below." },
+    { name: "priceIncrements", label: "Summed price: increment per level", type: "list", help: "One line per attribute that adds to the price, one number per level in level order: Brand: 0, 50, 120" },
+    { name: "priceVariation", label: "Summed price: random variation ± %", type: "number", default: 30, help: "Every screened and tournament concept's price is varied by up to this percentage, so price is not confounded with the levels (Sawtooth's default is about 30%)." },
+    { name: "priceRound", label: "Summed price: round to", type: "number", default: 1 },
+    { name: "priceCurrency", label: "Summed price: currency symbol", type: "text" },
   ],
 
   validateConfig(config: AcbcConfig): string[] {
@@ -64,6 +70,22 @@ export const acbcPlugin: DesignGeneratorPlugin<AcbcConfig> = {
     if ((config.screeningTasks ?? 6) < 1) errors.push("At least one screening screen is needed.");
     if ((config.conceptsPerScreen ?? 4) < 2) errors.push("At least 2 concepts per screen.");
     if ((config.tournamentAlternatives ?? 3) < 2) errors.push("A tournament set needs at least 2 concepts.");
+    /* F4 2026-10-22: a summed price names real attributes, one finite increment per level */
+    if (config.priceBase != null || config.priceIncrements?.length) {
+      if (config.priceBase != null && !Number.isFinite(Number(config.priceBase))) errors.push("The base price must be a number.");
+      const incs = parsePriceIncrements(config.priceIncrements);
+      if (!Object.keys(incs).length) errors.push("A summed price needs at least one attribute's increments — e.g. “Brand: 0, 50, 120”.");
+      for (const [k, v] of Object.entries(incs)) {
+        const a = c.attributes.find((x) => x.name === k || x.name.toLowerCase() === k.toLowerCase());
+        if (!a) { errors.push(`Price increments name “${k}”, which is not an attribute.`); continue; }
+        if (v.length !== a.levels.length) errors.push(`“${a.name}” has ${a.levels.length} levels but ${v.length} price increments — give one per level, in level order.`);
+        if (v.some((x) => !Number.isFinite(x))) errors.push(`A price increment of “${a.name}” is not a number.`);
+      }
+      const priceAttr = c.attributes.find((a) => /^(price|cost|fee)s?$/i.test(a.name));
+      if (priceAttr) errors.push(`With a summed price, “${priceAttr.name}” should not also be an attribute — the price comes from the base price and the increments.`);
+      const pv = Number(config.priceVariation ?? 30);
+      if (!(pv >= 0 && pv <= 50)) errors.push("Price variation is a percentage between 0 and 50.");
+    }
     const space = c.attributes.reduce((n, a) => n * Math.max(1, a.levels.length), 1) - 1;
     if (errors.length === 0 && space < c.conceptsPerScreen) errors.push(`Only ${space} concepts other than the BYO exist; each screen needs ${c.conceptsPerScreen}.`);
     return errors;
@@ -86,6 +108,7 @@ export const acbcPlugin: DesignGeneratorPlugin<AcbcConfig> = {
       conceptSpace: c.attributes.reduce((n, a) => n * a.levels.length, 1),
       screeningTasks: c.screeningTasks, conceptsPerScreen: c.conceptsPerScreen,
       adaptive: "concepts are generated per respondent at interview time from this configuration and the respondent's seed",
+      ...(c.summedPrice ? { summedPrice: { base: c.summedPrice.base, increments: c.summedPrice.increments, variationPct: Math.round(c.summedPrice.variation * 100), currency: c.summedPrice.currency } } : {}),
     };
     return { columns, rows, summary };
   },

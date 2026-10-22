@@ -13,7 +13,7 @@ import type { VersionedDefinition } from "@rescript/engine";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { loadQualityDefinition } from "./qualityDef";
 import { ensurePlannedAnalyses as ensureCore } from "./analysisPlanCore";
-import { surveyStamp, withResultCache } from "./resultCache";
+import { cacheGet, surveyStamp, withResultCache } from "./resultCache";
 import { readAllRows, stableOrder } from "./rowPaging";
 import { insertRun, pickPrevious, runFromRow, type RunInsertDb, type StoredRun as StoredRunShape } from "./analyticsRunStore";
 
@@ -343,6 +343,18 @@ export async function compute(db: SupabaseClient, surveyId: string, ctx: LoadedC
   }, (cached) => ({ ...cached, name: runDef.name }), opts);
 }
 
+/**
+ * THE KEY A MODEL JOB'S RESULT IS CACHED UNDER (2026-10-22, one place): the definition as compute() runs it and
+ * its input hash. The job service stores a finished HB run under it, and the plan's run looks it up with it — so
+ * a finished job is what the next run of the plan reads, and a change in the data (a new response) is a new key.
+ */
+export async function modelInputKey(db: SupabaseClient, surveyId: string, ctx: LoadedContext, definition: AnalysisDefinition): Promise<{ def: AnalysisDefinition; key: string }> {
+  const resolved = await resolveSaved(db, surveyId, definition);
+  const def: AnalysisDefinition = { ...resolved, surveyVersion: resolved.surveyVersion ?? ctx.version ?? undefined };
+  const dataVersion = await dataStamp(db, surveyId, def.dataset);
+  return { def, key: inputHashOf(def, { dataVersion, surveyVersion: surveyStamp(ctx) }) };
+}
+
 /** Variable picker payload: dictionary-derived metadata, grouped by question, plus dataset counts. */
 export async function variablesPayload(db: SupabaseClient, surveyId: string, ctx: LoadedContext) {
   const variables: VariableMeta[] = variableMetadata(ctx.def).filter((v) => !v.hidden);
@@ -452,7 +464,21 @@ export async function runPlanFor(db: SupabaseClient, surveyId: string, ctx: Load
     if (!weightedSets.has(key)) weightedSets.set(key, await buildFor(db, surveyId, ctx, { ...it.definition, dataset: spec }));
   }
   const datasetFor = (p: PlannedAnalysis): Dataset | undefined => (p.definition.weighting ? weightedSets.get(stableStringify(p.definition.weighting)) : undefined);
-  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual", ...(weightedSets.size ? { datasetFor } : {}) });
+  /*
+   * A HIERARCHICAL BAYES ITEM RUNS AS A BACKGROUND JOB (2026-10-22, migration 0066): the plan's run never waits on
+   * its chains. A finished job's result is in the result cache under the item's input hash (modelInputKey) — the run
+   * reads it from there; otherwise the item is "running as a job" in this run, and the Apply starts the job.
+   */
+  const precomputed = new Map<PlannedAnalysis, AnalysisResult>();
+  for (const it of items) {
+    if (it.definition.kind !== "hb") continue;
+    try {
+      const { key } = await modelInputKey(db, surveyId, ctx, it.definition);
+      const hit = await cacheGet<AnalysisResult>(db, surveyId, key);
+      if (hit && !hit.payload.error) precomputed.set(it, hit.payload);
+    } catch (e) { console.error("[analytics] HB result lookup failed:", e); }
+  }
+  const run = runPlan(ctx.def as SurveyDefinition, ds, { items, trigger: opts.trigger ?? "manual", ...(weightedSets.size ? { datasetFor } : {}), ...(precomputed.size ? { precomputed: (p: PlannedAnalysis) => precomputed.get(p) } : {}) });
   if (opts.skipEmpty && run.n === 0) return { run, stored: null };
   /* Phase 8: what moved since the previous comparable run — same environment, same dataset kind — is attached to the run before it is stored */
   const prev = await previousRun(db, surveyId, spec, run.computedAt);

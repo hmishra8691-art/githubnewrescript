@@ -366,6 +366,9 @@ export function questionVariables(
       push({ name: `${q.variableName}_SCREENED`, label: `${q.code} — concepts screened`, dataType: "numeric" });
       push({ name: `${q.variableName}_ACCEPTED`, label: `${q.code} — concepts marked a possibility`, dataType: "numeric" });
       push({ name: `${q.variableName}_ROUNDS`, label: `${q.code} — tournament rounds`, dataType: "numeric" });
+      /* F4 2026-10-22: the winner's summed price, when the design has one */
+      const acfg = (design?.config ?? {}) as { priceBase?: unknown; priceIncrements?: unknown[] };
+      if (acfg.priceBase != null || acfg.priceIncrements?.length) push({ name: `${q.variableName}_WINNER_PRICE`, label: `${q.code} — tournament winner: summed price`, dataType: "numeric" });
       push({ name: `${q.variableName}_JSON`, label: `${q.code} — full ACBC transcript (JSON)`, dataType: "text", notes: "BYO, every screen with concepts and verdicts, rules, every tournament round and choice" });
       break;
     }
@@ -447,6 +450,13 @@ export function questionVariables(
             // METHOD-14: what the respondent actually saw, top to bottom (the design's own `position` is re-shuffled per respondent)
             push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — ${taskName} shown order (item indices, top to bottom)`, dataType: "text",
               notes: "Item indices in the order this respondent saw them, joined by '|'. Use it to test position effects." });
+          } else if (design?.kind === "cva") {
+            /* F4 2026-10-22: rating-based conjoint — one rating per task (a pair's rating: low = left, high = right) */
+            const cfg = (design.config ?? {}) as { mode?: string; scaleMin?: number; scaleMax?: number };
+            const paired = cfg.mode === "paired";
+            const holdout = v1.some((r) => String(r.task) === t && Number(r.is_holdout) === 1);
+            push({ name: `${q.variableName}_T${t}`, label: `${q.code} — ${holdout ? "holdout " : ""}${paired ? "pair" : "profile"} ${t} rating`, dataType: "numeric",
+              notes: paired ? `Preference between the two profiles of the pair, ${cfg.scaleMin ?? 1} = strongly prefer the left (alt 1) … ${cfg.scaleMax ?? 9} = strongly prefer the right (alt 2).` : `Rating of the profile on the ${cfg.scaleMin ?? 0}–${cfg.scaleMax ?? 10} scale.` });
           } else if (design?.kind === "menu") {
             const items = v1.filter((r) => String(r.task) === t).sort((a, b) => Number(a.item) - Number(b.item));
             for (const it of items) {
@@ -461,6 +471,11 @@ export function questionVariables(
             // conjoint audit 2026-10-17: what this respondent saw, top to bottom — the position randomisation, recorded
             push({ name: `${q.variableName}_T${t}_ORDER`, label: `${q.code} — task ${t} shown order (design alternatives, top to bottom)`, dataType: "text",
               notes: "Design alternative numbers in the order this respondent saw them, joined by '|' (None last). Use it to test position effects; the stacked choice export has the same as a `position` column." });
+            /* F4 2026-10-22: dual-response None — the follow-up, one column per task */
+            if ((design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true) {
+              push({ name: `${q.variableName}_T${t}_BUY`, label: `${q.code} — task ${t}: would buy the chosen option`, dataType: "numeric",
+                valueCodes: [0, 1], valueLabels: { "0": "No", "1": "Yes" }, notes: "Dual-response None: 0 = would not buy the option chosen in the forced choice (the None response)." });
+            }
           }
         }
       }

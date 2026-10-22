@@ -108,6 +108,9 @@ importers:
       '@rescript/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@rescript/analytics':
+        specifier: workspace:*
+        version: link:../../packages/analytics
       '@rescript/billing':
         specifier: workspace:*
         version: link:../../packages/billing
@@ -126,6 +129,9 @@ importers:
       '@rescript/schema':
         specifier: workspace:*
         version: link:../../packages/schema
+      '@rescript/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@supabase/supabase-js':
         specifier: ^2.45.4
         version: 2.112.4

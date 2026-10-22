@@ -162,7 +162,7 @@ Roles: `dependent`, `independent`, `mediator`, `moderator`, `control`, `segmenta
 
 Measurement levels: `nominal`, `ordinal`, `interval`, `ratio`, `multi`, `text`, `rank`, `allocation`, `choice`, `date`.
 
-Methods: `frequencies`, `mean`, `median`, `top_box`, `nps`, `crosstab`, `chi_square`, `t_test`, `anova`, `mann_whitney`, `kruskal_wallis`, `correlation`, `regression`, `logistic_regression`, `factor`, `reliability`, `cluster`, `conjoint_utilities`, `maxdiff_scores`, `turf`, `driver_analysis`, `text_themes`, `ranking_scores`, `allocation_shares`, `pricing`, `brand_funnel`.
+Methods: `frequencies`, `mean`, `median`, `top_box`, `nps`, `crosstab`, `chi_square`, `t_test`, `anova`, `mann_whitney`, `kruskal_wallis`, `correlation`, `regression`, `logistic_regression`, `factor`, `reliability`, `cluster`, `conjoint_utilities`, `maxdiff_scores`, `turf`, `driver_analysis`, `text_themes`, `ranking_scores`, `allocation_shares`, `pricing`, `brand_funnel`, `hb`, `latent_class`, `sem`.
 
 ## Flow node types
 

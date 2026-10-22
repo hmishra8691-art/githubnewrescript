@@ -16,6 +16,7 @@ import { applyOps, askContext, datasetFrom, propose as proposeAsk, undoRecords }
 import { compute, hashPassword, loadDefinition, loadTheme, newToken, variablesPayload, runPlanFor, latestRun, listRuns, runById, dueMilestone, ensurePlannedAnalyses, draftFindingsReport } from "@/lib/analytics";
 import { applyPlan, editPlan, planPayload } from "@/lib/analysisPlanService";
 import { modelJobsGET, modelJobsPOST } from "@/lib/modelJobs";
+import { advancedGET, advancedInterpretationsFor, advancedPOST } from "@/lib/advancedModels";
 
 /**
  * The environment a report is built from.
@@ -93,6 +94,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string; 
   const [head, itemId, action] = params.path ?? [];
   /* chunked model runs (HB): lib/modelJobs.ts, migration 0066 */
   if (head === "models") return modelJobsGET(req, params.id, itemId);
+  /* the plan's advanced models: live state, reading, re-run — lib/advancedModels.ts (2026-10-22) */
+  if (head === "advanced") return advancedGET(req, params.id);
   const surveyId = params.id;
   const db = supabaseService();
 
@@ -301,6 +304,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   /* chunked model runs (HB): lib/modelJobs.ts, migration 0066 */
   if (head === "models") return modelJobsPOST(req, surveyId, itemId, action, body);
+  if (head === "advanced") return advancedPOST(req, surveyId, itemId, body);
 
   /*
    * APPLY THE ANALYSIS PLAN (Data Analytics → Analysis plan). Validates the
@@ -357,7 +361,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
       const { items, truncated } = await builderItems(db, surveyId, loaded, brief.analysisIds);
       if (!items.length) return bad("This survey has no saved analyses yet. Create the analyses first (the Analysis tab can create them from the analysis plan), then build the report.", 409);
       const model = await modelInterpretation(ctx.user, surveyId, brief, items, { ask: body.interpretation === true, fake: body.fake, db });
-      const draft = draftReport(brief, items, variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden), { story: body.story === true, interpretation: model.interpretation });
+      /* the advanced models (HB, latent class, SEM, …) each get their own gated reading in the report (2026-10-22) */
+      const advancedInterpretations = await advancedInterpretationsFor(ctx.user, surveyId, brief, items, { ask: body.interpretation === true && model.status !== "no_model", fake: body.fake, db });
+      const draft = draftReport(brief, items, variableMetadata(loaded.def as SurveyDefinition).filter((v) => !v.hidden), { story: body.story === true, interpretation: model.interpretation, advancedInterpretations });
       return json({ ...draft, model: { status: model.status, detail: model.detail }, truncated, analysesRead: items.length });
     }
     if (itemId === "scene") {

@@ -18,6 +18,8 @@ export interface DocumentActions {
   download(entryId: string): Promise<{ ok: boolean; error?: string }>;
   regenerate(entryId: string): Promise<void>;
   theme(entryId: string, action: { kind: "apply" } | { kind: "save"; name: string; scope: "user" | "org" } | { kind: "model" }): Promise<void>;
+  /** run a qualitative request's previewed action (F2 2026-10-22) */
+  qual?(entryId: string): Promise<void>;
 }
 
 export function DocumentOutput({ entry, actions }: { entry: CopilotEntry; actions?: DocumentActions }) {

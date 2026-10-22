@@ -8,3 +8,5 @@ export * from "./sap.js";
 export * from "./docxCheck.js";
 export * from "./officeCheck.js";
 export * from "./qualDocx.js";
+export * from "./qualSlides.js";
+export * from "./conjointSimulator.js";

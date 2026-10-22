@@ -49,8 +49,8 @@ const HINT: Partial<Record<AnalysisKind, string>> = {
   segmentation: "Pick the variables to profile, then add segments in the Segments step.", cluster: "Pick the numeric / scale variables to cluster on.", factor: "Pick the battery of items.", reliability: "Pick the items of one scale.",
   trend: "Pick the metric variable; period is chosen in Options.", nps: "Pick the 0–10 recommend question.", csat: "Pick the satisfaction / effort question(s).", turf: "Pick a multi-select question.", gap: "Set importance and performance items in Options.",
   pricing: "Van Westendorp: four price questions in order (too cheap, bargain, expensive, too expensive). Gabor-Granger: purchase-intent items.", brand: "Pick the brand-list questions in funnel order (awareness, consideration, …).",
-  ranking: "Pick the ranking question.", allocation: "Pick the allocation question.", text: "Pick an open-ended question.", quality: "No variables needed.", weighting: "Pick the variables to weight on; targets in Options.", conjoint: "Pick the conjoint task question.", maxdiff: "Pick the MaxDiff task question.",
-  hb: "Pick the CBC (conjoint) or MaxDiff task question. HB runs as a background job with progress; chains, burn-in and draws are in Options.", lca: "Pick the categorical indicators (three or more). The class range and random starts are in Options.", sem: "The model is written in Options (lavaan-style syntax); the variables it names are read from the data — no selection needed here.",
+  ranking: "Pick the ranking question.", allocation: "Pick the allocation question.", text: "Pick an open-ended question.", quality: "No variables needed.", weighting: "Pick the variables to weight on; targets in Options.", conjoint: "Pick the conjoint question — CBC, ACBC, menu-based or rating-based (CVA); the market simulator is in Options.", maxdiff: "Pick the MaxDiff task question.",
+  hb: "Pick the CBC, ACBC, menu-based (conjoint) or MaxDiff task question. HB runs as a background job with progress; chains, burn-in and draws are in Options.", lca: "Pick the categorical indicators (three or more). The class range and random starts are in Options.", sem: "The model is written in Options (lavaan-style syntax); the variables it names are read from the data — no selection needed here.",
 };
 
 const ROLE_LABEL: Record<VariableRole, string> = { categorical: "Categorical", multi: "Multi-select", numeric: "Numeric", scale: "Scale", text: "Text", date: "Date", system: "System", complex: "Question" };
@@ -170,7 +170,7 @@ function Options({ def, set, variables }: { def: AnalysisDefinition; set: (o: Re
     case "text": return <><label className="ax-field"><span>Themes (name: keyword, keyword; one per line)</span><textarea className="ta" rows={4} value={((o.themes as { name: string; keywords: string[] }[] | undefined) ?? []).map((t) => `${t.name}: ${t.keywords.join(", ")}`).join("\n")} onChange={(e) => set({ themes: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [n, k = ""] = l.split(":"); return { name: n.trim(), keywords: k.split(",").map((x) => x.trim()).filter(Boolean) }; }) })} placeholder={"Service: service, support, staff\nPrice: expensive, cheap, value"} /></label>{varSel("by", "Sentiment by", ["categorical"])}{num("topN", "Top words", "30")}</>;
     case "quality": return <>{num("speedSeconds", "Speeder threshold (seconds; blank = 40% of median)")}</>;
     case "weighting": return <div className="muted" style={{ fontSize: 13 }}>Set rim targets in the Weighting section below; this analysis reports the weighting diagnostics and the weighted vs unweighted profile.</div>;
-    case "conjoint": return <><label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label><label className="ax-field"><span>Price attribute (for WTP)</span><input className="input small" value={(o.priceAttribute as string | undefined) ?? ""} onChange={(e) => set({ priceAttribute: e.target.value || undefined })} placeholder="auto-detect" /></label><label className="ax-field"><span>Scenario profiles (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label></>;
+    case "conjoint": return <><label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label><label className="ax-field"><span>Price attribute (for WTP)</span><input className="input small" value={(o.priceAttribute as string | undefined) ?? ""} onChange={(e) => set({ priceAttribute: e.target.value || undefined })} placeholder="auto-detect" /></label><label className="ax-field"><span>Scenario profiles (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label><ConjointSuiteOptions o={o} set={set} /></>;
     case "maxdiff": return <>{varSel("by", "Compare by", ["categorical"])}</>;
     case "hb": return <AdvancedHbOptions o={o} set={set} num={num} sel={sel} />;
     case "lca": return <>{num("minClasses", "Fewest classes", "1")}{num("maxClasses", "Most classes (≤ 8)", "4")}{num("starts", "Random starts per K", "20")}{num("seed", "Seed", "1")}{num("classes", "Show the solution with K classes (blank = lowest BIC)")}<div className="muted" style={{ fontSize: 12.5 }}>Every K in the range is fitted and compared (log-likelihood, AIC, BIC, SABIC, entropy); the lowest BIC is recommended, with the trade-offs shown — not chosen automatically. Respondents missing an indicator are left out (listwise).</div></>;
@@ -200,6 +200,7 @@ function AdvancedHbOptions({ o, set, num, sel }: { o: Record<string, unknown>; s
       <fieldset className="ax-optgroup"><legend>Data &amp; simulation</legend>
         <label className="ax-toggle"><input type="checkbox" checked={!!o.includeHoldouts} onChange={(e) => set({ includeHoldouts: e.target.checked })} /> Include holdout tasks in estimation</label>
         <label className="ax-field"><span>Scenario profiles for the simulator (JSON: [{"{"}name, levels{"}"}])</span><textarea className="ta" rows={3} value={o.scenario ? JSON.stringify(o.scenario) : ""} onChange={(e) => { try { set({ scenario: e.target.value ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }} placeholder='[{"name":"Product A","levels":{"Price":"$20","Brand":"Alpha"}}]' /></label>
+        <ConjointSuiteOptions o={o} set={set} />
       </fieldset>
     </div>
   );
@@ -558,3 +559,39 @@ export function WeightingEditor({ value, onChange, variables }: { value: Analysi
 }
 
 export type { SegmentDef };
+
+/**
+ * CONJOINT SUITE OPTIONS (F4 2026-10-22), shared by the Conjoint and Hierarchical Bayes panels: the
+ * market simulator (products, share rule, revenue / WTP / demand / sensitivity / optimisation,
+ * segments — JSON, the shape in packages/analytics/src/conjoint/simulatorTables.ts), the
+ * dual-response None coding, the menu model's cross effects and price coding, and CVA order
+ * constraints. Each option only applies to the method that reads it.
+ */
+function ConjointSuiteOptions({ o, set }: { o: Record<string, unknown>; set: (patch: Record<string, unknown>) => void }) {
+  const [draft, setDraft] = React.useState<string>(o.simulator ? JSON.stringify(o.simulator) : "");
+  return (
+    <div className="ax-suite" data-testid="ax-conjoint-suite">
+      <label className="ax-field"><span>Market simulator (JSON: products, rule, wtp, demand, sensitivity, optimize, segmentBy)</span>
+        <textarea className="ta" rows={4} data-testid="ax-simulator" value={draft}
+          onChange={(e) => { setDraft(e.target.value); try { set({ simulator: e.target.value.trim() ? JSON.parse(e.target.value) : undefined }); } catch { /* keep typing */ } }}
+          placeholder='{"products":[{"name":"Ours","levels":{"Brand":"Alpha","Price":"$299"}},{"name":"Rival","levels":{"Brand":"Beta","Price":"$249"}}],"rule":"rfc","demand":true,"wtp":[{"attribute":"Battery","level":"3 days"}],"optimize":{"objective":"revenue"}}' /></label>
+      <label className="ax-field"><span>Dual-response None coding</span>
+        <select className="select small" data-testid="ax-dual-coding" value={(o.dualCoding as string | undefined) ?? "dual"} onChange={(e) => set({ dualCoding: e.target.value === "dual" ? undefined : e.target.value })}>
+          <option value="dual">Forced choice + buy / no-buy task (Sawtooth default)</option>
+          <option value="single_none">One task, None chosen when they would not buy</option>
+          <option value="forced">Forced choices only (no None)</option>
+        </select></label>
+      <label className="ax-field"><span>Menu: cross-price effects</span>
+        <select className="select small" data-testid="ax-cross-effects" value={Array.isArray(o.crossEffects) ? "list" : ((o.crossEffects as string | undefined) ?? "auto")} onChange={(e) => set({ crossEffects: e.target.value === "auto" ? undefined : e.target.value })}>
+          <option value="auto">Automatic (kept at p &lt; 0.01)</option>
+          <option value="none">Own prices only</option>
+          {Array.isArray(o.crossEffects) && <option value="list">As listed</option>}
+        </select></label>
+      <label className="ax-field"><span>Menu: own-price coding</span>
+        <select className="select small" value={(o.menuPriceCoding as string | undefined) ?? "linear"} onChange={(e) => set({ menuPriceCoding: e.target.value === "linear" ? undefined : e.target.value })}>
+          <option value="linear">Linear</option><option value="partworth">Part-worth per price point</option>
+        </select></label>
+      <label className="ax-toggle"><input type="checkbox" checked={o.excludeFlagged === true} onChange={(e) => set({ excludeFlagged: e.target.checked || undefined })} /> Rating-based (CVA): leave out flagged respondents</label>
+    </div>
+  );
+}

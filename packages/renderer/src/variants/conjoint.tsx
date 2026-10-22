@@ -22,7 +22,7 @@ import { registerVariantRenderer } from "./registry";
  * analysis sees.
  */
 
-interface MenuRow { item: string; label: string; price: string; priceValue: number; required: boolean }
+interface MenuRow { item: string; label: string; price: string; priceValue: number; required: boolean; /** F4: an exclusive section ("" = none) */ group: string }
 
 function menuOf(rows: Record<string, unknown>[], task: string): MenuRow[] {
   return rows
@@ -30,7 +30,7 @@ function menuOf(rows: Record<string, unknown>[], task: string): MenuRow[] {
     .sort((a, b) => Number(a.item) - Number(b.item))
     .map((r) => ({
       item: String(r.item), label: String(r.item_label ?? r.item), price: String(r.price ?? ""),
-      priceValue: Number(r.price_value), required: Number(r.required) === 1,
+      priceValue: Number(r.price_value), required: Number(r.required) === 1, group: r.group ? String(r.group) : "",
     }));
 }
 
@@ -74,7 +74,13 @@ export function MenuTasks(p: QRProps) {
           if (readOnly || it.required) return;
           const next = new Set(picked);
           if (next.has(it.item)) next.delete(it.item);
-          else { if (atMax) return; next.add(it.item); }
+          else {
+            /* F4 2026-10-22: an exclusive section — picking one of its items replaces the other */
+            const sibling = it.group ? menu.filter((x) => x.group === it.group && x.item !== it.item && next.has(x.item)) : [];
+            if (atMax && !sibling.length) return;
+            for (const x of sibling) next.delete(x.item);
+            next.add(it.item);
+          }
           setTask(t, [...next].sort((a, b) => Number(a) - Number(b)));
         };
         return (
@@ -87,7 +93,7 @@ export function MenuTasks(p: QRProps) {
                   <label key={it.item} className={`rs-menu-item${on ? " on" : ""}${it.required ? " required" : ""}${none ? " muted" : ""}`} data-testid="rs-menu-item" data-item={it.item}>
                     <input type="checkbox" checked={on} disabled={readOnly || it.required || none}
                       onChange={() => toggle(it)} aria-label={`${it.label}, ${it.price}`} />
-                    <span className="rs-menu-label">{it.label}{it.required && <span className="rs-menu-req"> · included</span>}</span>
+                    <span className="rs-menu-label">{it.label}{it.required && <span className="rs-menu-req"> · included</span>}{it.group && <span className="rs-menu-req" data-testid="rs-menu-group"> · {it.group}: choose one</span>}</span>
                     <span className="rs-menu-price" data-testid="rs-menu-price">{it.price}</span>
                   </label>
                 );

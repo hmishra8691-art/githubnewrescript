@@ -79,11 +79,12 @@ test("the gate: every method op is a survey action; missing essentials and unsup
   assert.match(rejected({ op: "create_maxdiff", text: "x" }), /needs the items .* ask the researcher/);
   assert.match(rejected({ op: "create_conjoint", text: "x" }), /needs the attributes and their levels .* ask the researcher .* rather than inventing/);
   assert.match(rejected({ op: "create_conjoint", method: "menu" }), /needs the menu/);
-  assert.match(rejected({ op: "create_conjoint", method: "rating-based", attributes: ATTRS }), /rating-based .* not implemented.*choice-based \(cbc\), menu-based \(menu\) and adaptive \(acbc\)/);
-  assert.match(rejected({ op: "create_conjoint", method: "ranking", attributes: ATTRS }), /ranking-based conjoint is not implemented/);
-  assert.match(rejected({ op: "create_conjoint", attributes: ATTRS, estimation: "HB" }), /HB .* not available .* aggregate/);
-  assert.match(rejected({ op: "create_maxdiff", items: ITEMS, estimation: "hb" }), /HB .* not available/);
-  assert.match(rejected({ op: "create_conjoint", attributes: ATTRS, dualNone: true }), /dual-response None is not implemented/);
+  /* F4 2026-10-22: rating-based (CVA) and dual-response None are implemented — accepted at the gate; ranking-based still refused */
+  assert.equal(rejected({ op: "create_conjoint", method: "rating-based", attributes: ATTRS }), "");
+  assert.match(rejected({ op: "create_conjoint", method: "ranking", attributes: ATTRS }), /ranking-based conjoint is not implemented.*rating-based \(cva\)/);
+  assert.match(rejected({ op: "create_conjoint", attributes: ATTRS, estimation: "HB" }), /not a design setting .* Data Analytics/);
+  assert.match(rejected({ op: "create_maxdiff", items: ITEMS, estimation: "hb" }), /not a design setting .* Data Analytics/);
+  assert.equal(rejected({ op: "create_conjoint", attributes: ATTRS, dualNone: true }), "");
   assert.match(rejected({ op: "create_conjoint", attributes: [{ name: "Price", levels: ["199", "299"], type: "numeric" }, ATTRS[0]] }), /linear\) term is not implemented/);
   assert.match(rejected({ op: "create_maxdiff", items: ITEMS, responseMode: "worst only" }), /worst-only MaxDiff is not supported/);
   assert.match(rejected({ op: "create_maxdiff", items: ITEMS, perTask: 2 }), /perTask .* 3 or more/);

@@ -7,6 +7,7 @@ import { timingLine } from "./runTimingText";
 import { AxApi, type ApplyResponse, type PlanPayload, type Row, type RunResult, timeAgo } from "./api";
 import { Chart, ResultTableView } from "./charts/Chart";
 import { Icon } from "../ui/Icon";
+import { AdvancedModelsCard, AdvancedReadingPanel, MethodOptions, isAdvancedPlanItem, optionsPatch } from "./AdvancedModels";
 
 /**
  * THE ANALYSIS PLAN WORKSPACE — Results → Data Analytics → Analysis plan.
@@ -185,6 +186,8 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
 
       {notice && <Notice n={notice} onClose={() => setNotice(null)} />}
       {applyResult?.summary && <ApplyOutcome r={applyResult} onFix={openEditorFor} onClose={() => setApplyResult(null)} />}
+      {(section === "overview" || section === "tests") && <AdvancedModelsCard api={p.api} dataset={p.dataset} canEdit={p.canEdit} canEditPlan={p.canEditPlan} startJobs={applyResult?.jobs ?? null}
+        onChanged={() => { void load(true); p.onApplied(); }} onPolicy={(policy) => edit([{ op: "set_analysis_plan", advancedRerun: policy }], policy?.mode === "threshold" ? `Advanced models re-run after ${policy.newResponses} new completes` : "Advanced models re-run by hand")} />}
       {!p.canEditPlan && <p className="muted ap-meta" data-testid="ap-readonly">Your role lets you apply the plan but not change it — editing the plan is a change to the survey.</p>}
 
       <div className="ap-sections" role="tablist" data-testid="ap-sections">
@@ -278,7 +281,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
 
       {(section === "crosstabs" || section === "tests") && (
         <ItemsSection kind={section === "crosstabs" ? "crosstab" : "test"} items={items.filter((i) => i.kind === (section === "crosstabs" ? "crosstab" : "test")).filter(matches)} all={items} data={data} api={p.api} dataset={p.dataset} dataN={dataN}
-          canEditPlan={p.canEditPlan} saving={saving} editor={editor} variables={p.variables} hypothesisLabels={hypothesisLabels} analysisRow={analysisRow} onOpenAnalysis={p.onOpenAnalysis}
+          canEditPlan={p.canEditPlan} canEdit={p.canEdit} saving={saving} editor={editor} variables={p.variables} hypothesisLabels={hypothesisLabels} analysisRow={analysisRow} onOpenAnalysis={p.onOpenAnalysis}
           onAdd={() => setEditor({ kind: section === "crosstabs" ? "crosstab" : "test" })} onEdit={(it) => setEditor({ kind: it.kind, item: it })} onCloseEditor={() => setEditor(null)}
           onSave={async (action, what) => { const ok = await edit([action], what); if (ok) setEditor(null); }}
           onRemove={async (it) => { if (!window.confirm(`Remove “${it.title}” from the plan?${it.analysis ? " Its saved analysis stays in the Analyses rail; its chart and dashboard widget are removed at the next apply." : ""}`)) return; await edit([{ op: it.kind === "crosstab" ? "remove_crosstab" : "remove_analysis_test", id: it.id }], `Removed ${it.title}`); if (editor?.item?.id === it.id) setEditor(null); }}
@@ -326,7 +329,8 @@ function ApplyOutcome({ r, onFix, onClose }: { r: ApplyResponse; onFix: (id: str
   return (
     <div className="ap-outcome" data-testid="ap-outcome" data-status={s.status}>
       <div className="row"><span className="grow"><b>Last apply:</b> {s.message}</span><button className="ax-rail-btn" onClick={onClose} aria-label="Dismiss" data-testid="ap-outcome-close">×</button></div>
-      <div className="muted" style={{ fontSize: 12.5 }}>{s.counts.created} created · {s.counts.updated} updated{s.counts.repointed ? ` · ${s.counts.repointed} moved to this dataset` : ""} · {s.counts.unchanged} unchanged · {s.counts.keptRefined} kept refined · {s.counts.run} run · {s.counts.charts} charts · report {r.report?.action ?? "none"} · dashboard {r.dashboard?.action ?? "none"}</div>
+      <div className="muted" style={{ fontSize: 12.5 }}>{s.counts.created} created · {s.counts.updated} updated{s.counts.repointed ? ` · ${s.counts.repointed} moved to this dataset` : ""} · {s.counts.unchanged} unchanged · {s.counts.keptRefined} kept refined · {s.counts.run} run{s.counts.jobs ? ` · ${s.counts.jobs} background job${s.counts.jobs === 1 ? "" : "s"}` : ""} · {s.counts.charts} charts · report {r.report?.action ?? "none"} · dashboard {r.dashboard?.action ?? "none"}</div>
+      {r.jobs?.length ? <div className="muted" style={{ fontSize: 12.5 }} data-testid="ap-outcome-jobs">{r.jobs.map((j) => `${j.title}: running as a background job (${j.job.progress.pct}%)`).join(" · ")} — followed under Advanced models; the findings update when it finishes.</div> : null}
       {bad.length > 0 && <ul className="ap-attention" style={{ marginTop: 6 }}>{bad.map((i) => <li key={i.id}><span className={`badge ${i.status === "failed" ? "error" : "warning"}`}>{i.status === "failed" ? "Failed" : "Skipped"}</span> <button className="ax-linkbtn" onClick={() => onFix(i.id)}>{i.title}</button><div className="muted" style={{ fontSize: 12.5 }}>{i.reason}</div></li>)}</ul>}
     </div>
   );
@@ -336,7 +340,7 @@ function ApplyOutcome({ r, onFix, onClose }: { r: ApplyResponse; onFix: (id: str
 
 function ItemsSection(p: {
   kind: "crosstab" | "test"; items: Item[]; all: Item[]; data: PlanPayload; api: AxApi; dataset: DatasetSpec; dataN: number;
-  canEditPlan: boolean; saving: boolean; editor: { kind: "crosstab" | "test"; item?: Item } | null; variables: VariableMeta[]; hypothesisLabels: string[];
+  canEditPlan: boolean; canEdit?: boolean; saving: boolean; editor: { kind: "crosstab" | "test"; item?: Item } | null; variables: VariableMeta[]; hypothesisLabels: string[];
   analysisRow: (it: Item) => Row | undefined; onOpenAnalysis: (a: Row) => void;
   onAdd: () => void; onEdit: (it: Item) => void; onCloseEditor: () => void; onSave: (action: unknown, what: string) => Promise<void>; onRemove: (it: Item) => Promise<void>; onMove: (it: Item, dir: -1 | 1) => Promise<void>;
 }) {
@@ -415,6 +419,7 @@ function ItemsSection(p: {
                     {p.dataN === 0 && <span className="muted" style={{ fontSize: 12.5 }} data-testid="ap-item-pending">Waiting for data — no complete responses in this dataset yet, so there is nothing to tabulate.</span>}
                     {it.state === "invalid" && <span className="muted" style={{ fontSize: 12.5 }}>Fix the variables above before it can run.</span>}
                   </div>
+                  {it.kind === "test" && it.state !== "invalid" && isAdvancedPlanItem((it.item as PlannedTest).method, (it.item as PlannedTest).options) && p.dataN > 0 && <AdvancedReadingPanel api={p.api} planned={it.id} dataset={p.dataset} canInterpret={!!p.canEdit} />}
                   {pv?.error && <p className="iq-error"><Icon name="warning" size={12} /> {pv.error}</p>}
                   {pv?.result && (
                     <div className="ap-preview" data-testid="ap-item-table">
@@ -436,13 +441,13 @@ function ItemsSection(p: {
 
 /* ------------------------------------------------------------ the editor */
 
-type Draft = { rows: string[]; columns: string[]; measure: string; method: AnalysisMethod; outcome: string; variables: string[]; groupBy: string; moderator: string; mediator: string; priority: number; hypotheses: string[]; reason: string };
+type Draft = { rows: string[]; columns: string[]; measure: string; method: AnalysisMethod; outcome: string; variables: string[]; groupBy: string; moderator: string; mediator: string; priority: number; hypotheses: string[]; reason: string; /** the method's settings (2026-10-22) */ options: Record<string, unknown> };
 
 function ItemEditor(p: { kind: "crosstab" | "test"; item?: Item; variables: VariableMeta[]; plan: NonNullable<PlanPayload["plan"]>; hypothesisLabels: string[]; saving: boolean; onCancel: () => void; onSave: (action: unknown, what: string) => Promise<void> }) {
   const x = p.item?.item as PlannedCrosstab | undefined; const t = p.item?.item as PlannedTest | undefined;
   const [d, setD] = React.useState<Draft>(() => p.kind === "crosstab"
-    ? { rows: x?.rows ?? [], columns: x?.columns ?? [], measure: x?.measure ?? "", method: "crosstab", outcome: "", variables: [], groupBy: "", moderator: "", mediator: "", priority: x?.priority ?? 2, hypotheses: x?.hypotheses ?? [], reason: x?.reason ?? "" }
-    : { rows: [], columns: [], measure: "", method: t?.method ?? "chi_square", outcome: t?.outcome ?? "", variables: t?.variables ?? [], groupBy: t?.groupBy ?? "", moderator: t?.moderator ?? "", mediator: t?.mediator ?? "", priority: t?.priority ?? 2, hypotheses: t?.hypotheses ?? [], reason: t?.reason ?? "" });
+    ? { rows: x?.rows ?? [], columns: x?.columns ?? [], measure: x?.measure ?? "", method: "crosstab", outcome: "", variables: [], groupBy: "", moderator: "", mediator: "", priority: x?.priority ?? 2, hypotheses: x?.hypotheses ?? [], reason: x?.reason ?? "", options: {} }
+    : { rows: [], columns: [], measure: "", method: t?.method ?? "chi_square", outcome: t?.outcome ?? "", variables: t?.variables ?? [], groupBy: t?.groupBy ?? "", moderator: t?.moderator ?? "", mediator: t?.mediator ?? "", priority: t?.priority ?? 2, hypotheses: t?.hypotheses ?? [], reason: t?.reason ?? "", options: { ...(t?.options ?? {}) } });
   const [err, setErr] = React.useState<string | null>(null);
   /* a variable is a dictionary variable, or one the plan computes (a derived variable, a segment) */
   const options = React.useMemo(() => {
@@ -457,15 +462,16 @@ function ItemEditor(p: { kind: "crosstab" | "test"; item?: Item; variables: Vari
   /* ONE RULE (the Apply audit, 2026-10-17): the analytics package's `plannedItemReadiness` — what the plan marks "invalid" and the apply skips — so the editor never accepts an item the apply then refuses */
   const readiness = React.useMemo(() => plannedItemReadiness(p.kind === "crosstab"
     ? { kind: "crosstab", crosstab: { rows: d.rows, columns: d.columns } }
-    : { kind: "test", test: { method: d.method, outcome: d.outcome || undefined, variables: d.variables, groupBy: d.groupBy || undefined, moderator: d.moderator || undefined, mediator: d.mediator || undefined } }, p.variables), [p.kind, d, p.variables]);
+    : { kind: "test", test: { method: d.method, outcome: d.outcome || undefined, variables: d.variables, groupBy: d.groupBy || undefined, moderator: d.moderator || undefined, mediator: d.mediator || undefined, ...(Object.keys(d.options).length ? { options: d.options } : {}) } }, p.variables), [p.kind, d, p.variables]);
+  const optPatch = p.kind === "test" ? optionsPatch(t?.options as Record<string, unknown> | undefined, d.options) : undefined;
   const validate = (): string | null => (readiness.ready ? null : readiness.missing.join(" "));
   const save = async () => {
     const v = validate(); setErr(v); if (v) return;
     const common = { priority: d.priority, hypotheses: d.hypotheses, reason: d.reason.trim() || (p.item ? null : undefined) };
     const action = p.kind === "crosstab"
       ? (p.item ? { op: "update_crosstab", id: p.item.id, rows: d.rows, columns: d.columns, measure: d.measure || null, ...common } : { op: "add_crosstab", rows: d.rows, columns: d.columns, ...(d.measure ? { measure: d.measure } : {}), priority: d.priority, hypotheses: d.hypotheses, ...(d.reason.trim() ? { reason: d.reason.trim() } : {}) })
-      : (p.item ? { op: "update_analysis_test", id: p.item.id, method: d.method, outcome: d.outcome || null, variables: d.variables, groupBy: d.groupBy || null, moderator: d.moderator || null, mediator: d.mediator || null, ...common }
-        : { op: "add_analysis_test", method: d.method, ...(d.outcome ? { outcome: d.outcome } : {}), variables: d.variables, ...(d.groupBy ? { groupBy: d.groupBy } : {}), ...(d.moderator ? { moderator: d.moderator } : {}), ...(d.mediator ? { mediator: d.mediator } : {}), priority: d.priority, hypotheses: d.hypotheses, ...(d.reason.trim() ? { reason: d.reason.trim() } : {}) });
+      : (p.item ? { op: "update_analysis_test", id: p.item.id, method: d.method, outcome: d.outcome || null, variables: d.variables, groupBy: d.groupBy || null, moderator: d.moderator || null, mediator: d.mediator || null, ...common, ...(optPatch ? { options: optPatch } : {}) }
+        : { op: "add_analysis_test", method: d.method, ...(d.outcome ? { outcome: d.outcome } : {}), variables: d.variables, ...(d.groupBy ? { groupBy: d.groupBy } : {}), ...(d.moderator ? { moderator: d.moderator } : {}), ...(d.mediator ? { mediator: d.mediator } : {}), priority: d.priority, hypotheses: d.hypotheses, ...(d.reason.trim() ? { reason: d.reason.trim() } : {}), ...(Object.keys(d.options).length ? { options: d.options } : {}) });
     await p.onSave(action, p.item ? `Changed ${p.item.title}` : p.kind === "crosstab" ? `Planned crosstab ${d.rows.join(", ")} by ${d.columns.join(", ")}` : `Planned ${words(d.method)}`);
   };
   const Pick = ({ label, value, onChange, multi, testid }: { label: string; value: string[] | string; onChange: (v: string[] | string) => void; multi?: boolean; testid: string }) => (
@@ -504,6 +510,7 @@ function ItemEditor(p: { kind: "crosstab" | "test"; item?: Item; variables: Vari
             <Pick label="Group by" value={d.groupBy} onChange={(v) => set({ groupBy: v as string })} testid="ap-ed-groupby" />
             <Pick label="Moderator" value={d.moderator} onChange={(v) => set({ moderator: v as string })} testid="ap-ed-moderator" />
             <Pick label="Mediator" value={d.mediator} onChange={(v) => set({ mediator: v as string })} testid="ap-ed-mediator" />
+            <div className="ap-field-wide"><MethodOptions method={d.method} mediator={d.mediator} value={d.options} onChange={(options) => set({ options })} /></div>
           </>
         )}
         <label className="ax-field ap-field"><span>Priority</span><select className="select" value={d.priority} onChange={(e) => set({ priority: Number(e.target.value) })} data-testid="ap-ed-priority"><option value={1}>P1 — answers a hypothesis or the objective</option><option value={2}>P2 — profiling</option><option value={3}>P3 — exploratory</option></select></label>

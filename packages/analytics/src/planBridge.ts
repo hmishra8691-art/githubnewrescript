@@ -32,7 +32,28 @@ const METHOD_KIND: Record<AnalysisMethod, AnalysisKind> = {
   correlation: "correlation", regression: "regression", logistic_regression: "regression", factor: "factor", reliability: "reliability", cluster: "cluster",
   conjoint_utilities: "conjoint", maxdiff_scores: "maxdiff", turf: "turf", driver_analysis: "regression", text_themes: "text",
   ranking_scores: "ranking", allocation_shares: "allocation", pricing: "pricing", brand_funnel: "brand",
+  hb: "hb", latent_class: "lca", sem: "sem",
 };
+
+/**
+ * THE OPTIONS A PLANNED TEST MAY CARRY INTO ITS ANALYSIS (2026-10-22) — per
+ * method, so a key the method does not read never reaches its runner. An item
+ * planned before this existed has no options and is translated exactly as before.
+ */
+const PLAN_OPTION_KEYS: Partial<Record<AnalysisMethod, readonly string[]>> = {
+  hb: ["chains", "burnIn", "draws", "thin", "seed", "priorVariance", "priorDf", "includeHoldouts", "scenario"],
+  /* covariates are carried so the readiness rule can refuse them in words (the estimator has no covariate model) */
+  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "maxIter", "covariates"],
+  sem: ["syntax", "scaling", "hypothesisPaths"],
+  regression: ["bootstrap", "seed"],
+  reliability: ["omega"],
+  pricing: ["method", "prices", "acceptCodes"],
+};
+export function plannedOptions(t: Pick<PlannedTest, "method" | "options">): Record<string, unknown> {
+  const keys = PLAN_OPTION_KEYS[t.method];
+  if (!keys || !t.options) return {};
+  return Object.fromEntries(keys.filter((k) => t.options![k] !== undefined && t.options![k] !== null).map((k) => [k, t.options![k]]));
+}
 const TEST_NAME: Partial<Record<AnalysisMethod, string>> = { chi_square: "chi_square", t_test: "t_independent", anova: "anova_one_way", mann_whitney: "mann_whitney", kruskal_wallis: "kruskal_wallis" };
 const words = (m: string) => m.replace(/_/g, " ");
 
@@ -67,7 +88,8 @@ export function testDefinition(planned: PlannedTest, dataset: DatasetSpec, def?:
   const r = (v: string | undefined) => (v ? planVariableName(def, v) : v);
   const t: PlannedTest = { ...planned, variables: planned.variables.map((v) => planVariableName(def, v)), ...(planned.outcome ? { outcome: r(planned.outcome) } : {}), ...(planned.groupBy ? { groupBy: r(planned.groupBy) } : {}), ...(planned.moderator ? { moderator: r(planned.moderator) } : {}), ...(planned.mediator ? { mediator: r(planned.mediator) } : {}) };
   const kind = METHOD_KIND[t.method];
-  const base = { dataset, options: { planned: t.id, ...(t.hypotheses.length ? { hypotheses: t.hypotheses } : {}) } as Record<string, unknown>, ...(t.reason ? { notes: t.reason } : {}) };
+  /* the method's own settings first, the plan's bookkeeping last (a setting can never overwrite `planned`) */
+  const base = { dataset, options: { ...plannedOptions(t), planned: t.id, ...(t.hypotheses.length ? { hypotheses: t.hypotheses } : {}) } as Record<string, unknown>, ...(t.reason ? { notes: t.reason } : {}) };
   const name = t.reason ?? `${words(t.method)}${planned.outcome ? ` — ${planned.outcome}` : ""}`;
   switch (kind) {
     case "test": {
@@ -83,6 +105,10 @@ export function testDefinition(planned: PlannedTest, dataset: DatasetSpec, def?:
     }
     case "correlation": return { ...base, name, kind, variables: [...(t.outcome ? [t.outcome] : []), ...t.variables], options: { ...base.options, method: "pearson" } };
     case "topbox": return { ...base, name, kind, variables: [...(t.outcome ? [t.outcome] : []), ...t.variables], options: { ...base.options, primaryBox: 2 } };
+    /* advanced models: HB reads the one exercise question; latent class its indicators; SEM its syntax (the variables are what the syntax observes, for the trace) */
+    case "hb": return { ...base, name, kind, variables: [...new Set([...(t.outcome ? [t.outcome] : []), ...t.variables])] };
+    case "lca": return { ...base, name, kind, variables: [...new Set(t.variables)] };
+    case "sem": return { ...base, name, kind, variables: [...new Set([...(t.outcome ? [t.outcome] : []), ...t.variables])] };
     case "maxdiff": case "conjoint": case "nps": case "turf": case "text": case "ranking": case "allocation": case "pricing": case "brand": case "reliability": case "factor": case "cluster": case "descriptive": case "crosstab":
     default:
       return { ...base, name, kind, variables: [...(t.outcome ? [t.outcome] : []), ...t.variables, ...(t.groupBy ? [t.groupBy] : [])] };

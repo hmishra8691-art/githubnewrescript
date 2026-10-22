@@ -31,7 +31,7 @@ test("HB readiness: one CBC or MaxDiff question; a non-choice question and a run
   assert.equal(analysisReadiness(D("hb", ["CBC_TASKS"]), vars).ready, true, "the picker's name for the conjoint question");
   assert.equal(analysisReadiness(D("hb", ["MD_TASKS"]), vars).ready, true);
   const wrong = analysisReadiness(D("hb", ["SAT"]), vars);
-  assert.equal(wrong.ready, false); assert.match(wrong.missing.join(" "), /CBC \(conjoint\) or MaxDiff question/);
+  assert.equal(wrong.ready, false); assert.match(wrong.missing.join(" "), /CBC, ACBC, menu-based \(conjoint\) or MaxDiff question/);
   assert.equal(analysisReadiness(D("hb", []), vars).ready, false);
   assert.match(analysisReadiness(D("hb", ["CBC", "MD"]), vars).missing.join(" "), /only that question/);
   assert.match(analysisReadiness(D("hb", ["CBC"], { burnIn: 150_000, draws: 100_000 }), vars).missing.join(" "), /limit is 200,000/);

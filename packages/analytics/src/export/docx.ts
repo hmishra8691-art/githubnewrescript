@@ -3,7 +3,8 @@ import type { SurveyDefinition, Question, AnalysisPlan } from "@rescript/schema"
 import { hypothesisLabel } from "@rescript/schema";
 import { describeHypothesis, structuredHypotheses, explainPlan, planSampleSize, expectedSample, inferRole, measurementOf, listBlocks, placedOrder, stripHtmlText, conditionSummary, buildAnalysisFramework, METHOD_CHART, MIN_READ_BASE } from "@rescript/engine";
 import * as engine from "@rescript/engine";
-import type { AnalysisResult, ResultTable } from "../types.js";
+import type { AnalysisDefinition, AnalysisResult, ResultTable } from "../types.js";
+import { advancedNarrative } from "../advancedNarrative.js";
 import type { AnalysisRun, Finding } from "../findings.js";
 import { reportNarrative } from "../findingsReport.js";
 import { deckFromRun, type DeckOptions, type DeckSlide } from "../deck.js";
@@ -746,6 +747,27 @@ async function findingsDocx(def: SurveyDefinition, run: RunForDocx, opts: Findin
         if (series.length && series[0].labels.length) out.push(gridTable(["", ...series.map((s) => s.name)], series[0].labels.map((l, i) => [l, ...series.map((s) => fmtCell(s.values[i], s.meta?.pct ? "pct" : "number", 1))])));
         else if (result.tables[0]) out.push(resultTable(result.tables[0]));
       }
+    }
+  }
+  /*
+   * THE ADVANCED MODELS (2026-10-22): each executed HB, latent class, SEM, bootstrapped mediation, ω or Gabor–Granger
+   * result, read by the engine — its plain-language summary, its diagnostics with a status, its caveats, and its key
+   * table (the SEM's paths as the path diagram's table) — numbers only from the result itself.
+   */
+  const advanced = (run.items ?? []).map((it) => {
+    const item = it as { definition: AnalysisDefinition; result?: AnalysisResult };
+    const result = item.result ?? (item.definition.id ? opts.results?.[item.definition.id] : undefined);
+    return result ? { def: item.definition, result, n: advancedNarrative(item.definition, result, { objective: def.research?.objective, hypotheses: (def.research?.hypotheses ?? []).map((text, i) => ({ label: `H${i + 1}`, text })), verdicts: run.verdicts }) } : null;
+  }).filter((x): x is { def: AnalysisDefinition; result: AnalysisResult; n: NonNullable<ReturnType<typeof advancedNarrative>> } => !!x?.n);
+  if (advanced.length) {
+    out.push(h1("Advanced models"));
+    for (const a of advanced) {
+      out.push(h2(a.n.title));
+      for (const s of a.n.summary) out.push(bullet(s));
+      if (a.n.diagnostics.length) out.push(gridTable(["Diagnostic", "Value", "Reading"], a.n.diagnostics.map((d) => [d.label, d.value, `${d.status === "ok" ? "OK" : d.status === "caution" ? "Caution" : "Fails"}${d.note ? ` — ${d.note}` : ""}`]), [2800, 2600, 3600]));
+      const key = ["hb_importance", "hb_shares", "lca_sizes", "sem_structural", "mediation_bootstrap", "omega", "gg"].map((id) => a.result.tables.find((t) => t.id === id)).find(Boolean);
+      if (key && a.n.valid) out.push(resultTable(key));
+      for (const c of a.n.caveats) out.push(muted(`Caveat: ${c}`));
     }
   }
   const segs = deck.slides.filter((s): s is Extract<DeckSlide, { type: "segment_comparison" }> => s.type === "segment_comparison");

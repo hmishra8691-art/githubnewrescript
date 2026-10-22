@@ -142,3 +142,48 @@ export function numericSurvey(columns: Record<string, number[]>) {
   } as AnalyticsRow));
   return { def, rows, ds: buildDataset(def, rows, { spec: advSpec }) };
 }
+
+/**
+ * THE SAME STUDY WITH A RESEARCH DESIGN (2026-10-22, advanced models from the plan): constructs measured by the
+ * nine attitude items (price perception X1–X3, trust M1–M3, purchase intent Y1–Y3), three hypotheses — a direct
+ * path, a mediation and a second direct path — a segmentation objective with the six usage indicators tagged for
+ * latent class, and a planned sample of 300. The data are the same as `advancedFixture` (X → M → Y holds).
+ */
+export function intelligentFixture(opts: AdvancedFixtureOptions = {}) {
+  const f = advancedFixture(opts);
+  const raw = JSON.parse(JSON.stringify(f.def)) as Record<string, unknown> & { questions: { id: string; analysis?: unknown }[] };
+  for (const q of raw.questions) if (/^q_u\d$/.test(q.id)) q.analysis = { modeling: ["latent_class"], primary: [], crosstabBy: [], relatedTo: [], hypotheses: [] };
+  raw.research = {
+    objective: "Segment phone buyers and test what drives purchase intent",
+    methodology: "Online survey, n = 300; CBC and MaxDiff exercises; attitude scales",
+    sampleSize: 300,
+    hypotheses: ["Trust increases purchase intent", "Trust mediates the effect of price perception on purchase intent", "Price perception increases purchase intent"],
+    constructs: [
+      { name: "Price perception", role: "independent", questionIds: ["q_x1", "q_x2", "q_x3"] },
+      { name: "Trust", role: "mediator", questionIds: ["q_m1", "q_m2", "q_m3"] },
+      { name: "Purchase intent", role: "dependent", questionIds: ["q_y1", "q_y2", "q_y3"] },
+    ],
+    analysis: [], assumptions: [], sources: [],
+  };
+  const def = SurveyDefinition.parse(raw);
+  return { ...f, def, ds: buildDataset(def, f.rows, { spec: advSpec }) };
+}
+
+/** a Gabor–Granger ladder: purchase intent (5 points) at four prices, demand falling with price */
+export function gaborGrangerFixture(n = 240, seed = 5) {
+  const prices = [9.99, 14.99, 19.99, 24.99];
+  const scale = ["Definitely not", "Probably not", "Not sure", "Probably would", "Definitely would"].map((label, k) => ({ code: k + 1, label }));
+  const def = SurveyDefinition.parse({
+    meta: { id: "gg", code: "GG", title: "Pricing", version: "1.0" },
+    research: { objective: "Find the revenue-maximising price", hypotheses: [], constructs: [], analysis: [], assumptions: [], sources: [], sampleSize: n },
+    questions: prices.map((p, i) => ({ id: `q_p${i + 1}`, code: `P${i + 1}`, variableName: `PRICE_${i + 1}`, type: "single_select", text: `How likely would you be to buy it at $${p}?`, options: scale })),
+    flow: [{ type: "page", id: "p1", questionIds: prices.map((_, i) => `q_p${i + 1}`) }, { type: "end", id: "e1", status: "complete" }],
+  });
+  const rng = new Rng(seed);
+  const rows: AnalyticsRow[] = Array.from({ length: n }, (_, i) => {
+    const wtp = 8 + 20 * rng.next();
+    const answers = Object.fromEntries(prices.map((p, k) => [`q_p${k + 1}`, Math.max(1, Math.min(5, Math.round(3 + (wtp - p) / 4 + 0.5 * rng.normal())))]));
+    return { id: `r${i}`, session_id: `s${i}`, status: "complete", is_test: false, started_at: "2026-10-01T10:00:00Z", completed_at: "2026-10-01T10:05:00Z", answers, calculated: {}, embedded: {}, flags: [] } as AnalyticsRow;
+  });
+  return { def, rows, prices, ds: buildDataset(def, rows, { spec: advSpec }) };
+}

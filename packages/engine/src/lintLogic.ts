@@ -1531,6 +1531,17 @@ export function lintStructure(def: SurveyDefinition): LogicIssue[] {
         message: `${q.code} is an adaptive conjoint (ACBC) question but design “${ref}” is a ${kind} design. Create an ACBC design in Design Generators and pick it here.`,
       });
     }
+    /* F4 2026-10-22: the conjoint suite — a rating-based question needs a CVA design; an ACBC design needs an ACBC question; dual-response and an in-task None do not mix */
+    if (q.type === "conjoint_task" && kind === "acbc") {
+      issues.push({ level: "error", questionId: q.id, questionCode: q.code, path: "settings.designRef", message: `${q.code} points at the ACBC design “${ref}”, but ACBC runs in an Adaptive CBC (ACBC) question. Change the question type to Adaptive CBC, or pick a CBC / menu / rating-based design.` });
+    }
+    if (q.type === "conjoint_task" && q.variant === "conjoint.cva" && kind && kind !== "cva") {
+      issues.push({ level: "error", questionId: q.id, questionCode: q.code, path: "settings.designRef", message: `${q.code} is a rating-based conjoint (CVA) question but design “${ref}” is a ${kind} design — respondents would be asked to choose, not rate. Create a Rating-based conjoint (CVA) design and pick it here.` });
+    }
+    const dcfg = ((def.designs ?? []).find((d: any) => d.id === ref)?.config ?? {}) as { dualResponseNone?: boolean; noneOption?: boolean };
+    if (q.type === "conjoint_task" && kind === "conjoint" && dcfg.dualResponseNone === true && dcfg.noneOption === true) {
+      issues.push({ level: "warning", questionId: q.id, questionCode: q.code, path: "settings.designRef", message: `${q.code}'s design has both a None alternative and the dual-response question — respondents are asked about “none” twice. Regenerate it with one of them.` });
+    }
   }
 
   /*

@@ -7,6 +7,7 @@ import { formatCharge } from "../../../lib/import/chat";
 import { languageName } from "../../../lib/intelligent/voice";
 import type { CopilotEntry, EngineTurn } from "./useCopilot";
 import { DocumentOutput, ThemeTurnCard, type DocumentActions } from "./DocumentCards";
+import { QualTurnCard } from "./QualTurnCard";
 import { validateResearch, PROVENANCE_REASON, type SurveyAction } from "@rescript/engine";
 import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilot/history";
 
@@ -145,6 +146,8 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
         {entry.output && <DocumentOutput entry={entry} actions={documents} />}
         {/* a report theme read from words (2026-10-18): the preview, then Apply / Save as */}
         {entry.theme && <ThemeTurnCard entry={entry} actions={documents} />}
+        {/* a qualitative synthesis request (2026-10-22): the preview, then Run */}
+        {entry.qual && <QualTurnCard card={entry.qual} onRun={documents?.qual ? () => documents.qual!(entry.id) : undefined} />}
         {entry.data && (
           /* a data question's answer (Phase 4): read on the respondent data — the base, the test, the caveats, and the planned finding on the same pair */
           <p className="cp-data" data-testid="cp-data" data-n={entry.data.n} data-source={entry.data.source}>

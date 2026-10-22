@@ -31,6 +31,7 @@ import { diffUx, type UxDiff } from "./ux.js";
 import { applyOptionAction, coerceOptionAction, describeOptionAction, isOptionOp, OPTION_ACTION_OPS, type OptionAction } from "./optionActions.js";
 import { applyResearchAction, coerceResearchAction, describeResearchAction, isResearchOp, RESEARCH_ACTION_OPS, type ResearchAction } from "./researchActions.js";
 import { applyQualAction, coerceQualAction, describeQualAction, isQualOp, qualGuideDiff, qualSectionChanges, QUAL_ACTION_OPS, type QualAction } from "./qualActions.js";
+import { AI_INTERVIEW_ACTION_OPS, applyAiInterviewAction, coerceAiInterviewAction, describeAiInterviewAction, isAiInterviewOp, type AiInterviewAction } from "./aiInterviewActions.js";
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
@@ -132,7 +133,9 @@ export type SurveyAction =
   /* qualitative: AI follow-up probes on open ends — see researchActions.ts; they write question.probe and nothing else */
   | ResearchAction
   /* qualitative: the moderated interview / focus-group guide — see qualActions.ts; they write def.qualStudy and nothing else */
-  | QualAction;
+  | QualAction
+  /* qualitative: the guide run as AI-moderated 1:1 interviews — see aiInterviewActions.ts; writes def.qualStudy.aiModeration only */
+  | AiInterviewAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -141,7 +144,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -390,6 +393,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (ra !== null) return ra;
       const qla = op ? coerceQualAction(op, o) : null;
       if (qla !== null) return qla;
+      const aia = op ? coerceAiInterviewAction(op, o) : null;
+      if (aia !== null) return aia;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -995,7 +1000,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         return r;
       }
       // the analysis framework: question.analysis and research.analysisPlan only, every variable resolved
-      if (isAnalysisOp(a.op)) return applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
+      if (isAnalysisOp(a.op)) {
+        const r = applyAnalysisAction(def, a as AnalysisAction, { question: (x) => tryQuestion(ctx, x), ids: ctx.ids, now: ctx.now });
+        /* an advanced model's suitability warnings (2026-10-22) travel with the change, as a quota's do */
+        if (r.warnings?.length) ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       // the quotas: def.quotas and the quota_check nodes; every condition through the gate, the check placed after what it reads
       if (isQuotaOp(a.op)) {
         const r = applyQuotaAction(def, a as QuotaAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids });
@@ -1005,6 +1015,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       // the List Fills: def.listFills and the masks of their destinations; every question, item and code resolved here
       if (isListFillOp(a.op)) {
         const r = applyListFillAction(def, a as ListFillAction, { question: (x) => tryQuestion(ctx, x), condition: (c) => parseCondition(def, withRefs(ctx, c)), ids: ctx.ids });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
+      // qualitative: the interview guide run as AI-moderated 1:1 interviews — def.qualStudy.aiModeration only
+      if (isAiInterviewOp(a.op)) {
+        const r = applyAiInterviewAction(def, a as AiInterviewAction);
         ctx.uxWarnings.push(...r.warnings);
         return r;
       }
@@ -1466,7 +1482,7 @@ export function describeAction(a: SurveyAction): string {
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
     case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
-    default: return isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 

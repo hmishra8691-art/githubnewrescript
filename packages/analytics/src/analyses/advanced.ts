@@ -25,13 +25,19 @@ import { effectsPriorShape, hbAdvance, hbDone, hbInit, hbSummarise, resolveHbOpt
 import { latentClass, type LcaFit } from "../models/lca.js";
 import { fitSem, type SemEstimate } from "../models/sem.js";
 import { MODELS_VERSION, intOpt, nowMs } from "../models/spec.js";
+import { dualCodingOf } from "./choice.js";
+import { menuHbTables, prepareSuiteHb, suiteHbPost, type SuiteHbPrep } from "../conjoint/hbSuite.js";
 
 const r3 = (x: number | null | undefined) => round(x, 3);
 
 /* ================================================================== HB */
 
 interface HbPrep {
-  kind: "cbc" | "maxdiff";
+  kind: "cbc" | "maxdiff" | "menu";
+  /** F4 2026-10-22: the conjoint suite's codings (conjoint/hbSuite.ts) */
+  variant?: "acbc" | "menu";
+  acbc?: SuiteHbPrep["acbc"];
+  menu?: SuiteHbPrep["menu"];
   qid: string;
   variable: string;
   data: HbData;
@@ -49,7 +55,10 @@ function prepareHb(def: AnalysisDefinition, ds: Dataset): HbPrep | { refuse: str
   const name = def.variables[0] ?? "";
   const q = choiceQuestionFor(ds, name);
   if (!q) return { refuse: "Hierarchical Bayes needs a CBC (conjoint_task) or MaxDiff question — none was found in this survey." };
-  if (q.type !== "conjoint_task" && q.type !== "maxdiff_task") return { refuse: q.type === "acbc_task" ? "Adaptive CBC is not estimated here: its screening and tournament stages need an ACBC-specific HB model. The transcripts are exported for an external estimator." : `Hierarchical Bayes needs a CBC or MaxDiff question; ${name} is a ${q.type} question.` };
+  /* F4 2026-10-22: ACBC and menu-based conjoint are estimated with the same sampler; CVA is refused in words */
+  const suite = prepareSuiteHb(def, ds, q);
+  if (suite) return suite;
+  if (q.type !== "conjoint_task" && q.type !== "maxdiff_task") return { refuse: `Hierarchical Bayes needs a CBC or MaxDiff question (or an ACBC / menu-based conjoint); ${name} is a ${q.type} question.` };
   const qrow = ds.def.questions.find((x) => x.id === q.id);
   const variable = qrow?.variableName ?? q.id;
   const toData = (resp: { id: string; sets: ChoiceSet[] }[], p: number, transform: { names: string[]; rows: number[][] }): HbData => ({
@@ -57,7 +66,7 @@ function prepareHb(def: AnalysisDefinition, ds: Dataset): HbPrep | { refuse: str
     respondents: resp.map((r) => ({ id: r.id, X: Float64Array.from(r.sets.flatMap((s) => s.alternatives.flat())), taskSizes: Int32Array.from(r.sets.map((s) => s.alternatives.length)), chosen: Int32Array.from(r.sets.map((s) => s.chosen)) })),
   });
   if (q.type === "conjoint_task") {
-    const s = cbcRespondentSets(ds, q.id, { includeHoldouts: opt(def, "includeHoldouts", false) as boolean });
+    const s = cbcRespondentSets(ds, q.id, { includeHoldouts: opt(def, "includeHoldouts", false) as boolean, dual: dualCodingOf(opt(def, "dualCoding", "dual")) });
     if (!s) return { refuse: "The conjoint design file has not been generated (or the question is a menu-based exercise, which has no choice model here)." };
     const lr = s.coding.levelRows();
     const data = toData(s.respondents, s.coding.p, { names: lr.names, rows: lr.rows });
@@ -76,7 +85,7 @@ function prepareHb(def: AnalysisDefinition, ds: Dataset): HbPrep | { refuse: str
 function hbRefusal(def: AnalysisDefinition, ds: Dataset, totalCases: number, prep: HbPrep | { refuse: string }): AnalysisResult | null {
   if ("refuse" in prep) return refused(def, ds, totalCases, prep.refuse, ["attribute_importance"]);
   const minResp = 20;
-  if (prep.respondents < minResp) return refused(def, ds, totalCases, `Hierarchical Bayes needs choices from at least ${minResp} respondents to estimate the population distribution — ${prep.respondents} answered. Use the aggregate ${prep.kind === "cbc" ? "conjoint" : "MaxDiff"} analysis until more data is in.`, ["attribute_importance"]);
+  if (prep.respondents < minResp) return refused(def, ds, totalCases, `Hierarchical Bayes needs choices from at least ${minResp} respondents to estimate the population distribution — ${prep.respondents} answered. Use the aggregate ${prep.kind === "maxdiff" ? "MaxDiff" : "conjoint"} analysis until more data is in.`, ["attribute_importance"]);
   if (prep.sets.length < prep.data.p * 3) return refused(def, ds, totalCases, `Only ${prep.sets.length} choice tasks answered — too few to estimate ${prep.data.p} parameters.`, ["attribute_importance"]);
   return null;
 }
@@ -94,7 +103,7 @@ export function hbResultFromState(def: AnalysisDefinition, ds: Dataset, totalCas
   const warnings: string[] = [...prep.warnings];
   for (const d of out.diagnostics) if (d.severity !== "info") warnings.push(d.message);
   const diagRows: { m: string; v: string | number | null }[] = [
-    { m: "Model", v: `Hierarchical Bayes multinomial logit (${prep.kind === "cbc" ? "CBC, effects-coded" + (prep.attr.includes(null) ? ", None constant" : "") : "MaxDiff, sequential best–worst, effects-coded"})` },
+    { m: "Model", v: `Hierarchical Bayes multinomial logit (${prep.variant === "acbc" ? "ACBC: BYO + screening vs threshold + implied rule screens + tournament, effects-coded" + (prep.acbc?.price ? ", linear summed price" : "") : prep.variant === "menu" ? "menu-based: buy-anything, item and section logits, prices standardised per item" : prep.kind === "cbc" ? "CBC, effects-coded" + (prep.attr.includes(null) ? ", None constant" : "") : "MaxDiff, sequential best–worst, effects-coded"})` },
     { m: "Verdict", v: out.converged ? "Converged — estimates below are valid" : "NOT converged — estimates are withheld" },
     { m: "Chains", v: o.chains },
     { m: "Burn-in iterations (per chain)", v: o.burnIn },
@@ -119,6 +128,11 @@ export function hbResultFromState(def: AnalysisDefinition, ds: Dataset, totalCas
   const insights: string[] = [];
   if (!out.converged) {
     return makeResult(def, ds, { tables, chart, warnings, insights: ["The HB chains did not converge; no part-worths are reported. Increase the burn-in and draws (Options) and run again."], recommendedCharts: ["table"], variablesUsed: [prep.variable], baseLabel: `${prep.respondents} respondents`, totalCases, validN: prep.respondents });
+  }
+  /* F4 2026-10-22: a menu run has its own tables (item / section / buy models) and the menu simulator */
+  if (prep.kind === "menu") {
+    const m = menuHbTables(def, prep as SuiteHbPrep, out);
+    return makeResult(def, ds, { tables: [...tables, ...m.tables], chart, warnings, insights: [...insights, ...m.insights], recommendedCharts: ["bar_horizontal", "table"], variablesUsed: [prep.variable], baseLabel: `${prep.respondents} respondents`, totalCases, validN: prep.respondents });
   }
   // aggregate MNL on the same sets, for comparison only
   const agg = conditionalLogit(prep.sets, prep.data.p);
@@ -196,7 +210,9 @@ export function hbResultFromState(def: AnalysisDefinition, ds: Dataset, totalCas
   tables.push({ id: "hb_individual_sd", title: "Individual utilities — posterior SDs", columns: [{ key: "id", label: "Respondent" }, ...out.names.map((n, l) => ({ key: levelCols[l], label: n, type: "number" as const, decimals: 3 }))], rows: out.individual.map((ind) => ({ id: caseCode(ind.id), ...Object.fromEntries(ind.sd.map((v, l) => [levelCols[l], r3(v)])) })), notes: ["Posterior standard deviation of each respondent's utility over the kept draws: how precisely that respondent's preferences are pinned down."] });
   insights.push(`HB fit: RLH ${fmtNum(out.fit.rlh, 3)} (chance ${fmtNum(Math.exp(out.fit.nullLogLik / out.fit.tasks), 3)}), percent certainty ${fmtPct(out.fit.pctCert * 100, 0)}; chains converged (largest R̂ ${fmtNum(out.maxRhat, 3)}).`);
   chart.kpis = [{ label: "Respondents", value: out.fit.respondents }, { label: "RLH", value: r3(out.fit.rlh) ?? 0 }, { label: "Largest R̂", value: r3(out.maxRhat) ?? 0 }];
-  return makeResult(def, ds, { tables, chart, warnings, insights, recommendedCharts: prep.kind === "cbc" ? ["attribute_importance", "part_worth", "utility_by_level", "preference_share"] : ["maxdiff_preference", "maxdiff_utility", "bar_horizontal"], variablesUsed: [prep.variable], baseLabel: `${prep.respondents} respondents`, totalCases, validN: prep.respondents });
+  const finished = makeResult(def, ds, { tables, chart, warnings, insights, recommendedCharts: prep.kind === "cbc" ? ["attribute_importance", "part_worth", "utility_by_level", "preference_share"] : ["maxdiff_preference", "maxdiff_utility", "bar_horizontal"], variablesUsed: [prep.variable], baseLabel: `${prep.respondents} respondents`, totalCases, validN: prep.respondents });
+  /* F4 2026-10-22: the ACBC price table and saved / asked-for simulator scenarios on individual utilities (absent → unchanged) */
+  return prep.kind === "cbc" ? suiteHbPost(def, ds, prep, out, finished) : finished;
 }
 
 export interface HbJobStep {

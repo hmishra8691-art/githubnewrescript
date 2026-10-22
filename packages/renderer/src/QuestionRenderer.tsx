@@ -46,6 +46,7 @@ import {
   type ValidationError,
 } from "@rescript/engine";
 import { variantRenderers } from "./variants/registry";
+import { DualResponseFollowUp } from "./variants/conjointSuite";
 import { MediaEmbed, SafeImage } from "./Media";
 import { SpeechInputButton } from "./SpeechInput";
 import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
@@ -1840,6 +1841,11 @@ function DesignTasks(p: QRProps) {
     const Menu = variantRenderers.menutasks;
     return <Menu {...p} />;
   }
+  /* F4 2026-10-22: a rating-based (CVA) design is rated, not chosen from — whichever variant the question stored */
+  if (design.kind === "cva" && variantRenderers.cvatasks) {
+    const Cva = variantRenderers.cvatasks;
+    return <Cva {...p} />;
+  }
   const allRows = design.file.rows as Record<string, unknown>[];
   /*
    * THE VERSION THIS RESPONDENT ANSWERS.
@@ -1978,13 +1984,16 @@ function DesignTasks(p: QRProps) {
                      */
                     const isNone = Number(alt.none_option) === 1;
                     const noneText = String((design.config as { noneLabel?: unknown } | undefined)?.noneLabel ?? "").trim() || "None of these";
-                    const optLabel = isNone ? noneText : `Option ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
+                    /* F4 2026-10-22: a LABELLED design names each alternative by its brand */
+                    const lab = design.config as { labelled?: boolean; brandAttribute?: string } | undefined;
+                    const brandCol = lab?.labelled ? (attrCols.find((c) => c === lab.brandAttribute) ?? attrCols.find((c) => /^brand/i.test(c)) ?? attrCols[0]) : undefined;
+                    const optLabel = isNone ? noneText : brandCol && alt[brandCol] ? String(alt[brandCol]) : `Option ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
                     const isChosen = vals[t] != null && String(vals[t]) === altKey;
                     return (
                       <tr key={altKey} className={isChosen ? "rs-cbc-chosen" : undefined} data-testid="cbc-alt"
                         data-task={t} data-alt={altKey} data-position={i + 1} data-none={isNone ? "1" : undefined}>
                         <td className="rowlabel">{optLabel}</td>
-                        {attrCols.map((a) => <td key={a} data-label={a}>{isNone ? "—" : String(alt[a] ?? "")}</td>)}
+                        {attrCols.map((a) => <td key={a} data-label={a}>{isNone || alt[a] === "" ? "—" : String(alt[a] ?? "")}</td>)}
                         <td className="rs-cbc-choose">
                           <label className="rs-cbc-pick">
                             <input type="radio" name={`${p.q.id}_${t}`} aria-label={`Choose ${optLabel}`}
@@ -2000,6 +2009,7 @@ function DesignTasks(p: QRProps) {
                 </tbody>
               </table>
             </div>
+            {!isMaxdiff && <DualResponseFollowUp def={p.def} q={p.q} task={t} value={vals} onChange={p.onChange} readOnly={!!p.q.settings.readOnly} />}
             {isMaxdiff && mdNotice[t] && (
               <div role="status" className="rs-md-notice rs-error-msg" data-testid={`md-conflict-${t}`} style={{ marginTop: 8 }}>
                 {mdNotice[t]}

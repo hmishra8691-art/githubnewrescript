@@ -2,6 +2,7 @@ import type { AnalysisMethod, AnalysisPlan, AnalysisRole, MeasurementLevel, Plan
 import { ANALYSIS_METHODS, ANALYSIS_ROLES, MEASUREMENT_LEVELS } from "@rescript/schema";
 import { buildAnalysisFramework, crosstabKey, freePlanId, isNonQuestionVariable, testKey } from "./analysisFramework.js";
 import type { IdMinter } from "./questionOps.js";
+import { advancedSuitability, gaborGrangerPattern, itemVariables, semModelFromDesign } from "./advancedMethods.js";
 
 /**
  * THE ANALYSIS ACTIONS — how the copilot (and the Studio's own buttons)
@@ -31,23 +32,23 @@ import type { IdMinter } from "./questionOps.js";
  */
 
 type CrosstabSpec = { rows: string[]; columns: string[]; measure?: PlannedCrosstab["measure"]; priority?: number; hypotheses?: string[]; reason?: string };
-type TestSpec = { method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string };
+type TestSpec = { method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string; /** method settings (2026-10-22): see PlannedTestOptions */ options?: Record<string, unknown> };
 type DerivedSpec = { name: string; kind: PlannedDerived["kind"]; from: string[]; expression?: string; reason?: string };
 type SegmentSpec = { name: string; by: string[]; reason?: string };
 
 export type AnalysisAction =
   | { op: "set_question_analysis"; target: string; role?: AnalysisRole | null; measurement?: MeasurementLevel | null; primary?: AnalysisMethod[]; crosstabBy?: string[]; modeling?: AnalysisMethod[]; relatedTo?: string[]; hypotheses?: string[]; construct?: string | null; notes?: string | null }
   | { op: "propose_analysis_plan"; merge?: boolean }
-  | { op: "set_analysis_plan"; merge?: boolean; crosstabs?: CrosstabSpec[]; tests?: TestSpec[]; derived?: DerivedSpec[]; segments?: SegmentSpec[] }
+  | { op: "set_analysis_plan"; merge?: boolean; crosstabs?: CrosstabSpec[]; tests?: TestSpec[]; derived?: DerivedSpec[]; segments?: SegmentSpec[]; /** when the advanced models re-run on new completes (2026-10-22); null = back to manual */ advancedRerun?: { mode: "manual" | "threshold"; newResponses?: number } | null }
   | { op: "add_crosstab"; rows: string[]; columns: string[]; measure?: PlannedCrosstab["measure"]; priority?: number; hypotheses?: string[]; reason?: string }
   | { op: "remove_crosstab"; id: string }
-  | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string }
+  | { op: "add_analysis_test"; method: AnalysisMethod; outcome?: string; variables?: string[]; groupBy?: string; moderator?: string; mediator?: string; priority?: number; hypotheses?: string[]; reason?: string; options?: Record<string, unknown> }
   | { op: "remove_analysis_test"; id: string }
   | { op: "add_derived_variable"; name: string; kind: PlannedDerived["kind"]; from: string[]; expression?: string; reason?: string }
   | { op: "remove_derived_variable"; name: string }
   /** every field optional: only what is given changes; `hypotheses: []` clears them, `reason: null` clears the reason */
   | { op: "update_crosstab"; id: string; rows?: string[]; columns?: string[]; measure?: PlannedCrosstab["measure"] | null; priority?: number; hypotheses?: string[]; reason?: string | null }
-  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null }
+  | { op: "update_analysis_test"; id: string; method?: AnalysisMethod; outcome?: string | null; variables?: string[]; groupBy?: string | null; moderator?: string | null; mediator?: string | null; priority?: number; hypotheses?: string[]; reason?: string | null; /** merged into the item's options; a key set to null is removed */ options?: Record<string, unknown> | null }
   /** the ids in the order wanted; an id left out keeps its relative place after the ones named */
   | { op: "reorder_analysis_plan"; crosstabs?: string[]; tests?: string[] };
 
@@ -84,10 +85,56 @@ function testSpec(x: unknown): TestSpec | string {
   const o = (x ?? {}) as Record<string, unknown>;
   const method = str(o.method ?? o.test)?.toLowerCase().replace(/[\s-]+/g, "_");
   if (!method || !METHODS.has(method)) return `“${method ?? ""}” is not an analysis method the platform runs (${[...METHODS].join(", ")})`;
-  const variables = strs(o.variables ?? o.predictors) ?? [];
+  const variables = strs(o.variables ?? o.predictors ?? o.indicators) ?? [];
   const outcome = str(o.outcome ?? o.dependent), groupBy = str(o.groupBy ?? o.group_by ?? o.by);
-  if (!variables.length && !outcome && !groupBy) return `${method} needs an outcome, variables or a groupBy`;
-  return { method: method as AnalysisMethod, ...(outcome ? { outcome } : {}), variables, ...(groupBy ? { groupBy } : {}), ...(str(o.moderator) ? { moderator: str(o.moderator) } : {}), ...(str(o.mediator) ? { mediator: str(o.mediator) } : {}), ...(priority(o.priority) ? { priority: priority(o.priority) } : {}), ...(hyps(o.hypotheses) ? { hypotheses: hyps(o.hypotheses) } : {}), ...(str(o.reason) ? { reason: str(o.reason) } : {}) };
+  const options = testOptions(method as AnalysisMethod, o);
+  if (typeof options === "string") return options;
+  /* an SEM planned from the hypotheses has no variables of its own: the engine builds its model from the design */
+  const fromDesign = method === "sem" && (hyps(o.hypotheses)?.length || typeof options?.syntax === "string");
+  if (!variables.length && !outcome && !groupBy && !fromDesign) return `${method} needs an outcome, variables or a groupBy`;
+  return { method: method as AnalysisMethod, ...(outcome ? { outcome } : {}), variables, ...(groupBy ? { groupBy } : {}), ...(str(o.moderator) ? { moderator: str(o.moderator) } : {}), ...(str(o.mediator) ? { mediator: str(o.mediator) } : {}), ...(priority(o.priority) ? { priority: priority(o.priority) } : {}), ...(hyps(o.hypotheses) ? { hypotheses: hyps(o.hypotheses) } : {}), ...(str(o.reason) ? { reason: str(o.reason) } : {}), ...(options && Object.keys(options).length ? { options } : {}) };
+}
+
+/**
+ * THE SETTINGS A PLANNED TEST MAY CARRY (2026-10-22), read from `options` or
+ * from the same keys at the top of the action (a model writes either). Each
+ * method reads its own keys, typed and bounded here; anything else is not
+ * kept. A value of the wrong type is refused with the reason, never coerced
+ * into something the researcher did not ask for.
+ */
+const OPTION_KEYS: Partial<Record<AnalysisMethod, string[]>> = {
+  hb: ["chains", "burnIn", "draws", "thin", "seed", "priorVariance", "priorDf"],
+  latent_class: ["minClasses", "maxClasses", "starts", "seed", "classes", "covariates"],
+  sem: ["syntax", "scaling", "hypothesisPaths"],
+  regression: ["bootstrap", "seed"], logistic_regression: ["bootstrap", "seed"], driver_analysis: ["bootstrap", "seed"],
+  reliability: ["omega"],
+  pricing: ["method", "prices", "acceptCodes"],
+};
+const INT_BOUNDS: Record<string, [number, number]> = { chains: [1, 8], burnIn: [100, 100_000], draws: [100, 100_000], thin: [1, 100], seed: [0, 2 ** 31 - 1], minClasses: [1, 8], maxClasses: [1, 8], starts: [1, 200], classes: [1, 8] };
+export function testOptions(method: AnalysisMethod, o: Record<string, unknown>): Record<string, unknown> | string | undefined {
+  const keys = OPTION_KEYS[method];
+  if (!keys) return undefined;
+  const src = { ...(o.options && typeof o.options === "object" && !Array.isArray(o.options) ? o.options as Record<string, unknown> : {}) };
+  for (const k of keys) if (o[k] !== undefined && src[k] === undefined) src[k] = o[k];
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    const v = src[k];
+    if (v === undefined || v === null) continue;
+    if (k in INT_BOUNDS) { const n = Number(v); const [lo, hi] = INT_BOUNDS[k]; if (!Number.isInteger(n) || n < lo || n > hi) return `${k} must be a whole number from ${lo} to ${hi}`; out[k] = n; continue; }
+    switch (k) {
+      case "priorVariance": case "priorDf": { const n = Number(v); if (!(n > 0 && n < 1000)) return `${k} must be a positive number`; out[k] = n; break; }
+      case "covariates": { const xs = strs(v); if (!xs) return "covariates is a list of variable names"; if (xs.length) out[k] = xs; break; }
+      case "syntax": { const t = typeof v === "string" ? v.trim() : ""; if (!t) return "syntax is the model written lavaan-style (F =~ a + b + c; Y ~ F)"; out[k] = t.slice(0, 6000); break; }
+      case "scaling": if (v !== "marker" && v !== "unit_variance") return "scaling is \"marker\" or \"unit_variance\""; out[k] = v; break;
+      case "hypothesisPaths": { if (typeof v !== "object" || Array.isArray(v)) return "hypothesisPaths maps a hypothesis label to its path (\"H2\": \"INTENT ~ TRUST\")"; const e = Object.entries(v as Record<string, unknown>).filter(([h, p]) => /^H\d+$/i.test(h) && typeof p === "string").map(([h, p]) => [h.toUpperCase(), String(p).slice(0, 120)]); if (e.length) out[k] = Object.fromEntries(e); break; }
+      case "bootstrap": { if (v === true) { out[k] = 5000; break; } if (v === false) break; const n = Number(v); if (!Number.isInteger(n) || n < 200 || n > 20_000) return "bootstrap is the number of resamples, 200 to 20,000 (5,000 is usual)"; out[k] = n; break; }
+      case "omega": if (typeof v !== "boolean") return "omega is true or false"; if (v) out[k] = true; break;
+      case "method": if (v !== "gabor_granger" && v !== "van_westendorp") return "pricing method is \"gabor_granger\" or \"van_westendorp\""; out[k] = v; break;
+      case "prices": { if (!Array.isArray(v)) return "prices is a list of numbers, one per purchase-intent question"; const xs = v.map((x) => Number(typeof x === "string" ? x.replace(/[^\d.]/g, "") : x)); if (xs.some((x) => !(x > 0))) return "every price must be a positive number"; out[k] = xs; break; }
+      case "acceptCodes": { const xs = strs(v); if (xs?.length) out[k] = xs; break; }
+    }
+  }
+  return out;
 }
 function derivedSpec(x: unknown): DerivedSpec | string {
   const o = (x ?? {}) as Record<string, unknown>;
@@ -140,7 +187,15 @@ export function coerceAnalysisAction(op: string, o: Record<string, unknown>): An
       if (tests) a.tests = tests;
       if (derived) a.derived = derived;
       if (segments) a.segments = segments;
-      if (!crosstabs && !tests && !derived && !segments) return "set_analysis_plan needs crosstabs, tests, derived or segments";
+      if (o.advancedRerun === null) a.advancedRerun = null;
+      else if (o.advancedRerun !== undefined) {
+        const r = (o.advancedRerun ?? {}) as Record<string, unknown>;
+        if (r.mode !== "manual" && r.mode !== "threshold") return "advancedRerun.mode is \"manual\" (flag stale results, re-run by hand) or \"threshold\" (re-run after newResponses completes)";
+        const n = r.newResponses === undefined ? undefined : Number(r.newResponses);
+        if (r.mode === "threshold" && !(Number.isInteger(n) && n! >= 1 && n! <= 100_000)) return "a threshold re-run needs newResponses, a whole number of new completes from 1 to 100,000";
+        a.advancedRerun = { mode: r.mode, ...(r.mode === "threshold" ? { newResponses: n } : {}) };
+      }
+      if (!crosstabs && !tests && !derived && !segments && a.advancedRerun === undefined) return "set_analysis_plan needs crosstabs, tests, derived, segments or advancedRerun";
       return a;
     }
     case "add_crosstab": { const c = crosstabSpec(o); return typeof c === "string" ? c : { op, ...c }; }
@@ -177,6 +232,8 @@ export function coerceAnalysisAction(op: string, o: Record<string, unknown>): An
       if (o.priority !== undefined) { const p = priority(o.priority); if (!p) return "priority is 1, 2 or 3"; a.priority = p; }
       if (o.hypotheses !== undefined) { const h = hyps(o.hypotheses); if (!h) return "hypotheses is a list of labels (H1, H2…)"; a.hypotheses = h; }
       if (o.reason === null) a.reason = null; else if (o.reason !== undefined) a.reason = str(o.reason) ?? null;
+      if (o.options === null) a.options = null;
+      else if (o.options !== undefined) { if (typeof o.options !== "object" || Array.isArray(o.options)) return "options is an object of the method's settings"; a.options = o.options as Record<string, unknown>; }
       if (Object.keys(a).length === 2) return "update_analysis_test changes nothing";
       return a;
     }
@@ -197,7 +254,7 @@ export interface AnalysisEnv {
   ids: IdMinter;
   now: string;
 }
-export interface AnalysisApplied { description: string; destructive?: string; touched: string[] }
+export interface AnalysisApplied { description: string; destructive?: string; touched: string[]; /** said with the change, not refusing it (an advanced model's suitability warnings, 2026-10-22) */ warnings?: string[] }
 
 class ActionError extends Error {}
 const fail = (m: string): never => { throw new ActionError(m); };
@@ -221,9 +278,51 @@ function crosstabOf(env: AnalysisEnv, c: CrosstabSpec): PlannedCrosstab {
   if (rows.some((r) => columns.includes(r))) fail(`a crosstab cannot tabulate ${words(rows.filter((r) => columns.includes(r)))} against itself`);
   return { id: env.ids("xt"), rows, columns, ...(c.measure ? { measure: c.measure } : {}), priority: c.priority ?? 2, hypotheses: c.hypotheses ?? [], ...(c.reason ? { reason: c.reason } : {}) };
 }
-function testOf(env: AnalysisEnv, t: TestSpec): PlannedTest {
+function testOf(env: AnalysisEnv, t: TestSpec, def?: SurveyDefinition): PlannedTest {
   const what = `the ${t.method.replace(/_/g, " ")}`;
-  return { id: env.ids("test"), method: t.method, ...(t.outcome ? { outcome: resolveVar(env, t.outcome, what) } : {}), variables: resolveVars(env, t.variables ?? [], what), ...(t.groupBy ? { groupBy: resolveVar(env, t.groupBy, what) } : {}), ...(t.moderator ? { moderator: resolveVar(env, t.moderator, what) } : {}), ...(t.mediator ? { mediator: resolveVar(env, t.mediator, what) } : {}), priority: t.priority ?? 2, hypotheses: t.hypotheses ?? [], ...(t.reason ? { reason: t.reason } : {}) };
+  if (t.method === "sem" && def) return semTestOf(def, env, t);
+  const options = t.options && Object.keys(t.options).length ? { ...t.options } : undefined;
+  /* a bootstrapped mediation of multi-item constructs reads their planned mean scores (2026-10-22): a plan's derived variable is a column of the run */
+  const derivedOk = !!def && !!options?.bootstrap && !!t.mediator;
+  const one = (ref: string | undefined) => (ref === undefined ? undefined : derivedOk ? resolvePlanVars(def!, env, [ref], what)[0] : resolveVar(env, ref, what));
+  const variables = derivedOk ? resolvePlanVars(def!, env, t.variables ?? [], what) : resolveVars(env, t.variables ?? [], what);
+  /* a Gabor–Granger ladder named without its prices: the prices its questions state (2026-10-22) */
+  if (def && t.method === "pricing" && options?.method === "gabor_granger" && !options.prices) {
+    const ladder = gaborGrangerPattern(def);
+    const prices = variables.map((v) => { const i = ladder?.questions.indexOf(v) ?? -1; return i >= 0 ? ladder!.prices[i] : null; });
+    if (prices.every((p) => p != null)) options.prices = prices;
+  }
+  return { id: env.ids("test"), method: t.method, ...(t.outcome ? { outcome: one(t.outcome) } : {}), variables, ...(t.groupBy ? { groupBy: resolveVar(env, t.groupBy, what) } : {}), ...(t.moderator ? { moderator: resolveVar(env, t.moderator, what) } : {}), ...(t.mediator ? { mediator: one(t.mediator) } : {}), priority: t.priority ?? 2, hypotheses: t.hypotheses ?? [], ...(t.reason ? { reason: t.reason } : {}), ...(options ? { options } : {}) };
+}
+
+/**
+ * AN SEM ITEM. Without syntax the model is built from the research design
+ * (the hypotheses named, else every hypothesis it can model); with syntax the
+ * observed names must be variables of the survey (questions or grid rows).
+ */
+function semTestOf(def: SurveyDefinition, env: AnalysisEnv, t: TestSpec): PlannedTest {
+  const options: Record<string, unknown> = { scaling: "marker", ...(t.options ?? {}) };
+  let variables: string[];
+  let hypotheses = t.hypotheses ?? [];
+  if (typeof options.syntax !== "string") {
+    const m = semModelFromDesign(def, { only: hypotheses });
+    if ("error" in m) fail(`no structural model can be built from the research design: ${m.error}`);
+    const model = m as Exclude<typeof m, { error: string }>;
+    if (model.df < 0) fail(`the model the design describes is not identified (${model.freeParameters} free parameters for ${model.freeParameters + model.df} variances and covariances) — add indicators to the constructs`);
+    options.syntax = model.syntax; options.hypothesisPaths = model.hypothesisPaths; options.freeParameters = model.freeParameters;
+    variables = model.observed;
+    hypotheses = model.hypotheses;
+  } else {
+    const known = new Set(def.questions.flatMap((q) => itemVariables(def, q)));
+    const latent = new Set([...String(options.syntax).matchAll(/^\s*([A-Za-z_][\w.]*)\s*=~/gm)].map((x) => x[1]));
+    const names = [...new Set([...String(options.syntax).replace(/#.*$/gm, "").replace(/^\s*\w+\s*:=.*$/gm, "").matchAll(/[A-Za-z_][\w.]*/g)].map((x) => x[0]))].filter((n) => !latent.has(n) && !/^(?:NA)$/.test(n) && !/^[a-z]+_h\d+$/.test(n));
+    const labels = new Set([...String(options.syntax).matchAll(/([A-Za-z_][\w.]*)\s*\*/g)].map((x) => x[1]));
+    const observed = names.filter((n) => !labels.has(n));
+    const unknown = observed.filter((n) => !known.has(n) && !env.question(n));
+    if (unknown.length) fail(`the model names ${unknown.join(", ")}, which ${unknown.length === 1 ? "is not a variable" : "are not variables"} of this survey (a grid row is VARIABLE_r<row code>)`);
+    variables = observed.map((n) => env.question(n)?.variableName ?? n);
+  }
+  return { id: env.ids("test"), method: "sem", variables, priority: t.priority ?? 1, hypotheses, ...(t.reason ? { reason: t.reason } : {}), options };
 }
 function derivedOf(def: SurveyDefinition, env: AnalysisEnv, d: DerivedSpec): PlannedDerived {
   if (def.questions.some((q) => q.variableName === d.name) || (def.calculations ?? []).some((c) => c.targetVariable === d.name)) fail(`${d.name} is already a variable in this survey — choose another name for the derived variable`);
@@ -290,7 +389,7 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
     }
     case "set_analysis_plan": {
       const plan = planOf(def);
-      const crosstabs = a.crosstabs?.map((c) => crosstabOf(env, c)), tests = a.tests?.map((t) => testOf(env, t)), derived = a.derived?.map((d) => derivedOf(def, env, d)), segments = a.segments?.map((s) => segmentOf(env, s));
+      const crosstabs = a.crosstabs?.map((c) => crosstabOf(env, c)), tests = a.tests?.map((t) => checkedTest(def, testOf(env, t, def)).test), derived = a.derived?.map((d) => derivedOf(def, env, d)), segments = a.segments?.map((s) => segmentOf(env, s));
       const replaced: string[] = [];
       if (a.merge) {
         for (const x of crosstabs ?? []) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) { x.id = freePlanId(plan, x); plan.crosstabs.push(x); }
@@ -303,6 +402,12 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
         if (tests) { if (plan.tests.length) replaced.push(`${plan.tests.length} tests`); const old = plan.tests; const used = new Set<string>(); for (const t of tests) { const same = old.find((y) => sameTest(t, y) && !used.has(y.id)); if (same) { t.id = same.id; used.add(same.id); } } plan.tests = tests; }
         if (derived) { if (plan.derived.length) replaced.push(`${plan.derived.length} derived variables`); plan.derived = derived; }
         if (segments) { if (plan.segments.length) replaced.push(`${plan.segments.length} segments`); plan.segments = segments; }
+      }
+      if (a.advancedRerun === null) delete plan.advancedRerun;
+      else if (a.advancedRerun) plan.advancedRerun = a.advancedRerun;
+      if (!crosstabs && !tests && !derived && !segments) {
+        plan.updatedAt = env.now;
+        return { description: a.advancedRerun?.mode === "threshold" ? `Advanced models re-run after ${a.advancedRerun.newResponses} new completes` : "Advanced models re-run by hand (stale results are flagged)", touched: [] };
       }
       plan.updatedAt = env.now; plan.source = "copilot";
       return { description: `Analysis plan: ${[crosstabs && `${crosstabs.length} crosstab${crosstabs.length === 1 ? "" : "s"}`, tests && `${tests.length} test${tests.length === 1 ? "" : "s"}`, derived && `${derived.length} derived`, segments && `${segments.length} segment${segments.length === 1 ? "" : "s"}`].filter(Boolean).join(", ")}${a.merge ? " added" : ""}`, ...(replaced.length ? { destructive: `Replaces the planned ${replaced.join(" and ")}` } : {}), touched: [] };
@@ -322,10 +427,10 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
     }
     case "add_analysis_test": {
       const plan = planOf(def);
-      const t = testOf(env, a);
+      const { test: t, warnings } = checkedTest(def, testOf(env, a, def));
       if (plan.tests.some((y) => sameTest(t, y))) fail(`that ${t.method.replace(/_/g, " ")} is already planned`);
       plan.tests.push(t); plan.updatedAt = env.now;
-      return { description: `Planned ${t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""}${t.variables.length ? ` with ${words(t.variables)}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}`, touched: [] };
+      return { description: `Planned ${ADVANCED_WORDS[t.method] ?? t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""}${t.variables.length ? ` with ${t.method === "sem" && t.variables.length > 8 ? `${words(t.variables.slice(0, 8))} and ${t.variables.length - 8} more` : words(t.variables)}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}${t.mediator && t.options?.bootstrap ? ` through ${t.mediator}` : ""}${optionWords(t)}`, touched: [], ...(warnings.length ? { warnings } : {}) };
     }
     case "remove_analysis_test": {
       const plan = planOf(def);
@@ -386,10 +491,19 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
         ...(outcome ? { outcome } : {}), ...(groupBy ? { groupBy } : {}), ...(moderator ? { moderator } : {}), ...(mediator ? { mediator } : {}) };
       const reason = a.reason === null ? undefined : a.reason ?? cur.reason;
       if (reason) next.reason = reason;
+      /* the item's settings survive an edit (2026-10-22): merged with the patch, a null removes one; a changed method keeps only what it reads */
+      if (a.options !== undefined || cur.options) {
+        const merged: Record<string, unknown> = a.options === null ? {} : { ...(cur.options ?? {}), ...(a.options ?? {}) };
+        for (const [k, v] of Object.entries(a.options ?? {})) if (v === null) delete merged[k];
+        const typed = testOptions(method, merged);
+        if (typeof typed === "string") return fail(typed);
+        if (typed && Object.keys(typed).length) next.options = typed;
+      }
+      const { warnings } = checkedTest(def, next);
       const dup = plan.tests.find((y) => y !== cur && sameTest(next, y));
       if (dup) fail(`that ${method.replace(/_/g, " ")} is already planned`);
       plan.tests[i] = next; plan.updatedAt = env.now;
-      return { description: `Changed the planned ${method.replace(/_/g, " ")}${next.outcome ? ` on ${next.outcome}` : ""}${next.variables.length ? ` with ${words(next.variables)}` : ""}${next.groupBy ? ` across ${next.groupBy}` : ""}`, touched: [] };
+      return { description: `Changed the planned ${method.replace(/_/g, " ")}${next.outcome ? ` on ${next.outcome}` : ""}${next.variables.length ? ` with ${words(next.variables)}` : ""}${next.groupBy ? ` across ${next.groupBy}` : ""}${optionWords(next)}`, touched: [], ...(warnings.length ? { warnings } : {}) };
     }
     case "reorder_analysis_plan": {
       const plan = planOf(def);
@@ -428,10 +542,10 @@ export function describeAnalysisAction(a: AnalysisAction): string {
   switch (a.op) {
     case "set_question_analysis": return `Analysis of ${a.target}`;
     case "propose_analysis_plan": return a.merge ? "Add the engine's analysis plan" : "Plan the analysis";
-    case "set_analysis_plan": return a.merge ? "Add to the analysis plan" : "Set the analysis plan";
+    case "set_analysis_plan": return !a.crosstabs && !a.tests && !a.derived && !a.segments && a.advancedRerun !== undefined ? "Set when the advanced models re-run" : a.merge ? "Add to the analysis plan" : "Set the analysis plan";
     case "add_crosstab": return `Plan a crosstab of ${a.rows.join(", ")} by ${a.columns.join(", ")}`;
     case "remove_crosstab": return `Remove planned crosstab ${a.id}`;
-    case "add_analysis_test": return `Plan a ${a.method.replace(/_/g, " ")}`;
+    case "add_analysis_test": return `Plan ${ADVANCED_WORDS[a.method] ?? `a ${a.method.replace(/_/g, " ")}`}`;
     case "remove_analysis_test": return `Remove planned test ${a.id}`;
     case "add_derived_variable": return `Plan derived variable ${a.name}`;
     case "remove_derived_variable": return `Remove planned derived variable ${a.name}`;
@@ -439,4 +553,25 @@ export function describeAnalysisAction(a: AnalysisAction): string {
     case "update_analysis_test": return `Change planned test ${a.id}`;
     case "reorder_analysis_plan": return "Reorder the analysis plan";
   }
+}
+
+/* ------------------------------------------------------------ advanced models (2026-10-22) */
+
+const ADVANCED_WORDS: Partial<Record<AnalysisMethod, string>> = { hb: "hierarchical Bayes", latent_class: "a latent class analysis", sem: "a structural equation model" };
+/** the settings an item carries, in words, for its description */
+function optionWords(t: PlannedTest): string {
+  const o = t.options ?? {};
+  const bits: string[] = [];
+  if (t.method === "latent_class") bits.push(`${String(o.minClasses ?? 1)}–${String(o.maxClasses ?? 4)} classes`);
+  if (t.method === "sem" && o.hypothesisPaths) bits.push(`paths for ${Object.keys(o.hypothesisPaths as object).join(", ")}`);
+  if (o.bootstrap) bits.push(`indirect effect bootstrapped (${String(o.bootstrap)} resamples)`);
+  if (o.omega) bits.push("McDonald's ω beside α");
+  if (o.method === "gabor_granger") bits.push(`Gabor–Granger at ${Array.isArray(o.prices) ? o.prices.join(", ") : "?"}`);
+  return bits.length ? ` (${bits.join("; ")})` : "";
+}
+/** the design-level suitability rules: a blocking reason refuses the item, warnings travel with it */
+function checkedTest(def: SurveyDefinition, t: PlannedTest): { test: PlannedTest; warnings: string[] } {
+  const s = advancedSuitability(def, t);
+  if (s.blocking.length) fail(s.blocking.join(" "));
+  return { test: t, warnings: s.warnings };
 }

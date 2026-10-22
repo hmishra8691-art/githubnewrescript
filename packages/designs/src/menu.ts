@@ -61,6 +61,24 @@ export interface MenuConfig {
   maxSelections?: number;
   /** currency symbol shown before the running total; default from the first price with a symbol, else "" */
   currency?: string;
+  /**
+   * MUTUALLY EXCLUSIVE MENU SECTIONS (F4 2026-10-22): one line per section, "Plan: Basic | Plus | Premium"
+   * (or just the items). The respondent picks at most one item of a section (or none of it); the analysis
+   * models a section as one multinomial choice. Absent → every item is its own yes/no decision, as before.
+   */
+  exclusiveGroups?: string[];
+}
+
+/** "Plan: Basic | Plus | Premium" → { name: "Plan", items: [...] } (names resolved case-insensitively by the caller) */
+export function parseExclusiveGroups(lines: unknown): { name: string; items: string[] }[] {
+  if (!Array.isArray(lines)) return [];
+  return lines.map((l, i) => {
+    const sline = typeof l === "string" ? l : "";
+    const m = /^\s*([^:|]+?)\s*:\s*(.+)$/.exec(sline);
+    const name = m ? m[1].trim() : `Section ${i + 1}`;
+    const items = (m ? m[2] : sline).split(/\s*[|,;]\s*/).map((x) => x.trim()).filter(Boolean);
+    return { name, items };
+  }).filter((g) => g.items.length);
 }
 
 interface Normalized {
@@ -137,6 +155,7 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
     { name: "minSelections", label: "Minimum items per task (0 = none)", type: "number", default: 0 },
     { name: "maxSelections", label: "Maximum items per task (0 = no cap)", type: "number", default: 0 },
     { name: "currency", label: "Currency symbol for the total (blank = detect)", type: "text" },
+    { name: "exclusiveGroups", label: "Mutually exclusive sections (optional)", type: "list", help: "One per line: Section: Item | Item | Item — the respondent picks at most one item of a section. Required items cannot be in a section." },
   ],
 
   validateConfig(config: MenuConfig): string[] {
@@ -164,6 +183,19 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
     if (c.maxSelections && c.maxSelections < c.items.filter((i) => i.required).length) errors.push("The maximum is below the number of always-included items.");
     if (c.minSelections > c.items.length) errors.push(`Minimum items (${c.minSelections}) is more than the menu has (${c.items.length}).`);
     void optional;
+    /* F4 2026-10-22: exclusive sections name real, optional items, each in one section */
+    const groups = parseExclusiveGroups(config.exclusiveGroups);
+    const inGroup = new Map<string, string>();
+    for (const g of groups) {
+      if (g.items.length < 2) errors.push(`Section “${g.name}” needs at least 2 items to choose between.`);
+      for (const it of g.items) {
+        const item = c.items.find((x) => x.name === it || x.name.toLowerCase() === it.toLowerCase());
+        if (!item) { errors.push(`Section “${g.name}” names “${it}”, which is not on the menu.`); continue; }
+        if (item.required) errors.push(`“${item.name}” is always included, so it cannot be in an exclusive section.`);
+        if (inGroup.has(item.name)) errors.push(`“${item.name}” is in two sections (${inGroup.get(item.name)} and ${g.name}).`);
+        inGroup.set(item.name, g.name);
+      }
+    }
     /* the design must be able to avoid repeating a price vector */
     const vectors = c.items.reduce((n, i) => n * Math.max(1, (i.levels ?? []).length), 1);
     if (errors.length === 0 && vectors < c.tasks) {
@@ -176,7 +208,11 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
     const problems = menuPlugin.validateConfig!(config);
     if (problems.length) throw new Error(problems[0]);
     const c = normalize(config);
-    const columns = ["version", "task", "item", "item_label", "price", "price_index", "price_value", "required"];
+    /* F4 2026-10-22: a `group` column only when sections exist, so every existing design's rows are unchanged */
+    const groups = parseExclusiveGroups(config.exclusiveGroups);
+    const groupOf = new Map<string, string>();
+    for (const g of groups) for (const it of g.items) { const item = c.items.find((x) => x.name === it || x.name.toLowerCase() === it.toLowerCase()); if (item) groupOf.set(item.name, g.name); }
+    const columns = ["version", "task", "item", "item_label", "price", "price_index", "price_value", "required", ...(groups.length ? ["group"] : [])];
     const rows: Record<string, unknown>[] = [];
     const counts = new Map<string, Map<string, number>>();
     for (const it of c.items) counts.set(it.name, new Map(it.levels.map((l) => [l, 0])));
@@ -213,6 +249,7 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
             price_index: it.levels.indexOf(price) + 1,
             price_value: priceValue(price),
             required: it.required ? 1 : 0,
+            ...(groups.length ? { group: groupOf.get(it.name) ?? "" } : {}),
           });
         });
       }
@@ -240,6 +277,7 @@ export const menuPlugin: DesignGeneratorPlugin<MenuConfig> = {
       else if (mn > 0 && mx / mn > POOR_RATIO) warnings.push(`Price points of "${it.name}" are shown unequally often (max/min ${priceRatio[it.name]}).`);
     }
     summary.diagnostics = { method: "price_balance", priceRatio, balanced: warnings.length === 0, warnings };
+    if (groups.length) summary.exclusiveGroups = groups.map((g) => ({ name: g.name, items: g.items.map((it) => c.items.find((x) => x.name.toLowerCase() === it.toLowerCase())?.name ?? it) }));
     if (warnings.length) summary.warnings = warnings;
     return { columns, rows, summary };
   },
@@ -286,7 +324,8 @@ export function menuTaskItems(rows: Record<string, unknown>[], version: string, 
       price: String(r.price ?? ""),
       priceValue: Number(r.price_value),
       required: Number(r.required) === 1,
-    }));
+      ...(r.group ? { group: String(r.group) } : {}),
+    }) as { item: string; label: string; price: string; priceValue: number; required: boolean; group?: string });
 }
 
 /** The bundle total for a set of chosen item indices (required items always count). */

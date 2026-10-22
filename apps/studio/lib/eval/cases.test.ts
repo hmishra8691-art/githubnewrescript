@@ -12,7 +12,7 @@ test("ids are unique, fixtures exist, every op named in an expectation is a real
   const ids = GOLDEN_CASES.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const c of GOLDEN_CASES) {
-    assert.ok(fixtureOf(c.fixture), c.id);
+    assert.ok(fixtureOf(c.fixture, c.fixtureSpec), c.id);
     for (const t of c.turns) for (const op of [...(t.expect?.opsPresent ?? []), ...(t.expect?.opsAbsent ?? [])]) assert.ok(OPS.has(op), `${c.id}: ${op} is not an action op`);
   }
 });

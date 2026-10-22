@@ -87,8 +87,10 @@ export async function saveCoding(db: SupabaseClient, surveyId: string, state: Qu
   return rows && rows.length ? next : null;
 }
 
-export async function saveSettings(db: SupabaseClient, surveyId: string, settings: { redactNames: string[] }, userId: string): Promise<void> {
-  const existing = check(await db.from("qual_codings").select("survey_id").eq("survey_id", surveyId).maybeSingle(), "settings");
+export async function saveSettings(db: SupabaseClient, surveyId: string, patch: { redactNames: string[]; autoCode?: unknown }, userId: string): Promise<void> {
+  const existing = check(await db.from("qual_codings").select("survey_id, settings").eq("survey_id", surveyId).maybeSingle(), "settings") as { settings?: unknown } | null;
+  /* F2 2026-10-22: the settings object also carries `autoCode` — a write MERGES what it names, never drops the rest */
+  const settings = { ...(existing?.settings && typeof existing.settings === "object" ? existing.settings as Record<string, unknown> : {}), ...patch };
   if (existing) check(await db.from("qual_codings").update({ settings, updated_by: userId }).eq("survey_id", surveyId).select("survey_id"), "settings");
   else check(await db.from("qual_codings").insert({ survey_id: surveyId, settings, updated_by: userId }).select("survey_id"), "settings");
 }

@@ -15,7 +15,7 @@
  *               invented attributes); 5 the attributes given → create_conjoint (D-efficiency said), Apply
  *            6  "Add a None option to the conjoint" → update_conjoint none → None rows, nothing else changed
  *            7  an infeasible MaxDiff (20 items, 3 tasks of 5) → refused with the generator's reason, nothing applied
- *            8  a rating-based conjoint → refused at the gate with the reason (no silent CBC)
+ *            8  a ranking-based conjoint → refused at the gate with the reason (no silent CBC)
  *            9  "Configure a LEAST List Fill …" → update_list_fill least_fill counted on completes → least_filled,
  *               the list's items, caps and destination untouched
  *   RUNTIME  the applied survey: least fill gives the brand with the fewest completes; the MaxDiff shows this
@@ -240,13 +240,13 @@ let afterNone;
   ok("infeasible MaxDiff (20 items, 3 tasks × 5) → refused with the generator's reason and the fix; nothing applied");
 }
 
-/* 8 — a rating-based conjoint: refused at the gate, not turned into a CBC */
+/* 8 — a RANKING-based conjoint: refused at the gate, not turned into a CBC (F4 2026-10-22: rating-based (CVA) is implemented now — scripts/conjoint-suite-test.mjs covers it) */
 {
-  const { body, card } = await ask("Make it a rating-based conjoint instead", { kind: "proposal", reply: "A ratings conjoint.", actions: [{ op: "create_conjoint", method: "rating", attributes: ATTRS }] });
-  assert.match(JSON.stringify(body.reply.rejected), /rating-based \(ratings\) conjoint is not implemented/);
-  assert.match((await card.$$eval('[data-testid="cp-rejected-reason"]', (e) => e.map((x) => x.textContent).join(" "))), /rating-based .* not implemented.*choice-based \(cbc\)/);
+  const { body, card } = await ask("Make it a ranking-based conjoint instead", { kind: "proposal", reply: "A ranking conjoint.", actions: [{ op: "create_conjoint", method: "ranking", attributes: ATTRS }] });
+  assert.match(JSON.stringify(body.reply.rejected), /ranking-based conjoint is not implemented/);
+  assert.match((await card.$$eval('[data-testid="cp-rejected-reason"]', (e) => e.map((x) => x.textContent).join(" "))), /ranking-based .* not implemented.*choice-based \(cbc/);
   assert.equal((await readDef()).designs.length, 2, "no substitute design");
-  ok("rating-based conjoint → refused at the gate with the reason and the supported methods; no CBC substituted");
+  ok("ranking-based conjoint → refused at the gate with the reason and the supported methods; no CBC substituted");
 }
 
 /* 9 — LEAST List Fill: least_filled counted on completes, the rest of the list untouched */
