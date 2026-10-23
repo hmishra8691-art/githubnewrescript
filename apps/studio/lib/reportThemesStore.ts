@@ -1,5 +1,5 @@
 import {
-  REPORT_THEMES, findReportTheme, readThemeSpec, themeNameKey, reportThemeHash, STRUCTURE_SECTIONS,
+  REPORT_THEMES, findReportTheme, readThemeSpec, themeNameKey, reportThemeHash, STRUCTURE_SECTIONS, readSectionOrders,
   type ThemeSpec, type StructureRequest, type StructureSection,
 } from "@rescript/analytics";
 
@@ -84,10 +84,17 @@ export async function saveTheme(db: Db, p: { scope: "org" | "user"; name: string
 export interface Selection { theme: ThemeSpec | null; ref: string | null; version: number | null; structure: StructureRequest | null; appliedAt: string | null; appliedBy: string | null }
 
 export function readStructure(x: unknown): StructureRequest | null {
-  const o = (x ?? null) as { order?: unknown; understood?: unknown } | null;
-  if (!o || !Array.isArray(o.order)) return null;
-  const order = o.order.filter((k): k is StructureSection => typeof k === "string" && (STRUCTURE_SECTIONS as readonly string[]).includes(k));
-  return order.length ? { order: [...new Set(order)], understood: typeof o.understood === "string" ? o.understood.slice(0, 200) : `sections reorganised around ${order.join(", ")}` } : null;
+  const o = (x ?? null) as { order?: unknown; understood?: unknown; sections?: unknown } | null;
+  if (!o) return null;
+  const order = (Array.isArray(o.order) ? o.order : []).filter((k): k is StructureSection => typeof k === "string" && (STRUCTURE_SECTIONS as readonly string[]).includes(k));
+  /* #18: an explicit section order per document family (drag and drop / keyboard in the Research tab) */
+  const sections = readSectionOrders(o.sections);
+  if (!order.length && !sections) return null;
+  return {
+    order: [...new Set(order)],
+    understood: typeof o.understood === "string" ? o.understood.slice(0, 200) : order.length ? `sections reorganised around ${order.join(", ")}` : "section order set in the Research tab",
+    ...(sections ? { sections } : {}),
+  };
 }
 
 export async function loadSelection(db: Db, surveyId: string): Promise<Selection | null> {

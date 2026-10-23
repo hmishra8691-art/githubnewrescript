@@ -1,4 +1,5 @@
 import { lexJs } from "./ux.js";
+import { readScript, tokenize, type StyleSet } from "./scriptAst.js";
 
 /**
  * LOOPS IN SURVEY SCRIPTS, BOUNDED RATHER THAN BANNED.
@@ -259,16 +260,12 @@ export function popupProblems(code: string): string[] {
   const src = withoutComments(code);
   const { bare } = lexJs(code);
   const out: string[] = [];
-  const fixed = /position\s*["']?\s*[:=]\s*["']?\s*fixed\b/i.test(src);
-  const toBody = /\b(?:document\s*\.\s*)?body\s*\.\s*(?:appendChild|append|prepend|insertBefore|insertAdjacentElement|insertAdjacentHTML)\s*\(/.test(src);
-  if (fixed && toBody) {
-    const inset0 = /\binset\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i.test(src);
-    const full = (re: RegExp) => re.test(src);
-    const wide = full(/\bwidth\s*["']?\s*[:=]\s*["']?\s*100\s*(?:%|vw)/i), tall = full(/\bheight\s*["']?\s*[:=]\s*["']?\s*100\s*(?:%|vh)/i);
-    const edges = [/\btop\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bleft\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bright\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i, /\bbottom\s*["']?\s*[:=]\s*["']?\s*0(?:px)?\b/i].filter((re) => re.test(src)).length;
-    const covers = inset0 || (wide && tall) || edges >= 4;
-    const looksLikePopup = /popup|pop-up|modal|overlay|dialog|backdrop|lightbox|toast/i.test(src);
-    if (covers || looksLikePopup) out.push(`the script builds its own popup (a position: fixed element appended to document.body${covers ? " that covers the whole screen" : ""}) — it is not sized for phones, not reachable by keyboard or a screen reader, and nothing closes it when the answer changes; ${POPUP_ALTERNATIVE}`);
+  /* #14b (2026-10-22): read from the script's tokens, in any spelling the sandbox lets through — not from its text */
+  const o = overlaySignals(code);
+  if (o.overlay) {
+    const sets = [o.zIndex !== null && o.zIndex >= HIGH_Z ? `z-index ${o.zIndex}` : "", o.backdrop ? "a dimmed backdrop" : ""].filter(Boolean);
+    const seen = [sets.length ? `it sets ${sets.join(" and ")}` : "", o.words.length ? `its names say ${o.words.slice(0, 2).map((w) => `“${w}”`).join(", ")}` : ""].filter(Boolean);
+    out.push(`the script builds its own popup (a position: ${o.position} element appended to ${o.onBody ? "document.body" : "the page"}${o.covers ? " that covers the whole screen" : ""}) — it is not sized for phones, not reachable by keyboard or a screen reader, and nothing closes it when the answer changes${seen.length ? ` (${seen.join("; ")})` : ""}; ${POPUP_ALTERNATIVE}`);
   }
   const opens = /\brs\s*\.\s*popup\s*\(/.test(bare);
   if (opens) {
@@ -316,4 +313,64 @@ export function exfiltrationProblems(code: string): string[] {
   if (/\b(?:window\s*\.\s*)?(?:location\s*(?:\.\s*(?:href|assign|replace)\s*[=(]|=)|open\s*\(\s*["'`]https?:)/.test(src)) say("navigation to another address");
   if (/https?:\/\/[^"'`\s]*(?:\{\{|\$\{)/.test(src)) say("an external address carrying piped or computed data");
   return [...new Set(out)];
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * HAND-BUILT OVERLAYS, READ FROM THE TOKENS (engine weakness #14b, 2026-10-22).
+ *
+ * The old check was two regular expressions: `position … fixed` somewhere in the text and `body.appendChild(` —
+ * so `el["style"]["position"] = "fixed"`, `Object.assign(s, {position: "fixed", inset: 0})` on an alias, a style
+ * string built from pieces, an absolute full-viewport box with a huge z-index or an overlay mounted somewhere other
+ * than the body all got through. `readScript` gives every style the script sets, in any spelling the sandbox
+ * allows (dot, bracket, alias, Object.assign, setProperty, cssText, setAttribute("style"), inline style="" in HTML
+ * it writes, a CSS string assigned later), the elements it creates and where it mounts them. An overlay is:
+ *
+ *   an element the script creates or mounts, AND
+ *   position: fixed with (the whole viewport | z-index ≥ 1000 | a dimmed backdrop | popup words), OR
+ *   position: absolute covering the whole viewport with (z-index ≥ 1000 | a backdrop | popup words)
+ *
+ * A small fixed badge ("2/5" in a corner) or an element placed in the question card is not an overlay.
+ * ------------------------------------------------------------------------------------------------ */
+
+const HIGH_Z = 1000;
+const POPUP_WORDS = /overlay|modal|backdrop|dialog|pop-?up|lightbox|toast|scrim|curtain/i;
+const zero = (v: string | undefined) => !!v && /^\s*-?0(?:px|%|vh|vw|rem|em)?\s*$/.test(v);
+const full = (v: string | undefined, axis: "w" | "h") => !!v && (/^\s*100(?:\.0+)?\s*%\s*$/.test(v) || (axis === "w" ? /^\s*(?:1\d\d|100)\s*(?:vw|dvw|svw|lvw)\s*$/ : /^\s*(?:1\d\d|100)\s*(?:vh|dvh|svh|lvh)\s*$/).test(v) || /calc\(\s*100(?:vw|vh|%)/.test(v));
+
+export interface OverlaySignals {
+  overlay: boolean;
+  position: "fixed" | "absolute" | null;
+  covers: boolean;
+  zIndex: number | null;
+  backdrop: boolean;
+  onBody: boolean;
+  creates: boolean;
+  words: string[];
+}
+export function overlaySignals(code: string): OverlaySignals {
+  const r = readScript(code);
+  const last = new Map<string, string>();
+  const anyOf = (p: string) => r.styles.filter((s: StyleSet) => s.prop === p).map((s) => s.value);
+  for (const s of r.styles) last.set(s.prop, s.value);
+  const positions = anyOf("position");
+  const position = positions.some((v) => /\bfixed\b/.test(v)) ? "fixed" : positions.some((v) => /\babsolute\b/.test(v)) ? "absolute" : null;
+  const inset = anyOf("inset").some((v) => v.split(/\s+/).every((x) => zero(x)));
+  const edges = ["top", "right", "bottom", "left"].filter((p) => anyOf(p).some((v) => zero(v)));
+  const wide = ["width", "min-width"].some((p) => anyOf(p).some((v) => full(v, "w"))), tall = ["height", "min-height"].some((p) => anyOf(p).some((v) => full(v, "h")));
+  const covers = inset || edges.length === 4 || (wide && tall) || (edges.includes("top") && edges.includes("left") && (wide || edges.includes("right")) && (tall || edges.includes("bottom")));
+  const zs = anyOf("z-index").map((v) => Number(v)).filter((n) => Number.isFinite(n));
+  const zIndex = zs.length ? Math.max(...zs) : null;
+  const backdrop = ["background", "background-color"].some((p) => anyOf(p).some((v) => /rgba?\([^)]*,\s*(?:0?\.\d+|0)\s*\)|hsla\([^)]*,\s*(?:0?\.\d+)\s*\)|#[0-9a-f]{8}\b|#[0-9a-f]{4}\b|transparent/i.test(v))) || anyOf("backdrop-filter").length > 0 || anyOf("-webkit-backdrop-filter").length > 0;
+  /* popup words: in its class names, ids, attributes (role="dialog", aria-modal) and its own variable / function names — never rs.popup / rs.closePopup themselves */
+  const t = tokenize(code);
+  const words = new Set<string>();
+  for (const n of r.names) if (POPUP_WORDS.test(n)) words.add(n);
+  for (const a of r.attributes) if ((a.name === "role" && /dialog/i.test(a.value)) || a.name === "aria-modal" || ((a.name === "class" || a.name === "id") && POPUP_WORDS.test(a.value))) words.add(a.value || a.name);
+  for (let i = 0; i < t.length; i++) { const x = t[i]!; if (x.k === "id" && POPUP_WORDS.test(x.v) && !(t[i - 1]?.v === "." && t[i - 2]?.v === "rs") && x.v !== "closePopup") words.add(x.v); }
+  const creates = r.creates.length > 0;
+  const mounted = r.mounts.length > 0;
+  const onBody = r.mounts.some((m) => m.onBody) || /\bdocument\s*(?:\.\s*body|\[\s*["'`]body["'`]\s*\])/.test(code);
+  const highZ = zIndex !== null && zIndex >= HIGH_Z;
+  const overlay = (creates || mounted) && ((position === "fixed" && (covers || highZ || backdrop || words.size > 0)) || (position === "absolute" && covers && (highZ || backdrop || words.size > 0)));
+  return { overlay, position, covers, zIndex, backdrop, onBody, creates, words: [...words] };
 }

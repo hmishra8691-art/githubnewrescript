@@ -454,6 +454,7 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
   };
   const items_ = isDash ? (def as DashboardDefinition | null)?.widgets ?? [] : (def as ReportDefinition | null)?.blocks ?? [];
   const setItems = (list: (ReportBlock | DashboardWidget)[]) => { setDef(isDash ? { ...(def as DashboardDefinition), widgets: list as DashboardWidget[] } : { ...(def as ReportDefinition), blocks: list as ReportBlock[] }); setDirty(true); };
+  const [orderSaid, setOrderSaid] = React.useState("");
   const onBlockAction = (id: string, action: "up" | "down" | "remove" | "edit") => {
     const i = items_.findIndex((b) => b.id === id); if (i < 0) return;
     if (action === "edit") return setEditing(id);
@@ -558,8 +559,12 @@ export function ReportsPanel({ api, analyses, themes, items, onChange, pendingAd
             ? (["kpi", "chart", "table", "text", "filter", "photo", "icon_panel", "steps", "ranked_list"] as DashboardWidget["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addWidget(t)} disabled={["icon_panel", "ranked_list", "kpi", "chart", "table"].includes(t) && !analyses.length} data-testid={`ax-add-widget-${t}`}>{t.replace("_", " ")}</button>)
             : (["cover", "executive_summary", "section", "chart", "table", "kpi", "panel_grid", "insights", "text", "methodology", "page_break"] as ReportBlock["type"][]).map((t) => <button key={t} className="btn small" onClick={() => addBlock(t)} disabled={["chart", "table", "kpi", "panel_grid", "insights", "executive_summary"].includes(t) && !analyses.length} data-testid={`ax-add-${t}`}>{t === "page_break" ? "page break" : t.replace("_", " ")}</button>)}</div>
           {!analyses.length && <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>Save an analysis first to add charts, tables and KPIs.</div>}
-          <div className="flabel" style={{ marginTop: 12 }}>Order (drag to reorder)</div>
-          <ol className="ax-order">{items_.map((b) => <li key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(b.id)} className={editing === b.id ? "on" : ""} onClick={() => setEditing(b.id)} data-testid="ax-order-item"><span className="ax-order-type">{b.type.replace("_", " ")}</span> {("title" in b && b.title) || ("analysisId" in b && b.analysisId ? analyses.find((a) => a.id === b.analysisId)?.name : "") || ""}</li>)}</ol>
+          <div className="flabel" style={{ marginTop: 12 }} id="ax-order-label">Order (drag, or focus and press Alt + ↑ / ↓)</div>
+          {/* #18: keyboard reordering beside drag and drop; the block order IS the order of the in-app view and of every export of this report */}
+          <ol className="ax-order" aria-labelledby="ax-order-label">{items_.map((b, i) => <li key={b.id} draggable tabIndex={0} aria-label={`${i + 1} of ${items_.length}: ${b.type.replace("_", " ")} ${("title" in b && b.title) || ""}`.trim()}
+            onKeyDown={(e) => { if (!isDash && (e.altKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); onBlockAction(b.id, e.key === "ArrowUp" ? "up" : "down"); setOrderSaid(`Moved to position ${Math.max(1, Math.min(items_.length, i + (e.key === "ArrowUp" ? 0 : 2)))} of ${items_.length}.`); const el = e.currentTarget; const to = e.key === "ArrowUp" ? i - 1 : i + 1; requestAnimationFrame(() => (el.parentElement?.children[to] as HTMLElement | undefined)?.focus()); } else if (e.key === "Enter") setEditing(b.id); }}
+            onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(b.id)} className={editing === b.id ? "on" : ""} onClick={() => setEditing(b.id)} data-testid="ax-order-item" data-id={b.id}><span className="ax-order-type">{b.type.replace("_", " ")}</span> {("title" in b && b.title) || ("analysisId" in b && b.analysisId ? analyses.find((a) => a.id === b.analysisId)?.name : "") || ""}</li>)}</ol>
+          <span aria-live="polite" data-testid="ax-order-said" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}>{orderSaid}</span>
           {!isDash && <>
             <div className="flabel" style={{ marginTop: 12 }}>Viewer segment switching</div>
             <div className="muted" style={{ fontSize: 12.5 }}>Segments a shared viewer may switch between (from analyses with segments). Empty = all available.</div>

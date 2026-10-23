@@ -6,7 +6,7 @@ import type { QRProps } from "../QuestionRenderer";
 import { NumberField, SliderCell, ctxOf, RowLabel, headerEveryFor, RepeatedHeaderRow } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { useRows } from "./shared";
-import { SpeechInputButton } from "../SpeechInput";
+import { SpeechInputButton, SpeechCell } from "../SpeechInput";
 import { anchor, cellAnchor } from "../authoring";
 import { CellMultiDropdown } from "../cellMultiDropdown";
 
@@ -163,13 +163,16 @@ export function fallbackSheetColumns(p: QRProps): QuestionColumn[] {
  * text box for anything else, which is what a spreadsheet does too.
  */
 function SheetCell({
-  col, value, onChange, label, readOnly,
+  col, value, onChange, label, readOnly, def, q,
 }: {
   col: QuestionColumn;
   value: unknown;
   onChange(v: unknown): void;
   label: string;
   readOnly: boolean;
+  /** for dictation in text cells (#16) */
+  def?: QRProps["def"];
+  q?: QRProps["q"];
 }) {
   const ro = readOnly || col.readOnly;
   switch (col.responseType) {
@@ -224,13 +227,22 @@ function SheetCell({
           value={value == null ? "" : String(value)}
           onChange={(e) => onChange(e.target.value || null)} />
       );
-    default:
-      return (
-        <input className="rs-input rs-sheet-in" type="text" aria-label={label}
+    default: {
+      const input = (ref?: React.RefObject<HTMLInputElement>) => (
+        <input ref={ref} className="rs-input rs-sheet-in" type="text" aria-label={label}
           readOnly={ro} placeholder={col.placeholder}
           value={value == null ? "" : String(value)}
           onChange={(e) => onChange(e.target.value === "" ? null : e.target.value)} />
       );
+      /* dictation per cell (#16), only in an editable text column */
+      if (ro || !def || !q || (col.responseType && col.responseType !== "text" && col.responseType !== "longtext")) return input();
+      return (
+        <SpeechCell def={def} q={q} value={value == null ? "" : String(value)} onChange={(x) => onChange(x === "" ? null : x)} label={label}
+          columnType="text" validation={col.validation ?? []}>
+          {(ref) => input(ref)}
+        </SpeechCell>
+      );
+    }
   }
 }
 
@@ -354,6 +366,7 @@ export function Spreadsheet(p: QRProps) {
                   <td key={c.id} data-row={rc} data-col={c.id} {...cellAnchor(rc, c.id)}
                     onKeyDown={(e) => onKeyDown(e, r, ci)}>
                     <SheetCell col={c} label={`${plain} — ${c.label.replace(/<[^>]*>/g, "")}`}
+                      def={p.def} q={p.q}
                       readOnly={!!p.q.settings.readOnly}
                       value={cells[rc]?.[c.id]}
                       onChange={(v) => setCell(rc, c.id, v)} />

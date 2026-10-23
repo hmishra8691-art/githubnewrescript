@@ -7,7 +7,7 @@ import {
   type ThemeSynthesis, type StudyInsights, type SynthesisEdit, type AskAnswer, type HighlightReel, type ReelOp, type ItemState, type CodingAssignment, type CoderSet, type QualExcerpt, type QualOp,
   type AssignmentAgreement, type Disagreement, type QualJob, type AutoCodeSettings, type GroupSession, type PromptResults, type QualState, type StudyContext,
 } from "@rescript/analytics";
-import { allSegments, type StoredSegment } from "@/lib/qual/qualWorkspace";
+import { allSegments, correctedSegment, type StoredSegment } from "@/lib/qual/qualWorkspace";
 import { QualApiError, type QualApi, type SandboxHandle, type WorkspaceView } from "./qualApi";
 
 /**
@@ -37,7 +37,7 @@ export interface SynthesisApi {
   reelOp(reel: ReelView, op: ReelOp): Promise<ReelView[]>;
   deleteReel(reel: ReelView): Promise<ReelView[]>;
   exportReel(reel: ReelView, format: "docx" | "pptx"): Promise<{ blob: Blob; name: string }>;
-  clip(excerptId: string): Promise<{ url: string; start: number; end: number; approximate: boolean }>;
+  clip(excerptId: string): Promise<{ url: string; start: number; end: number; approximate: boolean; byWords?: boolean }>;
   assignments(): Promise<{ me: string; assignments: AssignmentView[] }>;
   createAssignment(input: { coderA?: string; coderB: string; overlapPct: number; name?: string }): Promise<void>;
   coderOp(assignmentId: string, op: QualOp): Promise<void>;
@@ -185,7 +185,7 @@ export function sandboxSynthesisApi(api: QualApi, getDef: () => SurveyDefinition
       const c = ctx();
       return (await call<{ answer: AskResult }>("/api/surveys/sandbox/qual/ask", post({ question, state: c.state, segments: c.segments, sources: c.sources, redactNames: c.names, fake: fake("__rescriptAskFake") }))).answer;
     },
-    async reels() { const c = ctx(); return { reels: R.reels.map((r) => ({ ...r, states: reelItemStates(r, c.state, c.segments) })), can: { playback: false, edit: true, export: true } }; },
+    async reels() { const c = ctx(); return { reels: R.reels.map((r) => ({ ...r, states: reelItemStates(r, c.state, c.segments) })), can: { playback: true, edit: true, export: true } }; },
     async createReel(name, excerptIds, description) {
       const c = ctx();
       let reel: HighlightReel = { id: `reel${R.reels.length + 1}`, name: name.trim(), ...(description ? { description } : {}), items: [], createdBy: ME, createdAt: now(), updatedAt: now(), version: 0 };
@@ -202,7 +202,8 @@ export function sandboxSynthesisApi(api: QualApi, getDef: () => SurveyDefinition
     },
     async deleteReel(reel) { R.reels = R.reels.filter((r) => r.id !== reel.id); return (await this.reels()).reels; },
     exportReel(reel, format) { const c = ctx(); return download("/api/surveys/sandbox/qual/export", { type: "highlights", format, reel, states: reel.states, sources: Object.fromEntries(Object.entries(c.sources).map(([k, v]) => [k, { title: v.title }])), definition: getDef() }, `highlights.${format}`); },
-    async clip() { throw new QualApiError("Clips play from a recording — the sandbox has none (saved projects only).", 400); },
+    /* #17: a recording transcribed in this page plays from the page (its object URL); the clip is the excerpt's own words */
+    async clip(excerptId) { return api.clip(excerptId); },
     async assignments() {
       const c = ctx();
       return { me: ME, assignments: R.assignments.map((a) => { const sets = R.sets.get(a.id) ?? []; const v = coderView(a, sets, ME); const open = bothSubmitted(a); return { ...a, role: v.role, blind: v.blind, progress: v.progress, mine: v.mine, other: v.other, ...(open ? { agreement: assignmentAgreement(a, sets, c.state.codebook), disagreements: disagreements(a, sets, c.state.codebook) } : {}) }; }) };
@@ -251,7 +252,7 @@ export function sandboxSynthesisApi(api: QualApi, getDef: () => SurveyDefinition
       const bad = checkCorrection(before, text);
       if (bad) throw new QualApiError(bad, 400);
       const revision = Number((t.meta as { revision?: number }).revision ?? 0) + 1;
-      t.segments = segs.map((s, i) => (i === at ? { ...s, text } : s));
+      t.segments = segs.map((s, i) => (i === at ? correctedSegment(s, text) : s));
       t.meta = { ...(t.meta as Record<string, unknown>), revision };
       const c = ctx();
       const r = editSegmentExcerpts(c.state.excerpts, transcriptId, segmentId, before, text, { now: now(), revision });

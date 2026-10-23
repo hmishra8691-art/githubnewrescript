@@ -11,7 +11,7 @@ import { deckFromRun, type DeckOptions, type DeckSlide } from "../deck.js";
 import { CORRECTION_WORDS } from "../posthoc.js";
 import { seriesForChart } from "./shared.js";
 import { canonicalJson, hash64 } from "../canonical.js";
-import { docStyleOf, type DocStyle, type ThemeSpec, type StructureRequest } from "../reportThemes.js";
+import { docStyleOf, sectionOrderFor, sectionId, orderSections, type DocStyle, type ThemeSpec, type StructureRequest, type DocumentFamily } from "../reportThemes.js";
 
 /**
  * WORD DOCUMENTS (Research Engine audit, Phase 5) — the two client-ready
@@ -79,28 +79,32 @@ export function logoFromBytes(bytes: Uint8Array): DocLogo | null {
 }
 
 /*
- * STRUCTURE, ASKED FOR IN WORDS ONLY: "reorganize around the main hypotheses and recommendations" moves whole
- * sections (a Heading 1 and everything under it) — the named ones first, in the order named, the rest after in
- * their own order. The cover stays first. No block is added, dropped or changed.
+ * STRUCTURE (2026-10-18 in words; 2026-10-22 by drag and drop, engine item #18): whole sections (a Heading 1
+ * and everything under it) move — the named ones first, in the order named, the rest after in their own
+ * order. The cover stays first; no block is added, dropped or changed, except that numbered headings
+ * ("3. Hypotheses") are renumbered in their new order. The same order (`sectionOrderFor`) drives the deck
+ * of the same family, so the Word file and the PowerPoint agree.
  */
-const STRUCTURE_TITLES: Record<string, RegExp> = {
-  summary: /^executive summary$/i, hypotheses: /^the hypotheses$|^hypotheses/i, findings: /^key findings$/i, segments: /^who differs$/i,
-  implications: /^what it means$/i, recommendations: /^what to do next$|^recommendations/i, method: /^method/i, caveats: /^caveats$/i,
-};
-export function reorderSections(blocks: Block[], structure: StructureRequest | null | undefined): Block[] {
-  if (!structure?.order.length) return blocks;
+export function reorderSections(blocks: Block[], structure: StructureRequest | null | undefined, family: DocumentFamily = "findings"): Block[] {
+  const order = sectionOrderFor(structure, family);
+  if (!order?.length) return blocks;
   const head: Block[] = [];
-  const sections: { title: string; blocks: Block[] }[] = [];
+  const sections: { id: string; items: Block[] }[] = [];
   for (const b of blocks) {
     const t = b instanceof Paragraph ? SECTION_OF.get(b) : undefined;
-    if (t !== undefined) sections.push({ title: t, blocks: [b] });
-    else if (sections.length) sections[sections.length - 1].blocks.push(b);
+    if (t !== undefined) sections.push({ id: sectionId(t), items: [b] });
+    else if (sections.length) sections[sections.length - 1].items.push(b);
     else head.push(b);
   }
-  /* a closing note after the last section (the generated-by line) stays last */
-  const rank = (title: string) => { const i = structure.order.findIndex((k) => STRUCTURE_TITLES[k]?.test(title)); return i < 0 ? structure.order.length : i; };
-  const ordered = sections.map((sec, i) => ({ sec, i, r: rank(sec.title) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.sec);
-  return [...head, ...ordered.flatMap((x) => x.blocks)];
+  const ordered = orderSections(sections, order);
+  /* numbered headings take their new position's number */
+  let n = 0;
+  for (const sec of ordered) {
+    const title = SECTION_OF.get(sec.items[0] as Paragraph) ?? "";
+    const m = /^(\d+)\.\s+(.*)$/.exec(title);
+    if (m) { n++; if (Number(m[1]) !== n) sec.items[0] = h1(`${n}. ${m[2]}`); }
+  }
+  return [...head, ...ordered.flatMap((x) => x.items)];
 }
 /** sections kept with their heading, so a structure request can reorder whole sections and nothing else */
 const SECTION_OF = new WeakMap<Paragraph, string>();
@@ -293,6 +297,8 @@ export interface ProposalOptions {
   /** the report theme (2026-10-18): the look only — the text, numbering and tables are the same with or without one */
   theme?: ThemeSpec | null;
   logo?: DocLogo | null;
+  /** the project's section order (#18): `research_plan` / `proposal` family */
+  structure?: StructureRequest | null;
 }
 
 /** The research proposal / design document, from the survey and its research design. */
@@ -435,7 +441,10 @@ async function proposalDocx(def: SurveyDefinition, opts: ProposalOptions): Promi
   ]) out.push(bullet(line));
   out.push(divider());
   out.push(muted(`${definitionStamp(def).text} · generated ${date}`));
-  return document(`${title} — ${rp ? "research plan" : "research proposal"}`, `${rp ? "Research plan" : "Research proposal"} for ${def.meta.title}`, out, { header: `${def.meta.title}${def.meta.code ? ` (${def.meta.code})` : ""} — ${rp ? "Research plan" : "Research proposal"}`, footer: `${client ? `Prepared for ${client} · ` : ""}${date}` });
+  /* the project's section order (#18); the cover stays first and the closing stamp last */
+  const closing = out.splice(out.length - 2, 2);
+  const ordered = [...reorderSections(out, opts.structure, rp ? "research_plan" : "proposal"), ...closing];
+  return document(`${title} — ${rp ? "research plan" : "research proposal"}`, `${rp ? "Research plan" : "Research proposal"} for ${def.meta.title}`, ordered, { header: `${def.meta.title}${def.meta.code ? ` (${def.meta.code})` : ""} — ${rp ? "Research plan" : "Research proposal"}`, footer: `${client ? `Prepared for ${client} · ` : ""}${date}` });
 }
 
 /** The Word research plan: the proposal's research-plan edition (one exporter — see `ProposalOptions.edition`). */
@@ -805,7 +814,7 @@ async function findingsDocx(def: SurveyDefinition, run: RunForDocx, opts: Findin
   if (cav || narrative.caveats) { out.push(h1("Caveats")); for (const b of cav?.bullets ?? run.warnings) out.push(bullet(b)); }
   out.push(divider());
   out.push(muted(`Generated by Rescript from the analysis run of ${date}. Every number in this document is from that run.`));
-  if (opts.structure?.order.length) {
+  if (sectionOrderFor(opts.structure, "findings")?.length) {
     const closing = out.splice(out.length - 2, 2);
     return document(`${title} — findings report`, `Findings report for ${def.meta.title}`, [...reorderSections(out, opts.structure), ...closing]);
   }

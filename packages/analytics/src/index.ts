@@ -37,6 +37,8 @@ export * from "./planTrace.js";
 export * from "./blockRefs.js";
 export * from "./questionChart.js";
 export * from "./planCheck.js";
+/* engine #12 (2026-10-22): the readiness rule registered with the engine's action gate */
+export * from "./planGate.js";
 export * from "./reportBuilder.js";
 export * from "./analyticsIntent.js";
 export * from "./storyHtml.js";
@@ -46,3 +48,6 @@ export * from "./qual/index.js";
 export * from "./reportThemes.js";
 export * from "./advancedNarrative.js";
 export * from "./advancedStale.js";
+/* G3 2026-10-22: panel entries and exits (redirect-based panel recruitment), shared by the runtime and the Studio sandbox */
+export * from "./panels/service.js";
+export * from "./panels/stores.js";

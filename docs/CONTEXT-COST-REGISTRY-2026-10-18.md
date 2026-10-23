@@ -288,7 +288,7 @@ The orchestrator should run it with the regression set:
 ## 6. Limits
 
 - **Output is not reduced.** Output is the larger share of a generation's charge. The fake cannot measure it.
-- **The guides dominate an item call** (about 43k characters, cached). Selecting guides per item would cut more, but each distinct set is a new cache write. Not done and not measured.
+- **The guides dominate an item call** (about 43k characters, cached). Selecting guides per item would cut more, but each distinct set is a new cache write. Not done and not measured. *(Done and measured 2026-10-22 — `ENGINE-11-14-2026-10-22.md` §1: −41 % characters, 12/12 item calls still read the cache.)*
 - **The plan call still reads the whole brief.** It must.
 - **Context size.** The context is 45 % of this brief. Budgets favour exactness over size. A brief without headings is one section: its context is thinner and retrieval works on paragraphs.
 - **Heading detection is heuristic** (numbered headings, or short lines between blank lines). An instruction line can occasionally be taken for a heading; that is harmless (it becomes a retrievable section).

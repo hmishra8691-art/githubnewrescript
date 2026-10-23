@@ -275,7 +275,8 @@ const lfId = applied.listFills[0].id;
 await rt.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
 await sendPreview(rt, { definition: { ...applied, meta: { ...applied.meta, id: "methods_p5" } }, listFillCounts: { [lfId]: { "1": 9, "2": 0, "3": 4, "4": 7 } } }, { selector: '[data-qid="q_own"]' });
 const next = async () => { await rt.click('[data-testid="rs-next"]'); await rt.waitForTimeout(600); };
-const stateOf = () => rt.evaluate(() => JSON.parse(JSON.stringify({ seed: window.__rescriptState.seed, answers: window.__rescriptState.answers })));
+/* calculated: a design version CLAIMED for this respondent (exact balance, engine #15 — on for new multi-version designs) wins over the seed */
+const stateOf = () => rt.evaluate(() => JSON.parse(JSON.stringify({ seed: window.__rescriptState.seed, answers: window.__rescriptState.answers, calculated: window.__rescriptState.calculated ?? {} })));
 
 await rt.click('[data-qid="q_own"] input[value="1"]');
 for (const c of ["1", "2", "3"]) await rt.click(`[data-qid="q_brands"] input[value="${c}"]`);
@@ -291,7 +292,7 @@ const mdQ = byVar(applied, "FEAT_MD"), cbcQ = byVar(applied, "PHONE_CBC");
 const mdRows = designOf(applied, mdQ).file.rows, cbcRows = designOf(applied, cbcQ).file.rows;
 await rt.waitForSelector(`[data-qid="${mdQ.id}"] [data-testid="md-task-1"]`);
 const seed = (await stateOf()).seed;
-const mdVersion = designVersionFor(mdQ, mdRows, seed);
+const mdVersion = designVersionFor(mdQ, mdRows, seed, (await stateOf()).calculated);
 const shownMd = await rt.evaluate((qid) => {
   const out = {};
   for (const tr of document.querySelectorAll(`[data-qid="${qid}"] [data-testid="md-item"]`)) (out[tr.getAttribute("data-task")] ??= []).push(tr.getAttribute("data-item"));
@@ -313,7 +314,7 @@ ok(`MaxDiff: version ${mdVersion} of 10, 9 tasks × 5 items in the seeded order;
 await next();
 
 await rt.waitForSelector(`[data-qid="${cbcQ.id}"] [data-testid="cbc-task-1"]`);
-const cbcVersion = designVersionFor(cbcQ, cbcRows, seed);
+const cbcVersion = designVersionFor(cbcQ, cbcRows, seed, (await stateOf()).calculated);
 const shownCbc = await rt.evaluate((qid) => {
   const out = {};
   for (const tr of document.querySelectorAll(`[data-qid="${qid}"] [data-testid="cbc-alt"]`)) {
@@ -340,6 +341,7 @@ await rt.waitForSelector('[data-testid="rs-ended"]', { timeout: 15000 });
 const parsed = SurveyDefinition.parse(applied);
 const state = createResponseState(parsed, { seed });
 state.answers = st.answers;
+state.calculated = { ...state.calculated, ...st.calculated }; /* the claimed design versions */
 const flat = flattenVariables(parsed, state);
 assert.equal(flat.FEAT_MD_VERSION, mdVersion);
 assert.equal(String(flat.FEAT_MD_T1_BEST), shownMd["1"][0]);

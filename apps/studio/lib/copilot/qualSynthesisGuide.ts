@@ -14,7 +14,7 @@ export const COPILOT_QUAL_SYNTHESIS_GUIDE = `QUALITATIVE SYNTHESIS — the coded
 • "set up double coding with 20% overlap" — blind double-coding (κ and Krippendorff's α, disagreement resolution).
 • "what did Gen Z say about price?" — answered from cited excerpts only.
 • "code new interviews automatically" — the auto-coding pipeline (AI-suggested, for review).
-• "run a group session from the guide" — a TEXT group session (participants join by link, answer, rate each other's answers; AI clusters and follow-ups). Video conferencing is NOT supported — say so.
+• "run a group session from the guide" — a TEXT group session (participants join by link, answer, rate each other's answers; AI clusters and follow-ups). Live VIDEO groups moderated by a person: Research Tools → Qualitative → Live sessions.
 Frequency is not importance; AI-written text is reviewed before it is relied on.`;
 
 /** a request about writing up qualitative data, double-coding, reels, group sessions */

@@ -63,5 +63,5 @@ and Cost Optimization". Targeted changes on the existing modules; nothing was re
 - Prompt caching tested with mocks only; verify live (step 3).
 - Respondent STT has no server fallback (Firefox: typing only). Plan: a runtime `/api/transcribe` behind an explicit consent prompt and a survey-level switch, reusing the Studio's metered STT.
 - PDF references refused (plan above). Matrix/table text cells and rich text have no microphone.
-- Duplicate-behaviour check is exact (overlapping option sets not caught); overlay detection is pattern-based; the popup's "Close" label is English only; anchored popups do not follow scrolling inside an inner container.
+- Duplicate-behaviour check is exact (overlapping option sets not caught); overlay detection is pattern-based; the popup's "Close" label is English only; anchored popups do not follow scrolling inside an inner container. *(2026-10-22: duplicates by what behaviours do, overlays read from a tokenizer in any spelling, the popup's words localised and right-to-left — `ENGINE-11-14-2026-10-22.md` §4. Anchored popups in inner scrolling containers: still open.)*
 - Output budget: every request type may use up to 32k tokens with 8 continuations; capping UX/edit/repair calls is a product decision left open (`budget.ts`).

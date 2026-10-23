@@ -1,0 +1,34 @@
+/* Live human-moderated session (2026-10-22, G2) — the participant's / observer's page. Phone first; the survey
+   theme's variables when present (--rs-*), sensible defaults otherwise. */
+.lv-shell { min-height: 100vh; display: flex; justify-content: center; padding: 16px; background: var(--rs-bg, #f6f7f9); color: var(--rs-text, #111827); font-family: var(--rs-font, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif); }
+.lv-card { width: 100%; max-width: 760px; background: var(--rs-card, #fff); border-radius: 14px; box-shadow: 0 2px 14px rgba(15, 23, 42, .08); padding: 20px; align-self: flex-start; }
+.lv-wide { max-width: 1180px; }
+.lv-card h1 { font-size: 22px; margin: 0 0 8px; }
+.lv-muted { color: #5b6475; font-size: 14px; }
+.lv-box { border: 1px solid #d0d5dd; border-radius: 10px; padding: 12px 14px; margin: 10px 0; white-space: pre-wrap; }
+.lv-check { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0; font-size: 15px; }
+.lv-check input { margin-top: 3px; width: 18px; height: 18px; }
+.lv-btn { border: 1px solid #2f6fde; background: #2f6fde; color: #fff; border-radius: 10px; padding: 10px 16px; font-size: 15px; cursor: pointer; min-height: 44px; }
+.lv-btn[disabled] { opacity: .5; cursor: not-allowed; }
+.lv-btn.ghost { background: #fff; color: #2f6fde; }
+.lv-btn.danger { border-color: #b42318; background: #b42318; }
+.lv-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.lv-grow { flex: 1; }
+.lv-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 8px 0; }
+.lv-tile { position: relative; margin: 0; background: #0b1220; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; }
+.lv-tile.big { grid-column: 1 / -1; aspect-ratio: auto; height: min(56vh, 460px); }
+.lv-tile.self { max-width: 240px; }
+.lv-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lv-tile figcaption { position: absolute; left: 6px; bottom: 6px; color: #fff; background: rgba(0, 0, 0, .55); padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+.lv-stimulus { border: 1px solid #d0d5dd; border-radius: 10px; padding: 10px; background: #f8fafc; margin: 8px 0; }
+.lv-stimulus img, .lv-stimulus video { max-width: 100%; max-height: 50vh; display: block; margin-top: 6px; border-radius: 6px; }
+.lv-meter { height: 10px; border-radius: 999px; background: #eef0f3; overflow: hidden; }
+.lv-meter span { display: block; height: 100%; background: #2f6fde; transition: width .08s linear; }
+.lv-rec { color: #b42318; font-weight: 600; font-size: 14px; }
+.lv-alert { border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: #fff6e5; border: 1px solid #f5d28a; }
+.lv-error { color: #b42318; }
+.lv-select { padding: 6px 8px; border-radius: 8px; border: 1px solid #d0d5dd; font: inherit; max-width: 100%; }
+.lv-input { padding: 8px 10px; border-radius: 8px; border: 1px solid #d0d5dd; font: inherit; flex: 1; min-width: 160px; }
+.lv-chat { max-height: 200px; overflow: auto; font-size: 14px; border: 1px solid #eef0f3; border-radius: 8px; padding: 6px 8px; }
+.lv-chat p { margin: 2px 0; }
+@media (prefers-reduced-motion: reduce) { .lv-meter span { transition: none; } }

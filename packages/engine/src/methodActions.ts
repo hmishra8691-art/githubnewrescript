@@ -960,6 +960,8 @@ export function applyMethodAction(def: SurveyDefinition, a: MethodAction, env: M
       const id = env.ids("design");
       def.designs.push({ id, kind, name: a.name ?? `${q.code} ${LABEL[kind] ?? kind} design`, version: 1, seed, config, file: { format: "json", columns: file.columns, rows: file.rows, ...(file.summary ? { summary: file.summary } : {}), generatedAt: env.now } } as DesignReference);
       (q.settings as Record<string, unknown>).designRef = id;
+      /* a NEW design question hands out its versions by exact balance (#15) when it has more than one */
+      if (new Set(file.rows.map((r) => String((r as Record<string, unknown>).version ?? "1"))).size > 1) (q.settings as Record<string, unknown>).versionBalance = { exact: true };
       const what = LABEL[kind] ?? kind;
       return {
         description: `Created ${q.code} — ${what} (seed ${seed}): ${designWords(kind, config, file)}${built.assumed.length ? ` Assumed (not stated): ${built.assumed.join(", ")}.` : ""} ${dataWords(kind, q, config)}.`,

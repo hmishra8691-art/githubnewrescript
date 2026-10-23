@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { freshUrl, MediaError } from "@rescript/media";
-import { applyReelOp, reelItemStates, clipRange, redactText, type HighlightReel } from "@rescript/analytics";
+import { applyReelOp, reelItemStates, excerptClip, redactText, type HighlightReel } from "@rescript/analytics";
+import { liveClip } from "@rescript/analytics/live";
 import { isFailure, requireProjectFor, requireUser } from "@/lib/guard";
 import { supabaseService } from "@/lib/authServer";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
@@ -43,8 +44,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (clip) {
       const e = ctx.state.excerpts.find((x) => x.id === clip);
       if (!e) return json({ error: "no such excerpt" }, 404);
-      const range = clipRange(e, ctx.segments);
-      const mediaId = mediaOf(e.sourceId);
+      /* the excerpt's own words when the transcript has word timings (#17), else the whole turn */
+      let range = excerptClip(e, ctx.segments);
+      let mediaId = mediaOf(e.sourceId);
+      /* G2 2026-10-22: a live session's transcript is made of per-speaker chunks — the clip plays the chunk the turn was said in */
+      const live = range ? liveClip(ctx.rows.transcripts.find((t) => t.id === e.sourceId)?.meta, e.segmentId, range) : null;
+      if (live && range) { mediaId = live.mediaId; range = { ...range, start: live.start, end: live.end }; }
       if (!range || !mediaId) return json({ error: "This excerpt has no clip: its transcript has no recording or no timestamps.", code: "no_clip" }, 404);
       const handle = mediaDbOrResponse();
       if ("response" in handle) return handle.response;
@@ -52,13 +57,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       if (!owned || owned.survey_id !== params.id) return json({ error: "no such recording" }, 404);
       const { url } = await freshUrl(handle.db, mediaId, { seconds: 15 * 60 });
       await recordEvents(db, gate, [{ actor: gate.user.userId, action: "recording.clip_played", detail: `Played the clip of ${e.id} (${Math.round(range.start)}–${Math.round(range.end)} s)`, ids: [mediaId, e.id] }]);
-      return json({ ok: true, url, start: range.start, end: range.end, approximate: range.approximate, expiresInSeconds: 15 * 60 });
+      return json({ ok: true, url, start: range.start, end: range.end, approximate: range.approximate, byWords: range.byWords, expiresInSeconds: 15 * 60 });
     }
     const reels = await listReels(db, params.id);
     const pii = hasPii(gate);
     const red = (t: string) => (pii ? t : redactText(t, { names: ctx.names }).text);
     const can = { playback: qualRefusal(gate.grant, "playback") === null, edit: qualRefusal(gate.grant, "code") === null, export: qualRefusal(gate.grant, "report") === null };
-    return json({ ok: true, can, reels: reels.map((r) => ({ ...r, items: r.items.map((it) => ({ ...it, ...(it.note ? { note: red(it.note) } : {}), snapshot: { ...it.snapshot, quote: red(it.snapshot.quote) }, clip: !!mediaOf(it.snapshot.sourceId) && it.snapshot.start != null })), states: reelItemStates(r, ctx.state, ctx.segments) })) });
+    return json({ ok: true, can, reels: reels.map((r) => ({ ...r, items: r.items.map((it) => ({ ...it, ...(it.note ? { note: red(it.note) } : {}), snapshot: { ...it.snapshot, quote: red(it.snapshot.quote) }, clip: (!!mediaOf(it.snapshot.sourceId) || !!liveClip(ctx.rows.transcripts.find((t) => t.id === it.snapshot.sourceId)?.meta, it.snapshot.segmentId, { start: 0, end: 0 })) && it.snapshot.start != null })), states: reelItemStates(r, ctx.state, ctx.segments) })) });
   } catch (e) {
     if (e instanceof MediaError) return json({ error: e.message }, e.status);
     return storeFailure(e);

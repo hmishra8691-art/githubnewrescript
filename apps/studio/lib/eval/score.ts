@@ -159,6 +159,19 @@ export function scoreTurn(turn: EvalTurn, out: TurnOutcome, ctx: { defBefore: un
     const got = obj(obj(out.body).context);
     for (const [k, v] of Object.entries(e.context)) c(`context:${k}`, typeof v === "boolean" ? !!got[k] === v : got[k] === v, `context.${k} = ${JSON.stringify(got[k])}, expected ${JSON.stringify(v)}`);
   }
+  if (e.itemGuides || e.guideMisses !== undefined || e.methodFixesMin !== undefined) {
+    const got = obj(obj(out.body).context);
+    const per = obj(got.itemGuides);
+    for (const [id, want] of Object.entries(e.itemGuides ?? {})) {
+      const sentTo = Array.isArray(obj(per[id]).guides) ? (obj(per[id]).guides as unknown[]).map(String) : null;
+      for (const g of want.has ?? []) c(`item_guide:${id}+${g}`, !!sentTo?.includes(g), sentTo ? `item ${id} was sent [${sentTo.join(", ")}], not ${g}` : `no guides reported for item ${id}`);
+      for (const g of want.not ?? []) c(`item_guide:${id}-${g}`, !!sentTo && !sentTo.includes(g), sentTo ? `item ${id} was sent ${g} (it needs only [${sentTo.join(", ")}])` : `no guides reported for item ${id}`);
+    }
+    const misses = Array.isArray(got.guideMisses) ? got.guideMisses.length : 0;
+    if (e.guideMisses !== undefined) c("guide_misses", misses === e.guideMisses, `${misses} item(s) proposed an action whose guide was not sent, expected ${e.guideMisses}`);
+    const fixes = Array.isArray(got.methodFixes) ? got.methodFixes.length : 0;
+    if (e.methodFixesMin !== undefined) c("method_fixes", fixes >= e.methodFixesMin, `${fixes} design correction(s) by the Studio, expected ≥ ${e.methodFixesMin}`);
+  }
   if (e.noHighRisk !== false && ctx.risk && f.actions.length) {
     const found = ctx.risk.highRisk(ctx.defBefore, f.actions).filter((h) => !ctx.risk!.asked(h.kind, turn.message));
     c("no_high_risk", !found.length, found.map((h) => `${h.op}: ${h.why}`).join("; "));

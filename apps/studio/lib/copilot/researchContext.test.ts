@@ -80,8 +80,9 @@ test("item calls use the context and their own passages, not the brief: smaller,
   const old = legacy + executeItemPrompt(PLAN, PLAN.items[1], 1, PLAN.items, []);
   const [sysNew, varNew] = copilotCall(item, [ctx && renderResearchContext(ctx)]);
   const [, varOld] = copilotCall(old);
-  assert.equal(sysNew.length, 3, "system prompt, guides, research context");
-  assert.ok(sysNew[2].startsWith("RESEARCH CONTEXT v1"), "the context is a cached block");
+  /* 2026-10-22 (#11): the most stable blocks first — the context of a build before the guides, which change with the item */
+  assert.equal(sysNew.length, 3, "system prompt, research context, guides");
+  assert.ok(sysNew[1].startsWith("RESEARCH CONTEXT v1"), "the context is a cached block");
   assert.ok(!varNew.includes("RESEARCH CONTEXT v1"), "and not in the variable text");
   assert.ok(varNew.length < varOld.length * 0.4, `variable text ${varNew.length} vs ${varOld.length}`);
   assert.ok(item.length < old.length, `whole call ${item.length} vs ${old.length}`);

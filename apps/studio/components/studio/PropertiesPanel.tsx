@@ -915,6 +915,13 @@ export function SurveySettings() {
           onChange={(e) => s.update((d) => { if (e.target.checked) delete d.deployment.speechInput; else d.deployment.speechInput = false; })} />
         Let respondents dictate open-text answers (microphone)
       </label>
+      {/* #16: where the browser has no recogniser (Firefox) or it fails, record → the runtime's speech-to-text (metered to this project), after the respondent agrees */}
+      <label className="row" style={{ gap: 6, fontSize: 13, marginBottom: 8, marginLeft: 22 }}
+        title="Firefox has no speech recognition, and a browser's own can fail. With this on, the microphone records the answer instead (after the respondent agrees once) and the runtime's speech-to-text types it into the box — metered per minute to this project. The audio is not kept. Off: dictation only where the browser can do it itself.">
+        <input type="checkbox" checked={dep.speechInput !== false && dep.speechServer !== false} disabled={dep.speechInput === false} data-testid="survey-speech-server"
+          onChange={(e) => s.update((d) => { if (e.target.checked) delete d.deployment.speechServer; else d.deployment.speechServer = false; })} />
+        …and use our transcription service where the browser cannot (Firefox) — metered
+      </label>
 
       <QualitySettings />
 

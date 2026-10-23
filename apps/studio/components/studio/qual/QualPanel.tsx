@@ -16,7 +16,13 @@ import { SynthesisTab } from "./SynthesisTab";
 import { DoubleCodingTab } from "./DoubleCodingTab";
 import { HighlightsTab } from "./HighlightsTab";
 import { GroupsTab } from "./GroupsTab";
+/* G3 2026-10-22: alerts (Slack / Teams / webhook / e-mail / bell) and panel recruitment */
+import { AlertsPanelsTab } from "./AlertsPanelsTab";
 import { AutoCodePanel, CorrectableText, SynApiContext } from "./TranscriptTools";
+/* G2 2026-10-22: live human-moderated sessions (focus groups / IDIs) with multi-party video */
+/* loaded only when the tab is opened: the console (WebRTC client, recorder) stays out of the panel's first chunk */
+const LiveSessionsTab = React.lazy(() => import("./LiveSessionsTab").then((m) => ({ default: m.LiveSessionsTab })));
+import { ClipPlayer } from "./ClipPlayer";
 
 /**
  * THE QUALITATIVE WORKSPACE (2026-10-18) — Research Tools → Qualitative.
@@ -35,13 +41,14 @@ import { AutoCodePanel, CorrectableText, SynApiContext } from "./TranscriptTools
  *                excerpt ids, representative quotes, contradictory evidence
  *   Report       the qualitative report as a Word document
  *
- * Nothing here runs a live session: there is no conferencing or real-time moderation.
+ * Live sessions (G2 2026-10-22): live human-moderated focus groups / IDIs in the browser — moderator, participants
+ * by link, a back room of observers, recording per speaker → one transcript.
  */
 
-type Tab = "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups";
+type Tab = "guide" | "ai" | "sessions" | "transcripts" | "coding" | "themes" | "report" | "synthesis" | "double" | "highlights" | "groups" | "live" | "alerts";
 const TABS: { key: Tab; label: string }[] = [
   { key: "guide", label: "Guide" }, { key: "ai", label: "AI interviews" }, { key: "sessions", label: "Sessions" }, { key: "transcripts", label: "Transcripts" },
-  { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "synthesis", label: "Synthesis" }, { key: "double", label: "Double coding" }, { key: "highlights", label: "Highlights" }, { key: "groups", label: "Group sessions" }, { key: "report", label: "Report" },
+  { key: "coding", label: "Coding" }, { key: "themes", label: "Themes" }, { key: "synthesis", label: "Synthesis" }, { key: "double", label: "Double coding" }, { key: "highlights", label: "Highlights" }, { key: "groups", label: "Group sessions" }, { key: "live", label: "Live sessions" }, { key: "alerts", label: "Alerts & panels" }, { key: "report", label: "Report" },
 ];
 const STATUS_BADGE: Record<string, string> = { ai_suggested: "warning", human_reviewed: "success", rejected: "error" };
 const STATUS_WORD: Record<string, string> = { ai_suggested: "AI-suggested", human_reviewed: "Reviewed", rejected: "Rejected" };
@@ -59,7 +66,8 @@ export function QualPanel() {
   const defRef = React.useRef(s.def);
   defRef.current = s.def;
   const api = React.useMemo<QualApi>(() => (s.surveyDbId === "sandbox" ? sharedSandboxQualApi(() => defRef.current) : httpQualApi(s.surveyDbId)), [s.surveyDbId]);
-  const [tab, setTab] = React.useState<Tab>("guide");
+  /* G3: a deep link (an alert's "open the live view") names the tab: ?qual=ai|alerts|… */
+  const [tab, setTab] = React.useState<Tab>(() => { if (typeof window === "undefined") return "guide"; const q = new URLSearchParams(window.location.search).get("qual"); return (TABS.some((t) => t.key === q) ? q : "guide") as Tab; });
   const [ws, setWs] = React.useState<WorkspaceView | null>(null);
   const syn = React.useMemo<SynthesisApi>(() => (api.sandbox ? sandboxSynthesisApi(api, () => defRef.current, setWs) : httpSynthesisApi(s.surveyDbId, setWs, () => api.load())), [api, s.surveyDbId]);
   const [error, setError] = React.useState<{ text: string; status?: number } | null>(null);
@@ -90,12 +98,13 @@ export function QualPanel() {
         <span className="grow" />
         {busy && <span className="chip" data-testid="qual-busy">{busy}…</span>}
       </div>
-      <p className="ql-muted">Plan moderated interviews and focus groups, keep session records and recordings, import or transcribe transcripts, and code them with AI assistance and human review. Rescript does not run live human-moderated sessions: there is no video conferencing. One-to-one interviews can be run by an AI moderator (AI interviews).</p>
+      <p className="ql-muted">Plan moderated interviews and focus groups, keep session records and recordings, import or transcribe transcripts, and code them with AI assistance and human review. Run live human-moderated sessions in the browser (Live sessions: video, a waiting room, a back room for observers, recording per speaker), or let an AI moderator run one-to-one interviews (AI interviews).</p>
       {error && <div className={`alert ${error.status === 403 ? "warning" : "error"}`} data-testid="qual-error" data-status={error.status ?? ""}>{error.text}</div>}
       {note && <div className="alert success" data-testid="qual-note">{note}</div>}
       {forbidden ? <div className="empty" data-testid="qual-forbidden">Qualitative data belong to the Data module, and your access does not include it. The guide can still be exported from Intelligent Mode.</div>
         : tab === "guide" ? <GuideTab api={api} run={run} />
         : tab === "ai" ? <AiInterviewsTab qualApi={api} setWs={setWs} setNote={setNote} />
+        : tab === "alerts" ? <AlertsPanelsTab />
         : !ws ? <div className="sk" style={{ height: 120 }} />
         : !ws.available ? <div className="alert warning" data-testid="qual-unavailable">{ws.note}</div>
         : tab === "sessions" ? <SessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} />
@@ -104,6 +113,7 @@ export function QualPanel() {
         : tab === "double" ? <DoubleCodingTab ws={ws} api={syn} run={run} setWs={setWs} />
         : tab === "highlights" ? <HighlightsTab ws={ws} api={syn} run={run} />
         : tab === "groups" ? <GroupsTab ws={ws} api={syn} run={run} setWs={setWs} />
+        : tab === "live" ? <React.Suspense fallback={<div className="sk" style={{ height: 120 }} />}><LiveSessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} /></React.Suspense>
         : tab === "coding" ? <CodingTab ws={ws} api={api} run={run} setWs={setWs} />
         : tab === "themes" ? <ThemesTab ws={ws} />
         : <ReportTab ws={ws} api={api} run={run} />}
@@ -112,6 +122,8 @@ export function QualPanel() {
 }
 
 type Run = <T>(label: string, fn: () => Promise<T>, done?: (v: T) => void) => Promise<T | undefined>;
+/** recordings uploaded from this page, kept so a format the server cannot split can be decoded here instead (#17) */
+const uploadedFiles = new Map<string, File>();
 
 /* ------------------------------------------------------------ Guide */
 
@@ -195,7 +207,7 @@ function SessionsTab({ ws, api, run, setWs, setNote }: { ws: WorkspaceView; api:
             {x.recordingMediaId ? <span className="badge success" data-testid="qual-recording-stored">Recording stored</span> : <span className="ql-muted">No recording</span>}
             {ws.can.manage && !api.sandbox && (
               <label className="btn small">{x.recordingMediaId ? "Replace recording" : "Upload recording"}
-                <input type="file" accept="audio/*,video/*" hidden data-testid="qual-recording-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void run("Uploading the recording", () => api.uploadRecording(x.id, f, (p, phase) => setProgress((cur) => ({ ...cur, [x.id]: `${phase} ${Math.round(p * 100)}%` }))), setWs); }} />
+                <input type="file" accept="audio/*,video/*" hidden data-testid="qual-recording-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) { uploadedFiles.set(x.id, f); void run("Uploading the recording", () => api.uploadRecording(x.id, f, (p, phase) => setProgress((cur) => ({ ...cur, [x.id]: `${phase} ${Math.round(p * 100)}%` }))), setWs); } }} />
               </label>
             )}
             {progress[x.id] && <span className="chip">{progress[x.id]}</span>}
@@ -203,7 +215,18 @@ function SessionsTab({ ws, api, run, setWs, setNote }: { ws: WorkspaceView; api:
               <button type="button" className="btn small" onClick={() => run("Opening the recording", () => api.recordingUrl(x.recordingMediaId!, false), (u) => window.open(u, "_blank", "noopener"))}>Play</button>
               <button type="button" className="btn small" onClick={() => run("Preparing the download", () => api.recordingUrl(x.recordingMediaId!, true), (u) => { window.location.href = u; })}>Download</button>
             </>}
-            {x.recordingMediaId && ws.can.manage && <button type="button" className="btn small" data-testid="qual-transcribe" disabled={!ws.stt.ready} title={ws.stt.ready ? "" : ws.stt.reason} onClick={() => run("Transcribing", () => api.transcribe(x.id), (r) => { setWs(r.ws); setNote(`Transcribed.${r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}`); })}>Transcribe</button>}
+            {x.recordingMediaId && ws.can.manage && <button type="button" className="btn small" data-testid="qual-transcribe" disabled={!ws.stt.ready} title={ws.stt.ready ? "" : ws.stt.reason} onClick={() => run("Transcribing", async () => {
+              try { return await api.transcribe(x.id); }
+              catch (err) {
+                /* #17: a long recording the server cannot split (M4A, MP4, WebM, OGG, FLAC) is decoded in this browser instead */
+                if (err instanceof QualApiError && (err.code === "stt_unsplittable" || err.status === 415)) {
+                  const f = uploadedFiles.get(x.id);
+                  if (f) return api.transcribeInBrowser(f, { sessionId: x.id }, (d, n, phase) => setProgress((cur) => ({ ...cur, [x.id]: phase === "transcribing" ? `part ${d + 1}/${n}` : phase })));
+                  throw new QualApiError(`${err.message} It can be decoded in this browser instead: in Transcripts, choose this session and “Transcribe a recording in this browser…” with the same file.`, 415, err.code);
+                }
+                throw err;
+              }
+            }, (r) => { setWs(r.ws); setNote(`Transcribed.${r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}`); })}>Transcribe</button>}
             {api.sandbox && <span className="ql-muted">Recordings need a saved project (private storage).</span>}
             <span className="grow" />
             {ws.can.manage && <button type="button" className="btn small" onClick={() => run("Saving", () => api.saveSession({ status: x.status === "completed" ? "planned" : "completed" }, x.id), setWs)}>{x.status === "completed" ? "Mark planned" : "Mark completed"}</button>}
@@ -272,6 +295,15 @@ function TranscriptsTab({ ws, api, run, setWs, setNote }: { ws: WorkspaceView; a
             <button type="button" className="btn primary small" data-testid="qual-import-submit" disabled={!text.trim()} onClick={() => run("Importing", () => api.importText({ text, title: title || undefined, sessionId: sessionId || null }), done)}>Import text</button>
             <label className="btn small">Import a file…<input type="file" hidden accept=".txt,.vtt,.srt,.docx,text/plain,text/vtt" data-testid="qual-import-file" onChange={(e) => { const f = e.target.files?.[0]; if (f) void run("Importing", () => api.importFile(f, { title: title || undefined, sessionId: sessionId || null }), done); }} /></label>
           </div>
+          {/* #17: any recording the browser can play (M4A/AAC, MP4, WebM/Opus, OGG, FLAC, WAV, MP3) — decoded here, transcribed in parts with word timings */}
+          <div className="ql-row" data-testid="qual-browser-stt">
+            <label className={`btn small${api.sandbox || sessionId ? "" : " disabled"}`} title={api.sandbox ? "Decoded in this page; the recording stays in this page for clips" : sessionId ? "Decoded in this browser; the session's uploaded recording is what clips play from" : "Choose the session whose recording this is"}>
+              Transcribe a recording in this browser…
+              <input type="file" hidden accept="audio/*,video/*,.m4a,.aac,.mp4,.webm,.ogg,.opus,.flac,.wav,.mp3" data-testid="qual-browser-stt-file" disabled={!api.sandbox && !sessionId}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void run("Decoding and transcribing", () => api.transcribeInBrowser(f, { title: title || undefined, sessionId: sessionId || null }, (d, n, phase) => setNote(phase === "transcribing" ? `Transcribing part ${d + 1} of ${n}…` : phase === "done" ? "Merging the parts…" : `${phase[0].toUpperCase()}${phase.slice(1)} the recording in this browser…`)), (r) => { setWs(r.ws); setNote(`Transcribed.${r.warnings.length ? ` ${r.warnings.join(" ")}` : ""}`); }); }} />
+            </label>
+            <span className="ql-muted">Any format your browser plays — decoded here to 16 kHz mono, sent in parts of at most 24 MB with 2 s of overlap, with word timings so clips play exactly a quote.</span>
+          </div>
           {openQs.length > 0 && (
             <div className="ql-oe">
               <div className="eyebrow">Or code open-ended survey answers</div>
@@ -328,6 +360,9 @@ function CodingTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: QualApi; r
   const [codeForm, setCodeForm] = React.useState({ name: "", definition: "", include: "", exclude: "" });
   const [rename, setRename] = React.useState<Record<string, string>>({});
   const [manual, setManual] = React.useState({ segment: "", quote: "" });
+  /* #17: an excerpt's clip — exactly its words when the transcript has word timings */
+  const [clip, setClip] = React.useState<{ url: string; start: number; end: number; id: string; byWords?: boolean; approximate?: boolean } | null>(null);
+  const hasMedia = (sourceId: string) => { const t = ws.transcripts.find((x) => x.id === sourceId); return !!(t?.mediaId || ws.sessions.find((x) => x.id === t?.sessionId)?.recordingMediaId); };
   const [split, setSplit] = React.useState({ a: "", b: "", toB: [] as string[] });
   const [pair, setPair] = React.useState({ a: "", b: "" });
   const [names, setNames] = React.useState((ws.settings?.redactNames ?? []).join("\n"));
@@ -419,6 +454,7 @@ function CodingTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: QualApi; r
         </div>
 
         <div className="card ql-section" data-testid="qual-excerpts">
+          {clip && <ClipPlayer clip={clip} testId="qual-clip-player" onClose={() => setClip(null)} />}
           {!focused ? <div className="empty">Open a code to review its excerpts.</div> : <>
             <div className="ql-row">
               <b>{focused.name}</b>
@@ -432,6 +468,7 @@ function CodingTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: QualApi; r
                   <span className="ql-muted">{ws.transcripts.find((t) => t.id === e.sourceId)?.title ?? "source"} · {e.speaker ?? ""}{e.start != null ? ` · ${formatTimestamp(e.start)}` : ""} · {e.id} · coded by {who(e.coder)}</span>
                   <span className={`badge ${STATUS_BADGE[e.status]}`}>{STATUS_WORD[e.status]}</span>
                   {e.negativeCase && <span className="badge error">Negative case</span>}
+                  {ws.can.playback && e.start != null && hasMedia(e.sourceId) && <button type="button" className="btn small" data-testid="qual-excerpt-play" onClick={() => run("Opening the clip", () => api.clip(e.id), (c) => setClip({ ...c, id: e.id }))}>▶ Play clip</button>}
                   <span className="grow" />
                   {ws.can.code && <>
                     {e.status !== "human_reviewed" && <button type="button" className="btn small" data-testid="qual-excerpt-accept" onClick={() => op({ op: "review_excerpt", excerptId: e.id, decision: "accept" })}>Accept</button>}

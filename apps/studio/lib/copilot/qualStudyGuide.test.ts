@@ -21,7 +21,8 @@ test("sent with qualitative requests: the qualitative guide ends with it; modera
     assert.ok(qualIntent(m), m);
     assert.ok(copilotUserPrompt({ outline: "(survey)", surveyLanguage: "English", mode: "edit", message: m }).includes("create_qual_guide"), m);
   }
-  for (const w of ["does NOT run live human-moderated sessions", "no video conferencing, no real-time moderation by a person", "configure_ai_interviews", "a PATCH: name only what changes", "never population percentages", "every quote must be verbatim"]) assert.ok(COPILOT_QUAL_STUDY_GUIDE.includes(w), w);
+  /* G2 2026-10-22: live human-moderated sessions now run in the browser (Live sessions) — the guide says so, and that booking is a preview card */
+  for (const w of ["RUNS them live in the browser", "Live sessions", "never say a session is booked", "configure_ai_interviews", "a PATCH: name only what changes", "never population percentages", "every quote must be verbatim"]) assert.ok(COPILOT_QUAL_STUDY_GUIDE.includes(w), w);
 });
 
 test("the worked examples: create an interview guide, then add one question to one section — every other part is unchanged", () => {

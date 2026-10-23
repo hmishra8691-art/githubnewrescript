@@ -16,6 +16,14 @@
     "./story": {
       "types": "./dist/story/index.d.ts",
       "default": "./dist/story/index.js"
+    },
+    "./live": {
+      "types": "./dist/live/index.d.ts",
+      "default": "./dist/live/index.js"
+    },
+    "./live/server": {
+      "types": "./dist/live/server.d.ts",
+      "default": "./dist/live/server.js"
     }
   },
   "files": [
@@ -28,7 +36,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/*.test.js dist/stats/*.test.js dist/analyses/*.test.js dist/export/*.test.js dist/geo/*.test.js dist/story/*.test.js dist/models/*.test.js dist/conjoint/*.test.js"
+    "test": "node --test dist/*.test.js dist/stats/*.test.js dist/analyses/*.test.js dist/export/*.test.js dist/geo/*.test.js dist/story/*.test.js dist/models/*.test.js dist/conjoint/*.test.js dist/live/*.test.js"
   },
   "dependencies": {
     "@rescript/engine": "workspace:*",

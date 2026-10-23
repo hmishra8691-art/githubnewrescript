@@ -83,6 +83,7 @@ async function runTurn(c: EvalCase, t: EvalTurn, i: number, state: { def: unknow
     ...(t.mode ? { mode: t.mode } : {}),
     ...(t.planFirst === false ? { planFirst: false } : {}),
     ...(deps.fake && t.fake !== undefined ? { fake: t.fake } : {}),
+    ...(deps.fake && t.fakeRepair !== undefined ? { fakeRepair: t.fakeRepair } : {}),
   };
   if (t.stage === "plan") Object.assign(body, { stage: "plan", planFirst: true });
   if (t.stage === "execute") {

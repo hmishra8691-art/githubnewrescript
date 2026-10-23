@@ -74,7 +74,8 @@ style, exactly one compiled stylesheet and one script sandbox frame, and the scr
    new code never both run. `custom_component` code is separate and untouched.
 2. **Pattern before code.** Declarative behaviour (effects on an event) first; `show_popup`/`rs.popup` for
    popups; a script only when effects cannot say it. One mechanism per behaviour: a second behaviour for the
-   same target + event + options is refused ("Update <id>"). Stopping a respondent is validation
+   same target + event + options is refused ("Update <id>") — since 2026-10-22 also the same popup or a near-identical
+   script written another way (`ENGINE-11-14-2026-10-22.md` §4). Stopping a respondent is validation
    (`set_validation`), never a script disabling or hiding Next/Back.
 3. **Scope.** Compiled CSS sits under `[data-rs-ux="<survey id>"]` and the `data-rs-el`/`data-rs-id` hooks
    (≈0,5,0), never `html`/`body`/`:root`. Theme rules are ≤0,2,0 and act through `--rs-*` variables, so a theme

@@ -27,6 +27,12 @@ export interface UxPopupOptions {
   /** what anchored / inline placement is placed against */
   anchor?: HTMLElement | null;
   effect: Pick<UxEffect, "text" | "title" | "placement" | "dismiss" | "autoMs">;
+  /**
+   * #14c (2026-10-22): the popup's own words in the respondent's language — its close button's label and the name a
+   * popup with no title is announced by (engine `popupUiFor`: the survey's translation, else the built-in text for the
+   * language, else English) — and the writing direction (absent: read from the shell's `dir`).
+   */
+  labels?: { close?: string; message?: string; dir?: "ltr" | "rtl" };
 }
 
 interface Open { el: HTMLElement; owner: string; modal: boolean; dismissable: boolean; close: () => void; place?: () => void }
@@ -85,7 +91,10 @@ export function openUxPopup(o: UxPopupOptions): () => void {
   for (const p of [...stack]) if (p.owner === o.owner && o.root.contains(p.el)) p.close();
 
   const id = `rs-ux-popup-${++uid}`;
+  /* right to left: the shell's direction (an Urdu or Arabic survey), so the close button and an anchored bubble sit on the reading side */
+  const dir = o.labels?.dir ?? ((o.root.closest("[dir]")?.getAttribute("dir") === "rtl" || (typeof getComputedStyle === "function" && getComputedStyle(o.root).direction === "rtl")) ? "rtl" : "ltr");
   const outer = document.createElement("div");
+  outer.setAttribute("dir", dir);
   outer.className = `rs-ux-popup-${placement}${modal ? " rs-ux-popup-layer" : ""}`;
   outer.setAttribute("data-rs-ux-popup", o.owner);
   outer.setAttribute("data-placement", placement);
@@ -101,7 +110,7 @@ export function openUxPopup(o: UxPopupOptions): () => void {
     h.id = `${id}-title`; h.className = "rs-ux-popup-title"; h.textContent = e.title;
     box.setAttribute("aria-labelledby", h.id);
     box.appendChild(h);
-  } else box.setAttribute("aria-label", "Message");
+  } else box.setAttribute("aria-label", o.labels?.message || "Message");
   const text = document.createElement("div");
   text.id = `${id}-text`; text.className = "rs-ux-popup-text"; text.textContent = e.text ?? "";
   // a non-modal popup is announced; a modal one is read when focus moves into it
@@ -112,7 +121,8 @@ export function openUxPopup(o: UxPopupOptions): () => void {
     closeBtn = document.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "rs-ux-popup-close";
-    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.setAttribute("aria-label", o.labels?.close || "Close");
+    closeBtn.setAttribute("title", o.labels?.close || "Close");
     closeBtn.setAttribute("data-testid", "rs-ux-popup-close");
     closeBtn.textContent = "×";
     box.appendChild(closeBtn);
@@ -158,7 +168,8 @@ export function openUxPopup(o: UxPopupOptions): () => void {
       const vw = document.documentElement.clientWidth || window.innerWidth, vh = window.innerHeight;
       const w = outer.offsetWidth, h = outer.offsetHeight;
       const minX = Math.max(8, r.left + 4), maxX = Math.min(vw - 8, r.right - 4);
-      let x = Math.min(Math.max(a.left, minX), Math.max(minX, maxX - w));
+      /* left to right: from the anchor's left edge; right to left: from its right edge */
+      let x = Math.min(Math.max(dir === "rtl" ? a.right - w : a.left, minX), Math.max(minX, maxX - w));
       const below = a.bottom + 8, above = a.top - 8 - h;
       const y = below + h > vh - 8 && above >= 8 ? above : below;
       const side = y === below ? "below" : "above";

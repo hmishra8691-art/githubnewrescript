@@ -20,7 +20,7 @@ import { enqueueAutoCode } from "./autoCode";
  */
 export const LONG_AUDIO_MAX_BYTES = 200 * 1024 * 1024;
 type Billing = Exclude<Awaited<ReturnType<typeof billingProjectFor>>, { response: NextResponse }>;
-interface PartResult { offsetSeconds: number; text: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; diarized?: boolean; model?: string; language?: string }
+interface PartResult { offsetSeconds: number; text: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; words?: { word: string; start: number; end: number }[]; diarized?: boolean; model?: string; language?: string }
 
 export async function transcribeLong(o: { db: SupabaseClient; mediaDb: MediaDb; gate: ProjectContext; surveyId: string; session: { id: string; title: string }; participants: Participant[]; media: { id: string; bucket: string; path: string; storage_provider: string; mime_type: string | null; bytes: number; original_filename: string | null }; language?: string; billing: Billing }): Promise<NextResponse> {
   const { db, gate, surveyId, media } = o;
@@ -44,16 +44,16 @@ export async function transcribeLong(o: { db: SupabaseClient; mediaDb: MediaDb; 
     }
     const p = split.parts[i];
     const seconds = Math.max(1, Math.round(p.durationSeconds));
-    const m = await meteredSttCall(o.billing.meter, o.billing.ctx, "qual_transcription", seconds, () => transcribe(p.bytes, { segments: true, diarize: true, mimeType: p.mimeType, fileName: p.fileName, language: o.language || undefined, durationSeconds: seconds, timeoutMs: 180_000 }));
+    const m = await meteredSttCall(o.billing.meter, o.billing.ctx, "qual_transcription", seconds, () => transcribe(p.bytes, { segments: true, diarize: true, words: true, mimeType: p.mimeType, fileName: p.fileName, language: o.language || undefined, durationSeconds: seconds, timeoutMs: 180_000 }));
     if (!m.ok) { await saveJob(db, surveyId, job.id, { cursor: { parts: done }, release: true }); return refusalResponse(m); }
     if (!m.value.ok) { await saveJob(db, surveyId, job.id, { cursor: { parts: done }, error: m.value.reason, release: true }); return json({ error: `Part ${i + 1} of ${split.parts.length}: ${m.value.reason}`, code: "stt_failed", retryable: true, progress: { parts: split.parts.length, done: done.length } }, 502); }
     const v = m.value.value;
-    done.push({ offsetSeconds: p.offsetSeconds, text: v.text, ...(v.segments ? { segments: v.segments } : {}), diarized: !!v.diarized, model: v.model, ...(v.language ? { language: v.language } : {}) });
+    done.push({ offsetSeconds: p.offsetSeconds, text: v.text, ...(v.segments ? { segments: v.segments } : {}), ...(v.words?.length ? { words: v.words } : {}), diarized: !!v.diarized, model: v.model, ...(v.language ? { language: v.language } : {}) });
     await saveJob(db, surveyId, job.id, { cursor: { parts: done }, progress: { parts: split.parts.length, done: done.length } });
   }
   const merged = mergePartTranscripts(done);
   if (!merged.text.trim()) { await saveJob(db, surveyId, job.id, { status: "failed", error: "no speech was heard", release: true, finished: true }); return json({ error: "The transcription service heard no speech in this recording.", code: "stt_empty", retryable: true }, 422); }
-  const t = sttTranscript({ text: merged.text, segments: merged.segments, diarized: merged.diarized, model: done[0]?.model ?? "stt", language: done[0]?.language, durationSeconds: Math.round(split.durationSeconds) }, `${o.session.title} (transcribed)`, o.participants);
+  const t = sttTranscript({ text: merged.text, segments: merged.segments, ...(merged.words.length ? { words: merged.words } : {}), diarized: merged.diarized, model: done[0]?.model ?? "stt", language: done[0]?.language, durationSeconds: Math.round(split.durationSeconds) }, `${o.session.title} (transcribed)`, o.participants);
   t.meta.warnings = [...merged.warnings, ...t.meta.warnings];
   t.meta.parts = split.parts.length; t.meta.split = split.format;
   const row = checkRow(await db.from("qual_transcripts").insert({ survey_id: surveyId, session_id: o.session.id, media_id: media.id, title: t.title, source: "stt", format: "stt", language: t.language ?? null, segments: t.segments, speakers: t.speakers, char_count: t.char_count, meta: t.meta, status: "ready", created_by: gate.user.userId }).select("id").single(), "transcript") as { id: string };

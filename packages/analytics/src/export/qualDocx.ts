@@ -1,6 +1,7 @@
 import type { SurveyDefinition, QualStudy } from "@rescript/schema";
 import { guideMinutes, lintQualStudy } from "@rescript/engine";
-import { docKit, definitionStamp, type DocBlock } from "./docx.js";
+import { docKit, definitionStamp, reorderSections, type DocBlock } from "./docx.js";
+import type { StructureRequest } from "../reportThemes.js";
 import { unzipEntries } from "./docxCheck.js";
 import type { QualHistoryEntry, QualSegment, QualState, QualExcerpt } from "../qual/types.js";
 import { themeFrequency, themeSummaries, FREQUENCY_NOTE } from "../qual/analysis.js";
@@ -125,7 +126,8 @@ export interface QualReportOptions {
   /** two participant groups side by side, by code */
   comparison?: GroupComparison | null;
   /** a blind double-coding assignment's agreement (κ and α per code) */
-  doubleCoding?: (AssignmentAgreement & { name?: string }) | null;
+  doubleCoding?: (AssignmentAgreement & { name?: string }) | null;  /** the project's section order (#18), `qual` family — shared with the qualitative deck */
+  structure?: StructureRequest | null;
 }
 
 const statusWord = (s: string) => (s === "human_reviewed" ? "reviewed" : s === "ai_suggested" ? "AI-suggested" : "rejected");
@@ -263,7 +265,8 @@ export function buildQualReportDocx(def: SurveyDefinition, o: QualReportOptions)
   if (hist.length) { const nm = o.coderName ?? ((x: string) => x); out.push(label("Recent changes")); out.push(gridTable(["When", "Who", "What"], hist.map((h) => [h.at.slice(0, 16).replace("T", " "), nm(h.actor), red(h.detail)]), [1800, 1800, 5400])); }
   out.push(divider());
   out.push(muted(`${definitionStamp(def).text} · codebook v${cb.version} · generated ${date}`));
-  return document(`${plain(title, 80)} — qualitative report`, `Qualitative report for ${def.meta.title}`, out, { header: `${def.meta.title} — Qualitative report`, footer: `${o.client ? `Prepared for ${o.client} · ` : ""}${date}` });
+  const closing = out.splice(out.length - 2, 2);
+  return document(`${plain(title, 80)} — qualitative report`, `Qualitative report for ${def.meta.title}`, [...reorderSections(out, o.structure, "qual"), ...closing], { header: `${def.meta.title} — Qualitative report`, footer: `${o.client ? `Prepared for ${o.client} · ` : ""}${date}` });
 }
 
 /* ------------------------------------------------------------ reading a .docx transcript */

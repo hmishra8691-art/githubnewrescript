@@ -313,18 +313,28 @@ console.log("\n8 — the qualitative report .docx");
 }
 
 console.log("\n9 — access: no Data access, no transcripts");
+/* the dev server may be restarting (it compiles each route on first use and can be killed for memory): wait for it, then ask again — the answer is still checked */
+const fetchUp = async (url, init) => {
+  for (let i = 0; ; i++) {
+    try { return await fetch(url, init); }
+    catch (e) {
+      if (i >= 5) throw e;
+      for (let k = 0; k < 40; k++) { try { if ((await fetch(`${STUDIO}/sandbox`, { signal: AbortSignal.timeout(60000) })).ok) break; } catch {} await new Promise((r) => setTimeout(r, 3000)); }
+    }
+  }
+};
 {
   const project = process.env.QUAL_TEST_PROJECT, cookie = process.env.QUAL_TEST_COOKIE_NODATA;
   if (project && cookie) {
     for (const [method, path, body] of [["GET", "", null], ["POST", "/transcripts", JSON.stringify({ text: "Moderator: hi\nP1: hello", title: "x" })], ["POST", "/coding", JSON.stringify({ action: "op", op: { op: "add_code", name: "x" }, version: 0 })]]) {
-      const r = await fetch(`${STUDIO}/api/surveys/${project}/qual${path}`, { method, headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body } : {}) });
+      const r = await fetchUp(`${STUDIO}/api/surveys/${project}/qual${path}`, { method, headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body } : {}) });
       assert.equal(r.status, 403, `${method} ${path || "/"} → ${r.status}`);
     }
     ok("a member whose Data module is None gets 403 from GET /qual, POST /qual/transcripts and POST /qual/coding");
   } else {
-    const r = await fetch(`${STUDIO}/api/surveys/00000000-0000-4000-8000-000000000065/qual`);
+    const r = await fetchUp(`${STUDIO}/api/surveys/00000000-0000-4000-8000-000000000065/qual`);
     assert.notEqual(r.status, 200, "an anonymous caller never gets qualitative data");
-    const t = await fetch(`${STUDIO}/api/surveys/00000000-0000-4000-8000-000000000065/qual/transcripts`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    const t = await fetchUp(`${STUDIO}/api/surveys/00000000-0000-4000-8000-000000000065/qual/transcripts`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     assert.notEqual(t.status, 200);
     ok(`anonymous → ${r.status} / ${t.status} (no data). SKIPPED the 403 for a no-Data member: no database here — set QUAL_TEST_PROJECT and QUAL_TEST_COOKIE_NODATA; proven by lib/qual/qualAccess.test.ts and scripts/qual-research-sql-test.sql`);
   }

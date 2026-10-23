@@ -5,8 +5,11 @@ import { aiConfigured, aiProviderName, completeJson, JsonTextExtractor } from "@
 import { supabaseAdmin } from "@/lib/admin";
 import { contextOf, getMeter, meteredSessionAi, meterProvider, type SessionBilling } from "@/lib/metering";
 import { memoryStore } from "./memoryStore";
+import { realtimeRefusal } from "./realtime";
 import { supabaseStore } from "./supabaseStore";
-import { AiInterviewError, type Deps, type ModelCaller } from "./service";
+import { AiInterviewError, type Deps, type ModelCaller, type PanelHooks } from "./service";
+import { runtimePanels } from "@/lib/panels";
+import { emitFromRuntime } from "@/lib/notifyEmit";
 import type { SessionRec, StudyRec } from "./types";
 
 /**
@@ -33,7 +36,8 @@ function fakeValue(script: unknown, fake: () => Record<string, unknown>): Record
 
 const model: ModelCaller = async (req, o) => {
   const billing = billingFor(o.study, o.session);
-  const extractor = o.onSay ? new JsonTextExtractor(["say"], (d) => o.onSay!(d)) : null;
+  /* G1: the intent streams too (written first), so the speech gate knows it before the words */
+  const extractor = o.onSay || o.onIntent ? new JsonTextExtractor(["say", "intent"], (d, field) => { if (field === "intent") o.onIntent?.(d); else o.onSay?.(d); }) : null;
   const fake = isFakeProvider();
   const value = fake ? fakeValue(o.script, o.fake) : null;
   if (value === "fail") return { failed: "the stand-in provider was told to fail" };
@@ -58,6 +62,28 @@ export function aiInterviewDeps(): Deps {
     now: () => Date.now(),
     newToken: () => randomBytes(32).toString("hex"),
     hash: async (t) => createHash("sha256").update(t).digest("hex"),
+    /* G3 2026-10-22: panel recruitment and alert events */
+    panels: panelHooks(),
+    notify: emitFromRuntime,
+    /* G1: a realtime voice provider that can be gated (AI_REALTIME_*) */
+    realtimeAvailable: realtimeRefusal() === null,
+  };
+}
+
+/** the runtime's panel port as the service's hooks (G3) */
+function panelHooks(): PanelHooks | null {
+  const port = runtimePanels();
+  if (!port) return null;
+  return {
+    async enter(a) {
+      const r = await port.enter(a);
+      if (r.kind === "admitted") return { kind: "admitted", entryId: r.entryId, pid: r.pid };
+      if (r.kind === "over_quota") return { kind: "over_quota", message: r.message, redirect: r.redirect };
+      if (r.kind === "none") return r;
+      return { kind: r.kind, message: r.message };
+    },
+    attach: (id, ref) => port.attach(id, ref),
+    exit: (a) => port.exit(a),
   };
 }
 

@@ -83,6 +83,21 @@ export const NOTICES = {
       default: return english;
     }
   },
+  /**
+   * #13 (2026-10-22): a MaxDiff / conjoint design that could not be made — the engine's reasons (as written) and
+   * whether it was sent back to the model once. Said after the model's reply, so a reply that claims the design
+   * cannot stand alone.
+   */
+  designRefused(lang: ReplyLanguage, reasons: readonly string[], retried: boolean): string {
+    const why = reasons.slice(0, 3).map((r) => r.replace(/\s+/g, " ").trim().slice(0, 400)).join(" · ");
+    switch (lang) {
+      case "hi": return `ध्यान दें: MaxDiff / conjoint design नहीं बन सका${retried ? " (एक बार सुधार के लिए वापस भेजा गया, फिर भी नहीं बना)" : ""} — ${why}। कृपया ज़रूरी जानकारी दें (जैसे attributes और levels) या शर्तें बदलें।`;
+      case "hinglish": return `Dhyan dein: MaxDiff / conjoint design nahi ban saka${retried ? " (ek baar correction ke liye wapas bheja gaya, phir bhi nahi bana)" : ""} — ${why}. Zaroori details dijiye (jaise attributes aur levels) ya conditions badaliye.`;
+      case "mr": return `लक्षात घ्या: MaxDiff / conjoint design तयार होऊ शकले नाही${retried ? " (एकदा दुरुस्तीसाठी परत पाठवले, तरीही झाले नाही)" : ""} — ${why}. आवश्यक माहिती द्या (उदा. attributes आणि levels) किंवा अटी बदला.`;
+      case "ur": return `نوٹ: MaxDiff / conjoint design نہیں بن سکا${retried ? " (ایک بار درستی کے لیے واپس بھیجا گیا، پھر بھی نہیں بنا)" : ""} — ${why}۔ ضروری تفصیل دیں (جیسے attributes اور levels) یا شرائط بدلیں۔`;
+      default: return `Note: the MaxDiff / conjoint design could not be made${retried ? " (it was sent back once for correction and was refused again)" : ""} — ${why}. Nothing was added for it; give what is missing (for example the attributes and their levels) or relax what blocks it, and ask again.`;
+    }
+  },
   /** the one question back on a brief that could not be planned */
   briefQuestion(lang: ReplyLanguage, q: string | null): string {
     if (q) {

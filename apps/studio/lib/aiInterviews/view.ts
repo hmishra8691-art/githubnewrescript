@@ -1,5 +1,5 @@
-import type { SurveyDefinition } from "@rescript/schema";
-import { estimateInterviewCostUsd, buildModeratorPlan, launchProblems, moderationOf, interviewCounts, type InterviewSummary, type ModeratorFlag } from "@rescript/engine";
+import { AiLanguagePack, type SurveyDefinition } from "@rescript/schema";
+import { estimateInterviewCostUsd, buildModeratorPlan, launchProblems, moderationOf, interviewCounts, voiceSummaryOf, SERVICES, type InterviewSummary, type ModeratorFlag } from "@rescript/engine";
 import { redactText } from "@rescript/analytics";
 
 /**
@@ -31,6 +31,8 @@ export function summaryOf(r: SessionRow): InterviewSummary {
     id: r.id, participant: `P${p?.number ?? "?"}`, segment: p?.segment ?? null, mode: r.mode, language: r.language ?? "", status: r.status, excluded: !!r.excluded, isTest: !!r.is_test,
     flags: arr<ModeratorFlag>(r.flags), turns: r.turns_count ?? 0, costUsd: Number(r.cost_usd ?? 0), startedAt: r.started_at, lastActivityAt: r.last_activity_at,
     minutes: Math.max(0, Math.round((end - Date.parse(r.started_at)) / 6000) / 10), covered: arr<string>(st.covered).filter((x) => typeof x === "string"), qualTranscriptId: r.qual_transcript_id ?? null,
+    /* G1: the voice style, interruptions and latency of a voice interview */
+    ...(r.mode !== "text" ? { voice: voiceSummaryOf(r.state) } : {}),
   };
 }
 
@@ -42,10 +44,19 @@ export interface LiveView {
   interviews: InterviewSummary[];
   available: boolean;
   note?: string;
+  /** G1: can this installation offer realtime voice interviews (AI_REALTIME_*), and if not why */
+  realtime?: { available: boolean; reason?: string };
+}
+
+/** G1: the realtime voice provider's readiness from this environment (the runtime reads the same variables) */
+export function realtimeReadiness(env: Record<string, string | undefined> = process.env): { available: boolean; reason?: string } {
+  const r = SERVICES.realtime_voice?.readiness(env);
+  if (!r) return { available: false, reason: "no realtime voice provider in this build" };
+  return r.ready ? { available: true } : { available: false, reason: r.reason ?? `not configured: ${r.missing.join(", ")}` };
 }
 
 export function liveView(study: StudyRow | null, sessions: SessionRow[], runtimeBase: string): LiveView {
-  if (!study) return { study: null, counts: null, quotas: [], target: null, interviews: [], available: true };
+  if (!study) return { study: null, counts: null, quotas: [], target: null, interviews: [], available: true, realtime: realtimeReadiness() };
   const guide = study.guide as SurveyDefinition["qualStudy"];
   const cfg = moderationOf(guide!);
   const plan = buildModeratorPlan(guide!, { guideLanguage: study.guide_language, title: study.title });
@@ -56,6 +67,7 @@ export function liveView(study: StudyRow | null, sessions: SessionRow[], runtime
     ...interviewCounts(interviews, cfg),
     interviews,
     available: true,
+    realtime: realtimeReadiness(),
   };
 }
 
@@ -72,7 +84,7 @@ export function turnsView(rows: TurnRow[], opts: { pii: boolean; names?: string[
 
 /** the study row a launch inserts — a SNAPSHOT of the guide and its AI configuration — or why it cannot launch */
 export function launchRow(def: SurveyDefinition, userId: string, title?: string): { ok: true; row: Record<string, unknown>; quotas: { segment: string; target: number }[]; warnings: string[]; estimateUsd: number } | { ok: false; blocking: string[]; warnings: string[] } {
-  const check = launchProblems(def.qualStudy);
+  const check = launchProblems(def.qualStudy, { guideLanguage: def.localization?.sourceLanguage });
   if (check.blocking.length) return { ok: false, blocking: check.blocking, warnings: check.warnings };
   const guide = def.qualStudy!;
   const cfg = moderationOf(guide);
@@ -104,4 +116,28 @@ export function excerptsCiting(excerpts: unknown, transcriptId: string): number 
 export function transcriptText(segments: { speaker: string; start: number; text: string }[]): string {
   const ts = (s: number) => { const t = Math.max(0, Math.round(s)); return `${String(Math.floor(t / 3600)).padStart(2, "0")}:${String(Math.floor((t % 3600) / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
   return segments.map((g) => `[${ts(g.start)}] ${g.speaker}: ${g.text.replace(/\s*\n+\s*/g, " ")}`).join("\n");
+}
+
+/* ------------------------------------------------------------ G1: the study languages' wording (language packs) */
+
+/** a body's `translations` → valid packs by language code (anything else dropped) */
+export function parsePacks(raw: unknown): Record<string, AiLanguagePack> {
+  const out: Record<string, AiLanguagePack> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>).slice(0, 60)) {
+    const lang = k.toLowerCase().split(/[-_]/)[0].replace(/[^a-z]/g, "").slice(0, 8);
+    const p = AiLanguagePack.safeParse(v);
+    if (!lang || !p.success) continue;
+    /* bounded: a pack is short texts, never a document */
+    const clip = (r: Record<string, string>) => Object.fromEntries(Object.entries(r).slice(0, 600).map(([a, b]) => [a.slice(0, 120), String(b).slice(0, 2000)]));
+    out[lang] = { ...p.data, language: lang, texts: clip(p.data.texts), words: clip(p.data.words), ui: clip(p.data.ui) };
+  }
+  return out;
+}
+
+/** a guide snapshot with these packs merged in (a launch, or "apply to the running study") */
+export function withPacks<T extends { aiModeration?: unknown }>(guide: T, packs: Record<string, AiLanguagePack>): T {
+  if (!Object.keys(packs).length) return guide;
+  const cfg = (guide.aiModeration ?? {}) as { translations?: Record<string, AiLanguagePack> };
+  return { ...guide, aiModeration: { ...cfg, translations: { ...(cfg.translations ?? {}), ...packs } } };
 }

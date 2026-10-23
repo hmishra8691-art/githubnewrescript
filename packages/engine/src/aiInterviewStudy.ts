@@ -39,7 +39,7 @@ export function redirectFor(url: string | undefined | null, vars: { pid?: string
   return safe.replace(/\{\{\s*pid\s*\}\}/gi, encodeURIComponent(String(vars.pid ?? "").slice(0, 120)));
 }
 
-export function launchProblems(study: QualStudy | undefined | null): LaunchCheck {
+export function launchProblems(study: QualStudy | undefined | null, opts: { guideLanguage?: string } = {}): LaunchCheck {
   const blocking: string[] = [], warnings: string[] = [];
   if (!study) return { blocking: ["There is no interview guide — create one first."], warnings };
   if (study.kind !== "interview") blocking.push("AI-moderated interviews run one participant at a time: the guide must be an interview guide, not a focus-group discussion guide.");
@@ -58,7 +58,9 @@ export function launchProblems(study: QualStudy | undefined | null): LaunchCheck
   const segments = new Set(cfg.screener.flatMap((q) => q.options.map((o) => o.segment).filter(Boolean)));
   for (const q of cfg.quotas) if (!segments.has(q.segment) && !study.segments.some((s) => s.name === q.segment)) warnings.push(`Quota “${q.segment}”: no screener answer puts a participant in that segment.`);
   if (cfg.targetCompletes && cfg.quotas.length && cfg.quotas.reduce((n, q) => n + q.target, 0) < cfg.targetCompletes) warnings.push(`The quotas add up to ${cfg.quotas.reduce((n, q) => n + q.target, 0)}, fewer than the ${cfg.targetCompletes} completes wanted.`);
-  if (cfg.languages.length > 1 && !cfg.languages.includes("en")) warnings.push("The scripted fallback (used when the AI is unavailable) speaks English and Hindi only; other languages fall back to the guide's own words.");
+  /* G1: the scripted fallback speaks each study language from its language pack (made at launch) */
+  const packless = cfg.languages.map((l) => l.toLowerCase().split(/[-_]/)[0]).filter((l, i, a) => l && a.indexOf(l) === i && !cfg.translations?.[l] && l !== String(opts.guideLanguage ?? "en").toLowerCase().split(/[-_]/)[0]);
+  if (packless.length) warnings.push(`At launch the guide is translated into ${packless.join(", ")} for the scripted fallback (used when the AI is unavailable) — review the wording under Languages.`);
   const est = estimateInterviewCostUsd(plan);
   if (est > cfg.costCapUsd) warnings.push(`An interview is estimated at about $${est.toFixed(2)} of AI, above the $${cfg.costCapUsd} cap per interview: long interviews will finish on scripted questions.`);
   return { blocking, warnings };
@@ -85,6 +87,8 @@ export interface PublicStudyView {
   screener: PublicScreenerQuestion[];
   incentive?: string;
   silenceSeconds: number;
+  /** G1: the voice styles the participant may choose (realtime only when the runtime has a provider) */
+  voiceStyles?: ("turn_based" | "conversation" | "realtime")[];
 }
 
 /** what the participant's page is told before the interview — no qualifying rules, no moderator notes, no objectives */
@@ -102,7 +106,22 @@ export function publicStudyView(study: QualStudy, opts: { title?: string } = {})
     screener: cfg.screener.map((q) => ({ id: q.id, text: q.text, kind: q.kind, options: q.options.map((o) => o.label) })),
     ...(cfg.incentive ? { incentive: cfg.incentive } : {}),
     silenceSeconds: cfg.silenceSeconds,
+    voiceStyles: voiceStylesOf(cfg),
   };
+}
+
+/** G1: the voice styles a study offers (absent = turn_based and conversation) */
+export function voiceStylesOf(cfg: AiModeration): ("turn_based" | "conversation" | "realtime")[] {
+  return cfg.voiceStyles?.length ? [...cfg.voiceStyles] : ["turn_based", "conversation"];
+}
+
+/** G1: what the live view shows about a voice interview — its style, interruptions, latency (median, worst) */
+export interface VoiceSummary { style: string; interruptions: number; medianLatencyMs: number | null; maxLatencyMs: number | null; turnsMeasured: number; fallback?: string }
+export function voiceSummaryOf(state: unknown): VoiceSummary | null {
+  const v = (state && typeof state === "object" ? (state as { voice?: { style?: string; interruptions?: number; latenciesMs?: number[]; fallback?: string } }).voice : null) ?? null;
+  if (!v) return null;
+  const l = (Array.isArray(v.latenciesMs) ? v.latenciesMs : []).filter((x) => Number.isFinite(x) && x >= 0).sort((a, b) => a - b);
+  return { style: v.style ?? "turn_based", interruptions: Number(v.interruptions ?? 0), medianLatencyMs: l.length ? l[Math.floor((l.length - 1) / 2)] : null, maxLatencyMs: l.length ? l[l.length - 1] : null, turnsMeasured: l.length, ...(v.fallback ? { fallback: v.fallback } : {}) };
 }
 
 export interface ScreenVerdict { qualified: boolean; segment: string | null; reason?: string; answers: Record<string, string | string[] | number> }
@@ -241,6 +260,8 @@ export interface InterviewSummary {
   minutes: number;
   covered: string[];
   qualTranscriptId: string | null;
+  /** G1: voice style, interruptions and latency (voice interviews) */
+  voice?: VoiceSummary | null;
 }
 export interface InterviewCounts { started: number; inProgress: number; completed: number; screenedOut: number; abandoned: number; flagged: number; ended: number; excluded: number; tests: number; alerts: number }
 export interface QuotaProgress { segment: string; target: number; completed: number; inProgress: number }

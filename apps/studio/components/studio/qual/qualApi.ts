@@ -1,8 +1,10 @@
 "use client";
 import type { SurveyDefinition } from "@rescript/schema";
-import { applyQualOp, agreement as computeAgreement, type QualOp, type QualSegment, type QualState } from "@rescript/analytics";
+import { applyQualOp, agreement as computeAgreement, excerptClip, type QualOp, type QualSegment, type QualState } from "@rescript/analytics";
+import type { ChunkTranscript } from "@rescript/media";
+import { transcribeInBrowser } from "@/lib/qual/browserAudio";
 import {
-  importTranscript, openEndsTranscript, parseSessionInput, parseSpeakerEdit, speakerMap, toWorkspace, allSegments,
+  importTranscript, openEndsTranscript, parseSessionInput, parseSpeakerEdit, speakerMap, toWorkspace, allSegments, sttTranscript,
   type CodingRow, type EventRow, type QualWorkspace, type SessionRow, type TranscriptRow, type QualTranscriptView, type QualSessionView,
 } from "@/lib/qual/qualWorkspace";
 import type { QualOperation } from "@/lib/qual/qualAccess";
@@ -41,6 +43,15 @@ export interface QualApi {
   uploadRecording(sessionId: string, file: File, onProgress: (p: number, phase: string) => void): Promise<WorkspaceView>;
   recordingUrl(mediaId: string, download: boolean): Promise<string>;
   transcribe(sessionId: string): Promise<{ ws: WorkspaceView; warnings: string[] }>;
+  /**
+   * #17: transcribe a recording in ANY format the browser can decode (M4A/AAC, MP4, WebM/Opus, OGG, FLAC…):
+   * decoded here to 16 kHz mono WAV parts (≤ 24 MB, 2 s overlap), each transcribed with word timings, merged on
+   * the recording's clock. A saved project needs the session's recording uploaded (the clips play from it); the
+   * sandbox keeps the file in the page.
+   */
+  transcribeInBrowser(file: File, opts: { sessionId?: string | null; title?: string; language?: string }, onProgress?: (done: number, total: number, phase: string) => void): Promise<{ ws: WorkspaceView; warnings: string[] }>;
+  /** the excerpt's clip: a playable URL and the excerpt's own time range (its words when the transcript has word timings) */
+  clip(excerptId: string): Promise<{ url: string; start: number; end: number; approximate: boolean; byWords?: boolean }>;
   /** the sandbox's rows, for the synthesis / double-coding / highlights / correction / groups client (F2 2026-10-22); saved projects have none */
   sandboxHandle?: SandboxHandle;
 }
@@ -64,6 +75,17 @@ async function call<T>(url: string, init: RequestInit = {}): Promise<T> {
     throw new QualApiError((j as { error?: string }).error ?? `The request failed (${r.status}).`, r.status, (j as { code?: string }).code);
   }
   return (ct.includes("json") ? r.json() : r.blob()) as Promise<T>;
+}
+/** one part of a recording decoded in the browser (#17): a dropped connection or a gateway hiccup is retried — the route never pays twice for a part it already has */
+async function sendPart<T>(url: string, init: RequestInit): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await call<T>(url, init); }
+    catch (e) {
+      const retryable = e instanceof TypeError || (e instanceof QualApiError && (e.status === 502 || e.status === 503 || e.status === 504 || (e.status === 409 && /retries/.test(e.message))));
+      if (!retryable || attempt >= 3) throw e;
+      await new Promise((ok) => setTimeout(ok, 1500 * (attempt + 1)));
+    }
+  }
 }
 const jsonInit = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const nameOf = (r: Response, fallback: string) => /filename="([^"]+)"/.exec(r.headers.get("content-disposition") ?? "")?.[1] ?? fallback;
@@ -113,6 +135,21 @@ export function httpQualApi(surveyId: string): QualApi {
       return merge((out.reply as { workspace: QualWorkspace }).workspace);
     },
     async recordingUrl(mediaId, download) { const r = await call<{ url: string }>(`${base}/recordings?mediaId=${encodeURIComponent(mediaId)}${download ? "&download=1" : ""}`); return r.url; },
+    async transcribeInBrowser(file, opts, onProgress) {
+      if (!opts.sessionId) throw new QualApiError("Choose the session the recording belongs to — its clips play from the stored recording.", 400);
+      const sid = opts.sessionId;
+      const r = await transcribeInBrowser(file, async (p) => {
+        const res = await sendPart<{ workspace?: QualWorkspace; warnings?: string[] }>(`${base}/recordings/chunk`, {
+          method: "POST", body: p.wav as unknown as BodyInit,
+          headers: { "content-type": "audio/wav", "x-session-id": sid, "x-part-index": String(p.plan.index), "x-part-count": String(p.count), "x-offset": String(p.plan.offsetSeconds), "x-duration": String(p.plan.durationSeconds), "x-overlap-before": String(p.plan.overlapBefore), "x-overlap-after": String(p.plan.overlapAfter), ...(opts.language ? { "x-language": opts.language } : {}) },
+        });
+        return { final: res.workspace ? res : undefined };
+      }, onProgress);
+      const fin = r.final as { workspace?: QualWorkspace; warnings?: string[] } | null;
+      if (!fin?.workspace) throw new QualApiError("The parts were sent, but the transcript did not come back — press Transcribe again to finish it (parts already transcribed are not paid twice).", 202);
+      return { ws: merge(fin.workspace), warnings: fin.warnings ?? [] };
+    },
+    async clip(excerptId) { return call(`${base}/highlights?clip=${encodeURIComponent(excerptId)}`); },
     async transcribe(sessionId) {
       /* a long recording is transcribed in parts: the route answers 202 { continue: true } until it is done (F2 2026-10-22) */
       let r = await call<{ workspace?: QualWorkspace; warnings?: string[]; continue?: boolean }>(`${base}/recordings/transcribe`, jsonInit("POST", { sessionId }));
@@ -126,14 +163,17 @@ export function httpQualApi(surveyId: string): QualApi {
 
 /* ------------------------------------------------------------ the sandbox */
 
-const SANDBOX_CAN: Abilities = { read: true, manage: true, code: true, report: true, playback: false, settings: true, guide: true, pii: true };
+/* playback: the sandbox plays recordings transcribed in this page (kept as object URLs, never uploaded) — #17 */
+const SANDBOX_CAN: Abilities = { read: true, manage: true, code: true, report: true, playback: true, settings: true, guide: true, pii: true };
+/** recordings the sandbox transcribed in this page: transcript media id → object URL */
+export const SANDBOX_MEDIA = new Map<string, { url: string; name: string }>();
 
 export function sandboxQualApi(getDef: () => SurveyDefinition): QualApi {
   const rows: { sessions: SessionRow[]; transcripts: TranscriptRow[]; coding: CodingRow | null; events: EventRow[] } = { sessions: [], transcripts: [], coding: null, events: [] };
   let n = 0;
   const id = () => `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
   const now = () => new Date().toISOString();
-  const view = (): WorkspaceView => ({ ...toWorkspace(rows, { pii: true }), available: true, can: SANDBOX_CAN, stt: { ready: false, reason: "Recordings and speech-to-text need a saved project (storage)." } });
+  const view = (): WorkspaceView => ({ ...toWorkspace(rows, { pii: true }), available: true, can: SANDBOX_CAN, stt: { ready: false, reason: "Uploading recordings needs a saved project (storage); “Transcribe a recording” works here, in this page." } });
   const event = (action: string, detail: string, ids: string[] = [], actor = "sandbox-user") => rows.events.push({ actor: actor === "ai" ? null : actor, actor_label: actor === "ai" ? "AI (suggested)" : "You", action, detail, ids, created_at: now() });
   const state = (): { state: QualState; version: number } => { const ws = toWorkspace(rows, { pii: true }); return { state: ws.state, version: ws.version }; };
   const setState = (s: QualState) => { rows.coding = { codebook: s.codebook, excerpts: s.excerpts, version: (rows.coding?.version ?? 0) + 1, settings: rows.coding?.settings ?? {} }; };
@@ -203,10 +243,44 @@ export function sandboxQualApi(getDef: () => SurveyDefinition): QualApi {
       const sources = ws.transcripts.map((t: QualTranscriptView) => ({ id: t.id, title: t.title, kind: t.source === "open_ends" ? "open_ends" : "transcript", segments: t.segments.length }));
       /* F2 2026-10-22: the sandbox's AI synthesis records travel with the report (the route re-checks staleness) */
       const { sandboxReportExtras } = await import("./synthesisApi");
-      return docx(`/api/surveys/sandbox/qual/export`, { type, definition: getDef(), state: ws.state, segments: allSegments(ws), sources, history: ws.history, ...sandboxReportExtras(sandboxHandleRef), ...opts }, `${type}.docx`);
+      /* the sandbox's section order (#18) — the same one the Research tab sets for the qualitative report and deck */
+      const { sandboxTheme } = await import("@/lib/artifacts/sandboxStore");
+      const { sessionStore } = await import("@/lib/artifacts/client");
+      const structure = sandboxTheme(sessionStore()).structure;
+      return docx(`/api/surveys/sandbox/qual/export`, { type, definition: getDef(), state: ws.state, segments: allSegments(ws), sources, history: ws.history, ...sandboxReportExtras(sandboxHandleRef), ...(structure ? { structure } : {}), ...opts }, `${type}.docx`);
     },
     async uploadRecording() { throw new QualApiError("Recordings need a saved project (private storage).", 400); },
-    async recordingUrl() { throw new QualApiError("Recordings need a saved project.", 400); },
+    async recordingUrl(mediaId) { const m = SANDBOX_MEDIA.get(mediaId); if (!m) throw new QualApiError("Recordings need a saved project.", 400); return m.url; },
+    async transcribeInBrowser(file, opts, onProgress) {
+      const r = await transcribeInBrowser(file, async (p) => {
+        const res = await sendPart<{ part: ChunkTranscript }>(`/api/surveys/sandbox/qual/recordings/chunk`, {
+          method: "POST", body: p.wav as unknown as BodyInit,
+          headers: { "content-type": "audio/wav", "x-part-index": String(p.plan.index), "x-part-count": String(p.count), "x-offset": String(p.plan.offsetSeconds), "x-duration": String(p.plan.durationSeconds), "x-overlap-before": String(p.plan.overlapBefore), "x-overlap-after": String(p.plan.overlapAfter), ...(opts.language ? { "x-language": opts.language } : {}) },
+        });
+        return { part: res.part };
+      }, onProgress);
+      if (!r.merged || !r.merged.text.trim()) throw new QualApiError("The transcription service heard no speech in this recording.", 422);
+      const m = r.merged;
+      const t = sttTranscript({ text: m.text, segments: m.segments, ...(m.words.length ? { words: m.words } : {}), diarized: m.diarized, model: "stt", durationSeconds: Math.round(r.durationSeconds) }, opts.title?.trim() || `${file.name} (transcribed)`, participantsOf(opts.sessionId));
+      t.meta.warnings = [...m.warnings, ...t.meta.warnings];
+      t.meta.parts = r.parts; t.meta.split = "browser";
+      const mediaId = `local:${id()}`;
+      SANDBOX_MEDIA.set(mediaId, { url: URL.createObjectURL(file), name: file.name });
+      const tid = id();
+      rows.transcripts.push({ id: tid, session_id: opts.sessionId ?? null, title: t.title, source: "stt", format: "stt", language: t.language ?? null, segments: t.segments, speakers: t.speakers, status: "ready", error: null, char_count: t.char_count, media_id: mediaId, meta: t.meta, created_at: now() });
+      event("transcript.transcribed", `Transcribed “${file.name}” in this browser (${r.parts} part${r.parts === 1 ? "" : "s"}, ${Math.round(r.durationSeconds)} s${m.wordTimings ? ", word timings" : ""})`, [tid]);
+      return { ws: view(), warnings: t.meta.warnings };
+    },
+    async clip(excerptId) {
+      const ws = view();
+      const e = ws.state.excerpts.find((x) => x.id === excerptId);
+      if (!e) throw new QualApiError("no such excerpt", 404);
+      const media = ws.transcripts.find((t) => t.id === e.sourceId)?.mediaId;
+      const m = media ? SANDBOX_MEDIA.get(media) : null;
+      const range = excerptClip(e, allSegments(ws));
+      if (!m || !range) throw new QualApiError("This excerpt has no clip: its transcript has no recording in this page or no timestamps.", 404);
+      return { url: m.url, ...range };
+    },
     async transcribe() { throw new QualApiError("Speech-to-text needs a saved project with a recording.", 400); },
   };
 }

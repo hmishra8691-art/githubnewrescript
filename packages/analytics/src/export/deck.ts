@@ -2,6 +2,7 @@ import type { AnalysisResult, ReportTheme } from "../types.js";
 import { DEFAULT_THEME } from "../types.js";
 import type { DeckDefinition, DeckSlide } from "../deck.js";
 import { PptxCtor, addTable, drawAnalysisVisual, hex, type Pres, type Slide } from "./pptx.js";
+import { orderSections } from "../reportThemes.js";
 
 /**
  * THE DECK DESIGN SYSTEM (Research Engine audit, Phase 5).
@@ -37,6 +38,45 @@ export interface DeckPptxInput {
   footer?: string;
   /** pictures of charts the renderer drew, keyed by analysis id (maps and the like) */
   images?: Record<string, string>;
+  /** the project's findings section order (#18, `sectionOrderFor(structure, "findings")`) — the same order as the Word report */
+  sectionOrder?: string[] | null;
+}
+
+/** which findings-report section a deck slide belongs to (the Word report's section ids); null = stays with what precedes it */
+export function deckSlideSection(slide: DeckSlide): string | null {
+  switch (slide.type) {
+    case "title": return null;
+    case "summary": return "executive-summary";
+    case "key_finding": return slide.beyond ? "beyond-the-plan" : "key-findings";
+    case "statistical_highlight": return "key-findings";
+    case "segment_comparison": return "who-differs";
+    case "implications": return "what-it-means";
+    case "recommendations": return "what-to-do-next";
+    case "method": return "method";
+    case "caveats": return "caveats";
+    case "wave_change": return "since-the-last-wave";
+    default: return null;
+  }
+}
+
+/** the deck's slides in the section order: the title first; a section divider travels with the slides after it */
+export function orderDeckSlides(slides: readonly DeckSlide[], order: readonly string[] | null | undefined): DeckSlide[] {
+  if (!order?.length) return [...slides];
+  const head: DeckSlide[] = [];
+  const groups: { id: string; items: DeckSlide[] }[] = [];
+  let pendingDividers: DeckSlide[] = [];
+  for (const sl of slides) {
+    if (sl.type === "title") { head.push(sl); continue; }
+    if (sl.type === "section") { pendingDividers.push(sl); continue; }
+    const id = deckSlideSection(sl) ?? groups[groups.length - 1]?.id ?? "other";
+    const last = groups[groups.length - 1];
+    if (last && last.id === id && !pendingDividers.length) last.items.push(sl);
+    else groups.push({ id, items: [...pendingDividers, sl] });
+    pendingDividers = [];
+  }
+  const merged = new Map<string, DeckSlide[]>();
+  for (const g of groups) merged.set(g.id, [...(merged.get(g.id) ?? []), ...g.items]);
+  return [...head, ...orderSections([...merged].map(([id, items]) => ({ id, items })), order).flatMap((g) => g.items), ...pendingDividers];
 }
 
 const W = 10, H = 5.625;
@@ -78,7 +118,7 @@ export async function buildDeckPptx(input: DeckPptxInput): Promise<Buffer> {
     s.addText(items.map((t) => ({ text: t, options: { bullet: { indent: 14 }, breakLine: true, paraSpaceAfter: 6 } })) as never, { x: box.x, y: box.y, w: box.w, h: box.h, fontSize: size, color: text, fontFace: font, valign: "top", fit: "shrink" } as never);
   };
 
-  for (const slide of input.deck.slides) {
+  for (const slide of orderDeckSlides(input.deck.slides, input.sectionOrder)) {
     const s = p.addSlide();
     switch (slide.type) {
       case "title": {

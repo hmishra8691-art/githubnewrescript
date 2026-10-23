@@ -48,7 +48,7 @@ export function MenuTasks(p: QRProps) {
   if (design.kind !== "menu") {
     return <div className="rs-error-msg">This question needs a Menu design; “{design.name}” is a {design.kind} design.</div>;
   }
-  const rows = designRowsFor(p.q, design.file.rows as Record<string, unknown>[], p.state.seed);
+  const rows = designRowsFor(p.q, design.file.rows as Record<string, unknown>[], p.state.seed, p.state.calculated);
   const tasks = [...new Set(rows.map((r) => String(r.task)))];
   const cfg = (design.config ?? {}) as { noneOption?: boolean; minSelections?: number; maxSelections?: number; currency?: string };
   const summary = (design.file as { summary?: { currency?: string } }).summary;

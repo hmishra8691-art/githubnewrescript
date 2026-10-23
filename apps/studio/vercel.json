@@ -24,6 +24,10 @@
     {
       "path": "/api/cron/housekeeping",
       "schedule": "43 3 * * 0"
+    },
+    {
+      "path": "/api/cron/notifications",
+      "schedule": "* * * * *"
     }
   ]
 }

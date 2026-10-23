@@ -1,6 +1,6 @@
 import {
-  parseTranscript, suggestRole, redactText, openEndSegments, emptyCodebook,
-  type QualSegment, type QualState, type QualHistoryEntry, type TranscriptFormat, type QualCodebook, type QualExcerpt,
+  parseTranscript, suggestRole, redactText, openEndSegments, emptyCodebook, attachWords, realignAfterEdit,
+  type QualSegment, type SegmentWord, type QualState, type QualHistoryEntry, type TranscriptFormat, type QualCodebook, type QualExcerpt,
 } from "@rescript/analytics";
 
 /**
@@ -22,7 +22,7 @@ export interface EventRow { id?: number; actor: string | null; actor_label: stri
 
 export interface Participant { id: string; label: string; segment?: string }
 export interface SpeakerInfo { role?: "moderator" | "participant"; group?: string }
-export interface StoredSegment { id: string; index: number; speaker?: string; start?: number; end?: number; responseId?: string; questionId?: string; group?: string; text: string }
+export interface StoredSegment { id: string; index: number; speaker?: string; start?: number; end?: number; responseId?: string; questionId?: string; group?: string; text: string; /** word timings (#17) */ words?: SegmentWord[]; wordsStale?: boolean }
 
 export interface QualSessionView {
   id: string; kind: "interview" | "focus_group"; title: string; scheduledAt: string | null; moderator: string | null;
@@ -69,6 +69,20 @@ export function speakerMap(row: Pick<TranscriptRow, "speakers" | "segments">, pa
   return out;
 }
 
+/**
+ * A segment after a correction (#17): its words' timings follow the edit —
+ * unchanged words keep theirs, corrected ones are interpolated (marked
+ * approximate); an edit with nothing timed on either side marks the timings
+ * stale (clips then play the turn).
+ */
+export function correctedSegment(s: StoredSegment, text: string): StoredSegment {
+  if (!s.words?.length) return { ...s, text };
+  const r = realignAfterEdit(s.text, text, s.words, s.start, s.end);
+  const { words: _w, wordsStale: _st, ...rest } = s;
+  void _w; void _st;
+  return r.stale || !r.words ? { ...rest, text, wordsStale: true } : { ...rest, text, words: r.words };
+}
+
 /** a transcript row's segments as the analysis reads them */
 export function segmentsOf(row: TranscriptRow, participants: Participant[] = []): QualSegment[] {
   const map = speakerMap(row, participants);
@@ -77,7 +91,7 @@ export function segmentsOf(row: TranscriptRow, participants: Participant[] = [])
     const info = s.speaker ? map[s.speaker] : undefined;
     const role = kind === "response" ? "participant" : info?.role;
     const group = s.group ?? info?.group;
-    return { id: String(s.id), sourceKind: kind, sourceId: row.id, index: Number.isInteger(s.index) ? s.index : i, ...(s.speaker ? { speaker: s.speaker } : {}), ...(typeof s.start === "number" ? { start: s.start } : {}), ...(typeof s.end === "number" ? { end: s.end } : {}), ...(s.responseId ? { responseId: s.responseId } : {}), ...(s.questionId ? { questionId: s.questionId } : {}), ...(role ? { role } : {}), ...(group ? { group } : {}), text: String(s.text ?? "") };
+    return { id: String(s.id), sourceKind: kind, sourceId: row.id, index: Number.isInteger(s.index) ? s.index : i, ...(s.speaker ? { speaker: s.speaker } : {}), ...(typeof s.start === "number" ? { start: s.start } : {}), ...(typeof s.end === "number" ? { end: s.end } : {}), ...(s.responseId ? { responseId: s.responseId } : {}), ...(s.questionId ? { questionId: s.questionId } : {}), ...(role ? { role } : {}), ...(group ? { group } : {}), text: String(s.text ?? ""), ...(Array.isArray(s.words) && s.words.length ? { words: s.words } : {}), ...(s.wordsStale ? { wordsStale: true } : {}) };
   });
 }
 
@@ -128,7 +142,8 @@ export function redactWorkspace(ws: QualWorkspace, names: string[]): QualWorkspa
   const alias = new Map<string, string>();
   const label = (s: string | undefined) => { if (!s || !nameSet.has(s.toLowerCase())) return s; if (!alias.has(s.toLowerCase())) alias.set(s.toLowerCase(), `Participant ${alias.size + 1}`); return alias.get(s.toLowerCase())!; };
   const red = (t: string) => redactText(t, { names }).text;
-  const segs = (list: QualSegment[]) => list.map((s) => ({ ...s, ...(s.speaker ? { speaker: label(s.speaker) } : {}), text: red(s.text) }));
+  /* redacted text no longer lines up with the word spans: the words are dropped from this view (clips need contact details anyway) */
+  const segs = (list: QualSegment[]) => list.map(({ words: _w, ...s }) => { void _w; return { ...s, ...(s.speaker ? { speaker: label(s.speaker) } : {}), text: red(s.text) }; });
   return {
     ...ws,
     settings: null,
@@ -190,15 +205,19 @@ export function importTranscript(input: { text: string; title?: string; fileName
 }
 
 /** a speech-to-text result as a transcript: the provider's timed (and, when it could, diarized) segments, else one segment */
-export function sttTranscript(t: { text: string; language?: string; model: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; diarized?: boolean; speakerCount?: number; durationSeconds?: number }, title: string, participants: Participant[] = []): TranscriptFields {
-  const segs: StoredSegment[] = t.segments?.length
+export function sttTranscript(t: { text: string; language?: string; model: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; words?: { word: string; start: number; end: number }[]; diarized?: boolean; speakerCount?: number; durationSeconds?: number }, title: string, participants: Participant[] = []): TranscriptFields {
+  const base: StoredSegment[] = t.segments?.length
     ? t.segments.filter((s) => s.text?.trim()).map((s, i) => ({ id: `t${i + 1}`, index: i, ...(s.speaker ? { speaker: s.speaker } : {}), start: s.start, end: s.end, text: s.text.trim() }))
-    : [{ id: "t1", index: 0, text: t.text.trim() }];
+    : t.words?.length
+      ? [{ id: "t1", index: 0, start: t.words[0].start, end: t.words[t.words.length - 1].end, text: t.text.trim() }]
+      : [{ id: "t1", index: 0, text: t.text.trim() }];
+  /* word timings (#17), when the provider returned them: each segment's words aligned to its text — what lets a clip play exactly a quote */
+  const segs: StoredSegment[] = t.words?.length ? attachWords(base, t.words) : base;
   const warnings = [
     ...(t.diarized ? [] : ["The transcription service did not separate speakers: every turn is unattributed. Assign speakers, or import a transcript with speaker names."]),
     "Speech-to-text can mishear words and names — check the transcript against the recording before coding.",
   ];
-  return { title, source: "stt", format: "stt", language: t.language ?? null, segments: segs, speakers: speakerMap({ speakers: {}, segments: segs }, participants), char_count: segs.reduce((n, s) => n + s.text.length, 0), meta: { warnings, model: t.model, diarized: !!t.diarized, speakerCount: t.speakerCount ?? null, durationSeconds: t.durationSeconds ?? null } };
+  return { title, source: "stt", format: "stt", language: t.language ?? null, segments: segs, speakers: speakerMap({ speakers: {}, segments: segs }, participants), char_count: segs.reduce((n, s) => n + s.text.length, 0), meta: { warnings, model: t.model, diarized: !!t.diarized, speakerCount: t.speakerCount ?? null, durationSeconds: t.durationSeconds ?? null, wordTimings: segs.some((sg) => !!sg.words?.length) } };
 }
 
 /** open-ended answers as a source: one segment per answered response × question */

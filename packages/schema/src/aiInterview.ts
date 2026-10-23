@@ -83,6 +83,38 @@ export const AiPersona = z.object({
 });
 export type AiPersona = z.infer<typeof AiPersona>;
 
+/**
+ * HOW A VOICE INTERVIEW TALKS (G1 2026-10-22): turn_based = tap to speak, check the transcript, send;
+ * conversation = hands-free, the participant can interrupt the moderator (barge-in), each utterance sent
+ * at the end of their turn; realtime = a speech-to-speech provider (AI_REALTIME_*), offered only when one
+ * is configured. Absent on a study launched before = turn_based and conversation.
+ */
+export const AI_VOICE_STYLES = ["turn_based", "conversation", "realtime"] as const;
+export const AiVoiceStyle = z.enum(AI_VOICE_STYLES);
+export type AiVoiceStyle = z.infer<typeof AiVoiceStyle>;
+
+/**
+ * ONE STUDY LANGUAGE'S WORDING (G1 2026-10-22) — made once at launch through the translation provider,
+ * kept with the guide (and its launch snapshot), reviewable and editable in the Studio:
+ *   texts  the guide's own words by key (q:<step>, lead:<step>, probe:<step>:<i>, ask:<step>:<i>,
+ *          if:<step>:<i>, opening, closing, thanks, incentive, obj:<id>, stim:<name>, consent.*, title,
+ *          scr:<id>, scr:<id>:<i>) — what the scripted fallback says when the AI is unavailable
+ *   words  the moderator's rule wording (only for a language without built-in wording)
+ *   ui     the participant page's labels (only for a language without built-in labels)
+ */
+export const AiLanguagePack = z.object({
+  language: z.string(),
+  source: z.enum(["machine", "edited"]).default("machine"),
+  provider: z.string().optional(),
+  translatedAt: z.string().optional(),
+  /** a fingerprint of the source wording it was made from: a changed guide shows the pack as out of date */
+  sourceHash: z.string().optional(),
+  texts: z.record(z.string()).default({}),
+  words: z.record(z.string()).default({}),
+  ui: z.record(z.string()).default({}),
+});
+export type AiLanguagePack = z.infer<typeof AiLanguagePack>;
+
 export const AiModeration = z.object({
   enabled: z.boolean().default(true),
   modes: z.array(AiInterviewMode).min(1).default(["text"]),
@@ -114,6 +146,10 @@ export const AiModeration = z.object({
   studyBudgetUsd: z.number().positive().optional(),
   /** a nudge after this many seconds without an answer */
   silenceSeconds: z.number().int().min(20).max(600).default(120),
+  /** voice modes the participant may choose (G1); absent = turn_based and conversation */
+  voiceStyles: z.array(AiVoiceStyle).optional(),
+  /** each study language's wording for the scripted fallback and the participant page (G1), by language code */
+  translations: z.record(AiLanguagePack).optional(),
 });
 export type AiModeration = z.infer<typeof AiModeration>;
 

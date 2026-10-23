@@ -30,7 +30,9 @@ export type TranslatableKind =
   | "question_text" | "question_instruction" | "question_description" | "question_placeholder"
   | "option" | "option_alt" | "row" | "row_placeholder" | "column" | "column_option" | "column_placeholder"
   | "scale_label" | "validation_message" | "probe_prompt"
-  | "page_title" | "end_message" | "quota_message" | "button" | "ui";
+  | "page_title" | "end_message" | "quota_message" | "button" | "ui"
+  /* 2026-10-22 (#14c): a behaviour's popup / message text and title (show_popup, show_message effects) */
+  | "ux_text";
 
 export interface TranslatableElement {
   /** the stable address: `q:<qid>:text`, `q:<qid>:opt:<code>`, `flow:<nodeId>:message`, `ui:required`… */
@@ -71,6 +73,8 @@ export const K = {
   quotaMessage: (quotaId: string) => `quota:${quotaId}:message`,
   button: (which: string) => `branding:buttons:${which}`,
   ui: (id: string) => `ui:${id}`,
+  /** a behaviour effect's text or title (show_popup / show_message), by behaviour id and effect index */
+  uxText: (behaviorId: string, index: number, which: "text" | "title") => `ux:${behaviorId}:${index}:${which}`,
 };
 
 /* ----------------------------------------------------------- ui strings */
@@ -130,7 +134,49 @@ export const UI_STRINGS: { id: string; en: string; hint: string }[] = [
   { id: "saving", en: "Saving your answers…", hint: "final save" },
   { id: "loading", en: "Loading survey…", hint: "boot" },
   { id: "resume_note", en: "Welcome back — your earlier answers were kept.", hint: "resume banner" },
+  /* 2026-10-22 (#14c): the survey's popup — its close button and, for a popup with no title, what a screen reader announces */
+  { id: "popup_close", en: "Close", hint: "the close button of a popup (read by screen readers)" },
+  { id: "popup_message", en: "Message", hint: "a popup with no title (read by screen readers)" },
 ];
+
+/** the interface strings that exist only when the survey has a popup (not listed for translation otherwise) */
+export const POPUP_UI_STRINGS: ReadonlySet<string> = new Set(["popup_close", "popup_message"]);
+
+/**
+ * BUILT-IN TRANSLATIONS OF THE POPUP'S OWN WORDS (2026-10-22, #14c) — so a Hindi, Arabic or Tamil respondent's
+ * screen reader does not say "Close" in English when nobody translated it. A translation in the survey always wins;
+ * a language not listed here gets the survey's translation (machine-translated from Localization like any other
+ * element), else English. Keyed by the language's base code.
+ */
+export const BUILTIN_UI_STRINGS: Readonly<Record<string, Readonly<Partial<Record<string, string>>>>> = {
+  hi: { popup_close: "बंद करें", popup_message: "संदेश" }, mr: { popup_close: "बंद करा", popup_message: "संदेश" },
+  bn: { popup_close: "বন্ধ করুন", popup_message: "বার্তা" }, ta: { popup_close: "மூடு", popup_message: "செய்தி" },
+  te: { popup_close: "మూసివేయి", popup_message: "సందేశం" }, gu: { popup_close: "બંધ કરો", popup_message: "સંદેશ" },
+  kn: { popup_close: "ಮುಚ್ಚಿ", popup_message: "ಸಂದೇಶ" }, ml: { popup_close: "അടയ്ക്കുക", popup_message: "സന്ദേശം" },
+  pa: { popup_close: "ਬੰਦ ਕਰੋ", popup_message: "ਸੁਨੇਹਾ" }, or: { popup_close: "ବନ୍ଦ କରନ୍ତୁ", popup_message: "ବାର୍ତ୍ତା" },
+  as: { popup_close: "বন্ধ কৰক", popup_message: "বাৰ্তা" }, ne: { popup_close: "बन्द गर्नुहोस्", popup_message: "सन्देश" },
+  ur: { popup_close: "بند کریں", popup_message: "پیغام" }, ar: { popup_close: "إغلاق", popup_message: "رسالة" },
+  fa: { popup_close: "بستن", popup_message: "پیام" }, he: { popup_close: "סגירה", popup_message: "הודעה" },
+  fr: { popup_close: "Fermer", popup_message: "Message" }, es: { popup_close: "Cerrar", popup_message: "Mensaje" },
+  pt: { popup_close: "Fechar", popup_message: "Mensagem" }, de: { popup_close: "Schließen", popup_message: "Hinweis" },
+  it: { popup_close: "Chiudi", popup_message: "Messaggio" }, nl: { popup_close: "Sluiten", popup_message: "Bericht" },
+  sv: { popup_close: "Stäng", popup_message: "Meddelande" }, pl: { popup_close: "Zamknij", popup_message: "Wiadomość" },
+  ru: { popup_close: "Закрыть", popup_message: "Сообщение" }, uk: { popup_close: "Закрити", popup_message: "Повідомлення" },
+  tr: { popup_close: "Kapat", popup_message: "Mesaj" }, zh: { popup_close: "关闭", popup_message: "消息" },
+  ja: { popup_close: "閉じる", popup_message: "メッセージ" }, ko: { popup_close: "닫기", popup_message: "메시지" },
+  id: { popup_close: "Tutup", popup_message: "Pesan" }, ms: { popup_close: "Tutup", popup_message: "Mesej" },
+  vi: { popup_close: "Đóng", popup_message: "Thông báo" }, th: { popup_close: "ปิด", popup_message: "ข้อความ" },
+  sw: { popup_close: "Funga", popup_message: "Ujumbe" },
+};
+/** the built-in text of an interface string in a language (its base code: "hi-IN" → hi), when there is one */
+export function builtinUiText(lang: string, id: string): string | undefined {
+  const base = String(lang || "").toLowerCase().split(/[-_]/)[0] ?? "";
+  return BUILTIN_UI_STRINGS[base]?.[id];
+}
+/** does this survey show the survey's own popup (a show_popup effect, or rs.popup in a script)? */
+export function surveyHasPopup(def: SurveyDefinition): boolean {
+  return (def.ux?.behaviors ?? []).some((b) => b.effects.some((e) => e.do === "show_popup") || (!!b.script && /\brs\s*(?:\.\s*popup|\[\s*["'`]popup["'`]\s*\])\s*\(/.test(b.script)));
+}
 
 /** Fill `{name}` parameters into a UI string. */
 export function fill(template: string, params?: Record<string, unknown>): string {
@@ -215,7 +261,20 @@ export function translatableElements(def: SurveyDefinition): TranslatableElement
     add(K.button("back"), "button", b.backLabel, "Button · Back");
     add(K.button("submit"), "button", b.submitLabel, "Button · Submit");
   }
-  for (const u of UI_STRINGS) add(K.ui(u.id), "ui", u.en, `Interface · ${u.hint}`, {}, ["required", "review_errors", "other_specify", "min_selections", "max_selections", "thank_you"].includes(u.id));
+  /* a behaviour's popup and message words (#14c, 2026-10-22): optional — a missing one shows the source text, never blocks a launch */
+  for (const b of def.ux?.behaviors ?? []) {
+    b.effects.forEach((e, i) => {
+      if (e.do !== "show_popup" && e.do !== "show_message") return;
+      const what = e.do === "show_popup" ? "popup" : "message";
+      add(K.uxText(b.id, i, "title"), "ux_text", e.title, `Behaviour “${b.label}” · ${what} title`, {}, false);
+      add(K.uxText(b.id, i, "text"), "ux_text", e.text, `Behaviour “${b.label}” · ${what} text`, {}, false);
+    });
+  }
+  const popups = surveyHasPopup(def);
+  for (const u of UI_STRINGS) {
+    if (POPUP_UI_STRINGS.has(u.id) && !popups) continue;
+    add(K.ui(u.id), "ui", u.en, `Interface · ${u.hint}`, {}, ["required", "review_errors", "other_specify", "min_selections", "max_selections", "thank_you"].includes(u.id));
+  }
   return out;
 }
 
@@ -277,8 +336,25 @@ export function textFor(def: SurveyDefinition, lang: string, key: string, source
 /** A language's translated interface strings, `id → text` — for `uiText`. */
 export function uiStringsFor(def: SurveyDefinition, lang: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const u of UI_STRINGS) out[u.id] = textFor(def, lang, K.ui(u.id), u.en);
+  /* the survey's translation first; then the built-in text for the language (#14c — the popup's words, also in a non-English SOURCE language); then English */
+  const MISSING = "\u0000";
+  for (const u of UI_STRINGS) {
+    const tr = textFor(def, lang, K.ui(u.id), MISSING);
+    out[u.id] = tr !== MISSING ? tr : builtinUiText(lang, u.id) ?? u.en;
+  }
   return out;
+}
+
+/**
+ * THE WORDS AND DIRECTION OF THE SURVEY'S POPUP in a language (#14c, 2026-10-22): its close button's label and the
+ * name a title-less popup is announced by, through the survey's translation system with the built-in texts for the
+ * common languages, and whether the language is written right to left.
+ */
+export function popupUiFor(def: SurveyDefinition, lang?: string | null): { close: string; message: string; dir: "ltr" | "rtl"; lang: string } {
+  const code = lang || def.localization?.sourceLanguage || "en";
+  const ui = uiStringsFor(def, code);
+  const cfg = surveyLanguages(def).find((l) => l.code === code);
+  return { close: ui.popup_close ?? "Close", message: ui.popup_message ?? "Message", dir: languageDirection(code, cfg), lang: code };
 }
 
 /* ------------------------------------------------------------ localize */
@@ -358,6 +434,8 @@ export function localizeDefinition(def: SurveyDefinition, lang: string | null | 
     questions,
     flow: mapFlow(def.flow as FlowNode[]),
     quotas: (def.quotas ?? []).map((qt) => (qt.onFull?.message ? { ...qt, onFull: { ...qt.onFull, message: t(K.quotaMessage(qt.id), qt.onFull.message) } } : qt)),
+    /* a behaviour's popup / message words (#14c): the same object when nothing of it is translated */
+    ...(def.ux ? { ux: localizeUx(def.ux, (b, i, which, src) => t(K.uxText(b, i, which), src)) } : {}),
     branding: {
       ...def.branding,
       buttons: {
@@ -1066,4 +1144,23 @@ export function translationImpact(before: SurveyDefinition, after: SurveyDefinit
     languages: out, outdated: sum((l) => l.outdated.length), missing: sum((l) => l.missing.length), dropped: sum((l) => l.dropped.length),
     summary: touched.length ? touched.map((l) => `${l.name}: ${[l.outdated.length ? `${l.outdated.length} outdated` : "", l.missing.length ? `${l.missing.length} to translate` : "", l.dropped.length ? `${l.dropped.length} dropped` : "", l.moved.length ? `${l.moved.length} moved` : ""].filter(Boolean).join(", ")}`).join("; ") : "No translation is affected.",
   };
+}
+
+/** the UX configuration with each show_popup / show_message text and title in the respondent's language */
+function localizeUx<U extends NonNullable<SurveyDefinition["ux"]>>(ux: U, t: (behaviorId: string, index: number, which: "text" | "title", source: string | undefined) => string | undefined): U {
+  let changed = false;
+  const behaviors = ux.behaviors.map((b) => {
+    let dirty = false;
+    const effects = b.effects.map((e, i) => {
+      if (e.do !== "show_popup" && e.do !== "show_message") return e;
+      const text = t(b.id, i, "text", e.text), title = t(b.id, i, "title", e.title);
+      if (text === e.text && title === e.title) return e;
+      dirty = true;
+      return { ...e, ...(text !== undefined ? { text } : {}), ...(title !== undefined ? { title } : {}) };
+    });
+    if (!dirty) return b;
+    changed = true;
+    return { ...b, effects };
+  });
+  return changed ? { ...ux, behaviors } : ux;
 }

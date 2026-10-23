@@ -3,7 +3,7 @@ import { checkCorrection, editSegmentExcerpts, type EditOutcome } from "@rescrip
 import { isFailure, requireProject } from "@/lib/guard";
 import { supabaseService } from "@/lib/authServer";
 import { qualGuardCapability } from "@/lib/qual/qualAccess";
-import { codingState, type StoredSegment } from "@/lib/qual/qualWorkspace";
+import { codingState, correctedSegment, type StoredSegment } from "@/lib/qual/qualWorkspace";
 import { checkRow, hasPii, json, loadWorkspace, recordEvents, refuse, saveCoding, storeFailure, transcriptRow, UUID } from "@/lib/qual/qualStore";
 import { parseCorrection } from "@/lib/qual/synthesisWorkspace";
 import { coderSets, listAssignments, saveCoderSet, SYNTHESIS_MIGRATION_MESSAGE, missingSynthesisMigration } from "@/lib/qual/synthesisStore";
@@ -67,7 +67,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const before = String(segs[at].text ?? "");
     const bad = checkCorrection(before, text);
     if (bad) return json({ error: bad }, 400);
-    const next = segs.map((s, i) => (i === at ? { ...s, text } : s));
+    /* word timings follow the correction (#17): kept words keep theirs, corrected ones are re-aligned (approximate) or flagged stale */
+    const next = segs.map((s, i) => (i === at ? correctedSegment(s, text) : s));
     const nowIso = new Date().toISOString();
     /* 1. the transcript, compare-and-set on its revision */
     const up = checkRow(await db.from("qual_transcripts").update({ segments: next, revision: current + 1, char_count: next.reduce((n, s) => n + String(s.text ?? "").length, 0) }).eq("survey_id", params.id).eq("id", transcriptId).eq("revision", current).select("id"), "transcript") as unknown[];

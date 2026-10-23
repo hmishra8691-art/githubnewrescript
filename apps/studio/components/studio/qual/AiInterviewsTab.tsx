@@ -9,6 +9,10 @@ import { useStudio } from "../store";
 import { transcriptText } from "@/lib/aiInterviews/view";
 import { AiApiError, httpAiInterviewApi, sandboxAiInterviewApi, type AiInterviewApi, type AiView, type InterviewDetail } from "./aiInterviewApi";
 import type { QualApi, WorkspaceView } from "./qualApi";
+import { AiInterviewLanguages, VoiceStats } from "./AiInterviewLanguages";
+import { translatePacks } from "@/lib/aiInterviews/translatePacks";
+import { languagesNeedingPacks } from "@rescript/engine";
+import { PanelChip, entryFor, usePanelEntries } from "./PanelChip";
 
 /**
  * RESEARCH TOOLS → QUALITATIVE → AI INTERVIEWS (2026-10-22).
@@ -28,7 +32,7 @@ import type { QualApi, WorkspaceView } from "./qualApi";
 type Busy = (label: string, fn: () => Promise<unknown>) => Promise<unknown>;
 const STATUS_BADGE: Record<string, string> = { in_progress: "info", completed: "success", screened_out: "neutral", abandoned: "warning", flagged: "error", ended: "neutral" };
 const STATUS_WORD: Record<string, string> = { in_progress: "In progress", completed: "Completed", screened_out: "Screened out", abandoned: "Abandoned", flagged: "Flagged", ended: "Ended by you" };
-const FLAG_WORD: Record<string, string> = { distress: "Distress", abuse: "Abuse", manipulation: "Tried to steer the AI", low_quality: "Low quality", ai_generated: "Looks AI-written", speeder: "Speeder", pii_shared: "Shared contact details", off_topic: "Off topic", ended_early: "Stopped early", provider_fallback: "Scripted fallback", cost_cap: "AI cap reached", turn_cap: "Turn cap", over_time: "Over time" };
+const FLAG_WORD: Record<string, string> = { distress: "Distress", abuse: "Abuse", manipulation: "Tried to steer the AI", low_quality: "Low quality", ai_generated: "Looks AI-written", speeder: "Speeder", pii_shared: "Shared contact details", off_topic: "Off topic", ended_early: "Stopped early", provider_fallback: "Scripted fallback", cost_cap: "AI cap reached", turn_cap: "Turn cap", over_time: "Over time", realtime_unchecked: "Realtime words failed a check" };
 
 export function AiInterviewsTab({ qualApi, setWs, setNote }: { qualApi: QualApi; setWs: (w: WorkspaceView) => void; setNote: (n: string) => void }) {
   const s = useStudio();
@@ -38,7 +42,8 @@ export function AiInterviewsTab({ qualApi, setWs, setNote }: { qualApi: QualApi;
   const [view, setView] = React.useState<AiView | null>(null);
   const [error, setError] = React.useState<{ text: string; status?: number; blocking?: string[] } | null>(null);
   const [busyLabel, setBusyLabel] = React.useState<string | null>(null);
-  const [open, setOpen] = React.useState<string | null>(null);
+  /* G3: an alert's link opens the interview it is about (?interview=<id>) */
+  const [open, setOpen] = React.useState<string | null>(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("interview")));
   const imported = React.useRef<Set<string>>(new Set());
 
   const busy: Busy = React.useCallback(async (label, fn) => {
@@ -81,7 +86,8 @@ export function AiInterviewsTab({ qualApi, setWs, setNote }: { qualApi: QualApi;
       <p className="ql-muted">An AI moderator runs this guide with each participant, one at a time, from a link — by text, voice or voice with camera, in their language — asking follow-up questions for depth. You watch interviews arrive and code the transcripts here. It is not a video call: live human-moderated sessions and multi-party video conferencing are not part of Rescript.</p>
       {busyLabel && <span className="chip" data-testid="ai-busy">{busyLabel}…</span>}
       {error && <div className={`alert ${error.status === 403 ? "warning" : "error"}`} data-testid="ai-tab-error" data-status={error.status ?? ""}>{error.text}</div>}
-      <Setup />
+      <Setup realtime={view?.realtime} />
+      <AiInterviewLanguages api={api} view={view} busy={busy} onView={setView} />
       <Checks view={view} api={api} busy={busy} onView={setView} />
       <Simulator />
       {view?.study && <Live view={view} api={api} busy={busy} refresh={refresh} open={open} setOpen={setOpen} />}
@@ -91,7 +97,7 @@ export function AiInterviewsTab({ qualApi, setWs, setNote }: { qualApi: QualApi;
 
 /* ------------------------------------------------------------ setup */
 
-function Setup() {
+function Setup({ realtime }: { realtime?: { available: boolean; reason?: string } }) {
   const s = useStudio();
   const q = s.def.qualStudy!;
   const cfg = moderationOf(q);
@@ -121,6 +127,18 @@ function Setup() {
         <span>Modes</span>
         {(["text", "voice", "video"] as const).map((m) => <label key={m} className="chip"><input type="checkbox" data-testid={`ai-setup-mode-${m}`} checked={form.modes.includes(m)} onChange={(e) => set("modes", e.target.checked ? [...form.modes, m] : form.modes.filter((x) => x !== m))} /> {m === "video" ? "voice + camera" : m}</label>)}
       </div>
+      {/* G1: how a voice interview talks — participants choose among the styles ticked here */}
+      {form.modes.includes("voice") && (
+        <div className="ql-row" data-testid="ai-setup-voice-styles">
+          <span>Voice</span>
+          {([["turn_based", "tap to talk (check the words, then send)"], ["conversation", "hands-free conversation (interruptible)"], ["realtime", "realtime, low latency"]] as const).map(([v, label]) => (
+            <label key={v} className="chip" title={v === "realtime" ? (realtime?.available ? "speech-to-speech through the realtime provider: its words are checked AFTER they are spoken (flagged; the scripted turn follows as a correction)" : `not available: ${realtime?.reason ?? "no realtime provider configured (AI_REALTIME_*)"}`) : undefined}>
+              <input type="checkbox" data-testid={`ai-setup-voice-${v}`} disabled={v === "realtime" && !realtime?.available && !form.voiceStyles.includes("realtime")} checked={form.voiceStyles.includes(v)} onChange={(e) => set("voiceStyles", e.target.checked ? [...form.voiceStyles, v] : form.voiceStyles.filter((x) => x !== v))} /> {label}
+            </label>
+          ))}
+          {!realtime?.available && <span className="ql-muted" data-testid="ai-setup-realtime-off">Realtime is off on this installation: {realtime?.reason ?? "no realtime provider configured (AI_REALTIME_*)"}.</span>}
+        </div>
+      )}
       <div className="ql-grid">
         <label className="f"><span>Minutes (target)</span><input className="input" type="number" min={3} max={120} data-testid="ai-setup-minutes" value={form.minutes} onChange={(e) => set("minutes", e.target.value)} placeholder={String(q.durationMinutes ?? 20)} /></label>
         <label className="f"><span>Max moderator turns</span><input className="input" type="number" min={4} max={200} value={form.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} /></label>
@@ -159,9 +177,10 @@ function Setup() {
   );
 }
 
-interface FormState { modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string }
+interface FormState { voiceStyles: ("turn_based" | "conversation" | "realtime")[]; modes: ("text" | "voice" | "video")[]; minutes: string; maxTurns: string; probing: string; target: string; languages: string; persona: string; tone: string; cap: string; recording: string; thanks: string; incentive: string; redirect: string; perQuestion: Record<string, string>; screener: string; quotas: string; objectives: string }
 function toForm(c: AiModeration, configured: boolean): FormState {
   return {
+    voiceStyles: c.voiceStyles?.length ? [...c.voiceStyles] : ["turn_based", "conversation"],
     modes: configured ? c.modes : ["text"], minutes: c.targetMinutes ? String(c.targetMinutes) : "", maxTurns: String(c.maxTurns), probing: c.defaultProbing, target: c.targetCompletes ? String(c.targetCompletes) : "",
     languages: c.languages.join(", "), persona: c.persona.name, tone: c.persona.tone, cap: String(c.costCapUsd), recording: c.recordingConsent, thanks: c.thankYouMessage ?? "", incentive: c.incentive ?? "", redirect: c.redirectUrl ?? "",
     perQuestion: Object.fromEntries(c.probing.map((r) => [r.questionId, r.depth])),
@@ -182,6 +201,7 @@ function fromForm(f: FormState, questionIds: string[]): { ok: true; action: Reco
     op: "configure_ai_interviews", enabled: true, modes: f.modes, targetMinutes: num(f.minutes) ?? null, maxTurns: num(f.maxTurns), defaultProbing: f.probing,
     resetProbing: true, ...(perQuestion.length ? { probing: perQuestion } : {}), languages: f.languages.split(/[,\s]+/).filter(Boolean), targetCompletes: num(f.target) ?? null,
     persona: { name: f.persona || "Alex", tone: f.tone }, costCapUsd: num(f.cap), recordingConsent: f.recording,
+    ...(f.modes.includes("voice") && f.voiceStyles.length ? { voiceStyles: f.voiceStyles } : {}),
     thankYouMessage: f.thanks.trim() || null, incentive: f.incentive.trim() || null, redirectUrl: f.redirect.trim() || null,
     screener, quotas, objectives: f.objectives.split("\n").map((x) => x.trim()).filter(Boolean),
   } };
@@ -192,11 +212,25 @@ function fromForm(f: FormState, questionIds: string[]): { ok: true; action: Reco
 function Checks({ view, api, busy, onView }: { view: AiView | null; api: AiInterviewApi; busy: Busy; onView: (v: AiView) => void }) {
   const s = useStudio();
   const q = s.def.qualStudy!;
-  const check = launchProblems(q);
+  const check = launchProblems(q, { guideLanguage: s.def.localization?.sourceLanguage });
   const est = q.aiModeration ? estimateInterviewCostUsd(buildModeratorPlan(q)) : null;
   const st = view?.study;
   const canManage = view?.can?.manage !== false;
-  const launch = (relaunch: boolean) => busy(relaunch ? "Relaunching" : "Launching", async () => { const v = await api.launch({ relaunch }); onView(v); });
+  const launch = (relaunch: boolean) => busy(relaunch ? "Relaunching" : "Launching", async () => {
+    /* G1: at launch, the study languages' wording (fallback questions, consent, page labels) is translated first and travels with the snapshot */
+    const guideLanguage = (s.def.localization?.sourceLanguage ?? "en").toLowerCase().split("-")[0];
+    const need = languagesNeedingPacks(q, guideLanguage);
+    let translations: Awaited<ReturnType<typeof translatePacks>>["packs"] | undefined;
+    if (need.length) {
+      const r = await translatePacks(q, need, { guideLanguage, surveyId: s.surveyDbId, title: q.title });
+      if (Object.keys(r.packs).length) {
+        translations = r.packs;
+        s.labelNextEdit("AI interview wording");
+        s.update((d) => { if (d.qualStudy?.aiModeration) d.qualStudy.aiModeration.translations = { ...(d.qualStudy.aiModeration.translations ?? {}), ...r.packs }; });
+      }
+    }
+    const v = await api.launch({ relaunch, ...(translations ? { translations } : {}) }); onView(v);
+  });
   return (
     <div className="card ql-section" data-testid="ai-launch">
       <div className="eyebrow">Launch</div>
@@ -263,6 +297,8 @@ function Simulator() {
 
 function Live({ view, api, busy, refresh, open, setOpen }: { view: AiView; api: AiInterviewApi; busy: Busy; refresh: () => Promise<void>; open: string | null; setOpen: (id: string | null) => void }) {
   const c = view.counts;
+  /* G3: the panel each participant came from, their panel id and the outcome sent back */
+  const panelEntries = usePanelEntries();
   const real = view.interviews.filter((x) => !x.isTest);
   const tests = view.interviews.filter((x) => x.isTest);
   return (
@@ -284,7 +320,7 @@ function Live({ view, api, busy, refresh, open, setOpen }: { view: AiView; api: 
         <div className="table-wrap"><table className="grid" data-testid="ai-table"><thead><tr><th>Participant</th><th>Segment</th><th>Mode</th><th>Status</th><th>Flags</th><th>Turns</th><th>Minutes</th><th>AI $</th><th /></tr></thead><tbody>
           {[...real, ...tests].map((x) => (
             <tr key={x.id} data-testid="ai-row" data-status={x.status} data-participant={x.participant} data-test={x.isTest ? "1" : "0"} data-excluded={x.excluded ? "1" : "0"}>
-              <td>{x.participant}{x.isTest ? " (test)" : ""}</td><td>{x.segment ?? ""}</td><td>{x.mode}{x.language ? ` · ${x.language}` : ""}</td>
+              <td>{x.participant}{x.isTest ? " (test)" : ""}<PanelChip e={entryFor(panelEntries, x.id)} /></td><td>{x.segment ?? ""}</td><td>{x.mode}{x.language ? ` · ${x.language}` : ""} <VoiceStats v={x.voice} /></td>
               <td><span className={`badge ${STATUS_BADGE[x.status] ?? "neutral"}`}>{STATUS_WORD[x.status] ?? x.status}</span>{x.excluded && <span className="badge neutral">Excluded</span>}</td>
               <td>{x.flags.filter((f) => f.kind !== "provider_fallback").map((f, i) => <span key={i} className={`badge ${f.severity === "alert" ? "error" : f.severity === "warning" ? "warning" : "neutral"}`} title={f.note} data-testid="ai-flag" data-kind={f.kind}>{FLAG_WORD[f.kind] ?? f.kind}</span>)}</td>
               <td>{x.turns}</td><td>{x.minutes}</td><td>{x.costUsd.toFixed(3)}</td>
@@ -320,17 +356,24 @@ function Transcript({ id, row, api, busy, refresh, canManage }: { id: string; ro
       {row?.flags.filter((f) => f.severity !== "info").map((f, i) => <div key={i} className={`alert ${f.severity === "alert" ? "error" : "warning"}`} data-testid="ai-flag-note">{FLAG_WORD[f.kind] ?? f.kind}: {f.note}</div>)}
       {!d ? <div className="sk" style={{ height: 80 }} /> : (
         <div className="table-wrap"><table className="grid ql-segments"><tbody>
-          {d.turns.map((t) => (
-            <tr key={t.seq} data-testid="ai-transcript-turn" data-speaker={t.speaker}>
+          {d.turns.map((t, ti) => {
+            /* G1: a participant's turn that cut the moderator short marks that turn; their voice bookkeeping is shown */
+            const cut = (d.turns[ti + 1]?.decision as { voice?: { interrupted?: { seq?: number; heardChars?: number } } } | null)?.voice?.interrupted;
+            const cutHere = t.speaker === "moderator" && cut && cut.seq === t.seq ? Math.max(0, Number(cut.heardChars ?? 0)) : null;
+            const pv = t.speaker === "participant" ? (t.decision as { voice?: { interrupted?: unknown; previousReplyLatencyMs?: number } } | null)?.voice : null;
+            return (
+            <tr key={t.seq} data-testid="ai-transcript-turn" data-speaker={t.speaker} data-interrupted={cutHere !== null ? "1" : "0"}>
               <td style={{ whiteSpace: "nowrap" }}>{fmt(t.at)}</td>
               <td><b>{t.speaker === "moderator" ? "Moderator" : row?.participant ?? "Participant"}</b></td>
-              <td>{t.text}
+              <td>{cutHere !== null ? <>{t.text.slice(0, cutHere)}<s className="ql-muted" title="not heard: the participant spoke over it">{t.text.slice(cutHere)}</s> <span className="badge warning" data-testid="ai-interrupted">interrupted</span></> : t.text}
                 {t.originalText && <div className="ql-muted">speech-to-text heard: “{t.originalText}”</div>}
                 {t.translation && <div className="ql-muted">translation: {t.translation}</div>}
-                {t.decision && <div className="ql-muted" data-testid="ai-decision">{String(t.decision.intent ?? "")} · {String(t.decision.source ?? "")} · {String(t.decision.reason ?? "")}{Array.isArray(t.decision.problems) && t.decision.problems.length ? ` · replaced: ${(t.decision.problems as string[]).join("; ")}` : ""}</div>}
+                {pv && <div className="ql-muted" data-testid="ai-voice-turn">{pv.interrupted ? "spoke over the moderator" : ""}{pv.interrupted && pv.previousReplyLatencyMs !== undefined ? " · " : ""}{pv.previousReplyLatencyMs !== undefined ? `the reply before this answer started ${(pv.previousReplyLatencyMs / 1000).toFixed(1)} s after they stopped speaking` : ""}</div>}
+                {t.decision && t.decision.intent !== undefined && <div className="ql-muted" data-testid="ai-decision">{String(t.decision.intent ?? "")} · {String(t.decision.source ?? "")} · {String(t.decision.reason ?? "")}{Array.isArray(t.decision.problems) && t.decision.problems.length ? ` · replaced: ${(t.decision.problems as string[]).join("; ")}` : ""}{t.decision.interrupted ? " · after an interruption" : ""}</div>}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody></table></div>
       )}
     </div>

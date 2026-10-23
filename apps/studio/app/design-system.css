@@ -2119,3 +2119,27 @@ table.grid { border-collapse: separate; border-spacing: 0; width: 100%; font-siz
 .po-warnings { font-size: 12px; margin-top: 10px; }
 @media (max-width: 1100px) { .po-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); } .po-modules { grid-template-columns: 1fr; } }
 @media (max-width: 800px) { .po-grid { grid-template-columns: 1fr; } .po-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); } .po-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hero-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ===========================================================================
+   INTELLIGENT MODE — ADAPTIVE PANES (2026-10-22, engine item #19)
+   The conversation keeps ≥ 600 px; side panes shrink, then become 40 px rails
+   whose button opens the pane as a drawer over the conversation (no width
+   taken). Logical properties, so a right-to-left survey mirrors the lot.
+   =========================================================================== */
+.iq { position: relative; }
+.iq-rail { display: flex; flex-direction: column; align-items: center; padding-top: 8px; gap: 6px; background: var(--c-surface-2, #f6f7f9); border-inline-end: 1px solid var(--c-border); min-width: 0; }
+.iq-rail.end { border-inline-end: 0; border-inline-start: 1px solid var(--c-border); }
+.iq-rail-btn { padding: 6px; justify-content: center; }
+.iq-drawer { position: absolute; top: 0; bottom: 0; z-index: 40; width: min(380px, calc(100% - 48px)); background: var(--c-surface); box-shadow: 0 8px 32px rgba(15, 23, 42, .22); overflow: auto; display: flex; flex-direction: column; }
+.iq-drawer.start { inset-inline-start: 0; border-inline-end: 1px solid var(--c-border); }
+.iq-drawer.end { inset-inline-end: 0; border-inline-start: 1px solid var(--c-border); }
+.iq-drawer-close { align-self: flex-end; margin: 6px; flex: none; }
+.iq-divider:focus-visible { outline: 2px solid var(--c-primary-600, #4f46e5); outline-offset: -2px; }
+.iq-divider[aria-valuenow] { cursor: col-resize; }
+@media (prefers-reduced-motion: no-preference) { .iq-drawer { animation: iq-drawer-in .14s ease-out; } }
+@keyframes iq-drawer-in { from { opacity: .4; transform: translateX(calc(var(--iq-drawer-dir, 1) * -8px)); } to { opacity: 1; transform: none; } }
+.iq-drawer.end { --iq-drawer-dir: -1; }
+/* the adaptive layout decides the columns at every width (the older "one column below 900 / 960 px" rules
+   predate it and would stack the rails under the conversation) */
+.iq[data-inspector] { grid-template-columns: var(--iq-cols, minmax(0, 1fr)) !important; }
+.iq[data-inspector] > .iq-divider { display: block !important; }

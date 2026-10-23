@@ -20,6 +20,7 @@ import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
+import { designSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -45,6 +46,13 @@ export type RuntimeStep =
       sectionPath: string[];
       /** ids of every enclosing flow node — block, section, branch, loop … — outermost first */
       nodePath: string[];
+      /**
+       * Exact-balance slots (engine item #15) this page depends on, outermost
+       * first: the exact randomizers it sits inside and the exact design
+       * questions on it. Absent when there are none (every survey without the
+       * setting). The Runner claims the unassigned ones before showing it.
+       */
+      balance?: string[];
     }
   /** `loop`: the iteration the element runs in, so a piped value can read `{{loop.label}}` */
   | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[]; loop?: LoopContext | null }
@@ -56,8 +64,12 @@ export function compileFlow(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts?: QuotaCounts,
+  /** `onBalance`: told about every exact-balance slot on the path (exactBalance.ts) — absent, nothing changes */
+  opts: { onBalance?: (slot: BalanceSlot) => void } = {},
 ): RuntimeStep[] {
   const steps: RuntimeStep[] = [];
+  /* the exact-balance slots enclosing the node being walked (outermost first) */
+  const balanceStack: string[] = [];
   const ctxFor = (loop: LoopContext | null): EvalContext => ({
     def,
     state,
@@ -100,6 +112,16 @@ export function compileFlow(
            * pilot" is one rule, not an edit to every page.
            */
           if (!containerVisibleByRules(def, node, ctxFor(loop))) break;
+          /* exact-balance design questions on this page (#15) — only questions that ask for it */
+          const pageBalance = [...balanceStack];
+          for (const qid of node.questionIds) {
+            const q = def.questions.find((x) => x.id === qid);
+            if (!q || !(q.settings as { versionBalance?: { exact?: boolean } } | undefined)?.versionBalance?.exact) continue;
+            const slot = designSlot(def, state, q);
+            if (!slot) continue;
+            opts.onBalance?.(slot);
+            if (!pageBalance.includes(slot.key)) pageBalance.push(slot.key);
+          }
           steps.push({
             kind: "page",
             pageId: `${node.id}${loopKeySuffix(loop)}`,
@@ -110,6 +132,7 @@ export function compileFlow(
             loop,
             sectionPath,
             nodePath: [...nodePath],
+            ...(pageBalance.length ? { balance: pageBalance } : {}),
           });
           break;
         }
@@ -185,7 +208,26 @@ export function compileFlow(
            * markedly more even than a shuffle, with no shared state.)
            */
           let children = seededShuffle(eligible, seed);
-          if (node.show != null && node.show < children.length) {
+          /*
+           * EXACT BALANCE (#15): the children were CLAIMED for this respondent
+           * (least-filled, atomically, across the sample) and stored in
+           * `RANDOMIZER_<ID>`. Shown in a seeded order, so position effects are
+           * not baked in. Not claimed yet: the seed-derived window below stands
+           * in — the Runner claims before any page of it is shown.
+           */
+          let exactSlot: BalanceSlot | null = null;
+          if (node.balance?.exact) {
+            const nodeKey = `${node.id}${loopKeySuffix(loop)}`;
+            const show = node.show ?? eligible.length;
+            const fallbackIds = show < eligible.length ? seedWindow(eligible, show, state.seed, nodeKey, !!node.evenPresentation).map((c) => c.id) : [];
+            exactSlot = randomizerSlot(def, state, node, eligible.map((c) => c.id), loop, fallbackIds);
+            if (exactSlot) opts.onBalance?.(exactSlot);
+          }
+          if (exactSlot?.assigned) {
+            const chosen = new Set(exactSlot.assigned);
+            /* a child the respondent can no longer see (Back + a changed answer) is not shown; nothing is re-claimed */
+            children = seededShuffle(eligible.filter((c) => chosen.has(c.id)), seed);
+          } else if (node.show != null && node.show < children.length) {
             if (node.evenPresentation) {
               const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
               const inOrder = eligible;
@@ -197,7 +239,9 @@ export function compileFlow(
               children = children.slice(0, node.show);
             }
           }
-          walk(children, loop, sectionPath, blockTitle);
+          if (exactSlot) balanceStack.push(exactSlot.key);
+          try { walk(children, loop, sectionPath, blockTitle); }
+          finally { if (exactSlot) balanceStack.pop(); }
           break;
         }
         case "branch": {

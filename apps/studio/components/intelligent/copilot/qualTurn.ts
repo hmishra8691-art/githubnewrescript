@@ -5,6 +5,7 @@ import { qualPreview, type QualCardPreview } from "../../../lib/copilot/qualCard
 import { allSegments } from "../../../lib/qual/qualWorkspace";
 import { httpQualApi, sharedSandboxQualApi, type WorkspaceView } from "../../studio/qual/qualApi";
 import { httpSynthesisApi, sandboxSynthesisApi, studyOfDef, type SynthesisApi } from "../../studio/qual/synthesisApi";
+import { liveApi } from "../../studio/qual/liveApi";
 
 /**
  * A QUALITATIVE TURN IN THE COPILOT (2026-10-22). The engine classified the sentence (`interpretQualRequest`);
@@ -35,7 +36,8 @@ export async function qualTurn(req: QualRequest, c: Ctx): Promise<{ card: QualCa
     const { load } = clients(c);
     const ws = await load();
     if (!ws.available) return { card: { request: req, status: "failed", title: req.text, lines: [], runnable: false, calls: 0, error: ws.note ?? "The qualitative workspace is not available." }, said: ws.note ?? "The qualitative workspace is not available." };
-    const p = qualPreview(req, { state: ws.state, segments: allSegments(ws), objectives: studyOfDef(c.def).objectives, aiReady: c.surveyId === "sandbox" || ws.can.code, sandbox: c.surveyId === "sandbox" });
+    const tz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return "UTC"; } })();
+    const p = qualPreview(req, { state: ws.state, segments: allSegments(ws), objectives: studyOfDef(c.def).objectives, aiReady: c.surveyId === "sandbox" || ws.can.code, sandbox: c.surveyId === "sandbox", now: Date.now(), timeZone: tz, guide: c.def.qualStudy ? { title: c.def.qualStudy.title, hasConsent: !!c.def.qualStudy.consent?.statement?.trim() } : null });
     const status = p.runnable ? "preview" : "answered";
     return { card: { ...p, request: req, status }, said: `${p.title}${p.runnable ? " — preview below; nothing runs until you press the button." : ""}\n${p.lines.filter(Boolean).join("\n")}` };
   } catch (e) {
@@ -84,6 +86,12 @@ export async function runQualCard(card: QualCard, c: Ctx): Promise<{ card: QualC
       case "group_session": {
         const id = await syn.createGroup({ title: req.title ?? `${c.def.qualStudy?.title ?? c.def.meta.title} — group session`, mode: req.mode });
         return { card: { ...card, status: "done", result: [`Set up (${req.mode}). Start it and share the link in Research Tools → Qualitative → Group sessions.`] }, said: `A ${req.mode} text group session is set up (${id.slice(0, 8)}).` };
+      }
+      case "schedule_live": {
+        /* G2 2026-10-22: the previewed sessions, created as they were shown (instants, sizes, segments) */
+        const r = await liveApi(c.surveyId).schedule((card.liveSessions ?? []).map((x) => ({ title: x.title, kind: req.kind, scheduledAt: x.startsAt, timeZone: x.timeZone, segment: x.segment ?? null, slots: x.size, settings: { maxParticipants: x.size, durationMinutes: x.durationMinutes, record: req.record, recordVideo: req.recordVideo } })), c.surveyId === "sandbox" ? c.def.qualStudy ?? null : undefined);
+        const lines = r.rooms.map((x) => `${x.title}: scheduled, ${x.invites.length} participant link${x.invites.length === 1 ? "" : "s"}${x.problems.length ? ` — ${x.problems.join(" ")}` : ""}`);
+        return { card: { ...card, status: "done", result: [...lines, "Copy the links (or e-mail them) and moderate from Research Tools → Qualitative → Live sessions."] }, said: `Scheduled ${r.rooms.length} live session${r.rooms.length === 1 ? "" : "s"}.` };
       }
       default: return { card: { ...card, status: "answered" }, said: card.title };
     }

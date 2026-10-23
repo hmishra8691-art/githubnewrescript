@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { formatTimestamp, selectForReel, CLIP_NOTE } from "@rescript/analytics";
+import { ClipPlayer } from "./ClipPlayer";
 import { allSegments } from "@/lib/qual/qualWorkspace";
 import type { WorkspaceView } from "./qualApi";
 import { pickable, type SynthesisApi, type ReelView } from "./synthesisApi";
@@ -26,22 +27,13 @@ export function HighlightsTab({ ws, api, run }: { ws: WorkspaceView; api: Synthe
   const [name, setName] = React.useState("");
   const [picked, setPicked] = React.useState<string[]>([]);
   const [filter, setFilter] = React.useState("");
-  const [player, setPlayer] = React.useState<{ url: string; start: number; end: number; id: string } | null>(null);
-  const audio = React.useRef<HTMLVideoElement | null>(null);
+  const [player, setPlayer] = React.useState<{ url: string; start: number; end: number; id: string; byWords?: boolean; approximate?: boolean } | null>(null);
   const segs = React.useMemo(() => allSegments(ws), [ws]);
   const options = React.useMemo(() => pickable(ws), [ws]);
   React.useEffect(() => { void run("Loading reels", () => api.reels(), setData); }, [api, run, ws.version]);
   const suggest = () => { const s = selectForReel(ws.state, segs, topic); setPicked(s.excerpts.map((e) => e.id)); if (!name) setName(topic.trim().replace(/^./, (c) => c.toUpperCase())); return s.note; };
   const [note, setNote] = React.useState<string | null>(null);
   const setReels = (reels: ReelView[]) => setData((d) => (d ? { ...d, reels } : d));
-  React.useEffect(() => {
-    const el = audio.current;
-    if (!el || !player) return;
-    const start = () => { el.currentTime = player.start; void el.play().catch(() => {}); };
-    const stop = () => { if (el.currentTime >= player.end) el.pause(); };
-    el.addEventListener("loadedmetadata", start); el.addEventListener("timeupdate", stop);
-    return () => { el.removeEventListener("loadedmetadata", start); el.removeEventListener("timeupdate", stop); };
-  }, [player]);
   return (
     <div data-testid="qual-highlights">
       {data?.can.edit !== false && ws.can.code && (
@@ -62,7 +54,7 @@ export function HighlightsTab({ ws, api, run }: { ws: WorkspaceView; api: Synthe
           </div>
         </div>
       )}
-      {player && <div className="card ql-section" data-testid="hl-player"><video ref={audio} src={player.url} controls style={{ width: "100%", maxHeight: 240 }} /><p className="ql-muted">Clip {formatTimestamp(player.start)}–{formatTimestamp(player.end)} of {player.id}. {CLIP_NOTE}</p></div>}
+      {player && <ClipPlayer clip={player} testId="hl-player" />}
       {data?.reels.length === 0 && <div className="empty">No highlight reels yet.</div>}
       {data?.reels.map((r) => (
         <div key={r.id} className="card ql-section" data-testid="hl-reel" data-name={r.name} data-items={r.items.length}>
@@ -82,7 +74,7 @@ export function HighlightsTab({ ws, api, run }: { ws: WorkspaceView; api: Synthe
                     <button type="button" className="btn ghost small" disabled={i === r.items.length - 1} onClick={() => run("Moving", () => api.reelOp(r, { op: "move", excerptId: it.excerptId, to: i + 1 }), setReels)}>↓</button>
                     <button type="button" className="btn ghost small" onClick={() => { const n = window.prompt("Note", it.note ?? ""); if (n !== null) void run("Saving", () => api.reelOp(r, { op: "note", excerptId: it.excerptId, note: n }), setReels); }}>Note</button>
                     <button type="button" className="btn ghost small" onClick={() => run("Removing", () => api.reelOp(r, { op: "remove", excerptId: it.excerptId }), setReels)}>Remove</button></>}
-                  {data.can.playback && ws.can.playback && !api.sandbox && it.snapshot.start != null && <button type="button" className="btn small" data-testid="hl-play" onClick={() => run("Opening the clip", () => api.clip(it.excerptId), (c) => setPlayer({ ...c, id: it.excerptId }))}>Play clip</button>}
+                  {data.can.playback && ws.can.playback && it.snapshot.start != null && <button type="button" className="btn small" data-testid="hl-play" onClick={() => run("Opening the clip", () => api.clip(it.excerptId), (c) => setPlayer({ ...c, id: it.excerptId }))}>Play clip</button>}
                 </span>
               </li>
             ))}

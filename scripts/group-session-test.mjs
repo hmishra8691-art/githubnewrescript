@@ -140,6 +140,9 @@ console.log("\n4 — rating a sample: never one's own, redacted, no identities; 
 {
   for (const [i, p] of people.entries()) {
     await p.waitForSelector('[data-testid="group-sample-item"]', { timeout: SLOW });
+    /* the sample is drawn from the answers in so far: a page that polled before the last answer landed shows fewer
+       until its next poll (2 s) — wait for the full sample, then check it (G2 2026-10-23: a race under a slow server) */
+    await p.waitForFunction(() => document.querySelectorAll('[data-testid="group-sample-item"]').length >= 3, null, { timeout: SLOW }).catch(() => {});
     const items = await p.$$eval('[data-testid="group-sample-item"]', (es) => es.map((e) => e.textContent));
     assert.equal(items.length, 3, `P${i + 1} rates the 3 others`);
     assert.ok(!items.some((t) => /P\d/.test(t)), "no handle is shown with an answer");
@@ -218,8 +221,9 @@ console.log("\n7 — autonomous mode: the session's own clock");
   }
   assert.ok(id);
   await openQual("groups");
-  await page.waitForSelector('[data-testid="gs-item"][data-title="Auto group"]', { timeout: SLOW });
-  await page.click('[data-testid="gs-item"][data-title="Auto group"]');
+  /* by id: the sandbox keeps earlier runs' "Auto group" sessions (its temp file survives restarts) — G2 2026-10-23 */
+  await page.waitForSelector(`[data-testid="gs-item"][data-id="${id}"]`, { timeout: SLOW });
+  await page.click(`[data-testid="gs-item"][data-id="${id}"]`);
   await page.waitForSelector('[data-testid="gs-console"][data-mode="autonomous"][data-status="draft"]', { timeout: SLOW });
   const autoCode = await page.getAttribute('[data-testid="gs-console"]', "data-join");
   const two = [await join(autoCode), await join(autoCode)];

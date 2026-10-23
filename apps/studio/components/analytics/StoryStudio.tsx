@@ -189,6 +189,13 @@ export function StoryStudio({ api, id, onClose }: { api: StoryApi; id: string; o
     const next = [...def.scenes]; [next[i], next[j]] = [next[j], next[i]];
     setDef({ ...def, scenes: next.map((s) => (s.id === sceneId && !s.locked.includes("order") ? { ...s, locked: [...s.locked, "order"] } : s)) }); setDirty(true);
   };
+  /* drag and drop: the dragged scene takes the target's place (same section; the title stays first) */
+  const moveTo = (sceneId: string, targetId: string) => {
+    const from = def.scenes.findIndex((s) => s.id === sceneId), to = def.scenes.findIndex((s) => s.id === targetId);
+    if (from < 0 || to < 0 || def.scenes[from].section !== def.scenes[to].section || def.scenes[from].kind === "title" || def.scenes[to].kind === "title") return;
+    const next = [...def.scenes]; const [x] = next.splice(from, 1); next.splice(to, 0, x);
+    setDef({ ...def, scenes: next.map((s) => (s.id === sceneId && !s.locked.includes("order") ? { ...s, locked: [...s.locked, "order"] } : s)) }); setDirty(true);
+  };
   const setSection = (sceneId: string, section: "main" | "appendix") => {
     const s = def.scenes.find((x) => x.id === sceneId)!; if (s.kind === "title") return;
     const rest = def.scenes.filter((x) => x.id !== sceneId);
@@ -244,7 +251,13 @@ export function StoryStudio({ api, id, onClose }: { api: StoryApi; id: string; o
                 const ti = video ? video.pages.findIndex((p) => p.sceneId === s.id) : -1;
                 const bad = issuesFor(s.id).length;
                 return (
-                  <div key={s.id} className={`st-thumb ${s.id === scene.id ? "on" : ""}`} onClick={() => { setSelected(s.id); setTab("scene"); }} data-testid="st-thumb" data-scene={s.id}>
+                  <div key={s.id} className={`st-thumb ${s.id === scene.id ? "on" : ""}`} onClick={() => { setSelected(s.id); setTab("scene"); }} data-testid="st-thumb" data-scene={s.id}
+                    /* #18: drag a scene onto another in the same section, or focus it and press Alt + ↑ / ↓ — the order of the story, its PowerPoint and its video */
+                    tabIndex={0} role="button" aria-label={`Scene: ${s.title}. Alt + arrow keys move it.`} draggable={s.kind !== "title"}
+                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; try { e.dataTransfer.setData("text/plain", s.id); } catch { /* fine */ } }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => { e.preventDefault(); const from = e.dataTransfer.getData("text/plain"); if (from && from !== s.id) moveTo(from, s.id); }}
+                    onKeyDown={(e) => { if ((e.altKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); move(s.id, e.key === "ArrowUp" ? -1 : 1); const id = s.id; requestAnimationFrame(() => (document.querySelector(`[data-testid="st-thumb"][data-scene="${id}"]`) as HTMLElement | null)?.focus()); } else if (e.key === "Enter") { setSelected(s.id); setTab("scene"); } }}>
                     {page && measurer ? <Frame page={page} t={0} final width={150} measurer={measurer} total={3} /> : <div className="st-frame st-frame-empty" style={{ width: 150, height: 84 }} />}
                     <div className="st-thumb-meta"><b>{KIND_WORDS[s.kind] ?? s.kind}</b>{ti >= 0 && timings[ti] ? <span className="muted"> · {timings[ti].total.toFixed(1)}s</span> : null}{bad ? <span className="st-bad" title="Issues to fix"> · {bad} issue{bad === 1 ? "" : "s"}</span> : null}</div>
                     <div className="st-thumb-title">{s.title}</div>

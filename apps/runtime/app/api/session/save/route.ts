@@ -3,9 +3,10 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { checkSubmission, quotaIncrements, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, hasExactBalance, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
+import { surveyFieldworkEvents } from "@/lib/notifyEmit";
 
 export const dynamic = "force-dynamic";
 
@@ -186,6 +187,19 @@ export async function POST(req: NextRequest) {
       const { error: lfErr } = await db.rpc(fn, { p_survey: existing.survey_id, p_session: sessionId });
       if (lfErr) console.error(`[rescript:listfill] ${fn} failed`, { sessionId: sessionId.slice(0, 8), status: newStatus, error: lfErr.message });
     }
+    /*
+     * Exact balance (engine item #15, migration 0073), the same bargain: a
+     * completed interview keeps its randomizer / design-version claims counted
+     * for good; a screen-out, termination or quota-full gives them back so the
+     * completes balance. Never fails the save (a database without 0073 has no
+     * claims — the arms were seed-derived).
+     */
+    if (def && hasExactBalance(def)) {
+      const { error: bErr } = newStatus === "complete"
+        ? await db.rpc("rescript_complete_balance", { p_survey: existing.survey_id, p_session: sessionId })
+        : await db.rpc("rescript_release_balance", { p_survey: existing.survey_id, p_session: sessionId, p_reason: newStatus });
+      if (bErr) console.error("[rescript:balance] end-of-interview update failed", { sessionId: sessionId.slice(0, 8), status: newStatus, error: bErr.message });
+    }
     if (existing.respondent_id) {
       await db.from("respondents").update({ status: newStatus }).eq("id", existing.respondent_id);
     }
@@ -201,6 +215,8 @@ export async function POST(req: NextRequest) {
       const customerId = Array.isArray(cust) ? cust[0]?.customer_id : cust?.customer_id;
       if (customerId) void recordSessionUsage({ customerId, surveyId: existing.survey_id, environment: existing.is_test ? "TEST" : "LIVE", sessionId }, { eventType: "SURVEY_RESPONSE", quantity: 1, metadata: { sessionId: sessionId.slice(0, 8), versionId: existing.version_id } });
     }
+    /* G3 2026-10-22: survey fieldwork alerts — a quota-full end, completes milestones (never blocks the save) */
+    if (newStatus === "quota_full" || newStatus === "complete") await surveyFieldworkEvents(db, { surveyId: existing.survey_id, status: newStatus, isTest: !!existing.is_test, sampleSize: def?.research?.sampleSize ?? null, title: def?.meta.title ?? null });
     // the quality engine, on the final state of the row
     const summary = def ? summarizeConfig(def) : null;
     // §3 — what the engine is about to receive, so the saved settings and the

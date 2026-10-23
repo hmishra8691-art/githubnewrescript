@@ -9,6 +9,9 @@ import {
   resumeAt,
   advance,
   goBack,
+  balanceSlotsDue,
+  speechServerOn,
+  questionOffersSpeechInput,
   setAnswer,
   visibleQuestions,
   validatePage,
@@ -71,7 +74,7 @@ import {
   unmarkPopupSeen,
   migrateLegacyCustomCode,
 } from "@rescript/engine";
-import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState } from "@rescript/renderer";
+import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
@@ -81,6 +84,7 @@ import {
   cachePreviewState, readPreviewState, clearPreviewState, mergeResumeSnapshot,
 } from "@/lib/resume";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
+import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
 import type { ResponseTelemetry } from "@rescript/quality";
 
 export interface RunnerProps {
@@ -532,6 +536,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionBoot, bootAttempt]);
   const stateRef = React.useRef<ResponseState | null>(null);
+  /** this preview run's id in the tab's balance store (exact balance, #15) — a restart is a new run */
+  const previewBalanceSession = React.useRef(`preview-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`);
   const chosenLanguage = language ?? (stateRef.current ? stateLanguage(stateRef.current) : null);
   const lang = React.useMemo(
     () => resolveLanguage(sourceDef, { urlParams, browserLanguages, embedded: stateRef.current?.embedded ?? null, chosen: chosenLanguage }, mode !== "live"),
@@ -736,6 +742,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
        it — otherwise the resume would put the tester straight back where they
        asked to leave (see cachePreviewState) */
     clearPreviewState(previewStateId);
+    /* the abandoned run's balance claims are given back; the new run claims afresh */
+    endPreviewBalance(sourceDef.meta.id, previewBalanceSession.current, "release");
+    previewBalanceSession.current = `preview-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     setEnded(null);
     setErrors([]);
     setProbe(null);
@@ -996,10 +1005,91 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * sets is a default for the page as shown, and `get` tells it whether an
    * answer already exists.
    */
+  /*
+   * EXACT BALANCE (engine item #15). A page inside an exact randomizer, or
+   * holding an exact design question, is never shown before its slot is
+   * claimed: until then the Runner shows its loading card, claims (server in
+   * live / test, the tab's store in a preview), writes the assignment into the
+   * response and recompiles — the same index then holds the claimed arm's
+   * first page. Nested slots come one round after the other. Surveys without
+   * the setting have no `balance` on any step, so nothing here runs.
+   */
+  /* recomputed when the step or a stored assignment changes — not on every keystroke */
+  const balanceStep = stateRef.current && !booting && !fatal ? steps[stateRef.current.stepIndex] : undefined;
+  const assignmentSig = stateRef.current ? Object.entries(stateRef.current.calculated).filter(([k]) => k.startsWith("RANDOMIZER_") || k.endsWith("_VERSION")).map(([k, v]) => `${k}=${String(v)}`).join("|") : "";
+  const balanceDue = React.useMemo(() => {
+    const s = stateRef.current;
+    const st = balanceStep;
+    if (!s || st?.kind !== "page" || !st.balance?.length) return [];
+    try { return balanceSlotsDue(def, s, st, counts); } catch { return []; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balanceStep, assignmentSig, def]);
+  const balanceKey = balanceDue.map((b) => b.key).join("|");
+
+  /*
+   * SERVER DICTATION (#16). Where the browser cannot recognise speech (Firefox)
+   * or its recogniser fails, the microphone records and sends the clip to
+   * `/api/session/dictate` (the session's metered speech-to-text; a preview
+   * only against the fake provider). Whether the runtime can transcribe at all
+   * is asked once, and only for a survey that has a dictation field and allows
+   * server dictation.
+   */
+  const [sttAvailable, setSttAvailable] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!speechServerOn(sourceDef) || !sourceDef.questions.some((q) => questionOffersSpeechInput(q as never))) return;
+    let off = false;
+    fetch("/api/session/dictate", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!off) setSttAvailable(!!(j as { available?: boolean } | null)?.available); })
+      .catch(() => { if (!off) setSttAvailable(false); });
+    return () => { off = true; };
+  }, [sourceDef]);
+  const speechService = React.useMemo<SpeechService>(() => ({
+    available: sttAvailable,
+    /* the language this respondent is answering in — only a multilingual survey has one to pass (else the survey's own settings decide) */
+    language: sourceDef.localization?.languages?.length ? lang : null,
+    async transcribe(audio, meta) {
+      const sid = mode === "preview" || !session ? "preview" : session.sessionId;
+      try {
+        const r = await fetch("/api/session/dictate", {
+          method: "POST", cache: "no-store", body: audio,
+          headers: { "content-type": audio.type || "audio/webm", "x-session-id": sid, "x-question-id": meta.questionId, "x-language": meta.lang, "x-duration-ms": String(Math.round(meta.durationMs)) },
+        });
+        const j = await r.json().catch(() => ({})) as { text?: string; error?: string };
+        if (r.ok && typeof j.text === "string") return { ok: true as const, text: j.text };
+        return { ok: false as const, error: j.error ?? `Your answer could not be turned into text (${r.status}) — please type it.` };
+      } catch {
+        return { ok: false as const, error: "Your answer could not be sent — check your connection, or type it." };
+      }
+    },
+  }), [sttAvailable, lang, mode, session, sourceDef]);
+  React.useEffect(() => {
+    const s = stateRef.current;
+    if (!balanceKey || !s) return;
+    let cancelled = false;
+    void (async () => {
+      await claimBalance(def, s, balanceDue, {
+        mode, session, build: build ?? null, previewSession: previewBalanceSession.current,
+        onTrace: (line) => { if (mode !== "live") setLogs((l) => [...l, line]); },
+      });
+      if (cancelled) return;
+      try {
+        const nav = resumeAt(def, s, counts, s.stepIndex);
+        setSteps(nav.steps);
+      } catch (e) {
+        console.error("[rescript:runtime] could not settle after the balance claim", e);
+        setFatal(fatalOf(e, "navigation"));
+      }
+      force();
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balanceKey]);
+
   const shownPageId = (() => {
     const s = stateRef.current;
     const st = s && !booting && !fatal ? steps[s.stepIndex] : undefined;
-    return st?.kind === "page" ? st.pageId : null;
+    return st?.kind === "page" && !balanceKey ? st.pageId : null;
   })();
   React.useEffect(() => {
     const s = stateRef.current;
@@ -1033,6 +1123,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   }
   if (booting || !state) {
     return <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-booting"><h2>Loading survey…</h2></div></div>;
+  }
+  if (balanceKey) {
+    return <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-balancing" aria-busy="true"><h2>{uiText(ui, "loading")}</h2></div></div>;
   }
 
   const step = steps[state.stepIndex];
@@ -1412,7 +1505,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
       /* a finished preview starts clean next time, exactly as a finished
          response does — the resume is for an interview in progress */
-      if (mode === "preview") clearPreviewState(previewStateId);
+      if (mode === "preview") {
+        clearPreviewState(previewStateId);
+        endPreviewBalance(sourceDef.meta.id, previewBalanceSession.current, nav.endStatus === "complete" || !nav.endStatus ? "complete" : "release");
+      }
       if (nav.redirectUrl && mode === "live") {
         // "new window" keeps the completion page in place behind the panel's
         // own page — some panels require the survey tab to stay open
@@ -1701,6 +1797,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           ))}
         </div>
       )}
+      <SpeechServiceContext.Provider value={speechService}>
       <MediaGateContext.Provider value={mediaGate.gate}>
       <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
       {shownQuestions.map((q) => {
@@ -1776,6 +1873,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       })}
       </div>
       </MediaGateContext.Provider>
+      </SpeechServiceContext.Provider>
       {mediaGate.held && (
         <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
       )}
@@ -1820,7 +1918,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {...(b.responsive ? { "data-rs-theme": def.meta.id } : {})}>
       {b.responsive && <style data-rs-theme-css="" dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, `.rs-shell[data-rs-theme="${def.meta.id.replace(/["\\]/g, "")}"]`) }} />}
       {hasUx && !ended && (
-        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll} state={state}
+        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll} state={state} language={lang}
           shown={pageStep ? shownQuestions.map((q) => q.id) : []}
           pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}

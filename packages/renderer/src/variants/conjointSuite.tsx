@@ -26,7 +26,7 @@ export function CvaTasks(p: QRProps) {
   if (design.kind !== "cva") return <div className="rs-error-msg">This question needs a Rating-based conjoint (CVA) design; “{design.name}” is a {design.kind} design.</div>;
   const info = conjointMethodOf(p.def, p.q)!;
   const scale = info.cva!;
-  const tasks = cvaTasksFor(p.def, p.q, p.state.seed);
+  const tasks = cvaTasksFor(p.def, p.q, p.state.seed, p.state.calculated);
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const readOnly = !!p.q.settings.readOnly;
   const paired = scale.mode === "paired";

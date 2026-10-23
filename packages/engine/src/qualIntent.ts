@@ -14,6 +14,8 @@
  * Pure.
  */
 
+import { interpretLiveSchedule, describeLiveSchedule, type LiveScheduleRequest } from "./liveSchedule.js";
+
 export type QualRequest =
   | { op: "summarise_themes"; text: string; theme?: string }
   | { op: "insights"; text: string; objective?: number }
@@ -22,7 +24,9 @@ export type QualRequest =
   | { op: "double_coding"; text: string; overlapPct: number; coder: "ai" | "colleague" }
   | { op: "ask"; text: string; question: string }
   | { op: "auto_code"; text: string; enabled: boolean }
-  | { op: "group_session"; text: string; mode: "moderated" | "autonomous"; title?: string };
+  | { op: "group_session"; text: string; mode: "moderated" | "autonomous"; title?: string }
+  /* G2 2026-10-22: live human-moderated sessions (focus groups / IDIs) scheduled in words — liveSchedule.ts */
+  | LiveScheduleRequest;
 
 /** words that place a sentence in the qualitative data, not the questionnaire */
 /* not "findings" / "insights" alone: "summarise the findings" is the quantitative findings copilot's */
@@ -38,6 +42,9 @@ export function interpretQualRequest(raw: string): QualRequest | null {
   const text = clean(String(raw ?? ""));
   if (!text || text.length > 400 || /\n/.test(raw)) return null;
   const t = text.toLowerCase();
+  /* G2 2026-10-22: "schedule two focus groups of 6 next Tuesday 6 pm IST …" — before the survey-edit guard ("create" is a scheduling verb here) */
+  const live = interpretLiveSchedule(raw);
+  if (live) return live;
   if (SURVEY_EDIT.test(text)) return null;
   let m: RegExpExecArray | null;
 
@@ -108,5 +115,6 @@ export function describeQualRequest(r: QualRequest): string {
     case "ask": return `Answer “${r.question}” from the coded excerpts only, with citations.`;
     case "auto_code": return r.enabled ? "Code new transcripts and interviews automatically (as AI suggestions for review)." : "Stop coding new transcripts automatically.";
     case "group_session": return `Set up a ${r.mode} text group session from the guide${r.title ? ` called “${r.title}”` : ""}.`;
+    case "schedule_live": return describeLiveSchedule(r);
   }
 }

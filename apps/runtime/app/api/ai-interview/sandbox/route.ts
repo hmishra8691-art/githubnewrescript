@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { QualStudy } from "@rescript/schema";
-import { interviewCounts, launchProblems, moderationOf, type InterviewSummary } from "@rescript/engine";
+import { interviewCounts, launchProblems, moderationOf, voiceSummaryOf, type InterviewSummary } from "@rescript/engine";
 import { sandboxStore } from "@/lib/aiInterview/runtimeDeps";
 import { planFor } from "@/lib/aiInterview/service";
 
@@ -44,18 +44,25 @@ export async function POST(req: NextRequest) {
     if (!store.endSession(id)) return NextResponse.json({ error: "that interview is not in progress" }, { status: 409 });
   } else if (action === "exclude" || action === "include") {
     if (!store.excludeSession(id, action === "exclude", typeof body.reason === "string" ? body.reason.slice(0, 300) : undefined)) return NextResponse.json({ error: "no such interview" }, { status: 404 });
+  } else if (action === "translations") {
+    /* G1: the researcher's reviewed wording for the study languages, applied to the running (sandbox) study */
+    const packs: Record<string, unknown> = body.translations && typeof body.translations === "object" ? body.translations as Record<string, unknown> : {};
+    const g = QualStudy.safeParse({ ...study.guide, aiModeration: { ...(study.guide.aiModeration ?? {}), translations: { ...(study.guide.aiModeration?.translations ?? {}), ...packs } } });
+    if (!g.success) return NextResponse.json({ error: "the wording could not be read" }, { status: 400 });
+    study.guide = g.data;
   } else if (action !== "list" && action !== "interview") return NextResponse.json({ error: "unknown action" }, { status: 400 });
 
   const sessions = store.sessionsOf(study.id);
   if (action === "interview") {
     const s = sessions.find((x) => x.id === id);
     if (!s) return NextResponse.json({ error: "no such interview" }, { status: 404 });
-    return NextResponse.json({ ok: true, id: s.id, participant: `P${s.participantNumber}`, status: s.status, turns: s.turns.map((t) => ({ seq: t.seq, speaker: t.speaker, text: t.text, originalText: t.originalText ?? null, translation: t.translation ?? null, at: t.offsetMs, decision: t.decision ?? null })), flags: s.flags, transcript: s.qual?.transcript ?? null }, { headers: { "cache-control": "no-store" } });
+    return NextResponse.json({ ok: true, id: s.id, participant: `P${s.participantNumber}`, status: s.status, turns: s.turns.map((t) => ({ seq: t.seq, speaker: t.speaker, text: t.text, originalText: t.originalText ?? null, translation: t.translation ?? null, at: t.offsetMs, decision: t.decision ?? null })), flags: s.flags, voice: voiceSummaryOf(s.state), transcript: s.qual?.transcript ?? null }, { headers: { "cache-control": "no-store" } });
   }
   const rows: InterviewSummary[] = sessions.map((s) => ({
     id: s.id, participant: `P${s.participantNumber}`, segment: s.segment, mode: s.mode, language: s.language, status: s.status, excluded: s.excluded, isTest: s.isTest,
     flags: s.flags, turns: s.turnsCount, costUsd: s.costUsd, startedAt: new Date(s.startedAt).toISOString(), lastActivityAt: new Date(s.lastActivity).toISOString(),
     minutes: Math.round(((s.completedAt ?? s.lastActivity) - s.startedAt) / 6000) / 10, covered: s.state?.covered ?? [], qualTranscriptId: s.qual ? `mem-qt-${s.id}` : null,
+    ...(s.mode !== "text" ? { voice: voiceSummaryOf(s.state) } : {}),
   }));
   const cfg = moderationOf(study.guide);
   const plan = planFor(study);

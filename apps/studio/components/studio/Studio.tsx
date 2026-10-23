@@ -33,6 +33,7 @@ import { Icon, type IconName } from "@/components/ui/Icon";
 import { LocalizationPanel } from "./localization/LocalizationPanel";
 import { UsagePanel, useMeterView } from "./UsagePanel";
 import { WalletMenu } from "../billing/WalletMenu";
+import { AlertBell } from "../notify/AlertBell";
 import { fmtMoney } from "@/components/billing/shared";
 import { ModeProvider } from "./ModeContext";
 import { SelectionProvider } from "./SelectionContext";
@@ -925,6 +926,8 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           title="Export the survey you are editing as Word or JSON"><Icon name="export" size={15} /> Export</button>
         <button className="btn" onClick={() => setTab("data")} title="Browse test and live responses"><Icon name="data" size={15} /> Data</button>
         {/* the wallet, compact, beside the account (dashboard brief §3): the owner's balance, never this project's spend; its actions behind it */}
+        {/* G3 2026-10-22: my alerts (distress flags, quotas, the cost cap …) */}
+        <AlertBell />
         {s.surveyDbId === "sandbox" ? <WalletBadge surveyId={s.surveyDbId} onOpen={() => setTab("usage")} /> : <WalletMenu inStudio onAddFunds={() => setTab("usage")} />}
         {session.state.kind === "signed_in" && (
           <span className="row" style={{ gap: 6 }} data-testid="studio-user">

@@ -23,6 +23,7 @@
  * repair pass, that the reply claims no file it did not make, the language of
  * the reply, and cost / latency budgets.
  */
+import { ENGINE_1114_CASES } from "./engine1114Cases.ts";
 
 export type EvalCategory =
   | "single_edit" | "ux_script" | "translation" | "long_brief" | "staged_generation" | "analysis_plan"
@@ -73,6 +74,12 @@ export interface TurnExpect {
   clarify?: "forbidden" | "required" | "allowed";
   /** fields of the response's `context` (the route's deterministic reading: ux, uxOnly, the guides sent …); a boolean compares truthiness */
   context?: Record<string, string | number | boolean | null>;
+  /** #11 (2026-10-22): the guides each built plan item was sent (`context.itemGuides`) — by item id, guides it must have and must not */
+  itemGuides?: Record<string, { has?: string[]; not?: string[] }>;
+  /** #11: how many items proposed an action whose guide they were not sent (`context.guideMisses`) */
+  guideMisses?: number;
+  /** #13: the Studio corrected a refused design itself (`context.methodFixes`), at least this many */
+  methodFixesMin?: number;
 }
 
 export interface EvalTurn {
@@ -91,6 +98,8 @@ export interface EvalTurn {
   undoPrevious?: boolean;
   /** fake provider only: the scripted model reply (or replies, in call order) */
   fake?: unknown;
+  /** fake provider only, a staged build: the repair call's scripted reply (the per-item replies are `fake`) */
+  fakeRepair?: unknown;
   /** put this text into a question's wording before the turn (an injection payload in survey content) */
   inject?: { target: string; text: string };
   expect?: TurnExpect;
@@ -449,6 +458,8 @@ export const GOLDEN_CASES: EvalCase[] = [
       ],
       expect: { opsPresent: ["set_display_logic"], targets: ["S4"], appliedMin: 1, parse: "repaired" } }],
   },
+  /* engine items 11–14 (2026-10-22): per-item guides, the readiness rule at action time, refused designs repaired */
+  ...ENGINE_1114_CASES,
 ];
 
 /* ------------------------------------------------------------ cases from the shared fixtures */

@@ -18,3 +18,4 @@ export * from "./store.js";
 export * from "./runner.js";
 export * from "./zip.js";
 export * from "./audioSplit.js";
+export * from "./audioChunks.js";

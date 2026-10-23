@@ -34,6 +34,25 @@ import { subSeed } from "./random.js";
  * this is; see `docs/CHOICE-MODELLING.md`.)
  */
 
+/** where a CLAIMED version is stored in the response (exact balance, #15): `<VAR>_VERSION` — the column flatten writes */
+export function designVersionVariable(q: Pick<Question, "id"> & { variableName?: string }): string {
+  return `${q.variableName || q.id}_VERSION`;
+}
+
+/**
+ * The claimed version stored with the response, if any. Read whether or not the
+ * question still asks for exact balance: a respondent keeps the version they
+ * were given even if the setting is switched off mid-field. (The caller checks
+ * it is one of the design's versions; flatten already exported any calculated
+ * `<VAR>_VERSION` over the derived one, so this changes nothing for a survey
+ * that never claimed.)
+ */
+export function storedDesignVersion(q: Pick<Question, "id" | "settings"> & { variableName?: string }, calculated?: Record<string, unknown> | null): string | null {
+  if (!calculated) return null;
+  const v = calculated[designVersionVariable(q)];
+  return v == null || v === "" ? null : String(v);
+}
+
 /** How many versions a design file actually contains. */
 export function designVersionCount(rows: Record<string, unknown>[]): number {
   const seen = new Set<string>();
@@ -49,25 +68,35 @@ export function designVersionCount(rows: Record<string, unknown>[]): number {
  * — which would correlate the two designs for no reason.
  */
 export function designVersionFor(
-  q: Pick<Question, "id" | "settings">,
+  q: Pick<Question, "id" | "settings"> & { variableName?: string },
   rows: Record<string, unknown>[],
   seed: number,
+  /**
+   * The response's calculated variables. A version CLAIMED for this respondent
+   * (exact balance, engine item #15 — `settings.versionBalance`) is stored
+   * there as `<VAR>_VERSION` and wins over the seed; absent, the seed decides
+   * exactly as before.
+   */
+  calculated?: Record<string, unknown> | null,
 ): string {
   const versions = [...new Set(rows.map((r) => String(r.version ?? "1")))].sort(
     (a, b) => Number(a) - Number(b) || a.localeCompare(b),
   );
   if (versions.length <= 1) return versions[0] ?? "1";
+  const stored = storedDesignVersion(q, calculated);
+  if (stored && versions.includes(stored)) return stored;
   const h = subSeed(seed, `designversion:${q.id}`);
   return versions[Math.abs(h) % versions.length];
 }
 
 /** The rows this respondent is actually shown, in design order. */
 export function designRowsFor(
-  q: Pick<Question, "id" | "settings">,
+  q: Pick<Question, "id" | "settings"> & { variableName?: string },
   rows: Record<string, unknown>[],
   seed: number,
+  calculated?: Record<string, unknown> | null,
 ): Record<string, unknown>[] {
-  const version = designVersionFor(q, rows, seed);
+  const version = designVersionFor(q, rows, seed, calculated);
   return rows.filter((r) => String(r.version ?? "1") === version);
 }
 

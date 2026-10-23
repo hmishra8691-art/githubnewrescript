@@ -55,7 +55,11 @@ export type MailKind =
    * it carries a deadline — the last thing it should share is a reputation
    * with a 400-address invitation wave.
    */
-  | "media_delivery";
+  | "media_delivery"
+  /* G3 2026-10-22: an alert rule's e-mail (lib/notify) and live-session invitations / reminders sent through sendNotification (0072 widens the log's kinds) */
+  | "alert"
+  | "live_session_invite"
+  | "live_session_reminder";
 
 export interface MailMessage {
   to: string;

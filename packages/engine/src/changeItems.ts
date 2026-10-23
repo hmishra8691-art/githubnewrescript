@@ -9,6 +9,7 @@ import { formatPunchExpression } from "./autoPunch.js";
 import { listBlocks, listPages } from "./blocks.js";
 import { questionOrder } from "./dependencies.js";
 import { aiModerationWords } from "./aiInterviewActions.js";
+import { alertsWords, panelsWords } from "./integrationActions.js";
 import { quotaDiff } from "./quotaActions.js";
 import { diffTheme } from "./theme.js";
 import { diffUx } from "./ux.js";
@@ -50,6 +51,8 @@ export const CHANGE_CATEGORIES = [
   "Language", "Translation", "Survey", "Theme", "Style", "Animation", "Behaviour",
   /* 2026-10-18: the moderated interview / focus-group guide (def.qualStudy) */
   "Qualitative guide",
+  /* 2026-10-22 (G3): panel recruitment and alerts (def.panels, def.alerts) */
+  "Panels & alerts",
 ] as const;
 export type ChangeCategory = (typeof CHANGE_CATEGORIES)[number];
 
@@ -643,6 +646,11 @@ function surveyItems(t: Tree, before: SurveyDefinition, after: SurveyDefinition)
   for (const x of ux.added) t.add({ objectId: x.id, level: "ux", category: cat(x.kind), kind: "added", field: x.label, to: x.target });
   for (const x of ux.changed) t.add({ objectId: x.id, level: "ux", category: cat(x.kind), kind: "modified", field: x.label, to: x.target });
   for (const x of ux.removed) t.add({ objectId: x.id, level: "ux", category: cat(x.kind), kind: "removed", field: x.label, from: x.target });
+  /* 2026-10-22 (G3): panels and alerts, in words */
+  for (const [field, from, to] of [["panels", panelsWords(before.panels), panelsWords(after.panels)], ["alerts", alertsWords(before.alerts), alertsWords(after.alerts)]] as const) {
+    if (from === to) continue;
+    t.add({ objectId: field, level: "survey", category: "Panels & alerts", kind: !from ? "added" : !to ? "removed" : "modified", field, ...(from ? { from } : {}), ...(to ? { to } : {}) });
+  }
 }
 
 /** survey-level display rules (the named ones), by id: those targeting a question are that question's logic */

@@ -38,6 +38,7 @@ export * from "./lintLogic.js";
 export * from "./qualityCheck.js";
 export * from "./objectStatus.js";
 export * from "./designVersion.js";
+export * from "./exactBalance.js";
 export * from "./choiceData.js";
 export * from "./conjointSuite.js";
 export * from "./sampleSource.js";
@@ -164,11 +165,20 @@ export * from "./researchActions.js";
 export * from "./qualActions.js";
 /* F2 2026-10-22: qualitative synthesis requests in words (summaries, insights, comparisons, reels, double-coding, ask, auto-coding, group sessions) */
 export * from "./qualIntent.js";
+/* G2 2026-10-22: live human-moderated sessions scheduled in words (zoned times, segments) */
+export * from "./liveSchedule.js";
 export * from "./aiInterviewSafety.js";
 export * from "./aiModerator.js";
 export * from "./aiInterviewStudy.js";
 export * from "./aiInterviewActions.js";
 export * from "./aiModeratorEval.js";
+/* G1 2026-10-22: AI interviews in every language, voice conversation with barge-in, realtime */
+export * from "./aiInterviewMessages.js";
+export * from "./aiInterviewWords.js";
+export * from "./aiInterviewLanguages.js";
+export * from "./aiInterviewLocalize.js";
+export * from "./aiInterviewVoice.js";
+export * from "./aiInterviewRealtime.js";
 export * from "./researchSuitability.js";
 export * from "./researchTraceability.js";
 export * from "./researchValidation.js";
@@ -177,3 +187,12 @@ export * from "./untrusted.js";
 export * from "./provenance.js";
 /* production intents (2026-10-18): a calculation written in the condition language spelling (GRID.R1, IF … THEN … ELSE) */
 export * from "./calcRewrite.js";
+/* engine items 11–14 (2026-10-22): the plan-item readiness rule at action time; refused MaxDiff / conjoint designs corrected or explained; script structure */
+export * from "./planItemGate.js";
+export * from "./methodRepair.js";
+export * from "./scriptAst.js";
+export * from "./uxDuplicates.js";
+/* panel recruitment and alerts (2026-10-22, G3): presets, signed redirects, alert routing / redaction / rendering, the connect_panel / configure_alerts actions */
+export * from "./panels.js";
+export * from "./notifyEvents.js";
+export * from "./integrationActions.js";

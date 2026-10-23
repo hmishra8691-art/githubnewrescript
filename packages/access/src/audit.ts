@@ -174,6 +174,12 @@ export const AUDIT_EVENTS = [
   "analytics.ai_text_generated",
   "analytics.ai_refused",
 
+  /* alerts and panels (2026-10-22, G3): an organisation's alert channel added / removed; a panel's signing secret set
+     or cleared. The detail names the channel or panel — never the webhook URL or the secret. */
+  "notify.channel_added",
+  "notify.channel_removed",
+  "panel.secret_changed",
+
   /* collaboration */
   "comment.created",
   "comment.resolved",
@@ -226,6 +232,9 @@ export function describeEvent(r: AuditRow): string {
     case "user.logged_out": return `${who} signed out`;
     case "user.profile_updated": return `${who} updated their profile`;
     case "user.password_changed": return `${who} changed their password`;
+    case "notify.channel_added": return `${who} added the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
+    case "notify.channel_removed": return `${who} removed the ${str(d.kind) || "alert"} channel ${str(d.name) || ""}`.trim();
+    case "panel.secret_changed": return `${who} ${d.cleared ? "cleared" : "set"} the signing secret of the panel ${str(d.panel) || ""}`.trim();
     case "user.ai_credential_saved": return `${who} saved an API key for ${str(d.provider) || "an AI provider"}`;
     case "user.ai_credential_removed": return `${who} removed an API key for ${str(d.provider) || "an AI provider"}`;
     case "user.ai_connection_changed": return `${who} set ${str(d.feature) || "an AI feature"} to ${d.mode === "user" ? `their own provider (${str(d.provider)}${d.model ? ` · ${str(d.model)}` : ""})` : "the platform's AI"}`;

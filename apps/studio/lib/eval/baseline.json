@@ -1,7 +1,7 @@
 {
   "fake:fake": {
     "key": "fake:fake",
-    "recordedAt": "2026-10-22T09:58:01.664Z",
+    "recordedAt": "2026-10-22T19:54:01.140Z",
     "summary": {
       "passRate": 1,
       "byCategory": {
@@ -26,18 +26,18 @@
           "passRate": 1
         },
         "staged_generation": {
-          "cases": 1,
-          "passed": 1,
+          "cases": 3,
+          "passed": 3,
           "passRate": 1
         },
         "analysis_plan": {
-          "cases": 6,
-          "passed": 6,
+          "cases": 7,
+          "passed": 7,
           "passRate": 1
         },
         "methods": {
-          "cases": 7,
-          "passed": 7,
+          "cases": 16,
+          "passed": 16,
           "passRate": 1
         },
         "qualitative": {
@@ -78,12 +78,12 @@
       },
       "costUsd": 0,
       "latencyMs": {
-        "p50": 39,
-        "p95": 352,
-        "max": 972
+        "p50": 24,
+        "p95": 128,
+        "max": 278
       },
-      "repairRate": 0.017,
-      "clarifyRate": 0.017
+      "repairRate": 0.123,
+      "clarifyRate": 0.014
     },
     "passed": {
       "edit-required": true,
@@ -119,6 +119,18 @@
       "multi-turn-it": true,
       "undo-then-redo-differently": true,
       "repair-bad-reference": true,
+      "staged-item-guides": true,
+      "staged-guide-miss": true,
+      "analysis-readiness-repair": true,
+      "method-fix-maxdiff-per-task": true,
+      "method-fix-dual-none": true,
+      "method-fix-cva-profiles": true,
+      "method-repair-prohibitions": true,
+      "method-repair-gate-cbc": true,
+      "method-repair-menu": true,
+      "method-repair-acbc": true,
+      "method-repair-simulate": true,
+      "method-repair-refused-again": true,
       "injection-en-override-delete": true,
       "injection-en-redirect-piped": true,
       "injection-en-system-devmode": true,

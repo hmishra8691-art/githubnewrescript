@@ -13,6 +13,13 @@ import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchem
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
+/* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
+import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, type SurveyAction } from "@rescript/engine";
+import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
+import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
+import { qualSynthesisIntent } from "@/lib/copilot/qualSynthesisGuide";
+import { integrationsIntent } from "@/lib/copilot/integrationsGuide";
+import { registerPlanReadinessGate } from "@rescript/analytics";
 /* §3 (2026-10-18): a long brief read once — the structured research context, its store, the brief's exact passages, task-aware selection, per-call measurement */
 import { addCalls, briefFingerprint, contextLayersFor, contextOwner, deriveResearchContext, itemPassagesFor, questionnaireScope, reconcileContext, renderBriefPassages, renderResearchContext, retrieveBriefPassages, sectionBrief, withProgress, workflowIdFor, type CallMeasure, type ResearchContext, type StoredResearchContext } from "@/lib/copilot/researchContext";
 import { researchContextStoreFor } from "@/lib/copilot/researchContextStore";
@@ -32,7 +39,7 @@ import { fenceNonceFor, neutralizeUntrusted, UNTRUSTED_DATA_RULE } from "@rescri
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
 import { NOTICES, replyLanguage } from "@/lib/copilot/notices";
-import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, reportingIntent, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
+import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, type CopilotReply, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, reportingIntent, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
 import { copilotOutline } from "@/lib/copilot/outline";
@@ -42,6 +49,8 @@ import { methodsIntent } from "@/lib/copilot/methodsGuide";
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
 
 registerBuiltinDesignGenerators();
+/* #12: an analysis-plan item the one readiness rule calls not ready is refused at action time, naming what is missing */
+registerPlanReadinessGate();
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -352,7 +361,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const guard = <R extends NonNullable<ReturnType<typeof coerceCopilotReply>>>(r: R | null): R | null => (r ? gateReply(r, def, provenance, { allowUrls: themeImageUrl ?? [] }).reply : r);
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
   /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns. `planOnly`: the plan stage's, without the action guides */
-  const promptFor = (compact: boolean, planOnly = false) => copilotUserPrompt({
+  const promptFor = (compact: boolean, planOnly = false, guides?: GuideFlags) => copilotUserPrompt({
     message, outline, surveyLanguage: surveyLanguageOf(def), mode,
     memory: compact ? undefined : sanitizeMemory(body.memory), research: compact ? undefined : research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
@@ -367,12 +376,31 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     ...(useBriefLayers ? { briefRef: { chars: stored!.brief.length, ref: rc!.fingerprint.brief.slice(0, 12) }, researchPlan: researchPlanIntent(message, mode), qual: qualIntent(message), reporting: reportingIntent(message) } : {}),
     ...(turnPassages.length ? { briefPassages: renderBriefPassages(turnPassages) } : {}),
     ...(availability ? { availability } : {}),
+    /* #11: a staged item's own guides — every switch set, so nothing is read from the message for it */
+    ...(guides ?? {}),
   });
   const prompt = promptFor(false);
   let compactPrompt: string | null = null;
   const promptOf = (compact: boolean) => (compact ? (compactPrompt ??= promptFor(true)) : prompt);
   const planPrompts: Record<"full" | "compact", string | null> = { full: null, compact: null };
   const planPromptOf = (compact: boolean) => (compact ? (planPrompts.compact ??= promptFor(true, true)) : (planPrompts.full ??= promptFor(false, true)));
+  /*
+   * #11 PER-ITEM GUIDES (2026-10-22). What this turn would send (the brief's guides), and for a staged build each
+   * item's own selection — the core every item shares (one cached block) plus what the item needs. The prompts are
+   * built once per distinct set, so items that need the same guides send the same bytes.
+   */
+  const buildGuides: GuideFlags = { ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, methods: methodsTurn, findings: findingsTurn, researchPlan: researchPlanIntent(message, mode), qual: qualIntent(message), aiInterview: aiInterviewIntent(message), integrations: integrationsIntent(message), reporting: reportingIntent(message), qualSynthesis: qualSynthesisIntent(message) };
+  const perItemGuides = itemGuidesEnabled();
+  const itemPrompts = new Map<string, string>();
+  const itemPromptOf = (compact: boolean, sel: ItemGuideSelection) => {
+    const k = `${compact ? 1 : 0}|${sel.all.join(",")}`;
+    let p = itemPrompts.get(k);
+    if (p == null) { p = promptFor(compact, false, flagsOf(sel.all, !!buildGuides.qualSynthesis && sel.fallback)); itemPrompts.set(k, p); }
+    return p;
+  };
+  /** what each item of this request was sent (ids, why, characters) and the actions a reply proposed whose guide was not sent */
+  const itemGuides: Record<string, { guides: GuideId[]; core: GuideId[]; why: Partial<Record<GuideId, string>>; fallback?: true; chars: number }> = {};
+  const misses: { item: string; guides: GuideId[]; ops: string[] }[] = [];
 
   /* 3: the model — or the cache, for exactly the same request. The answer is not rationed (Phase 7): the provider's ceiling, the expected size reserved */
   const budget = outputBudget(mode === "generate" ? "generate" : mode === "review" ? "review" : uxTurn ? "ux" : "edit");
@@ -411,12 +439,12 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
    * the running totals with its research context. TEST SEAM, fake provider only: what each call sent.
    */
   const calls: CallMeasure[] = [];
-  const sent: { operation: string; chars: number; variableChars: number; variable: string; contextBlock: boolean; passages: string[] }[] = [];
+  const sent: { operation: string; chars: number; variableChars: number; variable: string; contextBlock: boolean; passages: string[]; blocks?: number[]; guides?: GuideId[] }[] = [];
   const retriesNow = () => events.filter((e) => e.type === "retry").length;
-  const measured = async <T,>(est: AiEstimate, userText: string, fn: () => Promise<T>, passages: string[] = []) => {
-    const [sys, variable] = copilotCall(userText, stableExtra);
+  const measured = async <T,>(est: AiEstimate, userText: string, fn: () => Promise<T>, passages: string[] = [], callOpts: { core?: readonly string[]; guides?: GuideId[] } = {}) => {
+    const [sys, variable] = copilotCall(userText, stableExtra, callOpts.core ? { core: callOpts.core } : {});
     const chars = sys.reduce((n, s) => n + s.length, 0) + variable.length;
-    if (fakeProvider) sent.push({ operation: est.operation, chars, variableChars: variable.length, variable, contextBlock: !!researchContextText && sys.slice(1).some((b) => b.includes(researchContextText)) && !variable.includes(researchContextText), passages });
+    if (fakeProvider) sent.push({ operation: est.operation, chars, variableChars: variable.length, variable, contextBlock: !!researchContextText && sys.slice(1).some((b) => b.includes(researchContextText)) && !variable.includes(researchContextText), passages, blocks: sys.map((b) => b.length), ...(callOpts.guides ? { guides: callOpts.guides } : {}) });
     const r0 = retriesNow(); const t0 = Date.now();
     const m = await meteredAi(meter, ctx, "AI_REQUEST", { ...est, meta: () => ({ workflowId, promptChars: chars, retries: retriesNow() - r0, ...(rc ? { researchContextVersion: rc.version } : {}) }) }, fn);
     if (m.ok) {
@@ -434,7 +462,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     return stored?.workflow ?? null;
   };
   /** what the response says about the context it used */
-  const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, cacheWriteTokens: c.cacheWriteTokens ?? 0, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
+  const contextMeta = () => { const shown = rc ?? planRc; return { researchContext: { status: rcStatus, ...(shown ? { version: shown.version, chars: (researchContextText ?? renderResearchContext(shown)).length, layer: rc ? layers.researchContext : "none", briefChars: shown.fingerprint.briefChars, ref: shown.fingerprint.brief.slice(0, 12), hypotheses: shown.hypotheses.length, sections: shown.sections.length } : {}), ...(stored?.context.status === "stale" ? { stale: true, reason: stored.context.staleReason } : {}), ...(turnPassages.length ? { passages: turnPassages.map((p) => p.id) } : {}) }, questionnaire: qScope, workflowId, ...(Object.keys(itemGuides).length ? { itemGuides } : {}), ...(misses.length ? { guideMisses: misses } : {}), calls: calls.map((c) => ({ operation: c.operation, promptChars: c.promptChars, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedInputTokens: c.cachedInputTokens, cacheWriteTokens: c.cacheWriteTokens ?? 0, retries: c.retries, latencyMs: c.latencyMs })), ...(fakeProvider && sent.length ? { sent } : {}) }; };
   const faults: Fault[] = fakeProvider && Array.isArray(body.faults) ? (body.faults as Fault[]).slice(0, 40) : [];
   /** the test seam: a scripted fault or delay in front of a model call (nothing, outside the fake provider) */
   const model = async <T,>(fn: () => Promise<T>): Promise<T> => {
@@ -580,11 +608,21 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       /* §3: the item's own exact passages of the stored brief (a quota table, a hypothesis, a definitions table) — not the whole brief */
       const hit = useBriefLayers ? itemPassagesFor(briefSections, item) : { text: "", ids: [] as string[] };
       const itemPassages = hit.text;
-      const itemPrompt = prompt + itemPassages + executeItemPrompt(plan, item, i, approved, done);
+      /*
+       * #11: THIS ITEM'S GUIDES — the build's core (one cached block, the same on every item) and what the item itself
+       * needs, read from its kind, title, objects and its own brief passages; the whole build's set when nothing can be
+       * read from it or per-item selection is off (COPILOT_ITEM_GUIDES=off).
+       */
+      const sel = perItemGuides ? itemGuideSelection({ item, build: buildGuides, mode, passages: itemPassages }) : null;
+      const core = sel ? guideTexts(sel.core) : undefined;
+      const basePrompt = (c: boolean) => (sel ? itemPromptOf(c, sel) : promptOf(c));
+      const sentGuides: GuideId[] = sel ? sel.all : guidesOf(buildGuides);
+      itemGuides[item.id] = { guides: sentGuides, core: sel?.core ?? [], why: sel?.why ?? {}, ...(sel?.fallback ? { fallback: true as const } : {}), chars: sentGuides.reduce((n, g) => n + GUIDE_TEXT[g].length, 0) };
+      const itemPrompt = basePrompt(false) + itemPassages + executeItemPrompt(plan, item, i, approved, done);
       const t0 = Date.now();
       try {
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
-          () => fitting((c) => { const p = promptOf(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids);
+          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -600,6 +638,12 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
         sink?.checkpoint(item.id, itemRaw);
         slowest = Math.max(slowest, Date.now() - t0);
         done.push(builtLine(item, itemRaw));
+        /* #11: an action whose guide this item was not sent — judged by the gate as any other; logged, and offered to the repair with its guide */
+        const miss = guideMisses(rawActionsOf(itemRaw).map(opOfRaw), sentGuides);
+        if (miss.length) {
+          misses.push({ item: item.id, guides: miss.map((x) => x.guide), ops: miss.flatMap((x) => x.ops) });
+          console.warn("[rescript:copilot]", JSON.stringify({ event: "guide miss: an item proposed actions whose guide it was not sent (the gate judges them; the repair carries the guide)", surveyId, item: item.id, sent: sentGuides, missing: miss }));
+        }
       } catch (e) {
         const failure = failureOfError(e, `plan item ${item.id}`);
         if (isProviderError(e) && (e.retryable || !["bad_request"].includes(e.kind))) {
@@ -670,6 +714,44 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
   let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
+  const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
+  /*
+   * #13 (2026-10-22): A REFUSED MAXDIFF / CONJOINT DESIGN WITH ONE OBVIOUS CORRECTION IS CORRECTED HERE — 5 items per
+   * task from 5 items, more alternatives than the attributes make concepts, a None beside dual-response, a level
+   * listed twice, too few rating profiles (`autoFixMethodAction`). No model call; the correction goes through the
+   * gate again and is kept only if more of the batch applies; what was changed is said (assumptions, context).
+   * Nothing is invented: missing levels, items or prices and over-tight prohibitions go to the repair below.
+   */
+  const methodFixes: { op: string; note: string }[] = [];
+  /** the raw actions `reply.rejected` indexes (the repair's own answer, once it is adopted) */
+  let rejectedRaw: unknown = raw;
+  for (let round = 0; round < 3; round++) {
+    const r0: CopilotReply = reply;
+    const rawList = rawActionsOf(raw);
+    const targets: { gate: boolean; i: number; obj: Record<string, unknown>; reason: string }[] = [];
+    for (const rj of r0.rejected) { const o = rawList[rj.index]; if (o && isMethodOp(opOfRaw(o))) targets.push({ gate: true, i: rj.index, obj: o, reason: rj.reason }); }
+    if (applied) for (const res of applied.results) if (!res.ok && isMethodOp(res.op)) targets.push({ gate: false, i: res.index, obj: r0.actions[res.index] as unknown as Record<string, unknown>, reason: res.error ?? "" });
+    if (!targets.length) break;
+    const nextActions: SurveyAction[] = [...r0.actions];
+    let nextRejected = [...r0.rejected];
+    const notes: { op: string; note: string }[] = [];
+    for (const tg of targets) {
+      const f = autoFixMethodAction(tg.obj, tg.reason, def);
+      if (!f) continue;
+      const c = coerceSurveyActions([f.action]);
+      if (!c.actions.length) continue;
+      if (tg.gate) { nextActions.push(c.actions[0]!); nextRejected = nextRejected.filter((x) => x.index !== tg.i); }
+      else nextActions[tg.i] = c.actions[0]!;
+      notes.push({ op: opOfRaw(tg.obj), note: f.note });
+    }
+    if (!notes.length) break;
+    const a2 = applySurveyActions(def, nextActions, { uxOnly: cls.uxOnly, uxOnlyInferred });
+    if (okCount(a2) <= okCount(applied)) break;
+    reply = { ...r0, kind: "proposal", actions: nextActions, rejected: nextRejected, assumptions: [...r0.assumptions, ...notes.map((n) => `Corrected by the Studio (${n.op}): ${n.note}.`)].slice(0, 30) };
+    applied = a2;
+    methodFixes.push(...notes);
+  }
+  if (methodFixes.length) console.warn("[rescript:copilot]", JSON.stringify({ event: "refused design corrected by the Studio, no model call", surveyId, fixes: methodFixes }));
   /*
    * ONE REPAIR. The model sometimes proposes something the Studio refuses — a
    * script reaching for the page, an event that does not exist, an option that
@@ -677,17 +759,36 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
    * refusals go back to the model once, with its answer, and it corrects
    * them. The corrected answer is used only if the Studio accepts more of it.
    */
-  let repair: { refused: string[]; fixed: boolean; uxGuide?: boolean; skipped?: "policy" } | undefined;
-  // the failed actions, each "what it was: why" — the first entries of errors, in order
-  const refused = applied ? applied.errors.slice(0, applied.results.filter((x) => !x.ok).length) : [];
+  let repair: { refused: string[]; fixed: boolean; uxGuide?: boolean; skipped?: "policy"; guides?: GuideId[] } | undefined;
+  // the failed actions, each "what it was: why" — the first entries of errors, in order (a design's refusal made precise: its prohibitions, what must not be invented)
+  const failedResults = applied ? applied.results.filter((x) => !x.ok) : [];
+  const refused = applied ? applied.errors.slice(0, failedResults.length).map((e, k) => { const res = failedResults[k]; if (!res || !isMethodOp(res.op)) return e; const why = res.error ?? ""; return `${e}${explainMethodRefusal(reply!.actions[res.index] as unknown as Record<string, unknown>, why).slice(why.length)}`; }) : [];
+  /*
+   * #12 / #13: AN ANALYSIS-PLAN OR DESIGN ACTION REFUSED AT THE GATE (before it could be applied — "create_conjoint
+   * (cbc) needs the attributes…", "a crosstab needs rows and columns") goes to the same repair. It never did: only
+   * refusals at apply time reached it, so such a turn ended in "nothing was changed".
+   */
+  const rawNow = rawActionsOf(raw);
+  const gateRefused = reply.rejected.filter((rj) => { const op = opOfRaw(rawNow[rj.index] ?? {}); return isMethodOp(op) || isAnalysisOp(op); }).map((rj) => { const o = rawNow[rj.index] ?? {}; const op = opOfRaw(o); return { op, text: `${op}: ${isMethodOp(op) ? explainMethodRefusal(o, rj.reason) : rj.reason}` }; });
+  const refusedAll = [...refused, ...gateRefused.map((g) => g.text)];
   // a refusal the model cannot change (said look-only, the enforced research design) is not worth a paid call
-  const repairable = refused.filter((r) => !policyRefusal(r));
-  if (applied && refused.length && !repairable.length) repair = { refused, fixed: false, skipped: "policy" };
-  if (applied && repairable.length && !cached && !executedPlan && !sink?.cancelled && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || fakes.length > 1)) {
-    const rp = repairPrompt({ prompt, raw, refused, total: reply.actions.length, uxGuideSent: uxTurn, methodsGuideSent: methodsTurn, ops: reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")) });
+  const repairable = refusedAll.filter((r) => !policyRefusal(r));
+  if (refusedAll.length && !repairable.length) repair = { refused: refusedAll, fixed: false, skipped: "policy" };
+  /*
+   * A STAGED BUILD gets the repair too (#11/#13, 2026-10-22) when what was refused is a design or plan action, or an
+   * action whose guide its item was not sent — the guide goes with the repair. TEST SEAM, fake provider only: the
+   * repair's scripted reply is `fakeRepair` (the per-item replies are `fake`).
+   */
+  const failedOps = [...failedResults.map((x) => x.op), ...gateRefused.map((g) => g.op)];
+  const missedOps = new Set(misses.flatMap((x) => x.ops));
+  const missedGuides = [...new Set(misses.flatMap((x) => x.guides))].filter((g) => failedOps.some((op) => missedOps.has(op)));
+  const repairHere = !executedPlan || failedOps.some((op) => isMethodOp(op) || isAnalysisOp(op) || missedOps.has(op));
+  const repairFake = executedPlan ? (fakeProvider ? (body as { fakeRepair?: unknown }).fakeRepair ?? null : null) : fakes[1] ?? null;
+  if (repairable.length && repairHere && !cached && !sink?.cancelled && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || repairFake != null)) {
+    const rp = repairPrompt({ prompt, raw, refused: refusedAll, total: reply.actions.length + gateRefused.length, uxGuideSent: uxTurn, methodsGuideSent: methodsTurn, ops: [...reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")), ...gateRefused.map((g) => g.op)], extraGuides: missedGuides.map((g) => GUIDE_TEXT[g]) });
     const repairPromptText = rp.text;
     // what was refused, for whoever reads the server log: the request did not reach the guide, or the model ignored it
-    console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, refused: refused.map((e) => e.slice(0, 300)) }));
+    console.warn("[rescript:copilot] actions refused, asking once more", JSON.stringify({ mode, uxGuideSent: uxTurn, addedUxGuide: rp.addedUxGuide, ...(missedGuides.length ? { addedGuides: missedGuides } : {}), refused: refusedAll.map((e) => e.slice(0, 300)) }));
     try {
       const rb = outputBudget("repair");
       sink?.progress({ stage: "repair", label: "Correcting refused actions" });
@@ -695,26 +796,37 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
         () => model(() => completeJson(...copilotCall(repairPromptText, stableExtra), rb.maxTokens, replyCallOptions({ timeoutMs: rb.timeoutMs, deadline, continuations: rb.continuations, operation: `copilot_${mode}_repair`, onEvent }))));
       if (m.ok) {
         charge += m.event?.customerCharge ?? 0;
-        const raw2 = fakes[1] ?? m.value;
+        const raw2 = repairFake ?? m.value;
         const c2 = coerceCopilotReply(raw2);
         const r2 = guard(c2 && themeImageUrl ? { ...c2, actions: withThemeImage(c2.actions, themeImageUrl) } : c2);
         /*
          * TARGETED: the model returns only the corrections; the accepted actions are kept as they were
          * (not regenerated, not paid for twice). A model that repeats an accepted action keeps it once.
          */
-        const kept = applied.results.filter((x) => x.ok).map((x) => reply!.actions[x.index]!).filter(Boolean);
+        const kept = applied ? applied.results.filter((x) => x.ok).map((x) => reply!.actions[x.index]!).filter(Boolean) : [];
         const merged = r2 ? mergeRepair(kept, r2.actions) : [];
         const a2 = r2 && merged.length ? applySurveyActions(def, merged, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
-        const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
-        if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied.results.some((x) => x.ok)))) {
-          reply = carryProvenance(reply, { ...r2, actions: merged }); applied = a2;
+        const r2Gate = r2 ? r2.rejected.length : 0;
+        if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied?.results.some((x) => x.ok)))) {
+          reply = carryProvenance(reply, { ...r2, actions: merged }); applied = a2; rejectedRaw = raw2;
           if (!fakes.length && !kept.length) { CACHE.set(key, { at: Date.now(), value: raw2 }); }
-          repair = { refused, fixed: !a2 || a2.results.every((x) => x.ok), uxGuide: rp.addedUxGuide };
-        } else repair = { refused, fixed: false, uxGuide: rp.addedUxGuide };
+          repair = { refused: refusedAll, fixed: (!a2 || a2.results.every((x) => x.ok)) && !r2Gate, uxGuide: rp.addedUxGuide, ...(missedGuides.length ? { guides: missedGuides } : {}) };
+        } else repair = { refused: refusedAll, fixed: false, uxGuide: rp.addedUxGuide, ...(missedGuides.length ? { guides: missedGuides } : {}) };
       }
     } catch (e) {
       console.warn("[rescript:copilot] repair failed", JSON.stringify({ error: (e as Error).message }));
     }
+  }
+  /*
+   * #13: A DESIGN THAT STILL CANNOT BE MADE IS SAID PLAINLY — what was refused and why, and that it was sent back
+   * once (the researcher is never left with a proposal that silently lacks the MaxDiff they asked for).
+   */
+  {
+    const rawEnd = rawActionsOf(rejectedRaw);
+    const stillGate = reply.rejected.map((rj) => ({ o: rawEnd[rj.index] ?? {}, reason: rj.reason })).filter((x) => isMethodOp(opOfRaw(x.o))).map((x) => `${opOfRaw(x.o)}: ${x.reason}`);
+    const stillApplied = applied ? applied.results.filter((x) => !x.ok && isMethodOp(x.op)).map((x) => `${x.description}: ${x.error ?? ""}`) : [];
+    const designStill = [...new Set([...stillApplied, ...stillGate])];
+    if (designStill.length) reply = { ...reply, reply: `${reply.reply} ${NOTICES.designRefused(lang, designStill, !!repair && repair.skipped !== "policy")}`.slice(0, 4000) };
   }
   /*
    * THE COVERAGE GATE (Phase 3). A generated survey is checked on the clone
@@ -783,7 +895,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(noticeOf() ? { notice: noticeOf() } : {}), ...(provenance.untrusted ? { injection: { untrusted: true, flagged: provenance.flagged, sources: provenance.sources, signals: provenance.signals.slice(0, 5).map((x) => ({ kind: x.kind, excerpt: x.excerpt })), excluded: provenanceRejections(reply).map((x) => x.reason) } } : {}), ...(repair ? { repair } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(noticeOf() ? { notice: noticeOf() } : {}), ...(provenance.untrusted ? { injection: { untrusted: true, flagged: provenance.flagged, sources: provenance.sources, signals: provenance.signals.slice(0, 5).map((x) => ({ kind: x.kind, excerpt: x.excerpt })), excluded: provenanceRejections(reply).map((x) => x.reason) } } : {}), ...(repair ? { repair } : {}), ...(methodFixes.length ? { methodFixes } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
     usage: { charge },
   });
 }
@@ -800,6 +912,13 @@ function streamSeam(v: unknown): StreamSeam | null {
   const script: FakeStreamScript = { ...(num(o.chunkChars) ? { chunkChars: num(o.chunkChars) } : {}), ...(num(o.delayMs) != null ? { delayMs: num(o.delayMs) } : {}), ...(num(o.failAfterChars) != null ? { failAfterChars: num(o.failAfterChars) } : {}), ...(kind ? { failKind: kind } : {}) };
   return { script, heartbeatMs: num(o.heartbeatMs), dropAfterCheckpoints: num(o.dropAfterCheckpoints), dropAfterMs: num(o.dropAfterMs) };
 }
+
+/** the model's own action objects (raw JSON), in order — what `reply.rejected` indexes */
+function rawActionsOf(raw: unknown): Record<string, unknown>[] {
+  const a = raw && typeof raw === "object" ? (raw as { actions?: unknown }).actions : null;
+  return Array.isArray(a) ? a.map((x) => (x && typeof x === "object" ? x as Record<string, unknown> : {})) : [];
+}
+const opOfRaw = (x: Record<string, unknown>): string => String(x.op ?? x.action ?? "");
 
 function sanitizeMemory(m: TurnMemory | undefined): TurnMemory | undefined {
   if (!m || typeof m !== "object") return undefined;

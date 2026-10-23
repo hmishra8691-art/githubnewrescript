@@ -185,6 +185,27 @@ export function enforceTheme(t: ThemeSpec): { theme: ThemeSpec; adjustments: The
   if (theme.branding.footer) theme.branding.footer = theme.branding.footer.slice(0, 120);
   return { theme, adjustments: adj };
 }
+/**
+ * THE CONTRAST OF A THEME AS IT STANDS — what the live preview warns about while a theme is edited (#18),
+ * before `enforceTheme` moves anything: each rule `enforceTheme` keeps, its ratio now and its minimum.
+ */
+export function themeContrastReport(t: ThemeSpec): { token: string; against: string; ratio: number; min: number; ok: boolean; why: string }[] {
+  const c = t.colors;
+  const rows: [keyof ThemeColors, keyof ThemeColors, number, string][] = [
+    ["text", "background", 7, "body text on the page"],
+    ["heading", "background", 4.5, "headings on the page"],
+    ["muted", "background", 4.5, "secondary text on the page"],
+    ["tableHeaderText", "tableHeaderBg", 4.5, "table header text on its fill"],
+    ["primary", "background", 3, "rules and the first series on the page"],
+    ["accent", "background", 3, "accents on the page"],
+  ];
+  return rows.map(([a, b, min, why]) => {
+    const fa = hex(c[a]), fb = hex(c[b]);
+    const ratio = fa && fb ? Math.round(contrast(fa, fb) * 100) / 100 : 0;
+    return { token: a, against: b, ratio, min, ok: ratio >= min, why };
+  });
+}
+
 const clampNum = (v: unknown, lo: number, hi: number, dflt: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
 /** a font family name, nothing that could be markup or a path */
 const safeFont = (v: unknown, dflt: string) => (typeof v === "string" && /^[A-Za-z0-9 \-]{2,40}$/.test(v.trim()) ? v.trim() : dflt);
@@ -200,8 +221,129 @@ export function reportThemeHash(t: ThemeSpec): string {
 
 export const STRUCTURE_SECTIONS = ["summary", "hypotheses", "findings", "segments", "implications", "recommendations", "method", "caveats"] as const;
 export type StructureSection = (typeof STRUCTURE_SECTIONS)[number];
-/** a reordering of the findings report's sections — content unchanged, asked for in words only */
-export interface StructureRequest { order: StructureSection[]; understood: string }
+/**
+ * A reordering of a project's documents' sections — content unchanged. `order` is the findings report's
+ * order asked for in words (2026-10-18); `sections` (2026-10-22, engine item #18) is an explicit order per
+ * DOCUMENT FAMILY set by drag and drop / keyboard in the Research tab, applied identically in every export of
+ * that family (the findings Word report and the findings deck share one order; the qualitative report and
+ * the qualitative deck share another). Section ids are `sectionId(title)`; ids a document does not have are
+ * ignored, and sections the order does not name keep their place after the named ones.
+ */
+export interface StructureRequest { order: StructureSection[]; understood: string; sections?: Partial<Record<DocumentFamily, string[]>> }
+
+export const DOCUMENT_FAMILIES = ["findings", "research_plan", "proposal", "sap", "qual"] as const;
+export type DocumentFamily = (typeof DOCUMENT_FAMILIES)[number];
+
+/** a section's stable id: its heading without its number, lower-case, hyphenated ("3. Hypotheses and rationale" → "hypotheses-and-rationale") */
+export function sectionId(title: string): string {
+  return title.replace(/^\s*\d+[.)]\s*/, "").replace(/\s*\(.*?\)\s*$/, "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+
+/** every section each family's documents can have, in their default order (some only appear when the study has them) */
+export const DOCUMENT_SECTIONS: Record<DocumentFamily, { id: string; title: string; when?: string }[]> = {
+  findings: [
+    { id: "executive-summary", title: "Executive summary" },
+    { id: "the-hypotheses", title: "The hypotheses" },
+    { id: "since-the-last-wave", title: "Since the last wave", when: "a tracker with an earlier wave" },
+    { id: "key-findings", title: "Key findings" },
+    { id: "advanced-models", title: "Advanced models", when: "advanced analyses were run" },
+    { id: "who-differs", title: "Who differs", when: "segment differences were found" },
+    { id: "beyond-the-plan", title: "Beyond the plan", when: "findings outside the plan" },
+    { id: "what-the-data-says-about-the-methods", title: "What the data says about the methods", when: "method checks apply" },
+    { id: "what-it-means", title: "What it means" },
+    { id: "what-to-do-next", title: "What to do next" },
+    { id: "method", title: "Method" },
+    { id: "caveats", title: "Caveats" },
+  ],
+  research_plan: [
+    { id: "executive-summary", title: "Executive summary" },
+    { id: "business-context-problem-and-objectives", title: "Business context, problem and objectives" },
+    { id: "research-questions-and-kpis", title: "Research questions and KPIs", when: "research questions are recorded" },
+    { id: "hypotheses-and-rationale", title: "Hypotheses and rationale" },
+    { id: "methodology", title: "Methodology" },
+    { id: "questionnaire-and-interview-guide", title: "Questionnaire and interview guide" },
+    { id: "how-each-question-serves-the-objectives-and-hypotheses", title: "How each question serves the objectives and hypotheses" },
+    { id: "variables-and-scales", title: "Variables and scales" },
+    { id: "population-sampling-and-fieldwork", title: "Population, sampling and fieldwork" },
+    { id: "analysis-plan", title: "Analysis plan" },
+    { id: "hypothesis-tests", title: "Hypothesis tests" },
+    { id: "proposed-tables-and-charts", title: "Proposed tables and charts" },
+    { id: "expected-outputs-and-interpretation-framework", title: "Expected outputs and interpretation framework" },
+    { id: "quality-control-requirements", title: "Quality control requirements" },
+    { id: "deliverables", title: "Deliverables" },
+    { id: "limitations-assumptions-and-recommendations", title: "Limitations, assumptions and recommendations" },
+    { id: "ethics-consent-and-data-protection", title: "Ethics, consent and data protection" },
+  ],
+  proposal: [
+    { id: "background-and-objective", title: "Background and objective" },
+    { id: "research-questions-and-kpis", title: "Research questions and KPIs", when: "research questions are recorded" },
+    { id: "hypotheses", title: "Hypotheses" },
+    { id: "questionnaire", title: "Questionnaire" },
+    { id: "sample-and-fieldwork", title: "Sample and fieldwork" },
+    { id: "analysis-plan", title: "Analysis plan" },
+    { id: "deliverables", title: "Deliverables" },
+    { id: "assumptions-and-sources", title: "Assumptions and sources", when: "assumptions or sources are recorded" },
+    { id: "ethics-consent-and-data-protection", title: "Ethics, consent and data protection" },
+  ],
+  sap: [
+    { id: "objectives-and-hypotheses", title: "Objectives and hypotheses" },
+    { id: "populations-bases-and-dataset-scope", title: "Populations, bases and dataset scope" },
+    { id: "variables-and-derived-variables", title: "Variables and derived variables" },
+    { id: "planned-analyses", title: "Planned analyses" },
+    { id: "statistical-conventions", title: "Statistical conventions" },
+    { id: "sample-size", title: "Sample size" },
+    { id: "interim-analyses-and-software", title: "Interim analyses and software" },
+  ],
+  qual: [
+    { id: "objectives", title: "Objectives" },
+    { id: "key-findings", title: "Key findings", when: "AI insights were made" },
+    { id: "method-and-coding", title: "Method and coding" },
+    { id: "codebook", title: "Codebook" },
+    { id: "themes", title: "Themes" },
+    { id: "group-differences", title: "Group differences" },
+    { id: "interpretation", title: "Interpretation" },
+    { id: "limitations", title: "Limitations" },
+    { id: "review-status-and-history", title: "Review status and history" },
+  ],
+};
+
+/** the words-only order (2026-10-18) of the findings report, as section ids */
+const LEGACY_FINDINGS: Record<StructureSection, string> = {
+  summary: "executive-summary", hypotheses: "the-hypotheses", findings: "key-findings", segments: "who-differs",
+  implications: "what-it-means", recommendations: "what-to-do-next", method: "method", caveats: "caveats",
+};
+
+/** the section order a family's documents follow — the explicit one, else (findings) the order asked for in words; null = as built */
+export function sectionOrderFor(structure: StructureRequest | null | undefined, family: DocumentFamily): string[] | null {
+  const explicit = structure?.sections?.[family];
+  if (explicit?.length) return explicit;
+  if (family === "findings" && structure?.order?.length) return structure.order.map((k) => LEGACY_FINDINGS[k]).filter(Boolean);
+  return null;
+}
+
+/**
+ * Put sections in an order: the named ones first, in the order named, then the rest in their own order.
+ * Generic over what a section is (Word heading blocks, deck slide groups, story scenes) — the same function
+ * for every export, which is what makes them agree.
+ */
+export function orderSections<T>(sections: readonly { id: string; items: T[] }[], order: readonly string[] | null | undefined): { id: string; items: T[] }[] {
+  if (!order?.length) return [...sections];
+  const rank = (id: string) => { const i = order.indexOf(id); return i < 0 ? order.length : i; };
+  return sections.map((s, i) => ({ s, i, r: rank(s.id) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.s);
+}
+
+/** read a stored / posted section-order map: known families, string ids, de-duplicated */
+export function readSectionOrders(x: unknown): Partial<Record<DocumentFamily, string[]>> | undefined {
+  if (!x || typeof x !== "object") return undefined;
+  const out: Partial<Record<DocumentFamily, string[]>> = {};
+  for (const f of DOCUMENT_FAMILIES) {
+    const v = (x as Record<string, unknown>)[f];
+    if (!Array.isArray(v)) continue;
+    const ids = [...new Set(v.filter((s): s is string => typeof s === "string" && /^[a-z0-9-]{1,60}$/.test(s)))].slice(0, 60);
+    if (ids.length) out[f] = ids;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 /* ------------------------------------------------------------ reading a request */
 

@@ -4,6 +4,7 @@ import type { SessionUser } from "@/lib/useSession";
 import { interviewsHandoffHref } from "@/lib/interviews-url";
 import { Icon } from "./Icon";
 import { WalletMenu } from "../billing/WalletMenu";
+import { AlertBell } from "../notify/AlertBell";
 
 /**
  * THE TOP-LEVEL HEADER shared by the Dashboard and Data Analytics pages:
@@ -44,6 +45,8 @@ export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
         <div className="apph-account" data-testid="dash-account">
           {/* the wallet, compact, beside the account controls (dashboard brief §3) — the one place the balance lives on these pages */}
           <WalletMenu onAddFunds={onAddFunds} />
+          {/* G3 2026-10-22: my alerts */}
+          <AlertBell />
           {active !== "account" && (
             <>
               {!!user.unread && <a className="btn small" href="/profile" title="You have unread notifications"><Icon name="bell" size={14} /> {user.unread} new</a>}
@@ -76,6 +79,7 @@ export function AppHeader({ active, user, onSignOut, crumbs, onAddFunds }: {
                   <a className="menu-item" href="/security" role="menuitem"><Icon name="shield" size={15} /> Security &amp; sessions</a>
                   <a className="menu-item" href="/billing" role="menuitem"><Icon name="chart" size={15} /> My usage</a>
                   <a className="menu-item" href="/settings/ai" role="menuitem" data-testid="menu-ai-settings"><Icon name="settings" size={15} /> AI &amp; Integrations</a>
+                  <a className="menu-item" href="/settings/alerts" role="menuitem" data-testid="menu-alert-settings"><Icon name="settings" size={15} /> Alerts</a>
                   <a className="menu-item" href="/" role="menuitem"><Icon name="grid" size={15} /> Projects</a>
                   {interviewsHref && (
                     <a className="menu-item" href={interviewsHref} role="menuitem"><Icon name="play" size={15} /> Interviews</a>

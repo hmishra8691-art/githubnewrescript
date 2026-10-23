@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { SetExpr } from "./setExpression.js";
+import { ExactBalance } from "./balance.js";
 
 /**
  * Survey Flow — the ordered structure the runtime walks (requirement §7).
@@ -305,6 +306,8 @@ export type FlowNode =
       /** Present N of the children, in random order. */
       show?: number;
       evenPresentation?: boolean;
+      /** exact balance across respondents (an atomic least-filled claim) — see balance.ts; absent = seed-derived */
+      balance?: ExactBalance;
       children: FlowNode[];
       /** Only run this randomizer (and show any of its children) when this holds. */
       visibleIf?: Condition;
@@ -479,6 +482,7 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       title: z.string().optional(),
       show: z.number().optional(),
       evenPresentation: z.boolean().optional(),
+      balance: ExactBalance.optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
     }),

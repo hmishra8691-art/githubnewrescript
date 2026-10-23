@@ -23,12 +23,15 @@ export default function GroupPage({ params }: { params: { code: string } }) {
   const [draft, setDraft] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  /* G3: a panel's end link and code (once the conversation has ended, or when the panel turned the entry away) */
+  const [panel, setPanel] = React.useState<{ url: string | null; code: string | null } | null>(null);
 
   React.useEffect(() => { try { setToken(window.sessionStorage.getItem(key)); } catch { /* a private window */ } }, [key]);
 
   const call = React.useCallback(async (body: Record<string, unknown>) => {
     const r = await fetch("/api/group", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, ...body }), cache: "no-store" });
     const d = await r.json().catch(() => ({}));
+    if ((d as { panel?: unknown }).panel) setPanel((d as { panel: { url: string | null; code: string | null } }).panel);
     if (!r.ok) throw Object.assign(new Error((d as { error?: string }).error ?? `HTTP ${r.status}`), { code: (d as { code?: string }).code });
     return d as { view?: View; token?: string; handle?: string };
   }, [code]);
@@ -45,7 +48,9 @@ export default function GroupPage({ params }: { params: { code: string } }) {
 
   const join = async () => {
     setBusy(true); setError(null);
-    try { const d = await call({ action: "join", consent: true }); if (d.token) { try { window.sessionStorage.setItem(key, d.token); } catch { /* */ } setToken(d.token); } }
+    /* G3: the link's own parameters (a panel's id: PROLIFIC_PID, RID, psid …) travel with the join */
+    const params = Object.fromEntries(new URLSearchParams(window.location.search).entries());
+    try { const d = await call({ action: "join", consent: true, params }); if (d.token) { try { window.sessionStorage.setItem(key, d.token); } catch { /* */ } setToken(d.token); } }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   const answer = async () => {
@@ -68,6 +73,7 @@ export default function GroupPage({ params }: { params: { code: string } }) {
       <label style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0" }}><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} data-testid="group-consent" /> I agree to take part</label>
       <button type="button" style={btn} disabled={!consent || busy} onClick={join} data-testid="group-join-button">Join</button>
       {error && <p role="alert" style={{ color: "#b42318" }} data-testid="group-error">{error}</p>}
+      {panel && (panel.url || panel.code) && <div style={card} data-testid="group-panel">{panel.code && <p data-testid="group-code">Your code: <b>{panel.code}</b></p>}{panel.url && <a style={{ ...btn, display: "inline-block", textDecoration: "none" }} href={panel.url} rel="noopener noreferrer" data-testid="group-redirect">Continue</a>}</div>}
     </main>
   );
 
@@ -108,6 +114,7 @@ export default function GroupPage({ params }: { params: { code: string } }) {
         </div>
       )}
       {error && <p role="alert" style={{ color: "#b42318" }} data-testid="group-error">{error}</p>}
+      {panel && (panel.url || panel.code) && <div style={card} data-testid="group-panel">{panel.code && <p data-testid="group-code">Your code: <b>{panel.code}</b></p>}{panel.url && <a style={{ ...btn, display: "inline-block", textDecoration: "none" }} href={panel.url} rel="noopener noreferrer" data-testid="group-redirect">Continue</a>}</div>}
     </main>
   );
 }

@@ -48,7 +48,7 @@ import {
 import { variantRenderers } from "./variants/registry";
 import { DualResponseFollowUp } from "./variants/conjointSuite";
 import { MediaEmbed, SafeImage } from "./Media";
-import { SpeechInputButton } from "./SpeechInput";
+import { SpeechInputButton, SpeechCell } from "./SpeechInput";
 import { anchor, cellAnchor, type AuthoringAnchor } from "./authoring";
 import { announceSelection } from "./optionPopup";
 import { CellMultiDropdown } from "./cellMultiDropdown";
@@ -914,6 +914,8 @@ export function PhoneInput({ value, onChange, country, readOnly, placeholder, ar
 
 export function TextInput(p: QRProps) {
   const text = p.value == null ? "" : String(p.value);
+  /* dictation gives focus back to the field when it ends (#16) */
+  const ref = React.useRef<HTMLInputElement>(null);
   /* a question validated as a phone number with a country (or the code list) takes one the way a phone field does */
   if (p.q.validation.some((r) => r.kind === "phone") && p.q.settings.phoneCountry) {
     return (
@@ -924,6 +926,7 @@ export function TextInput(p: QRProps) {
   return (
     <div className="rs-textfield">
       <input
+        ref={ref}
         className="rs-input"
         type="text"
         value={text}
@@ -932,7 +935,7 @@ export function TextInput(p: QRProps) {
         onChange={(e) => p.onChange(e.target.value)}
       />
       {/* `speech_input`, on by default: dictation writes into the SAME value, through the same onChange (the control decides whether it belongs here) */}
-      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />
+      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} target={ref} />
     </div>
   );
 }
@@ -945,9 +948,11 @@ export function LongText(p: QRProps) {
   const maxLen = p.q.validation?.find((v) => v.kind === "max_length")?.value;
   const min = Number(minLen);
   const short = Number.isFinite(min) && text.length < min;
+  const ref = React.useRef<HTMLTextAreaElement>(null);
   return (
     <div>
       <textarea
+        ref={ref}
         className="rs-textarea"
         value={text}
         placeholder={p.q.settings.placeholder}
@@ -955,7 +960,7 @@ export function LongText(p: QRProps) {
         maxLength={Number.isFinite(Number(maxLen)) ? Number(maxLen) : undefined}
         onChange={(e) => p.onChange(e.target.value)}
       />
-      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} />
+      <SpeechInputButton def={p.def} q={p.q} value={text} onChange={p.onChange} target={ref} />
       {(Number.isFinite(min) || Number.isFinite(Number(maxLen))) && (
         <div className={`rs-counter ${short ? "short" : ""}`} data-testid="char-counter">
           {text.length}
@@ -1629,10 +1634,16 @@ export function Matrix(p: QRProps) {
                 )}
                 {type === "matrix_text" && (
                   <td>
-                    <input className="rs-input" type="text"
-                      aria-label={`${plainLabel(row.label)}: ${plainLabel(view.columns[0]?.label ?? "Answer")}`}
-                      value={rowVal == null ? "" : String(rowVal)}
-                      onChange={(e) => setRow(rc, e.target.value)} />
+                    {/* dictation per cell, shown while the cell has focus (#16) — the column keeps its width */}
+                    <SpeechCell def={p.def} q={p.q} value={rowVal == null ? "" : String(rowVal)} onChange={(x) => setRow(rc, x)}
+                      label={plainLabel(row.label)} columnType="text">
+                      {(ref) => (
+                        <input ref={ref} className="rs-input" type="text"
+                          aria-label={`${plainLabel(row.label)}: ${plainLabel(view.columns[0]?.label ?? "Answer")}`}
+                          value={rowVal == null ? "" : String(rowVal)}
+                          onChange={(e) => setRow(rc, e.target.value)} />
+                      )}
+                    </SpeechCell>
                   </td>
                 )}
                 {type === "matrix_dropdown" && (
@@ -1776,12 +1787,23 @@ function CompositeCell({
     case "checkbox":
       return <input type="checkbox" checked={!!value} disabled={ro} onChange={(e) => onChange(e.target.checked)} />;
     case "longtext":
-      return <textarea className="rs-textarea" style={{ minHeight: 50 }} readOnly={ro}
-        value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} />;
     case "text":
-    default:
-      return <input className="rs-input" type="text" readOnly={ro} placeholder={col.placeholder}
-        value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} />;
+    default: {
+      const long = col.responseType === "longtext";
+      const text = value == null ? "" : String(value);
+      /* dictation per cell (#16); a read-only column never takes it */
+      if (ro) return long
+        ? <textarea className="rs-textarea" style={{ minHeight: 50 }} readOnly value={text} onChange={(e) => onChange(e.target.value)} />
+        : <input className="rs-input" type="text" readOnly placeholder={col.placeholder} value={text} onChange={(e) => onChange(e.target.value)} />;
+      return (
+        <SpeechCell def={p.def} q={p.q} value={text} onChange={(x) => onChange(x)} label={col.label.replace(/<[^>]*>/g, "")}
+          columnType={long ? "longtext" : "text"} validation={col.validation ?? []}>
+          {(ref) => long
+            ? <textarea ref={ref} className="rs-textarea" style={{ minHeight: 50 }} value={text} onChange={(e) => onChange(e.target.value)} />
+            : <input ref={ref} className="rs-input" type="text" placeholder={col.placeholder} value={text} onChange={(e) => onChange(e.target.value)} />}
+        </SpeechCell>
+      );
+    }
   }
 }
 
@@ -1856,7 +1878,7 @@ function DesignTasks(p: QRProps) {
    * derives it from the response seed (designVersion.ts), which is why it
    * survives a resume and is recoverable from the stored response.
    */
-  const rows = designRowsFor(p.q, allRows, p.state.seed);
+  const rows = designRowsFor(p.q, allRows, p.state.seed, p.state.calculated);
   const tasks = [...new Set(rows.map((r) => String(r.task)))];
   const vals = (p.value ?? {}) as Record<string, unknown>;
   const isMaxdiff = p.q.type === "maxdiff_task";

@@ -5,6 +5,7 @@ import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
+import { BalanceSettings } from "./FlowNodeEditors";
 import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns, offersOptionSearch } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
@@ -2251,10 +2252,18 @@ export function QuestionEditor({ q }: { q: Question }) {
           <label className="f"><span>Design file</span>
             <select className="select" value={q.settings.designRef ?? ""}
               data-testid="design-ref"
-              onChange={(e) => patchSettings({ designRef: e.target.value || undefined })}>
+              onChange={(e) => patchSettings({
+                designRef: e.target.value || undefined,
+                /* NEW (#15): picking a design for a question that never had one turns on EXACT version balance — written
+                   into the survey, so surveys saved before keep their seed-derived versions */
+                ...(e.target.value && !q.settings.designRef && !q.settings.versionBalance ? { versionBalance: { exact: true } } : {}),
+              })}>
               <option value="">— pick a generated design —</option>
               {s.def.designs.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.kind} v{d.version})</option>)}
             </select></label>
+          {q.settings.designRef && new Set(((s.def.designs.find((d) => d.id === q.settings.designRef)?.file?.rows ?? []) as Record<string, unknown>[]).map((r) => String(r.version ?? "1"))).size > 1 && (
+            <BalanceSettings value={q.settings.versionBalance} onChange={(b) => patchSettings({ versionBalance: b })} what="the design version" testId="version-balance" />
+          )}
           {s.def.designs.length === 0 && (
             <div className="chip warn" data-testid="no-designs" style={{ marginTop: -6 }}>
               No designs yet — generate one in{" "}

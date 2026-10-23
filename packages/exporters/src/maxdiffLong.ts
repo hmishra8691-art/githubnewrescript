@@ -46,7 +46,7 @@ export function maxdiffChoiceRows(
         placed = false;
         continue;
       }
-      const version = designVersionFor(q, design.rows, seed);
+      const version = designVersionFor(q, design.rows, seed, state.calculated);
       const versionRows = design.rows.filter((r) => String(r.version ?? "1") === version);
       for (const [key, value] of entries) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;

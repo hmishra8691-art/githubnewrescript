@@ -1,11 +1,12 @@
 "use client";
 import React from "react";
 import { EXPORT_PRESETS } from "@rescript/exporters";
-import { REPORT_THEMES, type ThemeSpec } from "@rescript/analytics";
+import { REPORT_THEMES, DEFAULT_REPORT_THEME, enforceTheme, type ThemeSpec, type ThemeReading, type StructureRequest, type DocumentFamily } from "@rescript/analytics";
 import { useStudio } from "./store";
 import { editionOf, mimeOf, type ArtifactType } from "../../lib/artifacts/core";
 import { fetchArtifactLines, fetchArtifactLink, sandboxFingerprint, saveBytes, saveUrl, sessionStore, type ArtifactLineView } from "../../lib/artifacts/client";
-import { sandboxLines, sandboxPut, sandboxTheme, fromBase64 } from "../../lib/artifacts/sandboxStore";
+import { sandboxLines, sandboxPut, sandboxTheme, setSandboxTheme, fromBase64 } from "../../lib/artifacts/sandboxStore";
+import { LiveThemePreview, SectionOrderEditor, orderedCatalog } from "./ReportLayout";
 import { themeTurn, applyThemeTurn, saveThemeTurn, type ThemeCard } from "../../lib/copilot/reportThemeTurn";
 import { ThemeSwatches } from "../intelligent/copilot/DocumentCards";
 
@@ -205,18 +206,53 @@ function ReportThemePanel({ surveyId, def, onChanged, toast }: { surveyId: strin
   const [scope, setScope] = React.useState<"user" | "org">("user");
   const [busy, setBusy] = React.useState(false);
   const [saved, setSaved] = React.useState<ThemeSpec[]>([]);
+  /* #18: the project's applied selection (theme + section orders), the theme being edited live, the family whose order is shown */
+  const [applied, setApplied] = React.useState<{ theme: ThemeSpec | null; structure: StructureRequest | null }>({ theme: null, structure: null });
+  const [draft, setDraft] = React.useState<ThemeSpec | null>(null);
+  const [edited, setEdited] = React.useState(false);
+  const [family, setFamily] = React.useState<DocumentFamily>("findings");
   const ctx = React.useMemo(() => ({ surveyId, def, store: sessionStore() }), [surveyId, def]);
   const loadSaved = React.useCallback(async () => {
-    if (surveyId === "sandbox") { setSaved(sandboxTheme(sessionStore()).saved); return; }
-    const r = await fetch(`/api/surveys/${surveyId}/report-themes`, { cache: "no-store" }).then((x) => (x.ok ? x.json() : null)).catch(() => null) as { saved?: ThemeSpec[] } | null;
+    if (surveyId === "sandbox") { const st = sandboxTheme(sessionStore()); setSaved(st.saved); setApplied({ theme: st.theme, structure: st.structure }); return; }
+    const r = await fetch(`/api/surveys/${surveyId}/report-themes`, { cache: "no-store" }).then((x) => (x.ok ? x.json() : null)).catch(() => null) as { saved?: ThemeSpec[]; applied?: { theme: ThemeSpec | null; structure: StructureRequest | null } | null } | null;
     setSaved(r?.saved ?? []);
+    setApplied({ theme: r?.applied?.theme ?? null, structure: r?.applied?.structure ?? null });
   }, [surveyId]);
+  /* the order of a family's sections, saved where the project keeps its report selection */
+  const saveStructure = async (structure: StructureRequest) => {
+    setBusy(true);
+    try {
+      if (surveyId === "sandbox") { setSandboxTheme(sessionStore(), { structure }); setApplied((a) => ({ ...a, structure })); toast("Section order saved: the next version of these documents uses it."); }
+      else {
+        const r = await fetch(`/api/surveys/${surveyId}/report-themes`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ op: "apply", structure }) });
+        const d = await r.json().catch(() => null) as { applied?: { structure: StructureRequest | null }; error?: string } | null;
+        if (!r.ok) toast(d?.error ?? `The order could not be saved (HTTP ${r.status}).`, "err");
+        else { setApplied((a) => ({ ...a, structure: d?.applied?.structure ?? structure })); toast("Section order saved: the next version of these documents uses it."); }
+      }
+    } finally { setBusy(false); onChanged(); }
+  };
+  /* switching theme: the live preview redraws at once (no request); the reading for Apply follows */
+  const pick = (name: string) => {
+    const t = [...saved, ...REPORT_THEMES].find((x) => x.name === name);
+    if (t) { setDraft(structuredClone(t)); setEdited(false); }
+    void preview(`Apply the ${name} theme`);
+  };
+  const applyEdits = async () => {
+    if (!draft) return;
+    const { theme, adjustments } = enforceTheme(draft);
+    const reading = { intent: "modify", patch: {}, preview: { ...theme, name: draft.name || "Custom theme" }, adjustments, understood: ["edited in the live preview"], unclear: [], needsModel: false, proposedName: draft.name || "Custom theme" } as unknown as ThemeReading;
+    setBusy(true);
+    const r = await applyThemeTurn({ op: "describe", status: "preview", reading, canApply: true }, ctx);
+    setCard(r.card); toast(r.said, r.card.status === "applied" ? undefined : "err");
+    setBusy(false); setEdited(false); onChanged(); void loadSaved();
+  };
   React.useEffect(() => { void loadSaved(); }, [loadSaved]);
   const preview = async (words: string) => {
     if (!words.trim()) return;
     setBusy(true);
     const t = await themeTurn(words, { op: "describe", text: words }, ctx);
     setCard(t.card); setName(t.card.reading?.saveAs ?? t.card.reading?.proposedName ?? t.card.reading?.preview?.name ?? "");
+    if (t.card.reading?.preview) { setDraft(structuredClone(t.card.reading.preview)); setEdited(false); }
     if (t.card.status !== "preview") toast(t.said, t.card.status === "failed" ? "err" : undefined);
     setBusy(false);
   };
@@ -239,7 +275,7 @@ function ReportThemePanel({ surveyId, def, onChanged, toast }: { surveyId: strin
     <div className="rd-theme" data-testid="report-theme" style={{ marginTop: 10 }}>
       <div className="row" style={{ gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span className="muted" style={{ fontSize: 12.5 }}>Report theme</span>
-        <select className="select" style={{ width: 200 }} data-testid="report-theme-pick" value="" aria-label="Pick a theme" onChange={(e) => { if (e.target.value) void preview(`Apply the ${e.target.value} theme`); }}>
+        <select className="select" style={{ width: 200 }} data-testid="report-theme-pick" value="" aria-label="Pick a theme" onChange={(e) => { if (e.target.value) pick(e.target.value); }}>
           <option value="">Pick a theme…</option>
           <optgroup label="Built-in">{REPORT_THEMES.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}</optgroup>
           {saved.length > 0 && <optgroup label="Saved">{saved.map((t) => <option key={t.id} value={t.name}>{t.name}{t.version ? ` (v${t.version})` : ""}</option>)}</optgroup>}
@@ -248,7 +284,18 @@ function ReportThemePanel({ surveyId, def, onChanged, toast }: { surveyId: strin
           placeholder="…or describe it: navy headings, subtle cyan accents, white backgrounds, striped tables" data-testid="report-theme-text" aria-label="Describe a report theme" />
         <button type="button" className="btn small" disabled={busy || !text.trim()} onClick={() => void preview(text)} data-testid="report-theme-preview">Preview</button>
       </div>
+      {/* the reading's swatches (what Apply will apply), kept beside the live page */}
       {r?.preview && <ThemeSwatches theme={r.preview} />}
+      {/* #18: the live preview — switching or editing redraws it at once; nothing is generated */}
+      <LiveThemePreview theme={draft ?? applied.theme ?? DEFAULT_REPORT_THEME} onChange={(t) => { setDraft(t); setEdited(true); }}
+        sections={orderedCatalog(family, applied.structure?.sections?.[family]).map((x) => x.title)} />
+      {edited && draft && (
+        <div className="row" style={{ gap: 6 }}>
+          <button type="button" className="btn small primary" disabled={busy} onClick={() => void applyEdits()} data-testid="theme-live-apply">Apply these edits to the project</button>
+          <button type="button" className="btn small" onClick={() => { setDraft(r?.preview ? structuredClone(r.preview) : null); setEdited(false); }} data-testid="theme-live-discard">Discard edits</button>
+        </div>
+      )}
+      <SectionOrderEditor structure={applied.structure} onSave={saveStructure} busy={busy} family={family} setFamily={setFamily} />
       {r?.structure && <p className="muted" style={{ fontSize: 12.5 }} data-testid="report-theme-structure">Section order for the findings report: {r.structure.order.join(" → ")} — content unchanged.</p>}
       {r && r.understood.length > 0 && <p className="muted" style={{ fontSize: 12.5 }} data-testid="report-theme-understood">Understood: {r.understood.join(" · ")}</p>}
       {r && r.adjustments.length > 0 && <p className="muted" style={{ fontSize: 12.5 }}>Adjusted for legibility: {r.adjustments.map((a) => `${a.token} → ${a.to}`).join(" · ")}</p>}

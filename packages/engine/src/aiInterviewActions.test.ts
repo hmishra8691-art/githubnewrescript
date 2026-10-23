@@ -99,15 +99,15 @@ test("provenance: a redirect URL that came from document content is held unless 
   assert.equal(asked.kept.length, 1);
 });
 
-test("the registry: AI-moderated 1:1 interviews are supported; live human-moderated / multi-party video sessions still are not", async () => {
+test("the registry: AI-moderated 1:1 interviews are supported; live human-moderated / multi-party video sessions are partial (G2: built-in mesh, SFU when configured)", async () => {
   const { capabilitiesMentioned, capabilityOf } = await import("./capabilities.js");
   const ids = (t: string) => capabilitiesMentioned(t).map((c) => `${c.id}:${c.status}`);
   const words = ids("run this guide as AI voice interviews with 50 people in Hindi and English, 20 minutes, deep probing");
   assert.ok(words.includes("qualitative:ai_interviews:supported"), words.join(", "));
-  assert.ok(!words.includes("qualitative:moderated:not_supported"), words.join(", "));
+  assert.ok(!words.some((w) => w.startsWith("qualitative:moderated:")), words.join(", "));
   assert.ok(ids("an AI interview with each customer").includes("qualitative:ai_interviews:supported"));
-  assert.ok(ids("run two focus groups first").includes("qualitative:moderated:not_supported"));
-  assert.ok(ids("host a live video conference with 6 participants").includes("qualitative:moderated:not_supported"));
+  assert.ok(ids("run two focus groups first").includes("qualitative:moderated:partial"));
+  assert.ok(ids("host a live video conference with 6 participants").includes("qualitative:moderated:partial"));
   assert.equal(capabilityOf("qualitative:ai_interview_voice")?.status, "requires_configuration");
   assert.deepEqual(capabilityOf("qualitative:ai_interviews")?.implementedAs?.actions, ["configure_ai_interviews"]);
 });

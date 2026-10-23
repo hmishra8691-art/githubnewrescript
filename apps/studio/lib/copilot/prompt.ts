@@ -5,6 +5,7 @@ import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanIntent } from "./researchGuide.ts";
 import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
 import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthesisGuide.ts";
+import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 /* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
 import { NOTICES, type ReplyLanguage } from "./notices.ts";
@@ -202,7 +203,8 @@ CHOOSING THE PATTERN:
 • A popup → the show_popup effect, never a hand-made overlay. "placement": "center" (modal) for confirmations, eligibility, anything that must be seen · "anchored" (next to its "target", e.g. "Q3.option:1") for a hint about one element · "top" banner · "inline" in the card; plain feedback beside the answer is show_message. "dismiss": "button" (default) | "auto" (+"autoMs") | "none" (not for center). On a momentary event (answer, click, appear) say how it closes.
 • A script only for what effects cannot express — and then rs.popup / rs.closePopup / rs.showMessage, never your own position:fixed element (refused).
 • Target "Q3" runs on Q3's page, "survey" on every page; every time unless "once": true.
-• One mechanism per behaviour: if the outline lists one for the same target and event, update it by id (a second is refused). A small script change is update_behavior "edits", not the whole script.
+• One mechanism per behaviour: if the outline lists one for the same target and event, update it by id (a second is refused). A small script change is update_behavior "edits", not the whole script. The Studio compares what behaviours DO, not their wording: the same popup on the same question for the same answer (an effect and a script alike), or the same script under other names, is refused — update the one there is.
+• Multilingual surveys: put popup and message words in show_popup / show_message effects (they are translated with the survey; the close button is labelled in each respondent's language and placed for right-to-left scripts by the Studio) — text inside a script is not translated.
 Worked example — "When Q3 has option 1 selected, display a popup" (Q3's option 1 in the outline):
 {"op":"create_behavior","label":"Q3 option 1 popup","target":"Q3","on":"select_option","options":["1"],"effects":[{"do":"show_popup","title":"Thank you","text":"Thanks — a few more questions about this follow.","placement":"center"}]}
 {"op":"create_behavior","label":"…","target":"Q5","script":"rs.listen('select', 'self', (e) => { if (e.option === '99') rs.showMessage('self', 'Tell us more below.'); });"}
@@ -463,11 +465,13 @@ export function mergeRepair<T>(accepted: T[], corrected: T[]): T[] {
 }
 
 export const UX_ACTION_OP = /^(?:create|update|remove)_(?:style|animation|behavior)$|^attach_behavior_to_|^create_responsive_rule$|^set_custom_(?:code|html)$|^set_theme$/;
-export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[]; methodsGuideSent?: boolean }): { text: string; addedUxGuide: boolean; addedMethodsGuide?: boolean } {
-  const addedUxGuide = !input.uxGuideSent && input.ops.some((op) => UX_ACTION_OP.test(op));
+export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[]; methodsGuideSent?: boolean; /** #11 (2026-10-22): guides a staged item was not sent but its refused actions needed — added when the prompt lacks them */ extraGuides?: string[] }): { text: string; addedUxGuide: boolean; addedMethodsGuide?: boolean } {
+  const addedUxGuide = !input.uxGuideSent && !input.prompt.includes(COPILOT_UX_GUIDE) && input.ops.some((op) => UX_ACTION_OP.test(op));
   // a MaxDiff / conjoint written as create_question (refused, naming create_maxdiff / create_conjoint) or a method action without its guide: the guide goes with the repair
-  const addedMethodsGuide = !input.methodsGuideSent && !input.prompt.includes(COPILOT_METHODS_GUIDE) && (input.ops.some((op) => /^(?:create|update)_(?:maxdiff|conjoint)$/.test(op)) || input.refused.some((r) => /create_maxdiff|create_conjoint/.test(r)));
-  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}${addedMethodsGuide ? `\n\n${COPILOT_METHODS_GUIDE}` : ""}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer in the same JSON shape with ONLY the corrected replacements for the refused actions — the accepted ones are kept as they are, do not repeat them. Correct each refused action using only the actions, events and rs api described above, or leave it out and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
+  /* #13 (2026-10-22): simulate_conjoint and a refusal naming any design action count too */
+  const addedMethodsGuide = !input.methodsGuideSent && !input.prompt.includes(COPILOT_METHODS_GUIDE) && (input.ops.some((op) => /^(?:create|update)_(?:maxdiff|conjoint)$|^simulate_conjoint$/.test(op)) || input.refused.some((r) => /create_maxdiff|create_conjoint|update_maxdiff|update_conjoint|simulate_conjoint/.test(r)));
+  const extra = (input.extraGuides ?? []).filter((g) => g && !input.prompt.includes(g) && !(addedUxGuide && g === COPILOT_UX_GUIDE) && !(addedMethodsGuide && g === COPILOT_METHODS_GUIDE));
+  const text = `${input.prompt}${addedUxGuide ? `\n\n${COPILOT_UX_GUIDE}` : ""}${addedMethodsGuide ? `\n\n${COPILOT_METHODS_GUIDE}` : ""}${extra.map((g) => `\n\n${g}`).join("")}\n\nYOUR PREVIOUS ANSWER:\n${JSON.stringify(input.raw).slice(0, 14_000)}\n\nTHE STUDIO REFUSED ${input.refused.length} OF ITS ${input.total} ACTIONS:\n${input.refused.map((e) => `- ${e}`).join("\n")}\n\nAnswer in the same JSON shape with ONLY the corrected replacements for the refused actions — the accepted ones are kept as they are, do not repeat them. Correct each refused action using only the actions, events and rs api described above, or leave it out and say plainly in "reply" what the Studio cannot do. Do not mention the refusal to the user unless something could not be done.`;
   return { text, addedUxGuide, ...(addedMethodsGuide ? { addedMethodsGuide } : {}) };
 }
 
@@ -516,8 +520,12 @@ export function copilotUserPrompt(input: {
   qual?: boolean;
   /** 2026-10-22: the AI-interview guide (configure_ai_interviews) — absent = read from the message */
   aiInterview?: boolean;
+  /** 2026-10-22 (G3): the panels & alerts guide (connect_panel, configure_alerts) — absent = read from the message */
+  integrations?: boolean;
   /** documents and reports — sent when the request names one (reportingIntent) */
   reporting?: boolean;
+  /** 2026-10-22 (#11): the qualitative-synthesis guide — absent = read from the message (a staged item sets every switch itself) */
+  qualSynthesis?: boolean;
   /** the plan stage: no action guides (the items carry them) */
   planOnly?: boolean;
   /** a pasted brief (isLongBrief): said as one, with the instruction to assume rather than ask */
@@ -556,8 +564,10 @@ export function copilotUserPrompt(input: {
     if (input.qual ?? qualIntent(input.message)) parts.push(COPILOT_QUAL_GUIDE);
     /* 2026-10-22: the guide run as AI-moderated interviews (configure_ai_interviews) */
     if (input.aiInterview ?? aiInterviewIntent(input.message)) parts.push(COPILOT_AI_INTERVIEW_GUIDE);
+    /* 2026-10-22 (G3): panel recruitment and alert routing (connect_panel, configure_alerts) */
+    if (input.integrations ?? integrationsIntent(input.message)) parts.push(COPILOT_INTEGRATIONS_GUIDE);
     /* 2026-10-22 (F2): writing up the coded data, double-coding, reels, text group sessions — the Studio's cards do it; the guide names the sentence */
-    if (qualSynthesisIntent(input.message)) parts.push(COPILOT_QUAL_SYNTHESIS_GUIDE);
+    if (input.qualSynthesis ?? qualSynthesisIntent(input.message)) parts.push(COPILOT_QUAL_SYNTHESIS_GUIDE);
     if (input.reporting ?? reportingIntent(input.message)) parts.push(REPORTING_GUIDE);
   }
   if (input.uxOnly) parts.push("THIS REQUEST IS LOOK-AND-BEHAVIOUR ONLY: propose UX actions only. Any structural action (questions, options, logic, blocks, punch rules, variables) will be refused — validation that stops the respondent (an age limit, a format) is the one exception, unless the researcher said not to change anything. If the researcher also needs such a change, say in one sentence that they can ask for it as its own request in this same chat (for example “Code SEGMENT as 1 when Q3 = 1”) — there is no other mode or session to switch to.");

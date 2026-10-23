@@ -92,7 +92,7 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
     // a bigint seed may arrive from the database as a numeric string; null / "" / non-numeric is no seed
     const seedNum = state.seed == null || (state.seed as unknown) === "" ? NaN : Number(state.seed);
     if (!Number.isFinite(seedNum)) continue;
-    out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, seedNum);
+    out[`${q.variableName}_VERSION`] = designVersionFor(q, design.rows, seedNum, state.calculated);
   }
 
   for (const q of def.questions) {

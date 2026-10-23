@@ -70,12 +70,12 @@ export function dualPrompt(design: DesignReference | undefined): string {
 export interface CvaTaskView { task: string; holdout: boolean; profiles: { alt: string; levels: Record<string, string> }[] }
 
 /** the CVA tasks a respondent rates, in design order (their version, from the seed) */
-export function cvaTasksFor(def: SurveyDefinition, q: Question, seed: number | string | null | undefined): CvaTaskView[] {
+export function cvaTasksFor(def: SurveyDefinition, q: Question, seed: number | string | null | undefined, calculated?: Record<string, unknown> | null): CvaTaskView[] {
   const design = designOfQuestion(def, q);
   const all = (design?.file?.rows ?? []) as Record<string, unknown>[];
   if (!all.length) return [];
   const s = seed == null || (seed as unknown) === "" ? NaN : Number(seed);
-  const rows = Number.isFinite(s) ? designRowsFor(q, all, s) : all.filter((r) => String(r.version ?? "1") === "1");
+  const rows = Number.isFinite(s) ? designRowsFor(q, all, s, calculated) : all.filter((r) => String(r.version ?? "1") === "1");
   const attrs = (design?.file?.columns ?? []).filter((c) => !["version", "task", "alt", "is_holdout"].includes(c));
   const tasks = new Map<string, CvaTaskView>();
   for (const r of rows) {

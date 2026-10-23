@@ -9,6 +9,9 @@ import { planTrace,
 } from "@rescript/analytics";
 import type { LoadedContext, StoredRun } from "./analytics";
 import type { AnalysisRun } from "@rescript/analytics";
+/* #12 (2026-10-22): plan edits by action are judged by the one readiness rule at action time, as in Intelligent Mode */
+import { registerPlanReadinessGate } from "@rescript/analytics";
+registerPlanReadinessGate();
 import type { ModelJobView } from "./modelJobState.ts";
 
 /**

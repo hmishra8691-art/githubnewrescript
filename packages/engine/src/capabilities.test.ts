@@ -64,7 +64,7 @@ test("asked by the copilot's refusal / clarify logic: what a request names, with
   assert.ok(ids("segment them with latent class").includes("analysis:latent_class:partial"));
   assert.ok(ids("fit a structural equation model").includes("analysis:sem:supported"));
   assert.ok(ids("a gabor-granger demand curve").includes("methodology:gabor_granger:supported"));
-  assert.ok(ids("run two focus groups first").includes("qualitative:moderated:not_supported"));
+  assert.ok(ids("run two focus groups first").includes("qualitative:moderated:partial")); // G2 2026-10-22: live sessions run in the browser
   assert.ok(ids("a sequential monadic test of 3 concepts").includes("methodology:sequential_monadic:partial"));
   assert.ok(ids("van westendorp pricing").includes("methodology:van_westendorp:supported"));
   assert.deepEqual(methodologiesNamed("Online survey with a MaxDiff of features").map((m) => m.id), ["maxdiff"]);

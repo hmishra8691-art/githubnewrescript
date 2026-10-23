@@ -29,6 +29,7 @@ import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
 import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
 import { StructurePane } from "./copilot/StructurePane";
+import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
 import { proposalCounts, changeRecordOf } from "../../lib/copilot/client";
 import { appliedKicker, changeNumber, type SaveView } from "../../lib/copilot/history";
 
@@ -123,13 +124,15 @@ let aiKnown: boolean | null = null;
 /* /api/ai/transcribe's availability is kept by the shared microphone hook (lib/useVoiceInput) */
 
 const PREFS_KEY = "rescript.intelligent";
-function loadPrefs(): { inspector: number } {
-  try {
-    const raw = typeof window !== "undefined" ? window.localStorage.getItem(PREFS_KEY) : null;
-    if (raw) { const p = JSON.parse(raw); if (typeof p.inspector === "number") return p; }
-  } catch { /* fine */ }
-  return { inspector: 360 };
+/** the side panes' remembered widths (#19): localStorage, read defensively — a private window starts from the defaults */
+function loadPrefs(): { inspector: number; structure: number } {
+  let raw: string | null = null;
+  try { raw = typeof window !== "undefined" ? window.localStorage.getItem(PREFS_KEY) : null; } catch { /* fine */ }
+  return readPaneWidths(raw);
 }
+
+/** a layout effect in the browser (before paint), a plain effect on the server (where neither runs) — no SSR warning */
+const useIsoLayoutEffect = typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
 
 export function IntelligentView() {
   const s = useStudio();
@@ -148,13 +151,51 @@ export function IntelligentView() {
   /** null = unknown yet; false = 501 or no session; true = the route answered */
   const [aiAvailable, setAiAvailableState] = React.useState<boolean | null>(aiKnown);
   const setAiAvailable = React.useCallback((v: boolean) => { aiKnown = v; setAiAvailableState(v); }, []);
-  const [prefs, setPrefs] = React.useState(loadPrefs);
+  /* the first render matches the server's (defaults, 1440 px); the remembered widths and the measured width
+     arrive in a layout effect before the first paint — no hydration mismatch, no visible jump */
+  const [prefs, setPrefs] = React.useState(() => readPaneWidths(null));
+  const prefsLoaded = React.useRef(false);
+  useIsoLayoutEffect(() => { setPrefs(loadPrefs()); prefsLoaded.current = true; }, []);
   const [showInspector, setShowInspector] = React.useState(true);
   const [showStructure, setShowStructure] = React.useState(true);
+  /*
+   * ADAPTIVE PANES (#19): the workspace's width decides whether each open side pane is docked, a rail or
+   * (pressed) a drawer over the conversation — the conversation keeps at least 600 px. `drawer` is the
+   * pane open as an overlay.
+   */
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const [rootWidth, setRootWidth] = React.useState<number>(1440);
+  const [drawer, setDrawer] = React.useState<"structure" | "inspector" | null>(null);
+  useIsoLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => setRootWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", measure);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+  const layout = paneLayout({ width: rootWidth, structure: { open: showStructure, width: prefs.structure }, inspector: { open: showInspector, width: prefs.inspector } });
+  /* asking for the inspector (Review, a proposal's changes, research) shows it — as a drawer when it is not docked */
+  const layoutRef = React.useRef(layout);
+  layoutRef.current = layout;
+  const revealInspector = React.useCallback(() => { setShowInspector(true); if (layoutRef.current.inspector !== "docked") setDrawer("inspector"); }, []);
+  /* a drawer only for a pane that is not docked; Escape closes it */
+  React.useEffect(() => {
+    if (drawer === "structure" && layout.structure === "docked") setDrawer(null);
+    if (drawer === "inspector" && layout.inspector === "docked") setDrawer(null);
+  }, [drawer, layout.structure, layout.inspector]);
+  React.useEffect(() => {
+    if (!drawer) return;
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === "Escape") setDrawer(null); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawer]);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const logRef = React.useRef<HTMLDivElement>(null);
 
-  React.useEffect(() => { try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* fine */ } }, [prefs]);
+  React.useEffect(() => { if (!prefsLoaded.current) return; try { window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* fine */ } }, [prefs]);
   // follow the conversation — but leave the welcome screen at its top
   React.useEffect(() => { if (turns.length) logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [turns.length, busy]);
 
@@ -286,14 +327,14 @@ export function IntelligentView() {
     // a review asked for in a sentence (Phase 7 consolidation): the engine's review is the card and the Review tab; with a model, its reading follows as the Review button's does
     if (interp.kind === "answer" && interp.category === "quality_control" && interp.detected.some((d) => d.what === "review")) {
       copilot.local(t, interp, heard);
-      setShowInspector(true);
+      revealInspector();
       if (copilot.available !== false && (copilot.executionMode !== "internal" || copilot.cloudOnce)) await copilot.runReview(t); else copilot.showReview();
       setBusy(false); inputRef.current?.focus(); return;
     }
     if (interp.kind !== "model") {
       copilot.local(t, interp, heard);
       if (interp.kind === "actions") {
-        setShowInspector(true);
+        revealInspector();
         // the proposal's target is the selection — the inspector shows how it is wired NOW, and "this question" means it next
         const target = interp.targets.find((id) => s.def.questions.some((q) => q.id === id));
         if (target) selectKey(`question:${target}` as ObjectKey);
@@ -584,7 +625,7 @@ export function IntelligentView() {
       if (actions.length) copilot.previewFix(actions, `Import quotas from ${file.name}`);
       else s.toast(`No quota could be made from ${file.name} — see the Quotas tab for why.`, "err");
       copilot.setTab(actions.length ? "changes" : "quotas");
-      setShowInspector(true);
+      revealInspector();
     } catch (e) { s.toast(`The quota sheet could not be read: ${(e as Error).message}`, "err"); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.surveyDbId, s.def, copilot]);
@@ -655,18 +696,33 @@ export function IntelligentView() {
   const voiceError = voiceIn.error;
   const toggleVoice = voiceIn.toggle;
 
-  /* -------------------------------------------------------------- resize */
-  const dragging = React.useRef<{ startX: number; start: number } | null>(null);
-  const onDividerDown = (e: React.PointerEvent) => {
-    dragging.current = { startX: e.clientX, start: prefs.inspector };
+  /* -------------------------------------------------------------- resize (both splitters: pointer and keyboard, mirrored in RTL) */
+  const dragging = React.useRef<{ pane: "structure" | "inspector"; startX: number; start: number } | null>(null);
+  const isRtl = () => typeof document !== "undefined" && !!rootRef.current && getComputedStyle(rootRef.current).direction === "rtl";
+  const setPane = (pane: "structure" | "inspector", w: number) => setPrefs((p) => ({ ...p, [pane]: Math.max(PANE_LIMITS[pane].min, Math.min(PANE_LIMITS[pane].max, Math.round(w))) }));
+  const splitterDown = (pane: "structure" | "inspector") => (e: React.PointerEvent) => {
+    dragging.current = { pane, startX: e.clientX, start: pane === "inspector" ? layout.inspectorWidth || prefs.inspector : layout.structureWidth || prefs.structure };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
-  const onDividerMove = (e: React.PointerEvent) => {
-    if (!dragging.current) return;
-    const w = Math.max(260, Math.min(640, dragging.current.start - (e.clientX - dragging.current.startX)));
-    setPrefs({ inspector: w });
+  const splitterMove = (e: React.PointerEvent) => {
+    const d = dragging.current;
+    if (!d) return;
+    const dx = (e.clientX - d.startX) * (isRtl() ? -1 : 1);
+    setPane(d.pane, d.pane === "inspector" ? d.start - dx : d.start + dx);
   };
-  const onDividerUp = () => { dragging.current = null; };
+  const splitterUp = () => { dragging.current = null; };
+  const splitterKeyDown = (pane: "structure" | "inspector") => (e: React.KeyboardEvent) => {
+    const cur = pane === "inspector" ? layout.inspectorWidth || prefs.inspector : layout.structureWidth || prefs.structure;
+    const next = splitterKey(e.key, e.shiftKey, cur, pane, pane === "structure" ? "start" : "end", isRtl());
+    if (next == null) return;
+    e.preventDefault();
+    setPane(pane, next);
+  };
+  /* kept for the existing inspector divider wiring */
+  const onDividerDown = splitterDown("inspector");
+  const onDividerMove = splitterMove;
+  const onDividerUp = splitterUp;
+  void readPaneWidths;
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void ask(text); }
@@ -698,8 +754,24 @@ export function IntelligentView() {
   }, [primary, s.def]);
 
   return (
-    <div className="iq cp-workspace" data-testid="intelligent-view" data-undo-depth={s.undoDepth} data-undo-label={s.undoLabel ?? ""} data-save={s.saveState.kind} style={{ gridTemplateColumns: `${showStructure ? "240px " : ""}${showInspector ? `minmax(0, 1fr) 6px ${prefs.inspector}px` : "minmax(0, 1fr)"}` }}>
-      {showStructure && <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={pickQuestion} />}
+    <div ref={rootRef} className="iq cp-workspace" data-testid="intelligent-view" data-undo-depth={s.undoDepth} data-undo-label={s.undoLabel ?? ""} data-save={s.saveState.kind}
+      data-structure={layout.structure} data-inspector={layout.inspector} data-main-width={layout.mainWidth} style={{ gridTemplateColumns: layout.columns, ["--iq-cols" as string]: layout.columns } as React.CSSProperties}>
+      {layout.structure === "docked" && <>
+        <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={pickQuestion} />
+        <div className="iq-divider" role="separator" aria-orientation="vertical" tabIndex={0} aria-label="Resize the structure pane (arrow keys)" aria-valuemin={PANE_LIMITS.structure.min} aria-valuemax={PANE_LIMITS.structure.max} aria-valuenow={layout.structureWidth}
+          onPointerDown={splitterDown("structure")} onPointerMove={splitterMove} onPointerUp={splitterUp} onKeyDown={splitterKeyDown("structure")} data-testid="iq-splitter-structure" />
+      </>}
+      {layout.structure === "rail" && (
+        <div className="iq-rail start" data-testid="iq-rail-structure-wrap">
+          <button type="button" className="iq-btn iq-rail-btn" aria-label="Show the survey's structure" title="The survey's structure" aria-expanded={drawer === "structure"} onClick={() => setDrawer((d) => (d === "structure" ? null : "structure"))} data-testid="iq-rail-structure"><Icon name="layers" size={14} /></button>
+        </div>
+      )}
+      {drawer === "structure" && layout.structure !== "docked" && (
+        <div className="iq-drawer start" role="dialog" aria-label="The survey's structure" data-testid="iq-drawer-structure">
+          <button type="button" className="iq-btn iq-drawer-close" onClick={() => setDrawer(null)} aria-label="Close the structure" data-testid="iq-drawer-close">×</button>
+          <StructurePane def={copilot.state ? copilot.state.after : s.def} diff={copilot.state?.diff ?? null} selectedId={selectedId} onSelect={(id) => { pickQuestion(id); }} />
+        </div>
+      )}
       <section
         className={`iq-main${dropping ? " iq-dropping" : ""}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDropping(true); } }}
@@ -708,18 +780,18 @@ export function IntelligentView() {
         data-testid="iq-main"
       >
         <div className="iq-toolbar">
-          <button type="button" className={`iq-btn${showStructure ? " on" : ""}`} onClick={() => setShowStructure((v) => !v)} aria-pressed={showStructure} data-testid="cp-toggle-structure" title="The survey's structure"><Icon name="layers" size={13} /></button>
+          <button type="button" className={`iq-btn${showStructure ? " on" : ""}`} onClick={() => { if (showStructure && layout.structure !== "docked" && drawer !== "structure") setDrawer("structure"); else { setDrawer((d) => (d === "structure" ? null : d)); setShowStructure((v) => !v); } }} aria-pressed={showStructure} data-testid="cp-toggle-structure" title="The survey's structure"><Icon name="layers" size={13} /></button>
           <span className="iq-title"><Icon name="sparkle" size={14} /> Intelligent</span>
           <span className="iq-hint">Describe your research or a change — typed or spoken, in any language. Every change is shown for review before it is applied.</span>
           <span className="iq-spacer" />
           <button type="button" className="iq-btn" onClick={() => { setText("My hypothesis is that … Target respondents: … Create a survey that tests it."); inputRef.current?.focus(); }} data-testid="cp-generate" title="Describe an objective or hypothesis; the copilot proposes the whole survey"><Icon name="plus" size={13} /> Generate survey</button>
-          <button type="button" className="iq-btn" onClick={() => { setShowInspector(true); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
-          <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted && h.key); if (last?.key) void copilot.restore(last.key).then((r) => { if (!r.ok && r.reason) { setShowInspector(true); copilot.setTab("history"); s.toast(r.reason, "err"); } }); }} disabled={!copilot.history.some((h) => !h.reverted && h.key)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
+          <button type="button" className="iq-btn" onClick={() => { revealInspector(); void copilot.runReview(); }} disabled={busy} data-testid="cp-review" title="Check logic, reachability, wording, scales, duplicates, length — and, with a model, research alignment"><Icon name="check" size={13} /> Review</button>
+          <button type="button" className="iq-btn" onClick={() => { const last = [...copilot.history].reverse().find((h) => !h.reverted && h.key); if (last?.key) void copilot.restore(last.key).then((r) => { if (!r.ok && r.reason) { revealInspector(); copilot.setTab("history"); s.toast(r.reason, "err"); } }); }} disabled={!copilot.history.some((h) => !h.reverted && h.key)} data-testid="cp-undo-last" title="Undo the last AI change, as one operation">Undo AI change</button>
           <label className={`iq-toggle${copilot.planFirst ? " on" : ""}`} data-testid="iq-plan-first" title="Plan first: a questionnaire generated from a brief, or a restructuring, is planned before it is built — the plan is shown for approval, then each approved item is built with its own model call, so nothing is cut off. Off: one reply with everything, as before."><input type="checkbox" checked={copilot.planFirst} onChange={(e) => copilot.setPlanFirst(e.target.checked)} /> Plan first</label>
           <span className="iq-provider" data-testid="iq-provider" data-ai={aiAvailable === null && copilot.available === null ? "unknown" : copilot.available || aiAvailable ? "on" : "off"} data-copilot={copilot.available === null ? "unknown" : copilot.available ? "on" : "off"} title={copilot.available === false ? "The Studio's engine reads every request first — edits, logic, options, dependencies, impact — with no model call. No language model is configured, so what the engine hands on (rewording, generation, translation text) is not available." : "The Studio's engine reads every request first and does everything it can deterministically, with no model call; the copilot (the configured model) is asked only for what it hands on."}>
             {copilot.available === false ? "engine only" : copilot.available ? "engine + copilot" : aiAvailable ? "engine + model" : "engine"}
           </span>
-          <button type="button" className={`iq-btn${showInspector ? " on" : ""}`} onClick={() => setShowInspector((v) => !v)} aria-pressed={showInspector} data-testid="iq-toggle-inspector" title="Inspector">
+          <button type="button" className={`iq-btn${showInspector ? " on" : ""}`} onClick={() => { if (showInspector && layout.inspector !== "docked" && drawer !== "inspector") setDrawer("inspector"); else { setDrawer((d) => (d === "inspector" ? null : d)); setShowInspector((v) => !v); } }} aria-pressed={showInspector} data-testid="iq-toggle-inspector" title="Inspector">
             <Icon name="info" size={13} /> Panel
           </button>
         </div>
@@ -764,11 +836,11 @@ export function IntelligentView() {
                 const open = turn.proposal === "open" && copilot.state;
                 return (
                   <CopilotCard key={turn.id} entry={turn} def={copilot.state && turn.proposal === "open" ? copilot.state.after : s.def} onSelect={pickQuestion}
-                    onReviewChanges={() => { setShowInspector(true); copilot.setTab("changes"); }} onApply={() => void applyCopilot()} onCancel={copilot.cancel}
+                    onReviewChanges={() => { revealInspector(); copilot.setTab("changes"); }} onApply={() => void applyCopilot()} onCancel={copilot.cancel}
                     op={turn.opKey ? copilot.op(turn.opKey) : undefined} onRetrySave={() => turn.opKey && void retrySave(turn.opKey)}
                     onAnswer={(q) => { setText(`${q} — `); inputRef.current?.focus(); }}
                     onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(q) => void ask(q)}
-                    onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); setShowInspector(true); }}
+                    onPreviewFix={(actions, label) => { copilot.previewFix(actions, label); revealInspector(); }}
                     onExecutePlan={(id, items) => void copilot.executePlan(id, items)} onCancelPlan={(id) => copilot.cancelPlan(id)}
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
@@ -791,7 +863,7 @@ export function IntelligentView() {
         {dropChoice && (
           <div className="cp-drop-choice" data-testid="cp-drop-choice">
             <span>{dropChoice.length === 1 ? `“${dropChoice[0].name}”` : `${dropChoice.length} files`} — use as:</span>
-            <button type="button" className="iq-btn primary" onClick={() => { void copilot.uploadDocs(dropChoice); setShowInspector(true); setDropChoice(null); }} data-testid="cp-drop-research">Research for the copilot</button>
+            <button type="button" className="iq-btn primary" onClick={() => { void copilot.uploadDocs(dropChoice); revealInspector(); setDropChoice(null); }} data-testid="cp-drop-research">Research for the copilot</button>
             <button type="button" className="iq-btn" onClick={() => { void startImport(dropChoice[0]); setDropChoice(null); }} disabled={dropChoice.length > 1} data-testid="cp-drop-import">A questionnaire to import</button>
             {dropChoice.length === 1 && /\.(?:xlsx|xls|csv|tsv)$/i.test(dropChoice[0].name) && <button type="button" className="iq-btn" onClick={() => { void importQuotaSheet(dropChoice[0]); setDropChoice(null); }} data-testid="cp-drop-quotas">A quota sheet</button>}
             <button type="button" className="iq-btn" onClick={() => setDropChoice(null)}>Cancel</button>
@@ -817,7 +889,7 @@ export function IntelligentView() {
             </span>
           )}
           <input ref={quotaSheetRef} type="file" hidden accept=".xlsx,.csv,.tsv,text/csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importQuotaSheet(f); }} data-testid="cp-quota-sheet-file" />
-          <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); setShowInspector(true); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
+          <input ref={researchRef} type="file" hidden multiple onChange={(e) => { void copilot.uploadDocs([...(e.target.files ?? [])]); revealInspector(); e.target.value = ""; }} data-testid="cp-research-file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx" />
           <span className="cp-attach-wrap">
             <button type="button" className="iq-attach" onClick={() => setAttachMenu((v) => !v)} disabled={busy || voice !== "idle"} data-testid="iq-attach" aria-label="Attach files" aria-expanded={attachMenu} title="Attach research documents for the copilot, or import a questionnaire">
               <Icon name="paperclip" size={15} />
@@ -846,10 +918,17 @@ export function IntelligentView() {
         </form>
       </section>
 
-      {showInspector && (
+      {layout.inspector === "rail" && (
+        <div className="iq-rail end" data-testid="iq-rail-inspector-wrap">
+          <button type="button" className="iq-btn iq-rail-btn" aria-label="Show the inspector" title="Inspector" aria-expanded={drawer === "inspector"} onClick={() => setDrawer((d) => (d === "inspector" ? null : "inspector"))} data-testid="iq-rail-inspector"><Icon name="info" size={14} /></button>
+        </div>
+      )}
+      {showInspector && (layout.inspector === "docked" || drawer === "inspector") && (
         <>
-          <div className="iq-divider" onPointerDown={onDividerDown} onPointerMove={onDividerMove} onPointerUp={onDividerUp} role="separator" aria-orientation="vertical" />
-          <div className="cp-panel-wrap" data-testid="iq-inspector">
+          {layout.inspector === "docked" && <div className="iq-divider" onPointerDown={onDividerDown} onPointerMove={onDividerMove} onPointerUp={onDividerUp} onKeyDown={splitterKeyDown("inspector")} role="separator" aria-orientation="vertical" tabIndex={0}
+            aria-label="Resize the inspector (arrow keys)" aria-valuemin={PANE_LIMITS.inspector.min} aria-valuemax={PANE_LIMITS.inspector.max} aria-valuenow={layout.inspectorWidth} data-testid="iq-splitter-inspector" />}
+          <div className={`cp-panel-wrap${layout.inspector === "docked" ? "" : " iq-drawer end"}`} data-testid="iq-inspector" {...(layout.inspector === "docked" ? {} : { role: "dialog", "aria-label": "Inspector" })} data-drawer={layout.inspector === "docked" ? undefined : "1"}>
+            {layout.inspector !== "docked" && <button type="button" className="iq-btn iq-drawer-close" onClick={() => setDrawer(null)} aria-label="Close the inspector" data-testid="iq-drawer-close">×</button>}
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
               onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
               primary={primary} index={index} onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(t) => void ask(t)} onTemplate={writeTemplate}

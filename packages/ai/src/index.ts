@@ -565,6 +565,14 @@ export interface TranscribeOptions {
    */
   segments?: boolean;
   /**
+   * Ask for WORD-level timings too (2026-10-22, engine item #17): OpenAI's
+   * `timestamp_granularities[]=word`, Google's `enableWordTimeOffsets`. They
+   * are what lets a coded excerpt play exactly its own words instead of the
+   * whole turn. Asked, never assumed — `Transcription.words` is present only
+   * when the provider returned them.
+   */
+  words?: boolean;
+  /**
    * Ask the provider to separate the speakers.
    *
    * Requested, never assumed. The OpenAI Whisper endpoint does not do this;
@@ -594,7 +602,12 @@ export interface TranscriptSegment {
   speaker?: string;
 }
 
+/** one word with its time on the recording (seconds) */
+export interface TranscriptWord { word: string; start: number; end: number }
+
 export interface Transcription {
+  /** present only when `words` was asked for and the provider returned word timings */
+  words?: TranscriptWord[];
   text: string;
   language?: string;
   model: string;
@@ -829,7 +842,7 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
       const r = await doFetch(`${hop.base}/speech:recognize`, {
         method: "POST", signal: ctrl.signal, cache: "no-store",
         headers: { "content-type": "application/json", ...hop.headers, "x-goog-api-key": hop.key },
-        body: JSON.stringify({ config: { ...google, languageCode: language, model: hop.model, enableAutomaticPunctuation: true, ...(wantSegments ? { enableWordTimeOffsets: true } : {}) }, audio: { content: Buffer.from(bytes).toString("base64") } }),
+        body: JSON.stringify({ config: { ...google, languageCode: language, model: hop.model, enableAutomaticPunctuation: true, ...(wantSegments || opts.words ? { enableWordTimeOffsets: true } : {}) }, audio: { content: Buffer.from(bytes).toString("base64") } }),
       });
       if (!r.ok) {
         const text = await r.text().catch(() => "");
@@ -839,7 +852,7 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
         console.warn("[rescript:ai] stt provider error", JSON.stringify({ status, model: hop.model, provider: hop.provider }));
         return { ok: false, status, reason: reasonOf(status, detail), fallbackable: classifyResponse(status, r.headers, detail).fallbackable };
       }
-      const j = (await r.json().catch(() => null)) as { results?: { alternatives?: { transcript?: string; words?: { startTime?: string; endTime?: string }[] }[]; resultEndTime?: string; languageCode?: string }[]; totalBilledTime?: string } | null;
+      const j = (await r.json().catch(() => null)) as { results?: { alternatives?: { transcript?: string; words?: { word?: string; startTime?: string; endTime?: string }[] }[]; resultEndTime?: string; languageCode?: string }[]; totalBilledTime?: string } | null;
       if (!j) return { ok: false, reason: `${label} replied in a format this installation could not read.`, fallbackable: false };
       const results = Array.isArray(j.results) ? j.results : [];
       const text = results.map((x) => (x.alternatives?.[0]?.transcript ?? "").trim()).filter(Boolean).join(" ").trim();
@@ -856,11 +869,13 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
         if (Number.isFinite(end)) from = end;
         return seg;
       }).filter((sg) => Number.isFinite(sg.end) && sg.text) : [];
+      const gWords: TranscriptWord[] = opts.words ? results.flatMap((x) => (x.alternatives?.[0]?.words ?? []).map((w) => ({ word: String(w.word ?? "").trim(), start: secs(w.startTime), end: secs(w.endTime) }))).filter((w) => w.word && Number.isFinite(w.start) && Number.isFinite(w.end)) : [];
       return {
         ok: true,
         value: {
           text, language: results[0]?.languageCode || language, model: hop.model, durationSeconds: measured, ...provider,
           ...(segments.length ? { segments } : {}),
+          ...(gWords.length ? { words: gWords } : {}),
           /* Google can label speakers, but this adapter does not ask: said truthfully */
           ...(opts.diarize ? { diarized: false, speakerCount: 0 } : {}),
         },
@@ -881,9 +896,11 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
      * and the transcript says truthfully that it has no timings.
      */
     const jsonOnly = /transcribe/i.test(hop.model) && !/diariz/i.test(hop.model);
-    const timings = wantSegments && !jsonOnly;
+    const timings = (wantSegments || !!opts.words) && !jsonOnly;
     form.append("response_format", timings ? "verbose_json" : "json");
     if (timings) form.append("timestamp_granularities[]", "segment");
+    /* word timings (#17): the same request and price on Whisper; a provider that ignores the field answers without `words` */
+    if (timings && opts.words) form.append("timestamp_granularities[]", "word");
     /*
      * Sent as an extra field rather than negotiated. Providers that diarize
      * read it; the rest ignore an unknown multipart part, which is why asking
@@ -914,6 +931,7 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
     const j = (await r.json().catch(() => null)) as {
       text?: string; language?: string; duration?: number;
       segments?: { start?: number; end?: number; text?: string; speaker?: string; speaker_label?: string }[];
+      words?: { word?: string; start?: number; end?: number }[];
     } | null;
     if (!j) return { ok: false, reason: `${label} replied in a format this installation could not read.`, fallbackable: false };
     const text = (j.text ?? "").trim();
@@ -939,11 +957,15 @@ async function attemptHop(hop: SttHop, usedFallback: boolean, own: boolean, byte
       .filter((sg) => Number.isFinite(sg.start) && Number.isFinite(sg.end) && sg.text);
 
     const speakers = new Set(segments.map((sg) => sg.speaker).filter(Boolean) as string[]);
+    const words: TranscriptWord[] = opts.words && Array.isArray(j?.words)
+      ? j!.words!.map((w) => ({ word: String(w.word ?? "").trim(), start: Number(w.start), end: Number(w.end) })).filter((w) => w.word && Number.isFinite(w.start) && Number.isFinite(w.end))
+      : [];
     return {
       ok: true,
       value: {
         text, language: j?.language || opts.language, model: hop.model, durationSeconds: measured, ...provider,
         ...(segments.length ? { segments } : {}),
+        ...(words.length ? { words } : {}),
         /* truthful: asked-for is not the same as happened */
         ...(opts.diarize ? { diarized: speakers.size > 0, speakerCount: speakers.size } : {}),
       },
@@ -1005,12 +1027,23 @@ export function fakeTranscribe(bytes: Uint8Array, opts: TranscribeOptions = {}):
     });
   }
 
+  /* word timings when asked (#17): the words of each segment spread evenly across it (or across the clip) — deterministic */
+  const words: TranscriptWord[] = [];
+  if (opts.words) {
+    const spans = segments.length ? segments : [{ start: 0, end: seconds, text }];
+    for (const sg of spans) {
+      const ws = sg.text.split(/\s+/).filter(Boolean);
+      const each = (sg.end - sg.start) / Math.max(1, ws.length);
+      ws.forEach((w, i) => words.push({ word: w, start: Math.round((sg.start + i * each) * 1000) / 1000, end: Math.round((sg.start + (i + 1) * each) * 1000) / 1000 }));
+    }
+  }
   return {
     text,
     language: opts.language ? shortLang(opts.language) : "en",
     model: "fake-stt",
     durationSeconds: seconds,
     ...(segments.length ? { segments } : {}),
+    ...(words.length ? { words } : {}),
     ...(opts.diarize
       ? { diarized: true, speakerCount: new Set(segments.map((s2) => s2.speaker)).size }
       : {}),
@@ -1801,3 +1834,6 @@ export async function probeProvider(opts: { maxTokens?: number } = {}): Promise<
     : `A plain request works, but asking for ${asked} output tokens is refused — set AI_MAX_OUTPUT_TOKENS to what ${model} allows.`;
   return { configured: true, provider, ...(host ? { host } : {}), model, verdict, plain, ...(schema ? { schema } : {}), ...(ceiling ? { ceiling } : {}) };
 }
+
+/* G3 2026-10-22: envelope encryption for integration secrets (alert webhooks, panel signing) — the BYOK vault's scheme, its own key */
+export * from "./envelope.js";

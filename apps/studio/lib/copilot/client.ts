@@ -8,8 +8,11 @@ import type { CopilotReply, TurnMemory } from "./prompt.ts";
  * route, or the proposal would be refused here ("not loaded"). Seeded, so the design is identical.
  */
 import { registerBuiltinDesignGenerators } from "@rescript/designs";
+/* #12 (2026-10-22): …and the same readiness rule for analysis-plan items as the route, so Apply never stores what the route refused */
+import { registerPlanReadinessGate } from "@rescript/analytics";
 
 registerBuiltinDesignGenerators();
+registerPlanReadinessGate();
 
 /**
  * THE COPILOT IN THE BROWSER — the pure part: proposals as chains of action

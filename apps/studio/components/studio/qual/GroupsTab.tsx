@@ -70,7 +70,7 @@ export function GroupsTab({ ws, api, run, setWs }: { ws: WorkspaceView; api: Syn
           <button type="button" className="btn primary small" data-testid="gs-create" disabled={!form.title.trim() || (!form.prompts.trim() && !guidePrompts.length)} onClick={() => run("Creating", () => api.createGroup({ title: form.title, mode: form.mode, ...(form.prompts.trim() ? { prompts: form.prompts.split("\n").map((x) => x.trim()).filter(Boolean) } : {}) }), (id) => { setOpen(id); void reload(); setForm({ title: "", mode: "moderated", prompts: "" }); })}>Create</button>
         </div>
       )}
-      <div className="ql-row">{list.map((g) => <button key={g.id} type="button" className={`chip ${open === g.id ? "on" : ""}`} data-testid="gs-item" data-title={g.title} onClick={() => setOpen(g.id)}>{g.title} · {g.status}</button>)}</div>
+      <div className="ql-row">{list.map((g) => <button key={g.id} type="button" className={`chip ${open === g.id ? "on" : ""}`} data-testid="gs-item" data-title={g.title} data-id={g.id} onClick={() => setOpen(g.id)}>{g.title} · {g.status}</button>)}</div>
       {live && (
         <div className="card ql-section" data-testid="gs-console" data-status={live.state.status} data-phase={live.state.phase} data-mode={live.state.mode} data-join={live.joinCode}>
           <div className="ql-row">

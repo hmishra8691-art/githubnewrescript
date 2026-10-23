@@ -38,7 +38,8 @@ export async function GET(req: NextRequest) {
       surveyId: n.survey_id,
       project: n.survey_id ? titles.get(n.survey_id) ?? null : null,
       action: n.action,
-      text: describeEvent({
+      /* G3 2026-10-22: an alert (lib/notify) carries its own words */
+      text: n.action.startsWith("alert.") ? [(n.detail as { title?: string })?.title, (n.detail as { text?: string })?.text].filter(Boolean).join(" — ") : describeEvent({
         id: n.id, action: n.action, entity: "survey", entityId: n.survey_id,
         userId: null, detail: n.detail as Record<string, unknown>, createdAt: n.created_at,
         actorName: (n.detail as { actorName?: string } | null)?.actorName ?? null,

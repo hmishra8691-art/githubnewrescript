@@ -39,7 +39,19 @@ export interface QualSegment {
   /** moderator turns are evidence of what was asked, not of what participants think */
   role?: "moderator" | "participant";
   text: string;
+  /**
+   * WORD TIMINGS (2026-10-22, #17): each word of `text` — seconds on the
+   * recording's clock (`s`, `e`) and its character span (`c0`, `c1`); `a: 1`
+   * when the timing was interpolated (a word the provider did not return, or
+   * one a correction changed). Present only for speech-to-text asked for word
+   * timestamps. `wordsStale` when a correction could not be re-aligned: clips
+   * then play the whole turn.
+   */
+  words?: SegmentWord[];
+  wordsStale?: boolean;
 }
+
+export interface SegmentWord { s: number; e: number; c0: number; c1: number; a?: 1 }
 
 export interface QualCode {
   id: string;

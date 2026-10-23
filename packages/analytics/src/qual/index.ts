@@ -14,6 +14,7 @@ export * from "./ask.js";
 export * from "./doubleCoding.js";
 export * from "./transcriptEdit.js";
 export * from "./highlights.js";
+export * from "./wordTimings.js";
 export * from "./autoCode.js";
 export * from "./groups.js";
 export * from "./groupService.js";

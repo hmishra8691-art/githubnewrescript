@@ -7,6 +7,7 @@ import { AiQuestionOverride, SpokenScript } from "./aiConversation.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
 import { normalizeQuestion } from "./questionContent.js";
+import { ExactBalance } from "./balance.js";
 
 /**
  * Question model.
@@ -1141,6 +1142,8 @@ const QuestionObject = z.object({
       sliderLeftLabel: z.string().optional(),
       sliderRightLabel: z.string().optional(),
       designRef: z.string().optional(), // conjoint/maxdiff design file id
+      /** which design VERSION a respondent answers: absent = derived from the seed; `{ exact: true }` = an atomic least-filled claim (balance.ts) */
+      versionBalance: ExactBalance.optional(),
 
       /* ---- 2026-09 variant batch. Every field optional; absent = old behaviour. */
       /** Video / audio stimulus URL (video rating, timeline, watch-time). */

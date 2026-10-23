@@ -17,6 +17,12 @@ const FULL_ENV = {
   AI_API_URL: "https://api.openai.com/v1", AI_API_KEY: "sk-secret-value", AI_MODEL: "gpt-4o", AI_EMBEDDINGS_MODEL: "text-embedding-3-small",
   SUPABASE_URL: "https://x.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "service-secret", RESEND_API_KEY: "re_secret", MAIL_FROM: "a@b.c", CRON_SECRET: "cron-secret",
   REPORT_NARRATION_ENABLED: "1", GEOCODE_API_URL: "https://nominatim.example/search",
+  /* G2 2026-10-22: live sessions */
+  WEBRTC_TURN_URLS: "turn:turn.example.org:3478", WEBRTC_TURN_SECRET: "turn-shared-secret", LIVEKIT_URL: "wss://livekit.example.org", LIVEKIT_API_KEY: "lk-api-key", LIVEKIT_API_SECRET: "lk-api-secret",
+  /* G1 2026-10-22 (added by G2: the realtime voice service was missing here, so "full" was not full) */
+  AI_REALTIME_API_URL: "https://realtime.example.org/v1", AI_REALTIME_API_KEY: "rt-secret-value", AI_REALTIME_MODEL: "gpt-realtime",
+  /* G3 2026-10-22: alert channels and panel signing */
+  INTEGRATIONS_SECRET_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 };
 
 test("every entry has the full shape: id, display name, category, status, services, configuration, inputs, handler, validation, output schema, limitations, tests, version", () => {

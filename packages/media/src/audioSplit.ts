@@ -160,13 +160,17 @@ export function splitAudio(b: Uint8Array, mimeType = "", maxBytes = SPLIT_TARGET
 }
 
 /** the timed segments of each part, moved onto the recording's clock; speaker labels kept as each part's provider gave them */
-export function mergePartTranscripts(parts: readonly { offsetSeconds: number; text: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; diarized?: boolean }[]): { text: string; segments: { start: number; end: number; text: string; speaker?: string }[]; diarized: boolean; warnings: string[] } {
+export function mergePartTranscripts(parts: readonly { offsetSeconds: number; text: string; segments?: { start: number; end: number; text: string; speaker?: string }[]; words?: { word: string; start: number; end: number }[]; diarized?: boolean }[]): { text: string; segments: { start: number; end: number; text: string; speaker?: string }[]; words: { word: string; start: number; end: number }[]; diarized: boolean; warnings: string[] } {
   const segments: { start: number; end: number; text: string; speaker?: string }[] = [];
+  /* word timings (#17) move onto the recording's clock with their part (the server split has no overlap, so nothing to de-duplicate) */
+  const words = parts.every((p) => p.words?.length || !p.text.trim())
+    ? parts.flatMap((p) => (p.words ?? []).map((w) => ({ word: w.word, start: Math.round((w.start + p.offsetSeconds) * 1000) / 1000, end: Math.round((w.end + p.offsetSeconds) * 1000) / 1000 })))
+    : [];
   for (const p of parts) {
     if (p.segments?.length) for (const s of p.segments) segments.push({ ...s, start: Math.round((s.start + p.offsetSeconds) * 1000) / 1000, end: Math.round((s.end + p.offsetSeconds) * 1000) / 1000 });
     else if (p.text.trim()) segments.push({ start: Math.round(p.offsetSeconds * 1000) / 1000, end: Math.round(p.offsetSeconds * 1000) / 1000, text: p.text.trim() });
   }
   const diarized = parts.length > 0 && parts.every((p) => p.diarized);
   const warnings = parts.length > 1 ? [`The recording was transcribed in ${parts.length} parts (cut at ${parts.slice(1).map((p) => `${Math.floor(p.offsetSeconds / 60)}:${String(Math.floor(p.offsetSeconds % 60)).padStart(2, "0")}`).join(", ")}); a word spoken across a cut may be split or lost.${diarized ? " Speakers were separated within each part only: “Speaker 1” in one part is not necessarily “Speaker 1” in the next — check the speaker map." : ""}`] : [];
-  return { text: parts.map((p) => p.text.trim()).filter(Boolean).join(" "), segments, diarized, warnings };
+  return { text: parts.map((p) => p.text.trim()).filter(Boolean).join(" "), segments, words, diarized, warnings };
 }

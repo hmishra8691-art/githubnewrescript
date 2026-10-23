@@ -3,6 +3,7 @@ import { COPILOT_LIST_FILL_GUIDE } from "./copilot/listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./copilot/methodsGuide.ts";
 import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE } from "./copilot/researchGuide.ts";
 import { COPILOT_AI_INTERVIEW_GUIDE } from "./copilot/aiInterviewGuide.ts";
+import { COPILOT_INTEGRATIONS_GUIDE } from "./copilot/integrationsGuide.ts";
 import { REPORTING_GUIDE } from "./copilot/reportingGuide.ts";
 
 /**
@@ -26,7 +27,7 @@ import { REPORTING_GUIDE } from "./copilot/reportingGuide.ts";
  */
 
 /** the guides, in the order `copilotUserPrompt` adds them */
-export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE, COPILOT_AI_INTERVIEW_GUIDE, REPORTING_GUIDE];
+export const COPILOT_STABLE_GUIDES: readonly string[] = [COPILOT_UX_GUIDE, COPILOT_ANALYSIS_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_LIST_FILL_GUIDE, COPILOT_METHODS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_RESEARCH_GUIDE, COPILOT_QUAL_GUIDE, COPILOT_AI_INTERVIEW_GUIDE, COPILOT_INTEGRATIONS_GUIDE, REPORTING_GUIDE];
 
 /** Lift each of `guides` found verbatim in `text` out of it: the guides found (in the list's order) and what is left. */
 export function splitStable(text: string, guides: readonly string[]): { stable: string[]; variable: string } {
@@ -45,19 +46,31 @@ export function splitStable(text: string, guides: readonly string[]): { stable: 
 
 /**
  * The system blocks and the user text of one copilot model call:
- * `[[COPILOT_SYSTEM_PROMPT, the guides it carries], the rest]` — spread as the
+ * `[[COPILOT_SYSTEM_PROMPT, the extra stable blocks, the guides it carries], the rest]` — spread as the
  * first two arguments of the model call (`...copilotCall(text)`).
+ *
+ * ORDER (2026-10-22, engine weakness #11): the blocks run from the most to the least stable, because a provider's
+ * cache is a PREFIX cache (Anthropic writes and reads at each block boundary; OpenAI caches the longest common
+ * prefix). The research context of a stored brief and the installation's availability note are the same bytes on
+ * every call of a build and every turn of a session; the guides change with what a request (or a plan item) needs.
+ * So: the system prompt, then the extra blocks, then the guides — a change of guides re-writes only the guides.
+ * With `core` (a staged item): the guides every item of the build carries are one block and this item's own
+ * guides another, so items that need different guides still read [system, context, core] from the cache.
  */
-export function copilotCall(userText: string, extraStable: readonly (string | undefined)[] = []): [readonly string[], string] {
+export function copilotCall(userText: string, extraStable: readonly (string | undefined)[] = [], opts: { core?: readonly string[] } = {}): [readonly string[], string] {
   const { stable, variable } = splitStable(userText, COPILOT_STABLE_GUIDES);
   /*
    * §3 (2026-10-18): the research context of a stored brief (and the installation's availability note) are the
-   * same bytes on every item of a build — a THIRD cached block, after the guides (Anthropic caches up to 4).
+   * same bytes on every item of a build — a cached block of their own (Anthropic caches up to 4 breakpoints).
    * Lifted verbatim, like the guides; absent from the text = not sent.
    */
   const extra = splitStable(variable, extraStable.filter((x): x is string => !!x && x.length > 0));
   const blocks: string[] = [COPILOT_SYSTEM_PROMPT];
-  if (stable.length) blocks.push(stable.join("\n\n"));
   if (extra.stable.length) blocks.push(extra.stable.join("\n\n"));
+  if (opts.core) {
+    const core = stable.filter((g) => opts.core!.includes(g)), own = stable.filter((g) => !opts.core!.includes(g));
+    if (core.length) blocks.push(core.join("\n\n"));
+    if (own.length) blocks.push(own.join("\n\n"));
+  } else if (stable.length) blocks.push(stable.join("\n\n"));
   return [blocks, extra.variable];
 }

@@ -94,6 +94,7 @@ test("the synthesis guide: sent for synthesis requests, never asks the model to 
   for (const s of ["can you summarise the interviews for me", "how does double-coding work here", "I want a highlight reel", "run a group session like Remesh"]) assert.ok(qualSynthesisIntent(s), s);
   for (const s of ["add a question about price", "make Q3 required"]) assert.ok(!qualSynthesisIntent(s), s);
   assert.match(COPILOT_QUAL_SYNTHESIS_GUIDE, /never write a theme summary, a finding, a quote, a count or a percentage yourself/);
-  assert.match(COPILOT_QUAL_SYNTHESIS_GUIDE, /Video conferencing is NOT supported/);
+  /* G2 2026-10-22: live video groups moderated by a person now run in Live sessions — the guide points there */
+  assert.match(COPILOT_QUAL_SYNTHESIS_GUIDE, /Live VIDEO groups moderated by a person: Research Tools → Qualitative → Live sessions/);
   assert.ok(COPILOT_QUAL_SYNTHESIS_GUIDE.length < 2_200, `guide ${COPILOT_QUAL_SYNTHESIS_GUIDE.length}`);
 });

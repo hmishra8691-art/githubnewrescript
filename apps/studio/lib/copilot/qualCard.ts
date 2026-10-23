@@ -1,5 +1,5 @@
 import {
-  describeQualRequest, type QualRequest,
+  describeQualRequest, resolveLiveSchedule, type QualRequest, type ResolvedLiveSession,
 } from "@rescript/engine";
 import {
   compareGroups, groupsNamedIn, selectForReel, sampleUnits, liveEvidence, themeFrequency, retrieveForQuestion,
@@ -28,11 +28,13 @@ export interface QualCardPreview {
   comparison?: GroupComparison | null;
   units?: number;
   note?: string;
+  /** G2 2026-10-22: the live sessions a "schedule …" request would create, resolved to instants */
+  liveSessions?: ResolvedLiveSession[];
 }
 
 const segKey = (s: { sourceId: string; id: string }) => `${s.sourceId}|${s.id}`;
 
-export function qualPreview(req: QualRequest, data: { state: QualState; segments: QualSegment[]; objectives: string[]; aiReady: boolean; sandbox: boolean }): QualCardPreview {
+export function qualPreview(req: QualRequest, data: { state: QualState; segments: QualSegment[]; objectives: string[]; aiReady: boolean; sandbox: boolean; now?: number; timeZone?: string; guide?: { title?: string; hasConsent: boolean } | null }): QualCardPreview {
   const title = describeQualRequest(req);
   const live = liveEvidence(data.state, data.segments);
   const themes = data.state.codebook.themes.filter((t) => t.status !== "rejected");
@@ -76,7 +78,19 @@ export function qualPreview(req: QualRequest, data: { state: QualState; segments
       return { title, lines: [`${r.items.length} excerpt${r.items.length === 1 ? "" : "s"} retrieved${r.groups.length ? ` from ${r.groups.join(", ")}` : ""} (of ${r.considered}).`, "One model call; the answer may only cite these excerpts.", ...noModel], runnable: data.aiReady, runLabel: "Answer", calls: 1 };
     }
     case "auto_code": return { title, lines: [req.enabled ? "Each new transcript, AI interview or closed group session is coded as AI suggestions (deductive with the current codebook, or proposing codes when there are none), at most 6 model calls per source, metered. Turning it on needs Data: Edit." : "New sources will no longer be coded automatically; what was coded stays."], runnable: true, runLabel: req.enabled ? "Turn it on" : "Turn it off", calls: 0 };
-    case "group_session": return { title, lines: ["A text-only live conversation: participants join by link, answer each prompt and rate a few of each other's answers; you (or, autonomous, the session's clock) move it on. Video conferencing is not supported.", "Set it up and start it in Research Tools → Qualitative → Group sessions."], runnable: true, runLabel: "Set it up", calls: 0 };
+    case "group_session": return { title, lines: ["A text-only live conversation: participants join by link, answer each prompt and rate a few of each other's answers; you (or, autonomous, the session's clock) move it on. For live video sessions use Research Tools → Qualitative → Live sessions.", "Set it up and start it in Research Tools → Qualitative → Group sessions."], runnable: true, runLabel: "Set it up", calls: 0 };
+    case "schedule_live": {
+      /* G2 2026-10-22: each session's local time, its instant, size and segment — computed here, created only on Run */
+      const r = resolveLiveSchedule(req, { now: data.now ?? Date.now(), fallbackTimeZone: data.timeZone, baseTitle: data.guide?.title });
+      const lines = [
+        ...r.sessions.map((x) => `${x.title}: ${x.localDate} ${x.localTime}–${x.endsLocalTime} (${x.timeZone}) · ${x.size} participant link${x.size === 1 ? "" : "s"}${x.segment ? ` · segment ${x.segment}` : ""}`),
+        ...r.problems, ...r.notes,
+        req.record ? `Recorded with each participant's consent (audio${req.recordVideo ? " and video" : ""}), transcribed per speaker after the session (metered per minute).` : "Not recorded.",
+        ...(data.guide?.hasConsent ? [] : ["The guide has no consent statement yet: participants cannot join until it has one (Guide tab, or ask for a guide)."]),
+        "Moderated by you in the browser (Research Tools → Qualitative → Live sessions): a waiting room, a back room for observers, stimuli and section timers from the guide. Nothing is sent to anyone until you share the links.",
+      ];
+      return { title, lines, runnable: r.sessions.length > 0 && !r.problems.length, runLabel: `Schedule ${r.sessions.length} session${r.sessions.length === 1 ? "" : "s"}`, calls: 0, liveSessions: r.sessions };
+    }
   }
 }
 

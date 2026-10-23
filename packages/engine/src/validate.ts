@@ -775,7 +775,7 @@ export function validateQuestion(
     const design = def.designs.find((d) => d.id === q.settings.designRef);
     const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
     if (design?.kind !== "menu" && design?.kind !== "cva" && allRows.length && allRows.every((r) => r.alt != null)) {
-      const mine = designRowsFor(q, allRows, ctx.state.seed);
+      const mine = designRowsFor(q, allRows, ctx.state.seed, ctx.state.calculated);
       /* F4 2026-10-22: a dual-response design stores "would you buy it?" beside the choice, under <task>_buy */
       const dual = (design?.config as { dualResponseNone?: boolean } | undefined)?.dualResponseNone === true;
       const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) =>
@@ -790,13 +790,13 @@ export function validateQuestion(
     if (design?.kind === "cva" && allRows.length) {
       const info = conjointMethodOf(def, q);
       const lo = info?.cva?.min ?? 0, hi = info?.cva?.max ?? 10;
-      const mine = new Set(designRowsFor(q, allRows, ctx.state.seed).map((r) => String(r.task)));
+      const mine = new Set(designRowsFor(q, allRows, ctx.state.seed, ctx.state.calculated).map((r) => String(r.task)));
       const bad = Object.entries(value as Record<string, unknown>).filter(([t, v]) => v != null && v !== "" && (!mine.has(t) || !Number.isFinite(Number(v)) || Number(v) < lo || Number(v) > hi));
       if (bad.length) push(`Task ${bad[0][0]}: please give a rating from ${lo} to ${hi}.`);
     }
     /* F4 2026-10-22: a menu with exclusive sections — at most one item of each section per task */
     if (design?.kind === "menu" && allRows.some((r) => r.group)) {
-      const mine = designRowsFor(q, allRows, ctx.state.seed);
+      const mine = designRowsFor(q, allRows, ctx.state.seed, ctx.state.calculated);
       for (const [t, v] of Object.entries(value as Record<string, unknown>)) {
         if (!Array.isArray(v)) continue;
         const picked = mine.filter((r) => String(r.task) === t && r.group && v.map(String).includes(String(r.item)));
@@ -860,7 +860,7 @@ export function validateQuestion(
   if (q.type === "maxdiff_task" && (q.required || !isEmpty(value)) && !hasNoAnswerableItems(q, ctx)) {
     const design = def.designs.find((d) => d.id === q.settings.designRef);
     const allRows = (design?.file?.rows ?? []) as Record<string, unknown>[];
-    const rows = allRows.length ? designRowsFor(q, allRows, ctx.state.seed) : [];
+    const rows = allRows.length ? designRowsFor(q, allRows, ctx.state.seed, ctx.state.calculated) : [];
     if (rows.length) {
       const bestOnly = (design?.config as { responseMode?: string } | undefined)?.responseMode === "best_only";
       const practice = new Set(rows.filter((r) => Number(r.practice) === 1).map((r) => String(r.task)));

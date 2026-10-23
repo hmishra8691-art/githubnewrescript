@@ -116,13 +116,13 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
     case "conjoint_task": {
       // the tasks THIS respondent sees: their design version follows the seed (designVersion.ts), not version 1
       const d = def.designs.find((x) => x.id === s.designRef); const out: Record<string, string> = {};
-      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed)) out[String(r.task)] = "1";
+      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed, ctx.state.calculated)) out[String(r.task)] = "1";
       return out;
     }
     case "maxdiff_task": {
       const d = def.designs.find((x) => x.id === s.designRef);
       const out: Record<string, { best: string; worst: string; anchor?: string }> = {};
-      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed)) {
+      for (const r of designRowsFor(q, (d?.file?.rows ?? []) as Record<string, unknown>[], ctx.state.seed, ctx.state.calculated)) {
         const t = String(r.task); const idx = String(r.item_index);
         if (!out[t]) out[t] = { best: idx, worst: idx }; else out[t].worst = idx; // first item best, last worst — never the same one
       }

@@ -3,6 +3,7 @@ import { ANALYSIS_METHODS, ANALYSIS_ROLES, MEASUREMENT_LEVELS } from "@rescript/
 import { buildAnalysisFramework, crosstabKey, freePlanId, isNonQuestionVariable, testKey } from "./analysisFramework.js";
 import type { IdMinter } from "./questionOps.js";
 import { advancedSuitability, gaborGrangerPattern, itemVariables, semModelFromDesign } from "./advancedMethods.js";
+import { checkPlanItem, type PlanItemForGate } from "./planItemGate.js";
 
 /**
  * THE ANALYSIS ACTIONS — how the copilot (and the Studio's own buttons)
@@ -225,7 +226,8 @@ export function coerceAnalysisAction(op: string, o: Record<string, unknown>): An
       const a: AnalysisAction = { op, id };
       if (o.method !== undefined) { const method = str(o.method)?.toLowerCase().replace(/[\s-]+/g, "_"); if (!method || !METHODS.has(method)) return `“${String(o.method)}” is not an analysis method the platform runs (${[...METHODS].join(", ")})`; a.method = method as AnalysisMethod; }
       for (const k of ["outcome", "groupBy", "moderator", "mediator"] as const) {
-        const raw = k === "groupBy" ? (o.groupBy ?? o.group_by) : o[k];
+        /* `groupBy: null` clears it (2026-10-22: `??` read the null as absent, so the grouping could not be removed) */
+        const raw = k === "groupBy" ? (o.groupBy !== undefined ? o.groupBy : o.group_by) : o[k];
         if (raw === null) a[k] = null; else if (raw !== undefined) a[k] = str(raw) ?? null;
       }
       if (o.variables !== undefined) { const v = strs(o.variables ?? o.predictors); if (!v) return "variables is a list of variable names"; a.variables = v; }
@@ -385,11 +387,17 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
         plan.updatedAt = env.now; plan.source = "engine";
       } else def.research!.analysisPlan = built;   // built with `previous`: an item that was in the plan keeps its id
       const p = def.research!.analysisPlan!;
-      return { description: `Analysis plan: ${p.crosstabs.length} crosstab${p.crosstabs.length === 1 ? "" : "s"}, ${p.tests.length} test${p.tests.length === 1 ? "" : "s"}, ${p.derived.length} derived variable${p.derived.length === 1 ? "" : "s"}, ${p.segments.length} segment${p.segments.length === 1 ? "" : "s"}`, ...(had && !a.merge ? { destructive: `Replaces the analysis plan (${had} planned item${had === 1 ? "" : "s"})` } : {}), touched: [] };
+      /* #12: the engine's own items are not refused (the model cannot repair the generator), but none is stored silently: what is not ready is said with the change */
+      const notReady = notReadyItems(def, p);
+      return { ...(notReady.length ? { warnings: [`${notReady.length} planned item${notReady.length === 1 ? " is" : "s are"} not ready to run yet and will show as invalid in Data Analytics until the missing input is added: ${notReady.slice(0, 6).join(" ")}${notReady.length > 6 ? " …" : ""}`] } : {}), description: `Analysis plan: ${p.crosstabs.length} crosstab${p.crosstabs.length === 1 ? "" : "s"}, ${p.tests.length} test${p.tests.length === 1 ? "" : "s"}, ${p.derived.length} derived variable${p.derived.length === 1 ? "" : "s"}, ${p.segments.length} segment${p.segments.length === 1 ? "" : "s"}`, ...(had && !a.merge ? { destructive: `Replaces the analysis plan (${had} planned item${had === 1 ? "" : "s"})` } : {}), touched: [] };
     }
     case "set_analysis_plan": {
       const plan = planOf(def);
       const crosstabs = a.crosstabs?.map((c) => crosstabOf(env, c)), tests = a.tests?.map((t) => checkedTest(def, testOf(env, t, def)).test), derived = a.derived?.map((d) => derivedOf(def, env, d)), segments = a.segments?.map((s) => segmentOf(env, s));
+      /* #12: every item the action writes passes the one readiness rule, named by its place in the action */
+      const readyWarnings: string[] = [];
+      crosstabs?.forEach((x, i) => readyWarnings.push(...readyOrFail(def, { kind: "crosstab", crosstab: x }, `crosstabs[${i + 1}] (${words(x.rows)} by ${words(x.columns)})`)));
+      tests?.forEach((t, i) => readyWarnings.push(...readyOrFail(def, { kind: "test", test: t }, `tests[${i + 1}] (${testWords(t)})`)));
       const replaced: string[] = [];
       if (a.merge) {
         for (const x of crosstabs ?? []) if (!plan.crosstabs.some((y) => sameCrosstab(x, y))) { x.id = freePlanId(plan, x); plan.crosstabs.push(x); }
@@ -410,12 +418,13 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
         return { description: a.advancedRerun?.mode === "threshold" ? `Advanced models re-run after ${a.advancedRerun.newResponses} new completes` : "Advanced models re-run by hand (stale results are flagged)", touched: [] };
       }
       plan.updatedAt = env.now; plan.source = "copilot";
-      return { description: `Analysis plan: ${[crosstabs && `${crosstabs.length} crosstab${crosstabs.length === 1 ? "" : "s"}`, tests && `${tests.length} test${tests.length === 1 ? "" : "s"}`, derived && `${derived.length} derived`, segments && `${segments.length} segment${segments.length === 1 ? "" : "s"}`].filter(Boolean).join(", ")}${a.merge ? " added" : ""}`, ...(replaced.length ? { destructive: `Replaces the planned ${replaced.join(" and ")}` } : {}), touched: [] };
+      return { ...(readyWarnings.length ? { warnings: readyWarnings } : {}), description: `Analysis plan: ${[crosstabs && `${crosstabs.length} crosstab${crosstabs.length === 1 ? "" : "s"}`, tests && `${tests.length} test${tests.length === 1 ? "" : "s"}`, derived && `${derived.length} derived`, segments && `${segments.length} segment${segments.length === 1 ? "" : "s"}`].filter(Boolean).join(", ")}${a.merge ? " added" : ""}`, ...(replaced.length ? { destructive: `Replaces the planned ${replaced.join(" and ")}` } : {}), touched: [] };
     }
     case "add_crosstab": {
       const plan = planOf(def);
       const x = crosstabOf(env, a);
       if (plan.crosstabs.some((y) => sameCrosstab(x, y))) fail(`a crosstab of ${words(x.rows)} by ${words(x.columns)} is already planned`);
+      readyOrFail(def, { kind: "crosstab", crosstab: x }, "the crosstab");
       plan.crosstabs.push(x); plan.updatedAt = env.now;
       return { description: `Planned crosstab: ${words(x.rows)} by ${words(x.columns)}${x.hypotheses.length ? ` (${words(x.hypotheses)})` : ""}`, touched: [] };
     }
@@ -429,6 +438,7 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       const plan = planOf(def);
       const { test: t, warnings } = checkedTest(def, testOf(env, a, def));
       if (plan.tests.some((y) => sameTest(t, y))) fail(`that ${t.method.replace(/_/g, " ")} is already planned`);
+      warnings.push(...readyOrFail(def, { kind: "test", test: t }, testWords(t)));
       plan.tests.push(t); plan.updatedAt = env.now;
       return { description: `Planned ${ADVANCED_WORDS[t.method] ?? t.method.replace(/_/g, " ")}${t.outcome ? ` on ${t.outcome}` : ""}${t.variables.length ? ` with ${t.method === "sem" && t.variables.length > 8 ? `${words(t.variables.slice(0, 8))} and ${t.variables.length - 8} more` : words(t.variables)}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}${t.mediator && t.options?.bootstrap ? ` through ${t.mediator}` : ""}${optionWords(t)}`, touched: [], ...(warnings.length ? { warnings } : {}) };
     }
@@ -472,8 +482,11 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       if (a.reason === null) delete next.reason; else if (a.reason) next.reason = a.reason;
       const dup = plan.crosstabs.find((y) => y !== cur && sameCrosstab(next, y));
       if (dup) fail(`a crosstab of ${words(next.rows)} by ${words(next.columns)} is already planned`);
+      /* #12: an edit that leaves the item not ready is refused — unless it touches none of its inputs and the item was already not ready (a priority or a reason may still be changed; the state is said) */
+      const inputsTouched = !!(a.rows || a.columns);
+      const xWarn = inputsTouched || itemReady(def, { kind: "crosstab", crosstab: cur }) ? readyOrFail(def, { kind: "crosstab", crosstab: next }, "the crosstab") : notReadyNote(def, { kind: "crosstab", crosstab: next }, "the crosstab");
       plan.crosstabs[i] = next; plan.updatedAt = env.now;
-      return { description: `Changed the planned crosstab: ${words(next.rows)} by ${words(next.columns)}${next.hypotheses.length ? ` (${words(next.hypotheses)})` : ""}`, touched: [] };
+      return { ...(xWarn.length ? { warnings: xWarn } : {}), description: `Changed the planned crosstab: ${words(next.rows)} by ${words(next.columns)}${next.hypotheses.length ? ` (${words(next.hypotheses)})` : ""}`, touched: [] };
     }
     case "update_analysis_test": {
       const plan = planOf(def);
@@ -502,6 +515,8 @@ export function applyAnalysisAction(def: SurveyDefinition, a: AnalysisAction, en
       const { warnings } = checkedTest(def, next);
       const dup = plan.tests.find((y) => y !== cur && sameTest(next, y));
       if (dup) fail(`that ${method.replace(/_/g, " ")} is already planned`);
+      const inputsTouched = a.method !== undefined || a.outcome !== undefined || a.variables !== undefined || a.groupBy !== undefined || a.moderator !== undefined || a.mediator !== undefined || a.options !== undefined;
+      warnings.push(...(inputsTouched || itemReady(def, { kind: "test", test: cur }) ? readyOrFail(def, { kind: "test", test: next }, testWords(next)) : notReadyNote(def, { kind: "test", test: next }, testWords(next))));
       plan.tests[i] = next; plan.updatedAt = env.now;
       return { description: `Changed the planned ${method.replace(/_/g, " ")}${next.outcome ? ` on ${next.outcome}` : ""}${next.variables.length ? ` with ${words(next.variables)}` : ""}${next.groupBy ? ` across ${next.groupBy}` : ""}${optionWords(next)}`, touched: [], ...(warnings.length ? { warnings } : {}) };
     }
@@ -574,4 +589,31 @@ function checkedTest(def: SurveyDefinition, t: PlannedTest): { test: PlannedTest
   const s = advancedSuitability(def, t);
   if (s.blocking.length) fail(s.blocking.join(" "));
   return { test: t, warnings: s.warnings };
+}
+
+/* ------------------------------------------------------------ the one readiness rule (#12, 2026-10-22) */
+
+const testWords = (t: PlannedTest): string => `${ADVANCED_WORDS[t.method] ?? `the ${t.method.replace(/_/g, " ")}`}${t.outcome ? ` on ${t.outcome}` : ""}${t.groupBy ? ` across ${t.groupBy}` : ""}`;
+/**
+ * The registered readiness rule (`plannedItemReadiness`) on an item this action writes: not ready → refused with the
+ * rule's own words (the missing role or variable), so the repair call can supply it; ready → its warnings travel
+ * with the change. No rule registered → nothing (as before).
+ */
+function readyOrFail(def: SurveyDefinition, item: PlanItemForGate, what: string): string[] {
+  const r = checkPlanItem(item, def);
+  if (!r) return [];
+  if (!r.ready) fail(`${what} is not ready to run, so it was not added to the plan — ${r.missing.join(" ")}`);
+  return r.warnings.map((w) => `${what}: ${w}`);
+}
+const itemReady = (def: SurveyDefinition, item: PlanItemForGate): boolean => checkPlanItem(item, def)?.ready !== false;
+function notReadyNote(def: SurveyDefinition, item: PlanItemForGate, what: string): string[] {
+  const r = checkPlanItem(item, def);
+  return r && !r.ready ? [`${what} is still not ready to run: ${r.missing.join(" ")}`] : [];
+}
+/** the items of a plan the rule calls not ready, each said once */
+function notReadyItems(def: SurveyDefinition, plan: AnalysisPlan): string[] {
+  const out: string[] = [];
+  for (const x of plan.crosstabs) { const r = checkPlanItem({ kind: "crosstab", crosstab: x }, def); if (r && !r.ready) out.push(`crosstab ${words(x.rows)} by ${words(x.columns)}: ${r.missing.join(" ")}`); }
+  for (const t of plan.tests) { const r = checkPlanItem({ kind: "test", test: t }, def); if (r && !r.ready) out.push(`${testWords(t)}: ${r.missing.join(" ")}`); }
+  return out;
 }

@@ -258,11 +258,24 @@ console.log("\nRUNTIME — opt-outs and unsupported browsers");
   assert.equal((await p4.$$('[data-testid="speech-toggle"]')).length, 0, "no mic anywhere — not even on a question that opted in");
   await p4.close();
   ok("per survey: deployment.speechInput = false removes every mic");
+  /*
+   * 2026-10-22 (engine item #16): a browser without a recogniser (Firefox) now gets SERVER dictation when the
+   * survey allows it and the runtime has speech-to-text — the preview runs on the fake provider, so the button
+   * appears in server mode. With the survey's server switch off it is the old rule: no button, never one
+   * that fails. (Expectation updated with the feature; the server path is exercised in engine-15-19-test.)
+   */
   const p5 = await open(baseDef(), { fake: false });
-  assert.equal((await p5.$$('[data-testid="speech-toggle"]')).length, 0, "no recogniser → no button, never one that fails");
-  assert.ok(await p5.$('[data-qid="q_line"] input.rs-input'), "the fields themselves are untouched");
+  await p5.waitForSelector('[data-qid="q_line"] [data-speech-mode="server"] [data-testid="speech-toggle"]', { timeout: 30000 });
   await p5.close();
-  ok("a browser without speech recognition shows no control");
+  const noServer = baseDef();
+  noServer.deployment = { ...(noServer.deployment ?? {}), speechServer: false };
+  const p6 = await open(noServer, { fake: false });
+  await p6.waitForSelector('[data-qid="q_line"] input.rs-input');
+  await p6.waitForTimeout(800);
+  assert.equal((await p6.$$('[data-testid="speech-toggle"]')).length, 0, "no recogniser and no server dictation → no button, never one that fails");
+  assert.ok(await p6.$('[data-qid="q_line"] input.rs-input'), "the fields themselves are untouched");
+  await p6.close();
+  ok("a browser without speech recognition: server dictation where the survey allows it; with it off, no control");
 }
 
 await h.close();

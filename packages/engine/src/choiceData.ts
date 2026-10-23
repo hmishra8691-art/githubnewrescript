@@ -33,6 +33,8 @@ export interface StackedChoiceState {
   respondentId?: string | null;
   seed?: number | string | null;
   answers: Record<string, unknown>;
+  /** the response's calculated variables — a version CLAIMED by exact balance (#15) is read from here */
+  calculated?: Record<string, unknown> | null;
 }
 
 export interface StackedChoiceData {
@@ -97,7 +99,7 @@ export function stackedChoiceData(def: SurveyDefinition, states: StackedChoiceSt
       if (!Number.isFinite(seed)) { skipped = true; continue; }
       const design = def.designs.find((x) => x.id === q.settings?.designRef)!;
       const all = design.file!.rows as Record<string, unknown>[];
-      const version = designVersionFor(q, all, seed);
+      const version = designVersionFor(q, all, seed, st.calculated);
       const mine = all.filter((r) => String(r.version ?? "1") === version);
       const attrs = levelsByQ.get(q.id)!;
       const tasks = [...new Set(mine.map((r) => String(r.task)))];

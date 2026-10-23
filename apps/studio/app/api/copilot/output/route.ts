@@ -6,7 +6,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import type { OutputRequest } from "@rescript/engine";
 import { briefText, buildDataset, compareRuns, deckFromRun, describeDeck, gateNarrative, claimsBrief, claimsFromRun, claimsHash, promptVersion, redactPrompt, redactRunForModel, hash64, runPlan, NARRATIVE_INSTRUCTIONS, type AnalyticsRow, type AnalysisResult, type NarrativeSections } from "@rescript/analytics";
 import { buildDeckPptx, buildFindingsDocx, buildProposalDocx, buildResearchPlanDocx, buildSapDocx, checkDocx, checkPptx, logoFromBytes } from "@rescript/analytics/export";
-import { readThemeSpec, findReportTheme, themeToReportTheme } from "@rescript/analytics";
+import { readThemeSpec, findReportTheme, themeToReportTheme, sectionOrderFor } from "@rescript/analytics";
 import { artifactFingerprint, definitionHash, editionOf, GENERATOR_VERSION, type ArtifactType } from "@/lib/artifacts/core";
 import { obtainArtifact, type Produced, type Fail as ArtifactFail } from "@/lib/artifacts/service";
 import { artifactDeps, documentLook, fingerprintInputs, type DocumentLook } from "@/lib/artifacts/server";
@@ -139,18 +139,18 @@ export async function POST(req: NextRequest) {
 
   /* THE WORD RESEARCH PLAN (2026-10-17): the proposal's research-plan edition, named <SurveyCode>_Research_Plan_<date>.docx */
   if (output.type === "research_plan_docx") {
-    const buf = await buildResearchPlanDocx(def, { client, author, date, fieldwork, ...styled });
+    const buf = await buildResearchPlanDocx(def, { client, author, date, fieldwork, ...styled, structure: look.structure });
     const plan = def.research?.analysisPlan;
     return docx(buf, `${safeName(String(def.meta.code ?? "") || def.meta.title)}_Research_Plan_${date}.docx`, `Research plan: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${plan ? `the saved analysis plan (${plan.tests.length} tests, ${plan.crosstabs.length} crosstabs)` : "the analysis plan derived from the design (not yet saved)"}, traceability, QC and limitations`);
   }
 
   if (output.type === "proposal_docx") {
-    const buf = await buildProposalDocx(def, { client, author, date, fieldwork, ...styled });
+    const buf = await buildProposalDocx(def, { client, author, date, fieldwork, ...styled, structure: look.structure });
     return docx(buf, `${base}-research-proposal.docx`, `Research proposal: ${def.research?.hypotheses.length ?? 0} hypotheses, ${def.questions.length} questions, ${def.research?.analysisPlan ? "the saved analysis plan" : "the design's analysis plan"}`);
   }
 
   if (output.type === "sap_docx") {
-    const buf = await buildSapDocx(def, { client, author, date, ...styled });
+    const buf = await buildSapDocx(def, { client, author, date, ...styled, structure: look.structure });
     const sapPlan = def.research?.analysisPlan;
     return docx(buf, `${safeName(def.meta.title)}-analysis-plan.docx`, `Statistical analysis plan: ${sapPlan ? `${sapPlan.tests.length} tests, ${sapPlan.crosstabs.length} crosstabs from the saved plan` : "derived from the design - no analysis plan is saved yet"}`);
   }
@@ -229,7 +229,8 @@ export async function POST(req: NextRequest) {
   const opts = { audience: output.audience, client, author, date, results, narrative };
   if (output.type === "findings_pptx") {
     const deck = deckFromRun(def, run, opts);
-    const buf = await buildDeckPptx({ deck, results, author, footer: client ? `Prepared for ${client}` : undefined, ...(look.theme ? { theme: themeToReportTheme(look.theme) } : {}) });
+    /* the same section order as the findings Word report (#18) */
+    const buf = await buildDeckPptx({ deck, results, author, footer: client ? `Prepared for ${client}` : undefined, ...(look.theme ? { theme: themeToReportTheme(look.theme) } : {}), sectionOrder: sectionOrderFor(look.structure, "findings") });
     const pc = checkPptx(buf);
     if (!pc.ok) return { ok: false, status: 500, error: `The deck was produced but failed its check, so it is not offered: ${pc.problems.slice(0, 3).join("; ")}.`, code: "invalid_document" };
     return { bytes: new Uint8Array(buf), fileName: `${base}-findings-${output.audience}.pptx`, mime: PPTX, summary: `${describeDeck(deck)} - ${run.n} completes`, narrative: gate };

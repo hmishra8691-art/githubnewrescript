@@ -3,6 +3,7 @@ import { liveEvidence } from "./evidence.js";
 import { codesOfTheme } from "./analysis.js";
 import { tokenize, sentimentOf } from "../analyses/business.js";
 import { stem } from "./ask.js";
+import { excerptClip } from "./wordTimings.js";
 
 /**
  * HIGHLIGHT REELS (2026-10-22) — a named collection of excerpts from across
@@ -39,7 +40,8 @@ export function clipRange(e: Pick<QualExcerpt, "sourceId" | "segmentId">, segmen
 
 export function snapshotOf(e: QualExcerpt, segments: readonly QualSegment[]): HighlightSnapshot {
   const seg = segments.find((s) => s.sourceId === e.sourceId && s.id === e.segmentId);
-  const clip = clipRange(e, segments);
+  /* the excerpt's own words when the transcript has word timings (#17), else the turn */
+  const clip = excerptClip(e, segments);
   return { quote: e.quote, sourceId: e.sourceId, segmentId: e.segmentId, codeId: e.codeId, charStart: e.charStart, charEnd: e.charEnd, ...(e.speaker ? { speaker: e.speaker } : {}), ...(seg?.group ? { group: seg.group } : {}), ...(clip ? { start: clip.start, end: clip.end } : {}) };
 }
 
@@ -113,4 +115,4 @@ export function selectForReel(state: QualState, segments: readonly QualSegment[]
   return { excerpts: out, codes: [...codeHit], note };
 }
 
-export const CLIP_NOTE = "Clips play the whole turn a quote is in (transcripts carry turn timings, not word timings). Clips are played one by one from the recording; joining them into one video is not done.";
+export const CLIP_NOTE = "Clips play exactly the quote's words when the transcript has word timings (speech-to-text since 2026-10-22; timings re-aligned after a correction are approximate), otherwise the whole turn the quote is in. Clips are played one by one from the recording; joining them into one video is not done.";

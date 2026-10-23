@@ -65,7 +65,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const bytes = await readObject(handle.db, { bucket: media.bucket, path: media.path, storage_provider: media.storage_provider });
     if (bytes.length > STT_MAX_BYTES) return tooBig(bytes.length);
     const seconds = Number(media.duration_seconds) > 0 ? Math.round(Number(media.duration_seconds)) : Math.max(1, Math.round(bytes.length / 8_000));
-    const metered = await meteredSttCall(billing.meter, billing.ctx, "qual_transcription", seconds, () => transcribe(bytes, { segments: true, diarize: true, mimeType: media.mime_type ?? undefined, fileName: media.original_filename ?? media.path.split("/").pop(), language: language || undefined, durationSeconds: seconds, timeoutMs: 280_000 }));
+    const metered = await meteredSttCall(billing.meter, billing.ctx, "qual_transcription", seconds, () => transcribe(bytes, { segments: true, diarize: true, words: true, mimeType: media.mime_type ?? undefined, fileName: media.original_filename ?? media.path.split("/").pop(), language: language || undefined, durationSeconds: seconds, timeoutMs: 280_000 }));
     if (!metered.ok) return refusalResponse(metered);
     const heard = metered.value;
     if (!heard.ok) return json({ error: heard.reason, code: "stt_failed", retryable: true }, heard.status && heard.status >= 400 && heard.status < 600 ? 502 : 500);

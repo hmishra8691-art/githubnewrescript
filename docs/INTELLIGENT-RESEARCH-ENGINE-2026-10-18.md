@@ -120,7 +120,7 @@ Per the capability registry and today's suites:
 - **A long brief is re-sent with each staged item.** Summarising it once would cut cost.
 - **After a page reload, a copilot download link is gone.** Asking again regenerates it.
 - **A report theme requested in a sentence is suggested, not applied.** Themes are stored records.
-- **Copilot analysis-plan actions with missing inputs are accepted** and marked invalid in Data Analytics, not refused up front.
+- **Copilot analysis-plan actions with missing inputs are accepted** and marked invalid in Data Analytics, not refused up front. *(Fixed 2026-10-22: refused at action time by the same readiness rule — `ENGINE-11-14-2026-10-22.md` §2.)*
 - **Three panes at 1024 px** leave the conversation 418 px wide.
 - **Not tested in a browser:** right-to-left layouts.
 - **Not supported:** moderated interviews and focus groups, AI theme coding, HB, latent class and SEM (see §3).

@@ -33,6 +33,8 @@ export const SPEECH_TEXT_FIELD_TYPES: readonly string[] = ["text", "longtext"];
 const TEXT_ANSWER_TYPES = new Set(["open_text", "long_text"]);
 /** Question types whose labelled fields are drawn by the shared form / list inputs. */
 const FIELD_LIST_TYPES = new Set(["text_list", "numeric_list", "repeating_group"]);
+/** Grid question types with text cells (#16): a microphone per cell, shown when the cell has focus. */
+const GRID_CELL_TYPES = new Set(["matrix_text", "custom_table", "composite"]);
 
 /** Which field of a question the microphone would sit beside. */
 export type SpeechField =
@@ -41,7 +43,14 @@ export type SpeechField =
   /** an "Other, please specify" box — an option's or a grid row's */
   | { kind: "other" }
   /** a labelled field of a form / list / repeating-group question */
-  | { kind: "field"; fieldType?: string | null; row?: Pick<QuestionRow, "validation"> | null };
+  | { kind: "field"; fieldType?: string | null; row?: Pick<QuestionRow, "validation"> | null }
+  /**
+   * A CELL of a grid (2026-10-22, #16): a matrix_text answer cell, or a text /
+   * long-text column of a composite (custom table) or an Editable Table.
+   * `columnType` is the column's response type (absent = text); `validation`
+   * the column's rules (or the question's, for matrix_text).
+   */
+  | { kind: "cell"; columnType?: string | null; validation?: readonly { kind: string }[] | null };
 
 type DefLike = Pick<SurveyDefinition, "deployment"> | { deployment?: { speechInput?: boolean } | null } | null | undefined;
 type QLike = Pick<Question, "type" | "settings"> & { variant?: string | null; validation?: Question["validation"] };
@@ -68,6 +77,11 @@ export function speechFieldIsProse(q: QLike, field: SpeechField): boolean {
     return !formatted(q.validation);
   }
   if (field.kind === "other") return (q.settings as { otherSpecifyFormat?: string } | undefined)?.otherSpecifyFormat !== "numeric";
+  if (field.kind === "cell") {
+    if (!GRID_CELL_TYPES.has(q.type)) return false;
+    const ct = field.columnType ?? "text";
+    return SPEECH_TEXT_FIELD_TYPES.includes(ct) && !formatted(field.validation ?? (q.type === "matrix_text" ? q.validation : null));
+  }
   const ft = field.fieldType ?? "text";
   return SPEECH_TEXT_FIELD_TYPES.includes(ft) && !formatted(field.row?.validation);
 }
@@ -86,11 +100,26 @@ export function questionOffersSpeechInput(q: QLike & Pick<Question, "options" | 
   if (speechFieldIsProse(q, { kind: "answer" })) return true;
   const hasOther = (q.options ?? []).some((o) => o.flags?.includes("other_specify")) || (q.rows ?? []).some((r) => r.flags?.includes("other_specify"));
   if (hasOther && speechFieldIsProse(q, { kind: "other" })) return true;
+  if (q.type === "matrix_text") return speechFieldIsProse(q, { kind: "cell", columnType: "text" });
+  if (GRID_CELL_TYPES.has(q.type)) {
+    const cols = (q as { columns?: { responseType?: string; validation?: { kind: string }[] }[] }).columns ?? [];
+    return cols.some((c) => speechFieldIsProse(q, { kind: "cell", columnType: c.responseType ?? "text", validation: c.validation ?? [] }));
+  }
   if (FIELD_LIST_TYPES.has(q.type)) {
     const dflt = q.type === "numeric_list" ? "number" : "text";
     return (q.rows ?? []).some((r) => speechFieldIsProse(q, { kind: "field", fieldType: r.fieldType ?? dflt, row: r }));
   }
   return false;
+}
+
+/**
+ * SERVER DICTATION (#16): may this survey send a respondent's recorded answer
+ * to the runtime's speech-to-text when the browser cannot recognise speech?
+ * On unless `deployment.speechServer === false` (and dictation itself is on).
+ */
+export function speechServerOn(def: DefLike): boolean {
+  const d = (def as { deployment?: { speechInput?: boolean; speechServer?: boolean } | null } | null | undefined)?.deployment;
+  return d?.speechInput !== false && d?.speechServer !== false;
 }
 
 /**
@@ -106,9 +135,11 @@ export function appendSpoken(current: string, spoken: string): string {
 }
 
 /** The recogniser's language:the question's, the voice mode's, the survey's, then the browser's. */
-export function speechInputLang(def: Partial<Pick<SurveyDefinition, "branding" | "deployment">> | null | undefined, q: Pick<Question, "settings">, browser = "en"): string {
+export function speechInputLang(def: Partial<Pick<SurveyDefinition, "branding" | "deployment">> | null | undefined, q: Pick<Question, "settings">, browser = "en", respondent?: string | null): string {
   const meta = (def as { meta?: { language?: string } } | null | undefined)?.meta?.language;
   return (q.settings as { speechLang?: string } | undefined)?.speechLang
+    /* the language THIS respondent is answering in (a multilingual survey, #16) — the recogniser must hear that one */
+    || respondent
     || def?.branding?.layout?.voice?.lang
     || meta
     || def?.deployment?.languages?.[0]

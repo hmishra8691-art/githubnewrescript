@@ -45,3 +45,17 @@
   .ai-turn { max-width: 92%; }
 }
 @media (prefers-reduced-motion: reduce) { .ai-log { scroll-behavior: auto; } }
+/* G1 2026-10-22 — the hands-free conversation's status, and right-to-left pages (Urdu, Arabic):
+   the chat bubbles, the camera and the rows follow the inline direction (flex start/end and logical corners) */
+.ai-conv { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #f1f5f9; }
+.ai-dot { width: 12px; height: 12px; border-radius: 50%; background: #94a3b8; flex: none; }
+.ai-dot.listening { background: #16a34a; }
+.ai-dot.userSpeaking { background: #dc2626; animation: ai-pulse 1s infinite; }
+.ai-dot.processing { background: #f59e0b; }
+.ai-dot.speaking { background: var(--rs-primary, #2563eb); animation: ai-pulse 1.4s infinite; }
+@keyframes ai-pulse { 50% { opacity: .35; } }
+.ai-shell[dir="rtl"] .ai-turn.moderator { border-bottom-left-radius: 14px; border-end-start-radius: 4px; }
+.ai-shell[dir="rtl"] .ai-turn.participant { border-bottom-right-radius: 14px; border-end-end-radius: 4px; }
+.ai-shell[dir="rtl"] { font-family: var(--rs-font, system-ui, "Noto Naskh Arabic", "Noto Nastaliq Urdu", "Segoe UI", Tahoma, sans-serif); }
+.ai-shell[dir="rtl"] .ai-turn { line-height: 1.7; }
+@media (prefers-reduced-motion: reduce) { .ai-dot { animation: none !important; } }

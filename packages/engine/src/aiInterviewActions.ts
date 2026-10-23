@@ -56,6 +56,8 @@ export interface AiInterviewAction {
   costCapUsd?: number;
   studyBudgetUsd?: number | null;
   silenceSeconds?: number;
+  /** G1: voice styles offered — turn_based (tap to talk), conversation (hands-free, barge-in), realtime */
+  voiceStyles?: ("turn_based" | "conversation" | "realtime")[];
 }
 export interface ScreenerInput { text?: string; kind?: "single" | "multi" | "number"; options?: { label: string; qualifies?: boolean; segment?: string }[]; min?: number; max?: number; fromQuestion?: string; qualifying?: string[]; segments?: Record<string, string> }
 
@@ -168,6 +170,13 @@ export function coerceAiInterviewAction(op: string, o: Record<string, unknown>):
   if (o.costCapUsd !== undefined) { const n = num(o.costCapUsd); if (n === undefined || n <= 0 || n > 50) return `${op}: costCapUsd is a dollar amount above 0 and at most 50 per interview`; a.costCapUsd = n; }
   if (o.studyBudgetUsd === null) a.studyBudgetUsd = null; else if (o.studyBudgetUsd !== undefined) { const n = num(o.studyBudgetUsd); if (n === undefined || n <= 0) return `${op}: studyBudgetUsd is a dollar amount`; a.studyBudgetUsd = n; }
   if (o.silenceSeconds !== undefined) { const n = num(o.silenceSeconds); if (n === undefined || n < 20 || n > 600) return `${op}: silenceSeconds is 20–600`; a.silenceSeconds = Math.round(n); }
+  if (o.voiceStyles !== undefined) {
+    const raw = Array.isArray(o.voiceStyles) ? o.voiceStyles : [o.voiceStyles];
+    const map = (x: unknown) => { const v = String(x ?? "").toLowerCase().replace(/[\s-]+/g, "_"); return /^(turn_?based|tap|push_to_talk|turn)$/.test(v) ? "turn_based" : /^(conversation(al)?|hands_?free|duplex|barge_?in|natural)$/.test(v) ? "conversation" : /^(real_?time|low_latency|speech_to_speech)$/.test(v) ? "realtime" : null; };
+    const styles = raw.map(map);
+    if (!styles.length || styles.some((x) => !x)) return `${op}: voiceStyles are turn_based, conversation and/or realtime`;
+    a.voiceStyles = [...new Set(styles as ("turn_based" | "conversation" | "realtime")[])];
+  }
   if (Object.keys(a).length === 1) return `${op} names nothing to configure`;
   return a;
 }
@@ -242,6 +251,7 @@ export function applyAiInterviewAction(def: SurveyDefinition, a: AiInterviewActi
   if (a.costCapUsd !== undefined) { next.costCapUsd = a.costCapUsd; changes.push(`AI cap $${a.costCapUsd} per interview`); }
   if (a.studyBudgetUsd === null) { delete next.studyBudgetUsd; changes.push("no study budget"); } else if (a.studyBudgetUsd !== undefined) { next.studyBudgetUsd = a.studyBudgetUsd; changes.push(`study budget $${a.studyBudgetUsd}`); }
   if (a.silenceSeconds !== undefined) { next.silenceSeconds = a.silenceSeconds; changes.push(`nudge after ${a.silenceSeconds}s`); }
+  if (a.voiceStyles) { next.voiceStyles = a.voiceStyles; changes.push(`voice: ${a.voiceStyles.map((v) => v.replace("_", "-")).join(" / ")}`); }
   const parsed = AiModerationSchema.safeParse(next);
   if (!parsed.success) fail(`the AI interview settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`);
   def.qualStudy = { ...study, aiModeration: parsed.data! };

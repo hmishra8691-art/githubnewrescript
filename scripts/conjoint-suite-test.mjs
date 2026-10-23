@@ -169,7 +169,8 @@ rt.on("pageerror", (e) => rtErrors.push(String(e)));
 await rt.goto(`${RUNTIME}/preview`, { waitUntil: "networkidle" });
 await sendPreview(rt, { definition: { ...def, meta: { ...def.meta, id: "conjoint_suite" } } }, { selector: '[data-qid="q_own"]' });
 const next = async () => { await rt.click('[data-testid="rs-next"]'); await rt.waitForTimeout(600); };
-const stateOf = () => rt.evaluate(() => JSON.parse(JSON.stringify({ seed: window.__rescriptState.seed, answers: window.__rescriptState.answers })));
+/* calculated: a design version CLAIMED for this respondent (exact balance, engine #15 — on for new multi-version designs) wins over the seed */
+const stateOf = () => rt.evaluate(() => JSON.parse(JSON.stringify({ seed: window.__rescriptState.seed, answers: window.__rescriptState.answers, calculated: window.__rescriptState.calculated ?? {} })));
 await rt.click('[data-qid="q_own"] input[value="1"]');
 await next();
 
@@ -177,20 +178,20 @@ const parsed = SurveyDefinition.parse(def);
 const cvaQ = byVar(def, "CVA"), cbcQ = byVar(def, "CBC"), menuQ = byVar(def, "PLAN");
 /* 5 — CVA */
 await rt.waitForSelector(`[data-qid="${cvaQ.id}"] [data-testid="rs-cva-tasks"]`);
-const seed = (await stateOf()).seed;
-const tasks = cvaTasksFor(parsed, parsed.questions.find((q) => q.id === cvaQ.id), seed);
+const { seed, calculated: calc } = await stateOf();
+const tasks = cvaTasksFor(parsed, parsed.questions.find((q) => q.id === cvaQ.id), seed, calc);
 const shown = await rt.$$eval(`[data-qid="${cvaQ.id}"] [data-testid^="cva-task-"]`, (els) => els.map((e) => ({ task: e.getAttribute("data-task"), cells: [...e.querySelectorAll("td[data-label]")].map((td) => [td.getAttribute("data-label"), td.textContent.trim()]), points: e.querySelectorAll('input[type="radio"]').length })));
 assert.equal(shown.length, tasks.length);
 shown.forEach((s, i) => { assert.equal(s.task, tasks[i].task); assert.deepEqual(Object.fromEntries(s.cells), tasks[i].profiles[0].levels); assert.equal(s.points, 11); });
 for (const [i, t] of tasks.entries()) await rt.click(`[data-testid="cva-rate-${t.task}-${i % 11}"]`);
 const cvaAns = (await stateOf()).answers[cvaQ.id];
 assert.deepEqual(Object.values(cvaAns).map(Number), tasks.map((_, i) => i % 11));
-ok(`CVA: ${tasks.length} profiles of version ${designVersionFor(cvaQ, designOf(def, cvaQ).file.rows, seed)}, each with its levels and a 0–10 scale; ratings recorded`);
+ok(`CVA: ${tasks.length} profiles of version ${designVersionFor(cvaQ, designOf(def, cvaQ).file.rows, seed, calc)}, each with its levels and a 0–10 scale; ratings recorded`);
 await next();
 
 /* 6 — dual-response CBC */
 await rt.waitForSelector(`[data-qid="${cbcQ.id}"] [data-testid="cbc-task-1"]`);
-const cbcRows = designRowsFor(cbcQ, designOf(def, cbcQ).file.rows, seed);
+const cbcRows = designRowsFor(cbcQ, designOf(def, cbcQ).file.rows, seed, (await stateOf()).calculated);
 const nTasks = new Set(cbcRows.map((r) => r.task)).size;
 assert.equal(await rt.$('[data-testid="cbc-dual-1"]'), null, "no follow-up before a choice");
 for (let t = 1; t <= nTasks; t++) {
@@ -219,6 +220,7 @@ await rt.waitForSelector('[data-testid="rs-ended"]', { timeout: 15000 });
 /* 8 — exports */
 const state = createResponseState(parsed, { seed });
 state.answers = (await stateOf()).answers;
+state.calculated = { ...state.calculated, ...(await stateOf()).calculated };
 const flat = flattenVariables(parsed, state);
 assert.equal(flat[`CVA_T${tasks[1].task}`], 1);
 assert.equal(flat.CBC_T1_BUY, 1); assert.equal(flat.CBC_T2_BUY, 0);

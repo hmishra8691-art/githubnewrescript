@@ -86,6 +86,15 @@ const PUBLIC = {
     "the same bearer-token credential as the media job, checked the same way in the handler's first statement. "
     + "It releases reservations whose TTL has passed and touches nothing a caller could name, so there is no "
     + "project to gate on — and no session, because a scheduler has none",
+  "cron/notifications/route.ts":
+    "alert retries and digests (0072, G3): the same bearer-token credential as the media job, checked against CRON_SECRET by "
+    + "`timingSafeEqual` in each handler's first statement, refusing everything when it is unset. It sends what the delivery "
+    + "log says is due, across every organisation, so there is no project to gate on — and no session",
+  "notify/ingest/route.ts":
+    "events from the respondent runtime (0072, G3): not a person and no session. Authenticated by an HMAC-SHA256 signature "
+    + "(t=…,v1=…, five-minute window) over the raw body with a sub-key of INTEGRATIONS_SECRET_KEY, checked in the handler's "
+    + "first statement and refusing everything when the key is unset; only on the database-less fake-provider sandbox "
+    + "(never production) does it accept the runtime's forwarded sandbox events unsigned",
   "cron/expire-partials/route.ts":
     "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
     + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "

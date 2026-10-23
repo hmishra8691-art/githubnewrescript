@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { aiProviderName } from "@rescript/ai";
 import { SurveyDefinition } from "@rescript/schema";
 import { agreement, redactText, compareGroups, themeSynthesisState, insightsState, assignmentAgreement, bothSubmitted, reelItemStates, type HighlightReel, type ItemState, type QualHistoryEntry, type QualSegment, type QualState, type ThemeSynthesis, type StudyInsights } from "@rescript/analytics";
+import { sectionOrderFor } from "@rescript/analytics";
+import { loadSelection, readStructure } from "@/lib/reportThemesStore";
 import { buildQualGuideDocx, buildQualReportDocx, buildQualDeckPptx, buildHighlightsDocx, buildHighlightsPptx, checkDocx, checkPptx, type QualSourceInfo } from "@rescript/analytics/export";
 import { synthesisRows, listAssignments, coderSets, listReels } from "@/lib/qual/synthesisStore";
 import { synthesisWorkspace } from "@/lib/qual/synthesisWorkspace";
@@ -85,8 +87,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const syntheses = (Array.isArray(body.syntheses) ? body.syntheses as ThemeSynthesis[] : []).filter((x) => x && Array.isArray(x.summary)).map((x) => ({ ...x, state: themeSynthesisState(x, state, segments) === "current" ? "current" as const : "stale" as const }));
       const insights = body.insights && typeof body.insights === "object" && Array.isArray((body.insights as StudyInsights).objectives) ? { ...(body.insights as StudyInsights), state: insightsState(body.insights as StudyInsights, state, segments, study) === "current" ? "current" as const : "stale" as const } : null;
       const comparison = comparePair ? compareGroups(state, segments, comparePair[0], comparePair[1]) : null;
-      if (type === "deck") return deck(await buildQualDeckPptx(def, { state, segments, sources: Object.fromEntries(sources.map((x) => [x.id, { title: x.title }])), syntheses, insights, comparison, date }), `${safe(String(def.meta.code ?? def.meta.title))}_Qualitative_Deck_${date}.pptx`);
-      return file(await buildQualReportDocx(def, { state, segments, sources, history, agreement: agr, interpretation, date, coderName: (id) => (id === "ai" ? "AI (suggested)" : id), syntheses, insights, comparison }), `${safe(String(def.meta.code ?? def.meta.title))}_Qualitative_Report_${date}.docx`, "Qualitative report");
+      /* the sandbox's section order (#18) travels in the body, as its theme does */
+      const structure = readStructure(body.structure);
+      if (type === "deck") return deck(await buildQualDeckPptx(def, { state, segments, sources: Object.fromEntries(sources.map((x) => [x.id, { title: x.title }])), syntheses, insights, comparison, date, sectionOrder: sectionOrderFor(structure, "qual") }), `${safe(String(def.meta.code ?? def.meta.title))}_Qualitative_Deck_${date}.pptx`);
+      return file(await buildQualReportDocx(def, { state, segments, sources, history, agreement: agr, interpretation, date, coderName: (id) => (id === "ai" ? "AI (suggested)" : id), syntheses, insights, comparison, structure }), `${safe(String(def.meta.code ?? def.meta.title))}_Qualitative_Report_${date}.docx`, "Qualitative report");
     } catch (e) { return json({ error: (e as Error).message }, 400); }
   }
 
@@ -131,8 +135,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const comparison = comparePair ? compareGroups(full.state, segs, comparePair[0], comparePair[1]) : null;
     const done = await listAssignments(db, params.id).then((l) => l.find((a) => bothSubmitted(a) && a.status !== "cancelled") ?? null).catch(() => null);
     const doubleCoding = done ? { ...assignmentAgreement(done, await coderSets(db, params.id, done.id), full.state.codebook), name: done.name } : null;
+    /* the project's section order (#18): the qualitative report and deck follow the same one */
+    const structure = (await loadSelection(db as never, params.id).catch(() => null))?.structure ?? null;
     if (type === "deck") {
-      const buf = await buildQualDeckPptx(def, { state: full.state, segments: segs, sources: Object.fromEntries(full.transcripts.map((t) => [t.id, { title: t.title }])), syntheses, insights, comparison, date, author: gate.user.email, ...(pii ? {} : { redact: (t: string) => redactText(t, { names }).text }) });
+      const buf = await buildQualDeckPptx(def, { state: full.state, segments: segs, sources: Object.fromEntries(full.transcripts.map((t) => [t.id, { title: t.title }])), syntheses, insights, comparison, date, author: gate.user.email, ...(pii ? {} : { redact: (t: string) => redactText(t, { names }).text }), sectionOrder: sectionOrderFor(structure, "qual") });
       await recordEvents(db, gate, [{ actor: gate.user.userId, action: "report.exported", detail: `Downloaded the qualitative deck${pii ? "" : " (redacted)"}`, ids: [] }]);
       return deck(buf, `${code}_Qualitative_Deck_${date}.pptx`);
     }
@@ -142,7 +148,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       state: full.state, segments: allSegments(full), sources: sourcesOf(full), history: full.history, agreement: agr, interpretation, date, author: gate.user.email,
       coderName: (id) => (id === "ai" ? "AI (suggested)" : who.get(id) ?? (full.history.some((h) => h.actor === id) ? id : "a reviewer")),
       ...(pii ? {} : { redact: (t: string) => redactText(t, { names }).text }),
-      syntheses, insights, comparison, doubleCoding,
+      syntheses, insights, comparison, doubleCoding, structure,
     });
     await recordEvents(db, gate, [{ actor: gate.user.userId, action: "report.exported", detail: `Downloaded the qualitative report${pii ? "" : " (redacted)"}`, ids: [] }]);
     return file(buf, `${code}_Qualitative_Report_${date}.docx`, `Qualitative report: ${full.state.codebook.codes.length} codes, ${full.state.excerpts.length} excerpts`);

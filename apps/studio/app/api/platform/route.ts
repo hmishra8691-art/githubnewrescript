@@ -95,6 +95,10 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   /* without it AI-moderated interviews cannot be launched (the AI interviews tab says so); the guide's AI settings still work */
   { migration: "0069", what: "AI-moderated interviews (studies, participants, turns)", table: "ai_interview_sessions", column: "token_hash" },
   { migration: "0070", what: "qualitative synthesis, double-coding, highlights, transcript corrections, auto-coding jobs, text group sessions", table: "qual_group_participants", column: "token_hash" },
+  /* G2 2026-10-22 */
+  { migration: "0071", what: "live human-moderated sessions (rooms, invitations, members, signalling, recorded chunks, back-room notes)", table: "live_room_tracks", column: "transcript" },
+  /* G3 2026-10-22 */
+  { migration: "0072", what: "alerts (channels with sealed webhook URLs, rules, the outbox, the delivery log) and panel recruitment (sealed signing secrets, panel entries)", table: "panel_entries", column: "outcome" },
 ];
 
 export async function GET(_req: NextRequest) {

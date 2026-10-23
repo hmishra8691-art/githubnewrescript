@@ -1,6 +1,7 @@
 import type { SurveyDefinition } from "@rescript/schema";
 import { docKit, definitionStamp, type DocBlock } from "./docx.js";
 import { PptxCtor } from "./pptx.js";
+import { orderSections } from "../reportThemes.js";
 import type { QualExcerpt, QualSegment, QualState } from "../qual/types.js";
 import type { HighlightReel, ItemState } from "../qual/highlights.js";
 import { CLIP_NOTE } from "../qual/highlights.js";
@@ -93,7 +94,7 @@ export async function buildHighlightsPptx(def: SurveyDefinition, o: HighlightExp
   return (await pres.write({ outputType: "nodebuffer" })) as Buffer;
 }
 
-export interface QualDeckOptions { state: QualState; segments: QualSegment[]; insights?: (StudyInsights & { state?: string }) | null; syntheses?: (ThemeSynthesis & { state?: string })[]; comparison?: GroupComparison | null; sources: Record<string, { title: string }>; redact?: (t: string) => string; date?: string; author?: string }
+export interface QualDeckOptions { state: QualState; segments: QualSegment[]; insights?: (StudyInsights & { state?: string }) | null; syntheses?: (ThemeSynthesis & { state?: string })[]; comparison?: GroupComparison | null; sources: Record<string, { title: string }>; redact?: (t: string) => string; date?: string; author?: string; /** the project's `qual` section order (#18) — the same order as the qualitative report */ sectionOrder?: string[] | null }
 
 /** the qualitative deck: findings, themes, groups, method and limitations — every AI-written line labelled */
 export async function buildQualDeckPptx(def: SurveyDefinition, o: QualDeckOptions): Promise<Buffer> {
@@ -103,28 +104,32 @@ export async function buildQualDeckPptx(def: SurveyDefinition, o: QualDeckOption
   const claim = (c: SynthClaim) => ({ text: `${red(c.text)}${c.origin === "edited" ? " (edited)" : ""}${c.interpretation ? " — interpretation" : ""}` });
   const pres = newDeck();
   titleSlide(pres, def.qualStudy?.title ?? def.meta.title, ["Qualitative findings", o.date ?? new Date().toISOString().slice(0, 10), o.author ?? ""]);
+  /* each group of slides is one section of the qualitative report (#18): built in the project's section order */
+  const sections: { id: string; items: (() => void)[] }[] = [];
+  const section = (id: string, build: () => void) => sections.push({ id, items: [build] });
   const ins = o.insights;
-  if (ins) {
+  section("key-findings", () => { if (ins) {
     textSlide(pres, "Executive summary", ins.executiveSummary.flatMap((c) => [claim(c), ...q(c)]), `AI-written from cited excerpts${ins.state === "stale" ? " · the coding has changed since — regenerate" : ""}`);
     for (const ob of ins.objectives) textSlide(pres, `${ob.ref} · ${OBJECTIVE_WORDS[ob.status]}`, [{ text: plain(ob.objective, 160), muted: true }, ...(ob.findings.length ? ob.findings.flatMap((c) => [claim(c), ...q(c)]) : [{ text: "Not enough evidence in the coded data to answer this objective." }]), ...(ob.note ? [{ text: ob.note, muted: true }] : [])], "Findings cite the excerpts they rest on");
     if (ins.recommendations.length) textSlide(pres, "Recommendations (interpretation)", ins.recommendations.map(claim), "Interpretation, not findings: each rests on the cited excerpts");
-  }
-  for (const sy of o.syntheses ?? []) textSlide(pres, sy.themeName, [...sy.summary.flatMap((c) => [claim(c), ...q(c)]), ...sy.bySegment.map((c) => ({ text: `${c.group}: ${red(c.text)}` })), ...sy.contradicting.map((c) => ({ text: `Against: ${red(c.text)}` }))], `${sy.coverage.words} · AI-written${sy.status === "edited" ? ", edited" : ""}${sy.state === "stale" ? " · stale — regenerate" : ""}`);
-  if (o.comparison?.rows.length) {
+  } });
+  section("themes", () => { for (const sy of o.syntheses ?? []) textSlide(pres, sy.themeName, [...sy.summary.flatMap((c) => [claim(c), ...q(c)]), ...sy.bySegment.map((c) => ({ text: `${c.group}: ${red(c.text)}` })), ...sy.contradicting.map((c) => ({ text: `Against: ${red(c.text)}` }))], `${sy.coverage.words} · AI-written${sy.status === "edited" ? ", edited" : ""}${sy.state === "stale" ? " · stale — regenerate" : ""}`); });
+  section("group-differences", () => { if (o.comparison?.rows.length) {
     const c = o.comparison;
     const s = pres.addSlide();
     s.addText(`${c.a} vs ${c.b}`, { x: 0.6, y: 0.35, w: W - 1.2, h: 0.8, fontSize: 24, bold: true, color: NAVY, fontFace: "Calibri" });
     const head = ["Theme", c.a, c.b, "Difference"].map((t) => ({ text: t, options: { bold: true, color: "FFFFFF", fill: { color: NAVY } } }));
     s.addTable([head, ...c.rows.slice(0, 12).map((r) => [r.theme, `${r.a.segments} (${r.a.share}%)`, `${r.b.segments} (${r.b.share}%)`, `${r.difference > 0 ? "+" : ""}${r.difference}`].map((t) => ({ text: t, options: {} })))], { x: 0.6, y: 1.3, w: W - 1.2, fontSize: 13, fontFace: "Calibri", border: { type: "solid", color: "D0D5DD", pt: 0.5 } });
     s.addText(FREQUENCY_NOTE, { x: 0.6, y: H - 0.8, w: W - 1.2, h: 0.5, fontSize: 10, color: MUTED, fontFace: "Calibri" });
-  }
-  textSlide(pres, "Method and limitations", [
+  } });
+  section("method-and-coding", () => textSlide(pres, "Method and limitations", [
     { text: `${new Set(o.segments.map((s) => s.sourceId)).size} sources, ${o.state.codebook.codes.filter((c) => c.status !== "rejected").length} codes, ${o.state.excerpts.filter((e) => e.status !== "rejected").length} excerpts; coded with AI assistance and human review.` },
     { text: "AI-written lines cite the excerpts they rest on; uncited sentences and numbers the evidence does not give were removed; every count is the Studio's." },
     { text: FREQUENCY_NOTE },
     { text: "Qualitative samples are purposive: the findings describe these participants, not a population." },
     ...(o.redact ? [{ text: "Personal details are redacted in this copy.", muted: true }] : []),
-  ], `${definitionStamp(def).text}`);
+  ], `${definitionStamp(def).text}`));
+  for (const sec of orderSections(sections, o.sectionOrder)) for (const build of sec.items) build();
   return (await pres.write({ outputType: "nodebuffer" })) as Buffer;
 }
 

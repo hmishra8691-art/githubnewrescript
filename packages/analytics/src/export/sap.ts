@@ -1,7 +1,7 @@
 import type { SurveyDefinition, AnalysisPlan, PlannedTest, Question } from "@rescript/schema";
 import { buildAnalysisFramework, conditionSummary, explainPlan, expectedSample, planSampleSize, structuredHypotheses, describeHypothesis, MIN_READ_BASE, type PlanExplanation, type PlanVariable } from "@rescript/engine";
 import { ANALYTICS_ENGINE_VERSION } from "../provenance.js";
-import { docKit, definitionStamp, samplingDesign, screeningRules, METHOD_WORDS, type DocBlock } from "./docx.js";
+import { docKit, definitionStamp, samplingDesign, screeningRules, reorderSections, METHOD_WORDS, type DocBlock } from "./docx.js";
 
 /**
  * THE STATISTICAL ANALYSIS PLAN (audit DOC-03) — the standalone document a
@@ -16,7 +16,7 @@ import { docKit, definitionStamp, samplingDesign, screeningRules, METHOD_WORDS, 
  * and marked so — the document never presents an assumption as a decision.
  * The stamp carries a hash of the definition it was read from.
  */
-export interface SapOptions { client?: string; author?: string; date?: string; title?: string; /** the report theme (2026-10-18): the look only */ theme?: import("../reportThemes.js").ThemeSpec | null; logo?: import("./docx.js").DocLogo | null }
+export interface SapOptions { client?: string; author?: string; date?: string; title?: string; /** the report theme (2026-10-18): the look only */ theme?: import("../reportThemes.js").ThemeSpec | null; logo?: import("./docx.js").DocLogo | null; /** the project's section order (#18), `sap` family */ structure?: import("../reportThemes.js").StructureRequest | null }
 
 const { h1, h2, label, body, lead, muted, bullet, divider, gridTable, cover, document, plain, themed } = docKit;
 
@@ -174,5 +174,7 @@ async function sapDocx(def: SurveyDefinition, opts: SapOptions): Promise<Buffer>
   out.push(body(plan.software ?? `Rescript analytics engine ${ANALYTICS_ENGINE_VERSION}; the version and a hash of each analysis are stored with every run. (default)`));
   out.push(divider());
   out.push(muted(`${stamp.text} · generated ${date}. This plan is read from the survey definition above; regenerate it after the questionnaire or the research design changes.`));
-  return document(`${title} — statistical analysis plan`, `Statistical analysis plan for ${def.meta.title}`, out);
+  /* the project's section order (#18): the cover first, the closing stamp last */
+  const closing = out.splice(out.length - 2, 2);
+  return document(`${title} — statistical analysis plan`, `Statistical analysis plan for ${def.meta.title}`, [...reorderSections(out, opts.structure, "sap"), ...closing]);
 }

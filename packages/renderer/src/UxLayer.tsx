@@ -4,7 +4,7 @@ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
-  uxGuardHolds, createResponseState, guardScriptLoops, type ResponseState,
+  uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState,
 } from "@rescript/engine";
 import { DomBridge } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
@@ -55,7 +55,12 @@ export interface UxLayerProps {
   onLog?: (line: string) => void;
   /** drawn inside another page (the Studio's preview): what scripts add to the body stays in the shell */
   contained?: boolean;
+  /** #14c (2026-10-22): the respondent's language — the popup's close label and direction follow it (absent: the shell's data-language, else the survey's source language) */
+  language?: string | null;
 }
+
+/** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
+const popupLabels = new WeakMap<HTMLElement, { close: string; message: string; dir: "ltr" | "rtl" }>();
 
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
@@ -81,7 +86,8 @@ function applyEffect(root: HTMLElement, def: SurveyDefinition, owner: UxTarget, 
   if (e.do === "show_popup") {
     if (!e.text) return [];
     const anchor = e.placement === "anchored" || e.placement === "inline" ? uxElements(root, t)[0] ?? null : null;
-    return [{ run: openUxPopup({ root, owner: ownerId, anchor, effect: e }) }];
+    const labels = popupLabels.get(root) ?? popupUiFor(def, root.getAttribute("data-language"));
+    return [{ run: openUxPopup({ root, owner: ownerId, anchor, effect: e, labels }) }];
   }
   if (e.do === "hide_popup") { closeUxPopups(root); return []; }
   const content = e.do === "animate" && ["survey", "block", "page"].includes(t.kind);
@@ -180,6 +186,16 @@ export function UxLayer(p: UxLayerProps) {
   const animations = def.ux?.animations ?? [];
 
   const byCode = React.useMemo(() => new Map(def.questions.map((q) => [q.id, String(q.code)])), [def.questions]);
+  /*
+   * #14c THE POPUP'S OWN WORDS in the respondent's language (the close button's label, the name of a popup with no
+   * title) and its direction — kept for the shell, read when a popup opens. Set during render so the first popup of
+   * a page already has them.
+   */
+  {
+    const root = p.rootRef.current;
+    const lang = p.language ?? root?.getAttribute("data-language") ?? null;
+    if (root) popupLabels.set(root, popupUiFor(def, lang));
+  }
   /* without a response state (the Studio's UX preview), the answers on hand are the whole response */
   const stateFromValues = (): ResponseState => ({ ...createResponseState(def, { seed: 1, sessionId: "ux" }), answers: { ...(p.allValues ?? {}), ...p.values } as ResponseState["answers"] });
   const stateRef = React.useRef<() => ResponseState>(stateFromValues);

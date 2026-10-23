@@ -1,0 +1,26 @@
+/* Live sessions (2026-10-22, G2) — Research Tools → Qualitative → Live sessions. Studio design tokens only. */
+.lv-console { display: flex; flex-direction: column; gap: 8px; }
+.lv-bar { position: sticky; top: 0; background: var(--panel, #fff); z-index: 2; padding: 4px 0; }
+.lv-main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .lv-main { grid-template-columns: minmax(0, 1fr); } }
+.lv-stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lv-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.lv-tile { position: relative; margin: 0; background: #0b1220; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; }
+.lv-tile.big { grid-column: 1 / -1; aspect-ratio: auto; height: 420px; }
+.lv-tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lv-tile figcaption { position: absolute; left: 6px; bottom: 6px; color: #fff; background: rgba(0, 0, 0, .55); padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+.lv-stimulus { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel2); }
+.lv-stimulus img, .lv-stimulus video { max-width: 100%; max-height: 360px; display: block; margin-top: 6px; border-radius: 6px; }
+.lv-side { display: flex; flex-direction: column; gap: 8px; }
+.lv-panel { padding: 10px 12px; }
+.lv-panel .ql-row { margin: 4px 0; }
+.lv-chat { max-height: 180px; overflow: auto; font-size: 13px; }
+.lv-chat p { margin: 2px 0; }
+.lv-transcript { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; max-height: 260px; overflow: auto; font-size: 13px; }
+.lv-transcript p { margin: 3px 0; }
+.lv-check { display: grid; grid-template-columns: 320px 1fr; gap: 12px; align-items: end; max-width: 640px; }
+.lv-meter { height: 10px; border-radius: 999px; background: var(--panel2); overflow: hidden; border: 1px solid var(--border); }
+.lv-meter span { display: block; height: 100%; background: var(--accent, #2f6fde); transition: width .08s linear; }
+.lv-room.on { outline: 2px solid var(--accent, #2f6fde); }
+.lv-link { width: 300px; font-size: 12px; }
+.lv-detail .table td { vertical-align: middle; }

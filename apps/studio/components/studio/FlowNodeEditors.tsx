@@ -1,7 +1,7 @@
 "use client";
 import { UxItemsEditor } from "./UxItemsEditor";
 import React from "react";
-import type { FlowNode, EmbeddedDataType } from "@rescript/schema";
+import type { FlowNode, EmbeddedDataType, ExactBalance } from "@rescript/schema";
 import {
   EMBEDDED_TYPES, checkEmbeddedExpression, normalizeExpression,
   validateRedirectUrl, urlVariableCatalog, embeddedCatalog, stripHtmlText,
@@ -403,6 +403,57 @@ export function RedirectEditor({ node, onChange }: {
 
 /* ================================================== every other element */
 
+/**
+ * EXACT BALANCE settings (engine item #15) — shared by the randomizer card and
+ * the design question's properties. Off = the seed-derived assignment (balanced
+ * on average); on = an atomic least-filled claim across the sample.
+ */
+export function BalanceSettings({ value, onChange, what, testId }: {
+  value: ExactBalance | undefined; onChange(v: ExactBalance | undefined): void; what: string; testId: string;
+}) {
+  const s = useStudio();
+  const on = !!value?.exact;
+  const set = (patch: Partial<ExactBalance>) => onChange({ exact: true, ...(value ?? {}), ...patch });
+  return (
+    <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid={testId} data-exact={on ? "1" : "0"}>
+      <label className="row" style={{ gap: 6, fontSize: 13 }}>
+        <input type="checkbox" checked={on} data-testid={`${testId}-exact`} onChange={(e) => onChange(e.target.checked ? { ...(value ?? {}), exact: true } : undefined)} />
+        <strong>Exact balance</strong>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {on ? `${what} is claimed for each respondent — the least-filled first — so counts never differ by more than one, however many arrive together`
+            : `${what} comes from the respondent's random seed — even on average only`}
+        </span>
+      </label>
+      {on && (
+        <div className="row" style={{ flexWrap: "wrap", gap: 12, marginTop: 6, fontSize: 13 }}>
+          <label className="row" style={{ gap: 4 }}>count
+            <select className="select" style={{ width: 230 }} value={value?.basis ?? "completed"} data-testid={`${testId}-basis`} onChange={(e) => set({ basis: e.target.value as ExactBalance["basis"] })}>
+              <option value="completed">completes + in progress (abandoned given back)</option>
+              <option value="started">everyone who started</option>
+            </select>
+          </label>
+          <label className="row" style={{ gap: 4 }}>ties
+            <select className="select" style={{ width: 170 }} value={value?.tieBreak ?? "seeded"} data-testid={`${testId}-tie`} onChange={(e) => set({ tieBreak: e.target.value as ExactBalance["tieBreak"] })}>
+              <option value="seeded">per respondent (seeded)</option>
+              <option value="sequential">in listed order</option>
+            </select>
+          </label>
+          <label className="row" style={{ gap: 4 }}>within quota
+            <select className="select" style={{ width: 170 }} value={value?.byQuota ?? ""} data-testid={`${testId}-quota`} onChange={(e) => set({ byQuota: e.target.value || undefined })}>
+              <option value="">the whole sample</option>
+              {(s.def.quotas ?? []).map((q) => <option key={q.id} value={q.id}>each cell of {q.name}</option>)}
+            </select>
+          </label>
+          <label className="row" style={{ gap: 4 }} title="An interview in progress longer than this is treated as abandoned and its claim is given back">abandoned after
+            <input className="input" type="number" min={5} max={10080} style={{ width: 70 }} value={value?.holdMinutes ?? 120} data-testid={`${testId}-hold`}
+              onChange={(e) => set({ holdMinutes: Math.max(5, Math.min(10080, Number(e.target.value) || 120)) })} /> min
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: FlowNode): void }) {
   const s = useStudio();
   /* fields that pipe: their inputs, so Insert piped text lands at the cursor */
@@ -492,11 +543,18 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               of {node.children.length}, in random order
             </label>
             <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={node.evenPresentation ?? false}
-                onChange={(e) => onChange({ ...node, evenPresentation: e.target.checked || undefined })} />
+              <input type="checkbox" checked={node.evenPresentation ?? false} data-testid="randomizer-even"
+                onChange={(e) => onChange({
+                  ...node, evenPresentation: e.target.checked || undefined,
+                  /* NEW: ticking "evenly present" turns on EXACT balance (#15) — written into the survey, so a survey
+                     already in the field (or saved before) keeps its seed-derived behaviour until someone ticks it */
+                  ...(e.target.checked && !node.balance ? { balance: { exact: true } } : {}),
+                  ...(!e.target.checked ? { balance: undefined } : {}),
+                })} />
               even presentation
             </label>
           </div>
+          {node.evenPresentation && <BalanceSettings value={node.balance} onChange={(b) => onChange({ ...node, balance: b })} what="each child" testId="randomizer-balance" />}
           <p className="muted" style={{ fontSize: 12.5 }}>
             Anything can go inside: blocks, groups, even another randomizer. Drag it onto
             this card, or use <em>+ Add element</em> inside it.

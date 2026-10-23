@@ -99,7 +99,8 @@ const QUAL_REPLY = {
 const expectedQual = engineRun(EMPTY, QUAL_REPLY.actions);
 assert.equal(validateResearch(expectedQual).kind, "qualitative");
 const FOCUS = "Run two moderated focus groups before the survey";
-assert.ok(capabilitiesMentioned(FOCUS).some((c) => c.id === "qualitative:moderated" && c.status === "not_supported"), "the registry says so");
+/* G2 2026-10-22: live human-moderated sessions now run in Research Tools → Qualitative → Live sessions (built-in mesh; partial) */
+assert.ok(capabilitiesMentioned(FOCUS).some((c) => c.id === "qualitative:moderated" && c.status === "partial"), "the registry says so");
 
 const MIXED = "Design a mixed-methods study: qualitative interviews first, then a quantitative survey to test what we learn";
 const MIXED_REPLY = {

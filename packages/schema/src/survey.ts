@@ -10,6 +10,7 @@ import { QualityConfig } from "./quality.js";
 import { ListFill } from "./listFill.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QualStudy } from "./qualStudy.js";
+import { AlertSettings, PanelConfig } from "./integrations.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -705,6 +706,15 @@ export const DeploymentConfig = z.object({
    * `speechInputFor` in `@rescript/engine`.
    */
   speechInput: z.boolean().optional(),
+  /**
+   * SERVER DICTATION (2026-10-22, engine item #16): where the browser has no
+   * speech recogniser (Firefox) or it fails, the microphone records the answer
+   * and sends it to the runtime's speech-to-text (metered to the project), after
+   * the respondent agrees once. Absent or true = on (it only appears when the
+   * runtime has speech-to-text configured); `false` keeps dictation
+   * browser-native only — no audio ever leaves the device.
+   */
+  speechServer: z.boolean().optional(),
   activeFrom: z.string().optional(),
   activeUntil: z.string().optional(),
   /*
@@ -847,6 +857,14 @@ export const SurveyDefinition = z.object({
    * all carry it; absent, the runtime renders exactly as before.
    */
   ux: UxConfig.optional(),
+  /**
+   * PANEL RECRUITMENT (2026-10-22, see integrations.ts): entry parameters, outcome redirects (optionally signed),
+   * duplicate prevention and completes per panel, for AI interviews, group / live sessions and the survey link.
+   * The signing secret is sealed in the database (0072), never here. Absent on every survey that never had one.
+   */
+  panels: z.array(PanelConfig).optional(),
+  /** ALERTS (2026-10-22, see integrations.ts): which study events go to which channels. Absent = the organisation's defaults. */
+  alerts: AlertSettings.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

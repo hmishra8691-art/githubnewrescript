@@ -1,4 +1,5 @@
 import type { Condition, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+import { semanticTwin } from "./uxDuplicates.js";
 import { parseLogicExpression } from "./logicExpression.js";
 import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, UX_POPUP_PLACEMENTS, UX_POPUP_DISMISS, effectiveResponseModel } from "@rescript/schema";
 import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxItem, uxBehaviorKey, uxBehaviorTrigger, UX_HOLDING_EVENTS, type UxLookups } from "./ux.js";
@@ -541,9 +542,15 @@ export function applyScriptEdits(b: Pick<UxBehavior, "label" | "script">, list: 
  */
 function refuseDuplicate(def: SurveyDefinition, list: UxBehavior[], b: UxBehavior) {
   const key = uxBehaviorKey(b);
-  if (!key) return;
-  const twin = list.find((x) => x.id !== b.id && uxBehaviorKey(x) === key);
+  /* a script that decides its own event has no exact key — it is still compared by what it does (#14a, below) */
+  const twin = key ? list.find((x) => x.id !== b.id && uxBehaviorKey(x) === key) : undefined;
   if (twin) fail(`there is already a behaviour for this — ${twin.id} “${twin.label}” (when ${eventWords(twin.script ? { ...twin, ...uxTriggerOf(twin) } : twin)} on ${describeUxTarget(def, twin.target)}${twin.script ? ", a script" : ` → ${twin.effects.map((e) => effectWords(def, e)).join(", ")}`}). Update ${twin.id} instead of adding a second one (update_behavior {"id":"${twin.id}", …}${twin.script ? ' with "edits" or a new "script"' : ' with its "effects" plus the new one'}) — two behaviours on one event both run`);
+  /* #14a (2026-10-22): the same thing done another way — the same popup on the same question, the same effects, or a near-identical script (names, quotes and comments set aside) */
+  const sem = semanticTwin(def, list, b);
+  if (sem) {
+    const t2 = sem.twin;
+    fail(`this repeats a behaviour that is already there — ${t2.id} “${t2.label}” on ${describeUxTarget(def, t2.target)}: ${sem.why}. Update ${t2.id} instead of adding a second one (update_behavior {"id":"${t2.id}", …}${t2.script ? ' with "edits" or a new "script"' : ' with its "effects"'}) — both would run, and the respondent would see the thing twice`);
+  }
 }
 const uxTriggerOf = (b: UxBehavior): Partial<UxBehavior> => { const t = uxBehaviorTrigger(b); return t ? { on: t.on as UxBehavior["on"], options: t.options } : {}; };
 function optionCodes(def: SurveyDefinition, t: UxTarget, raw: string[]): string[] {
