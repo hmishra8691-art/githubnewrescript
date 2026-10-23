@@ -72,6 +72,16 @@ const serverUp = async () => {
     await sleep(2000);
   }
 };
+/* a member's direct call to the runtime API — done again when it died with a restarting server (5xx / refused) */
+async function liveApi(body) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(`${RUNTIME}/api/live`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
+      if (r.status < 500 || attempt >= 3) return await r.json();
+    } catch (e) { if (attempt >= 3) throw e; }
+    await serverUp();
+  }
+}
 async function until(label, act, done, ms = 60000) {
   for (let attempt = 0; ; attempt++) {
     await act();
@@ -79,6 +89,20 @@ async function until(label, act, done, ms = 60000) {
       if (attempt >= 3) throw e;
       console.log(`  (${label}: not seen yet — ${String(e.message).split("\n")[0]}; waiting for the servers and doing it again)`);
       await serverUp();
+/*
+ * Keep the routes this suite uses compiled: the development servers drop a route that has not been asked for in a
+ * minute and recompile it on the next request — a memory spike that, with four browsers holding camera streams, is
+ * what gets the Studio OOM-killed mid-run. A light request every 20 s keeps them warm (it changes nothing).
+ */
+const keepWarm = setInterval(() => {
+  const q = (u, init) => fetch(u, { ...init, signal: AbortSignal.timeout(15000) }).catch(() => null);
+  void q(`${STUDIO}/sandbox?mode=studio`);
+  void q(`${STUDIO}/api/surveys/sandbox/qual/live`);
+  for (const path of ["room", "media/ticket"]) void q(`${STUDIO}/api/surveys/sandbox/qual/live/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  void q(`${RUNTIME}/live/${"x".repeat(43)}`);
+  for (const path of ["", "/media/ticket"]) void q(`${RUNTIME}/api/live${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "view" }) });
+}, 20000);
+keepWarm.unref();
       try { return await done(15000); } catch { /* do it again */ }
     }
   }
@@ -93,21 +117,34 @@ await serverUp();
 /* ------------------------------------------------------------ the Studio (moderator) */
 const studioCtx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, permissions: ["camera", "microphone"] });
 let page = watch(await studioCtx.newPage(), "studio");
-await until("the Studio sandbox", () => page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle", timeout: SLOW }).catch(() => {}), (ms) => page.waitForSelector(".block-badge", { timeout: ms }), SLOW);
-await switchMode(page, "studio").catch(() => {});
-await openTab(page, "JSON");
-await page.waitForSelector("textarea.code");
-await page.click('button:has-text("edit")');
-await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(DEF));
-await page.click('button:has-text("validate & apply")');
-await page.waitForTimeout(1200);
+/* the Studio sandbox with the guide applied — again on a fresh tab if the dev server was OOM-killed under it */
+async function loadStudio() {
+  if (page.isClosed()) page = watch(await studioCtx.newPage(), "studio");
+  await until("the Studio sandbox", () => page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle", timeout: SLOW }).catch(() => {}), (ms) => page.waitForSelector(".block-badge", { timeout: ms }), SLOW);
+  await switchMode(page, "studio").catch(() => {});
+  await openTab(page, "JSON");
+  await page.waitForSelector("textarea.code");
+  await page.click('button:has-text("edit")');
+  await page.$eval("textarea.code", (el, v) => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, v); el.dispatchEvent(new Event("input", { bubbles: true })); }, JSON.stringify(DEF));
+  await page.click('button:has-text("validate & apply")');
+  await page.waitForTimeout(1200);
+}
+await loadStudio();
 const openQual = async (tab) => { await switchMode(page, "studio").catch(() => {}); await openTab(page, "Qualitative"); await page.waitForSelector('[data-testid="qual-panel"]', { timeout: SLOW }); await page.click(`[data-testid="qual-tab-${tab}"]`); await page.waitForTimeout(300); };
 
 console.log("\n1 — schedule a live focus group from the guide; participant and observer links");
 let roomId, links, observerLink;
 {
-  await openQual("live");
-  await page.waitForSelector('[data-testid="live-transport"]', { timeout: SLOW });
+  /* the Live tab's first open compiles its chunk — the moment the dev server is most likely to be OOM-killed: start over */
+  for (let attempt = 0; ; attempt++) {
+    try { await openQual("live"); await page.waitForSelector('[data-testid="live-transport"]', { timeout: SLOW }); break; } catch (e) {
+      if (attempt >= 3) throw e;
+      console.log(`  (the Live sessions tab: not seen yet — ${String(e.message).split("\n")[0]}; reloading the Studio)`);
+      await serverUp();
+      await page.close().catch(() => {});
+      await loadStudio();
+    }
+  }
   assert.equal(await page.getAttribute('[data-testid="live-transport"]', "data-turn"), "none");
   assert.match(await page.textContent('[data-testid="live-turn-warning"]'), /corporate firewalls or on some mobile networks/);
   await page.fill('[data-testid="live-title"]', TITLE);
@@ -146,7 +183,11 @@ let p1, p2;
 {
   /* the API refuses a join without the recording consent (the page cannot be talked past) */
   const token = links[0].split("/live/")[1];
-  const refused = await fetch(`${RUNTIME}/api/live`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "join", invite: token, consent: { agree: true } }) });
+  let refused;
+  for (let attempt = 0; !refused; attempt++) {
+    try { refused = await fetch(`${RUNTIME}/api/live`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "join", invite: token, consent: { agree: true } }) }); if (refused.status >= 500) { refused = null; throw new Error("5xx"); } }
+    catch (e) { if (attempt >= 3) throw e; await serverUp(); }
+  }
   assert.equal(refused.status, 400);
   assert.equal((await refused.json()).code, "recording_consent_required");
   p1 = await joinParticipant(links[0], "P1");
@@ -174,10 +215,21 @@ console.log("\n4 — the moderator enters, opens the room, admits both, starts t
   await page.close().catch(() => {});
   page = watch(await studioCtx.newPage(), "studio");
   await until("the Studio sandbox", () => page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle", timeout: SLOW }).catch(() => {}), (ms) => page.waitForSelector(".block-badge", { timeout: ms }), SLOW);
-  await openQual("live");
-  await page.waitForSelector(`[data-testid="live-room"][data-title="${TITLE}"] [data-testid="live-moderate"]`, { timeout: SLOW });
-  await page.click(`[data-testid="live-room"][data-title="${TITLE}"] [data-testid="live-moderate"]`);
-  await page.waitForSelector('[data-testid="live-console"][data-phase="preview"]', { timeout: SLOW });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await openQual("live"); await page.waitForSelector(`[data-testid="live-room"][data-title="${TITLE}"] [data-testid="live-moderate"]`, { timeout: SLOW });
+      await page.click(`[data-testid="live-room"][data-title="${TITLE}"] [data-testid="live-moderate"]`);
+      await page.waitForSelector('[data-testid="live-console"][data-phase="preview"]', { timeout: SLOW });
+      break;
+    } catch (e) {
+      if (attempt >= 3) throw e;
+      console.log(`  (the console's tab: not seen yet — ${String(e.message).split("\n")[0]}; reloading the Studio)`);
+      await serverUp();
+      await page.close().catch(() => {});
+      page = watch(await studioCtx.newPage(), "studio");
+      await until("the Studio sandbox", () => page.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle", timeout: SLOW }).catch(() => {}), (ms) => page.waitForSelector(".block-badge", { timeout: ms }), SLOW);
+    }
+  }
   await waitFor(page, () => { const v = document.querySelector('[data-testid="live-preview"] video'); return v && v.videoWidth > 0; });
   await page.click('[data-testid="live-enter"]');
   await page.waitForSelector('[data-testid="live-console"][data-phase="in"][data-status="scheduled"]', { timeout: SLOW });
@@ -236,10 +288,10 @@ console.log("\n6 — the observer is invisible to participants");
   }
   /* the API's own answer to a participant (their member token is in their tab) */
   const tok = await p1.evaluate(() => { for (const k of Object.keys(sessionStorage)) if (k.startsWith("rs-live-")) return JSON.parse(sessionStorage.getItem(k)).token; return null; });
-  const r = await (await fetch(`${RUNTIME}/api/live`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "view", token: tok }) })).json();
+  const r = await liveApi({ action: "view", token: tok });
   assert.ok(r.view && !JSON.stringify(r).includes(ids.obs) && r.chat === undefined && r.notes === undefined, "the participant API returns no observer and no back room");
-  const sig = await (await fetch(`${RUNTIME}/api/live`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "signal", token: tok, signals: [{ to: ids.obs, type: "offer", payload: { description: { type: "offer", sdp: "v=0" } } }] }) })).json();
-  assert.deepEqual([sig.sent, sig.refused], [0, 1], "a participant cannot even signal the observer");
+  const sig = await liveApi({ action: "signal", token: tok, signals: [{ to: ids.obs, type: "offer", payload: { description: { type: "offer", sdp: "v=0" } } }] });
+  assert.deepEqual([sig.sent, sig.refused], [0, 1], `a participant cannot even signal the observer (${JSON.stringify(sig).slice(0, 200)})`);
   ok("no peer, no view entry, no page text, no API field, and a refused signal — participants cannot see the back room");
 }
 
@@ -324,7 +376,7 @@ console.log("\n11 — end → Finalize → one transcript, the speakers from sep
 
 /* a dev server restarting mid-load leaves a chunk-load / hydration error on the page the retry then reloaded — that is the
    environment, not the product; every other page error fails the suite */
-const restartNoise = (e) => /ChunkLoadError|Loading chunk .* failed|error while hydrating/.test(e);
+const restartNoise = (e) => /ChunkLoadError|Loading (?:CSS )?chunk .* failed|error while hydrating/.test(e);
 if (pageErrors.some(restartNoise)) console.log(`  (ignored ${pageErrors.filter(restartNoise).length} page error(s) from a server restart mid-load)`);
 assert.deepEqual(pageErrors.filter((e) => !restartNoise(e)), [], pageErrors.join("\n"));
 await browser.close();

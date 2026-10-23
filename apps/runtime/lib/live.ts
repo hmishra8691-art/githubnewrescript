@@ -2,7 +2,7 @@ import "server-only";
 import { NextResponse } from "next/server";
 import { beginUpload, confirmUpload, resumeUpload, type MediaDb } from "@rescript/media";
 import { supabaseLiveStore, type ChunkMediaOps, type LiveDeps, type LiveMember, type LiveRoomRow, type LiveStore } from "@rescript/analytics/live";
-import { iceServers, livekitConfig, livekitToken, newMemberToken, sha256Hex } from "@rescript/analytics/live/server";
+import { iceServersFor, livekitConfig, livekitToken, newMemberToken, sha256Hex } from "@rescript/analytics/live/server";
 import { supabaseAdmin } from "@/lib/admin";
 
 /**
@@ -31,8 +31,8 @@ export async function forward(path: string, body: Record<string, unknown>): Prom
 }
 
 /** ICE servers (TURN credentials minted for this person) and, for an SFU room once admitted, a LiveKit token */
-export function connectionFor(row: LiveRoomRow, member: Pick<LiveMember, "id" | "role" | "handle" | "state">) {
-  const ice = iceServers(process.env, { identity: member.id });
+export async function connectionFor(row: LiveRoomRow, member: Pick<LiveMember, "id" | "role" | "handle" | "state">) {
+  const ice = await iceServersFor(process.env, { identity: member.id });
   const lk = row.state.settings.transport === "sfu" ? livekitConfig(process.env) : null;
   return {
     iceServers: ice.iceServers, turn: ice.turn, ...(ice.warning ? { warning: ice.warning } : {}),

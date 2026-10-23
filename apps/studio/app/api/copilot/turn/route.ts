@@ -14,7 +14,7 @@ import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
-import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, type SurveyAction } from "@rescript/engine";
+import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, isQualOp, type SurveyAction } from "@rescript/engine";
 import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
 import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
 import { qualSynthesisIntent } from "@/lib/copilot/qualSynthesisGuide";
@@ -766,10 +766,11 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   /*
    * #12 / #13: AN ANALYSIS-PLAN OR DESIGN ACTION REFUSED AT THE GATE (before it could be applied — "create_conjoint
    * (cbc) needs the attributes…", "a crosstab needs rows and columns") goes to the same repair. It never did: only
-   * refusals at apply time reached it, so such a turn ended in "nothing was changed".
+   * refusals at apply time reached it, so such a turn ended in "nothing was changed". A qualitative guide refused in
+   * the same way goes too (production 2026-10-23: a 20-minute guide dropped for sessionPlan.mode "video", $0.16 spent).
    */
   const rawNow = rawActionsOf(raw);
-  const gateRefused = reply.rejected.filter((rj) => { const op = opOfRaw(rawNow[rj.index] ?? {}); return isMethodOp(op) || isAnalysisOp(op); }).map((rj) => { const o = rawNow[rj.index] ?? {}; const op = opOfRaw(o); return { op, text: `${op}: ${isMethodOp(op) ? explainMethodRefusal(o, rj.reason) : rj.reason}` }; });
+  const gateRefused = reply.rejected.filter((rj) => { const op = opOfRaw(rawNow[rj.index] ?? {}); return isMethodOp(op) || isAnalysisOp(op) || isQualOp(op); }).map((rj) => { const o = rawNow[rj.index] ?? {}; const op = opOfRaw(o); return { op, text: `${op}: ${isMethodOp(op) ? explainMethodRefusal(o, rj.reason) : rj.reason}` }; });
   const refusedAll = [...refused, ...gateRefused.map((g) => g.text)];
   // a refusal the model cannot change (said look-only, the enforced research design) is not worth a paid call
   const repairable = refusedAll.filter((r) => !policyRefusal(r));
@@ -782,7 +783,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const failedOps = [...failedResults.map((x) => x.op), ...gateRefused.map((g) => g.op)];
   const missedOps = new Set(misses.flatMap((x) => x.ops));
   const missedGuides = [...new Set(misses.flatMap((x) => x.guides))].filter((g) => failedOps.some((op) => missedOps.has(op)));
-  const repairHere = !executedPlan || failedOps.some((op) => isMethodOp(op) || isAnalysisOp(op) || missedOps.has(op));
+  const repairHere = !executedPlan || failedOps.some((op) => isMethodOp(op) || isAnalysisOp(op) || isQualOp(op) || missedOps.has(op));
   const repairFake = executedPlan ? (fakeProvider ? (body as { fakeRepair?: unknown }).fakeRepair ?? null : null) : fakes[1] ?? null;
   if (repairable.length && repairHere && !cached && !sink?.cancelled && deadline - Date.now() > MIN_ITEM_MS && (aiProviderName() !== "fake" || repairFake != null)) {
     const rp = repairPrompt({ prompt, raw, refused: refusedAll, total: reply.actions.length + gateRefused.length, uxGuideSent: uxTurn, methodsGuideSent: methodsTurn, ops: [...reply.actions.map((x) => String((x as { op?: unknown }).op ?? "")), ...gateRefused.map((g) => g.op)], extraGuides: missedGuides.map((g) => GUIDE_TEXT[g]) });

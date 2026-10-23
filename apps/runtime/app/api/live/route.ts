@@ -58,15 +58,15 @@ export async function POST(req: NextRequest) {
       if (r.status !== 200 || !r.body.token) return reply(r.body, r.status);
       const m = (await store.memberByHash(liveDeps.hash(String(r.body.token))))!;
       const row = (await store.room(m.roomId))!;
-      return reply({ ...r.body, connection: connectionFor(row, m) });
+      return reply({ ...r.body, connection: await connectionFor(row, m) });
     }
     if (body.action === "ice") {
       const m = /^[A-Za-z0-9_-]{24,120}$/.test(String(body.token ?? "")) ? await store.memberByHash(liveDeps.hash(String(body.token))) : null;
       if (!m || m.role === "moderator") return reply({ error: "Join the session first.", code: "not_joined" }, 401);
       const row = (await store.room(m.roomId))!;
-      return reply({ ok: true, connection: connectionFor(row, m) });
+      return reply({ ok: true, connection: await connectionFor(row, m) });
     }
-    const r = await memberAction(store, body, liveDeps, { allowRoles: ["participant", "observer"], onPoll: async (row: LiveRoomRow, m: LiveMember) => (row.state.settings.transport === "sfu" && m.state === "admitted" ? { connection: connectionFor(row, m) } : undefined) });
+    const r = await memberAction(store, body, liveDeps, { allowRoles: ["participant", "observer"], onPoll: async (row: LiveRoomRow, m: LiveMember) => (row.state.settings.transport === "sfu" && m.state === "admitted" ? { connection: await connectionFor(row, m) } : undefined) });
     return reply(r.body, r.status);
   } catch (e) {
     console.warn("[rescript:live] request failed", JSON.stringify({ action: String(body.action ?? ""), error: (e as Error).message }));

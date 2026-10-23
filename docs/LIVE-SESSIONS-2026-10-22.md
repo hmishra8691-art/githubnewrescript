@@ -182,6 +182,7 @@ check (Data view + contact details).
 
 | Variable | App | Purpose |
 |---|---|---|
+| `CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN` | Studio, runtime | Cloudflare TURN (added 2026-10-23): credentials are minted per person through Cloudflare's API (`…/credentials/generate-ice-servers`, TTL from `WEBRTC_TURN_TTL_SECONDS`, port-53 addresses dropped); takes precedence over the settings below; if Cloudflare does not answer in 8 s the session falls back to them, with a warning |
 | `WEBRTC_TURN_URLS` | Studio, runtime | `turn:` / `turns:` URLs, comma-separated |
 | `WEBRTC_TURN_SECRET` | Studio, runtime | shared secret → time-limited credentials per person (recommended) |
 | `WEBRTC_TURN_USERNAME`, `WEBRTC_TURN_CREDENTIAL` | Studio, runtime | static TURN credentials (instead of the secret) |

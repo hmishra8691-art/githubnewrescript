@@ -276,7 +276,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (r.status !== 200) return json(r.body, r.status);
       const m = (await store.members(row.id)).find((x) => x.id === r.body.memberId)!;
       await event(`live.joined_${role}`, `Joined “${row.state.title}” as ${role}`, [row.id]);
-      return json({ ...r.body, connection: connectionFor(row, m) });
+      return json({ ...r.body, connection: await connectionFor(row, m) });
     }
 
     /* ---------------------------------------------------------------- finalize → the qualitative source */

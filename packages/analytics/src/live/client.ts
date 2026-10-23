@@ -24,7 +24,7 @@ import type { LiveView, PeerView, LiveRole } from "./room.js";
 
 export type Call = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 export interface RemoteTile { memberId: string; kind: "camera" | "screen"; stream: MediaStream; via: string }
-export interface OutSignal { to: string; type: "offer" | "answer" | "candidate" | "meta" | "bye"; payload: Record<string, unknown> }
+export interface OutSignal { to: string; type: "offer" | "answer" | "candidate" | "meta" | "bye"; payload: Record<string, unknown>; queuedAt?: number }
 
 /* ------------------------------------------------------------ perfect negotiation, testable */
 
@@ -83,7 +83,7 @@ export class Negotiator {
 interface Peer {
   /* cid: this connection's own random id, sent with every message on it; remoteCid: the other side's */
   id: string; role: string; pc: RTCPeerConnection; neg: Negotiator; cid: string; remoteCid: string | null;
-  inbound: Map<string, MediaStream>; senders: Map<string, RTCRtpSender>; created: number; disconnectedAt: number | null;
+  inbound: Map<string, MediaStream>; senders: Map<string, RTCRtpSender>; created: number; disconnectedAt: number | null; lastRestart?: number;
 }
 
 export interface LiveClientOptions {
@@ -222,6 +222,15 @@ export class LiveClient {
     const now = Date.now();
     for (const p of this.peers.values()) {
       if (p.disconnectedAt && now - p.disconnectedAt > 10_000) { p.disconnectedAt = now; try { p.pc.restartIce(); } catch { /* */ } }
+      /* never connected (an offer or the candidates were lost — a server restarting mid-handshake): ask again with fresh
+         candidates every 15 s; the other side answers on the connection it has, or opens one for this offer */
+      else if (p.pc.connectionState !== "connected" && p.pc.connectionState !== "closed" && now - (p.lastRestart ?? p.created) > 15_000) {
+        p.lastRestart = now;
+        const d = p.pc.localDescription;
+        /* our offer was never answered: send it again; settled but not connecting: fresh candidates (an ICE restart) */
+        if (p.pc.signalingState === "have-local-offer" && d) this.queue({ to: p.id, type: "offer", payload: { description: { type: d.type, sdp: d.sdp } } });
+        else if (p.pc.signalingState === "stable" && (p.pc.localDescription || p.pc.remoteDescription)) { try { p.pc.restartIce(); } catch { /* */ } }
+      }
     }
   }
 
@@ -229,7 +238,7 @@ export class LiveClient {
 
   private queue(s: OutSignal): void {
     const p = this.peers.get(s.to);
-    this.outbox.push({ ...s, payload: { ...s.payload, sid: this.sid, ...(p ? { cid: p.cid } : {}), ...(p?.remoteCid ? { rcid: p.remoteCid } : {}) } });
+    this.outbox.push({ ...s, queuedAt: Date.now(), payload: { ...s.payload, sid: this.sid, ...(p ? { cid: p.cid } : {}), ...(p?.remoteCid ? { rcid: p.remoteCid } : {}) } });
     if (!this.flushTimer) this.flushTimer = setTimeout(() => { void this.flush(); }, 100);
   }
 
@@ -238,12 +247,20 @@ export class LiveClient {
     const batch = this.outbox.splice(0);
     if (!batch.length) return;
     for (let attempt = 0; attempt < 4; attempt++) {
-      try { await this.o.call({ action: "signal", signals: batch }); return; } catch (e) {
-        if ((e as { code?: string }).code === "not_in_room") return;
+      try { await this.o.call({ action: "signal", signals: batch }); this.flushBackoff = 0; return; } catch (e) {
+        if ((e as { code?: string }).code === "not_in_room" || (e as { code?: string }).code === "not_joined") return;
         await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
       }
     }
+    /* the server is away (restarting): keep the messages, in order, and try again — a lost offer or candidate leaves a
+       connection checking for ever; messages older than the server's two-minute life are not worth sending */
+    if (!this.running) return;
+    const fresh = batch.filter((m) => Date.now() - (m.queuedAt ?? Date.now()) < 110_000);
+    this.outbox.unshift(...fresh);
+    this.flushBackoff = Math.min(8000, (this.flushBackoff || 500) * 2);
+    if (!this.flushTimer && this.outbox.length) this.flushTimer = setTimeout(() => { void this.flush(); }, this.flushBackoff);
   }
+  private flushBackoff = 0;
 
   private async onSignal(s: { from: string; type: string; payload: Record<string, unknown> }): Promise<void> {
     /*

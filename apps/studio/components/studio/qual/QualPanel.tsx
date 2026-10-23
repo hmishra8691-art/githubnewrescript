@@ -20,8 +20,7 @@ import { GroupsTab } from "./GroupsTab";
 import { AlertsPanelsTab } from "./AlertsPanelsTab";
 import { AutoCodePanel, CorrectableText, SynApiContext } from "./TranscriptTools";
 /* G2 2026-10-22: live human-moderated sessions (focus groups / IDIs) with multi-party video */
-/* loaded only when the tab is opened: the console (WebRTC client, recorder) stays out of the panel's first chunk */
-const LiveSessionsTab = React.lazy(() => import("./LiveSessionsTab").then((m) => ({ default: m.LiveSessionsTab })));
+import { LiveSessionsTab } from "./LiveSessionsTab";
 import { ClipPlayer } from "./ClipPlayer";
 
 /**
@@ -113,7 +112,7 @@ export function QualPanel() {
         : tab === "double" ? <DoubleCodingTab ws={ws} api={syn} run={run} setWs={setWs} />
         : tab === "highlights" ? <HighlightsTab ws={ws} api={syn} run={run} />
         : tab === "groups" ? <GroupsTab ws={ws} api={syn} run={run} setWs={setWs} />
-        : tab === "live" ? <React.Suspense fallback={<div className="sk" style={{ height: 120 }} />}><LiveSessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} /></React.Suspense>
+        : tab === "live" ? <LiveSessionsTab ws={ws} api={api} run={run} setWs={setWs} setNote={setNote} />
         : tab === "coding" ? <CodingTab ws={ws} api={api} run={run} setWs={setWs} />
         : tab === "themes" ? <ThemesTab ws={ws} />
         : <ReportTab ws={ws} api={api} run={run} />}

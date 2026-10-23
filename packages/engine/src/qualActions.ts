@@ -69,6 +69,16 @@ function kindOf(v: unknown): "interview" | "focus_group" | undefined | { error: 
   if (/^(focus_group|focus_groups|group|fg|discussion)$/.test(t)) return "focus_group";
   return { error: `kind is "interview" or "focus_group" (got ${JSON.stringify(v)})` };
 }
+/** a session mode word → in_person | remote | phone | mixed; undefined when it is none of them */
+export function sessionMode(v: unknown): "in_person" | "remote" | "phone" | "mixed" | undefined {
+  const t = String(v ?? "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+  if (!t) return undefined;
+  if (/^(in_person|inperson|face_to_face|f2f|offline|onsite|on_site|in_home|central_location|clt|facility|viewing_facility)$/.test(t)) return "in_person";
+  if (/^(remote|online|video|video_call|videocall|webcam|web|virtual|zoom|teams|ms_teams|google_meet|meet|skype|webex|video_based|video_conference|videoconference|online_video|async|asynchronous)$/.test(t)) return "remote";
+  if (/^(phone|telephone|telephonic|tele|call|phone_call|cati|voice_call|mobile)$/.test(t)) return "phone";
+  if (/^(mixed|hybrid|mixed_mode|multi_mode|both|any|flexible)$/.test(t)) return "mixed";
+  return undefined;
+}
 const SECTION_KIND = new Set<string>(QUAL_SECTION_KINDS);
 const sectionKind = (v: unknown): string | undefined => { const t = str(v, 40)?.toLowerCase().replace(/[\s-]+/g, "_"); if (!t) return undefined; if (SECTION_KIND.has(t)) return t; if (/^(intro|introduction|welcome)$/.test(t)) return "opening"; if (/^(warmup|warm)$/.test(t)) return "warm_up"; if (/^(wrap_up|wrapup|close|thanks|ending)$/.test(t)) return "closing"; if (/^(concept_test|concept_evaluation|stimulus|concepts)$/.test(t)) return "concept"; if (/^(task|activity|projective)$/.test(t)) return "exercise"; return "main"; };
 
@@ -174,8 +184,10 @@ export function coerceQualAction(op: string, o: Record<string, unknown>): QualAc
   if (sp) {
     const s = nonNeg(sp.sessions ?? sp.groups ?? sp.interviews, "sessions"); if (isErr(s)) return `${op}: ${s.error}`;
     const p = nonNeg(sp.participantsPerSession ?? sp.perGroup, "participantsPerSession"); if (isErr(p)) return `${op}: ${p.error}`;
-    const m = sp.mode === null ? null : str(sp.mode, 20)?.toLowerCase().replace(/[\s-]+/g, "_");
-    if (m && !["in_person", "remote", "phone", "mixed"].includes(m)) return `${op}: sessionPlan.mode is in_person, remote, phone or mixed`;
+    /* the session mode in the words a model (or a researcher) uses: "video", "online", "Zoom" are remote; "telephone"
+       is phone; "face-to-face" is in person; "hybrid" is mixed. An unknown word drops the mode, never the guide
+       (production 2026-10-23: a whole 20-minute guide was refused for mode "video"). */
+    const m = sp.mode === null ? null : sessionMode(sp.mode);
     sessionPlan = { ...(s !== undefined ? { sessions: s === null ? null : Math.round(s) } : {}), ...(p !== undefined ? { participantsPerSession: p === null ? null : Math.round(p) } : {}), ...(m !== undefined ? { mode: m } : {}), ...(nullable(sp.notes) !== undefined ? { notes: nullable(sp.notes) } : {}) };
   }
   const fields: QualGuidePatch = {

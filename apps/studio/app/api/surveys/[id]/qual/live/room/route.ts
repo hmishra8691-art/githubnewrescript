@@ -63,7 +63,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (body.via === "runtime") {
       if (!sandbox) return json({ error: "not here" }, 403);
       if (action === "join") { const r = await joinWithInvite(store, body, liveDeps); return json(await withConnection(store, r), r.status); }
-      if (action === "ice") { const m = await memberOf(store, body.token, params.id); return m && m.member.role !== "moderator" ? json({ ok: true, connection: connectionFor(m.row, m.member) }) : json({ error: "Join the session first.", code: "not_joined" }, 401); }
+      if (action === "ice") { const m = await memberOf(store, body.token, params.id); return m && m.member.role !== "moderator" ? json({ ok: true, connection: await connectionFor(m.row, m.member) }) : json({ error: "Join the session first.", code: "not_joined" }, 401); }
       const r = await memberAction(store, body, liveDeps, { allowRoles: ["participant", "observer"], onPoll: sfuConnection });
       return json(r.body, r.status);
     }
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const me = await memberOf(store, body.token, params.id);
     if (!me) return json({ error: "This console is no longer in the session — open it again.", code: "not_joined" }, 401);
     if (me.member.role === "participant") return json({ error: "not here" }, 403);
-    if (action === "ice") return json({ ok: true, connection: connectionFor(me.row, me.member) });
+    if (action === "ice") return json({ ok: true, connection: await connectionFor(me.row, me.member) });
     if (action === "work" || action === "assist") {
       if (me.member.role !== "moderator" || !manage) return json({ error: "Only the moderator can do that.", code: "forbidden" }, 403);
       return action === "work" ? work(store, me.row, user, params.id) : assist(store, me.row, user, params.id, body);
@@ -93,14 +93,14 @@ async function memberOf(store: LiveStore, token: unknown, surveyId: string): Pro
 
 /** an SFU room hands each admitted member their LiveKit token with the poll */
 async function sfuConnection(row: LiveRoomRow, member: LiveMember) {
-  return row.state.settings.transport === "sfu" && member.state === "admitted" ? { connection: connectionFor(row, member) } : undefined;
+  return row.state.settings.transport === "sfu" && member.state === "admitted" ? { connection: await connectionFor(row, member) } : undefined;
 }
 
 async function withConnection(store: LiveStore, r: { status: number; body: Record<string, unknown> }) {
   if (r.status !== 200 || !r.body.memberId) return r.body;
   const m = (await store.memberByHash(liveDeps.hash(String(r.body.token))))!;
   const row = (await store.room(m.roomId))!;
-  return { ...r.body, connection: connectionFor(row, m) };
+  return { ...r.body, connection: await connectionFor(row, m) };
 }
 
 async function meterFor(user: AuthedUser | null, surveyId: string): Promise<Meter | { response: Response }> {

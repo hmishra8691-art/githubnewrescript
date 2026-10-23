@@ -9,7 +9,7 @@ import {
   memoryLiveStore, supabaseLiveStore, MESH_MAX_PARTICIPANTS,
   type LiveStore, type MemoryLiveStore, type LiveRoomRow, type LiveDeps, type LiveTrack, type LiveMember, type LiveInvite, type ChunkMediaOps,
 } from "@rescript/analytics/live";
-import { iceServers, livekitConfig, livekitToken, inviteToken, linkSecret, sha256Hex, newMemberToken, turnStatus, TURN_WARNING } from "@rescript/analytics/live/server";
+import { iceServersFor, livekitConfig, livekitToken, inviteToken, linkSecret, sha256Hex, newMemberToken, turnStatus, TURN_WARNING } from "@rescript/analytics/live/server";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 import { supabaseService } from "@/lib/authServer";
 
@@ -98,8 +98,8 @@ export function transportInfo() {
 }
 
 /** what one member's browser needs to connect: ICE servers (TURN credentials minted for them) and, for an SFU room, a LiveKit token once admitted */
-export function connectionFor(row: LiveRoomRow, member: Pick<LiveMember, "id" | "role" | "handle" | "state">) {
-  const ice = iceServers(process.env, { identity: member.id });
+export async function connectionFor(row: LiveRoomRow, member: Pick<LiveMember, "id" | "role" | "handle" | "state">) {
+  const ice = await iceServersFor(process.env, { identity: member.id });
   const lk = row.state.settings.transport === "sfu" ? livekitConfig(process.env) : null;
   return {
     iceServers: ice.iceServers, turn: ice.turn, ...(ice.warning ? { warning: ice.warning } : {}),
