@@ -95,6 +95,11 @@ const PUBLIC = {
     + "(t=…,v1=…, five-minute window) over the raw body with a sub-key of INTEGRATIONS_SECRET_KEY, checked in the handler's "
     + "first statement and refusing everything when the key is unset; only on the database-less fake-provider sandbox "
     + "(never production) does it accept the runtime's forwarded sandbox events unsigned",
+  "cron/intelligent-tasks/route.ts":
+    "continues a long Intelligent Mode generation whose browser went away (the durable task rows): the same "
+    + "bearer-token credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's "
+    + "first statement and again in run(), refusing everything when it is unset. It sweeps tasks across every survey, "
+    + "so there is no project to gate on — and no session, because a scheduler has none",
   "cron/expire-partials/route.ts":
     "marks in_progress responses idle past their survey's window as abandoned (RUNTIME-07): the same bearer-token "
     + "credential as the media job, checked against CRON_SECRET by `timingSafeEqual` in each handler's first statement, "

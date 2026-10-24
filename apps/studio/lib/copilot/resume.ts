@@ -164,3 +164,40 @@ export function interruptedFailure(cp: Checkpoint): TurnFailure {
     next: ["Resume continues from where it stopped — nothing is generated twice and nothing needs to be typed again.", ...(cp.built.length ? ["Or review what is already built."] : [])],
   };
 }
+
+/* --------------------------------------- where "what is built" is read from */
+
+/**
+ * THE SWITCH FROM THE BROWSER'S CHECKPOINT TO THE DATABASE, off by default.
+ *
+ * The durable task rows are written from the first deploy (dual write), but
+ * what the next request BELIEVES is built still comes from the browser's
+ * `done[]` until an operator says otherwise. That ordering is deliberate: a
+ * wrong read means items built twice or items never built, and it must be
+ * reversible with an environment variable and a restart — no deploy, no
+ * migration, no code change.
+ *
+ * `COPILOT_TASK_RESUME=on` (also 1/true/yes) makes the server's own rows the
+ * source of truth for what is already built. Anything else — unset, empty,
+ * "off" — keeps the browser's checkpoint as the source, exactly as today.
+ *
+ * `COPILOT_PLAN_RESUME` (the plan-read switch, lib/copilot/planPersistence.ts)
+ * turns this on too: reading a persisted plan back and then ignoring what its
+ * steps already built would be the worst of both, so one operator switch
+ * moves the whole read. Setting this one explicitly still wins.
+ */
+export const TASK_RESUME_ENV = "COPILOT_TASK_RESUME";
+export function taskResumeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const own = (env.COPILOT_TASK_RESUME ?? "").trim();
+  return /^(?:on|1|true|yes)$/i.test(own || (env.COPILOT_PLAN_RESUME ?? "").trim());
+}
+
+/**
+ * The dual write — every built item committed to the task rows as well as
+ * sent to the page — is ON unless an operator switches it off, because a read
+ * that is turned on later is only safe if the rows were being written all
+ * along. `COPILOT_TASK_DUAL_WRITE=off` (also 0/false/no) stops it.
+ */
+export function taskDualWriteEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return !/^(?:off|0|false|no)$/i.test((env.COPILOT_TASK_DUAL_WRITE ?? "").trim());
+}

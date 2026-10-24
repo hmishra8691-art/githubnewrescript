@@ -8,6 +8,7 @@ import { aiReadyFor, connectionFor } from "@/lib/byok/connect";
 import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
+import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
@@ -426,6 +427,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   let planFailures: { id: string; failure: TurnFailure }[] = [];
   let planPending: string[] = [];
   let executedPlan: ChangePlan | null = null;
+  /* the durable mirror of this turn, started in the execute stage and closed once the actions have been applied to a clone */
+  let mirror: Mirror | null = null;
   /* this request's clock and what the provider told us on the way */
   const fakeProvider = aiProviderName() === "fake";
   const budgetMs = fakeProvider && Number.isFinite(Number(body.budgetMs)) && Number(body.budgetMs) > 0 ? Number(body.budgetMs) : ROUTE_BUDGET_MS;
@@ -587,6 +590,15 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
      */
     const prior = sanitizeDone(body.done, new Set(plan.items.map((i) => i.id)));
     const finalize = body.finalize === true;
+    /*
+     * THE DURABLE MIRROR (2026-10-24). The browser's checkpoint above is
+     * still the source of truth for what is built; these rows are WRITTEN so
+     * that an operator can later make them the source (COPILOT_TASK_RESUME)
+     * without a deploy. Best-effort by construction: `mirrorStart` returns
+     * null for a turn too small to deserve a task row and for any failure at
+     * all, and nothing below it can fail this turn.
+     */
+    mirror = await mirrorStart({ surveyId, request: message, plan, mode, definition: def, planFirst: body.planFirst !== false });
     /* mergeable: built earlier and not yet in a proposal; the rest of `prior` is context for the next item's prompt */
     const built: { item: typeof approved[number]; raw: unknown }[] = approved.filter((it) => prior.has(it.id) && !prior.get(it.id)!.applied).map((item) => ({ item, raw: prior.get(item.id)!.raw }));
     const newlyBuilt: { id: string; raw: unknown }[] = [];
@@ -600,14 +612,36 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     if (!finalize) for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
+      /*
+       * THE STAGE CAP IS NOT CONDITIONAL ON SOMETHING HAVING BEEN BUILT
+       * ALREADY (2026-10-24). Until now both halves of this test sat behind
+       * `newlyBuilt.length`, so the 90 s cap engaged only AFTER an item had
+       * come back: a request whose FIRST item was slow ran to `itemDeadline`
+       * (150 s) and could sit open and silent to ~160 s — the very symptom
+       * the 2026-10-17 cap was added to remove, still reachable on the first
+       * item. The cap now applies to every item; the "is there time for
+       * another one" test, which only means anything once an item has been
+       * timed, keeps its guard.
+       */
+      if (Date.now() >= softStop) break;
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
-      if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
+      if (newlyBuilt.length && itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5)) break;
       /* streaming, and the page has gone (or the stream was dropped): nothing more is started for nobody — what is built was already sent as checkpoints */
       if (sink?.cancelled) break;
       sink?.progress({ stage: "item", item: i + 1, of: approved.length, id: item.id, label: item.title });
       /* §3: the item's own exact passages of the stored brief (a quota table, a hypothesis, a definitions table) — not the whole brief */
       const hit = useBriefLayers ? itemPassagesFor(briefSections, item) : { text: "", ids: [] as string[] };
       const itemPassages = hit.text;
+      /*
+       * AND THIS ITEM CANNOT OUTLIVE THE CAP EITHER. Stopping BEFORE an item
+       * is only half the fix: the first item, started inside the cap, used to
+       * be given the whole 150 s. It is given until the cap instead, with a
+       * floor of MIN_ITEM_MS so a slice that starts late still gets a fair
+       * attempt. An item cut here falls into the existing `if (!built.length)`
+       * path and is handed back as a retryable failure in about 90 s, not a
+       * silent 160 s.
+       */
+      const stepDeadline = Math.min(itemDeadline, Math.max(Date.now() + MIN_ITEM_MS, softStop));
       /*
        * #11: THIS ITEM'S GUIDES — the build's core (one cached block, the same on every item) and what the item itself
        * needs, read from its kind, title, objects and its own brief passages; the whole build's set when nothing can be
@@ -622,7 +656,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       const t0 = Date.now();
       try {
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
-          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
+          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: stepDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -636,6 +670,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
         newlyBuilt.push({ id: item.id, raw: itemRaw });
         /* the item, kept by the page the moment it exists: a connection lost after this costs only the item in flight */
         sink?.checkpoint(item.id, itemRaw);
+        /* and kept by the SERVER, so a connection lost after this costs nothing at all once the read is switched over */
+        await mirror?.step(item.id, itemRaw, { tokensIn: m.event?.inputUnits ?? undefined, tokensOut: m.event?.outputUnits ?? undefined, charge: m.event?.customerCharge, model: m.event?.model ?? undefined });
         slowest = Math.max(slowest, Date.now() - t0);
         done.push(builtLine(item, itemRaw));
         /* #11: an action whose guide this item was not sent — judged by the gate as any other; logged, and offered to the repair with its guide */
@@ -663,6 +699,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       return failedTurn(waiting ? { ...failure, retryAfterMs: waiting.retryAfterMs || failure.retryAfterMs } : failure, prompt.length);
     }
     if (planPending.length && !finalize) {
+      await mirror?.finish(null);
       /* a checkpoint: what was built in this request, what is still to do, why it stopped — the browser stores it and carries on */
       return NextResponse.json({
         ok: true, stage: "progress", built: newlyBuilt, builtIds: built.map((b) => b.item.id), pending: planPending, failed: planFailures,
@@ -867,6 +904,14 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       }
     }
   }
+  /*
+   * THE COMPLETION GATE, and the only place it can honestly run: `applied.def`
+   * is the survey as this turn would leave it. A task whose every step came
+   * back but whose deliverable is short — 64 questions of 100 — stays
+   * `running` here and resumes at 65. Deterministic code decides; no model is
+   * asked, and a failure to record it cannot fail the turn.
+   */
+  await mirror?.finish(applied?.valid ? applied.def : null);
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation
