@@ -247,6 +247,7 @@ function RowValidation({ rules, onChange }: {
         </div>
         {/* the row rule's own gate — honoured by the validator, editable nowhere until now */}
         <OptionalCondition label="Check only when" value={r.when}
+          workspace={{ title: "Row validation — check only when", description: "Check this rule only when the following condition is met:" }}
           onChange={(when) => onChange(rules.map((x, j) => (j === i ? { ...x, when } : x)))} />
         </div>
       ))}
@@ -319,6 +320,7 @@ function ColumnProps({ q, id, patch, patchOption }: {
 
       <h3 className="sec">Display</h3>
       <OptionalCondition label="Show this column when" value={col.visibleIf}
+        workspace={{ title: "Column display logic", subject: col.label || id, description: "Show this column only when the following condition is met:" }}
         onChange={(c) => patch(id, { visibleIf: c })} />
     </>
   );
@@ -441,6 +443,7 @@ function QuestionProps({ q }: { q: Question }) {
 
       <h3 className="sec">Display logic</h3>
       <OptionalCondition label="Show this question when" value={q.displayLogic} purpose={`Display ${q.code} if`}
+        workspace={{ title: "Display logic", subject: q.code, description: `Display ${q.code} only if the following condition is met:` }}
         onChange={(c) => patch({ displayLogic: c })} />
 
       <h3 className="sec">Randomization</h3>

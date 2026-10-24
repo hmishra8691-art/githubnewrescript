@@ -14,6 +14,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
@@ -287,29 +288,24 @@ await studio.waitForTimeout(350);
 
 // The Properties panel's sections are independently collapsible and
 // default to collapsed unless already configured — expand Skip logic first.
-{
-  const head = '[data-testid="psec-head-skip-logic"]';
-  await studio.waitForSelector(head);
-  if ((await studio.getAttribute(head, "aria-expanded")) !== "true") {
-    await studio.click(head);
-    await studio.waitForTimeout(150);
-  }
-}
-await studio.click('.rightpanel >> text=+ skip rule');
+// (24 Oct) skip rules are edited in the centred logic workspace — the panel shows their summary + "Add logic ⤢";
+// the layout checks below run on the workspace, which is where nested logic is built now
+await openSectionWorkspace(studio, "skip-logic");
+await studio.click(`${LD_BODY} >> text=+ skip rule`);
 // conditions first: the builder opens empty, so build two and group them
-await studio.waitForSelector('.rightpanel [data-testid="logic-builder"]');
-await studio.click('.rightpanel [data-testid="lb-add-condition"]');
+await studio.waitForSelector(`${LD_BODY} [data-testid="logic-builder"]`);
+await studio.click(`${LD_BODY} [data-testid="lb-add-condition"]`);
 await studio.waitForTimeout(200);
-await studio.click('.rightpanel [data-testid="lb-add-condition"] >> nth=0');
+await studio.click(`${LD_BODY} [data-testid="lb-add-condition"] >> nth=0`);
 await studio.waitForTimeout(250);
-const picks = await studio.$$('.rightpanel .lb-list.root > .lb-row > .lb-pick > input');
+const picks = await studio.$$(`${LD_BODY} .lb-list.root > .lb-row > .lb-pick > input`);
 await picks[0].click();
 await picks[1].click();
 await studio.waitForTimeout(150);
-await studio.click('.rightpanel [data-testid="lb-move-to-group"]');
-await studio.waitForSelector('.rightpanel [data-testid="lb-group"]');
+await studio.click(`${LD_BODY} [data-testid="lb-move-to-group"]`);
+await studio.waitForSelector(`${LD_BODY} [data-testid="lb-group"]`);
 await studio.waitForTimeout(200);
-const targetSel = await studio.$$('.rightpanel .skip-target select');
+const targetSel = await studio.$$(`${LD_BODY} .skip-target select`);
 await targetSel[0].selectOption("url");
 await studio.waitForTimeout(300);
 
@@ -323,8 +319,8 @@ await studio.waitForTimeout(300);
  * is the connector between the rows, and the connectors inside a group are
  * plain words that mirror the header.
  */
-const groupOps = await studio.$$eval(".rightpanel [data-testid='group-op']", (els) => els.length);
-const groups = await studio.$$eval(".rightpanel .lb-group", (els) => els.length);
+const groupOps = await studio.$$eval(`${LD_BODY} [data-testid='group-op']`, (els) => els.length);
+const groups = await studio.$$eval(`${LD_BODY} .lb-group`, (els) => els.length);
 assert.equal(groupOps, groups,
   `every group has exactly one operator control of its own (${groupOps} controls, ${groups} groups)`);
 /*
@@ -334,7 +330,7 @@ assert.equal(groupOps, groups,
  * plus its own header control for the group as a whole (where NOT lives).
  */
 const groupWithTwo = await studio.$$eval(
-  ".rightpanel .lb-group",
+  `${LD_BODY} .lb-group`,
   (els) => els.map((g) => ({
     rows: g.querySelectorAll(":scope > .lb-group-body > .lb-list > .lb-row").length,
     joins: g.querySelectorAll(":scope > .lb-group-body > .lb-list > .lb-join select").length,
@@ -348,7 +344,7 @@ console.log(`✔ each of the ${groups} groups owns its operator, and each gap ow
 
 // nothing may overflow its box or escape the panel
 const layout = await studio.evaluate(() => {
-  const root = document.querySelector(".rightpanel");
+  const root = document.querySelector('[data-testid="logic-dialog-body"]');
   const r = root.getBoundingClientRect();
   const clipped = [];
   const spill = [];
@@ -364,10 +360,10 @@ const layout = await studio.evaluate(() => {
 });
 assert.deepEqual(layout.clipped, [], `no control is clipped: ${layout.clipped.join(", ")}`);
 assert.deepEqual(layout.spill, [], `nothing escapes the panel: ${layout.spill.join(", ")}`);
-console.log(`✔ every control fits inside the ${layout.width}px properties panel`);
+console.log(`✔ every control fits inside the ${layout.width}px logic workspace`);
 
 // the external-URL field gets a usable width instead of a stub
-const urlW = await studio.$eval(".rightpanel .skip-url", (e) => e.getBoundingClientRect().width);
+const urlW = await studio.$eval(`${LD_BODY} .skip-url`, (e) => e.getBoundingClientRect().width);
 assert.ok(urlW > 250, `the URL field is usable: ${urlW.toFixed(0)}px`);
 console.log(`✔ the external URL field is ${urlW.toFixed(0)}px wide`);
 

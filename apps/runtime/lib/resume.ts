@@ -123,6 +123,14 @@ export interface PendingAnswers {
   at: number;
   /** preview only: the response seed, so a reload re-derives the same design version and orders */
   seed?: number;
+  /**
+   * preview only (A66): one configuration fingerprint per question
+   * (engine `configFingerprints`) at the time of the snapshot, so the next
+   * resume drops the stored answers of exactly the questions whose options,
+   * Hidden setting, punch rules or logic changed in the builder since — and
+   * keeps everything else. Absent on a snapshot written before this existed.
+   */
+  fingerprints?: Record<string, string>;
 }
 
 /**

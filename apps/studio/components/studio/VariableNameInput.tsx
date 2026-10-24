@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { renameImpact, applyRename } from "@rescript/engine";
+import { renameImpact, applyRename, normalizeVariableNameInput } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /**
@@ -47,6 +47,12 @@ export function VariableNameInput({
   const [draft, setDraft] = React.useState(name);
   const [error, setError] = React.useState<string | null>(null);
   const [focused, setFocused] = React.useState(false);
+  /*
+   * ESCAPE CANCELS. It used to reset the draft and blur — but the blur handler
+   * reads the FIELD's value, which still holds what was typed until React
+   * re-renders, so Escape committed the very rename it was meant to abandon.
+   */
+  const cancelling = React.useRef(false);
 
   // follow the definition when it changes underneath us (undo, JSON edit, a
   // template applied on another tab)
@@ -111,13 +117,26 @@ export function VariableNameInput({
         autoFocus={autoFocus}
         onFocus={(e) => { setFocused(true); if (autoFocus) e.target.select(); }}
         onChange={(e) => {
-          setDraft(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"));
+          /*
+           * CASE IS KEPT (client review 23/10/2026, B20). This used to force
+           * upper case while typing, so a question coded `Q6a` got the
+           * variable `Q6A`. Nothing downstream needs that: the engine resolves
+           * `{{Q6a}}`, rules and calculations by the exact stored spelling,
+           * CSV and Stata keep the case, and SPSS / SAS upper-case on export
+           * (deduplicating afterwards). Only characters a variable name cannot
+           * contain are replaced; uniqueness is checked case-insensitively by
+           * `renameImpact`, so `Q6a` and `Q6A` can never both exist.
+           */
+          setDraft(normalizeVariableNameInput(e.target.value));
           setError(null);
         }}
-        onBlur={(e) => commit(e.target.value)}
+        onBlur={(e) => {
+          if (cancelling.current) { cancelling.current = false; setFocused(false); return; }
+          commit(e.target.value);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
-          if (e.key === "Escape") { setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); onDone?.(); }
+          if (e.key === "Escape") { cancelling.current = true; setDraft(name); setError(null); (e.target as HTMLInputElement).blur(); onDone?.(); }
         }}
       />
       {error && (

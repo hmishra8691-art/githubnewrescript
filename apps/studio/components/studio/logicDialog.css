@@ -1,0 +1,123 @@
+/* ==========================================================================
+   The logic workspace (LogicDialog.tsx) — a centred dialog with room for
+   nested logic, modelled on the Qualtrics "Display logic (…)" sample.
+
+   Tokens only (no literal colours but the shadow), so it follows the design
+   system's light theme and any dark theme that redefines the same variables.
+   Above every panel, menu and toast (toast is 100, the mode chooser 190).
+   ========================================================================== */
+.ld-back {
+  position: fixed; inset: 0; z-index: 120;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  background: rgba(15, 23, 42, .42); backdrop-filter: blur(2px);
+  animation: ld-fade var(--dur-2, 160ms) var(--ease, ease);
+}
+@keyframes ld-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.ld {
+  display: flex; flex-direction: column; min-height: 0;
+  width: min(1100px, 92vw); max-height: 85vh;
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 28px 72px rgba(15, 23, 42, .28);
+  outline: none;
+}
+.ld:focus-visible { box-shadow: 0 28px 72px rgba(15, 23, 42, .28), 0 0 0 3px var(--tint); }
+
+.ld-head {
+  display: flex; align-items: flex-start; gap: 12px; flex: 0 0 auto;
+  padding: 16px 22px 12px; border-bottom: 1px solid var(--border);
+}
+.ld-head-text { flex: 1 1 auto; min-width: 0; }
+.ld-title {
+  margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -.01em; color: var(--text);
+  text-transform: none; line-height: 1.3; overflow-wrap: anywhere;
+}
+.ld-subject { font-weight: 500; color: var(--subtle); }
+.ld-desc { margin: 6px 0 0; font-size: 13.5px; color: var(--subtle); line-height: 1.45; }
+.ld-dirty { flex: 0 0 auto; margin-top: 2px; font-size: 12px; color: var(--amber); border-color: var(--amber); background: transparent; }
+.ld-x {
+  flex: 0 0 auto; font: inherit; font-size: 22px; line-height: 1; width: 32px; height: 32px;
+  border: 1px solid transparent; border-radius: 8px; background: none; color: var(--subtle); cursor: pointer;
+}
+.ld-x:hover { color: var(--text); background: var(--panel2); border-color: var(--border); }
+
+/* the body is the only thing that scrolls — the frame stays within the viewport */
+.ld-body {
+  flex: 1 1 auto; min-height: 120px; overflow: auto; overscroll-behavior: contain;
+  padding: 16px 22px 18px; font-size: 14px;
+}
+.ld-body > .cond-modes > .cond-mode-bar .ld-open { display: none; } /* no workspace button inside the workspace */
+
+.ld-foot {
+  display: flex; align-items: center; gap: 8px; flex: 0 0 auto; flex-wrap: wrap;
+  padding: 12px 22px 14px; border-top: 1px solid var(--border); background: var(--panel2);
+  border-radius: 0 0 14px 14px;
+}
+.ld-foot-extra { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.ld-confirm {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 auto;
+  font-size: 13.5px; font-weight: 600; color: var(--amber);
+}
+
+/* under tablet width the dialog is the screen */
+@media (max-width: 720px) {
+  .ld-back { padding: 0; }
+  .ld { width: 100vw; height: 100dvh; max-height: none; border-radius: 0; border: none; }
+  .ld-head, .ld-body, .ld-foot { padding-left: 14px; padding-right: 14px; }
+  .ld-foot { border-radius: 0; }
+}
+
+/* ---------- the opener and the inline strip ---------- */
+.ld-open { white-space: nowrap; }
+.ld-open-glyph { font-weight: 700; }
+.ld-strip {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel2);
+  font-size: 13px; line-height: 1.45;
+}
+.ld-strip-text { flex: 1 1 200px; min-width: 0; display: grid; gap: 2px; }
+.ld-strip-count { font-weight: 700; color: var(--accent2); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+.ld-strip-sentence { color: var(--text); overflow-wrap: anywhere; }
+.ld-strip .ld-open { flex: 0 0 auto; align-self: center; }
+.ld-rule-strip { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 13px; }
+.ld-rule-strip .ld-rule-n { font-weight: 700; color: var(--accent2); font-size: 12px; flex: 0 0 auto; }
+
+/* ==========================================================================
+   WIDE LAYOUT for the condition builder — the same component, the same data,
+   with the room it never had in a 440px panel: source, operator and value on
+   one line, deeper indentation for nested groups, the connector words readable.
+   Applies to anything inside `.logic-wide` (the dialog body) and to a builder
+   given `layout="wide"` (`.logic-builder.wide`).
+   ========================================================================== */
+.logic-wide .cond-rule, .logic-builder.wide .cond-rule { padding: 9px 12px; gap: 6px 10px; }
+.logic-wide .cond-rule-main, .logic-builder.wide .cond-rule-main { gap: 8px; align-items: center; }
+.logic-wide .cond-rule .ref-select, .logic-builder.wide .cond-rule .ref-select { flex: 0 1 300px; min-width: 180px; }
+.logic-wide .cond-rule .op-select, .logic-builder.wide .cond-rule .op-select { flex: 0 1 230px; min-width: 150px; }
+.logic-wide .cond-rule .select:not(.ref-select):not(.op-select), .logic-wide .cond-rule .input,
+.logic-builder.wide .cond-rule .select:not(.ref-select):not(.op-select), .logic-builder.wide .cond-rule .input {
+  flex: 0 1 220px; min-width: 110px;
+}
+.logic-wide .cond-rule .input[data-testid="cond-value2"], .logic-builder.wide .cond-rule .input[data-testid="cond-value2"] { flex: 0 1 120px; }
+.logic-wide .cond-rule-tools, .logic-builder.wide .cond-rule-tools { padding-left: 2px; }
+.logic-wide .cond-rule-actions .btn, .logic-builder.wide .cond-rule-actions .btn { padding: 4px 9px; }
+
+/* groups: a deeper indent and a thicker bracket, so three levels read as three */
+.logic-wide .lb-row, .logic-builder.wide .lb-row { grid-template-columns: 26px minmax(0, 1fr); }
+.logic-wide .lb-group, .logic-builder.wide .lb-group { border-left-width: 4px; margin: 6px 0; }
+.logic-wide .lb-group-body, .logic-builder.wide .lb-group-body { padding: 6px 12px 8px 20px; }
+.logic-wide .lb-group-head, .logic-builder.wide .lb-group-head { padding: 7px 12px; }
+.logic-wide .lb-group-hint, .logic-builder.wide .lb-group-hint { display: inline; }
+.logic-wide .lb-join, .logic-builder.wide .lb-join { padding: 3px 0 3px 26px; }
+.logic-wide .lb-join-select, .logic-builder.wide .lb-join-select { font-size: 13.5px; padding: 2px 10px; }
+.logic-wide .lb-join-label, .logic-builder.wide .lb-join-label { font-size: 12.5px; padding: 2px 9px; }
+.logic-wide .lb-root-head, .logic-builder.wide .lb-root-head { margin-bottom: 8px; }
+.logic-wide .lb-empty, .logic-builder.wide .lb-empty { padding: 14px 16px; }
+.logic-wide .lb-add, .logic-builder.wide .lb-add { margin-top: 8px; }
+.logic-wide .cond-tester .card { max-width: 720px; }
+
+/* a list of rule cards (skip / validation / punch / list logic) in the workspace: one card per rule, numbered */
+.logic-wide .card { padding: 12px 14px; }
+.logic-wide .ld-rule-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.logic-wide .ld-rule-head .flabel { margin: 0; }
+.logic-wide .ld-rule-move { display: inline-flex; gap: 4px; }

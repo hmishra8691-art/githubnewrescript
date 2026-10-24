@@ -2,12 +2,14 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { headerRepeatApplies, gridAxes, displayedListCanVary, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput } from "@rescript/engine";
-import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES } from "@rescript/schema";
+import { headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText } from "@rescript/engine";
+import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES, effectiveResponseModel } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
+import { DefaultValueBox } from "./DefaultValueBox";
 import { useCanvas } from "../canvas/CanvasContext";
 import { ElementPanel } from "../canvas/ElementPanel";
 import { OptionalCondition, ConditionEditor, newConditionGroup } from "./ConditionBuilder";
+import { LogicDialog, WorkspaceSummary, useCompactLogic, CompactLogicScope } from "./LogicDialog";
 import { RandomizeAxes } from "./RandomizeAxes";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
@@ -261,8 +263,94 @@ function ValidationMessageModal({ value, questionId, onCancel, onSave }: {
   );
 }
 
+/** a validation rule in words, for the inline strip */
+function validationRuleText(v: ValidationRule, def: Parameters<typeof conditionSummary>[0]): string {
+  const kind = VALIDATION_KINDS.find((k) => k.value === v.kind);
+  const base = kind?.hasValue ? `${kind.label} ${String(v.value ?? "")}`.trim() : (kind?.label ?? v.kind);
+  const check = v.kind === "condition" && v.check ? ` — invalid when ${conditionSummary(def, v.check)}` : "";
+  const when = v.when ? ` (only when ${conditionSummary(def, v.when)})` : "";
+  return `${base}${check}${when}${v.severity === "warning" ? " · warns" : ""}`;
+}
+
+/** what blocks Save in the validation workspace: a rule missing the value its kind needs */
+function validationRulesProblem(rules: ValidationRule[]): string | null {
+  for (let i = 0; i < rules.length; i++) {
+    const kind = VALIDATION_KINDS.find((k) => k.value === rules[i].kind);
+    if (kind?.hasValue && (rules[i].value === undefined || rules[i].value === "")) return `Rule ${i + 1}: “${kind.label}” needs a value`;
+  }
+  return null;
+}
+
 function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
   const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const compact = useCompactLogic();
+  const rules = q.validation ?? [];
+  return (
+    <div>
+      <WorkspaceSummary count={rules.length} onOpen={() => setOpen(true)} testId="validation-strip"
+        openLabel={rules.length ? "Edit logic" : "Add logic"}>
+        {rules.map((v, i) => (
+          <span key={i} className="ld-rule-strip" data-testid="validation-rule-sentence">
+            <span className="ld-rule-n">{i + 1}.</span>
+            <span>{validationRuleText(v, s.def)}</span>
+          </span>
+        ))}
+      </WorkspaceSummary>
+      {!compact && (
+        <div style={{ marginTop: 8 }}>
+          <ValidationRulesList q={q} rules={rules} onChange={(validation) => patch({ validation })} />
+        </div>
+      )}
+      {/*
+        * WHERE THE MESSAGES GO — one setting for the question, not one per
+        * rule. They share a single `role="alert"` region so a screen reader
+        * announces them as one group belonging to this question; splitting
+        * them across two places would mean two regions and an
+        * `aria-describedby` that can only point at one of them.
+        * (A question setting, not a rule — so it stays inline and is not in the workspace.)
+        */}
+      <label className="f" style={{ marginTop: 10, maxWidth: 320 }}>
+        <span>Message position</span>
+        <select className="select" data-testid="validation-position"
+          title="Where this question's validation messages appear"
+          value={q.settings.validationPosition ?? ""}
+          onChange={(e) => patch({
+            settings: {
+              ...q.settings,
+              validationPosition: e.target.value === "" ? undefined : (e.target.value as "above" | "below"),
+            },
+          })}>
+          <option value="">Default — below the question</option>
+          <option value="above">Above the question</option>
+          <option value="below">Below the question</option>
+        </select>
+      </label>
+      {open && (
+        <LogicDialog<ValidationRule[]>
+          title="Validation rules" subject={subjectOf(q)}
+          description={`The answer to ${q.code} is accepted only when every rule below holds. Each rule can carry its own message and can be checked only under a condition.`}
+          value={rules} validate={validationRulesProblem}
+          onSave={(validation) => { s.labelNextEdit?.("edit validation rules"); patch({ validation }); }}
+          onClose={() => setOpen(false)}>
+          {(draft, setDraft) => <ValidationRulesList q={q} rules={draft} onChange={setDraft} inWorkspace />}
+        </LogicDialog>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The validation rules themselves — inline and in the workspace, over a plain
+ * `rules` + `onChange` pair (the dialog's draft is just another caller).
+ */
+function ValidationRulesList({ q, rules, onChange, inWorkspace }: {
+  q: Question; rules: ValidationRule[]; onChange(rules: ValidationRule[]): void; inWorkspace?: boolean;
+}) {
+  const s = useStudio();
+  const patch = (p: { validation: ValidationRule[] }) => onChange(p.validation);
+  /* the list this component edits — `q.validation` is the SAVED list, which in the workspace lags the draft */
+  q = { ...q, validation: rules };
   const qVariant = resolveVariant(q.variant);
   const allowed = allowedValidationKinds(
     qVariant?.validations,
@@ -302,6 +390,7 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
             */
           <div key={i} className="card" data-testid="validation-rule" style={{ padding: 10, marginBottom: 6 }}>
             <div className="opt-row">
+              {inWorkspace && <span className="flabel" style={{ margin: 0, flex: "0 0 auto" }}>RULE {i + 1}</span>}
               <select className="select" style={{ width: 130 }} value={v.kind}
                 onChange={(e) => patch({
                   validation: q.validation.map((x, j) => (j === i ? { ...x, kind: e.target.value as any } : x)),
@@ -366,7 +455,15 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                 <option value="error">blocks</option>
                 <option value="warning">warns</option>
               </select>
-              <button className="btn small danger"
+              {q.validation.length > 1 && (
+                <span className="ld-rule-move">
+                  <button className="btn small" title="Move this rule up" disabled={i === 0} data-testid="validation-rule-up"
+                    onClick={() => { const n = [...q.validation]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; patch({ validation: n }); }}>↑</button>
+                  <button className="btn small" title="Move this rule down" disabled={i === q.validation.length - 1} data-testid="validation-rule-down"
+                    onClick={() => { const n = [...q.validation]; [n[i], n[i + 1]] = [n[i + 1], n[i]]; patch({ validation: n }); }}>↓</button>
+                </span>
+              )}
+              <button className="btn small danger" data-testid="validation-rule-remove"
                 onClick={() => patch({ validation: q.validation.filter((_, j) => j !== i) })}>×</button>
             </div>
             {/*
@@ -389,6 +486,7 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
             <div style={{ marginTop: 6 }} data-testid="validation-when">
               <OptionalCondition label="Check this rule only when" value={v.when}
                 hint="Otherwise the rule is checked for every respondent."
+                workspace={inWorkspace ? false : { title: `Validation — rule ${i + 1} applies when`, subject: subjectOf(q), description: "Check this rule only when the following condition is met:" }}
                 onChange={(when) => patch({
                   validation: q.validation.map((x, j) => (j === i ? { ...x, when } : x)),
                 })} />
@@ -434,6 +532,8 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
                 <div className="flabel">The answer is INVALID when</div>
                 <ConditionEditor
                   value={v.check ?? newConditionGroup()}
+                  layout={inWorkspace ? "wide" : "narrow"}
+                  workspace={inWorkspace ? false : { title: `Validation — rule ${i + 1}`, subject: subjectOf(q), description: `The answer to ${q.code} is INVALID when the following condition is met:` }}
                   onChange={(check) => patch({
                     validation: q.validation.map((x, j) => (j === i ? { ...x, check } : x)),
                   })}
@@ -443,31 +543,8 @@ function ValidationEditor({ q, patch }: { q: Question; patch(p: Partial<Question
           </div>
         );
       })}
-      <button className="btn small"
+      <button className="btn small" data-testid="validation-rule-add"
         onClick={() => patch({ validation: [...q.validation, { kind: "required" }] })}>+ rule</button>
-      {/*
-        * WHERE THE MESSAGES GO — one setting for the question, not one per
-        * rule. They share a single `role="alert"` region so a screen reader
-        * announces them as one group belonging to this question; splitting
-        * them across two places would mean two regions and an
-        * `aria-describedby` that can only point at one of them.
-        */}
-      <label className="f" style={{ marginTop: 10, maxWidth: 320 }}>
-        <span>Message position</span>
-        <select className="select" data-testid="validation-position"
-          title="Where this question's validation messages appear"
-          value={q.settings.validationPosition ?? ""}
-          onChange={(e) => patch({
-            settings: {
-              ...q.settings,
-              validationPosition: e.target.value === "" ? undefined : (e.target.value as "above" | "below"),
-            },
-          })}>
-          <option value="">Default — below the question</option>
-          <option value="above">Above the question</option>
-          <option value="below">Below the question</option>
-        </select>
-      </label>
     </div>
   );
 }
@@ -518,13 +595,26 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
   const set = (p: Partial<typeof cf>) => patch({ carryForward: { ...cf, ...p } });
   const colChoices = grid ? axes.columns : [];
   const cols = (cf.columns ?? []).map(String);
+  /* B47–B55: destinations by the TARGET's type; the stored value is read through the normaliser, never rewritten on render */
+  const destinations = carryForwardDestinations(q);
+  const into = normalizeCarryForwardInto(q, cf.into);
+  const stale = destinations.length > 0 && !destinations.some((d) => d.value === cf.into);
+  /*
+   * SOURCES THAT HAVE SOMETHING TO CARRY. An open end or a number has no list,
+   * so offering it as a source was an impossible choice; a question whose list
+   * is itself carried or built at runtime still qualifies. The stored source is
+   * always listed, so an old choice stays visible rather than silently moving.
+   */
+  const sources = s.def.questions.filter((x) => x.id !== q.id && (
+    x.id === cf.sourceQuestionId || shapeHasAxis(x, "options") || shapeHasAxis(x, "rows") || !!x.carryForward || (x.optionPipeline?.length ?? 0) > 0
+  ));
 
   return (
     <div className="card" style={{ padding: 10 }} data-testid="carry-forward-editor">
       <div className="row" style={{ flexWrap: "wrap" }}>
         <select className="select" value={cf.sourceQuestionId} data-testid="cf-source"
           onChange={(e) => set({ sourceQuestionId: e.target.value, columns: undefined })}>
-          {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
+          {sources.map((x) => (
             <option key={x.id} value={x.id}>{x.code}</option>
           ))}
         </select>
@@ -532,13 +622,27 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
           onChange={(e) => set({ filter: e.target.value as F })}>
           {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
-        <select className="select" value={cf.into}
-          onChange={(e) => set({ into: e.target.value as any })}>
-          <option value="options">→ into options</option>
-          <option value="rows">→ into rows</option>
-          <option value="columns">→ into columns</option>
-        </select>
-        <label className="row" style={{ gap: 4, fontSize: 13 }} title={`Also keep ${q.code}'s own ${cf.into}, after the carried ones`}>
+        {/*
+          * THE DESTINATION FOLLOWS THE TARGET'S TYPE (client review 23/10/2026,
+          * B47–B55). A choice question has one place for carried items — its
+          * answer list, which researchers call the rows — so it is shown, not
+          * chosen. A grid offers rows and columns. "Options" is not a visible
+          * choice anywhere; the stored value stays `options | rows | columns`
+          * and an old or impossible value is normalised (`normalizeCarryForwardInto`).
+          */}
+        {destinations.length <= 1 ? (
+          <span className="chip" data-testid="cf-into" data-into={into} title={destinations[0]?.hint ?? "This question type has no list to carry items into."}>
+            {destinations[0]?.label ?? "→ nowhere to carry into"}
+          </span>
+        ) : (
+          <select className="select" value={stale ? cf.into : into} data-testid="cf-into" data-into={stale ? cf.into : into}
+            onChange={(e) => set({ into: normalizeCarryForwardInto(q, e.target.value) })}>
+            {/* a saved value this type no longer offers stays visible — and selected — until the programmer picks a real destination */}
+            {stale && <option value={cf.into} disabled>→ into {cf.into} (no longer offered)</option>}
+            {destinations.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+          </select>
+        )}
+        <label className="row" style={{ gap: 4, fontSize: 13 }} title={`Also keep ${q.code}'s own items (${(destinations.find((d) => d.value === into)?.label ?? into).replace(/^→ into /, "")}), after the carried ones`}>
           <input type="checkbox" checked={cf.keepOwn}
             onChange={(e) => set({ keepOwn: e.target.checked })} />
           keep own
@@ -546,6 +650,20 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
         <button className="btn small danger" onClick={() => patch({ carryForward: undefined })}>remove</button>
       </div>
       {hint && <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }} data-testid="cf-hint">{hint}</div>}
+      {destinations.length > 1 && <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }} data-testid="cf-into-hint">{destinations.find((d) => d.value === into)?.hint}</div>}
+      {stale && (
+        /* a saved destination this type no longer offers (an older survey, or a type change): nothing is rewritten until the programmer says so */
+        <div className="chip warn" style={{ marginTop: 6, display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }} data-testid="cf-into-stale">
+          {cf.into === "columns"
+            ? "Saved as “into columns”, which is never applied at question level — the carried items currently land nowhere."
+            : <>Saved as “into {cf.into}”, which is not offered for this question type.</>}
+          {destinations.length > 0 && (
+            <button className="btn small" data-testid="cf-into-fix" onClick={() => set({ into })}>
+              use {destinations.find((d) => d.value === into)?.label.replace(/^→ /, "") ?? into}
+            </button>
+          )}
+        </div>
+      )}
       {grid && colChoices.length > 0 && (
         <div style={{ marginTop: 8 }} data-testid="cf-columns">
           <span className="flabel">Only rows where this {axes.columnLabel.replace(/ \(.*\)$/, "")} was chosen (any of)</span>
@@ -570,14 +688,21 @@ function CarryForwardEditor({ q, patch }: { q: Question; patch(p: Partial<Questi
       <div style={{ marginTop: 8 }}>
         <OptionalCondition perOption label="Only carry items where" value={cf.where}
           hint="A condition on each carried item — @option.code, @option.label — or on other answers."
+          workspace={{ title: "Carry-forward — only carry items where", subject: subjectOf(q), description: `Carry an item from ${src?.code ?? "the source"} into ${q.code} only when the following condition is met (“this option” is the item being carried):` }}
           onChange={(where) => set({ where })} />
       </div>
     </div>
   );
 }
 
-function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
-  const s = useStudio();
+/** "Q5 — Which brand do you use?" for a dialog title */
+export function subjectOf(q: Question): string {
+  const text = stripHtmlText(q.text ?? "").trim();
+  return text ? `${q.code}: ${text.length > 70 ? `${text.slice(0, 70)}…` : text}` : q.code;
+}
+
+/** every page in the flow, wherever it is nested — the targets a skip rule can name */
+function flowPages(flow: unknown[]): { id: string; title?: string }[] {
   const pages: { id: string; title?: string }[] = [];
   const walk = (nodes: any[]) => {
     for (const n of nodes) {
@@ -587,23 +712,70 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
       if (n.otherwise) walk(n.otherwise);
     }
   };
-  walk(s.def.flow as any[]);
+  walk(flow as any[]);
+  return pages;
+}
 
-  const setRule = (i: number, r: SkipRule) =>
-    patch({ skipLogic: q.skipLogic.map((x, j) => (j === i ? r : x)) });
+/** the THEN half of a skip rule, in words */
+function skipTargetText(rule: SkipRule, def: { questions: Question[]; flow: unknown[] }): string {
+  const t = rule.target;
+  if (t.kind === "question") return `go to ${def.questions.find((x) => x.id === t.ref)?.code ?? "(pick a question)"}`;
+  if (t.kind === "page") return `go to page ${flowPages(def.flow).find((p) => p.id === t.ref)?.title ?? t.ref ?? "(pick a page)"}`;
+  if (t.kind === "url") return `go to ${t.ref || "(URL)"}`;
+  if (t.kind === "terminate") return `terminate (${t.status ?? "terminated"})`;
+  return "end the survey (complete)";
+}
+
+/** a skip rule the engine could not follow — what blocks Save in the workspace */
+function skipRulesProblem(rules: SkipRule[]): string | null {
+  for (let i = 0; i < rules.length; i++) {
+    const t = rules[i].target;
+    if ((t.kind === "question" || t.kind === "page") && !t.ref) return `Rule ${i + 1}: pick where to go`;
+    if (t.kind === "url" && !/^https?:\/\//i.test(t.ref ?? "")) return `Rule ${i + 1}: the URL must start with http:// or https://`;
+  }
+  return null;
+}
+
+/**
+ * The skip rules — inline in the Properties panel and, through the workspace
+ * button, in the centred dialog with the whole list (add / remove / reorder,
+ * every condition in the wide builder). One component for both, over a plain
+ * `rules` + `onChange` pair, so the dialog's draft is just another caller.
+ */
+function SkipRulesList({ q, rules, onChange, inWorkspace }: {
+  q: Question; rules: SkipRule[]; onChange(rules: SkipRule[]): void; inWorkspace?: boolean;
+}) {
+  const s = useStudio();
+  const pages = flowPages(s.def.flow as unknown[]);
+  const setRule = (i: number, r: SkipRule) => onChange(rules.map((x, j) => (j === i ? r : x)));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
 
   return (
-    <div>
-      {q.skipLogic.map((rule, i) => (
-        <div key={rule.id} className="card" style={{ padding: 10 }}>
-          <div className="row" style={{ marginBottom: 4 }}>
+    <div data-testid={inWorkspace ? "skip-rules-workspace" : "skip-rules"}>
+      {rules.map((rule, i) => (
+        <div key={rule.id} className="card" style={{ padding: 10 }} data-testid="skip-rule">
+          <div className="row ld-rule-head" style={{ marginBottom: 4 }}>
             <span className="flabel" style={{ margin: 0 }}>RULE {i + 1}</span>
             <span className="grow" />
-            <button className="btn small danger" title="Remove this skip rule"
-              onClick={() => patch({ skipLogic: q.skipLogic.filter((_, j) => j !== i) })}>×</button>
+            {rules.length > 1 && (
+              <span className="ld-rule-move">
+                <button className="btn small" title="Move this rule up" disabled={i === 0} data-testid="skip-rule-up" onClick={() => move(i, -1)}>↑</button>
+                <button className="btn small" title="Move this rule down" disabled={i === rules.length - 1} data-testid="skip-rule-down" onClick={() => move(i, 1)}>↓</button>
+              </span>
+            )}
+            <button className="btn small danger" title="Remove this skip rule" data-testid="skip-rule-remove"
+              onClick={() => onChange(rules.filter((_, j) => j !== i))}>×</button>
           </div>
           <div className="logic-if">IF</div>
-          <ConditionEditor value={rule.when} onChange={(when) => setRule(i, { ...rule, when })} />
+          <ConditionEditor value={rule.when} onChange={(when) => setRule(i, { ...rule, when })}
+            layout={inWorkspace ? "wide" : "narrow"}
+            workspace={inWorkspace ? false : { title: `Skip logic — rule ${i + 1}`, subject: subjectOf(q), description: `After ${q.code} is answered, skip ahead when the following condition is met:` }} />
           {isEmptyConditionTree(rule.when) && (
             /* an empty condition holds, so an unfinished rule skips EVERY
              * respondent — "+ skip rule" starts here with "end" as the target */
@@ -651,16 +823,50 @@ function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>
           </div>
         </div>
       ))}
-      <button className="btn small" onClick={() =>
-        patch({
-          skipLogic: [...q.skipLogic, {
-            id: uid("skip"),
-            when: { type: "group", op: "and", children: [] },
-            target: { kind: "end" },
-          }],
-        })}>
+      <button className="btn small" data-testid="skip-rule-add" onClick={() =>
+        onChange([...rules, {
+          id: uid("skip"),
+          when: { type: "group", op: "and", children: [] },
+          target: { kind: "end" },
+        }])}>
         + skip rule
       </button>
+    </div>
+  );
+}
+
+function SkipLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const compact = useCompactLogic();
+  const rules = q.skipLogic ?? [];
+  return (
+    <div>
+      {/* the whole list in one wide view: the 23-Oct review's centred logic workspace */}
+      <WorkspaceSummary count={rules.length} onOpen={() => setOpen(true)} testId="skip-logic-strip"
+        openLabel={rules.length ? "Edit logic" : "Add logic"}>
+        {rules.map((r, i) => (
+          <span key={r.id} className="ld-rule-strip" data-testid="skip-rule-sentence">
+            <span className="ld-rule-n">{i + 1}.</span>
+            <span>IF {conditionSummary(s.def, r.when) || "(no condition — every respondent)"} → {skipTargetText(r, s.def)}</span>
+          </span>
+        ))}
+      </WorkspaceSummary>
+      {!compact && (
+        <div style={{ marginTop: 8 }}>
+          <SkipRulesList q={q} rules={rules} onChange={(skipLogic) => patch({ skipLogic })} />
+        </div>
+      )}
+      {open && (
+        <LogicDialog<SkipRule[]>
+          title="Skip logic" subject={subjectOf(q)}
+          description={`After ${q.code} is answered, the first rule whose condition is met decides where the respondent goes next. Rules are checked top to bottom.`}
+          value={rules} validate={skipRulesProblem}
+          onSave={(skipLogic) => { s.labelNextEdit?.("edit skip logic"); patch({ skipLogic }); }}
+          onClose={() => setOpen(false)}>
+          {(draft, setDraft) => <SkipRulesList q={q} rules={draft} onChange={setDraft} inWorkspace />}
+        </LogicDialog>
+      )}
     </div>
   );
 }
@@ -773,12 +979,14 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
               <div className="flabel">KEEP OPTIONS WHERE</div>
               <ConditionEditor perOption
                 value={op.where ?? { type: "group", op: "and", children: [] }}
+                workspace={{ title: `List operation ${i + 1} — keep options where`, subject: subjectOf(q), description: "Keep an option only when the following condition is met (“this option” is the option being tested):" }}
                 onChange={(where) => setOp(i, { where })} />
             </div>
           )}
 
           <div style={{ marginTop: 6 }}>
             <OptionalCondition label="Only run this step when" value={op.when}
+              workspace={{ title: `List operation ${i + 1} — run only when`, subject: subjectOf(q) }}
               onChange={(when) => setOp(i, { when })} />
           </div>
           <div className="logic-summary">{listOperationSummary(s.def, op)}</div>
@@ -795,6 +1003,115 @@ function ListOperationsEditor({ q, patch }: { q: Question; patch(p: Partial<Ques
         })}>
         + list operation
       </button>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------- list logic */
+
+type ListLogicRule = NonNullable<Question["listLogic"]>[number];
+
+const LIST_ACTION_TEXT: Record<string, string> = { include: "include only", exclude: "exclude", prioritize: "move to top", deprioritize: "move to bottom" };
+const LIST_WHICH_TEXT: Record<string, string> = { selected: "items selected in", not_selected: "items NOT selected in", displayed: "items displayed in" };
+
+/** the list rules over a plain `rules` + `onChange` pair — inline and in the workspace */
+function ListLogicRules({ q, rules, onChange, inWorkspace }: {
+  q: Question; rules: ListLogicRule[]; onChange(rules: ListLogicRule[]): void; inWorkspace?: boolean;
+}) {
+  const s = useStudio();
+  const set = (ri: number, p: Partial<ListLogicRule>) => onChange(rules.map((x, j) => (j === ri ? { ...x, ...p } : x)));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= rules.length) return;
+    const next = [...rules];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  return (
+    <div data-testid={inWorkspace ? "list-logic-workspace" : "list-logic-rules"}>
+      {rules.map((rule, ri) => (
+        <div key={rule.id} className="card" style={{ padding: 10 }} data-testid="list-logic-rule">
+          <div className="row" style={{ flexWrap: "wrap" }}>
+            {inWorkspace && <span className="flabel" style={{ margin: 0 }}>RULE {ri + 1}</span>}
+            <select className="select" style={{ width: 120 }} value={rule.action} data-testid="list-logic-action"
+              onChange={(e) => set(ri, { action: e.target.value as any })}>
+              <option value="include">include only</option>
+              <option value="exclude">exclude</option>
+              <option value="prioritize">move to top</option>
+              <option value="deprioritize">move to bottom</option>
+            </select>
+            <select className="select" style={{ width: 140 }} value={rule.which} data-testid="list-logic-which"
+              onChange={(e) => set(ri, { which: e.target.value as any })}>
+              <option value="selected">items selected in</option>
+              <option value="not_selected">items NOT selected in</option>
+              <option value="displayed">items displayed in</option>
+            </select>
+            <select className="select grow" value={rule.sourceQuestionId} data-testid="list-logic-source"
+              onChange={(e) => set(ri, { sourceQuestionId: e.target.value })}>
+              {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
+                <option key={x.id} value={x.id}>{x.code}</option>
+              ))}
+            </select>
+            {rules.length > 1 && (
+              <span className="ld-rule-move">
+                <button className="btn small" title="Move this rule up" disabled={ri === 0} onClick={() => move(ri, -1)}>↑</button>
+                <button className="btn small" title="Move this rule down" disabled={ri === rules.length - 1} onClick={() => move(ri, 1)}>↓</button>
+              </span>
+            )}
+            <button className="btn small danger" data-testid="list-logic-remove" onClick={() => onChange(rules.filter((_, j) => j !== ri))}>×</button>
+          </div>
+          {/* the engine has always gated a list rule on `when`; it had no control here */}
+          <div style={{ marginTop: 6 }}>
+            <OptionalCondition label="Apply this rule only when" value={rule.when}
+              hint="Otherwise it applies to every respondent."
+              workspace={inWorkspace ? false : { title: `List logic — rule ${ri + 1} applies when`, subject: subjectOf(q), description: "Apply this list rule only when the following condition is met:" }}
+              onChange={(when) => set(ri, { when })} />
+          </div>
+        </div>
+      ))}
+      <button className="btn small" disabled={s.def.questions.length < 2} data-testid="list-logic-add"
+        onClick={() => onChange([...rules, {
+          id: uid("ll"),
+          sourceQuestionId: s.def.questions.find((x) => x.id !== q.id)!.id,
+          action: "include", which: "selected",
+        } as ListLogicRule])}>
+        + list rule
+      </button>
+    </div>
+  );
+}
+
+function ListLogicEditor({ q, patch }: { q: Question; patch(p: Partial<Question>): void }) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const compact = useCompactLogic();
+  const rules = q.listLogic ?? [];
+  return (
+    <div data-testid="list-logic">
+      <WorkspaceSummary count={rules.length} onOpen={() => setOpen(true)} testId="list-logic-strip"
+        openLabel={rules.length ? "Edit logic" : "Add logic"}>
+        {rules.map((r, i) => (
+          <span key={r.id} className="ld-rule-strip" data-testid="list-logic-sentence">
+            <span className="ld-rule-n">{i + 1}.</span>
+            <span>{LIST_ACTION_TEXT[r.action] ?? r.action} {LIST_WHICH_TEXT[r.which] ?? r.which} {s.def.questions.find((x) => x.id === r.sourceQuestionId)?.code ?? "?"}{r.when ? ` — only when ${conditionSummary(s.def, r.when)}` : ""}</span>
+          </span>
+        ))}
+      </WorkspaceSummary>
+      {!compact && (
+        <div style={{ marginTop: 8 }}>
+          <ListLogicRules q={q} rules={rules} onChange={(listLogic) => patch({ listLogic })} />
+        </div>
+      )}
+      {open && (
+        <LogicDialog<ListLogicRule[]>
+          title="List logic" subject={subjectOf(q)}
+          description={`Build ${q.code}'s option list from what earlier questions selected or displayed. Rules apply top to bottom, before sorting and randomization.`}
+          value={rules}
+          onSave={(listLogic) => { s.labelNextEdit?.("edit list logic"); patch({ listLogic }); }}
+          onClose={() => setOpen(false)}>
+          {(draft, setDraft) => <ListLogicRules q={q} rules={draft} onChange={setDraft} inWorkspace />}
+        </LogicDialog>
+      )}
     </div>
   );
 }
@@ -941,7 +1258,16 @@ export function SurveySettings() {
   );
 }
 
+/**
+ * The panel is a NARROW surface: with the default logic preference its rule
+ * builders render as summaries with "Edit logic ⤢", and the editing happens in
+ * the centred workspace (LogicDialog.tsx, 23-Oct review item 3).
+ */
 export function PropertiesPanel() {
+  return <CompactLogicScope><PropertiesPanelBody /></CompactLogicScope>;
+}
+
+function PropertiesPanelBody() {
   const s = useStudio();
   const q = selectedQuestion(s);
   const canvas = useCanvas();
@@ -1101,6 +1427,7 @@ export function PropertiesPanel() {
         <div className="logic-if">IF</div>
         <OptionalCondition label="these conditions hold" purpose={`Display ${q.code} if`}
           hint={`Nothing here means ${q.code} always shows.`}
+          workspace={{ title: "Display logic", subject: subjectOf(q), description: `Display ${q.code} only if the following condition is met:` }}
           value={q.displayLogic} onChange={(c) => patch({ displayLogic: c })} />
         <div className="logic-then">
           <span className="logic-then-word">THEN</span> show <strong>{q.code}</strong>
@@ -1216,9 +1543,11 @@ export function PropertiesPanel() {
             <div className="logic-if">IF</div>
             <OptionalCondition label="ask only when these hold"
               hint="Nothing here means the follow-up is asked whenever the question was answered."
+              workspace={{ title: "Follow-up probe — ask only when", subject: subjectOf(q), description: "Ask the follow-up only when the following condition is met:" }}
               value={q.probe.when} onChange={(c) => patch({ probe: { ...q.probe!, when: c } })} />
             <OptionalCondition label="stop probing once these hold"
               hint="Evaluated after every follow-up answer."
+              workspace={{ title: "Follow-up probe — stop once", subject: subjectOf(q), description: "Stop probing once the following condition is met (checked after every follow-up answer):" }}
               value={q.probe.stopWhen} onChange={(c) => patch({ probe: { ...q.probe!, stopWhen: c } })} />
           </div>
           {lintProbeQuestion(q).map((m, i) => (
@@ -1246,8 +1575,10 @@ export function PropertiesPanel() {
         <button className="btn small" disabled={s.def.questions.length < 2}
           onClick={() => patch({
             carryForward: {
-              sourceQuestionId: s.def.questions.find((x) => x.id !== q.id)!.id,
-              filter: "selected", into: "options", keepOwn: false,
+              /* a source with a list to carry, when there is one (B47) */
+              sourceQuestionId: (s.def.questions.find((x) => x.id !== q.id && (shapeHasAxis(x, "options") || shapeHasAxis(x, "rows")))
+                ?? s.def.questions.find((x) => x.id !== q.id)!).id,
+              filter: "selected", into: carryForwardDestinations(q)[0]?.value ?? "options", keepOwn: false,
             },
           })}>
           + carry forward from another question
@@ -1345,6 +1676,7 @@ export function PropertiesPanel() {
                 })}>×</button>
               </div>
               <ConditionEditor value={rule.when}
+                workspace={{ title: `Conditional randomization — rule ${ri + 1}`, subject: subjectOf(q), description: `Use this randomization for ${q.code} when the following condition is met (the first matching rule wins):` }}
                 onChange={(when) => patch({
                   randomization: {
                     ...q.randomization!,
@@ -1385,57 +1717,7 @@ export function PropertiesPanel() {
         question selected or displayed. Rules apply in order, before sorting and randomization.
         “Exclude + displayed” = show only items not yet seen.
       </p>
-      {(q.listLogic ?? []).map((rule, ri) => (
-        <div key={rule.id} className="card" style={{ padding: 10 }}>
-          <div className="row" style={{ flexWrap: "wrap" }}>
-            <select className="select" style={{ width: 120 }} value={rule.action}
-              onChange={(e) => patch({
-                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, action: e.target.value as any } : x)),
-              })}>
-              <option value="include">include only</option>
-              <option value="exclude">exclude</option>
-              <option value="prioritize">move to top</option>
-              <option value="deprioritize">move to bottom</option>
-            </select>
-            <select className="select" style={{ width: 140 }} value={rule.which}
-              onChange={(e) => patch({
-                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, which: e.target.value as any } : x)),
-              })}>
-              <option value="selected">items selected in</option>
-              <option value="not_selected">items NOT selected in</option>
-              <option value="displayed">items displayed in</option>
-            </select>
-            <select className="select grow" value={rule.sourceQuestionId}
-              onChange={(e) => patch({
-                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, sourceQuestionId: e.target.value } : x)),
-              })}>
-              {s.def.questions.filter((x) => x.id !== q.id).map((x) => (
-                <option key={x.id} value={x.id}>{x.code}</option>
-              ))}
-            </select>
-            <button className="btn small danger" onClick={() =>
-              patch({ listLogic: q.listLogic!.filter((_, j) => j !== ri) })}>×</button>
-          </div>
-          {/* the engine has always gated a list rule on `when`; it had no control here */}
-          <div style={{ marginTop: 6 }}>
-            <OptionalCondition label="Apply this rule only when" value={rule.when}
-              hint="Otherwise it applies to every respondent."
-              onChange={(when) => patch({
-                listLogic: q.listLogic!.map((x, j) => (j === ri ? { ...x, when } : x)),
-              })} />
-          </div>
-        </div>
-      ))}
-      <button className="btn small" disabled={s.def.questions.length < 2}
-        onClick={() => patch({
-          listLogic: [...(q.listLogic ?? []), {
-            id: uid("ll"),
-            sourceQuestionId: s.def.questions.find((x) => x.id !== q.id)!.id,
-            action: "include", which: "selected",
-          } as any],
-        })}>
-        + list rule
-      </button>
+      <ListLogicEditor q={q} patch={patch} />
       </CollapsibleSection>
       )}
 
@@ -1495,16 +1777,37 @@ export function PropertiesPanel() {
 
       {showSec("State") && (
       <CollapsibleSection id="state" title="State"
-        active={q.settings.hidden || q.settings.readOnly || !!q.settings.defaultValue}>
+        active={q.settings.hidden || !!q.settings.defaultValue}>
+      {/*
+        * ONE SWITCH (brief 19/10/2026). "Read-only" was removed from here: it
+        * made a question that could be seen and not answered, which nobody
+        * wanted — what programmers want is a question respondents never see
+        * that still runs its logic, and that is Hidden. The schema keeps
+        * `readOnly` so an older definition still parses, and the renderer still
+        * honours one that is set (inputs disabled) until the question is
+        * edited; it simply cannot be set from here any more. Hidden controls
+        * RESPONDENT visibility: the question stays visible in this builder, in
+        * Preview, in test mode and on test links (purple, with its auto-punch
+        * result), and is gone from the live link.
+        */}
       <div className="row" style={{ flexWrap: "wrap" }}>
-        <label className="row" style={{ gap: 4, fontSize: 13 }}>
-          <input type="checkbox" checked={q.settings.hidden}
+        <label className="row" style={{ gap: 4, fontSize: 13 }} title="Hidden from respondents on the live survey. Still shown — in a purple hidden-question theme, with its auto-punch result — in Preview, in test mode and on test links; its logic, auto-punch, piping and calculations keep running and the value is stored.">
+          <input type="checkbox" checked={q.settings.hidden} data-testid="state-hidden"
             onChange={(e) => patch({ settings: { ...q.settings, hidden: e.target.checked } })} /> hidden
         </label>
-        <label className="row" style={{ gap: 4, fontSize: 13 }}>
-          <input type="checkbox" checked={q.settings.readOnly}
-            onChange={(e) => patch({ settings: { ...q.settings, readOnly: e.target.checked } })} /> read-only
-        </label>
+        {q.settings.hidden && (
+          <span className="muted" data-testid="state-hidden-note" style={{ fontSize: 12 }}>
+            hidden from live respondents · visible in Preview / Test
+          </span>
+        )}
+        {/* a definition saved before Read Only was removed may still carry it: say so, and offer the one way out */}
+        {q.settings.readOnly && (
+          <span className="muted" data-testid="state-legacy-readonly" style={{ fontSize: 12 }}>
+            legacy read-only is on (inputs disabled) ·{" "}
+            <button type="button" className="btn small" data-testid="state-clear-readonly"
+              onClick={() => patch({ settings: { ...q.settings, readOnly: false } })}>clear</button>
+          </span>
+        )}
         {/* dictation is ON BY DEFAULT on every free-text field of a question (its text answer, its Other boxes, its text fields): the switch opts this question out */}
         {questionOffersSpeechInput(q) && (
           <label className="row" style={{ gap: 4, fontSize: 13 }} title="A microphone beside each free-text field when the respondent's browser can recognise speech (on the device — no audio is sent). The transcript is the ordinary text answer. On by default.">
@@ -1521,10 +1824,11 @@ export function PropertiesPanel() {
             data-testid="speech-lang"
             onChange={(e) => patch({ settings: { ...q.settings, speechLang: e.target.value || undefined } })} /></label>
       )}
-      <label className="f" style={{ marginTop: 8 }}><span>Default / piped value</span>
-        <input className="input mono" value={String(q.settings.defaultValue ?? "")}
-          placeholder='static, or {{Q1}} piped'
-          onChange={(e) => patch({ settings: { ...q.settings, defaultValue: e.target.value || undefined } })} /></label>
+      {/* the question's own default — the same box every open field has (DefaultValueBox, A63), with the piped-text picker and an unresolved-token warning */}
+      <DefaultValueBox def={s.def} q={q} label="Default / piped value" testId="question-default-value"
+        accept={effectiveResponseModel(q) === "numeric" || effectiveResponseModel(q) === "allocation" ? "number" : "text"}
+        value={q.settings.defaultValue}
+        onChange={(next) => patch({ settings: { ...q.settings, defaultValue: next } })} />
       </CollapsibleSection>
       )}
 

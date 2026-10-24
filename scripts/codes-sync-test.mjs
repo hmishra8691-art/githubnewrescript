@@ -22,6 +22,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 import { formatCondition } from "../packages/engine/dist/index.js";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY, LOGIC_SECTIONS } from "./lib/logicWorkspace.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -85,6 +86,7 @@ const selectCard = async (code) => {
   await page.waitForSelector(".rightpanel");
 };
 const openSection = async (id) => {
+  if (LOGIC_SECTIONS.has(id)) { await openSectionWorkspace(page, id); await page.waitForTimeout(150); return; } // edited in the centred logic workspace
   const head = `[data-testid="psec-head-${id}"]`;
   await page.waitForSelector(head);
   if ((await page.getAttribute(head, "aria-expanded")) !== "true") { await page.click(head); await page.waitForTimeout(150); }
@@ -182,19 +184,50 @@ await loadDef(FIXTURE);
   assert.deepEqual(await shown(pv), ["q4"], "Yes → Q4");
   await pv.fill('[data-rs-el="question"][data-rs-id="q4"] textarea, [data-rs-el="question"][data-rs-id="q4"] input', "Because");
   await next(pv);
-  assert.deepEqual(await shown(pv), ["q7"], "Yes and no Other → Q7 (and the hidden Q6 is never shown)");
+  /*
+   * HIDDEN = HIDDEN FROM RESPONDENTS (brief 19/10/2026, docs/HIDDEN-AUTOPUNCH-2026-10-24.md).
+   * The preview is the programmer's view: the hidden SEGMENT (Q6) is SHOWN, in the
+   * hidden-question theme, with its auto-punch result. The respondent's view (what a
+   * live link draws — the preview bar's "as a respondent") never shows it.
+   */
+  assert.deepEqual(await shown(pv), ["q6", "q7"], "Yes and no Other → Q7; the hidden Q6 is on the programmer's page");
+  const q6card = '[data-rs-el="question"][data-rs-id="q6"]';
+  assert.equal(await pv.getAttribute(q6card, "data-rs-hidden"), "1", "Q6 carries the hidden theme");
+  assert.ok(await pv.$(`${q6card} [data-testid="rs-hidden-banner"]`), "…the hidden-question banner");
+  assert.match(await pv.textContent(`${q6card} [data-testid="rs-hidden-badge"]`), /HIDDEN QUESTION — PREVIEW MODE/);
+  assert.equal(await pv.getAttribute(q6card, "data-rs-autopunch"), "applied", "…and its punch reads Applied");
+  assert.equal(await pv.$('[data-rs-el="question"][data-rs-id="q7"] [data-testid="rs-hidden-banner"]'), null, "the visible Q7 has no hidden theme");
   const st = await pv.evaluate(() => window.__rescriptState.answers);
   assert.equal(st.q6, 1, "SEGMENT coded Fans (1) from Q3 = 1 AND Q5 = 1");
+  // the respondent's view of the same page: Q6 is never shown, no programmer chrome at all
+  await pv.check('[data-testid="preview-respondent-view"] input');
+  await pv.waitForFunction(() => !document.querySelector('[data-rs-el="question"][data-rs-id="q6"]'), null, { timeout: 10000 });
+  assert.deepEqual(await shown(pv), ["q7"], "as a respondent: the hidden Q6 is never shown");
+  assert.equal(await pv.$(".rs-hidden-q, [data-testid='rs-hidden-banner'], [data-testid='rs-autopunch']"), null, "as a respondent: no hidden theme or auto-punch chrome");
+  assert.equal((await pv.evaluate(() => window.__rescriptState.answers)).q6, 1, "…while SEGMENT stays coded");
   await pv.close();
   const pv2 = await runtime(def);
   await clickOption(pv2, "q3", 2); await next(pv2);
   assert.equal(await pv2.$('[data-rs-el="question"]'), null, "No → skipped to the end");
   await pv2.close();
   const pv3 = await runtime(def);
-  await clickOption(pv3, "q3", 3); await clickOption(pv3, "q5", 99); await next(pv3);
+  await clickOption(pv3, "q3", 3); await clickOption(pv3, "q5", 99);
+  // "Other" needs its specify text, or the page is (rightly) refused and nothing below is tested
+  await pv3.fill('[data-rs-el="question"][data-rs-id="q5"] [data-testid="rs-other-input"], [data-rs-el="question"][data-rs-id="q5"] .rs-other-input', "Fanta");
+  await next(pv3);
+  assert.ok(!(await shown(pv3)).includes("q1"), "the page was accepted and left");
   assert.ok(!(await shown(pv3)).includes("q7"), "Maybe with Other → Q7 hidden");
+  // programmer's view: page three holds only the hidden Q6, shown so its punch can be read
+  assert.deepEqual(await shown(pv3), ["q6"], "the programmer sees the hidden Q6 on its own");
+  assert.notEqual(await pv3.getAttribute('[data-rs-el="question"][data-rs-id="q6"]', "data-rs-autopunch"), "applied", "…with no punch applied");
   const st3 = await pv3.evaluate(() => window.__rescriptState.answers);
   assert.equal(st3.q6, undefined, "no punch without Q3 = 1");
+  // the respondent's view: nothing on page three is theirs, so it is passed over — never an empty page, never Q6
+  await pv3.check('[data-testid="preview-respondent-view"] input');
+  await pv3.waitForFunction(() => !document.querySelector('[data-rs-el="question"][data-rs-id="q6"]'), null, { timeout: 10000 });
+  assert.ok(!(await shown(pv3)).includes("q6"), "as a respondent: the hidden Q6 is never shown");
+  // nothing after page three is the respondent's, so the switch settles the preview on the previous page — never an empty one
+  assert.ok((await shown(pv3)).length > 0, "…its page is passed over: never an empty page");
   await pv3.close();
   ok("6–9 (runtime): the skip ends the survey on No, the nested condition shows/hides Q7, the hidden SEGMENT is punched from the same codes");
 }

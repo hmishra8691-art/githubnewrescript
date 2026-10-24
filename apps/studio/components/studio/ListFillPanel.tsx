@@ -275,6 +275,7 @@ export function ListFillPanel() {
                         <td colSpan={11}>
                           <OptionalCondition label={`${row.code} is eligible only when`} value={opt?.eligibleWhen}
                             hint="Otherwise the checkbox alone decides."
+                            workspace={{ title: "List Fill — item eligible when", subject: `${lf.name ?? lf.id} · ${row.code}`, description: `${row.code} can be allocated to a respondent only when the following condition is met:` }}
                             onChange={(c) => setLf(i, (x) => { x.options[oi].eligibleWhen = c; })} />
                         </td>
                       </tr>
@@ -472,6 +473,7 @@ export function ListFillPanel() {
                   run this List Fill only when — {lf.runWhen ? conditionToText(lf.runWhen as never, s.def) : "always"}
                 </div>
                 <ConditionEditor value={(lf.runWhen ?? { type: "group", op: "and", children: [] }) as never}
+                  workspace={{ title: "List Fill — run only when", subject: lf.name ?? lf.id, description: "Run this List Fill for a respondent only when the following condition is met:" }}
                   onChange={(when) => setLf(i, (x) => {
                     const empty = (when as any)?.type === "group" && !(when as any).children?.length;
                     x.runWhen = empty ? undefined : when;

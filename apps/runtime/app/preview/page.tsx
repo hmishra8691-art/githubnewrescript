@@ -20,6 +20,15 @@ export default function PreviewPage() {
   const [entry, setEntry] = React.useState<{ startAt?: string; answers?: Record<string, unknown>; revision?: number | null } | null>(null);
   /** List Fill sample counters to decide against (a preview has no sample); optional, see RunnerProps.listFillCounts */
   const [listFillCounts, setListFillCounts] = React.useState<Record<string, Record<string, number>> | undefined>(undefined);
+  /**
+   * "AS A RESPONDENT" (hidden questions, brief 19/10/2026). By default a
+   * preview is the programmer's view: hidden questions are shown in their
+   * purple theme with their auto-punch result. The Studio's message may set
+   * `respondentView: true` to see the page exactly as a live respondent will
+   * — hidden questions gone, no chrome. It arrives with the definition, from
+   * the Studio, never from this page's URL.
+   */
+  const [respondentView, setRespondentView] = React.useState(false);
 
   /**
    * The preview's own query string, handed to the survey as its URL
@@ -68,6 +77,7 @@ export default function PreviewPage() {
       if (e.data?.type === "rescript:preview" && e.data.definition) {
         tryLoad(e.data.definition);
         if (e.data.listFillCounts && typeof e.data.listFillCounts === "object") setListFillCounts(e.data.listFillCounts);
+        if (typeof e.data.respondentView === "boolean") setRespondentView(e.data.respondentView);
         if (e.data.startAt !== undefined || e.data.answers !== undefined) {
           setEntry({ startAt: e.data.startAt || undefined, answers: e.data.answers ?? undefined, revision: e.data.revision ?? null });
         }
@@ -118,6 +128,9 @@ export default function PreviewPage() {
         <span>{saved ? `saved ${saved}` : "unsaved draft"}</span>
         {seeded > 0 && <span data-testid="preview-seeded">{seeded} test value{seeded === 1 ? "" : "s"}</span>}
         <span className="rs-preview-live">live — follows your edits</span>
+        <label className="rs-preview-view" data-testid="preview-respondent-view" title="Hide what respondents never see: hidden questions and the programmer's auto-punch notes">
+          <input type="checkbox" checked={respondentView} onChange={(e) => setRespondentView(e.target.checked)} /> as a respondent
+        </label>
       </div>
       {/* deliberately not keyed on the definition: the Studio pushes edits live
           and remounting on each one would restart the respondent every keystroke.
@@ -130,6 +143,7 @@ export default function PreviewPage() {
         seedAnswers={entry?.answers}
         urlParams={urlParams}
         listFillCounts={listFillCounts}
+        respondentView={respondentView}
       />
     </>
   );

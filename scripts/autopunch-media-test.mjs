@@ -233,7 +233,9 @@ await popup2.close();
 // preview bar reports the revision after the draft flush (sandbox: null → omitted), and never crashes
 console.log("✔ Preview block: a block without dependencies opens directly");
 
-// unreachable block: display logic false with no answers → a clear note, the first page instead
+// gated block: display logic false with no answers → the block is still shown (A44: a block
+// preview shows ONLY that block, never another block's page) with a clear note that the real
+// survey would have hidden it
 pv = await openPreview({ startAt: "blk" });
 await pv.waitForSelector('[data-qid="q2"]');
 await pv.close();
@@ -242,14 +244,15 @@ gated.flow[1].visibleIf = { type: "rule", source: { kind: "question", ref: "q1" 
 await h.loadDef(gated);
 pv = await openPreview({ startAt: "blk" });
 await pv.waitForSelector('[data-testid="rs-start-note"]');
-assert.match(await pv.textContent('[data-testid="rs-start-note"]'), /not reachable/);
-assert.ok(await pv.$('[data-qid="q1"]'), "falls back to the first page, visibly");
+assert.match(await pv.textContent('[data-testid="rs-start-note"]'), /would hide it/);
+assert.ok(await pv.$('[data-qid="q2"]'), "the block's own questions are shown for testing");
+assert.equal(await pv.$('[data-qid="q1"]'), null, "never falls back to another block's page (A44)");
 await pv.close();
 pv = await openPreview({ startAt: "blk", answers: { q1: ["A"] } });
 await pv.waitForSelector('[data-qid="q2"]');
 assert.equal(await pv.$('[data-testid="rs-start-note"]'), null, "with the gating answer seeded the block is reachable");
 await pv.close();
-console.log("✔ Preview block: unreachable block is reported, never silently mis-started");
+console.log("✔ Preview block: a gated block is reported, never silently mis-started, never another block");
 
 /* ===================================================== 7. media URLs */
 const mediaDef = baseDef();

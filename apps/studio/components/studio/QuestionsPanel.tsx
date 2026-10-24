@@ -3,12 +3,13 @@ import { OptionalCondition } from "./ConditionBuilder";
 import { optionMetaFields, VariantSettings, type MetaField } from "./variantConfig";
 import { CountInput } from "./CountInput";
 import React from "react";
-import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef } from "@rescript/schema";
+import type { Question, Option, QuestionColumn, ResponseType, QuestionVariantDef, SurveyDefinition } from "@rescript/schema";
 import { questionTypeRegistry, variantRegistry, resolveVariant } from "@rescript/schema";
 import { BalanceSettings } from "./FlowNodeEditors";
 import { honoursColumns, drawsOptionImages, honoursOrientation, readsCellColumns, offersOptionSearch } from "@rescript/renderer";
 import { VariantPickerModal, VariantSwitcher, createFromVariant } from "./VariantPicker";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
+import { DefaultValueBox } from "./DefaultValueBox";
 
 /** Put the caret at the end of a label field — an input or a contentEditable line. */
 function focusLabel(el: HTMLElement | null | undefined) {
@@ -235,10 +236,32 @@ const OPTION_WINDOW = 40;
 /** Text questions whose answer is one box, so `settings.placeholder` applies. */
 const SCALAR_TEXT_TYPES = ["open_text", "long_text"];
 
+/**
+ * AN OPEN FIELD THIS OPTION / ROW CARRIES (2026-10-24, client item A63): its
+ * Constant Sum amount or grid cell (`defaultValue`), one composite cell per
+ * open column (`cell:<columnId>`), or its "Other — specify" box
+ * (`otherDefault`). Each gets a Default / piped value box under the row.
+ */
+export interface OpenFieldSpec { key: "defaultValue" | "otherDefault" | `cell:${string}`; label: string; accept: "text" | "number" }
+/** rows are edited through the option editor; these are the row-only fields it carries through */
+type RowExtras = { defaultValue?: unknown; otherDefault?: string; cellDefaults?: Record<string, unknown> };
+const openFieldValue = (o: Option, key: OpenFieldSpec["key"]): unknown =>
+  key === "defaultValue" ? o.defaultValue : key === "otherDefault" ? o.otherDefault : (o as RowExtras).cellDefaults?.[key.slice(5)];
+const openFieldPatch = (o: Option, key: OpenFieldSpec["key"], next: string | undefined): Partial<Option> & RowExtras => {
+  if (key === "defaultValue") return { defaultValue: next };
+  if (key === "otherDefault") return { otherDefault: next };
+  const cellDefaults = { ...((o as RowExtras).cellDefaults ?? {}) };
+  if (next === undefined) delete cellDefaults[key.slice(5)]; else cellDefaults[key.slice(5)] = next;
+  return { cellDefaults: Object.keys(cellDefaults).length ? cellDefaults : undefined };
+};
+
 function OptionRows({ options, onChange, showFlags = true, flagChoices, showImage = false, metaFields = [],
-  enableLogic = false, questionId, onAfterDelete, onCodeCommit, countLimit, addLabel = "+ option" }: {
+  enableLogic = false, questionId, onAfterDelete, onCodeCommit, countLimit, addLabel = "+ option", openFields, def, question }: {
   options: Option[]; onChange(opts: Option[]): void; showFlags?: boolean;
   flagChoices?: string[]; showImage?: boolean; metaFields?: MetaField[];
+  /** the open fields of an option / row, each with a Default / piped value box (A63) */
+  openFields?: (o: Option) => OpenFieldSpec[];
+  def?: SurveyDefinition; question?: Question;
   /** per-option logic + piping controls (reqs §1–4, §21) */
   enableLogic?: boolean; questionId?: string;
   /** called after a removal so the owner can re-sequence codes */
@@ -576,6 +599,24 @@ function OptionRows({ options, onChange, showFlags = true, flagChoices, showImag
             visibleIf={o.visibleIf}
             onChange={(patch) => set(i, patch as Partial<Option>)} />
         )}
+        {/* Default / piped value, one box per open field of this option or row (A63) */}
+        {openFields && def && (() => {
+          const fields = openFields(o);
+          if (!fields.length) return null;
+          return (
+            <div className="row opt-defaults" data-testid="option-defaults" data-code={String(o.code)} style={{ flexWrap: "wrap", gap: 10, margin: "2px 0 6px 30px", fontSize: 12.5 }}>
+              {fields.map((f) => (
+                <span key={f.key} className="row" style={{ gap: 4, alignItems: "center" }}>
+                  <span className="muted">{f.label}</span>
+                  <DefaultValueBox compact def={def} q={question} accept={f.accept} label={f.label}
+                    testId={`default-${f.key.replace(":", "-")}-${String(o.code)}`}
+                    value={openFieldValue(o, f.key)}
+                    onChange={(next) => set(i, openFieldPatch(o, f.key, next) as Partial<Option>)} />
+                </span>
+              ))}
+            </div>
+          );
+        })()}
         </React.Fragment>
         );
       })}
@@ -688,6 +729,7 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
       : { responseType };
   const set = (i: number, patch: Partial<QuestionColumn>) =>
     onChange(cols.map((c, j) => (j === i ? { ...c, ...patch } : c)));
+  const colDef = useStudio().def;
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= cols.length) return;
@@ -816,6 +858,14 @@ function ColumnEditor({ q, onChange, allowedTypes }: {
             placeholder="calculated expression (makes cell read-only), e.g. RATING_{{row}} * 2"
             value={c.expression ?? ""}
             onChange={(e) => set(i, { expression: e.target.value || undefined })} />
+          {/* DEFAULT / PIPED VALUE for every cell of an open column (A63); a row's own cell default wins */}
+          {!c.expression && ["text", "longtext", "numeric", "slider"].includes(String(c.responseType)) && (
+            <DefaultValueBox def={colDef} q={q} accept={c.responseType === "text" || c.responseType === "longtext" ? "text" : "number"}
+              label="Default / piped value (every cell of this column — a row's own default wins)"
+              testId={`default-column-${c.id}`}
+              value={c.defaultValue}
+              onChange={(next) => set(i, { defaultValue: next })} />
+          )}
         </div>
       ))}
       <button className="btn small" data-testid="add-column" onClick={() =>
@@ -845,7 +895,9 @@ function FieldRowsEditor({ q, patch, patchSettings, onCodeCommit }: {
 }) {
   const rows = q.rows;
   /* a field row's code is its variable suffix — same freeze, same reason */
-  const frozen = useStudio().codesFrozen;
+  const fieldsStudio = useStudio();
+  const frozen = fieldsStudio.codesFrozen;
+  const fieldsDef = fieldsStudio.def;
   const codeAtFocus = React.useRef<string | null>(null);
   const commitCode = (e: React.FocusEvent<HTMLInputElement>) => {
     const from = codeAtFocus.current;
@@ -1042,6 +1094,16 @@ function FieldRowsEditor({ q, patch, patchSettings, onCodeCommit }: {
                 value={r.placeholder ?? ""}
                 onChange={(e) => setRow(i, { placeholder: e.target.value || undefined })} />
               )}
+              {/* DEFAULT / PIPED VALUE of this field (A63): static or {{Q1}}, filled in when the question is first shown */}
+              {!fieldSpec?.range && (
+                <span className="row" style={{ gap: 4, alignItems: "center", fontSize: 12.5 }}>
+                  <span className="muted">default</span>
+                  <DefaultValueBox compact def={fieldsDef} q={q} accept={isNum ? "number" : "text"} label="Default / piped value"
+                    testId={`default-field-${String(r.code)}`}
+                    value={r.defaultValue}
+                    onChange={(next) => setRow(i, { defaultValue: next })} />
+                </span>
+              )}
               {/* a field that appears only when an earlier answer says so — the
                   runtime already honours row.visibleIf live; this is where it
                   gets set (the Conditional Form variant is built on it) */}
@@ -1116,6 +1178,7 @@ function FieldRowsEditor({ q, patch, patchSettings, onCodeCommit }: {
               <div style={{ marginTop: 8 }} data-testid={`field-showwhen-editor-${i}`}>
                 <OptionalCondition label={`Show “${r.label || r.code}” when`}
                   hint="Leave empty to always show this field."
+                  workspace={{ title: "Row display logic", subject: `${q.code} · ${r.label || r.code}`, description: `Show the row “${r.label || r.code}” only when the following condition is met:` }}
                   value={r.visibleIf}
                   onChange={(c) => setRow(i, { visibleIf: c })} />
               </div>
@@ -1474,9 +1537,30 @@ export function QuestionEditor({ q }: { q: Question }) {
             onCodeCommit={(from, to) => recode("rows", from, to)}
             /* a row's picture lives in `meta.image` (Image Categorization) — edited with the same upload / choose control an option's image uses */
             showImage={!!builder.rowsImages}
+            def={s.def} question={q}
+            /*
+             * DEFAULT / PIPED VALUE per open field of a row (A63): a Text /
+             * Numeric Matrix row's cell, each text or numeric column of a
+             * composite grid, and the row's "Other — specify" box.
+             */
+            openFields={(o) => {
+              const out: OpenFieldSpec[] = [];
+              if (q.type === "matrix_text") out.push({ key: "defaultValue", label: "Default / piped value", accept: "text" });
+              if (q.type === "matrix_numeric") out.push({ key: "defaultValue", label: "Default / piped value", accept: "number" });
+              if (q.type === "composite" || q.type === "custom_table") {
+                for (const c of q.columns ?? []) {
+                  if (c.expression) continue;
+                  if (["text", "longtext"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${c.label.replace(/<[^>]*>/g, "") || c.id} default`, accept: "text" });
+                  else if (["numeric", "slider"].includes(String(c.responseType))) out.push({ key: `cell:${c.id}`, label: `${c.label.replace(/<[^>]*>/g, "") || c.id} default`, accept: "number" });
+                }
+              }
+              if ((o.flags ?? []).includes("other_specify")) out.push({ key: "otherDefault", label: "Other box default", accept: "text" });
+              return out;
+            }}
             options={q.rows.map((r) => ({
               code: r.code, label: r.label, flags: r.flags ?? [],
               logic: r.logic, visibleIf: r.visibleIf,
+              defaultValue: r.defaultValue, otherDefault: r.otherDefault, cellDefaults: r.cellDefaults,
               ...(builder.rowsImages && typeof r.meta?.image === "string" ? { imageUrl: r.meta.image } : {}),
             }))}
             onChange={(rows) =>
@@ -1485,6 +1569,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                   // match by position, not by code: a code edit would otherwise
                   // lose the row's validation and field settings
                   const prev = q.rows[i];
+                  const extras = r as Option & { cellDefaults?: Record<string, unknown> };
                   return {
                     ...prev,
                     validation: prev?.validation ?? [],
@@ -1494,6 +1579,7 @@ export function QuestionEditor({ q }: { q: Question }) {
                     // any anchoring the row carried
                     flags: r.flags ?? [],
                     logic: r.logic, visibleIf: r.visibleIf,
+                    defaultValue: r.defaultValue, otherDefault: r.otherDefault, cellDefaults: extras.cellDefaults,
                     ...(builder.rowsImages ? { meta: { ...(prev?.meta ?? {}), image: r.imageUrl || undefined } } : {}),
                   };
                 }),
@@ -1676,6 +1762,14 @@ export function QuestionEditor({ q }: { q: Question }) {
             onAfterDelete={() => resequence("options")}
             onCodeCommit={(from, to) => recode("options", from, to)}
             flagChoices={allowedFlagsFor(q.type)} enableLogic questionId={q.id}
+            def={s.def} question={q}
+            /* DEFAULT / PIPED VALUE of an option's open field (A63): a Constant Sum amount, an "Other — specify" box */
+            openFields={(o) => {
+              const out: OpenFieldSpec[] = [];
+              if (q.type === "allocation") out.push({ key: "defaultValue", label: "Default amount", accept: "number" });
+              if ((o.flags ?? []).includes("other_specify")) out.push({ key: "otherDefault", label: "Other box default", accept: "text" });
+              return out;
+            }}
             /*
               * `drawsOptionImages` as well as the capability. The capability
               * says the question shape can carry an image; this says the

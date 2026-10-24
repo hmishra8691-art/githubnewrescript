@@ -369,7 +369,8 @@ function RightPanel({ tab, hidden = false }: { tab: Tab; hidden?: boolean }) {
       if (asideRef.current?.contains(t)) return;             // inside the panel
       // the Grid owns its own selection (rows, ranges, toggles) — a click there is never a dismissal
       // every mode renderer owns its own selection semantics — a click in Intelligent, Flow, Architect or a split pane's head is never a dismissal
-      if (t.closest(".qcard, .menubar, .topbar, .modal, dialog, [role='dialog'], .rs-card, .sg, .iq, .fc, .ar, .split-head, .split-divider")) return;
+      // `.ld-back` is the logic workspace's backdrop (LogicDialog): a click there asks "discard?" — deselecting would unmount the dialog and drop its draft
+      if (t.closest(".qcard, .menubar, .topbar, .modal, dialog, [role='dialog'], .ld-back, .rs-card, .sg, .iq, .fc, .ar, .split-head, .split-divider")) return;
       if (t.closest("input, textarea, select, button, a, [contenteditable='true']")) return;
       s.select(null);
     };

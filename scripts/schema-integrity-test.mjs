@@ -27,6 +27,7 @@
  * Needs the Studio on :3000 and the runtime on :3001 (AI_API_URL=fake:).
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -208,10 +209,9 @@ console.log("\nA LOGIC BUILDER LOADS THE CURRENT SCHEMA, NOT THE ONE THE RULE WA
   await openQuestion("qt");
   /* the properties panel remembers which sections a person left open, so the
      suite opens the one it is about to read rather than assuming */
-  if (!(await page.$('[data-testid="psec-body-display-logic"]'))) {
-    await page.click('[data-testid="psec-head-display-logic"]');
-    await page.waitForTimeout(300);
-  }
+  /* …and open its logic workspace, where the builder is (h.readDef saves it) */
+  await openSectionWorkspace(page, "display-logic");
+  await page.waitForTimeout(300);
   await page.waitForSelector('.op-select[data-stale="1"]', { timeout: 8000 });
   const staleLabel = await page.$eval('.op-select[data-stale="1"]', (e) => e.selectedOptions[0].textContent);
   assert.match(staleLabel, /not available for this question/,

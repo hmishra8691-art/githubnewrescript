@@ -238,7 +238,8 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
               onClick={() => onChange({ logic: absorbLegacyVisibleIf(l, visibleIf), visibleIf: undefined })}>convert</button>
             <button className="btn small danger" onClick={() => onChange({ visibleIf: undefined })}>remove it</button>
           </div>
-          <ConditionEditor perOption value={visibleIf} onChange={(c) => onChange({ visibleIf: c })} />
+          <ConditionEditor perOption value={visibleIf} onChange={(c) => onChange({ visibleIf: c })}
+            workspace={{ title: "Option display logic (legacy “show when”)", subject: title, description: "Show this option only when the following condition is met:" }} />
         </div>
       )}
 
@@ -250,16 +251,21 @@ export function OptionLogicEditor({ title, logic, visibleIf, onChange }: {
         <div className="option-logic-adv">
           <div data-testid="adv-eligible"><OptionalCondition perOption label="Eligible when" value={l.eligibleWhen}
             hint="The option is shown only while this holds (what “Show when…” used to do)."
+            workspace={{ title: "Option logic — eligible when", subject: title, description: "Show this option only while the following condition is met:" }}
             onChange={(c) => setLogic({ eligibleWhen: c })} /></div>
           <div data-testid="adv-exclude"><OptionalCondition perOption label="Exclude when" value={l.excludeWhen}
             hint="The option is removed while this holds — overrides Always Show (what “Hide when…” used to do)."
+            workspace={{ title: "Option logic — exclude when", subject: title, description: "Remove this option while the following condition is met:" }}
             onChange={(c) => setLogic({ excludeWhen: c })} /></div>
           <div data-testid="adv-prioritize"><OptionalCondition perOption label="Prioritize when (move to top)" value={l.prioritizeWhen}
+            workspace={{ title: "Option logic — prioritize when", subject: title, description: "Move this option to the top while the following condition is met:" }}
             onChange={(c) => setLogic({ prioritizeWhen: c })} /></div>
           <div data-testid="adv-deprioritize"><OptionalCondition perOption label="Deprioritize when (move to bottom)" value={l.deprioritizeWhen}
+            workspace={{ title: "Option logic — deprioritize when", subject: title, description: "Move this option to the bottom while the following condition is met:" }}
             onChange={(c) => setLogic({ deprioritizeWhen: c })} /></div>
           <div data-testid="adv-randomize"><OptionalCondition perOption label="Randomize when" value={l.randomizeWhen}
             hint="When the condition is false the option stays in its programmed position."
+            workspace={{ title: "Option logic — randomize when", subject: title, description: "Randomize this option's position only while the following condition is met:" }}
             onChange={(c) => setLogic({ randomizeWhen: c })} /></div>
 
           <PopupEditor popup={l.popup} onChange={(popup) => setLogic({ popup })} />

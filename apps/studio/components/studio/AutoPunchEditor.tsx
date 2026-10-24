@@ -73,13 +73,15 @@ const ACTIONS: PunchActionKind[] = ["select", "deselect", "show", "hide", "enabl
 
 /* ------------------------------------------------------------ one rule row */
 
-function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
+function SimpleRow({ target, rule, onChange, onMove, onRemove, lockedTarget }: {
   target: Question;
   rule: PunchRule;
   onChange(next: PunchRule): void;
   /** the rule lives on a different target now */
   onMove(targetId: string, next: PunchRule): void;
   onRemove(): void;
+  /** editing a DRAFT of one question's rules (the logic workspace): a rule cannot leave for another target from here */
+  lockedTarget?: boolean;
 }) {
   const s = useStudio();
   /*
@@ -121,6 +123,10 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
     /* blur after no edit is not an edit — rewriting the rule would add an
        undo step and normalise a rule nobody touched */
     if (targetQuestionId === target.id && JSON.stringify(next) === JSON.stringify(rule)) return;
+    if (targetQuestionId !== target.id && lockedTarget) {
+      setErr(`This workspace edits ${target.code}'s rules — a rule for another question is moved from the Logic tab.`);
+      return;
+    }
     if (targetQuestionId === target.id) onChange(next); else onMove(targetQuestionId, next);
   };
 
@@ -207,6 +213,8 @@ function SimpleRow({ target, rule, onChange, onMove, onRemove }: {
         <div data-testid="ap-builder">
           <div className="flabel" style={{ marginBottom: 4 }}>{rule.mode === "else_if" ? "ELSE IF" : "IF"}</div>
           <ConditionEditor value={rule.when ?? { type: "group", op: "and", children: [] }}
+            layout={lockedTarget ? "wide" : "narrow"}
+            workspace={lockedTarget ? false : { title: "Auto punch — rule condition", subject: `${target.code}${target.text ? `: ${strip(target.text).slice(0, 70)}` : ""}`, description: `${PUNCH_ACTION_LABELS[rule.action as PunchActionKind] ?? rule.action} in ${target.code} when the following condition is met:` }}
             onChange={(when) => {
               s.labelNextEdit?.("edit auto punch rule");
               const next = { ...rule };
@@ -294,9 +302,14 @@ function useRuleOps() {
   return { replaceRule, moveRule, removeRule, addRules };
 }
 
-function AddRule({ defaultTarget }: { defaultTarget?: Question }) {
+function AddRule({ defaultTarget, onAdd }: {
+  defaultTarget?: Question;
+  /** DRAFT mode (the logic workspace): the new rules go to the caller, not the store */
+  onAdd?(rules: { targetQuestionId: string; rule: PunchRule }[]): void;
+}) {
   const s = useStudio();
-  const ops = useRuleOps();
+  const storeOps = useRuleOps();
+  const ops = onAdd ? { addRules: onAdd } : storeOps;
   const qs = choiceQuestions(s.def.questions);
   const [text, setText] = React.useState("");
   const [err, setErr] = React.useState<string | null>(null);
@@ -380,10 +393,30 @@ export function AutoPunchPanel() {
 }
 
 /** The rules that fill one question — for that question's editor. */
-export function AutoPunchRows({ q }: { q: Question }) {
+export function AutoPunchRows({ q, draft, onChange }: {
+  q: Question;
+  /**
+   * DRAFT mode (the logic workspace, LogicDialog.tsx): the full `punches` list
+   * being edited, and where edits go. Without these the rows write to the
+   * store directly, as they always have.
+   */
+  draft?: PunchRule[];
+  onChange?(punches: PunchRule[]): void;
+}) {
   const s = useStudio();
-  const ops = useRuleOps();
-  const rules = (q.punches ?? []).filter((r) => simpleView(r) || isOptionLevelPunch(r));
+  const storeOps = useRuleOps();
+  const all = draft ?? q.punches ?? [];
+  const inDraft = !!draft && !!onChange;
+  const ops = inDraft
+    ? {
+        replaceRule: (_t: string, next: PunchRule) => onChange!(all.map((r) => (r.id === next.id ? next : r))),
+        moveRule: (_f: string, _t: string, _n: PunchRule) => { /* refused by SimpleRow (lockedTarget) */ },
+        removeRule: (_t: string, id: string) => onChange!(all.filter((r) => r.id !== id)),
+        addRules: (rules: { targetQuestionId: string; rule: PunchRule }[]) =>
+          onChange!([...all, ...rules.filter((x) => x.targetQuestionId === q.id).map((x) => x.rule)]),
+      }
+    : storeOps;
+  const rules = all.filter((r) => simpleView(r) || isOptionLevelPunch(r));
   /*
    * Chain problems the engine cannot refuse: an ELSE carrying a condition
    * that will be ignored, an ELSE IF with none, a rule stranded after the
@@ -391,21 +424,21 @@ export function AutoPunchRows({ q }: { q: Question }) {
    * which is exactly the class of thing that has to be read rather than run.
    */
   const chainProblems = lintPunchChain(
-    q.punches ?? [],
+    all,
     (r, i) => `Rule ${i + 1}${r.label ? ` (${r.label})` : ""}`,
   );
   return (
-    <div data-testid="auto-punch-rows">
+    <div data-testid={inDraft ? "auto-punch-rows-workspace" : "auto-punch-rows"}>
       {chainProblems.map((p) => (
         <div key={p} className="chip warn qd-note" data-testid="ap-chain-problem">{p}</div>
       ))}
       {rules.map((rule) => (
-        <SimpleRow key={rule.id} target={q} rule={rule}
+        <SimpleRow key={rule.id} target={q} rule={rule} lockedTarget={inDraft}
           onChange={(next) => ops.replaceRule(q.id, next)}
           onMove={(toId, next) => ops.moveRule(q.id, toId, next)}
           onRemove={() => { s.labelNextEdit?.("remove auto punch rule"); ops.removeRule(q.id, rule.id); }} />
       ))}
-      <AddRule defaultTarget={q} />
+      <AddRule defaultTarget={q} onAdd={inDraft ? ops.addRules : undefined} />
     </div>
   );
 }

@@ -429,6 +429,22 @@ const RESERVED = new Set([
 const VALID_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * What the Studio's variable-name field does to each keystroke: replace the
+ * characters a name cannot hold, and nothing else. The field used to force
+ * upper case as well (`Q6a` → `Q6A`); the client review of 23/10/2026 (B20)
+ * asked for the case to stay as typed, and nothing downstream needs upper
+ * case — every resolver matches the stored spelling exactly, and the SPSS /
+ * SAS exporters upper-case their own names. Uniqueness is the other half of
+ * that decision: `sameVariableName` compares names case-insensitively, so
+ * `Q6a` and `Q6A` can never both be owned.
+ */
+export const normalizeVariableNameInput = (raw: string): string => String(raw ?? "").replace(/[^A-Za-z0-9_]/g, "_");
+
+/** Two names that would be the same variable: equal ignoring case (SPSS and SAS fold case on export). */
+export const sameVariableName = (a: string | undefined | null, b: string | undefined | null): boolean =>
+  String(a ?? "").toUpperCase() === String(b ?? "").toUpperCase();
+
+/**
  * What renaming `oldName` to `newName` would do — computed by actually
  * rebuilding the dictionary, so the preview cannot promise a result the
  * rename does not produce.
@@ -499,17 +515,26 @@ export function renameImpact(
      * So the check is against everything that OWNS a name, not just
      * everything that produces a column.
      */
-    const takenVars = new Set<string>(before.map((v) => v.name));
-    for (const q of def.questions) if (q.variableName !== oldName) takenVars.add(q.variableName);
-    for (const c of def.calculations ?? []) if (c.targetVariable !== oldName) takenVars.add(c.targetVariable);
-    if (takenVars.has(newName)) {
-      blockers.push(`"${newName}" is already a variable in this survey.`);
+    /*
+     * CASE-INSENSITIVE (B20, 23/10/2026). Variable names keep the case they
+     * were typed in, but `Q6a` and `Q6A` are one SPSS / SAS column, so they
+     * may not both be owned. The variable being renamed — its own derived
+     * columns included — is left out, so a case-only rename (`q6a` → `Q6a`)
+     * is not blocked by itself.
+     */
+    const fold = (s: string | undefined | null) => String(s ?? "").toUpperCase();
+    const target = fold(newName);
+    const takenVars = new Set<string>(before.filter((v) => !(owner && v.questionId === owner.id) && !sameVariableName(v.name, oldName)).map((v) => fold(v.name)));
+    for (const q of def.questions) if (q !== owner && !sameVariableName(q.variableName, oldName)) takenVars.add(fold(q.variableName));
+    for (const c of def.calculations ?? []) if (c !== calc && !sameVariableName(c.targetVariable, oldName)) takenVars.add(fold(c.targetVariable));
+    if (takenVars.has(target)) {
+      blockers.push(`"${newName}" is already a variable in this survey${def.questions.some((q) => fold(q.variableName) === target && q.variableName !== newName) ? " (variable names are matched regardless of case)" : ""}.`);
     }
-    const clashingCode = def.questions.find((q) => q.code === newName && q.variableName !== oldName);
+    const clashingCode = def.questions.find((q) => fold(q.code) === target && q !== owner && !sameVariableName(q.variableName, oldName));
     if (clashingCode) {
       blockers.push(`"${newName}" is already the question code of ${clashingCode.code}, and a rule that names it would become ambiguous.`);
     }
-    if ((def.embeddedData ?? []).some((e) => e.name === newName)) {
+    if ((def.embeddedData ?? []).some((e) => fold(e.name) === target)) {
       blockers.push(`"${newName}" is already an embedded data field.`);
     }
   }

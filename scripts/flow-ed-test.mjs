@@ -5,9 +5,9 @@
  *   STUDIO_URL=http://localhost:3000 RUNTIME_URL=http://localhost:3001 node scripts/flow-ed-test.mjs
  *
  * STUDIO   /sandbox?mode=studio → Survey Flow
- *   F  the Add Element popover is a 3-per-row grid of labelled icon buttons
- *      with tooltips; each element type is added at the chosen position and
- *      the grid closes; keyboard: arrows move, Escape closes
+ *   F  the Add Element panel is ONE long row of labelled icon buttons with
+ *      tooltips (A32, 19/10/2026); each element type is added at the chosen
+ *      position and the row closes; keyboard: arrows move, Escape closes
  *   B  the value field is compact, grows with its text, and a ZIP list of
  *      hundreds of codes wraps inside the card — no horizontal page growth;
  *      the "stored as" preview is shortened with a "show all" control
@@ -87,22 +87,24 @@ await page.waitForSelector(".menubar");
   const n = await btns.count();
   assert.equal(n, 9, "Embedded data, Branch, Randomizer, Loop, Quota check, Redirect, End, Block, Group — none dropped");
   const boxes = await btns.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), icon: !!e.querySelector("svg.ico"), label: e.textContent.trim(), title: e.getAttribute("title") }; }));
-  assert.equal(new Set(boxes.slice(0, 3).map((b) => b.top)).size, 1, "three on the first row");
-  assert.ok(boxes[3].top > boxes[0].top, "the fourth starts the second row");
+  // client review 19/10/2026 (A32): one long row, not a 3 × 3 grid
+  assert.equal(new Set(boxes.map((b) => b.top)).size, 1, "all nine on ONE row");
   assert.equal(new Set(boxes.map((b) => `${b.w}x${b.h}`)).size, 1, `consistent size: ${boxes.map((b) => `${b.w}x${b.h}`)}`);
   assert.ok(boxes.every((b) => b.icon && b.label && / — /.test(b.title)), "icon, label and a tooltip with the purpose");
   // keyboard: the first button has focus, arrows move, Escape closes
   await page.keyboard.press("ArrowRight");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "insert-branch");
-  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "insert-quota_check");
   assert.match(await page.textContent('[data-testid="flow-insert-hint"]'), /Quota check — stop or flag/, "the focused element's purpose");
-  // hovering shows the purpose under the grid too
+  // hovering shows the purpose under the row too
   await btns.nth(2).hover();
   assert.match(await page.textContent('[data-testid="flow-insert-hint"]'), /Randomizer — shuffle what comes next/);
   await page.keyboard.press("Escape");
   await page.waitForSelector('[data-testid="flow-insert-menu"]', { state: "detached" });
-  ok("F: a 3-per-row grid of icon buttons, same size, tooltips with the purpose, keyboard and Escape");
+  ok("F/A32: one row of nine icon buttons, same size, tooltips with the purpose, keyboard and Escape");
 
   const expected = { embedded_data: "embedded_data", branch: "branch", randomizer: "randomizer", loop: "loop", quota_check: "quota_check", redirect: "redirect", end: "end", page: "page", section: "section" };
   for (const [type, nodeType] of Object.entries(expected)) {

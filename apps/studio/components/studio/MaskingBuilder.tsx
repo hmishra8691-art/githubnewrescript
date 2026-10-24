@@ -14,6 +14,8 @@ import {
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { AutoPunchRows } from "./AutoPunchEditor";
+import { LogicDialog, WorkspaceButton, WorkspaceSummary, useCompactLogic } from "./LogicDialog";
+import { formatPunchExpression, conditionSummary } from "@rescript/engine";
 
 /**
  * Option-level rules (a literal code set, no cell target, no priority) are
@@ -468,12 +470,16 @@ export function SetExprField({ expr, onChange, testId = "setexpr" }: {
   );
 }
 
-export function MaskingBuilder({ q, patch, field = "mask" }: {
+export function MaskingBuilder({ q, patch, field = "mask", inWorkspace }: {
   q: Question; patch(p: Partial<Question>): void; field?: MaskField;
+  /** rendered inside the logic workspace over a DRAFT of `q[field]` */
+  inWorkspace?: boolean;
 }) {
   const s = useStudio();
   const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  const [workspaceOpen, setWorkspaceOpen] = React.useState(false);
   const noun = FIELD_NOUN[field];
+  const compact = useCompactLogic();
 
   /*
    * Any other question a mask can read.
@@ -517,7 +523,10 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
   const issues = expr ? validateSetExpr(s.def, q.id, expr) : [];
   const summary = expr ? setExpressionSummary(s.def, expr) : "";
   // the older sequential pipeline only ever drove options, never rows/columns
-  const convertible = field === "mask" && !mask ? pipelineToSetExpr(q) : null;
+  // (not offered in the workspace: converting also clears the pipeline, which is outside the mask draft)
+  const convertible = field === "mask" && !mask && !inWorkspace ? pipelineToSetExpr(q) : null;
+  const subject = `${q.code}${q.text ? `: ${stripHtmlText(q.text).slice(0, 70)}` : ""}`;
+  const maskTitle = field === "mask" ? "Masking" : field === "rowMask" ? "Row masking" : "Column masking";
 
   /** Items the mask can never remove, for the reassurance line. */
   const items = field === "mask" ? q.options : field === "rowMask" ? q.rows : q.columns;
@@ -527,6 +536,47 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
       o.flags?.some((f) => ["other_specify", "exclusive"].includes(f)),
   );
   const itemLabel = (o: (typeof items)[number]) => stripHtmlText(o.label);
+
+  const maskDialog = !inWorkspace && workspaceOpen && (
+    <LogicDialog<Question[MaskField]>
+      title={maskTitle} subject={subject}
+      description={`Build the ${noun} list ${q.code} shows from other questions' answers — UNION, INTERSECTION and DIFFERENCE, with brackets.`}
+      value={mask}
+      onSave={(next) => { s.labelNextEdit?.(`edit ${noun} mask`); patch({ [field]: next } as Partial<Question>); }}
+      onClose={() => setWorkspaceOpen(false)}>
+      {(draft, setDraft) => (
+        <MaskingBuilder q={{ ...q, [field]: draft } as Question} field={field} inWorkspace
+          patch={(p) => { if (field in p) setDraft((p as Record<string, unknown>)[field] as Question[MaskField]); }} />
+      )}
+    </LogicDialog>
+  );
+
+  /* THE NARROW PANEL (default): what the mask does, in words, and "Edit logic ⤢" — the builder is in the workspace */
+  if (compact && !inWorkspace) {
+    const ACTION_TEXT: Record<string, string> = { display: `shows only these ${noun}s`, remove: `removes these ${noun}s`, preselect: "pre-selects these", display_and_preselect: "shows only these and pre-selects them", disable: "allows only these" };
+    return (
+      <div className="masking-builder"
+        data-testid={field === "mask" ? "masking-builder" : `masking-builder-${field}`} data-compact="1">
+        <WorkspaceSummary onOpen={() => setWorkspaceOpen(true)} testId={`mask-strip-${field}`}
+          text={expr ? `${q.code} ${ACTION_TEXT[mask?.action ?? "display"] ?? ""}: ${summary}${mask?.when ? ` — only when ${conditionSummary(s.def, mask.when)}` : ""}` : `No ${noun} mask — ${q.code} shows its own ${noun}s.`}
+          openLabel={expr ? "Edit logic" : "Add logic"} />
+        {issues.map((iss, i) => (
+          <div key={i} className={iss.level === "error" ? "xe-error" : "xe-warn"} data-testid="mask-issue">⚠ {iss.message}</div>
+        ))}
+        {convertible && (
+          <div className="mb-convert" data-testid="mask-convert">
+            This question uses the older list pipeline, which reads as{" "}
+            <code>{formatSetExpression(s.def, convertible)}</code>.
+            <button className="btn small" data-testid="mask-convert-btn"
+              onClick={() => { setExpr(convertible); patch({ optionPipeline: [] }); }}>
+              convert to a mask
+            </button>
+          </div>
+        )}
+        {maskDialog}
+      </div>
+    );
+  }
 
   return (
     <div className="masking-builder"
@@ -562,7 +612,9 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
           <button className="btn small danger" data-testid="mask-clear"
             onClick={() => patch({ [field]: undefined } as Partial<Question>)}>clear mask</button>
         )}
+        {!inWorkspace && <WorkspaceButton onClick={() => setWorkspaceOpen(true)} testId={`mask-workspace-open-${field}`} />}
       </div>
+      {maskDialog}
 
       {mode === "visual"
         ? <SetChainEditor expr={expr} sources={sources} listFills={listFills} onChange={setExpr} />
@@ -638,6 +690,7 @@ export function MaskingBuilder({ q, patch, field = "mask" }: {
             </div>
           )}
           <OptionalCondition label="Apply the mask only when" value={mask?.when}
+            workspace={inWorkspace ? false : { title: `${maskTitle} — apply only when`, subject, description: "Apply this mask only when the following condition is met:" }}
             onChange={(when) => patch({ [field]: { ...mask!, when } } as Partial<Question>)} />
         </>
       )}
@@ -669,7 +722,54 @@ export function PunchRules({ q, patch }: {
   patch(p: Partial<Question>): void;
 }) {
   const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const compact = useCompactLogic();
   const rules = q.punches ?? [];
+  const subject = `${q.code}${q.text ? `: ${stripHtmlText(q.text).slice(0, 70)}` : ""}`;
+  return (
+    <div>
+      {/* the whole rule list in the centred workspace (23-Oct review) — the draft is `q.punches`, saved through the same `patch` */}
+      <WorkspaceSummary count={rules.length} onOpen={() => setOpen(true)} testId="auto-punch-strip"
+        openLabel={rules.length ? "Edit logic" : "Add logic"}>
+        {rules.map((r, i) => (
+          <span key={r.id} className="ld-rule-strip" data-testid="auto-punch-sentence">
+            <span className="ld-rule-n">{i + 1}.</span>
+            <span className="mono" style={{ fontSize: 12.5 }}>{formatPunchExpression(s.def, q, r)}</span>
+          </span>
+        ))}
+      </WorkspaceSummary>
+      {!compact && <PunchRulesBody q={q} patch={patch} />}
+      {open && (
+        <LogicDialog<PunchRule[]>
+          title="Auto punch" subject={subject}
+          description={`Rules that select, deselect, show or hide options in ${q.code} from other answers. IF / ELSE IF / ELSE rules form a chain in which the first match wins.`}
+          value={rules}
+          onSave={(punches) => { s.labelNextEdit?.("edit auto punch rules"); patch({ punches }); }}
+          onClose={() => setOpen(false)}>
+          {(draft, setDraft) => (
+            <PunchRulesBody q={{ ...q, punches: draft }} draft={draft}
+              patch={(p) => { if ("punches" in p) setDraft((p.punches ?? []) as PunchRule[]); }} />
+          )}
+        </LogicDialog>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The two rule lists — option-level (AutoPunchRows) and set-based — over a
+ * question and a `patch`. Inline, `q` is the saved question; in the
+ * workspace, `q.punches` is the DRAFT and `patch` writes to it.
+ */
+function PunchRulesBody({ q, patch, draft }: {
+  q: Question;
+  patch(p: Partial<Question>): void;
+  /** present in the workspace: the list being edited */
+  draft?: PunchRule[];
+}) {
+  const s = useStudio();
+  const rules = q.punches ?? [];
+  const inWorkspace = !!draft;
   const listFills = (s.def.listFills ?? []).map((lf) => ({ id: lf.id, name: lf.name ?? lf.id }));
   /*
    * Any other question a mask can read.
@@ -716,7 +816,7 @@ export function PunchRules({ q, patch }: {
         “If an option is selected elsewhere, select / deselect / show / hide an option here.”
         Also listed survey-wide in the Logic tab.
       </p>
-      <AutoPunchRows q={q} />
+      <AutoPunchRows q={q} draft={draft} onChange={inWorkspace ? (punches) => patch({ punches }) : undefined} />
 
       <h3 className="sec" style={{ marginTop: 16 }}>Auto-select from a set (punching)</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
@@ -876,6 +976,7 @@ export function PunchRules({ q, patch }: {
           )}
 
           <OptionalCondition label="Only when" value={rule.when}
+            workspace={inWorkspace ? false : { title: "Auto-select from a set — only when", subject: q.code, description: "Run this auto-selection rule only when the following condition is met:" }}
             onChange={(when) => setRule(i, { when })} />
         </div>
       ); })}

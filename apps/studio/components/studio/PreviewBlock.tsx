@@ -7,11 +7,14 @@ import { openPreview, setPreviewRevision } from "./previewWindow";
 import { runtimeBaseUrl } from "@/lib/runtime-url";
 
 /**
- * "Preview block": the real runtime, entered at this block.
+ * "Preview block": the real runtime, scoped to this block.
  *
- * Same Runner, same compiled flow, same logic / piping / masking / page breaks
- * / punching — only the entry point moves (engine `start({ startAt })`). What
- * a block cannot fake is the answers that come before it, so the dependencies
+ * Same Runner, same logic / piping / masking / page breaks / punching, but the
+ * flow it compiles is JUST this block (engine `scopeDefinitionToNode`, applied
+ * by the Runner from `startAt`) — so Next and Back stay inside it and the run
+ * ends with "Thank you for completing this block" / "Restart Block" (client
+ * review 19/10/2026, A44). The saved definition is not changed. What a block
+ * cannot fake is the answers that come before it, so the dependencies
  * are computed (`blockDependencies`) and, when there are any, the tester is
  * offered test values for exactly those questions before the tab opens.
  *

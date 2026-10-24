@@ -269,6 +269,7 @@ export function OptionGroupsEditor({ q, patch }: {
                       value={g.visibleIf}
                       onChange={(c) => updateGroup(g.id, { visibleIf: c })}
                       label="Show the whole group when"
+                      workspace={{ title: "Option group display logic", subject: g.name || g.id, description: "Show the whole group only when the following condition is met:" }}
                     />
                     <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
                       Hides every member. An option marked <strong>Always Show</strong> stays —

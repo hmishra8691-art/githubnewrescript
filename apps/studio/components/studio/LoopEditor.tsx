@@ -313,6 +313,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
       <LoopScopeProvider loops={scope}>
         <OptionalCondition
           label="Eligibility rule (narrows the items; can read this loop’s reference columns)"
+          workspace={{ title: "Loop — eligibility rule", subject: node.loopVar, description: "An item produces an iteration only when the following condition is met (evaluated once per candidate item):" }}
           value={node.eligibleIf}
           onChange={(c: Condition | undefined) => set({ eligibleIf: c })}
           hint='e.g. loop.Category = "Smartphone" — evaluated once per candidate item'
@@ -320,6 +321,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
         {src.kind === "question" && (src.filter === "invalid") && (
           <OptionalCondition
             label="What makes an item invalid"
+            workspace={{ title: "Loop — invalid items", subject: node.loopVar, description: "An item is treated as invalid when the following condition is met:" }}
             value={node.invalidIf}
             onChange={(c: Condition | undefined) => set({ invalidIf: c })}
             hint="codes that match no option are always invalid; this rule adds more"
@@ -332,12 +334,14 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
           */}
         <OptionalCondition
           label="Skip an item (CONTINUE — the item produces no iteration)"
+          workspace={{ title: "Loop — skip an item (CONTINUE)", subject: node.loopVar, description: "Skip the item (no iteration) when the following condition is met:" }}
           value={node.skipIf}
           onChange={(c: Condition | undefined) => set({ skipIf: c })}
           hint='e.g. loop.code = "other" — the opposite polarity of the eligibility rule'
         />
         <OptionalCondition
           label="Stop the loop (BREAK / UNTIL — this iteration runs, later ones do not)"
+          workspace={{ title: "Loop — stop the loop (BREAK / UNTIL)", subject: node.loopVar, description: "Stop after this iteration when the following condition is met:" }}
           value={node.breakIf}
           onChange={(c: Condition | undefined) => set({ breakIf: c })}
           hint="reads the answers this iteration gave, e.g. Q7 >= 5. For WHILE, write the condition that ends it."
@@ -467,6 +471,7 @@ export function LoopEditor({ node, onChange }: { node: LoopFlowNode; onChange(n:
                   <LoopScopeProvider loops={scope}>
                     <OptionalCondition
                       label="count an iteration when"
+                      workspace={{ title: "Loop aggregate — count an iteration when", subject: node.loopVar, description: "Count an iteration toward this aggregate when the following condition is met:" }}
                       value={agg.where}
                       onChange={(c: Condition | undefined) => patch({ where: c })}
                       hint="evaluated once per iteration, in that iteration's context"

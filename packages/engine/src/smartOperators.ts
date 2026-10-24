@@ -11,6 +11,7 @@ import { evaluateCondition, type EvalTrace } from "./evaluate.js";
 import { createResponseState } from "./state.js";
 import { forEachRule } from "./conditionWalk.js";
 import { stripHtmlText } from "./html.js";
+import { containsReplacementFor } from "./containsOperator.js";
 
 /**
  * SMART OPERATORS — one operator menu for every place a condition is built
@@ -66,6 +67,7 @@ export type ValueKind =
   | "options"     // several options (a multi-option selector)
   | "cell"        // a grid answer column (row + column, no value)
   | "number" | "numberRange"
+  | "numberList"  // several numbers, separated by commas ("is in list" on a numeric source)
   | "text" | "textList"
   | "items"       // list items: one, or several separated by commas
   | "date" | "dateRange" | "time" | "timeRange"
@@ -258,6 +260,7 @@ const DISPLAY: E[] = [
   e("displayed", "option is displayed", "display", "option", { hint: "The option was on the respondent's screen, selected or not" }),
   e("notDisplayed", "option is not displayed", "display", "option"),
 ];
+const MULTI_VALUE_NOTE = "Several values separated by commas (\"25, 26, 27\") are read one by one: every value must satisfy it.";
 const NUMERIC = (v: ValueKind = "number", r: ValueKind = "numberRange"): E[] => [
   e("eq", "= equals", "primary", v),
   e("ne", "≠ does not equal", "primary", v),
@@ -265,18 +268,34 @@ const NUMERIC = (v: ValueKind = "number", r: ValueKind = "numberRange"): E[] => 
   e("gte", "≥ is at least", "primary", v),
   e("lt", "< is less than", "primary", v),
   e("lte", "≤ is at most", "primary", v),
-  e("between", "is between", "primary", r, { hint: "Inclusive: both ends count" }),
-  e("notBetween", "is not between", "primary", r),
+  e("between", "is between", "primary", r, { hint: `Inclusive: both ends count. ${MULTI_VALUE_NOTE}` }),
+  e("notBetween", "is not between", "primary", r, { hint: "Outside the range, both ends excluded. A comma-separated answer must have NO value in the range." }),
+];
+/*
+ * "IS IN LIST" ON A NUMBER (2026-10-24, client item A48 §3C): a list of
+ * individual allowed values — 1, 5, 10, 25, 50, 100 — distinct from a range.
+ * `in` has always been valid on a numeric source; it was offered nowhere.
+ */
+const NUMBER_LIST: E[] = [
+  e("in", "is in list", "primary", "numberList", { hint: `The answer is one of these values, exactly — 25 matches "1, 5, 10, 25", 26 does not. ${MULTI_VALUE_NOTE}` }),
+  e("notIn", "is not in list", "primary", "numberList", { hint: "None of these values. A comma-separated answer must have NO value in the list." }),
 ];
 const TEXT: E[] = [
   e("eq", "equals", "primary", "text"),
   e("ne", "does not equal", "primary", "text"),
-  e("contains", "contains text", "primary", "text", { hint: "Contains TEXT: any part of the answer, ignoring case — \"blue\" matches \"Light blue\"" }),
+  e("contains", "contains text", "primary", "text", { hint: "Contains TEXT: any part of the answer, ignoring case — \"blue\" matches \"Light blue\". For a number or a range use “is in list” or “is between”." }),
   e("notContains", "does not contain text", "primary", "text"),
   e("startsWith", "starts with", "primary", "text"),
   e("endsWith", "ends with", "primary", "text"),
-  e("in", "is one of", "primary", "textList", { hint: "Exact match against any value in the list — a typed ZIP in a list of ZIPs" }),
-  e("notIn", "is not one of", "primary", "textList"),
+  e("in", "is in list", "primary", "textList", { hint: `The whole answer equals one of the values — a typed ZIP in a list of ZIPs; 26 is not in "1, 5, 10, 25". ${MULTI_VALUE_NOTE}` }),
+  e("notIn", "is not in list", "primary", "textList", { hint: "The answer is none of these values. A comma-separated answer must have NO value in the list." }),
+  /*
+   * A TYPED NUMBER'S RANGE (2026-10-24, client item A48): "Enter a number
+   * between 1 and 100" is usually a text box, and the range test belongs on
+   * it. The comparison is numeric, inclusive, value by value.
+   */
+  e("between", "is between (numbers)", "primary", "numberRange", { hint: `Reads the answer as a number: inclusive, both ends count — 100 is between 1 and 100, 150 is not, and text that is not a number never is. ${MULTI_VALUE_NOTE}` }),
+  e("notBetween", "is not between (numbers)", "primary", "numberRange", { hint: "Reads the answer as a number, outside the range. A comma-separated answer must have NO value in the range." }),
   e("matches", "matches pattern (regex)", "primary", "text"),
 ];
 const ITEMS_HINT = "Contains ITEM: whole items of a comma-separated list, ignoring spaces and case — 10001 never matches 110001. A list of items matches when ANY of them is in the list.";
@@ -327,6 +346,7 @@ function entriesFor(type: OperandType, q: Question | undefined): { entries: E[];
         defaultId: "selected", rowSelector: false,
       };
     case "numeric":
+      return { entries: [...NUMERIC(), ...NUMBER_LIST, ...STATUS], defaultId: "eq", rowSelector: false };
     case "duration":
       return { entries: [...NUMERIC(), ...STATUS], defaultId: "eq", rowSelector: false };
     case "text":
@@ -361,12 +381,12 @@ function entriesFor(type: OperandType, q: Question | undefined): { entries: E[];
         defaultId: "selected", rowSelector: "row",
       };
     case "grid_numeric":
-      return { entries: [...NUMERIC(), ...STATUS], defaultId: "eq", rowSelector: "row" };
+      return { entries: [...NUMERIC(), ...NUMBER_LIST, ...STATUS], defaultId: "eq", rowSelector: "row" };
     case "grid_text":
       return { entries: [...TEXT, ...STATUS], defaultId: "eq", rowSelector: "row" };
     case "constant_sum":
       return {
-        entries: [...NUMERIC(), ...STATUS],
+        entries: [...NUMERIC(), ...NUMBER_LIST, ...STATUS],
         defaultId: "eq", rowSelector: "field",
       };
     case "ranking":
@@ -468,7 +488,7 @@ function entriesFor(type: OperandType, q: Question | undefined): { entries: E[];
       return {
         entries: [
           ...NUMERIC("text", "numberRange").map((x) => (x.op === "eq" || x.op === "ne" ? { ...x, label: x.op === "eq" ? "= equals" : "≠ does not equal" } : x)),
-          ...TEXT.filter((x) => x.op !== "eq" && x.op !== "ne"),
+          ...TEXT.filter((x) => !["eq", "ne", "between", "notBetween"].includes(x.op)),
           ...ITEMS,
           e("isEmpty", "is empty", "status", "none"),
           e("isNotEmpty", "is not empty", "status", "none"),
@@ -559,16 +579,34 @@ export function applyOperatorEntry(rule: ConditionRule, entry: OperatorEntry, pr
   if (entry.preset && "value" in entry.preset) { next.value = entry.preset.value; next.value2 = undefined; return next; }
   if (VALUELESS_KINDS.includes(entry.value)) { next.value = undefined; next.value2 = undefined; return next; }
   if (!sameKind) {
-    next.value = entry.value === "options" || entry.value === "textList" ? [] : entry.value === "number" && entry.group === "count" ? 1 : "";
+    next.value = entry.value === "options" || entry.value === "textList" || entry.value === "numberList" ? [] : entry.value === "number" && entry.group === "count" ? 1 : "";
     next.value2 = undefined;
   }
   return next;
 }
 
+/**
+ * The rule with its `contains` replaced by the operator that names what it
+ * does (`operatorStatus().replacement`). The source and the value are kept —
+ * `contains "2"` on a single select becomes `eq "2"`, `contains "a"` on a
+ * multi-select `selected "a"` — so the rule evaluates exactly as it did.
+ */
+export function applyContainsReplacement(rule: ConditionRule, replacement: OperatorEntry): ConditionRule {
+  return { ...rule, operator: replacement.op };
+}
+
 export interface OperatorStatus {
-  /** ok: offered for this source · other: not offered but still valid, evaluates as before · needsUpdate: cannot be evaluated against this source any more */
+  /** ok: offered for this source · other: not offered but still valid, evaluates as before · needsUpdate: cannot be evaluated against this source any more, or (with `replacement`) has an operator that says what it does */
   status: "ok" | "other" | "needsUpdate";
   message?: string;
+  /**
+   * `contains` on a choice source (2026-10-24): the rule still evaluates as it
+   * always did, and this menu entry is the operator that names it — "equals"
+   * on a single select, "has selected" on a multi-select or grid. The builder
+   * applies it on one click, keeping the value; the linter warns rather than
+   * blocks, because nothing is broken.
+   */
+  replacement?: OperatorEntry;
 }
 
 /** Does this stored rule still fit its source? Never changes the rule. */
@@ -583,7 +621,20 @@ export function operatorStatus(def: SurveyDefinition, rule: ConditionRule): Oper
       message: `“${rule.operator}” cannot be used with this ${menu.typeLabel.toLowerCase()} source — its type changed. Choose one of the operators it offers.`,
     };
   }
-  return entryForRule(menu, rule) ? { status: "ok" } : { status: "other" };
+  const entry = entryForRule(menu, rule);
+  if (!entry && (rule.operator === "contains" || rule.operator === "notContains") && (rule.source.kind === "question" || rule.source.kind === "variable")) {
+    const q = getQuestionByCodeOrVar(def, rule.source.ref);
+    const rep = containsReplacementFor(q, rule.operator, rule.source.columnId);
+    const replacement = rep ? menu.entries.find((x) => x.op === rep.op && !x.preset?.count && x.value !== "cell") ?? menu.entries.find((x) => x.op === rep.op) : undefined;
+    if (rep) {
+      return {
+        status: "needsUpdate",
+        replacement,
+        message: `“${rule.operator === "contains" ? "contains" : "does not contain"}” is a text operator — on this ${menu.typeLabel.toLowerCase()} it means “${rep.label}”. It still evaluates as before; choose “${rep.label}” to say so.`,
+      };
+    }
+  }
+  return entry ? { status: "ok" } : { status: "other" };
 }
 
 /* ------------------------------------------------------------ sentences */

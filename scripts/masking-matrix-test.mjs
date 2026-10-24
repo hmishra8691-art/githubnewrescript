@@ -17,6 +17,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY, LOGIC_SECTIONS } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -68,10 +69,13 @@ const readDef = async () => {
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the open logic workspace (openTab does) and reopens it afterwards
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing) await reopenLastWorkspace(page);
   return JSON.parse(json);
 };
 const goTab = async (name) => {
@@ -101,11 +105,15 @@ await page.waitForSelector('[data-testid="masking-builder-columnMask"]');
 await page.$eval('[data-testid="masking-builder-rowMask"]', (e) => e.scrollIntoView({ block: "center" }));
 console.log('✔ §28: row masking and column masking each render their own panel on a question with both rows and columns');
 
+// each panel is a summary with "Edit logic ⤢"; the mask builder itself opens in the logic workspace
 const exprOf = async (field) => {
-  const scope = `[data-testid="masking-builder-${field}"]`;
+  await openWorkspace(page, `[data-testid="masking-builder-${field}"]`);
+  const scope = `${LD_BODY} [data-testid="masking-builder-${field}"]`;
   await page.click(`${scope} [data-testid="mask-mode-expression"]`);
   await page.waitForSelector(`${scope} [data-testid="mask-expression"]`);
-  return (await page.inputValue(`${scope} [data-testid="mask-expression"]`)).trim();
+  const text = (await page.inputValue(`${scope} [data-testid="mask-expression"]`)).trim();
+  await saveWorkspace(page); // nothing changed: closes
+  return text;
 };
 assert.equal(await exprOf("rowMask"), "QP.Selected", "the row mask's tree round-trips to its expression");
 assert.equal(await exprOf("columnMask"), "QF.Selected", "the column mask's tree round-trips to its expression");

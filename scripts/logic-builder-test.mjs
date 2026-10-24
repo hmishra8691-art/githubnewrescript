@@ -11,6 +11,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -40,10 +41,13 @@ const readDef = async () => {
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the logic workspace (openTab does) — and reopens it afterwards, so editing carries on
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing && activeTab === "questions") await openSectionWorkspace(page, "display-logic");
   return JSON.parse(json);
 };
 
@@ -62,16 +66,10 @@ const openQuestionLogic = async () => {
   // The Properties panel's sections are independently collapsible and
   // default to collapsed unless already configured — expand Display logic
   // before looking for its "+ add" control.
-  const head = '[data-testid="psec-head-display-logic"]';
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
-    await page.click(head);
-    await page.waitForTimeout(150);
-  }
-  // the display-logic builder sits behind "+ add" on "Show this question when"
-  const addBtn = await page.$('[data-testid="optional-add"]');
-  if (addBtn) await addBtn.click();
-  await page.waitForSelector('[data-testid="logic-builder"]');
+  // the display-logic builder is in the centred logic workspace ("Add logic ⤢" / "Edit logic ⤢");
+  // readDef (→ openTab) presses Save before reading the JSON
+  await openSectionWorkspace(page, "display-logic");
+  await page.waitForSelector(`${LD_BODY} [data-testid="logic-builder"]`);
 };
 
 /**
@@ -112,7 +110,7 @@ assert.equal(await page.$('[data-testid="lb-actions"]'), null, "no action bar un
 console.log("✔ §2: the builder opens with no conditions, no group and no operator");
 
 // and the old confusing vocabulary is gone everywhere
-const panelText = await page.textContent(".rightpanel");
+const panelText = await page.textContent(LD_BODY); // the builder is in the logic workspace
 assert.equal(/ALL \(AND\)|ANY \(OR\)|AND ALL|OR ALL|NOR/.test(panelText), false,
   "no AND ALL / OR ALL / NOR wording remains");
 console.log("✔ §11: “AND ALL”, “OR ALL” and “NOR” no longer appear");
@@ -337,14 +335,12 @@ console.log("✔ §18: “Move to new group” is a single undoable operation");
  * "C1 AND C2 OR C3 AND C4" could not be expressed at all.
  * ======================================================================== */
 
-await openQuestionLogic();
-await page.click('[data-testid="optional-add"]').catch(() => {});
 {
-  // start from a clean four-condition list
-  const clearBtn = await page.$('.rightpanel >> text=clear');
+  // start from a clean four-condition list: "clear" stays on the panel, beside the summary
+  await saveWorkspace(page);
+  const clearBtn = await page.$('[data-testid="psec-body-display-logic"] button:text-is("clear")');
   if (clearBtn) { await clearBtn.click(); await page.waitForTimeout(250); }
-  await page.click('[data-testid="optional-add"]');
-  await page.waitForSelector('[data-testid="logic-builder"]');
+  await openQuestionLogic();
   for (let i = 0; i < 4; i++) {
     await page.click('[data-testid="lb-add-condition"] >> nth=0');
     await page.waitForTimeout(180);
@@ -424,23 +420,26 @@ await page.waitForSelector('[data-testid="flow-insert-menu"]');
 await page.click('[data-testid="insert-branch"]');
 await page.waitForTimeout(400);
 
-await page.waitForSelector('[data-testid="logic-builder"]');
-const branchText = await page.textContent('.flow-card.container-card.branch');
+// the branch card shows its paths as a summary; "Edit logic ⤢" opens them all in the logic workspace
+await openWorkspace(page, ".flow-card.container-card.branch");
+const BR = `${LD_BODY} [data-testid="branch-path-editor"] >> nth=0 >> `;
+await page.waitForSelector(`${LD_BODY} [data-testid="logic-builder"]`);
+const branchText = await page.textContent(LD_BODY);
 assert.match(branchText, /No conditions added yet/, "a new branch opens with an empty condition list");
-assert.equal(await page.$('.flow-card.container-card.branch [data-testid="lb-group"]'), null,
+assert.equal(await page.$(`${LD_BODY} [data-testid="lb-group"]`), null,
   "and no group was created for it either");
 console.log("✔ §14: Survey Flow branch logic uses the same conditions-first builder");
 
 // build a two-condition OR inside the branch and check it lands in the flow
-await page.click('.flow-card.container-card.branch [data-testid="lb-add-condition"]');
+await page.click(`${BR}[data-testid="lb-add-condition"]`);
 await page.waitForTimeout(200);
-await page.click('.flow-card.container-card.branch [data-testid="lb-add-condition"] >> nth=0');
+await page.click(`${LD_BODY} [data-testid="lb-add-condition"] >> nth=0`);
 await page.waitForTimeout(250);
-assert.equal((await page.$$(`.flow-card.container-card.branch ${TOP_ROW}`)).length, 2);
-await tickRows([0, 1], ".flow-card.container-card.branch ");
-await page.click('.flow-card.container-card.branch [data-testid="lb-move-to-group"]');
+assert.equal((await page.$$(`${LD_BODY} ${TOP_ROW}`)).length, 2);
+await tickRows([0, 1], `${LD_BODY} `);
+await page.click(`${LD_BODY} [data-testid="lb-move-to-group"]`);
 await page.waitForTimeout(350);
-await page.selectOption('.flow-card.container-card.branch [data-testid="group-op"]', "or");
+await page.selectOption(`${LD_BODY} [data-testid="group-op"]`, "or");
 await page.waitForTimeout(350);
 
 def = await readDef();

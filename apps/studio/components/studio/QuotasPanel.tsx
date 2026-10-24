@@ -188,6 +188,7 @@ export function QuotasPanel({ focusQuotaId }: { focusQuotaId?: string } = {}) {
                 <div className="qbar"><div className={pct >= 100 ? "full" : ""} style={{ width: `${pct}%` }} /></div>
                 <div className="flabel" style={{ marginTop: 8 }}>cell condition — {conditionToText(cell.when, s.def)}</div>
                 <ConditionEditor value={cell.when}
+                  workspace={{ title: "Quota cell condition", subject: `${qt.name} — ${cell.label || `cell ${ci + 1}`}`, description: "A respondent counts toward this cell when the following condition is met:" }}
                   onChange={(when) => s.update((d) => { d.quotas[qi].cells[ci].when = when; })} />
               </div>
             );

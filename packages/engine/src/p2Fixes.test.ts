@@ -57,6 +57,7 @@ test("OR-05: a composite column takes its own type's operators, not the whole vo
   assert.ok(operatorsForQuestion(q, "m").includes("containsAll") && !operatorsForQuestion(q, "m").includes("gt"));
   assert.ok(operatorsForQuestion(q, "s").includes("selected"));
   assert.ok(operatorsForQuestion(q, "d").includes("dateBefore") && !operatorsForQuestion(q, "d").includes("contains"));
-  assert.ok(num.length < 15 && txt.length < 15, "a column's list is short");
+  /* 2026-10-24: a text column also takes "is between (numbers)" / "is not between" (client item A48) — 15 operators, still a short list */
+  assert.ok(num.length < 15 && txt.length < 17, "a column's list is short");
   assert.deepEqual(operatorsForQuestion(q, "nope"), all, "an unknown column falls back to the question's vocabulary");
 });

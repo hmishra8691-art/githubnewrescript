@@ -10,6 +10,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, discardWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1100 } });
@@ -234,9 +235,12 @@ await (async () => {
   assert.match(ifThen, /THEN show/, `and states the action: ${ifThen.slice(0, 200)}`);
   console.log("✔ display logic reads IF → conditions → THEN show <question>");
 
-  await p.click('.rightpanel >> text=+ skip rule');
+  // skip rules are edited in the centred logic workspace (the panel shows their summary + "Add logic ⤢")
+  await openWorkspace(p, '[data-testid="psec-body-skip-logic"]');
+  await p.click(`${LD_BODY} >> text=+ skip rule`);
   await p.waitForSelector(".skip-target");
-  const skipText = await p.$eval(".rightpanel", (e) => e.innerText.replace(/\s+/g, " "));
+  const skipText = await p.$eval(LD_BODY, (e) => e.innerText.replace(/\s+/g, " "));
+  await discardWorkspace(p);
   assert.match(skipText, /THEN GO TO/, `skip logic states its action: ${skipText.slice(0, 200)}`);
   console.log("✔ skip logic reads IF → conditions → THEN GO TO <target>");
 

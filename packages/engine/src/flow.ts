@@ -322,12 +322,27 @@ export function compileFlow(
   return steps;
 }
 
+/**
+ * WHO IS LOOKING. `revealHidden` is the programmer's view (the Studio preview,
+ * the runtime's test mode, a test link — see `revealsHiddenQuestions`): a
+ * question set `settings.hidden` is then SHOWN, so it can be seen, tested and
+ * its auto-punch result read, while everything else about it — its display
+ * logic, the named rules, an empty List Fill — still applies. A respondent's
+ * view (the default, and every live link) never shows it. Hidden-TYPE
+ * questions (hidden variable, calculated, embedded data) are never drawn in
+ * either view: they have nothing to draw.
+ */
+export interface VisibilityOptions {
+  revealHidden?: boolean;
+}
+
 /** Questions actually visible on a page step (display logic + displayRules). */
 export function visibleQuestions(
   def: SurveyDefinition,
   step: Extract<RuntimeStep, { kind: "page" }>,
   state: ResponseState,
   quotaCounts?: QuotaCounts,
+  opts: VisibilityOptions = {},
 ): Question[] {
   const ctx: EvalContext = { def, state, loop: step.loop, quotaCounts };
   // a List Fill destination that received no item, configured to disappear
@@ -337,7 +352,7 @@ export function visibleQuestions(
   return step.questionIds
     .map((id) => getQuestion(def, id))
     .filter((q): q is Question => !!q)
-    .filter((q) => q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data" && !q.settings.hidden)
+    .filter((q) => q.type !== "hidden" && q.type !== "calculated" && q.type !== "embedded_data" && (opts.revealHidden || !q.settings.hidden))
     .filter((q) => evaluateCondition(q.displayLogic, ctx))
     .filter((q) => !unusedDestinations.has(q.id))
     /*
@@ -518,7 +533,7 @@ export function advance(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts: QuotaCounts = {},
-  opts: { /** the pageId of the page being submitted, when the caller knows it */ fromPageId?: string } = {},
+  opts: { /** the pageId of the page being submitted, when the caller knows it */ fromPageId?: string } & VisibilityOptions = {},
 ): NavigationResult {
   /*
    * Know WHICH page is being left, not just its index. Submitting a page can
@@ -558,7 +573,7 @@ export function advance(
     }
   }
 
-  const result = moveForward(def, state, quotaCounts, idx + 1, triggeredSkips);
+  const result = moveForward(def, state, quotaCounts, idx + 1, triggeredSkips, opts);
   /*
    * LOGIC-04: remember the page just left so Back can return to it. Back used
    * to walk the compiled order, so a respondent who skipped p2 and p3 landed
@@ -596,6 +611,7 @@ function moveForward(
   quotaCounts: QuotaCounts,
   idx: number,
   triggeredSkips: NavigationResult["triggeredSkips"],
+  view: VisibilityOptions = {},
 ): NavigationResult {
   let steps = compileFlow(def, state, quotaCounts);
   let guard = 0;
@@ -610,7 +626,18 @@ function moveForward(
     const s = steps[idx];
     if (s.kind === "page") {
       const visible = visibleQuestions(def, s, state, quotaCounts);
-      if (visible.length === 0) { idx++; continue; }
+      /*
+       * "Is there anything to show?" is asked of the viewer. For a respondent
+       * a page holding only hidden questions is empty and is passed over —
+       * no empty space, no page break caused by them. For the programmer's
+       * view the same page IS shown, so the hidden question on it can be
+       * seen and its punch result read. Pruning, prefill and defaults below
+       * still run on the RESPONDENT'S set only: a hidden question's answer
+       * belongs to its punch rules (`punchDerivedQuestions`, just above),
+       * and the programmer's view must change nothing about how it is filled.
+       */
+      const shown = view.revealHidden ? visibleQuestions(def, s, state, quotaCounts, view) : visible;
+      if (shown.length === 0) { idx++; continue; }
       state.stepIndex = idx;
       /*
        * An answer naming something no longer offered is not an answer. A
@@ -702,6 +729,7 @@ export function goBack(
   def: SurveyDefinition,
   state: ResponseState,
   quotaCounts: QuotaCounts = {},
+  view: VisibilityOptions = {},
 ): NavigationResult {
   const steps = compileFlow(def, state, quotaCounts);
   /*
@@ -718,7 +746,7 @@ export function goBack(
     if (here?.kind === "page" && here.pageId === pageId) continue;
     const at = steps.findIndex((s) => s.kind === "page" && s.pageId === pageId);
     const s = at >= 0 ? steps[at] : undefined;
-    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts).length > 0) {
+    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) {
       state.stepIndex = at;
       return { steps, stepIndex: at, done: false, triggeredSkips: [], quotaFull: [] };
     }
@@ -726,14 +754,50 @@ export function goBack(
   let idx = Math.min(state.stepIndex, steps.length - 1) - 1;
   while (idx >= 0) {
     const s = steps[idx];
-    if (s.kind === "page" && visibleQuestions(def, s, state, quotaCounts).length > 0) {
+    if (s.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) {
       state.stepIndex = idx;
       return { steps, stepIndex: idx, done: false, triggeredSkips: [], quotaFull: [] };
     }
     idx--;
   }
-  state.stepIndex = 0;
-  return { steps, stepIndex: 0, done: false, triggeredSkips: [], quotaFull: [] };
+  /*
+   * NOTHING TO GO BACK TO: stay put. This used to jump to step 0, which is
+   * only a page when the flow begins with one — a flow that opens with an
+   * Embedded Data element (the ordinary way to capture URL parameters, and
+   * every block preview that carries the embedded data on the way to its
+   * block) put the respondent on a step the Runner cannot draw, a dead end
+   * with "There is no page to show". The first page is the first page; Back
+   * from it goes nowhere.
+   */
+  const stay = Math.max(0, Math.min(state.stepIndex, steps.length - 1));
+  state.stepIndex = stay;
+  return { steps, stepIndex: stay, done: false, triggeredSkips: [], quotaFull: [] };
+}
+
+/**
+ * Is there a page before the current one that Back could reach? What the
+ * Runner asks before drawing a Back button — a button that leads nowhere is
+ * worse than none (block preview A44: the first page of the block must not
+ * offer a Back that leaves it, or that lands on nothing).
+ */
+export function hasPreviousPage(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts = {},
+  view: VisibilityOptions = {},
+): boolean {
+  const steps = compileFlow(def, state, quotaCounts);
+  for (const pageId of visitedStack(state)) {
+    const here = steps[state.stepIndex];
+    if (here?.kind === "page" && here.pageId === pageId) continue;
+    const s = steps.find((x) => x.kind === "page" && x.pageId === pageId);
+    if (s?.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) return true;
+  }
+  for (let idx = Math.min(state.stepIndex, steps.length - 1) - 1; idx >= 0; idx--) {
+    const s = steps[idx];
+    if (s.kind === "page" && visibleQuestions(def, s, state, quotaCounts, view).length > 0) return true;
+  }
+  return false;
 }
 
 /** First visible page for a fresh session. */
@@ -752,16 +816,16 @@ export function start(
     const at = findBlockStart(def, state, quotaCounts, opts.startAt);
     if (at < 0) {
       return {
-        ...moveForward(def, state, quotaCounts, 0, []),
+        ...moveForward(def, state, quotaCounts, 0, [], opts),
         startAt: { blockId: opts.startAt, found: false },
       };
     }
     // no page precedes the start: nothing to run skip logic for, so step
     // straight into the block's first page, running whatever embedded-data or
     // quota steps sit inside the block before it
-    return { ...moveForward(def, state, quotaCounts, at, []), startAt: { blockId: opts.startAt, found: true } };
+    return { ...moveForward(def, state, quotaCounts, at, [], opts), startAt: { blockId: opts.startAt, found: true } };
   }
-  return advanceFrom(def, state, quotaCounts, -1);
+  return advanceFrom(def, state, quotaCounts, -1, opts);
 }
 
 /**
@@ -798,6 +862,7 @@ export function resumeAt(
   state: ResponseState,
   quotaCounts: QuotaCounts,
   savedIndex: number | null | undefined,
+  view: VisibilityOptions = {},
 ): NavigationResult {
   const steps = compileFlow(def, state, quotaCounts);
 
@@ -808,11 +873,11 @@ export function resumeAt(
    * second direction.
    */
   const wanted = Number.isFinite(savedIndex as number) ? Math.trunc(savedIndex as number) : -1;
-  if (wanted < 0) return advanceFrom(def, state, quotaCounts, -1);
+  if (wanted < 0) return advanceFrom(def, state, quotaCounts, -1, view);
 
   const target = Math.min(wanted, steps.length - 1);
   const at = target >= 0 ? steps[target] : undefined;
-  if (at?.kind === "page" && visibleQuestions(def, at, state, quotaCounts).length > 0) {
+  if (at?.kind === "page" && visibleQuestions(def, at, state, quotaCounts, view).length > 0) {
     state.stepIndex = target;
     return { steps, stepIndex: target, done: false, triggeredSkips: [], quotaFull: [] };
   }
@@ -822,10 +887,10 @@ export function resumeAt(
    * would re-run quota checks the respondent has already passed and re-ask
    * pages they have already answered.
    */
-  return moveForward(def, state, quotaCounts, Math.max(0, target), []);
+  return moveForward(def, state, quotaCounts, Math.max(0, target), [], view);
 }
 
-export interface StartOptions {
+export interface StartOptions extends VisibilityOptions {
   /**
    * Begin at the first page of this block / section (a flow node id) instead
    * of the survey's first page — "Preview block". The rest of the survey runs
@@ -860,9 +925,10 @@ function advanceFrom(
   state: ResponseState,
   quotaCounts: QuotaCounts,
   fromIndex: number,
+  view: VisibilityOptions = {},
 ): NavigationResult {
   state.stepIndex = fromIndex;
-  return advance(def, state, quotaCounts);
+  return advance(def, state, quotaCounts, view);
 }
 
 export function setAnswer(

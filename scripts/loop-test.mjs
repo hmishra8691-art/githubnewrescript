@@ -21,6 +21,7 @@
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -218,7 +219,10 @@ console.log("\nSTUDIO — a question inside the loop can build logic on the loop
   assert.match(chip, /Product_ID/);
   ok("the properties panel says which loop the question is in and which references it can use");
 
-  // the condition builder's source list offers the loop's columns, by name
+  // the condition builder's source list offers the loop's columns, by name — in the logic workspace,
+  // which keeps the loop scope of the question it was opened from
+  await openSectionWorkspace(page, "display-logic");
+  await page.waitForSelector("select.ref-select").catch(() => {});
   const opts = await page.$$eval("select.ref-select option", (os) => os.map((o) => o.value));
   assert.ok(opts.includes("loop:Category"), `loop:Category is offered — got ${opts.filter((o) => o.startsWith("loop")).join(", ")}`);
   assert.ok(opts.includes("loop:Product_ID"));

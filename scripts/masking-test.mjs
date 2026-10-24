@@ -10,6 +10,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -54,10 +55,13 @@ const readDef = async () => {
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the open logic workspace (openTab does) and reopens it afterwards
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing && activeTab === "questions") await reopenLastWorkspace(page);
   return JSON.parse(json);
 };
 const goTab = async (name) => {
@@ -74,16 +78,17 @@ const punchesOf = (def, id = "q8") => def.questions.find((q) => q.id === id)?.pu
  * expanded first. Idempotent: does nothing if the section is already open,
  * which matters since `openMasking()` runs more than once per question.
  */
+/* masking and auto punch are edited in the centred logic workspace (the panel shows a summary + "Edit logic ⤢") */
 const ensureSectionOpen = async (id) => {
-  const head = `[data-testid="psec-head-${id}"]`;
-  await page.waitForSelector(head);
-  const expanded = await page.getAttribute(head, "aria-expanded");
-  if (expanded !== "true") {
-    await page.click(head);
-    await page.waitForTimeout(150);
-  }
+  await openSectionWorkspace(page, id);
+  await page.waitForTimeout(150);
 };
 
+const exprMode = async () => {
+  if (await page.$('[data-testid="mask-expression"]')) return;
+  await page.click('[data-testid="mask-mode-expression"]');
+  await page.waitForSelector('[data-testid="mask-expression"]');
+};
 /** Select Q8 and scroll the masking builder into view. */
 const openMasking = async () => {
   await goTab("Questions");
@@ -91,8 +96,8 @@ const openMasking = async () => {
   const cards = await page.$$(".qcard");
   await cards[cards.length - 1].click();
   await ensureSectionOpen("masking");
-  await page.waitForSelector('[data-testid="masking-builder"]');
-  await page.$eval('[data-testid="masking-builder"]', (e) => e.scrollIntoView({ block: "center" }));
+  await page.waitForSelector(`${LD_BODY} [data-testid="masking-builder"]`);
+  await page.$eval(`${LD_BODY} [data-testid="masking-builder"]`, (e) => e.scrollIntoView({ block: "center" }));
 };
 
 await page.goto("http://localhost:3000/sandbox", { waitUntil: "networkidle" });
@@ -186,12 +191,14 @@ console.log("✔ §10: the builder says what the mask means in words");
 
 await page.click('[data-testid="mask-mode-expression"]');
 await page.waitForSelector('[data-testid="mask-expression"]');
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 let text = await page.inputValue('[data-testid="mask-expression"]');
 assert.equal(text.trim(), "(Q5.Selected UNION Q6.Selected) DIFFERENCE Q7.Selected",
   `the visual tree prints as the expression: ${text}`);
 console.log("✔ §26: Visual → Expression shows the same thing");
 
 // edit it as text, with nesting on the RIGHT — the case a flat pipeline cannot hold
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]', "Q5.Selected UNION (Q6.Selected INTERSECTION Q7.Selected)");
 await page.waitForTimeout(450);
 def = await readDef();
@@ -213,16 +220,19 @@ console.log("✔ §26: Expression → Visual draws the bracket");
 await page.click('[data-testid="mask-mode-expression"]');
 await page.waitForSelector('[data-testid="mask-expression"]');
 const before = JSON.stringify(maskOf(await readDef()));
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]', "(Q5.Selected UNION Q6.Selected");
 await page.waitForTimeout(400);
 let err = await page.textContent('[data-testid="mask-error"]');
 assert.match(err, /Missing closing parenthesis/);
 assert.equal(JSON.stringify(maskOf(await readDef())), before, "the saved mask was left alone");
 
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]', "Q99.Selected");
 await page.waitForTimeout(400);
 assert.match(await page.textContent('[data-testid="mask-error"]'), /Q99 does not exist/);
 
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]', "Q5.Nonsense");
 await page.waitForTimeout(400);
 assert.match(await page.textContent('[data-testid="mask-error"]'), /is not a selection/);
@@ -230,6 +240,7 @@ console.log("✔ §9: malformed set expressions are refused, and change nothing"
 
 /* --------------------------------------------- §31: a question masking itself */
 
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]', "Q8.Selected");
 await page.waitForTimeout(450);
 const issue = await page.textContent('[data-testid="mask-issue"]');
@@ -238,6 +249,7 @@ console.log("✔ §31: a question masking itself is reported, not left to the ru
 
 /* ------------------------------------ back to the brief's worked example */
 
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 await page.fill('[data-testid="mask-expression"]',
   "(Q5.Selected UNION Q6.Selected) DIFFERENCE Q7.Selected");
 await page.waitForTimeout(450);
@@ -371,6 +383,7 @@ await openMasking();
 assert.equal(JSON.stringify(maskOf(await readDef())), stored, "the mask tree survived");
 await page.click('[data-testid="mask-mode-expression"]');
 await page.waitForSelector('[data-testid="mask-expression"]');
+await exprMode(); // a JSON peek reopens the workspace in Visual mode
 text = await page.inputValue('[data-testid="mask-expression"]');
 assert.equal(text.trim(), "(Q5.Selected UNION Q6.Selected) DIFFERENCE Q7.Selected",
   "and prints the same expression");

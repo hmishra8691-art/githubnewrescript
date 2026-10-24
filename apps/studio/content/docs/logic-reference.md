@@ -61,7 +61,7 @@ Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BU
 | `any` | `answered`, `unanswered`, `isEmpty`, `isNotEmpty`, `eq`, `ne` |
 | `choice` | `selected`, `notSelected`, `in`, `notIn`, `contains`, `notContains`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `displayed`, `notDisplayed` |
 | `list` | `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `selected`, `notSelected`, `in`, `notIn`, `displayed`, `notDisplayed`, `containsItem`, `notContainsItem`, `containsAllItems`, `containsExactly` |
-| `text` | `eq`, `ne`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches`, `isEmpty`, `isNotEmpty`, `in`, `notIn` |
+| `text` | `eq`, `ne`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches`, `isEmpty`, `isNotEmpty`, `in`, `notIn`, `between`, `notBetween` |
 | `numeric` | `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween`, `in`, `notIn` |
 | `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `displayed`, `notDisplayed` |
 | `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween` |

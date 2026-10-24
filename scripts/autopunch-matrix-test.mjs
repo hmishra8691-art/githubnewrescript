@@ -18,6 +18,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY, LOGIC_SECTIONS } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1200 } });
@@ -58,10 +59,13 @@ const readDef = async () => {
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the open logic workspace (openTab does) and reopens it afterwards
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing) await reopenLastWorkspace(page);
   return JSON.parse(json);
 };
 const goTab = async (name) => {
@@ -72,6 +76,7 @@ const punchesOf = (def) => def.questions.find((q) => q.id === "qm")?.punches ?? 
 
 /** Properties panel sections are independently collapsible; expand one. */
 const ensureSectionOpen = async (id) => {
+  if (LOGIC_SECTIONS.has(id)) { await openSectionWorkspace(page, id); await page.waitForTimeout(150); return; } // edited in the centred logic workspace
   const head = `[data-testid="psec-head-${id}"]`;
   await page.waitForSelector(head);
   if ((await page.getAttribute(head, "aria-expanded")) !== "true") {

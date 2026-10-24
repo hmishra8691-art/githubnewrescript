@@ -149,6 +149,10 @@ export function withoutPresentation(def: SurveyDefinition): SurveyDefinition {
     if (q.type !== "custom_component") delete (q as { customHtml?: string }).customHtml;
     // a starting answer is behaviour, not structure: the question, its options, codes and logic are what they were
     if (q.settings) delete (q.settings as { defaultValue?: unknown }).defaultValue;
+    /* …and so are the per-field ones (2026-10-24, A63): a field's, a cell's, a column's, an Other box's */
+    for (const o of q.options ?? []) { delete (o as { defaultValue?: unknown }).defaultValue; delete (o as { otherDefault?: unknown }).otherDefault; }
+    for (const r of q.rows ?? []) { delete (r as { defaultValue?: unknown }).defaultValue; delete (r as { otherDefault?: unknown }).otherDefault; delete (r as { cellDefaults?: unknown }).cellDefaults; }
+    for (const c of q.columns ?? []) delete (c as { defaultValue?: unknown }).defaultValue;
   }
   return out;
 }

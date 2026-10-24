@@ -16,6 +16,7 @@
  *   node scripts/option-popup-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -102,11 +103,7 @@ ok("a saved Hide when… becomes Exclude when…");
 await h.loadDef(fixture());
 await h.goTab("Questions");
 await page.click('[data-testid="qcard"][data-qid="q_next"]');
-const head = '[data-testid="psec-head-display-logic"]';
-await page.waitForSelector(head);
-if ((await page.getAttribute(head, "aria-expanded")) !== "true") await page.click(head);
-const add = await page.$('[data-testid="optional-add"]');
-if (add) await add.click();
+await openSectionWorkspace(page, "display-logic"); // the builder is in the centred logic workspace; h.readDef saves it
 await page.waitForSelector('[data-testid="logic-builder"]');
 await page.click('[data-testid="lb-add-condition"]');
 await page.waitForSelector(".cond-rule");

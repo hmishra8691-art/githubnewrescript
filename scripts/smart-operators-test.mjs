@@ -22,6 +22,7 @@
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -58,9 +59,9 @@ const openLogic = async () => {
   await h.goTab("Questions");
   await page.waitForSelector('[data-testid="qcard"][data-qid="q_next"]');
   await page.click('[data-testid="qcard"][data-qid="q_next"]');
-  const head = '[data-testid="psec-head-display-logic"]';
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") await page.click(head);
+  /* display logic is edited in the centred logic workspace (the panel shows its summary + “Edit logic ⤢”);
+     reading the JSON (h.readDef → openTab) saves it first */
+  await openSectionWorkspace(page, "display-logic");
   await page.waitForTimeout(200);
 };
 const logicOf = async () => {

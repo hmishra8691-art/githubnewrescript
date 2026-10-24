@@ -1,6 +1,6 @@
 import { displayedCodesFor, hasDisplayedResolver } from "./displayedRegistry.js";
 import type { Condition, ConditionRule, Question, SurveyDefinition } from "@rescript/schema";
-import { isOptionValueRef, isQuestionValueRef, isPipedValueRef, effectiveResponseModel } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef, isPipedValueRef, effectiveResponseModel, OPEN_ENDED_MULTI_VALUE_OPERATORS } from "@rescript/schema";
 import type { LoopContext, ResponseState } from "./state.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
 import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "./state.js";
@@ -10,7 +10,7 @@ import { findNamedExpression } from "./namedExpressions.js";
 import { getEffectiveListsResolver, resolvePipingText } from "./piping.js";
 import { isEmptyAnswer } from "./answers.js";
 import { isCategoricalGrid } from "./gridCell.js";
-import { listItems } from "./listValue.js";
+import { isListText, listItems } from "./listValue.js";
 import { effectiveEmbeddedType, embeddedCatalog } from "./embedded.js";
 
 /**
@@ -850,12 +850,23 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
       : isRecord(left) && GRID_RECORDS.has(left) ? flattenCells(left)
       : null
     : null;
+  /*
+   * AN OPEN-ENDED ANSWER WITH SEVERAL VALUES (2026-10-24, client items A46 /
+   * A48). "Enter a number between 1 and 100, separated by commas" → the
+   * respondent types "25, 26, 27, 45" into a text box, and `between 1 and 100`
+   * compared `Number("25, 26, 27, 45")` — NaN, false for every respondent.
+   * For a question whose answer is TYPED, the numeric comparisons and
+   * `in` / `notIn` now read such an answer value by value: every value must
+   * satisfy them. See `applyOpenEnded` and OPEN_ENDED_MULTI_VALUE_OPERATORS.
+   */
+  const apply = OPEN_ENDED_MULTI_VALUE_OPERATORS.includes(operator) && isOpenEndedQuestionSource(rule, ctx)
+    ? applyOpenEnded : applyOperator;
   if (ex && cells) {
     // several cells: any of them for a comparison, none of them for its negation
-    const any = cells.some((cell) => applyOperator(ex.op, cell, right, right2));
+    const any = cells.some((cell) => apply(ex.op, cell, right, right2));
     result = ex.negated ? !any : any;
   } else {
-    result = applyOperator(operator, left, right, right2);
+    result = apply(operator, left, right, right2);
   }
 
   ctx.trace?.push({
@@ -866,6 +877,63 @@ export function evaluateRule(rule: ConditionRule, ctx: EvalContext): boolean {
     right,
   });
   return result;
+}
+
+/*
+ * OPEN-ENDED, VALUE BY VALUE (2026-10-24).
+ *
+ * `applyOpenEnded` is `applyOperator` for an answer the respondent TYPED.
+ * When that answer is a comma-separated list ("25, 26, 27", "25; 26",
+ * one per line), a positive comparison (`between`, `>`, `≥`, `<`, `≤`,
+ * `in`) holds when the WHOLE answer satisfies it as before — so nothing a
+ * single value satisfied stops being satisfied — or when EVERY value does.
+ * A negation (`notBetween`, `notIn`) holds when the whole answer is not a
+ * match AND no value is one. Items are trimmed, empty items ("25,,26,") are
+ * ignored, decimals and negatives read as numbers, and a value that is not a
+ * number fails a numeric comparison — so "99.100, 101" is never between 1
+ * and 100, and "abc, 5" is not either. A scalar answer takes the ordinary
+ * path untouched.
+ */
+const POSITIVE_OF: Partial<Record<ConditionRule["operator"], ConditionRule["operator"]>> = { notBetween: "between", notIn: "in" };
+function applyOpenEnded(operator: ConditionRule["operator"], left: unknown, rawRight: unknown, right2: unknown): boolean {
+  /* "is in list" typed as one comma-separated value ("1, 5, 10") is the list it spells */
+  const right = (operator === "in" || operator === "notIn") && typeof rawRight === "string" && isListText(rawRight) ? listItems(rawRight) : rawRight;
+  if (typeof left !== "string" || !isListText(left)) return applyOperator(operator, left, right, right2);
+  const items = listItems(left);
+  const positive = POSITIVE_OF[operator];
+  if (positive) {
+    /* the negation itself per item (so a non-number is "not between" nothing, exactly as a scalar), and the whole must not match */
+    return !applyOperator(positive, left, right, right2) && items.every((item) => applyOperator(operator, item, right, right2));
+  }
+  return applyOperator(operator, left, right, right2) || items.every((item) => applyOperator(operator, item, right, right2));
+}
+
+/** Column response types whose cell is typed by the respondent. */
+const OPEN_COLUMN_TYPES = new Set(["text", "longtext", "numeric", "slider"]);
+
+/**
+ * Is this rule reading an answer the respondent TYPES — a text or numeric
+ * open end, a Text / Numeric List field, a Text / Numeric Matrix cell, a
+ * Constant Sum amount, or a text / numeric column of a composite grid? Only
+ * such a source is read value by value (see `applyOpenEnded`); choice,
+ * ranking, date, time and Embedded Data sources evaluate exactly as before.
+ */
+function isOpenEndedQuestionSource(rule: ConditionRule, ctx: EvalContext): boolean {
+  const s = rule.source;
+  if (s.count || (s.kind !== "question" && s.kind !== "variable")) return false;
+  const q = getQuestionByCodeOrVar(ctx.def, s.ref);
+  if (!q) return false;
+  if (q.type === "composite" || q.type === "custom_table") {
+    if (!s.columnId) return false;
+    const col = (q.columns ?? []).find((c) => String(c.id) === String(s.columnId));
+    return !!col && OPEN_COLUMN_TYPES.has(String(col.responseType));
+  }
+  switch (effectiveResponseModel(q)) {
+    case "text": return q.type !== "date" && q.type !== "time";
+    case "numeric": case "allocation": case "fields": return true;
+    case "per_row": return q.type === "matrix_text" || q.type === "matrix_numeric";
+    default: return false;
+  }
 }
 
 /** Is this rule reading an Embedded Data field whose effective type is a LIST? */

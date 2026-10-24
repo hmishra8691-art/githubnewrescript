@@ -16,6 +16,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { sendPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY, LOGIC_SECTIONS } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -42,10 +43,13 @@ const FIXTURE = {
 
 const readDef = async () => {
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the open logic workspace (openTab does) and reopens it afterwards
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing) await reopenLastWorkspace(page);
   return JSON.parse(json);
 };
 const goTab = async (name) => { await openTab(page, name); await page.waitForTimeout(150); };
@@ -57,17 +61,18 @@ const selectCard = async (i) => {
   await page.waitForTimeout(200);
 };
 const openSection = async (id) => {
+  if (LOGIC_SECTIONS.has(id)) { await openSectionWorkspace(page, id); await page.waitForTimeout(150); return; } // edited in the centred logic workspace
   await page.waitForSelector(`[data-testid="psec-head-${id}"]`);
   if ((await page.getAttribute(`[data-testid="psec-head-${id}"]`, "aria-expanded")) !== "true") {
     await page.click(`[data-testid="psec-head-${id}"]`);
     await page.waitForTimeout(120);
   }
 };
-const rules = () => page.locator('[data-testid="psec-body-validation-rules"] [data-testid="validation-rule"]');
+const rules = () => page.locator('[data-testid="logic-dialog-body"] [data-testid="validation-rule"]');
 /** add a rule, pick its kind, and return its card */
 const addRule = async (kind) => {
   const before = await rules().count();
-  await page.click('[data-testid="psec-body-validation-rules"] button:has-text("+ rule")');
+  await page.click('[data-testid="logic-dialog-body"] button:has-text("+ rule")');
   await page.waitForTimeout(150);
   const card = rules().nth(before);
   const kindSelect = card.locator("select").first();

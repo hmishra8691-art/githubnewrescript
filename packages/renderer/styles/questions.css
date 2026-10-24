@@ -1056,3 +1056,31 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-speech-cell > .rs-speech.compact .rs-speech-live, .rs-speech-cell > .rs-speech.compact .rs-speech-reason, .rs-speech-cell > .rs-speech.compact .rs-speech-consent { position: absolute; top: 100%; inset-inline-end: 0; margin-top: 4px; white-space: nowrap; background: var(--rs-surface, #fff); border-radius: 6px; padding: 2px 6px; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
 .rs-speech-cell > .rs-speech.compact .rs-speech-consent { white-space: normal; width: min(320px, 80vw); }
 @media (prefers-reduced-motion: reduce) { .rs-speech-cell > .rs-speech.compact { transition: none; } }
+
+/* ------------------------------------------------------------------------
+ * PROGRAMMER CHROME — preview / test only (brief 19/10/2026; programmerView.tsx).
+ * A live link never carries `.rs-programmer-q`, so none of this applies there.
+ * ------------------------------------------------------------------------ */
+.rs-card.rs-hidden-q { background: #F3EEFF; border: 2px dashed #9B7BEA; }
+.rs-card.rs-hidden-q .rs-qtext, .rs-card.rs-hidden-q .rs-qtext.rs-qhtml { color: #5B3FB8; }
+.rs-hidden-banner {
+  display: flex; align-items: flex-start; gap: 8px; margin: -4px 0 12px; padding: 9px 12px;
+  background: #E9E0FF; color: #3F2A85; border: 1px solid #C9B8F5; border-radius: calc(var(--rs-radius, 12px) - 6px);
+  font-size: 13px; line-height: 1.45;
+}
+.rs-hidden-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 10px; color: #5B3FB8; font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+.rs-hidden-eye { flex: none; vertical-align: -3px; }
+.rs-hidden-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #9B7BEA; color: #fff; font-size: 11px; letter-spacing: .08em; }
+.rs-hidden-qnum { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border: 1px solid #9B7BEA; border-radius: 999px; background: #fff; color: #5B3FB8; font-size: 11px; }
+.rs-hidden-foot { display: flex; align-items: center; gap: 6px; margin-top: 12px; padding-top: 8px; border-top: 1px dashed #C9B8F5; color: #5B3FB8; font-size: 12px; }
+.rs-autopunch { margin-top: 12px; padding: 10px 12px; border-radius: calc(var(--rs-radius, 12px) - 6px); background: #F0FDF4; border: 1px solid #BBF7D0; color: #14532D; font-size: 13px; line-height: 1.5; }
+.rs-card.rs-hidden-q .rs-autopunch { background: #F0FDF4; }
+.rs-autopunch[data-status="waiting"] { background: #FEFCE8; border-color: #FDE68A; color: #713F12; }
+.rs-autopunch[data-status="failed"] { background: #FEF2F2; border-color: #FECACA; color: #7F1D1D; }
+.rs-autopunch[data-status="none"] { background: #F8FAFC; border-color: #E2E8F0; color: #334155; }
+.rs-autopunch-details { margin-top: 6px; }
+.rs-autopunch-details > summary { cursor: pointer; font-weight: 600; }
+.rs-autopunch-details table { margin-top: 6px; border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.rs-autopunch-details th { text-align: start; font-weight: 600; padding: 2px 10px 2px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+.rs-autopunch-details td { padding: 2px 0; }
+.rs-autopunch-details tr.rs-autopunch-rule th { padding-top: 8px; color: #166534; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }

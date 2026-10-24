@@ -16,6 +16,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -159,6 +160,8 @@ await openTab(page, "Questions");
 await page.waitForSelector(".block-badge");
 await page.click(".qcard >> nth=0");
 await page.waitForSelector(".qcard.selected");
+// Q1's display logic shows as a summary in the panel; its builder is in the logic workspace
+await openSectionWorkspace(page, "display-logic");
 await page.waitForSelector(".cond-rule .ref-select");
 
 const refValues = await page.$$eval(".ref-select option", (els) => els.map((e) => e.value));

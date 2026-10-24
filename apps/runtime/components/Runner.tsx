@@ -73,6 +73,16 @@ import {
   markPopupSeen,
   unmarkPopupSeen,
   migrateLegacyCustomCode,
+  scopeDefinitionToNode,
+  evaluateCondition,
+  hasPreviousPage,
+  runCalculations,
+  revealsHiddenQuestions,
+  explainAutoPunch,
+  configFingerprints,
+  invalidateStalePreviewAnswers,
+  punchDerivedQuestions,
+  prefillQuestions,
 } from "@rescript/engine";
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
@@ -125,6 +135,15 @@ export interface RunnerProps {
    * counters on the server; this is never sent anywhere.
    */
   listFillCounts?: ListFillCounts;
+  /**
+   * PREVIEW ONLY: "show me what a respondent sees". Set by the Studio's
+   * preview message, not by the URL. It turns the programmer's view off —
+   * hidden questions disappear exactly as on a live link, no theme, no
+   * auto-punch chrome — while the preview still stores nothing and still
+   * exposes its state to the inspector. Ignored outside preview mode: test
+   * and live are decided by the route that served the page.
+   */
+  respondentView?: boolean;
 }
 
 type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; status?: number } | { ok: true; skipped: true };
@@ -402,7 +421,17 @@ export function Runner(props: RunnerProps) {
   );
 }
 
-function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers, listFillCounts }: RunnerProps) {
+function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers, listFillCounts, respondentView }: RunnerProps) {
+  /*
+   * WHO IS LOOKING (brief 19/10/2026, hidden questions). `mode` is set by the
+   * route that served this page — `/preview`, `/t/…` (test) or `/s/…` and
+   * every other respondent entry (live) — never read from a query string. In
+   * preview and test the programmer sees `settings.hidden` questions in the
+   * hidden-question theme with their auto-punch result; a live link never
+   * does. `respondentView` is the preview's own "as a respondent" switch.
+   */
+  const reveal = revealsHiddenQuestions(mode, mode === "preview" && !!respondentView);
+  const view = reveal ? { revealHidden: true as const } : {};
   const [, force] = React.useReducer((x: number) => x + 1, 0);
   /*
    * THE ONE SCRIPT PIPELINE. A survey saved before "Custom code" was folded
@@ -411,7 +440,23 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * interview, preview and test run passes through — means a published survey
    * keeps running its code without anyone having to open and re-save it.
    */
-  const sourceDef = React.useMemo(() => migrateLegacyCustomCode(loadedDef).def, [loadedDef]);
+  /*
+   * BLOCK PREVIEW ISOLATION (client review 19/10/2026, A44). A "Preview
+   * block" run (`startAt`) gets a definition whose flow is JUST that block —
+   * its pages, its logic, its loops, the embedded data on the way to it — so
+   * Next cannot walk into the next block and Back cannot walk into the
+   * previous one: there is nothing outside the block to walk to. The saved
+   * definition is not changed; this is a view the Runner compiles. See
+   * engine/blockPreview.ts for exactly what travels with the block. The
+   * block's own display logic is lifted off and reported (`blockGate`) so the
+   * block can be tested even when the current test values would hide it.
+   */
+  const blockScope = React.useMemo(
+    () => scopeDefinitionToNode(migrateLegacyCustomCode(loadedDef).def, startAt),
+    [loadedDef, startAt],
+  );
+  const sourceDef = blockScope.def;
+  const blockPreview = !!startAt && blockScope.found;
   /**
    * THE RESPONDENT'S LANGUAGE — a layer over the definition, never a copy.
    *
@@ -591,6 +636,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    */
   const mediaGate = useMediaGateState();
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
+  /**
+   * STALE PREVIEW (A66). The configuration fingerprints of the definition
+   * this preview last ran: when the Studio pushes a changed definition, the
+   * stored answers of exactly the changed questions — and of the punched
+   * questions that read them — are dropped and recomputed; nothing else is.
+   * Preview only; a live or test interview runs one frozen version.
+   */
+  const fingerprintsRef = React.useRef<Record<string, string> | null>(null);
+  /** Re-run every punch rule that can write now: the survey's derived questions, then the current page's prefill. */
+  const refreshPunches = (step: RuntimeStep | undefined) => {
+    const st = stateRef.current;
+    if (!st) return;
+    punchDerivedQuestions(def, st, counts);
+    if (step?.kind === "page") {
+      const ctx = { def, state: st, loop: step.loop ?? null, quotaCounts: counts };
+      prefillQuestions(visibleQuestions(def, step, st, counts), ctx, (q) => answerKey(q.id, step.loop ?? null));
+    }
+  };
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [epoch, setEpoch] = React.useState(0);
   /**
@@ -885,11 +948,37 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * here, into the same `savedRef` the live path fills, so exactly one piece
      * of code restores a position and `resumeAt` settles it.
      */
+    /** A66: what a changed configuration invalidated on this resume (preview only), for the log and the re-punch below. */
+    let stale: ReturnType<typeof invalidateStalePreviewAnswers> | null = null;
     if (mode === "preview" && !savedRef.current) {
       const prev = readPreviewState(previewStateId);
-      if (prev) { savedRef.current = prev; setResumed(true); }
+      if (prev) {
+        /*
+         * STALE PREVIEW (A66). The snapshot was written against the
+         * definition of the previous run. The programmer has since changed
+         * an option, a punch condition, the Hidden setting — and reopened the
+         * preview expecting the new configuration. Each question's stored
+         * answer stands only while its configuration fingerprint stands; a
+         * changed question, and every punched question that reads it, loses
+         * its stored value here, and the punch rules write the fresh one on
+         * the walk below. Unrelated answers are kept, and ordinary navigation
+         * changes no fingerprint, so a plain reload keeps everything.
+         */
+        stale = invalidateStalePreviewAnswers(def, prev.answers as Record<string, unknown>, prev.fingerprints);
+        savedRef.current = prev;
+        setResumed(true);
+      }
     }
-    let nav = start(def, state, counts, startAt ? { startAt } : {});
+    if (mode === "preview") fingerprintsRef.current = configFingerprints(def);
+    /*
+     * A block preview's flow IS the block (see `blockScope`), so it starts at
+     * its own beginning — running the embedded data carried in front of the
+     * block — rather than jumping to the block's first page, which would skip
+     * them. Seeded test values stand for submitted pages, so the values those
+     * submits would have derived are computed first, as `start({ startAt })` does.
+     */
+    if (blockPreview && seedAnswers) runCalculations(def, state, "on_page_submit");
+    let nav = start(def, state, counts, { ...view, ...(startAt && !blockPreview ? { startAt } : {}) });
     /*
      * Resume: the row's answers come back, the flow is recompiled with them
      * (branches depend on answers) and the position is restored, clamped in
@@ -924,8 +1013,18 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
        * EXECUTING the embedded-data and quota steps on the way rather than
        * jumping over them.
        */
-      nav = resumeAt(def, state, counts, saved.stepIndex);
+      nav = resumeAt(def, state, counts, saved.stepIndex, view);
       savedRef.current = null;
+      if (stale?.invalidated.length) {
+        /*
+         * The resumed page is drawn as it stands, so the punches that read a
+         * dropped answer must be recomputed NOW rather than on the next
+         * navigation: every derived question survey-wide, then the page's
+         * own prefill (a `once` rule fills an answer that is no longer there).
+         */
+        refreshPunches(nav.steps[state.stepIndex]);
+        setLogs((l) => [...l, `[preview] configuration changed for ${stale!.changed.join(", ")} — dropped the stored answers of ${stale!.invalidated.join(", ")} and recomputed their auto-punch rules; everything else kept`]);
+      }
     }
     /*
      * SURVEY_LANGUAGE: decided once the embedded data is in (a panel's
@@ -936,9 +1035,21 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       recordLanguage(state, resolveLanguage(sourceDef, { urlParams, browserLanguages, embedded: state.embedded, chosen: language ?? stateLanguage(state) }, mode !== "live"));
     }
     notePage(nav.steps, state.stepIndex, saved || telemetryRef.current.data.navigation.reloads > 0 ? "reload" : "start");
+    /*
+     * A block preview shows the block whatever its own display logic says
+     * (the gate was lifted off the scoped flow), and says so when the survey
+     * would have hidden it with these test values — the tester asked to see
+     * this block, and a preview that showed something else was the A44 bug.
+     */
+    const gateHolds = !blockPreview || !blockScope.gate
+      || evaluateCondition(blockScope.gate, { def, state, loop: null, quotaCounts: counts });
     setStartNote(
-      nav.startAt && !nav.startAt.found
+      blockPreview && nav.done
+        ? "This block is hidden by a survey-level display rule with the current test values, so there is nothing to show. Preview it again with test values that satisfy the rule."
+        : nav.startAt && !nav.startAt.found
         ? "This block is not reachable with the current test values — its display logic (or an enclosing branch) hides it — so the preview starts at the first page instead."
+        : !gateHolds
+          ? "With the current test values this block's display logic would hide it in the real survey. It is shown here anyway so you can test its questions."
         : recovered
           ? "We have put your answers back — the last page you filled in had not reached us, and it was still on this device."
           : resumed
@@ -979,10 +1090,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * is wrong and keeps saying it until the edit that fixes it arrives.
      */
     try {
+      /*
+       * A66, the live-edit half: the same invalidation the resume runs, for
+       * a definition pushed while the preview is open. A changed option, a
+       * changed punch, a Hidden switch drops the stored answers that depended
+       * on it and recomputes the punches on the page in front of the
+       * programmer; a keystroke in a question's text changes no fingerprint
+       * and drops nothing.
+       */
+      const stale = invalidateStalePreviewAnswers(def, stateRef.current.answers as Record<string, unknown>, fingerprintsRef.current);
+      fingerprintsRef.current = configFingerprints(def);
       const next = compileFlow(def, stateRef.current, counts);
       setSteps(next);
       if (stateRef.current.stepIndex >= next.length) {
         stateRef.current.stepIndex = Math.max(0, next.length - 1);
+      }
+      if (stale.invalidated.length) {
+        refreshPunches(next[stateRef.current.stepIndex]);
+        setLogs((l) => [...l, `[preview] configuration changed for ${stale.changed.join(", ")} — dropped the stored answers of ${stale.invalidated.join(", ")} and recomputed their auto-punch rules; everything else kept`]);
       }
       // a follow-up on screen belongs to the definition that produced it
       setProbe((p) => (p && def.questions.find((q) => q.id === p.q.id) ? p : null));
@@ -994,6 +1119,37 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [def]);
+
+  /*
+   * THE PREVIEW'S "AS A RESPONDENT" SWITCH changes which pages exist: a page
+   * holding only hidden questions is the programmer's, not the respondent's.
+   * Switching while standing on one would leave an empty page, so the
+   * position is settled again under the new view — forward to the next page
+   * that has something to show, or, when nothing follows, back to the last
+   * one. Answers are untouched. Preview only (test and live never switch).
+   */
+  const viewMounted = React.useRef(false);
+  React.useEffect(() => {
+    if (!viewMounted.current) { viewMounted.current = true; return; }
+    const st = stateRef.current;
+    if (mode !== "preview" || !st) return;
+    try {
+      const snapshot = { stepIndex: st.stepIndex, status: st.status };
+      let nav = resumeAt(def, st, counts, st.stepIndex, view);
+      if (nav.done) {
+        // nothing to show from here on: stay in the interview, one page back
+        st.status = snapshot.status;
+        st.stepIndex = snapshot.stepIndex;
+        nav = goBack(def, st, counts, view);
+      }
+      setSteps(nav.steps);
+      setErrors([]);
+    } catch (e) {
+      console.error("[rescript:runtime] could not settle after switching the preview view", e);
+    }
+    force();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal]);
 
   /*
    * A PAGE's on_load runs when the page is shown — once per page id, which
@@ -1074,7 +1230,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       });
       if (cancelled) return;
       try {
-        const nav = resumeAt(def, s, counts, s.stepIndex);
+        const nav = resumeAt(def, s, counts, s.stepIndex, view);
         setSteps(nav.steps);
       } catch (e) {
         console.error("[rescript:runtime] could not settle after the balance claim", e);
@@ -1130,7 +1286,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
 
   const step = steps[state.stepIndex];
   const pageStep = step?.kind === "page" ? step : null;
+  /*
+   * TWO SETS, ONE PAGE. `questions` is the RESPONDENT'S page — what is
+   * validated, pruned, punched-from and saved; a `settings.hidden` question is
+   * never in it, so a required hidden question cannot block Next and a hidden
+   * question's answer is never pruned. `pageQuestions` is what is DRAWN: the
+   * same, plus the hidden questions when the programmer is looking (preview,
+   * test), each in the hidden-question theme. On a live link the two are the
+   * same list.
+   */
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
+  const pageQuestions = pageStep && reveal ? visibleQuestions(def, pageStep, state, counts, view) : questions;
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts, ui, locale };
 
   /*
@@ -1157,16 +1323,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     force();
   };
   const convoIndex = conversational && pageStep
-    ? (convo.pageId === pageStep.pageId ? Math.min(convo.index, Math.max(0, questions.length - 1)) : 0)
+    ? (convo.pageId === pageStep.pageId ? Math.min(convo.index, Math.max(0, pageQuestions.length - 1)) : 0)
     : 0;
-  const shownQuestions = conversational ? questions.slice(convoIndex, convoIndex + 1) : questions;
+  const shownQuestions = conversational ? pageQuestions.slice(convoIndex, convoIndex + 1) : pageQuestions;
   /** what has been asked so far, for the conversational transcript: earlier pages, then this page's earlier questions */
   const transcript: { q: Question; loop: LoopContext | null; answer: string }[] = conversational && pageStep
     ? [
       ...steps.slice(0, state.stepIndex).flatMap((s) => (s.kind === "page"
         ? visibleQuestions(def, s, state, counts).map((q) => ({ q, loop: s.loop ?? null }))
         : [])),
-      ...questions.slice(0, convoIndex).map((q) => ({ q, loop: pageStep.loop ?? null })),
+      ...pageQuestions.slice(0, convoIndex).map((q) => ({ q, loop: pageStep.loop ?? null })),
     ]
       .filter(({ q }) => q.type !== "html" && !q.settings.hidden)
       .map(({ q, loop }) => ({ q, loop, answer: resolvePiping(`{{${q.code}}}`, { ...ctx, loop }).trim() }))
@@ -1446,7 +1612,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       // the seed too (conjoint audit 2026-10-17): a CBC / MaxDiff answer names a design alternative of the
       // respondent's VERSION, and the version comes from the seed — a reload with a fresh seed would put
       // the restored choices on another version's concepts (and re-roll every randomised order)
-      cachePreviewState(previewStateId, { ...snapshot, seed: state.seed });
+      // …and the configuration fingerprints (A66), so the next resume can tell a changed question from an unchanged one
+      cachePreviewState(previewStateId, { ...snapshot, seed: state.seed, fingerprints: configFingerprints(def) });
     }
     void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
       if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }
@@ -1462,7 +1629,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     // name the page being left: a List Fill decided just above may have added steps before it
     let nav: ReturnType<typeof advance>;
     try {
-      nav = advance(def, state, counts, { fromPageId: pageStep.pageId });
+      nav = advance(def, state, counts, { fromPageId: pageStep.pageId, ...view });
     } catch (e) {
       /*
        * `moveForward` throws when the flow does not terminate — a branch that
@@ -1537,12 +1704,20 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     force();
   };
 
+  /*
+   * Back is drawn only when there is a page to go back TO (engine
+   * `hasPreviousPage`). "stepIndex > 0" was the old test, and the first page
+   * of a flow that opens with an Embedded Data element — or of a block
+   * preview, which carries the embedded data on the way to its block (A44) —
+   * has an index above 0 and nothing before it to show.
+   */
+  const backPossible = !!pageStep && hasPreviousPage(def, state, counts, view);
   const handleBack = () => {
     ackRef.current.text = null;
     telemetryRef.current?.leavePage();
     let nav: ReturnType<typeof goBack>;
     try {
-      nav = goBack(def, state, counts);
+      nav = goBack(def, state, counts, view);
     } catch (e) {
       console.error("[rescript:runtime] could not go back", e);
       setFatal(fatalOf(e, "navigation"));
@@ -1563,13 +1738,14 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const convoNext = once(async () => {
     if (!pageStep) return;
     if (mediaGate.held) return;
-    const q = questions[convoIndex];
-    if (q) {
+    const q = pageQuestions[convoIndex];
+    // a hidden question is on screen for the programmer only: never validated, never acknowledged
+    if (q && !q.settings.hidden) {
       const errs = validatePage(def, [q], ctx);
       if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
     }
-    if (q && q.type !== "html") { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
-    if (convoIndex < questions.length - 1) {
+    if (q && q.type !== "html" && !q.settings.hidden) { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
+    if (convoIndex < pageQuestions.length - 1) {
       setErrors([]);
       setConvo({ pageId: pageStep.pageId, index: convoIndex + 1 });
       force();
@@ -1599,12 +1775,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   ) : ended && finalSave.kind === "saving" ? (
     <div className="rs-card rs-end" data-testid="rs-saving"><h2>{uiText(ui, "saving")}</h2></div>
   ) : ended ? (
-    <div className="rs-card rs-end" data-testid="rs-ended" data-saved={finalSave.kind === "saved" || mode === "preview" ? "1" : "0"}>
+    <div className="rs-card rs-end" data-testid="rs-ended" data-saved={finalSave.kind === "saved" || mode === "preview" ? "1" : "0"}
+      data-preview-scope={blockPreview ? "block" : "survey"}>
       {ended.message ? (
         <h2 dangerouslySetInnerHTML={{ __html: resolvePiping(ended.message, ctx) }} />
       ) : (
         <h2>
-          {ended.status === "complete"
+          {/* A44: a block preview ends with its own words — the tester finished a block, not the survey */}
+          {ended.status === "complete" && blockPreview
+            ? "Thank you for completing this block."
+            : ended.status === "complete"
             ? uiText(ui, "thank_you", undefined, "Thank you for completing this survey!")
             : ended.status === "quota_full"
               ? uiText(ui, "quota_full", undefined, "Unfortunately the group you belong to is already complete.")
@@ -1618,9 +1798,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           (test mode: would redirect to {ended.redirectUrl})
         </p>
       )}
+      {blockPreview && startNote && (
+        <p className="rs-error-banner" data-testid="rs-start-note" style={{ background: "#fff7e6", color: "#7a4b00", borderColor: "#f0c36d" }}>{startNote}</p>
+      )}
       {mode !== "live" && (
-        <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart}>
-          ↻ Restart test session
+        /* A44: "Restart Block" restarts only the previewed block — the scoped flow is the block, so a fresh run of it is a fresh run of the block */
+        <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart} data-testid="rs-restart">
+          {blockPreview ? "↻ Restart Block" : "↻ Restart test session"}
         </button>
       )}
     </div>
@@ -1670,7 +1854,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         </>
       )}
       <button type="button" className="rs-btn" style={{ marginTop: 18 }} onClick={restart}>
-        {mode === "live" ? "Start again" : "↻ Restart test session"}
+        {mode === "live" ? "Start again" : blockPreview ? "↻ Restart Block" : "↻ Restart test session"}
       </button>
     </div>
   ) : probe ? (
@@ -1780,7 +1964,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           }}
           onNext={conversational ? convoNext : handleNext}
           onBack={conversational ? convoBack : handleBack}
-          canGoBack={b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0))}
+          canGoBack={b.buttons.showBack && (backPossible || (conversational && convoIndex > 0))}
           acknowledgement={conversational ? ackRef.current.text : null}
           onVoice={noteVoice}
           surveyLanguage={locale}
@@ -1823,6 +2007,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
             otherValues={otherTextsOf(state, q, pageStep.loop ?? null)}
             /* the whole error, not its sentence — see QRProps.errors */
             errors={errors.filter((e) => e.questionId === q.id)}
+            /*
+             * Programmer chrome — preview and test only, never live: the
+             * hidden-question theme for a `settings.hidden` question and the
+             * auto-punch visualisation for any question with punch rules,
+             * recomputed on every render so it follows the source answer.
+             */
+            programmerView={reveal ? { mode: mode as "preview" | "test", hidden: !!q.settings.hidden, autoPunch: explainAutoPunch(def, q, ctx, pageStep.loop ?? null) } : undefined}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
               telemetryRef.current?.answerChanged(q.id);
@@ -1878,7 +2069,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
       )}
       <div className="rs-nav">
-        {b.buttons.showBack && (state.stepIndex > 0 || (conversational && convoIndex > 0)) ? (
+        {b.buttons.showBack && (backPossible || (conversational && convoIndex > 0)) ? (
           <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
             {b.buttons.backLabel}
           </button>
@@ -1886,7 +2077,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         <button
           type="button"
           data-testid="rs-next"
-          data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? "submit" : "next"}
+          data-rs-button={pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? "submit" : "next"}
           className={`rs-btn ${b.buttons.style}`}
           /* the ref above is what actually prevents the second submit; this
              is so the respondent can see why the button stopped responding —
@@ -1895,7 +2086,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           aria-busy={advancing || undefined}
           onClick={conversational ? convoNext : handleNext}
         >
-          {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= questions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
+          {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
         </button>
       </div>
     </>

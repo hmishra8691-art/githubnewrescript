@@ -23,6 +23,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
 import { openPreview } from "./lib/preview.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -57,13 +58,10 @@ const loadFixture = async (def) => {
   await page.click('button:has-text("validate & apply")');
   await page.waitForTimeout(400);
 };
+/* the rule list is edited in the centred logic workspace; readDef (→ openTab) saves it first */
 const ensureSectionOpen = async (id) => {
-  const head = `[data-testid="psec-head-${id}"]`;
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
-    await page.click(head);
-    await page.waitForTimeout(150);
-  }
+  await openSectionWorkspace(page, id);
+  await page.waitForTimeout(150);
 };
 const selectQuestion = async (index) => {
   await goTab("Questions");

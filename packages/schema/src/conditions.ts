@@ -121,6 +121,22 @@ export const LIST_ITEM_OPERATORS: ComparisonOperator[] = [
 ];
 
 /**
+ * Operators that read a comma-separated OPEN-ENDED answer value by value
+ * (2026-10-24, client items A46/A48). When a text or numeric question's
+ * answer holds several values ("25, 26, 27, 45"), these hold when EVERY value
+ * satisfies them — `between 1 and 100` on "25, 26" is true, on "99.100, 101"
+ * false, and a value that is not a number fails a numeric comparison. Their
+ * negations (`notBetween`, `notIn`) hold when NO value satisfies the positive
+ * form. An answer that matches as a whole still matches, so nothing a single
+ * value satisfied before stops being satisfied. Only question sources whose
+ * answer is typed by the respondent are read this way; Embedded Data keeps
+ * its list-item operators.
+ */
+export const OPEN_ENDED_MULTI_VALUE_OPERATORS: ComparisonOperator[] = [
+  "between", "notBetween", "gt", "gte", "lt", "lte", "in", "notIn",
+];
+
+/**
  * Which operators make sense for which kind of source. The Studio uses this
  * to offer only meaningful operators (req §7); the linter uses it to flag
  * incompatible configurations (req §30). "any" operators are always allowed.
@@ -176,6 +192,14 @@ export const OPERATORS_BY_KIND: Record<string, ComparisonOperator[]> = {
      */
     "in",
     "notIn",
+    /*
+     * 2026-10-24 (client items A46/A48, additive): a typed answer that holds a
+     * NUMBER — or several separated by commas ("25, 26, 27") — can be asked
+     * "is between 1 and 100". The evaluator reads each value; see
+     * `OPEN_ENDED_MULTI_VALUE_OPERATORS`.
+     */
+    "between",
+    "notBetween",
   ],
   numeric: ["eq", "ne", "gt", "gte", "lt", "lte", "between", "notBetween", "in", "notIn"],
   ranking: [

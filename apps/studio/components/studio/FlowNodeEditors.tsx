@@ -13,6 +13,7 @@ import { InsertPipedText } from "./InsertPipedText";
 import { CompactValueInput, StoredAsPreview, TestValuePanel, type CompactValueHandle } from "./FlowValueInput";
 import { insertAt } from "@/lib/flow/flowEd";
 import { OptionalCondition, ConditionEditor, conditionToText } from "./ConditionBuilder";
+import { LogicDialog, WorkspaceButton, WorkspaceSummary, CompactLogicScope, useCompactLogic } from "./LogicDialog";
 import { LoopEditor } from "./LoopEditor";
 
 /**
@@ -281,6 +282,7 @@ export function EmbeddedDataEditor({ node, onChange }: {
                 raw={f.source === "static" ? f.value : f.defaultValue} />
               <OptionalCondition label="Set only when" value={f.when}
                 hint="Otherwise this field is left as it was."
+                workspace={{ title: "Embedded data — set only when", subject: name || undefined, description: `Set ${name || "this field"} only when the following condition is met:` }}
                 onChange={(c) => setField(i, { when: c })} />
             </div>
           </div>
@@ -396,6 +398,7 @@ export function RedirectEditor({ node, onChange }: {
       </div>
 
       <OptionalCondition label="Redirect only when" value={node.when}
+        workspace={{ title: "Redirect — only when", description: "Redirect the respondent only when the following condition is met:" }}
         onChange={(c) => onChange({ ...node, when: c })} />
     </div>
   );
@@ -454,7 +457,124 @@ export function BalanceSettings({ value, onChange, what, testId }: {
   );
 }
 
-export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: FlowNode): void }) {
+/* ======================================================== branch / condition */
+
+type BranchNode = Extract<FlowNode, { type: "branch" }>;
+
+/**
+ * The paths of a branch — over a `node` + `onChange` pair, so the same list
+ * serves the flow card and the logic workspace's draft. Each path's condition
+ * is the ordinary condition builder; a nested path's children are not edited
+ * here (they are the cards below the branch in the flow).
+ */
+function BranchPaths({ node, onChange, inWorkspace }: { node: BranchNode; onChange(n: BranchNode): void; inWorkspace?: boolean }) {
+  const s = useStudio();
+  const setPath = (i: number, patch: Partial<BranchNode["branches"][number]>) =>
+    onChange({ ...node, branches: node.branches.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= node.branches.length) return;
+    const next = [...node.branches];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange({ ...node, branches: next });
+  };
+  return (
+    <div data-testid={inWorkspace ? "branch-paths-workspace" : "branch-paths"}>
+      {node.branches.map((b, i) => (
+        <div key={b.id} className="card" style={{ padding: 10 }} data-testid="branch-path-editor">
+          <div className="row ld-rule-head" style={{ marginBottom: 4 }}>
+            <span className="flabel" style={{ margin: 0 }}>{i === 0 ? "IF" : "ELSE IF"}</span>
+            <input className="input grow" placeholder="name this path" value={b.label ?? ""}
+              onChange={(e) => setPath(i, { label: e.target.value })} />
+            {node.branches.length > 1 && (
+              <span className="ld-rule-move">
+                <button className="btn small" title="Move this path up" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                <button className="btn small" title="Move this path down" disabled={i === node.branches.length - 1} onClick={() => move(i, 1)}>↓</button>
+              </span>
+            )}
+            <button className="btn small danger" title="Remove this path"
+              disabled={node.branches.length <= 1}
+              onClick={() => onChange({ ...node, branches: node.branches.filter((_, j) => j !== i) })}>×</button>
+          </div>
+          <ConditionEditor value={b.when} onChange={(when) => setPath(i, { when })}
+            layout={inWorkspace ? "wide" : "narrow"}
+            workspace={inWorkspace ? false : { title: `Branch — path ${i + 1}${b.label ? ` “${b.label}”` : ""}`, subject: node.title || undefined, description: "Run this path when the following condition is met (paths are tried top to bottom; the first match runs):" }} />
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+            THEN run what is nested under “{b.label || conditionToText(b.when, s.def) || "this path"}”{inWorkspace ? " in the flow" : " below"}.
+          </div>
+        </div>
+      ))}
+      <button className="btn small" data-testid="branch-add-path"
+        onClick={() => onChange({
+          ...node,
+          branches: [...node.branches, {
+            id: uid("br"), when: { type: "group", op: "and", children: [] }, children: [],
+          }],
+        })}>+ add path</button>
+    </div>
+  );
+}
+
+/**
+ * The branch card's editor: its name, its paths, and the one button that
+ * opens every path in the centred logic workspace (23-Oct review). Save
+ * writes the whole node back through the flow's own `onChange` — the paths'
+ * nested children are carried across untouched.
+ */
+function BranchEditor({ node, onChange }: { node: BranchNode; onChange(n: FlowNode): void }) {
+  const s = useStudio();
+  const [open, setOpen] = React.useState(false);
+  const compact = useCompactLogic();
+  return (
+    <div>
+      <div className="row" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label className="f" style={{ marginBottom: 0 }}>
+          <span>Name (optional)</span>
+          <input className="input" style={{ maxWidth: 280 }} value={node.title ?? ""}
+            placeholder="Branch" onChange={(e) => onChange({ ...node, title: e.target.value || undefined })} />
+        </label>
+        <span className="grow" />
+        {!compact && <WorkspaceButton onClick={() => setOpen(true)} label="Edit all paths in workspace" testId="branch-workspace-open" />}
+      </div>
+      {compact ? (
+        /* the card shows what each path tests; the paths are edited in the workspace */
+        <div style={{ marginTop: 8 }}>
+          <WorkspaceSummary count={node.branches.length} countNoun={node.branches.length === 1 ? "path" : "paths"}
+            onOpen={() => setOpen(true)} testId="branch-strip" openLabel="Edit logic">
+            {node.branches.map((b, i) => (
+              <span key={b.id} className="ld-rule-strip" data-testid="branch-path-sentence">
+                <span className="ld-rule-n">{i === 0 ? "IF" : "ELSE IF"}</span>
+                <span>{b.label ? `“${b.label}”: ` : ""}{conditionToText(b.when, s.def) || "(no condition yet)"}</span>
+              </span>
+            ))}
+          </WorkspaceSummary>
+        </div>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          <BranchPaths node={node} onChange={onChange} />
+        </div>
+      )}
+      {open && (
+        <LogicDialog<BranchNode>
+          title="Branch / condition" subject={node.title || undefined}
+          description="Each path runs the elements nested under it in the flow when its condition is met. Paths are tried top to bottom; the first match runs, and OTHERWISE runs when none does."
+          value={node}
+          validate={(n) => (n.branches.length === 0 ? "A branch needs at least one path" : null)}
+          onSave={(next) => { s.labelNextEdit?.("edit branch logic"); onChange(next); }}
+          onClose={() => setOpen(false)}>
+          {(draft, setDraft) => <BranchPaths node={draft} onChange={setDraft} inWorkspace />}
+        </LogicDialog>
+      )}
+    </div>
+  );
+}
+
+/** A flow card is a NARROW surface: its conditions are summaries with "Edit logic ⤢" by default (LogicDialog.tsx). */
+export function NodeEditor(props: { node: FlowNode; onChange(n: FlowNode): void }) {
+  return <CompactLogicScope><NodeEditorBody {...props} /></CompactLogicScope>;
+}
+
+function NodeEditorBody({ node, onChange }: { node: FlowNode; onChange(n: FlowNode): void }) {
   const s = useStudio();
   /* fields that pipe: their inputs, so Insert piped text lands at the cursor */
   const urlRef = React.useRef<HTMLInputElement>(null);
@@ -501,6 +621,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               .map((q) => <option key={q.id} value={q.id}>{q.code} — {q.variableName}</option>)}
           </select>
           <OptionalCondition label="Show page only when" value={node.visibleIf}
+            workspace={{ title: "Page display logic", subject: node.title || node.id, description: "Show this page only when the following condition is met:" }}
             onChange={(c) => onChange({ ...node, visibleIf: c })} />
           <div className="flabel" style={{ marginTop: 10 }}>Styles, animations &amp; scripts for this page</div>
           <UxItemsEditor scope={{ kind: "page", pageId: node.id }} />
@@ -517,6 +638,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
               onChange={(e) => onChange({ ...node, title: e.target.value })} />
           </label>
           <OptionalCondition label="Show only when" value={node.visibleIf}
+            workspace={{ title: `${node.type === "block" ? "Block" : "Section"} display logic`, subject: node.title || undefined, description: `Show this ${node.type} only when the following condition is met:` }}
             onChange={(c) => onChange({ ...node, visibleIf: c })} />
           {node.type === "block" && (<>
             <div className="flabel" style={{ marginTop: 10 }}>Styles, animations &amp; scripts for this block</div>
@@ -561,47 +683,13 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
           </p>
           <OptionalCondition label="Run this randomizer only when" value={node.visibleIf}
             hint="Otherwise skipped as a whole. “Show N” picks only from the elements a respondent is eligible for."
+            workspace={{ title: "Randomizer — run only when", subject: node.title || undefined, description: "Run this randomizer only when the following condition is met:" }}
             onChange={(c) => onChange({ ...node, visibleIf: c })} />
         </div>
       );
 
     case "branch":
-      return (
-        <div>
-          <label className="f">
-            <span>Name (optional)</span>
-            <input className="input" style={{ maxWidth: 280 }} value={node.title ?? ""}
-              placeholder="Branch" onChange={(e) => onChange({ ...node, title: e.target.value || undefined })} />
-          </label>
-          {node.branches.map((b, i) => (
-            <div key={b.id} className="card" style={{ padding: 10 }}>
-              <div className="row" style={{ marginBottom: 4 }}>
-                <span className="flabel" style={{ margin: 0 }}>IF</span>
-                <input className="input grow" placeholder="name this path" value={b.label ?? ""}
-                  onChange={(e) => onChange({
-                    ...node,
-                    branches: node.branches.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)),
-                  })} />
-                <button className="btn small danger" title="Remove this path"
-                  disabled={node.branches.length <= 1}
-                  onClick={() => onChange({ ...node, branches: node.branches.filter((_, j) => j !== i) })}>×</button>
-              </div>
-              <ConditionEditor value={b.when} onChange={(when) =>
-                onChange({ ...node, branches: node.branches.map((x, j) => (j === i ? { ...x, when } : x)) })} />
-              <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
-                THEN run what is nested under “{b.label || conditionToText(b.when, s.def) || "this path"}” below.
-              </div>
-            </div>
-          ))}
-          <button className="btn small" data-testid="branch-add-path"
-            onClick={() => onChange({
-              ...node,
-              branches: [...node.branches, {
-                id: uid("br"), when: { type: "group", op: "and", children: [] }, children: [],
-              }],
-            })}>+ add path</button>
-        </div>
-      );
+      return <BranchEditor node={node} onChange={onChange} />;
 
     case "loop":
       // the loop has its own editor — source, filters, count, order, the
@@ -642,6 +730,7 @@ export function NodeEditor({ node, onChange }: { node: FlowNode; onChange(n: Flo
         </div>
           <OptionalCondition label="Check only when" value={node.when}
             hint="Otherwise respondents pass this point without the full-quota check (they still count toward the quota on completion)."
+            workspace={{ title: "Quota check — only when", description: "Check the quota at this point only when the following condition is met:" }}
             onChange={(c) => onChange({ ...node, when: c })} />
         </div>
       );

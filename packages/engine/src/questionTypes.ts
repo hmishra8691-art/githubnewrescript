@@ -20,7 +20,8 @@ function baseCreate(type: string, partial?: Partial<Question>): Question {
   return {
     id,
     code: partial?.code ?? "QX",
-    variableName: partial?.variableName ?? (partial?.code ?? "QX").toUpperCase(),
+    /* the variable name defaults to the code AS TYPED — upper-casing it was the B20 complaint (23/10/2026) */
+    variableName: partial?.variableName ?? String(partial?.code ?? "QX"),
     type,
     text: partial?.text ?? "",
     options: [],

@@ -8,6 +8,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, workspaceOpen, reopenLastWorkspace, LD_BODY, LOGIC_SECTIONS } from "./lib/logicWorkspace.mjs";
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1700, height: 1150 } });
@@ -41,10 +42,13 @@ const readDef = async () => {
   // found it, or whatever ran right after this call would find its target
   // in the right panel gone.
   const activeTab = await page.$eval(".menubar-here", (e) => e.dataset.tab).catch(() => null);
+  // a peek at the JSON saves the open logic workspace (openTab does) and reopens it afterwards
+  const wasEditing = await workspaceOpen(page);
   await openTab(page, "JSON");
   await page.waitForSelector("textarea.code");
   const json = await page.$eval("textarea.code", (e) => e.value);
   if (activeTab) await openTabKey(page, activeTab).catch(() => {});
+  if (wasEditing) await reopenLastWorkspace(page);
   return JSON.parse(json);
 };
 const goTab = async (name) => {
@@ -60,6 +64,7 @@ const displayLogicOf = (def, qid = "q_age") =>
  * it. Idempotent.
  */
 const ensureSectionOpen = async (id) => {
+  if (LOGIC_SECTIONS.has(id)) { await openSectionWorkspace(page, id); await page.waitForTimeout(150); return; } // edited in the centred logic workspace
   const head = `[data-testid="psec-head-${id}"]`;
   await page.waitForSelector(head);
   if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
@@ -107,8 +112,9 @@ await page.waitForSelector(".qcard");
 let cards = await page.$$(".qcard");
 await cards[cards.length - 1].click();
 await page.waitForTimeout(300);
-await ensureSectionOpen("display-logic");
-await page.click('[data-testid="optional-add"]');
+await ensureSectionOpen("display-logic"); // opens the (empty) display logic in the logic workspace
+const add0 = await page.$('[data-testid="optional-add"]');
+if (add0) await add0.click();
 await page.waitForSelector('[data-testid="logic-mode-bar"]');
 // the visual builder is what opens — the expression editor is opt-in
 assert.ok(await page.$('[data-testid="logic-builder"]'), "Visual is the default");
@@ -190,7 +196,7 @@ assert.equal(logic.children[1].source.columnId, "2", "the matrix scale point");
 assert.equal(logic.children[1].value, undefined, "a grid cell carries no separate value");
 console.log("✔ §3/§4: brackets decide the nesting, matrix references resolve");
 
-const readsAs = await page.textContent(".rightpanel .logic-summary");
+const readsAs = await page.textContent(`${LD_BODY} .logic-summary`);
 assert.match(readsAs, /Brand A|brandA/, `it says what it means: ${readsAs}`);
 console.log("✔ §10: the editor shows what the expression reads as");
 
@@ -295,6 +301,8 @@ await page.waitForTimeout(200);
 await openExpression();
 assert.equal(JSON.stringify(displayLogicOf(await readDef())), stored,
   "the tree survived leaving and returning");
+await page.click('[data-testid="mode-expression"]'); // the JSON peek reopened the workspace in Visual mode
+await page.waitForSelector('[data-testid="xe-input"]');
 text = await page.inputValue('[data-testid="xe-input"]');
 assert.match(text.replace(/\s+/g, " "), /\(Q1\.brandA OR Q1\.brandB\) AND NOT Q3 > 25/,
   `and prints the same expression: ${text}`);
@@ -309,7 +317,9 @@ await page.waitForSelector('[data-testid="flow-insert-menu"]');
 await page.click('[data-testid="insert-branch"]');
 await page.waitForTimeout(400);
 
-const BRANCH = ".flow-card.container-card.branch ";
+// the branch card is a summary; its paths are edited in the logic workspace
+await openWorkspace(page, ".flow-card.container-card.branch");
+const BRANCH = `${LD_BODY} `;
 await page.waitForSelector(`${BRANCH}[data-testid="logic-mode-bar"]`);
 await page.click(`${BRANCH}[data-testid="mode-expression"]`);
 await page.waitForSelector(`${BRANCH}[data-testid="xe-input"]`);

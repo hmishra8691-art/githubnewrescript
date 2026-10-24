@@ -26,6 +26,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import { openPreview } from "./lib/preview.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
@@ -78,7 +79,10 @@ const loadFixture = async (def) => {
   await page.click('button:has-text("validate & apply")');
   await page.waitForTimeout(400);
 };
+/* logic sections are edited in the centred logic workspace (readDef → openTab saves it); simple sections expand in place */
+const LOGIC_SECTIONS = new Set(["display-logic", "skip-logic", "validation-rules", "auto-punch", "list-logic"]);
 const ensureSectionOpen = async (id) => {
+  if (LOGIC_SECTIONS.has(id)) { await openSectionWorkspace(page, id); await page.waitForTimeout(150); return; }
   const head = `[data-testid="psec-head-${id}"]`;
   await page.waitForSelector(head);
   if ((await page.getAttribute(head, "aria-expanded")) !== "true") { await page.click(head); await page.waitForTimeout(150); }
@@ -149,15 +153,16 @@ await page.waitForTimeout(300);
 rule = q(await readDef(), "q8").punches[0];
 assert.equal(rule.mode, "else_if", "before: an edit turned ELSE IF back into IF");
 assert.equal(Number(rule.when.value2), 8);
-assert.match(await page.textContent('[data-testid="ap-rule-text"]'), /^ELSE IF /);
+/* the saved rule, as the panel's summary prints it */
+assert.match(await page.textContent('[data-testid="auto-punch-sentence"]'), /ELSE IF /);
 ok("Oweas #5 — an ELSE IF rule stays ELSE IF through an edit, and prints as ELSE IF");
 
 /* ------------------------------------------------ Prince 44: constant sum per option */
 await selectQuestion("Q10");
 await ensureSectionOpen("display-logic");
-const tab = await page.$('[data-testid="psec-body-display-logic"] button:has-text("Expression")');
+const tab = await page.$(`${LD_BODY} button:has-text("Expression")`);
 if (tab) await tab.click();
-const box = '[data-testid="psec-body-display-logic"] textarea';
+const box = `${LD_BODY} textarea`;
 await page.waitForSelector(box);
 await page.fill(box, "Q5.1 < 6 OR Q5.2 > 6");
 await page.$eval(box, (e) => e.blur());
@@ -197,7 +202,7 @@ await page.click('[data-testid="carry-forward-editor"] button:has-text("remove")
 /* ------------------------------------------------ conditional validation */
 await selectQuestion("Q3");
 await ensureSectionOpen("validation-rules");
-await page.click('[data-testid="psec-body-validation-rules"] button:has-text("+ rule")');
+await page.click(`${LD_BODY} button:has-text("+ rule")`);
 await page.waitForSelector('[data-testid="validation-when"]');
 await page.click('[data-testid="validation-when"] [data-testid="optional-add"]');
 await page.waitForTimeout(300);

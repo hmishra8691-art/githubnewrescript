@@ -96,3 +96,14 @@ test("a scale inside its limit is left exactly alone", () => {
   assert.deepEqual([shown.min, shown.max, shown.clamped], [1, 5, false],
     "a five-star rating is still a five-star rating — the bound is a ceiling, not a replacement");
 });
+
+test("no min / max set: the variant's own default scale (a smiley is five faces), never the renderer's widest fallback", () => {
+  const fb = { min: 1, max: 10 };
+  assert.deepEqual(
+    (({ min, max }) => ({ min, max }))(effectiveScale({ variant: "slider.emoji", settings: {} } as never, fb)),
+    { min: 1, max: 5 },
+  );
+  assert.deepEqual((({ min, max }) => ({ min, max }))(effectiveScale({ variant: "single_select.stars", settings: {} } as never, fb)), { min: 1, max: 5 });
+  assert.deepEqual((({ min, max }) => ({ min, max }))(effectiveScale({ variant: "slider.emoji", settings: { minValue: 1, maxValue: 10 } } as never, fb)), { min: 1, max: 10 }, "explicit settings win");
+  assert.deepEqual((({ min, max }) => ({ min, max }))(effectiveScale({ variant: undefined, settings: {} } as never, fb)), { min: 1, max: 10 }, "no variant: the renderer's fallback, as before");
+});

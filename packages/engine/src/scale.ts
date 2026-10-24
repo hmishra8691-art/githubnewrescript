@@ -67,8 +67,17 @@ export function effectiveScale(
     return { min: limit.min, max: limit.max, limit, clamped };
   }
   const ceiling = limit ?? fallback;
-  const rawMin = q.settings.minValue ?? fallback.min;
-  const rawMax = q.settings.maxValue ?? fallback.max;
+  /*
+   * NO MIN / MAX SET: the variant's own default scale, then the renderer's.
+   * A Smiley, Star or Heart rating is created with 1–5 (`defaults.settings`),
+   * and a definition that omits the setting (imported, hand-written, sent to
+   * the preview) must draw what the variant says it is — five faces — not
+   * the renderer's widest fallback of ten. Explicit settings always win.
+   */
+  const declared = resolveVariant(q.variant ?? undefined)?.defaults?.settings as { minValue?: unknown; maxValue?: unknown } | undefined;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const rawMin = q.settings.minValue ?? num(declared?.minValue) ?? fallback.min;
+  const rawMax = q.settings.maxValue ?? num(declared?.maxValue) ?? fallback.max;
   let min = clamp(rawMin, ceiling.min, ceiling.max);
   let max = clamp(rawMax, ceiling.min, ceiling.max);
   if (max < min) max = min;

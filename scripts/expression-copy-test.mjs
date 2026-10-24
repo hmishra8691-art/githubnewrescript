@@ -10,6 +10,7 @@
  *   node scripts/expression-copy-test.mjs      (studio on 3000)
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -49,11 +50,7 @@ const openExpr = async (qid) => {
   await h.goTab("Questions");
   await page.waitForSelector(`[data-testid="qcard"][data-qid="${qid}"]`);
   await page.click(`[data-testid="qcard"][data-qid="${qid}"]`);
-  const head = '[data-testid="psec-head-display-logic"]';
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") await page.click(head);
-  const add = await page.$('[data-testid="optional-add"]');
-  if (add) await add.click();
+  await openSectionWorkspace(page, "display-logic"); // the builder is in the centred logic workspace; h.readDef saves it
   await page.waitForSelector('[data-testid="logic-mode-bar"]');
   await page.click('[data-testid="mode-expression"]');
   await page.waitForSelector('[data-testid="xe-input"]');

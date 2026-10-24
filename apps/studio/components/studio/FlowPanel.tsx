@@ -53,66 +53,92 @@ const makeNode = (type: string): FlowNode => newFlowNode(type as FlowNode["type"
  * cards, inside a randomizer, inside a branch path. Same list, same wording,
  * so "add an element" is one thing to learn.
  *
- * A BUTTON GRID (document 15/10/2026, item F): every element in view at once,
- * each a labelled button with its icon, three to a row (two on a narrow
- * screen), its purpose as the tooltip and in the line under the grid. The
- * search box went: with every element visible there is nothing to search
- * for, and the document asks for direct selection. Arrow keys move, Enter
- * adds, Escape closes; a click adds at this position and closes.
+ * ONE LONG ROW (client review 19/10/2026, item A32). The 15/10 version was a
+ * compact 3 × 3 popup anchored to the button; the review asked for the
+ * Qualtrics arrangement instead: a long rectangular container that expands
+ * DIRECTLY BELOW the "+ Add element" position, across the available width of
+ * the Survey Flow section (or of the container the position is in), with all
+ * nine elements in a single row — icon on top, label below, every button the
+ * same size. On a narrow width the row scrolls horizontally rather than
+ * cutting a button off or wrapping into a grid again.
+ *
+ * The container is a flex child of the insert row (`display: contents` on the
+ * wrapper), which is what lets it take the row's full width without any
+ * absolute positioning or measuring. Tooltips carry each element's purpose
+ * (`title`), the line under the row repeats it for the focused or hovered
+ * element, and the keyboard still works: ← → move, Home / End jump, Enter
+ * adds, Escape closes. A click adds at this position and closes; the row can
+ * be reopened from the same button. Every "+ Add element" in the flow is this
+ * one component, so the change applies to all of them.
  */
 const ELEMENT_ICONS: Record<string, IconName> = {
   embedded_data: "data", branch: "logic", randomizer: "shuffle", loop: "repeat", quota_check: "quotas",
   redirect: "redirect", end: "flag", page: "questions", section: "layers",
 };
-const GRID_COLS = 3;
+/** how long the collapse animation runs before the row leaves the tree (keep in step with `.add-el-panel.closing` in globals.css) */
+const ADD_EL_COLLAPSE_MS = 140;
 
-function AddElementMenu({ onAdd, testid, compact, align }: {
+function AddElementMenu({ onAdd, testid, compact }: {
   onAdd(type: string): void; testid?: string; compact?: boolean;
-  /** "start": the button sits at the left edge, so the grid opens rightwards rather than centred on it */
+  /** kept for callers that still pass it; the row always spans its container now */
   align?: "start";
 }) {
   const [open, setOpen] = React.useState(false);
+  /* true while the collapse animation runs: the panel is still in the tree, but on its way out */
+  const [closing, setClosing] = React.useState(false);
   const [focus, setFocus] = React.useState(0);
   /* the pointer's element, for the purpose line; the keyboard keeps its own place */
   const [hover, setHover] = React.useState<number | null>(null);
   const buttonRef = React.useRef<HTMLButtonElement>(null);
-  const gridRef = React.useRef<HTMLDivElement>(null);
+  const rowRef = React.useRef<HTMLDivElement>(null);
+  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const hintId = React.useId();
   const items = INSERTABLE;
   const close = (refocus = true) => {
-    setOpen(false);
+    if (!open) return;
+    setClosing(true);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => { setOpen(false); setClosing(false); closeTimer.current = null; }, ADD_EL_COLLAPSE_MS);
     if (refocus) requestAnimationFrame(() => buttonRef.current?.focus());
   };
+  const reopen = () => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+    setClosing(false);
+    setHover(null);
+    setOpen(true);
+  };
+  React.useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
   React.useEffect(() => {
-    if (!open) return;
-    requestAnimationFrame(() => gridRef.current?.querySelectorAll<HTMLButtonElement>("button")[focus]?.focus());
+    if (!open || closing) return;
+    requestAnimationFrame(() => rowRef.current?.querySelectorAll<HTMLButtonElement>("button")[focus]?.focus());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return; }
-    /* two columns on a narrow screen: read the real column count from the layout */
-    const cols = gridRef.current ? (getComputedStyle(gridRef.current).gridTemplateColumns.split(" ").length || GRID_COLS) : GRID_COLS;
-    const next = gridMove(focus, e.key, cols, items.length);
+    /* one row: ← → step, Home / End jump; ↑ ↓ have nowhere to go and are left alone */
+    const next = gridMove(focus, e.key, items.length, items.length);
     if (next === null) return;
     e.preventDefault();
     setFocus(next);
-    gridRef.current?.querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
+    const btn = rowRef.current?.querySelectorAll<HTMLButtonElement>("button")[next];
+    btn?.focus();
+    btn?.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
   const current = items[hover ?? focus];
   return (
-    <div className="menu-anchor">
+    <div className="add-el-anchor">
       <button ref={buttonRef} className={compact ? "fi-btn" : "btn small"} data-testid={testid ?? "flow-insert"}
-        aria-haspopup="menu" aria-expanded={open}
-        title="Add a flow element here" onClick={() => (open ? close() : setOpen(true))}>
+        aria-haspopup="menu" aria-expanded={open && !closing}
+        title="Add a flow element here" onClick={() => (open && !closing ? close() : reopen())}>
         + Add element
       </button>
       {open && (
         <>
           <div className="menu-scrim" onClick={() => close()} />
-          <div className={`menu add-el-menu${align === "start" ? " start" : ""}`} role="menu" aria-label="Add a flow element" data-testid="flow-insert-menu"
-            onKeyDown={onKeyDown}>
+          <div className={`add-el-panel${closing ? " closing" : ""}`} role="menu" aria-label="Add a flow element" data-testid="flow-insert-menu"
+            data-state={closing ? "closing" : "open"} onKeyDown={onKeyDown}>
             <div className="menu-label">Add element here</div>
-            <div ref={gridRef} className="add-el-grid">
+            <div ref={rowRef} className="add-el-row" data-testid="add-el-row">
               {items.map((it, i) => (
                 <button key={it.type} type="button" role="menuitem" className="add-el-btn" data-testid={`insert-${it.type}`}
                   title={`${it.label} — ${it.hint}`} aria-describedby={hintId} tabIndex={i === focus ? 0 : -1}
@@ -256,8 +282,8 @@ function FlowChildren({ nodes, container, depth, what }: {
     return (
       <div className="flow-children">
         <EmptyContainerZone zoneKey={zoneKey(insideTarget(0))} target={insideTarget(0)} what={what} />
-        <div className="row" style={{ marginTop: 6 }}>
-          <AddElementMenu compact align="start" testid="flow-insert-empty"
+        <div className="flow-insert start" style={{ marginTop: 6 }}>
+          <AddElementMenu compact testid="flow-insert-empty"
             onAdd={(t) => ops.insert(t, insideTarget(0))} />
         </div>
       </div>

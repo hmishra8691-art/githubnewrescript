@@ -16,6 +16,7 @@
  */
 export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilter, OTHER, EXCLUSIVE } from "./QuestionRenderer";
 export type { QRProps } from "./QuestionRenderer";
+export { programmerCardClass, autoPunchCss, HiddenQuestionHead, ProgrammerFoot, HIDDEN_BANNER_TEXT, HIDDEN_FOOTER_TEXT, type ProgrammerView } from "./programmerView";
 export { UxLayer, uxElements } from "./UxLayer";
 export type { UxLayerProps } from "./UxLayer";
 /*

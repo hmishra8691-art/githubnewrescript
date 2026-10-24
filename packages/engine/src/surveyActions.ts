@@ -99,7 +99,11 @@ export type SurveyAction =
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
   | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
-  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none" }
+  | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
+      /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
+      hidden?: boolean;
+      /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
+      readOnlyIgnored?: boolean }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -322,6 +326,19 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (scale(o.scale)) a.scale = scale(o.scale);
       if (bool(o.randomize) !== undefined) a.randomize = bool(o.randomize);
       if (otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat)) a.otherFormat = otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat);
+      /*
+       * HIDDEN is a respondent-visibility switch (brief 19/10/2026): the
+       * question keeps running its logic and auto-punch rules and stays
+       * visible in preview and test. READ ONLY was removed from the State
+       * section the same day; a request that still names it is not refused
+       * — the other changes go through — but nothing is applied for it and
+       * the description says so (`readOnlyIgnored`). On its own it is an
+       * honest "changes nothing" with the reason.
+       */
+      if (bool(o.hidden) !== undefined) a.hidden = bool(o.hidden);
+      const readOnlyAsked = o.readOnly !== undefined || o.read_only !== undefined || o.readonly !== undefined;
+      if (readOnlyAsked) a.readOnlyIgnored = true;
+      if (Object.keys(a).length === 3 && a.readOnlyIgnored) return "update_question changes nothing: Read Only is no longer a question state — a question respondents must not answer is set hidden (hidden: true); it still runs its logic and auto-punch rules";
       return Object.keys(a).length > 2 ? a : "update_question changes nothing";
     }
     case "delete_question": { const target = str(o.target); return target ? { op, target } : "delete_question needs a target"; }
@@ -751,6 +768,11 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         what.push(a.randomize ? "randomized" : "not randomized");
       }
       if (a.otherFormat) what.push(setOtherFormat(q, a.otherFormat));
+      if (a.hidden !== undefined && a.hidden !== !!q.settings.hidden) {
+        q.settings = { ...q.settings, hidden: a.hidden };
+        what.push(a.hidden ? "hidden from respondents (shown in preview and test, auto-punch still runs)" : "shown to respondents");
+      }
+      if (a.readOnlyIgnored) what.push("Read Only not applied — it is no longer a question state; use hidden");
       if (!what.length) fail(`nothing to change on ${q.code}`);
       for (const r of renames) {
         // applyRename works on a copy; the copy's contents become this definition's, so every reference the batch holds stays valid
@@ -1492,7 +1514,10 @@ export function describeAction(a: SurveyAction): string {
     case "remove_behavior": return `Remove behaviour ${a.id}`;
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
-    case "set_default_value": return a.value === null ? `Remove the default value of ${a.target}` : `Default value of ${a.target}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
+    case "set_default_value": {
+      const where = a.field ? `${a.target} ${a.field}` : a.target;
+      return a.value === null ? `Remove the default value of ${where}` : `Default value of ${where}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
+    }
     default: return isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
@@ -1609,6 +1634,13 @@ export function diffSurveys(before: SurveyDefinition, after: SurveyDefinition): 
     // look-and-behaviour fields of a question: without them a proposal that only sets these would read as "no change"
     const dv = (x: Question) => { const v = (x.settings as { defaultValue?: unknown } | undefined)?.defaultValue; return v === undefined || v === null ? "" : Array.isArray(v) ? v.join(", ") : String(v); };
     push("default value", dv(p), dv(q));
+    /* the per-field defaults (2026-10-24, A63): a field's, a cell's, a column's, an Other box's */
+    const fdv = (x: Question) => [
+      ...(x.options ?? []).flatMap((o) => [o.defaultValue !== undefined ? `${o.code}=${String(o.defaultValue)}` : "", o.otherDefault !== undefined ? `${o.code}.other=${o.otherDefault}` : ""]),
+      ...(x.rows ?? []).flatMap((r) => [r.defaultValue !== undefined ? `${r.code}=${String(r.defaultValue)}` : "", r.otherDefault !== undefined ? `${r.code}.other=${r.otherDefault}` : "", ...Object.entries(r.cellDefaults ?? {}).map(([c, v]) => `${r.code}/${c}=${String(v)}`)]),
+      ...(x.columns ?? []).map((c) => (c.defaultValue !== undefined ? `column ${c.id}=${String(c.defaultValue)}` : "")),
+    ].filter(Boolean).join(" | ");
+    push("field defaults", fdv(p), fdv(q));
     push("custom HTML", (p.customHtml ?? "").slice(0, 120), (q.customHtml ?? "").slice(0, 120));
     push("block", blockOf(before, q.id)?.title ?? "", blockOf(after, q.id)?.title ?? "");
     // what the question is FOR (the analysis framework): a proposal that only tags questions must read as a change

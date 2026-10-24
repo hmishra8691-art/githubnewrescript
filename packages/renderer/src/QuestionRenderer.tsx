@@ -55,6 +55,8 @@ import { CellMultiDropdown } from "./cellMultiDropdown";
 import { TimeSelects } from "./TimeSelects";
 import { enhanceMediaCarousels } from "./mediaCarousel";
 import { CardFace, cardFrameClass } from "./CardFace";
+import { programmerCardClass, HiddenQuestionHead, ProgrammerFoot, type ProgrammerView } from "./programmerView";
+import { DefaultsNote } from "./defaultsNote";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -106,6 +108,16 @@ export interface QRProps {
    * it as one keeps working. Absent outside a Runner (nothing to store into).
    */
   onExtraChange?(suffix: string, value: unknown): void;
+  /**
+   * PROGRAMMER CHROME — preview and test only (brief 19/10/2026). The Runner
+   * passes it when the page is a preview, the runtime's test mode or a test
+   * link: the hidden-question theme for a `settings.hidden` question and the
+   * auto-punch visualisation for a question with punch rules, both drawn on
+   * the container so every question type gets them. Absent on a live link
+   * (and from every other caller), and then nothing extra is rendered. See
+   * `programmerView.tsx`.
+   */
+  programmerView?: ProgrammerView | null;
 }
 
 /**
@@ -2827,6 +2839,17 @@ export function QuestionRenderer(props: QRProps) {
    */
   const a11y = p.q.settings.accessibility;
   /*
+   * Programmer chrome (preview / test): the class on the card, the data
+   * attributes a suite can read, the head and foot blocks. `pv` is null on a
+   * live link and for every caller that does not pass it, and then none of
+   * this exists in the DOM.
+   */
+  const pv = p.programmerView ?? null;
+  const pvClass = programmerCardClass(pv);
+  const pvData = pv
+    ? { "data-rs-hidden": pv.hidden ? "1" : undefined, "data-rs-autopunch": pv.autoPunch?.status, "data-rs-view": pv.mode }
+    : {};
+  /*
    * Sanitised at render as well as at save (the "defence in depth" html.ts
    * promised and this file never did): a definition written by an API
    * client, an import, or before the editor sanitised is injected raw
@@ -2939,18 +2962,21 @@ export function QuestionRenderer(props: QRProps) {
     case "html":
       return (
         <div
-      className="rs-card"
+      className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
+      {...pvData}
       {...anchor("question", p.q.id)}
     >
+          {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
           {/* the block's content IS its text (`normalizeQuestionContent` moved any legacy HTML Content there) */}
           <div {...anchor("text")} className="rs-qhtml" ref={cardRef} {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
           <QuestionMedia q={p.q} anchor={anchor("media")} decorative={!!a11y?.decorative} altText={a11y?.altText} />
+          {pv && <ProgrammerFoot q={p.q} pv={pv} />}
         </div>
       );
     default:
@@ -2975,16 +3001,21 @@ export function QuestionRenderer(props: QRProps) {
 
   return (
     <div
-      className="rs-card"
+      className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
+      {...pvData}
       {...anchor("question", p.q.id)}
     >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
       <span ref={cardRef} hidden aria-hidden />
+      {/* preview / test only: the hidden-question banner and header — nothing on a live link (`programmerView.tsx`) */}
+      {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
+      {/* preview / test only: a default / piped value that resolved to nothing (A63, `defaultsNote.tsx`) */}
+      {pv && <DefaultsNote q={p.q} ctx={ctxOf(p)} />}
       {/*
         * ABOVE THE QUESTION, when the author asked for it.
         *
@@ -3019,6 +3050,8 @@ export function QuestionRenderer(props: QRProps) {
       {p.q.settings.validationPosition !== "above" && (
         <ValidationBlock id={`${p.q.id}__err`} errors={p.errors} />
       )}
+      {/* preview / test only: auto-punch status + details, and the visibility footer */}
+      {pv && <ProgrammerFoot q={p.q} pv={pv} />}
     </div>
   );
 }

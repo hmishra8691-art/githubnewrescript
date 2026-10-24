@@ -36,9 +36,11 @@ import { embeddedCatalog, isNamedEmbeddedField, embeddedFieldName, coerceEmbedde
 import { gridAxes, gridScaleOptions } from "./gridAxes.js";
 import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
 import { staleFields, shapeHasAxis } from "./questionShape.js";
+import { carryForwardDestinations, normalizeCarryForwardInto } from "./carryForwardInto.js";
 import { honoursColumns, drawsOptionImages, honoursOrientation } from "./rendererReads.js";
 import { effectiveScale } from "./scale.js";
 import { EMBEDDED_MEANINGLESS } from "./smartOperators.js";
+import { containsReplacementFor } from "./containsOperator.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
@@ -416,6 +418,23 @@ function lintCondition(
            */
           message: `Operator “${operator}” cannot be used with ${src.code} (${src.type}) — this condition needs updating: choose one of the operators ${src.code} offers.`,
         });
+      } else {
+        /*
+         * "CONTAINS" ON A CHOICE QUESTION (2026-10-24, client items A46/A48).
+         * A text operator where an operator with its own words exists:
+         * `contains "2"` on a single select is `equals`, on a multi-select or
+         * a grid `has selected`. It evaluates exactly as it always did, so
+         * this is a WARNING that names the replacement — the builder offers
+         * it with one click — not an error that stops deployment.
+         */
+        const rep = containsReplacementFor(src, operator, source.columnId);
+        if (rep) {
+          ctx.push({
+            level: "warning",
+            path,
+            message: `Operator “${operator}” on ${src.code} (${src.type}) needs updating: it is a text operator — use “${rep.label}” (${rep.op}), which is what it means here. It evaluates as before until changed.`,
+          });
+        }
       }
       // deleted option codes
       if (!isOptionValueRef(c.value) && (src.options?.length ?? 0) > 0) {
@@ -1141,6 +1160,35 @@ function lintQuestionLogicUnsafe(def: SurveyDefinition, q: Question, order: Reco
         questionCode: q.code,
         path: "carryForward",
         message: "Carry-forward source question no longer exists.",
+      });
+    }
+    /*
+     * B47–B55 (23/10/2026): the destination must be one this type has. A
+     * choice question carries into its answer list ("options"; the rows, as a
+     * researcher says); a grid into its rows or columns. Anything else is read
+     * as the nearest valid destination by the Studio, and said here.
+     */
+    const stored = q.carryForward.into ?? "options";
+    const wanted = normalizeCarryForwardInto(q, stored);
+    const allowed = carryForwardDestinations(q);
+    if (allowed.length === 0) {
+      issues.push({
+        level: "warning",
+        questionId: q.id,
+        questionCode: q.code,
+        path: "carryForward.into",
+        message: `Carry-forward into ${stored}: a ${q.type} question has no answer list, rows or columns for the carried items to land in. Change the type, or remove the carry-forward.`,
+      });
+    } else if (!allowed.some((d) => d.value === stored)) {
+      const to = allowed.find((d) => d.value === wanted)?.label.replace(/^→ /, "") ?? wanted;
+      issues.push({
+        level: "warning",
+        questionId: q.id,
+        questionCode: q.code,
+        path: "carryForward.into",
+        message: stored === "columns"
+          ? `Carry-forward is saved as “into columns”, which the engine never applies at question level — the carried items currently land nowhere. Open Carry-forward and choose “${to}” (or carry forward on a column, for a column table).`
+          : `Carry-forward is saved as “into ${stored}”, which is not offered for a ${q.type} question (it carries ${allowed.map((d) => d.label.replace(/^→ /, "")).join(" or ")}). Open Carry-forward and choose “${to}”.`,
       });
     }
     lintCondition(q.carryForward.where, "carryForward.where", optCtx);

@@ -281,6 +281,7 @@ function BehaviorGuard({ b, readOnly, onChange }: { b: UxBehavior; readOnly: boo
     <div data-testid="ux-beh-when">
       <OptionalCondition label="Only when" value={b.when ?? undefined}
         hint="Otherwise it runs for every respondent."
+        workspace={{ title: "Style / script — run only when", description: "Apply this item only when the following condition is met:" }}
         onChange={(when) => onChange({ ...b, when }, true)} />
     </div>
   );

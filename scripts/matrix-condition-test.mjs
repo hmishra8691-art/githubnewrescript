@@ -22,6 +22,7 @@
  *   node scripts/matrix-condition-test.mjs      (studio on 3000, runtime on 3001)
  */
 import { openHarness, assert } from "./lib/variantHarness.mjs";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const h = await openHarness();
 const { page } = h;
@@ -56,9 +57,8 @@ const openLogic = async () => {
   await h.goTab("Questions");
   await page.waitForSelector('[data-testid="qcard"][data-qid="q_next"]');
   await page.click('[data-testid="qcard"][data-qid="q_next"]');
-  const head = '[data-testid="psec-head-display-logic"]';
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") await page.click(head);
+  /* edited in the centred logic workspace; h.readDef (→ openTab) saves it first */
+  await openSectionWorkspace(page, "display-logic");
   await page.waitForTimeout(200);
 };
 const settle = () => page.waitForTimeout(250);
@@ -230,7 +230,8 @@ ok("runtime: row 1 answered Good shows the dependent question");
   const numOps = await page.$$eval('[data-testid="cond-operator"] option', (o) => o.map((x) => x.value));
   assert.ok(numOps.includes("gt") && numOps.includes("between"), `numeric column compares: ${numOps}`);
   assert.ok(!numOps.includes("matches") && !numOps.includes("rankedFirst") && !numOps.includes("dateBefore"), `…without regex, rank or date: ${numOps}`);
-  assert.ok(numOps.length < allOps.length / 2, `${numOps.length} operators instead of ${allOps.length}`);
+  /* 2026-10-24: a number also offers "is in list" / "is not in list" (client item A48) — 12 of the 22, still its own short list */
+  assert.ok(numOps.length <= 12 && numOps.length < allOps.length * 0.6, `${numOps.length} operators instead of ${allOps.length}`);
   await page.selectOption('[data-testid="cond-column"]', "c_t");
   await settle();
   const txtOps = await page.$$eval('[data-testid="cond-operator"] option', (o) => o.map((x) => x.value));

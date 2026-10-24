@@ -33,8 +33,21 @@ export async function openGroup(page, groupSel) {
   return panel;
 }
 
+/**
+ * The logic workspace (a centred modal, 24 Oct 2026) covers the menubar while
+ * it is open. Leaving for another tool commits it first, the way a person
+ * presses Save before moving on — so a suite's `readDef()` (JSON tab) sees what
+ * was just built. No dialog: nothing happens. See ./logicWorkspace.mjs.
+ */
+async function commitOpenLogicWorkspace(page) {
+  if (!(await page.$('[data-testid="logic-dialog"]').catch(() => null))) return;
+  const { saveWorkspace } = await import("./logicWorkspace.mjs");
+  await saveWorkspace(page);
+}
+
 /** open the tool whose menu label is `label` ("JSON", "Survey Settings", …) */
 export async function openTab(page, label) {
+  await commitOpenLogicWorkspace(page);
   const panel = await openGroup(page, groupButtonFor(label));
   const want = label.trim();
   // the exact label first (so "Data" is not "Data Analytics"), then Playwright's substring match
@@ -49,6 +62,7 @@ export async function openTab(page, label) {
 
 /** open a tool by its tab key ("json", "settings", …) — what `.menubar-here` reports in `data-tab` */
 export async function openTabKey(page, key) {
+  await commitOpenLogicWorkspace(page);
   const panel = await openGroup(page, `.menubar [data-group-button][data-nav-keys~="${key}"]`);
   await page.click(`${panel} [data-testid="nav-${key}"]`);
   await page.waitForSelector(panel, { state: "detached" });
@@ -56,6 +70,7 @@ export async function openTabKey(page, key) {
 
 /** switch the programming mode by id ("grid", "flow", …) through the Mode menu */
 export async function switchMode(page, id) {
+  await commitOpenLogicWorkspace(page);
   const panel = await openGroup(page, '.menubar [data-group-button="mode"]');
   await page.click(`${panel} [data-testid="mode-${id}"]`);
   await page.waitForSelector(panel, { state: "detached" });

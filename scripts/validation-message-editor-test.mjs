@@ -23,6 +23,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab, openTabKey } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 let passed = 0;
@@ -56,13 +57,10 @@ const loadFixture = async (def) => {
   await page.click('button:has-text("validate & apply")');
   await page.waitForTimeout(400);
 };
+/* the rule list is edited in the centred logic workspace; readDef (→ openTab) saves it first */
 const ensureSectionOpen = async (id) => {
-  const head = `[data-testid="psec-head-${id}"]`;
-  await page.waitForSelector(head);
-  if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
-    await page.click(head);
-    await page.waitForTimeout(150);
-  }
+  await openSectionWorkspace(page, id);
+  await page.waitForTimeout(150);
 };
 const selectQuestion = async (index) => {
   await goTab("Questions");
@@ -112,6 +110,8 @@ await page.keyboard.press("Enter");
 await page.keyboard.type("Second line, which an option label could never have");
 await page.keyboard.press("Enter");
 await page.keyboard.type("Third line — enough to prove this box actually grows");
+// the workspace is wide, so three lines no longer wrap past the box's minimum height — add a few more
+for (const extra of ["Fourth line", "Fifth line", "Sixth line"]) { await page.keyboard.press("Enter"); await page.keyboard.type(extra); }
 await page.waitForTimeout(300);
 
 const innerText = await boxHandle.evaluate((el) => el.innerText);
@@ -127,8 +127,8 @@ ok(`the box grows with its content (${Math.round(box0.height)}px -> ${Math.round
 // blur to commit, and confirm the edit converted the rule to messageFormat:"html"
 // (typing into the rich box is how a plain message becomes markup — unchanged
 // behavior from before this fix, just re-proven through the new taller box)
-await page.click('[data-testid="psec-head-validation-rules"]');
-await page.click('[data-testid="psec-head-validation-rules"]');
+// (in the workspace: click its title — inside the dialog, outside the box)
+await page.click('[data-testid="logic-dialog-title"]');
 await page.waitForTimeout(200);
 let def = await readDef();
 let rule = def.questions[0].validation[0];
@@ -192,6 +192,9 @@ assert.match(rule.message, /<b>|<strong>/i, `the bold formatting must be committ
 assert.equal(rule.messageFormat, "html");
 ok("the modal's Save commits the edited, formatted, piped message back to the rule");
 
+// the rule list (and each rule's "Respondent sees" preview) is in the logic workspace now
+await selectQuestion(0);
+await ensureSectionOpen("validation-rules");
 const panelPreviewText = await page.$eval('[data-testid="validation-message-preview"] .rs-error-rich', (el) => el.textContent);
 assert.match(panelPreviewText, /Way too low/, `the panel's own preview must reflect the saved message: ${panelPreviewText}`);
 ok("the panel's \"Respondent sees\" preview reflects the saved message immediately");
@@ -244,7 +247,8 @@ ok("opening the modal and saving without editing does NOT convert a plain messag
 /* ================================================== 6. nothing else moved */
 
 // message position and piping-lint (pre-existing features) still present and wired
-assert.ok(await page.$('[data-testid="validation-position"]'), "the message-position control is still there");
+assert.ok(await page.$('[data-testid="validation-position"]'), "the message-position control is still there (inline — a question setting, not a rule)");
+await ensureSectionOpen("validation-rules"); // the rules themselves are in the logic workspace
 await page.fill('[data-testid="validation-rule"] [data-testid="validation-message"]', "You answered {{NOPE}}.");
 await page.waitForTimeout(300);
 assert.ok(await page.$('[data-testid="validation-message-piping-warning"]'), "the piping lint warning still fires from the (now bigger) box");

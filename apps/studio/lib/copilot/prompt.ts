@@ -224,6 +224,7 @@ Worked example — "When Q3 has option 1 selected, display a popup" (Q3's option
   //     Write it for the page it belongs to: put it on the question it concerns ("target":"Q5"), or "survey" for the whole survey.
   // A script CANNOT fill in or change an answer. A starting answer is set_default_value:
 {"op":"set_default_value","target":"Q2","value":19}   // the question's default value (Properties → Default value): filled in when the question is first shown, only if it has no answer yet, never over the respondent's own answer; a number for numeric, text for text, an option CODE (or list of codes for a multi-select) for a choice question; null removes it
+{"op":"set_default_value","target":"Q8","field":"r1","value":"{{Q1}}"}   // ONE open field's default (static or piped): "field" is a list field / text or numeric matrix row code, a constant-sum row (code or label), "row/column" for a composite cell, "column:<id>" for every cell of a column, "<code>.other" for an Other — specify box; empty fields only, the respondent can overwrite; null removes it
 {"op":"update_behavior","id":"…","effects":[…]}   // or "on", "options", "script": what is given replaces
 {"op":"update_behavior","id":"…","edits":[{"find":"You are eligible","replace":"You are an eligible voter"}]}   // a small change to a stored script: each "find" is text in it (exactly once); the rest is kept
 {"op":"remove_style","id":"…"} · {"op":"remove_animation","id":"…"} · {"op":"remove_behavior","id":"…"}

@@ -19,7 +19,7 @@ import {
   OPERATOR_LABEL, OPERATOR_HINT, setGroupConnector, listFillVariableNames,
   stripHtmlText,
   operatorMenu, entryForRule, applyOperatorEntry, operatorStatus, ruleSentence, conditionSentence,
-  conditionTestInputs, evaluateWithTestInputs, containsMatchesItems,
+  conditionTestInputs, evaluateWithTestInputs, containsMatchesItems, applyContainsReplacement,
   type OperatorEntry,
 } from "@rescript/engine";
 import { SYSTEM_VARIABLE_HELP } from "@rescript/quality";
@@ -29,6 +29,7 @@ import { ExpressionEditor } from "./ExpressionEditor";
 import { CountEditor, COUNT_OPERATORS, scopesFor } from "./CountEditor";
 import { ExprEditor } from "./ExprEditor";
 import { InsertPipedText } from "./InsertPipedText";
+import { LogicDialog, WorkspaceButton, WorkspaceSummary, useCompactLogic } from "./LogicDialog";
 
 /**
  * Recursive visual condition builder — arbitrary AND/OR/NOT nesting with
@@ -88,8 +89,9 @@ const OPERATOR_LABELS: Record<ComparisonOperator, string> = {
 };
 
 const VALUE2_PLACEHOLDER: Partial<Record<ComparisonOperator, string>> = {
-  between: "and",
-  notBetween: "and",
+  /* a range reads "between [min] [max]" — inclusive, both ends count */
+  between: "max",
+  notBetween: "max",
   dateBetween: "and",
   rankedTopN: "N",
   rankEquals: "rank",
@@ -629,7 +631,19 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
           {operatorStale && (
             <span className="chip warn" data-testid="cond-needs-update" title={status.message}>needs update</span>
           )}
-          {operatorStale && menu?.defaultEntry && (
+          {operatorStale && status.replacement ? (
+            /*
+             * "CONTAINS" ON A CHOICE QUESTION (2026-10-24): a text operator
+             * where "equals" / "has selected" says what it does. One click
+             * renames it; the value and the source stay, and the rule
+             * evaluates exactly as it did.
+             */
+            <button type="button" className="btn small" data-testid="fix-operator" data-replacement={status.replacement.op}
+              title={status.message}
+              onClick={() => onChange(applyContainsReplacement(rule, status.replacement!))}>
+              use “{status.replacement.label}”
+            </button>
+          ) : operatorStale && menu?.defaultEntry && (
             <button type="button" className="btn small" data-testid="fix-operator"
               title={`“${OPERATOR_LABELS[rule.operator] ?? rule.operator}” cannot be evaluated against this source any more — its type changed. Use “${menu.defaultEntry.label}” (or pick another operator from the list).`}
               onClick={() => onChange(applyOperatorEntry({ ...rule, value: undefined, value2: undefined }, menu.defaultEntry!))}>
@@ -704,13 +718,34 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             ))}
           </select>
         ) : (
+          <>
           <input className="input" type={listOps ? "text" : inputType} data-testid="cond-value-input"
-            inputMode={inputType === "number" ? "decimal" : undefined}
-            placeholder={listOps ? "1,2,3" : valueKind === "items" ? "10003 — or a list: 10001, 10003" : valueKind === "textList" ? "a, b, c" : "value"}
+            inputMode={inputType === "number" || valueKind === "numberList" ? "decimal" : undefined}
+            placeholder={valueKind === "numberList" ? "1, 5, 10, 25 — separated by commas" : listOps ? "1,2,3" : valueKind === "items" ? "10003 — or a list: 10001, 10003" : valueKind === "textList" ? "a, b, c — separated by commas" : valueKind === "numberRange" ? "min" : "value"}
+            aria-label={valueKind === "numberRange" ? "Minimum" : undefined}
             value={listOps && Array.isArray(rule.value) ? rule.value.join(",") : String(rule.value ?? "")}
             onChange={(e) =>
               onChange({ ...rule, value: listOps ? e.target.value.split(",").map((x) => x.trim()) : e.target.value })
             } />
+          {/*
+            * THE LIST AS CHIPS (2026-10-24): "is in list" on an open end takes
+            * a value list — typed with commas above, shown one chip per value
+            * here, each removable — so "1, 5, 10, 25, 50, 100" is seen as six
+            * values and not as one piece of text.
+            */}
+          {listOps && valueChoices.length === 0 && Array.isArray(rule.value) && rule.value.filter((x) => String(x).trim() !== "").length > 0 && (
+            <span className="cond-options" data-testid="cond-value-chips" role="group" aria-label="Values in the list" style={{ flexBasis: "100%", display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {rule.value.map((x, i) => String(x).trim() === "" ? null : (
+                <span key={`${i}:${String(x)}`} className="chip" data-testid="cond-value-chip" data-value={String(x)} style={{ fontSize: 12 }}>
+                  {String(x)}
+                  <button type="button" className="chip-x" aria-label={`Remove ${String(x)}`} title="Remove this value"
+                    style={{ marginLeft: 4, border: 0, background: "transparent", cursor: "pointer", padding: 0 }}
+                    onClick={() => onChange({ ...rule, value: (rule.value as unknown[]).filter((_, j) => j !== i) })}>×</button>
+                </span>
+              ))}
+            </span>
+          )}
+          </>
         )
       )}
       {/*
@@ -797,13 +832,16 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
               onChange={(e) => setOpQuery(e.target.value)} />
           )}
           {menu && <span className="muted" data-testid="cond-operand-type" style={{ fontSize: 11.5 }}>{menu.typeLabel}</span>}
-          {(rule.operator === "contains" || rule.operator === "notContains" || rule.operator === "containsItem" || rule.operator === "notContainsItem" || rule.operator === "containsAllItems") && menu && (menu.type === "list" || menu.type === "text" || menu.type === "any") && (
+          {(rule.operator === "contains" || rule.operator === "notContains" || rule.operator === "containsItem" || rule.operator === "notContainsItem" || rule.operator === "containsAllItems") && menu && (menu.type === "list" || menu.type === "text" || menu.type === "any") ? (
             <span className="muted" data-testid="cond-op-hint" style={{ flexBasis: "100%" }}>
               {(rule.operator === "contains" || rule.operator === "notContains") && !containsMatchesItems(s.def, rule.source)
-                ? "Contains text: any part of the text — “1000” matches “10001”. For a comma-separated list use “contains item”."
+                ? "Contains text: any part of the text — “1000” matches “10001”. For a comma-separated list use “contains item”; for a number or a range use “is in list” or “is between”."
                 : "Contains item: whole items of a comma-separated list, spaces and case ignored — 10001 never matches 110001; a list of items matches when any of them is there."}
             </span>
-          )}
+          ) : currentEntry?.hint && ["between", "notBetween", "in", "notIn"].includes(rule.operator) && menu && ["text", "numeric", "grid_text", "grid_numeric", "constant_sum"].includes(menu.type) && !counting ? (
+            /* an open end's range / list operator says how a comma-separated answer is read (2026-10-24) */
+            <span className="muted" data-testid="cond-op-hint" style={{ flexBasis: "100%" }}>{currentEntry.hint}</span>
+          ) : null}
         </div>
       )}
       {/* the count's own controls, on their own line: what to count, over
@@ -1040,16 +1078,69 @@ function GroupRow({ ctx, path, group }: {
  * stores an expression, so switching modes cannot lose or change anything
  * (reqs §1, §13–15).
  */
+/**
+ * What the workspace dialog says at the top for this condition. Every
+ * `ConditionEditor` offers one (the 23-Oct review: the right-hand box is too
+ * narrow for nested logic — see LogicDialog.tsx); the embedding names the
+ * feature and the subject, or the editor falls back to its `purpose`.
+ */
+export interface ConditionWorkspace {
+  /** "Display logic", "Skip logic — rule 2", "Branch path" … */
+  title?: string;
+  /** "Q5 — Which brand do you use?" */
+  subject?: string;
+  /** one line under the title */
+  description?: React.ReactNode;
+}
+
 export function ConditionEditor(props: {
   value: Condition; onChange(c: Condition): void; perOption?: boolean;
   /** what the condition decides, to read it as a sentence: "Display Q4 if" */
   purpose?: string;
+  /** `wide` inside the workspace: source, operator and value on one row, deeper indents (CSS only — same data, same behaviour) */
+  layout?: "narrow" | "wide";
+  /** the "Edit in workspace" button and the dialog it opens; `false` hides it (used inside the workspace itself) */
+  workspace?: ConditionWorkspace | false;
 }) {
   const [mode, setMode] = React.useState<"visual" | "expression">("visual");
+  const [workspaceOpen, setWorkspaceOpen] = React.useState(false);
   const s = useStudio();
   const sentence = props.purpose ? conditionSentence(s.def, props.value, props.purpose) : "";
+  const ws = props.workspace === false ? null : (props.workspace ?? {});
+  const wsTitle = ws?.title ?? (props.purpose ? `Condition — ${props.purpose.replace(/\s+if$/i, "")}` : "Condition");
+  const compact = useCompactLogic();
+  const dialog = ws && workspaceOpen && (
+    <LogicDialog<Condition>
+      title={wsTitle} subject={ws.subject}
+      description={ws.description ?? (props.purpose ? `${props.purpose} the following condition is met:` : undefined)}
+      value={props.value}
+      onSave={(next) => { s.labelNextEdit?.(`edit ${wsTitle.toLowerCase()}`); props.onChange(next); }}
+      onClose={() => setWorkspaceOpen(false)}>
+      {(draft, setDraft) => (
+        <ConditionEditor value={draft} onChange={setDraft} perOption={props.perOption} purpose={props.purpose}
+          layout="wide" workspace={false} />
+      )}
+    </LogicDialog>
+  );
+  /*
+   * THE COMPACT PANEL ("workspace" surface, see lib/logicDialog/surface.ts):
+   * a read-only reading of the condition and the button — the builder itself
+   * lives only in the centred workspace.
+   */
+  if (ws && compact && props.layout !== "wide") {
+    const text = conditionSummary(s.def, props.value);
+    const n = countConditions(props.value);
+    return (
+      <div className="cond-modes summary-only" data-testid="cond-summary-only">
+        <WorkspaceSummary text={text || "No conditions yet."} count={n} countNoun={n === 1 ? "condition" : "conditions"}
+          onOpen={() => setWorkspaceOpen(true)} testId="cond-summary-strip" />
+        {sentence && <div className="muted" data-testid="cond-purpose-summary" style={{ fontSize: 12.5, marginTop: 2 }}>{sentence}</div>}
+        {dialog}
+      </div>
+    );
+  }
   return (
-    <div className="cond-modes">
+    <div className={`cond-modes${props.layout === "wide" ? " wide" : ""}`}>
       <div className="cond-mode-bar" data-testid="logic-mode-bar">
         <button className={`cm-tab ${mode === "visual" ? "on" : ""}`} data-testid="mode-visual"
           onClick={() => setMode("visual")}>Visual</button>
@@ -1059,6 +1150,7 @@ export function ConditionEditor(props: {
         <span className="muted cm-hint">
           {mode === "visual" ? "click to build" : "type, drag or click references"}
         </span>
+        {ws && <WorkspaceButton onClick={() => setWorkspaceOpen(true)} compact={!props.layout || props.layout === "narrow"} />}
       </div>
       {mode === "visual"
         ? <VisualConditionEditor {...props} />
@@ -1068,6 +1160,7 @@ export function ConditionEditor(props: {
       <ConditionSummary value={props.value} />
       {sentence && <div className="muted" data-testid="cond-purpose-summary" style={{ fontSize: 12.5, marginTop: 2 }}>{sentence}</div>}
       <ConditionTester value={props.value} />
+      {dialog}
     </div>
   );
 }
@@ -1131,8 +1224,8 @@ function shapeSignature(c: Condition | undefined): string {
     : "r";
 }
 
-function VisualConditionEditor({ value, onChange, perOption }: {
-  value: Condition; onChange(c: Condition): void; perOption?: boolean;
+function VisualConditionEditor({ value, onChange, perOption, layout }: {
+  value: Condition; onChange(c: Condition): void; perOption?: boolean; layout?: "narrow" | "wide";
 }) {
   const s = useStudio();
   const root = editableCondition(value);
@@ -1212,7 +1305,7 @@ function VisualConditionEditor({ value, onChange, perOption }: {
   const issues = validateLogicTree(root);
 
   return (
-    <div className="logic-builder" data-testid="logic-builder">
+    <div className={`logic-builder${layout === "wide" ? " wide" : ""}`} data-testid="logic-builder" data-layout={layout ?? "narrow"}>
       {selected.length > 0 && (
         <div className="lb-actions" data-testid="lb-actions">
           <span className="lb-count" data-testid="lb-count">{selected.length} selected</span>
@@ -1271,12 +1364,19 @@ function VisualConditionEditor({ value, onChange, perOption }: {
 }
 
 /** Optional condition wrapper: none / edit. */
-export function OptionalCondition({ label, value, onChange, perOption, hint, purpose }: {
+export function OptionalCondition({ label, value, onChange, perOption, hint, purpose, workspace }: {
   label: string; value: Condition | undefined; onChange(c: Condition | undefined): void;
   perOption?: boolean; hint?: string;
   /** read the condition as a sentence: "Display Q4 if …" */
   purpose?: string;
+  /** the workspace dialog's title / subject / description; `false` offers no workspace */
+  workspace?: ConditionWorkspace | false;
 }) {
+  const s = useStudio();
+  const [workspaceOpen, setWorkspaceOpen] = React.useState(false);
+  const ws = workspace === false ? null : (workspace ?? {});
+  const wsTitle = ws?.title ?? (purpose ? `Condition — ${purpose.replace(/\s+if$/i, "")}` : label);
+  const compact = useCompactLogic();
   return (
     <div style={{ marginBottom: 12 }}>
       <div className="row" style={{ marginBottom: 4 }}>
@@ -1285,18 +1385,44 @@ export function OptionalCondition({ label, value, onChange, perOption, hint, pur
         {value ? (
           <button className="btn small danger" onClick={() => onChange(undefined)}>clear</button>
         ) : (
-          /* opens an EMPTY builder — no group, no operator, nothing to undo */
-          <button className="btn small" data-testid="optional-add"
-            onClick={() => onChange(newConditionGroup())}>
-            + add
-          </button>
+          <>
+            {/* opens an EMPTY builder — no group, no operator, nothing to undo (not on the compact panel, where the workspace is the builder) */}
+            {(!ws || !compact) && <button className="btn small" data-testid="optional-add"
+              onClick={() => onChange(newConditionGroup())}>
+              + add
+            </button>}
+            {/* …or build it in the centred workspace; nothing is stored until Save */}
+            {ws && <WorkspaceButton onClick={() => setWorkspaceOpen(true)} label={compact ? "Add logic" : "in workspace"} testId="optional-add-workspace"
+              title="Build this condition in a larger, centred workspace — stored when you press Save" />}
+          </>
         )}
       </div>
       {hint && !value && <div className="muted" style={{ fontSize: 12.5, marginTop: -2 }}>{hint}</div>}
-      {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} purpose={purpose} />}
+      {value && <ConditionEditor value={value} onChange={onChange} perOption={perOption} purpose={purpose} workspace={workspace} />}
+      {ws && !value && workspaceOpen && (
+        <LogicDialog<Condition>
+          title={wsTitle} subject={ws.subject}
+          description={ws.description ?? (purpose ? `${purpose} the following condition is met:` : hint)}
+          value={newConditionGroup()}
+          onSave={(next) => { s.labelNextEdit?.(`add ${wsTitle.toLowerCase()}`); onChange(isEmptyTree(next) ? undefined : next); }}
+          onClose={() => setWorkspaceOpen(false)}>
+          {(draft, setDraft) => (
+            <ConditionEditor value={draft} onChange={setDraft} perOption={perOption} purpose={purpose} layout="wide" workspace={false} />
+          )}
+        </LogicDialog>
+      )}
     </div>
   );
 }
+
+/** how many leaf conditions a tree holds — the count on the compact summary */
+function countConditions(c: Condition | undefined): number {
+  if (!c) return 0;
+  return c.type === "group" ? (c.children ?? []).reduce((n, x) => n + countConditions(x), 0) : 1;
+}
+
+/** an empty group is "no condition" — saving one from the workspace leaves the optional condition unset */
+const isEmptyTree = (c: Condition | undefined): boolean => !c || (c.type === "group" && (c.children ?? []).length === 0);
 
 /** Readable one-line summary of a configured condition (req §14). */
 export function ConditionSummary({ value }: { value: Condition | undefined }) {

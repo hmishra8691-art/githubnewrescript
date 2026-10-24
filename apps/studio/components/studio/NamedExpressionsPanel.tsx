@@ -139,6 +139,7 @@ export function NamedExpressionsPanel() {
                 <OptionalCondition
                   label={`${e.name} is true when`}
                   value={e.when}
+                  workspace={{ title: "Named expression", subject: e.name, description: `${e.name} is TRUE when the following condition is met:` }}
                   onChange={(c) => patch(e.id, { when: c ?? { type: "group", op: "and", children: [] } })}
                 />
                 {used.length > 0 && (

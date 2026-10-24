@@ -290,6 +290,7 @@ export function DisplayRuleCard({ index }: { index: number }) {
       </div>
       <div className="flabel">WHEN</div>
       <ConditionEditor value={r.when}
+        workspace={{ title: "Display rule", description: "Apply this display rule when the following condition is met:" }}
         onChange={(when) => s.update((d) => { d.displayRules[index].when = when; })} />
     </div>
   );
@@ -330,6 +331,7 @@ export function CalculationCard({ index, error }: { index: number; error?: strin
       </div>
       {err && <div className="chip warn">syntax: {err}</div>}
       <OptionalCondition label="Only compute when" value={c.when}
+        workspace={{ title: "Calculation — compute only when", subject: c.targetVariable, description: `Compute ${c.targetVariable} only when the following condition is met:` }}
         onChange={(w) => s.update((d) => { d.calculations[index].when = w; })} />
     </div>
   );

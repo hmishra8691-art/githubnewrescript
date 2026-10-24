@@ -258,6 +258,15 @@ export const Option = z.object({
    */
   sourceQuestionId: z.string().optional(),
   sourceCode: z.union([z.string(), z.number()]).optional(),
+  /**
+   * DEFAULT / PIPED VALUE of this option's OWN open field (2026-10-24, client
+   * item A63): the starting amount of a Constant Sum row — static, or piped
+   * (`{{Q1}}`), resolved when the question is first shown and written only
+   * into an empty field. Absent = exactly the old behaviour.
+   */
+  defaultValue: z.any().optional(),
+  /** The same for this option's "Other — specify" box, when it has one. */
+  otherDefault: z.string().optional(),
 });
 export type Option = z.infer<typeof Option>;
 
@@ -554,6 +563,11 @@ export const QuestionColumn = z.object({
   validation: z.array(ValidationRule).default([]),
   visibleIf: Condition.optional(),
   readOnly: z.boolean().default(false),
+  /**
+   * DEFAULT / PIPED VALUE of every cell in this column (2026-10-24, client
+   * item A63) — static or piped, resolved when the question is first shown,
+   * written only into empty cells; a row's own `cellDefaults[columnId]` wins.
+   */
   defaultValue: z.any().optional(),
   /** Expression evaluated by the calc engine (makes the cell calculated). */
   expression: z.string().optional(),
@@ -601,6 +615,20 @@ export const QuestionRow = z.object({
    */
   sourceQuestionId: z.string().optional(),
   sourceCode: z.union([z.string(), z.number()]).optional(),
+  /**
+   * DEFAULT / PIPED VALUE of the field this row holds (2026-10-24, client item
+   * A63): a Text / Numeric List field, a Text or Numeric Matrix row's cell.
+   * Static or piped (`{{Q1}}`), resolved when the question is first shown and
+   * written only into an empty cell. Absent = exactly the old behaviour.
+   */
+  defaultValue: z.any().optional(),
+  /**
+   * Per-CELL defaults of a multi-column grid (composite / custom table), by
+   * column id. A cell without one falls back to its column's `defaultValue`.
+   */
+  cellDefaults: z.record(z.any()).optional(),
+  /** The default text of this row's "Other — specify" box, when it has one. */
+  otherDefault: z.string().optional(),
 });
 export type QuestionRow = z.infer<typeof QuestionRow>;
 

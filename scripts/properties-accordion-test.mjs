@@ -120,7 +120,8 @@ assert.equal(await page.$('[data-testid="psec-body-auto-punch"]'), null, "collap
 const midPunches = JSON.stringify((await readDef()).questions[1].punches);
 assert.equal(midPunches, beforePunches, "collapsing a section does not touch the survey definition");
 await toggle("auto-punch"); // reopen
-assert.ok(await page.$('[data-testid="punch-rule"]'), "the rule is exactly where it was");
+// the section shows its rules as a summary (the builders open in the logic workspace)
+assert.ok(await page.$('[data-testid="psec-body-auto-punch"] [data-testid="auto-punch-sentence"]'), "the rule is exactly where it was");
 const afterPunches = JSON.stringify((await readDef()).questions[1].punches);
 assert.equal(afterPunches, beforePunches, "…and reopening it doesn't touch the definition either");
 console.log("✔ §45: expand/collapse is a UI preference — the survey's auto-punch rule survives collapse and reopen byte for byte");

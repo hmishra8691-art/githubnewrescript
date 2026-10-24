@@ -11,6 +11,7 @@
 import { chromium } from "./lib/playwright.mjs";
 import { openTab } from "./lib/nav.mjs";
 import assert from "node:assert/strict";
+import { openSectionWorkspace, openWorkspace, saveWorkspace, LD_BODY } from "./lib/logicWorkspace.mjs";
 
 const SURVEY = "11111111-2222-3333-4444-555555555555";
 const browser = await chromium.launch();
@@ -64,7 +65,15 @@ async function studioWithServer(opts = {}) {
   await page.route(`**/api/surveys/${SURVEY}/responses*`, (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
 
-  await page.goto(`http://localhost:3000/sandbox?dbid=${SURVEY}&rev=0`, { waitUntil: "networkidle" });
+  /* the dev server is supervised and can be restarted under memory pressure: wait for it rather than fail */
+  for (let attempt = 0; ; attempt++) {
+    try { await page.goto(`http://localhost:3000/sandbox?dbid=${SURVEY}&rev=0`, { waitUntil: "networkidle", timeout: 90000 }); break; }
+    catch (e) {
+      if (attempt >= 10 || !/ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|Timeout/.test(String(e))) throw e;
+      console.log(`  …studio not reachable (${String(e).split("\n")[0].slice(0, 60)}), retrying`);
+      await page.waitForTimeout(6000);
+    }
+  }
   await page.waitForSelector(".block-badge");
   return { page, server };
 }
@@ -191,17 +200,8 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
   await page.waitForTimeout(300);
   // The Properties panel's sections are independently collapsible and
   // default to collapsed unless already configured — expand Display logic.
-  {
-    const head = '[data-testid="psec-head-display-logic"]';
-    await page.waitForSelector(head);
-    if ((await page.getAttribute(head, "aria-expanded")) !== "true") {
-      await page.click(head);
-      await page.waitForTimeout(150);
-    }
-  }
-  const add = await page.$('.rightpanel >> text=+ add');
-  assert.ok(add, "display logic can be added");
-  await add.click();
+  // (24 Oct) display logic is built in the centred logic workspace ("Add logic ⤢") and stored on Save
+  await openSectionWorkspace(page, "display-logic");
   await page.waitForSelector('[data-testid="logic-builder"]');
 
   /*
@@ -247,7 +247,9 @@ const saveState = (page) => page.$eval('[data-testid="save-state"]', (e) => e.te
     `the parent operator is untouched (${parentBefore} → ${parentAfter})`);
   console.log(`✔ changing the nested operator left the parent as ${parentAfter}`);
 
-  // and the STORED tree agrees
+  // and the STORED tree agrees — once the workspace is saved and the autosave has run
+  await saveWorkspace(page);
+  await settle(page);
   const logic = server.draft.questions[2].displayLogic;
   assert.equal(logic.type, "group");
   assert.equal(logic.op, parentBefore, "the saved parent operator matches the editor");

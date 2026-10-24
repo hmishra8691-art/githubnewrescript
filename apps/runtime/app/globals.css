@@ -91,6 +91,8 @@ body {
 }
 .rs-preview-bar strong { letter-spacing: .06em; text-transform: uppercase; font-size: 10.5px; }
 .rs-preview-live { margin-left: auto; opacity: .75; }
+.rs-preview-view { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+.rs-preview-view input { margin: 0; }
 
 /* ---------- preview / test toolbar (Phase 5) ----------
    The testing controls (device widths, Debug) must stay reachable however far

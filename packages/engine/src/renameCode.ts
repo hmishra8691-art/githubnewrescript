@@ -41,17 +41,24 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const noop = (def: SurveyDefinition, problem?: string): RenameCodeResult => ({ def, rewritten: [], needsReview: [], ...(problem ? { problem } : {}) });
 
 /** Every name that already means something, other than this question's own code: nothing may be renamed onto one. */
+/**
+ * Keyed CASE-INSENSITIVELY (B20, 23/10/2026): codes and variable names keep
+ * the case they were typed in, but `Q6a` and `Q6A` would be one column in
+ * SPSS or SAS, so neither may be taken while the other is owned.
+ */
 function namesTaken(def: SurveyDefinition, exceptQuestionId: string): Map<string, string> {
   const taken = new Map<string, string>();
+  const fold = (s: string) => s.toUpperCase();
   for (const q of def.questions ?? []) {
     if (q.id === exceptQuestionId) continue;
-    if (q.code) taken.set(q.code, `the code of ${q.code}`);
-    if (q.variableName) taken.set(q.variableName, `the variable name of ${q.code}`);
+    if (q.code) taken.set(fold(String(q.code)), `the code of ${q.code}`);
+    if (q.variableName) taken.set(fold(q.variableName), `the variable name of ${q.code}`);
   }
-  for (const c of def.calculations ?? []) if (c.targetVariable) taken.set(c.targetVariable, `the calculation ${c.targetVariable}`);
-  for (const e of def.embeddedData ?? []) if (e.name) taken.set(e.name, `the embedded field ${e.name}`);
+  for (const c of def.calculations ?? []) if (c.targetVariable) taken.set(fold(c.targetVariable), `the calculation ${c.targetVariable}`);
+  for (const e of def.embeddedData ?? []) if (e.name) taken.set(fold(e.name), `the embedded field ${e.name}`);
   return taken;
 }
+const foldName = (s: string) => s.toUpperCase();
 
 /**
  * Rewrite the identifiers of an expression that name the old code, skipping
@@ -132,7 +139,7 @@ export function renameQuestionCode(def: SurveyDefinition, oldCode: string, newCo
   if (!target) return noop(def, `there is no question coded ${from}`);
 
   const taken = namesTaken(def, target.id);
-  const clash = taken.get(to);
+  const clash = taken.get(foldName(to));
   if (clash) return noop(def, `${to} is already ${clash}`);
 
   const next: SurveyDefinition = JSON.parse(JSON.stringify(def));
@@ -145,12 +152,12 @@ export function renameQuestionCode(def: SurveyDefinition, oldCode: string, newCo
    * as a code or variable name, in which case it was never this one's alone.
    */
   const stillResolves = nq.variableName === from;
-  const ownedElsewhere = taken.has(from);
+  const ownedElsewhere = taken.has(foldName(from));
   if (stillResolves || ownedElsewhere) return { def: next, rewritten: [], needsReview: [] };
 
   const rewritten: string[] = [];
   const review: string[] = [];
-  const ownsName = (n: string) => taken.has(n) || n === nq.variableName;
+  const ownsName = (n: string) => taken.has(foldName(n)) || n === nq.variableName;
   const rwExpr = (s: string) => rewriteExpression(s, from, to, ownsName);
   
   const walk = (node: any, path: string, owner: string): void => {

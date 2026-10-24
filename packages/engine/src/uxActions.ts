@@ -1,4 +1,4 @@
-import type { Condition, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
+import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { semanticTwin } from "./uxDuplicates.js";
 import { parseLogicExpression } from "./logicExpression.js";
 import { UX_ANIMATION_TRIGGERS, UX_EFFECTS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES, UX_POPUP_PLACEMENTS, UX_POPUP_DISMISS, effectiveResponseModel } from "@rescript/schema";
@@ -6,6 +6,7 @@ import { describeUxTarget, resolveUxTarget, uxToken, uxDeclarations, validateUxI
 import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
 import { applyThemePatch } from "./theme.js";
 import { defaultAnswerFor } from "./defaultValue.js";
+import { lintPipingTokens } from "./piping.js";
 import { createResponseState } from "./state.js";
 import { describeOptions, type OptionList } from "./optionCodes.js";
 
@@ -60,7 +61,15 @@ export type UxAction =
   | { op: "remove_behavior"; id: string }
   | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
   | { op: "set_custom_html"; target: string; html: string | null }
-  | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null };
+  | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null;
+      /**
+       * ONE OPEN FIELD of the question instead of the whole answer (2026-10-24,
+       * A63): a row / field code (Text or Numeric List, Text or Numeric
+       * Matrix), an option code (Constant Sum), "row/column" (a composite
+       * cell), "column:<id>" (every cell of a column), "<code>.other" (an
+       * "Other — specify" box). Absent = the question's own default, as before.
+       */
+      field?: string };
 
 export const isUxOp = (op: string) => (UX_ACTION_OPS as readonly string[]).includes(op);
 
@@ -205,8 +214,12 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       const target = str(o.target) ?? str(o.question);
       if (!target) return "set_default_value needs a target question";
       const v = "value" in o ? o.value : o.default ?? o.defaultValue;
-      if (v === null) return { op: "set_default_value", target, value: null };
-      if (typeof v === "number" || (typeof v === "string" && v.trim())) return { op: "set_default_value", target, value: typeof v === "string" ? v.trim().slice(0, 500) : v };
+      const fieldRaw = o.field ?? o.row ?? o.cell ?? o.option;
+      const field = typeof fieldRaw === "number" ? String(fieldRaw) : str(fieldRaw);
+      const withField = field ? { field } : {};
+      if (v === null) return { op: "set_default_value", target, value: null, ...withField };
+      if (typeof v === "number" || (typeof v === "string" && v.trim())) return { op: "set_default_value", target, value: typeof v === "string" ? v.trim().slice(0, 500) : v, ...withField };
+      if (field) return "set_default_value with a field needs a value (text, a number or a {{piped}} reference — or null to remove it)";
       if (Array.isArray(v) && v.length && v.every((x) => typeof x === "number" || typeof x === "string")) return { op: "set_default_value", target, value: v as (string | number)[] };
       return "set_default_value needs a value (a number, text, an option code or a list of codes — or null to remove it)";
     }
@@ -223,6 +236,84 @@ function forceKind(t: string, kind: string): unknown {
 }
 
 /* ------------------------------------------------------------ applying */
+
+/**
+ * set_default_value on ONE OPEN FIELD (2026-10-24, A63) — the same setting the
+ * builder's Default / piped value box under a row, an option, a column or an
+ * Other box writes. Static text or a number is checked against the field
+ * (a numeric field takes a number); a `{{piped}}` reference is stored as
+ * written and resolved for each respondent when the question is shown.
+ */
+function applyFieldDefault(def: SurveyDefinition, q: Question, field: string, value: string | number | (string | number)[] | null): UxApplied {
+  if (Array.isArray(value)) fail("a field's default is one value — text, a number or a {{piped}} reference");
+  const text = value === null ? undefined : String(value);
+  const piped = !!text && text.includes("{{");
+  const model = effectiveResponseModel(q);
+  const strip = (x: unknown) => String(x ?? "").replace(/<[^>]*>/g, "").trim();
+  const numericCheck = (numeric: boolean, what: string) => {
+    if (numeric && text !== undefined && !piped && !Number.isFinite(Number(text))) fail(`${what} takes a number, not “${text}”`);
+  };
+  const same = (a: unknown, b: string) => String(a).toLowerCase() === b.toLowerCase();
+  const done = (what: string, had: boolean): UxApplied => ({
+    description: text === undefined ? `Remove the default of ${q.code} ${what}` : `${had ? "Change" : "Set"} the default of ${q.code} ${what} to ${text}${piped ? " (piped — resolved for each respondent)" : ""} — filled in when the question is first shown, only while the field is empty`,
+    ...(had ? { destructive: `Replaces the default of ${q.code} ${what}` } : {}),
+    warnings: piped ? lintPipingTokens(def, text!, q).map((m) => `${q.code} ${what}: ${m} — the field will start empty`) : [],
+    touched: [q.id],
+  });
+  /* an Other box: "<code>.other" */
+  const other = /^(.+?)[.:]other$/i.exec(field);
+  if (other) {
+    const code = other[1];
+    const o = (q.options ?? []).find((x) => same(x.code, code) && (x.flags ?? []).includes("other_specify"));
+    const r = (q.rows ?? []).find((x) => same(x.code, code) && (x.flags ?? []).includes("other_specify"));
+    const owner = o ?? r ?? fail(`${q.code} has no “Other — specify” option or row coded ${code}`);
+    const had = owner.otherDefault !== undefined;
+    if (text === undefined && !had) fail(`${q.code} ${code}'s Other box has no default`);
+    owner.otherDefault = text;
+    return done(`“${strip(owner.label) || code}” Other box`, had);
+  }
+  /* a whole column: "column:<id>" */
+  const column = /^col(?:umn)?:(.+)$/i.exec(field);
+  if (column) {
+    const c = (q.columns ?? []).find((x) => same(x.id, column[1]) || same(strip(x.label), column[1])) ?? fail(`${q.code} has no column “${column[1]}”`);
+    if (!["text", "longtext", "numeric", "slider"].includes(String(c.responseType)) || c.expression) fail(`column “${strip(c.label)}” of ${q.code} is not typed into — only text and numeric columns take a default`);
+    numericCheck(c.responseType === "numeric" || c.responseType === "slider", `column “${strip(c.label)}”`);
+    const had = c.defaultValue !== undefined;
+    c.defaultValue = text;
+    return done(`column “${strip(c.label) || c.id}”`, had);
+  }
+  /* a composite cell: "row/column" */
+  const cell = /^([^/]+)\/(.+)$/.exec(field);
+  if (cell && (q.type === "composite" || q.type === "custom_table")) {
+    const r = (q.rows ?? []).find((x) => same(x.code, cell[1])) ?? fail(`${q.code} has no row coded ${cell[1]}`);
+    const c = (q.columns ?? []).find((x) => same(x.id, cell[2]) || same(strip(x.label), cell[2])) ?? fail(`${q.code} has no column “${cell[2]}”`);
+    if (!["text", "longtext", "numeric", "slider"].includes(String(c.responseType)) || c.expression) fail(`column “${strip(c.label)}” of ${q.code} is not typed into`);
+    numericCheck(c.responseType === "numeric" || c.responseType === "slider", `${q.code} ${cell[1]}/${strip(c.label)}`);
+    const cur = { ...(r.cellDefaults ?? {}) };
+    const had = cur[c.id] !== undefined;
+    if (text === undefined) delete cur[c.id]; else cur[c.id] = text;
+    r.cellDefaults = Object.keys(cur).length ? cur : undefined;
+    return done(`cell ${r.code} / “${strip(c.label) || c.id}”`, had);
+  }
+  /* a Constant Sum amount: an option code or label */
+  if (model === "allocation") {
+    const o = (q.options ?? []).find((x) => same(x.code, field) || same(strip(x.label), field)) ?? fail(`${q.code} has no row “${field}”`);
+    numericCheck(true, `${q.code} “${strip(o.label)}”`);
+    const had = o.defaultValue !== undefined;
+    o.defaultValue = text;
+    return done(`amount “${strip(o.label) || o.code}”`, had);
+  }
+  /* a list field, or a text / numeric matrix row */
+  if (model === "fields" || q.type === "matrix_text" || q.type === "matrix_numeric") {
+    const r = (q.rows ?? []).find((x) => same(x.code, field) || same(strip(x.label), field)) ?? fail(`${q.code} has no field or row “${field}”`);
+    const numeric = q.type === "matrix_numeric" || (model === "fields" && ["number", "decimal", "integer", "currency", "hours"].includes(String(r.fieldType ?? (q.type === "numeric_list" ? "number" : "text"))));
+    numericCheck(numeric, `${q.code} “${strip(r.label)}”`);
+    const had = r.defaultValue !== undefined;
+    r.defaultValue = text;
+    return done(`“${strip(r.label) || r.code}”`, had);
+  }
+  return fail(`${q.code} (${q.type.replace(/_/g, " ")}) has no open field “${field}” — a field default is for list fields, text / numeric matrix rows, constant-sum rows, composite cells and Other boxes; the question's own default has no field`);
+}
 
 export interface UxEnv { lookups: UxLookups; ids: (prefix: string) => string; now: string; refs: Map<string, string> }
 export interface UxApplied { description: string; destructive?: string; warnings: string[]; touched: string[] }
@@ -337,6 +428,10 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
     if (!r.changes.length) fail(r.errors.length ? r.errors.join("; ") : "the theme is already like that");
     def.branding = r.branding;
     return { description: `Theme${a.label ? ` “${a.label}”` : ""}: ${r.changes.slice(0, 8).join("; ")}${r.changes.length > 8 ? ` and ${r.changes.length - 8} more` : ""}`, warnings: r.errors.map((e) => `Theme: ${e} — left as it was`), touched: [] };
+  }
+  if (a.op === "set_default_value" && a.field) {
+    const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);
+    return applyFieldDefault(def, q, a.field, a.value);
   }
   if (a.op === "set_default_value") {
     const q = env.lookups.question(a.target) ?? fail(`there is no question “${a.target}”`);

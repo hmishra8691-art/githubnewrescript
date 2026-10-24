@@ -309,8 +309,19 @@ const stateOf = (pv) => pv.evaluate(() => {
     { type: "end", id: "e", status: "complete" },
   ];
   const pv = await runPreview(def);
+  /*
+   * Hidden = hidden from RESPONDENTS (brief 19/10/2026): the preview is the
+   * programmer's view and shows Q1 in the hidden-question theme; the
+   * respondent's view (the preview bar's "as a respondent" — what a live link
+   * draws) does not render it at all.
+   */
+  await pv.waitForSelector('[data-qid="q1"][data-rs-hidden="1"] [data-testid="rs-hidden-banner"]');
+  assert.equal(await pv.$('[data-qid="q3"][data-rs-hidden]'), null, "the visible Q3 has no hidden theme");
+  await pv.check('[data-testid="preview-respondent-view"] input');
+  await pv.waitForFunction(() => !document.querySelector('[data-qid="q1"]'), null, { timeout: 10000 });
   const hiddenOnPage = await pv.$('[data-qid="q1"]');
-  assert.equal(hiddenOnPage, null, "the source question is genuinely not rendered");
+  assert.equal(hiddenOnPage, null, "as a respondent: the source question is genuinely not rendered");
+  assert.ok(await pv.$('[data-qid="q3"]'), "…and the page is still Q3's");
   // populate it the way a URL parameter, a script or a calculation would
   await pv.evaluate(() => { window.__rescriptState.answers.q1 = ["C", "B"]; });
   await h.next(pv);
