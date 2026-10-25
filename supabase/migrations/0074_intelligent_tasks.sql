@@ -200,8 +200,9 @@ set search_path = public, pg_temp
 as $$
 declare
   v_id uuid;
+  v_was text;
 begin
-  select s.id into v_id
+  select s.id, s.status into v_id, v_was
   from public.intelligent_steps s
   where s.task_id = p_task
     and s.retry_count < p_max_attempts
@@ -229,10 +230,30 @@ begin
     return;
   end if;
 
+  /*
+   * A RECLAIM COSTS AN ATTEMPT (audit C4, 2026-10-25).
+   *
+   * The candidate test above refuses a step at `p_max_attempts`, and the
+   * header promises that this is what stops a step the model cannot answer
+   * from being retried forever at the customer's expense. It did not: this
+   * UPDATE never touched `retry_count`, which moved only when the
+   * TypeScript `fail()` was called — and the failure this table exists for,
+   * a worker killed mid-flight, never calls it. An oversized prompt or a
+   * model that always times out was therefore reclaimed and re-billed every
+   * `p_stale_seconds`, without limit.
+   *
+   * Only a RECLAIM is counted, not the first claim of a `pending` step.
+   * 0027 counts every claim because the transcript table has no other
+   * counter; here `fail()` counts an attempt that failed and said so, so
+   * counting the first claim as well would spend two of three attempts on a
+   * single honest retry. Each increment now stands for exactly one attempt
+   * that was lost or refused.
+   */
   update public.intelligent_steps s
      set status = 'running',
          claimed_at = now(),
          started_at = coalesce(s.started_at, now()),
+         retry_count = s.retry_count + (case when v_was = 'running' then 1 else 0 end),
          failure_kind = null,
          failure_message = null
    where s.id = v_id;

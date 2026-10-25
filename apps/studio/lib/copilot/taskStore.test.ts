@@ -5,7 +5,7 @@ import {
   MAX_ATTEMPTS, STALE_SECONDS,
   type CreateTaskInput, type TaskStore,
 } from "./taskStore.ts";
-import { taskProgress, taskSpend, type ExecStep, type ExecTask } from "@rescript/engine";
+import { dependenciesMet, taskProgress, taskSpend, type ExecStep, type ExecTask } from "@rescript/engine";
 
 /*
  * DURABLE TASK AND STEP STATE — the contract, run against the memory store
@@ -419,4 +419,115 @@ test("planRevision: an ordinary continuation does NOT unseat a completed step", 
     assert.equal(out.find((s) => s.stepId === "p1")!.status, "completed", `an incoming ${incoming} is ignored`);
     assert.deepEqual(out.find((s) => s.stepId === "p1")!.output, { a: 1 });
   }
+});
+
+/*
+ * AUDIT C3 (2026-10-25). Reconciliation marks a CHANGED item by handing back
+ * `pending` with a NEW idempotency key (the key is derived from the item's
+ * fingerprint). `pending` alone cannot be the signal — an ordinary
+ * continuation hands that too for a step that simply has not run — so the key
+ * is what `planRevision` reads. Before this, a changed item kept its
+ * `completed` row and was never rebuilt, while the reply said it was being
+ * rebuilt, and its dependents ran again against the stale output.
+ */
+test("planRevision: a completed step whose CONTENT changed is unseated and starts clean", () => {
+  const existing: ExecStep[] = [
+    { taskId: "t", stepId: "p1", planVersion: 1, dependsOn: [], status: "completed", retryCount: 2, idempotencyKey: "sv:p1:OLDFP", output: { built: "p1" }, usage: { charge: 0.04 }, validation: { status: "valid" } },
+  ];
+  const out = planRevision(existing, "t", 2, [
+    { stepId: "p1", planVersion: 2, dependsOn: [], status: "pending", idempotencyKey: "sv:p1:NEWFP" },
+  ], []);
+  const p1 = out.find((s) => s.stepId === "p1")!;
+  assert.equal(p1.status, "pending", "the changed item is runnable again");
+  assert.equal(p1.idempotencyKey, "sv:p1:NEWFP", "and carries the new key, so its delivery is a new delivery");
+  assert.equal(p1.retryCount, 0, "new content is new work, not a continuation of the old attempts");
+  assert.equal(p1.output, undefined, "the stale output is not carried — a dependent must not read it");
+  assert.equal(p1.usage, undefined);
+  assert.equal(p1.validation, undefined, "and it is certainly not still 'valid'");
+  assert.equal(p1.planVersion, 2);
+});
+
+test("planRevision: a dependent of a changed step cannot run until the parent is rebuilt", () => {
+  const existing: ExecStep[] = [
+    { taskId: "t", stepId: "p1", planVersion: 1, dependsOn: [], status: "completed", retryCount: 0, idempotencyKey: "sv:p1:OLDFP", output: { built: "p1" } },
+    { taskId: "t", stepId: "p2", planVersion: 1, dependsOn: ["p1"], status: "completed", retryCount: 0, idempotencyKey: "sv:p2:FP", output: { built: "p2" } },
+  ];
+  const out = planRevision(existing, "t", 2, [
+    { stepId: "p1", planVersion: 2, dependsOn: [], status: "pending", idempotencyKey: "sv:p1:NEWFP" },
+    { stepId: "p2", planVersion: 2, dependsOn: ["p1"], status: "blocked", idempotencyKey: "sv:p2:FP" },
+  ], []);
+  const by = new Map(out.map((s) => [s.stepId, s]));
+  assert.equal(by.get("p1")!.status, "pending");
+  assert.equal(by.get("p2")!.status, "blocked", "the dependent waits rather than reusing itself");
+  /* the live gate: dependenciesMet must refuse p2 while p1 is unbuilt */
+  assert.equal(dependenciesMet(by.get("p2")!, by), false, "and it is not runnable, because p1 is no longer completed");
+});
+
+test("planRevision: the SAME key on a completed row is still an ordinary continuation", () => {
+  const existing: ExecStep[] = [
+    { taskId: "t", stepId: "p1", planVersion: 1, dependsOn: [], status: "completed", retryCount: 1, idempotencyKey: "sv:p1:FP", output: { built: "p1" } },
+  ];
+  for (const incoming of ["pending", "running", "retrying"] as const) {
+    const out = planRevision(existing, "t", 2, [
+      { stepId: "p1", planVersion: 2, dependsOn: [], status: incoming, idempotencyKey: "sv:p1:FP" },
+    ], []);
+    const p1 = out.find((s) => s.stepId === "p1")!;
+    assert.equal(p1.status, "completed", `an incoming ${incoming} with an unchanged key does not unseat finished work`);
+    assert.deepEqual(p1.output, { built: "p1" }, "and the output is kept, so it is not rebuilt or re-billed");
+  }
+});
+
+/*
+ * AUDIT C4 (2026-10-25). The claim's candidate test refuses a step at
+ * `maxAttempts`, and the migration header promises that is what stops a step
+ * the model cannot answer from being retried for ever at the customer's
+ * expense. Nothing incremented the counter on the path that matters: a worker
+ * killed mid-flight never calls `fail()`, so the step was reclaimed and
+ * re-billed every stale window, without limit. The old tests reached the
+ * bound only by calling `fail()` or setting the count by hand, which is why
+ * they passed.
+ */
+test("claim: a worker that dies mid-flight costs an attempt, so a doomed step is not reclaimed for ever", async () => {
+  const s = isolatedTaskStore();
+  const t = await s.create(input([step("a")]));
+  let claims = 0;
+  /* claim, die, wait out the lease — the loop a recycled worker makes, with nothing ever calling fail() */
+  for (let round = 0; round < 10; round++) {
+    const c = await s.claim(t.id, { staleSeconds: 0, maxAttempts: 3 });
+    if (!c) break;
+    claims++;
+    /* the lease is stamped with the clock, and a zero window still means "strictly older than now" */
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  /*
+   * The arithmetic, stated so it is not a surprise: the candidate test is
+   * `retryCount < maxAttempts` and only a RECLAIM increments, so with
+   * maxAttempts = 3 a doomed step is handed out 1 + 3 = 4 times and then
+   * refused for ever. The SQL claim computes the same number the same way.
+   */
+  assert.equal(claims, 4, "one free attempt and three reclaims, then refused — not an unbounded loop");
+  const after = await s.load(t.id);
+  assert.equal(after!.steps[0]!.retryCount, 3, "the first claim is free; each reclaim after it costs one");
+  await new Promise((r) => setTimeout(r, 2));
+  assert.equal(await s.claim(t.id, { staleSeconds: 0, maxAttempts: 3 }), null, "and it stays refused");
+});
+
+test("claim: a first claim of a pending step is free, so one honest retry does not spend the budget", async () => {
+  const s = isolatedTaskStore();
+  const t = await s.create(input([step("a")]));
+  await s.claim(t.id);
+  assert.equal((await s.load(t.id))!.steps[0]!.retryCount, 0, "claiming work that has never run is not an attempt spent");
+  await s.fail(t.id, "a", { kind: "transient", message: "the provider was busy", retryable: true });
+  assert.equal((await s.load(t.id))!.steps[0]!.retryCount, 1, "a failure that said so counts once, here and not in the claim");
+});
+
+test("claim: a `running` row with no lease is not claimable, as in SQL", async () => {
+  const s = isolatedTaskStore();
+  const t = await s.create(input([step("a")]));
+  const c = await s.claim(t.id);
+  assert.ok(c, "claimed");
+  /* a row left running with no lease is a stranded row, not a free one: the SQL claim requires claimed_at is not null */
+  const loaded = await s.load(t.id);
+  assert.equal(loaded!.steps[0]!.status, "running");
+  assert.equal(await s.claim(t.id, { staleSeconds: 86_400 }), null, "inside the window nobody else may have it");
 });

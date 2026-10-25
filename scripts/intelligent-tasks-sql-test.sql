@@ -194,6 +194,64 @@ begin
   ok := (select relrowsecurity from pg_class where oid = 'public.intelligent_tasks'::regclass)
     and (select relrowsecurity from pg_class where oid = 'public.intelligent_steps'::regclass);
   perform pg_temp.check('T13 row level security is enabled on both tables', ok);
+
+end $$;
+
+/* ------------------------------------------------------------------ T15
+ *
+ * THE BOUND ON A STEP WHOSE WORKER KEEPS DYING (audit C4, 2026-10-25).
+ *
+ * The candidate test refuses a step at `p_max_attempts`, but nothing used to
+ * increment `retry_count` on the path that matters: a worker killed mid-flight
+ * never calls the TypeScript `fail()`, so an oversized prompt or a model that
+ * always times out was reclaimed — and re-billed — every stale window, for
+ * ever. T7 did not catch it because it reaches the bound by setting
+ * `retry_count` by hand rather than by dying.
+ *
+ * This exercises the real cycle: claim, die, let the lease age, claim again.
+ * Only a RECLAIM counts, so with max_attempts = 3 the step is handed out
+ * 1 + 3 = 4 times and then refused. `MemoryTaskStore.claim` computes the same
+ * number the same way and `taskStore.test.ts` asserts the same two figures.
+ */
+do $$
+declare
+  s uuid := '50000074-0000-0000-0000-000000000001';
+  t uuid;
+  n_claims int := 0;
+  n_rc int;
+  r record;
+begin
+  insert into public.intelligent_tasks (survey_id, customer_id, kind, request, deliverable)
+    values (s, 'c0000074-0000-0000-0000-000000000001', 'survey_build', 'a step nobody can finish', '{"kind":"survey_build"}'::jsonb)
+    returning id into t;
+  insert into public.intelligent_steps (task_id, step_id, ordinal, status, idempotency_key)
+    values (t, 'doomed', 0, 'pending', 'idem-doomed');
+
+  for i in 1..10 loop
+    select * into r from public.rescript_claim_intelligent_step(t, 0, 3);
+    exit when r.id is null;
+    n_claims := n_claims + 1;
+    /* the worker dies: nothing committed, nothing failed, the lease simply ages */
+    update public.intelligent_steps set claimed_at = now() - interval '1 hour'
+      where task_id = t and step_id = 'doomed';
+  end loop;
+  select retry_count into n_rc from public.intelligent_steps where task_id = t and step_id = 'doomed';
+  perform pg_temp.check('T15 a doomed step is handed out 1 free + 3 reclaims, then refused for ever', n_claims = 4 and n_rc = 3,
+    format('claims=%s retry_count=%s', n_claims, n_rc));
+
+  update public.intelligent_steps set status = 'tombstoned' where task_id = t and step_id = 'doomed';
+  insert into public.intelligent_steps (task_id, step_id, ordinal, status, idempotency_key)
+    values (t, 'fresh', 1, 'pending', 'idem-fresh');
+  perform public.rescript_claim_intelligent_step(t, 180, 3);
+  select retry_count into n_rc from public.intelligent_steps where task_id = t and step_id = 'fresh';
+  perform pg_temp.check('T15 a first claim of a pending step costs no attempt', n_rc = 0, format('retry_count=%s', n_rc));
+
+  /* a running row with no lease is stranded, not free — the memory store agrees since 2026-10-25 */
+  update public.intelligent_steps set status = 'running', claimed_at = null where task_id = t and step_id = 'fresh';
+  select * into r from public.rescript_claim_intelligent_step(t, 0, 3);
+  perform pg_temp.check('T15 a running row with no lease is not claimable at any stale value', r.id is null);
+
+  delete from public.intelligent_tasks where id = t;
 end $$;
 
 select 'intelligent tasks SQL: ' || count(*) || ' checks passed' from t_ok;

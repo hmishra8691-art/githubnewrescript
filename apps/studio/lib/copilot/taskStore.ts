@@ -168,15 +168,35 @@ export function planRevision(
     /*
      * A COMPLETED ROW IS NOT IMMUTABLE WHEN THE RE-PLAN INVALIDATED IT.
      * Reconciliation (planPersistence.ts) decides what a new instruction
-     * invalidates: a completed step whose inputs changed comes back as
-     * `blocked`, and one the instruction deleted as `tombstoned`. Keeping it
-     * `completed` here would mean invalidated work is never re-run — the
-     * exact failure §6 rule 2 exists to prevent. An incoming `pending`,
-     * `retrying` or `running` on a completed row is still ignored: only a
-     * deliberate invalidation may unseat a finished step, and its output is
-     * kept either way so the reply can say what was dropped.
+     * invalidates; this records that decision. There are three ways it says
+     * so, and an earlier version of this function understood only two:
+     *
+     *   `tombstoned` / in `tombstoned[]`  the instruction deleted the item;
+     *   `blocked`                         the item is unchanged but something
+     *                                     it depends on moved;
+     *   A DIFFERENT IDEMPOTENCY KEY       THE ITEM ITSELF CHANGED (audit C3).
+     *
+     * The third is the primary case of §6 rule 2 and it was being missed.
+     * Reconciliation marks a changed item by handing back `pending` — which
+     * is also what an ordinary continuation hands for a step that simply has
+     * not run — so `pending` cannot be the signal. The key can: it is
+     * `idemOf(surveyId, item.id, itemFingerprint(item))`, so it changes when
+     * and only when the item's content changes, and a reused step is handed
+     * back carrying `prev.idempotencyKey` unchanged. Without this a changed
+     * item kept its old `completed` row and was never rebuilt, the reply told
+     * the researcher it was being rebuilt, and its dependents — correctly
+     * `blocked` — became runnable again against the STALE output, because
+     * `dependenciesMet` saw the parent as completed.
+     *
+     * An incoming `pending`, `retrying` or `running` with the SAME key is
+     * still ignored, so an ordinary continuation cannot rebuild and re-bill
+     * work that is already done. And the key is only read on a row that
+     * COMPLETED: on any other row a differing key says nothing worth acting
+     * on, and treating it as new work would throw away a retry count that
+     * has genuinely been spent.
      */
-    const invalidated = s.status === "blocked" || s.status === "tombstoned" || dead.has(s.stepId);
+    const contentChanged = prev?.status === "completed" && !!prev.idempotencyKey && !!s.idempotencyKey && prev.idempotencyKey !== s.idempotencyKey;
+    const invalidated = s.status === "blocked" || s.status === "tombstoned" || dead.has(s.stepId) || contentChanged;
     if (prev?.status === "completed" && !invalidated) { out.push({ ...prev }); continue; }
     if (prev?.status === "completed" && s.status === "blocked" && !dead.has(s.stepId)) {
       out.push({ ...prev, planVersion, status: "blocked" });
@@ -190,12 +210,15 @@ export function planRevision(
       ...s,
       taskId,
       planVersion,
-      /* an incoming blocked survives; otherwise the row keeps the status it had (a tombstone is revived as pending) */
-      status: s.status === "blocked" ? "blocked" : prev && prev.status !== "tombstoned" ? prev.status : "pending",
-      retryCount: prev?.retryCount ?? 0,
-      output: prev?.output,
-      usage: prev?.usage,
-      validation: prev?.validation,
+      /*
+       * A changed item takes the status reconciliation gave it (`pending`)
+       * and starts clean; an incoming `blocked` survives; otherwise the row
+       * keeps the status it had (a tombstone is revived as pending).
+       */
+      status: contentChanged ? s.status : s.status === "blocked" ? "blocked" : prev && prev.status !== "tombstoned" ? prev.status : "pending",
+      /* new content is new work: it does not inherit the old row's attempts, output or verdict */
+      retryCount: contentChanged ? 0 : prev?.retryCount ?? 0,
+      ...(contentChanged ? {} : { output: prev?.output, usage: prev?.usage, validation: prev?.validation }),
     });
   }
   /* kept history: completed and tombstoned rows the new plan no longer lists */
@@ -363,13 +386,27 @@ export class MemoryTaskStore implements TaskStore {
     const byId = new Map(t.steps.map((s) => [s.stepId, s]));
     for (const s of t.steps) {
       if (s.retryCount >= maxAttempts) continue;
+      /*
+       * The same predicate as the SQL claim, deliberately (audit C4/M1).
+       * Two things used to differ and both mattered:
+       *   • a `running` row with NO lease was treated as stale here (a
+       *     missing lease reads as epoch 0) and as unclaimable in SQL, which
+       *     is the opposite answer to the same row;
+       *   • neither counted a reclaim, so a step whose worker keeps dying
+       *     was offered again for ever (the `retryCount >= maxAttempts` test
+       *     above could never become true on that path).
+       */
+      const lease = t.claimedAt.get(s.stepId);
       const runnable =
         s.status === "pending" || s.status === "retrying" ||
-        (s.status === "running" && (t.claimedAt.get(s.stepId) ?? 0) < now - stale);
+        (s.status === "running" && lease !== undefined && lease < now - stale);
       if (!runnable) continue;
       if (!dependenciesMet(s, byId)) continue;
       /* the whole mutation, with no await in it: this is the skip-locked window */
+      const reclaim = s.status === "running";
       s.status = "running";
+      /* a reclaim costs an attempt; a first claim of a pending step does not — `fail()` counts the ones that failed and said so */
+      if (reclaim) s.retryCount += 1;
       s.startedAt = s.startedAt ?? now;
       s.failureKind = undefined;
       s.failureMessage = undefined;

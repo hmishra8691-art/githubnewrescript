@@ -264,7 +264,22 @@ export function deliverableFor(request: string, kind: TaskKind, plan: ChangePlan
     const lang = /\b(?:into|in|to)\s+([A-Z][a-z]{2,14})\b/.exec(request);
     if (lang) spec.language = lang[1]!;
   }
-  if (plan?.items.length) spec.invariants = ["every approved plan item built"];
+  /*
+   * NO `invariants` HERE (audit C1, 2026-10-25). This used to set
+   * `["every approved plan item built"]`, which is not an invariant name —
+   * `INVARIANTS` in deliverable.ts is keyed by ids like `ids_unique` and
+   * `logic_resolves`. `checkDeliverable` answered "Unknown invariant … — it
+   * was not checked", which is a problem, and `ok` is "no problems", so NO
+   * TASK THE LIVE PATH CREATED COULD EVER REACH `completed`.
+   *
+   * Nothing needs to go here instead. `checkDeliverable` already adds the
+   * whole SURVEY_BUILD_INVARIANTS battery for a survey_build or scored_exam
+   * and `schema_valid` for the others (deliverable.ts:369-370), so the spec
+   * only ever needs to name an EXTRA invariant. And "every approved plan item
+   * built" was never a property of the definition anyway — it is a property
+   * of the step rows, which `nextStatusFor` already requires before it will
+   * return `completed`.
+   */
   return spec;
 }
 
