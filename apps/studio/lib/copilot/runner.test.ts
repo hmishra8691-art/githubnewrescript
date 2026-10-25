@@ -55,6 +55,7 @@ interface MemStore extends TaskStore {
 }
 
 function memoryStore(task: ExecTask, now: () => number): MemStore {
+  let extraCharge = 0;
   const t: ExecTask = clone(task);
   const leases = new Map<string, number>();
   const deliveries: { stepId: string; key: string; output: unknown }[] = [];
@@ -126,6 +127,7 @@ function memoryStore(task: ExecTask, now: () => number): MemStore {
       const last = Math.max(0, ...t.steps.map((s) => s.finishedAt ?? s.startedAt ?? 0));
       return (t.status === "running" || t.status === "pending") && now() - last >= olderThanMs ? [{ id: t.id, surveyId: t.surveyId }] : [];
     },
+    async addExtraCharge(_id: string, amount: number) { extraCharge += amount; },
   };
 }
 
@@ -210,15 +212,24 @@ test("a worker killed mid-slice: every step that returned is durable, and no com
     if (s.stepId === "c" && calls.filter((c) => c === "c").length === 1) throw new Error("the worker was recycled");
     return { output: { built: s.stepId }, usage: USAGE };
   };
-  await assert.rejects(runSlice("t1", { budgetMs: 300_000, store, buildStep: killing, now: clock.now, sleep: clock.sleep, minStepMs: 10 }));
-  /* a and b are committed; c was in flight when the worker died and is still claimed by it */
-  assert.deepEqual(store.rows().filter((r) => r.status === "completed").map((r) => r.stepId), ["a", "b"]);
-  assert.equal(store.rows().find((r) => r.stepId === "c")!.status, "running");
+  /*
+   * AUDIT M3 (2026-10-25). This used to be `assert.rejects` — it encoded as
+   * correct the fact that a thrown `buildStep` propagated out of `runSlice`,
+   * so the caller got an exception instead of a `SliceResult`, `finish()`
+   * never ran, the task status was never written, and the step in flight
+   * held its lease for the whole reclaim window. A function whose contract
+   * is "returns what remains" has to return. A throw is now a failed step.
+   */
+  const first = await runSlice("t1", { budgetMs: 300_000, store, buildStep: killing, now: clock.now, sleep: clock.sleep, minStepMs: 10, maxRetries: 0 });
+  assert.deepEqual(first.built, ["a", "b", "d"], "the slice returns, and one bad step does not cost the ones after it");
+  assert.ok(first.failed.some((f) => f.id === "c"), "the step that threw is reported as failed, not swallowed");
+  assert.deepEqual(store.rows().filter((r) => r.status === "completed").map((r) => r.stepId), ["a", "b", "d"]);
+  assert.notEqual(store.rows().find((r) => r.stepId === "c")!.status, "completed");
 
-  /* a NEW worker, after the reclaim window: it picks up at the earliest incomplete step */
+  /* a NEW worker, after the reclaim window: it picks up what is left */
   const second = scripted();
   const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: second.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, staleSeconds: 0, check: PASSES });
-  assert.deepEqual(r.built, ["c", "d"], "it resumed from the earliest incomplete step");
+  assert.deepEqual(r.built, ["c"], "it resumed at the only step still outstanding");
   assert.equal(r.remaining.length, 0);
   assert.equal(r.status, "completed");
   assert.equal(second.countOf("a"), 0, "a completed step is never asked of the model again");

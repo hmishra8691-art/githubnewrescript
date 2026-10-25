@@ -536,10 +536,21 @@ const KIND_PATTERNS: [TaskKind, RegExp][] = [
   ["analysis", /\b(analysis plan|crosstabs?|significance test|run the analysis)\b/i],
 ];
 
+/*
+ * Name → ISO code. `lintLanguage` and `recordTranslation` key everything by
+ * the code, so a spec carrying a display name can never complete. Urdu was
+ * missing, which is the language the brief's own acceptance test C uses
+ * (audit, 2026-10-25); the rest of the subcontinental and CJK set is filled
+ * in at the same time so the next one is not a surprise either.
+ */
 const LANGUAGE_NAMES: Record<string, string> = {
-  hindi: "hi", spanish: "es", french: "fr", german: "de", portuguese: "pt", italian: "it", dutch: "nl",
+  hindi: "hi", urdu: "ur", spanish: "es", french: "fr", german: "de", portuguese: "pt", italian: "it", dutch: "nl",
   arabic: "ar", japanese: "ja", korean: "ko", russian: "ru", polish: "pl", turkish: "tr", thai: "th",
-  vietnamese: "vi", indonesian: "id", tamil: "ta", telugu: "te", bengali: "bn", marathi: "mr", gujarati: "gu",
+  vietnamese: "vi", indonesian: "id", malay: "ms", tamil: "ta", telugu: "te", bengali: "bn", marathi: "mr",
+  gujarati: "gu", kannada: "kn", malayalam: "ml", punjabi: "pa", odia: "or", assamese: "as", nepali: "ne",
+  sinhala: "si", burmese: "my", khmer: "km", lao: "lo", filipino: "fil", tagalog: "fil", swahili: "sw",
+  hebrew: "he", persian: "fa", farsi: "fa", greek: "el", czech: "cs", hungarian: "hu", romanian: "ro",
+  swedish: "sv", norwegian: "nb", danish: "da", finnish: "fi", ukrainian: "uk", chinese: "zh", mandarin: "zh",
 };
 
 /**
@@ -650,8 +661,17 @@ const RANGE_RE = /(\d+)\s*(?:-|–|to|…|\.\.)\s*(\d+)/;
  * `inputRef` to the browser and the panel must still be able to say which
  * items are in flight.
  */
+/*
+ * L2 (audit, 2026-10-25): `inputRef` may be the reconciliation envelope,
+ * `{"v":1,"objects":[…],"fp":"…"}`. Running a range regex over that turned an
+ * object named "2024-2025 wave" into "items 2024–2025". An envelope is
+ * structure, not prose: it is skipped, and only the title is read.
+ */
+const ENVELOPE = /^\s*\{\s*"v"\s*:/;
+
 export function itemRangeOf(step: { inputRef?: string; title?: string } | null | undefined): { from: number; to: number } | null {
-  const m = step ? RANGE_RE.exec(step.inputRef ?? step.title ?? "") : null;
+  const ref = step?.inputRef && !ENVELOPE.test(step.inputRef) ? step.inputRef : undefined;
+  const m = step ? RANGE_RE.exec(ref ?? step.title ?? "") : null;
   if (!m) return null;
   const from = Number(m[1]), to = Number(m[2]);
   return Number.isFinite(from) && Number.isFinite(to) && to >= from ? { from, to } : null;

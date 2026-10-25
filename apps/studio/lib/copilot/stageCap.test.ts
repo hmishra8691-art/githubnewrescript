@@ -114,7 +114,7 @@ test("the durable mirror cannot fail the turn: every call is optional-chained an
 });
 
 test("the completion gate runs against the APPLIED survey, never the editor's copy", () => {
-  assert.match(route, /await mirror\?\.finish\(applied\?\.valid \? applied\.def : null\);/);
+  assert.match(route, /await mirror\?\.finish\(applied\?\.valid \? applied\.def : null, charge\);/, "with the turn's own spend, so the task total reconciles (audit M7)");
   assert.ok(
     route.indexOf("await mirror?.finish(applied?.valid") > route.indexOf("let applied = reply.actions.length"),
     "the gate is after the actions are applied to a clone",

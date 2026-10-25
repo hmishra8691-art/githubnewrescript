@@ -28,6 +28,8 @@ import { useCopilot, type CopilotEntry } from "./copilot/useCopilot";
 import { applyIntent, undoIntent } from "../../lib/copilot/spoken";
 import { CopilotCard, SaveFailed } from "./copilot/CopilotCard";
 import { CopilotPanel } from "./copilot/CopilotPanel";
+import { ExecutionPanel } from "./ExecutionPanel";
+import type { ClientTask } from "@/lib/copilot/taskStore";
 import { StructurePane } from "./copilot/StructurePane";
 import { paneLayout, splitterKey, readPaneWidths, PANE_LIMITS } from "../../lib/intelligent/paneLayout";
 import { proposalCounts, changeRecordOf } from "../../lib/copilot/client";
@@ -134,6 +136,41 @@ function loadPrefs(): { inspector: number; structure: number } {
 /** a layout effect in the browser (before paint), a plain effect on the server (where neither runs) — no SSR warning */
 const useIsoLayoutEffect = typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect;
 
+/*
+ * THE DURABLE TASK, READ BACK (§10, 2026-10-25).
+ *
+ * The execution panel was written to take a task as a prop and nothing
+ * supplied one, so a reload — let alone a reload on another device — showed
+ * nothing, which is exactly what §10 asked for. This polls
+ * /api/copilot/task while a build is running and hands the panel its rows.
+ *
+ * Deliberately undemanding: it polls only while the copilot is busy, it
+ * never throws into the view (a failure just means no panel), and it stops
+ * on unmount. Nothing here is the source of truth for the generation — that
+ * is still the copilot's own state; this is the server's record of it,
+ * shown so the researcher can see it survives the page.
+ */
+function useDurableTask(surveyId: string, active: boolean): { task: ClientTask | null; durable: boolean } {
+  const [state, setState] = React.useState<{ task: ClientTask | null; durable: boolean }>({ task: null, durable: false });
+  React.useEffect(() => {
+    if (!surveyId) return;
+    let live = true;
+    const read = async () => {
+      try {
+        const r = await fetch(`/api/copilot/task?surveyId=${encodeURIComponent(surveyId)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const d = await r.json() as { task: ClientTask | null; durable?: boolean };
+        if (live) setState({ task: d.task ?? null, durable: d.durable === true });
+      } catch { /* the panel simply has nothing to show */ }
+    };
+    void read();
+    if (!active) return () => { live = false; };
+    const t = setInterval(() => void read(), 4000);
+    return () => { live = false; clearInterval(t); };
+  }, [surveyId, active]);
+  return state;
+}
+
 export function IntelligentView() {
   const s = useStudio();
   const sel = useSelection();
@@ -217,6 +254,8 @@ export function IntelligentView() {
   }, [sel, s]);
 
   /* ------------------------------------------------------------ copilot */
+  /* §10: the server's own record of the running build, polled while it runs */
+  const durableTask = useDurableTask(s.surveyDbId, busy);
   const copilot = useCopilot({
     entries: turns,
     selectedId,
@@ -929,6 +968,7 @@ export function IntelligentView() {
             aria-label="Resize the inspector (arrow keys)" aria-valuemin={PANE_LIMITS.inspector.min} aria-valuemax={PANE_LIMITS.inspector.max} aria-valuenow={layout.inspectorWidth} data-testid="iq-splitter-inspector" />}
           <div className={`cp-panel-wrap${layout.inspector === "docked" ? "" : " iq-drawer end"}`} data-testid="iq-inspector" {...(layout.inspector === "docked" ? {} : { role: "dialog", "aria-label": "Inspector" })} data-drawer={layout.inspector === "docked" ? undefined : "1"}>
             {layout.inspector !== "docked" && <button type="button" className="iq-btn iq-drawer-close" onClick={() => setDrawer(null)} aria-label="Close the inspector" data-testid="iq-drawer-close">×</button>}
+            {durableTask.task && <ExecutionPanel task={durableTask.task} durable={durableTask.durable} />}
             <CopilotPanel copilot={copilot} def={s.def} onSelect={selectQuestion} onApply={applyCopilot} applyNote={applyNote} readOnly={s.readOnly}
               onImportQuotaSheet={() => quotaSheetRef.current?.click()} quotaImport={quotaImport}
               primary={primary} index={index} onSelectKey={(k) => selectKey(k as ObjectKey)} onAsk={(t) => void ask(t)} onTemplate={writeTemplate}

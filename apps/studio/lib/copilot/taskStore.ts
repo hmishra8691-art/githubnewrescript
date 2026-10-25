@@ -71,6 +71,8 @@ export interface StepFailureInput {
   retryable: boolean;
   /** what the provider layer cannot see: an answer that did not validate, an output that did not fit */
   hint?: "invalid_output" | "context_limit" | "permanent";
+  /** the caller's own retry budget, so the store does not overrule it with MAX_ATTEMPTS (audit M4) */
+  maxAttempts?: number;
 }
 
 export interface CommitInput {
@@ -107,12 +109,23 @@ export interface TaskStore {
   earliestIncomplete(taskId: string): Promise<ExecStep | null>;
   /** tasks left running or pending past their reclaim window, for the cron continuation */
   stale(olderThanMs: number, limit?: number): Promise<{ id: string; surveyId: string }[]>;
+  /** spend the turn made outside any step — the repair and coverage passes (audit M7) */
+  addExtraCharge(taskId: string, amount: number): Promise<void>;
 }
 
 /** the default reclaim window, in seconds — longer than the 165s route budget, so a live slice is never stolen from */
 export const STALE_SECONDS = 180;
 /** how many times one step may be claimed before the claim stops offering it */
 export const MAX_ATTEMPTS = 3;
+/*
+ * `fail()` decides `retrying` vs `failed` by comparing the row's count with a
+ * bound. It used to use MAX_ATTEMPTS unconditionally, so a caller running
+ * with its own `maxRetries` had the store overrule it: a step that was merely
+ * slower than the stage cap burned one attempt per slice and was dead after
+ * three, with nothing wrong with it, and `runSlice({maxRetries: 5})` had the
+ * store mark a step `failed` at 3 while the runner carried on building it
+ * (audit M4, 2026-10-25). The bound is now the caller's where it gives one.
+ */
 
 /* ------------------------------------------------- classification helper */
 
@@ -332,6 +345,8 @@ export interface MemTask extends ExecTask {
   committed: Map<string, string>;
   /** the lease clock, per step id */
   claimedAt: Map<string, number>;
+  /** the turn's own spend that belongs to no step (audit M7) */
+  extraCharge?: number;
 }
 
 let memSeq = 0;
@@ -433,6 +448,18 @@ export class MemoryTaskStore implements TaskStore {
       const first = t.steps.find((x) => x.stepId === seen);
       return structuredClone(first ?? s);
     }
+    /*
+     * AND THE OTHER HALF OF THE SAME GUARD (audit M2, 2026-10-25). The SQL
+     * update is `.neq("status","completed")`, so a second delivery of a step
+     * that already finished — under a DIFFERENT key, which the key map above
+     * cannot catch — changes nothing. Memory used to overwrite the output and
+     * the usage, so the reference implementation every test runs against was
+     * not the contract the database enforces.
+     */
+    if (s.status === "completed") {
+      t.committed.set(out.idempotencyKey, stepId);
+      return structuredClone(s);
+    }
     t.committed.set(out.idempotencyKey, stepId);
     s.status = "completed";
     s.output = out.output;
@@ -457,7 +484,7 @@ export class MemoryTaskStore implements TaskStore {
     s.retryCount += 1;
     s.failureKind = kind;
     s.failureMessage = scrubSecrets(failure.message);
-    s.status = failure.retryable && !isTerminalFailure(kind) && s.retryCount < MAX_ATTEMPTS ? "retrying" : "failed";
+    s.status = failure.retryable && !isTerminalFailure(kind) && s.retryCount < (failure.maxAttempts ?? MAX_ATTEMPTS) ? "retrying" : "failed";
     s.finishedAt = Date.now();
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
@@ -498,6 +525,14 @@ export class MemoryTaskStore implements TaskStore {
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  async addExtraCharge(taskId: string, amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const t = this.read(taskId);
+    if (!t) return;
+    t.extraCharge = (t.extraCharge ?? 0) + amount;
+    t.updatedAt = Date.now();
   }
 }
 
@@ -744,7 +779,24 @@ class SupabaseTaskStore implements TaskStore {
       t.tokens_cached += num(r.tokens_cached) ?? 0;
       t.charge += num(r.charge) ?? 0;
     }
-    await db.from(TASKS).update(t).eq("id", taskId);
+    /*
+     * The steps explain everything attributable; `extra_charge` is the turn's
+     * own spend that belongs to no plan item — the repair and coverage passes
+     * (audit M7). `charge` is the sum, so it reconciles against `api_calls`.
+     */
+    const { data: own } = await db.from(TASKS).select("extra_charge").eq("id", taskId).maybeSingle();
+    const extra = num((own as Row | null)?.extra_charge) ?? 0;
+    await db.from(TASKS).update({ ...t, charge: t.charge + extra }).eq("id", taskId);
+  }
+
+  /** record spend the turn made outside any step; `charge` is refreshed to include it */
+  async addExtraCharge(taskId: string, amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const db = await this.db();
+    const { data } = await db.from(TASKS).select("extra_charge").eq("id", taskId).maybeSingle();
+    const next = (num((data as Row | null)?.extra_charge) ?? 0) + amount;
+    await db.from(TASKS).update({ extra_charge: next }).eq("id", taskId);
+    await this.retotal(taskId);
   }
 
   async fail(taskId: string, stepId: string, failure: StepFailureInput): Promise<ExecStep> {
@@ -754,7 +806,7 @@ class SupabaseTaskStore implements TaskStore {
     if (!cur) throw new Error("taskStore: no such step");
     const kind = classifyFailure(failure.kind, failure.hint);
     const retryCount = Number((cur as Row).retry_count ?? 0) + 1;
-    const status = failure.retryable && !isTerminalFailure(kind) && retryCount < MAX_ATTEMPTS ? "retrying" : "failed";
+    const status = failure.retryable && !isTerminalFailure(kind) && retryCount < (failure.maxAttempts ?? MAX_ATTEMPTS) ? "retrying" : "failed";
     const { data, error } = await db.from(STEPS).update({
       status, failure_kind: kind, failure_message: scrubSecrets(failure.message),
       retry_count: retryCount, claimed_at: null, finished_at: new Date().toISOString(),

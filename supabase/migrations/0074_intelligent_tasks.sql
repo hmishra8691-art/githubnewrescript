@@ -77,6 +77,21 @@ create table if not exists public.intelligent_tasks (
   tokens_out    bigint  not null default 0,
   tokens_cached bigint  not null default 0,
   charge        numeric(14,6) not null default 0,
+  /*
+   * WHAT THE TURN SPENT THAT NO STEP CAN CARRY (audit M7, 2026-10-25).
+   *
+   * `charge` is recomputed from the step rows, so it could only ever hold
+   * what the per-item model calls cost. A turn also pays for the repair pass
+   * and the coverage pass, which belong to the turn and not to any one plan
+   * item, and those were recorded nowhere: the task's total was permanently
+   * short of the truth with no row explaining the gap, which makes it
+   * useless as a reconciliation target against `api_calls`.
+   *
+   * `charge` stays the sum of the steps plus this. Kept apart so the step
+   * rows remain the explanation of everything attributable, and this is
+   * visibly the remainder.
+   */
+  extra_charge  numeric(14,6) not null default 0,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
@@ -91,6 +106,9 @@ create trigger intelligent_tasks_touch before update on public.intelligent_tasks
   for each row execute function public.touch_updated_at();
 
 /* the survey foreign key NOT VALID then validated, as 0047 does (an inline reference waits on surveys' lock) */
+/* idempotent for a database that already has the table from an earlier apply of this file */
+alter table public.intelligent_tasks add column if not exists extra_charge numeric(14,6) not null default 0;
+
 alter table public.intelligent_tasks drop constraint if exists intelligent_tasks_survey_id_fkey;
 alter table public.intelligent_tasks add constraint intelligent_tasks_survey_id_fkey
   foreign key (survey_id) references public.surveys(id) on delete cascade not valid;

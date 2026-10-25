@@ -606,7 +606,9 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
      * for every unapproved item, so the task could never be complete, and
      * the cron swept it as unfinished work for ever.
      */
-    mirror = await mirrorStart({ surveyId, request: message, plan: executedPlan, mode, definition: def, planFirst: body.planFirst !== false });
+    mirror = await mirrorStart({ surveyId, request: message, plan: executedPlan, mode, definition: def, planFirst: body.planFirst !== false,
+      /* L3: a row nobody owns cannot be attributed to a tenant, billed against, or swept on anyone's behalf */
+      ...(ctx.customerId ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { createdBy: ctx.userId } : {}) });
     /* mergeable: built earlier and not yet in a proposal; the rest of `prior` is context for the next item's prompt */
     const built: { item: typeof approved[number]; raw: unknown }[] = approved.filter((it) => prior.has(it.id) && !prior.get(it.id)!.applied).map((item) => ({ item, raw: prior.get(item.id)!.raw }));
     const newlyBuilt: { id: string; raw: unknown }[] = [];
@@ -712,7 +714,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       return failedTurn(waiting ? { ...failure, retryAfterMs: waiting.retryAfterMs || failure.retryAfterMs } : failure, prompt.length);
     }
     if (planPending.length && !finalize) {
-      await mirror?.finish(null);
+      await mirror?.finish(null, charge);
       /* a checkpoint: what was built in this request, what is still to do, why it stopped — the browser stores it and carries on */
       return NextResponse.json({
         ok: true, stage: "progress", built: newlyBuilt, builtIds: built.map((b) => b.item.id), pending: planPending, failed: planFailures,
@@ -924,7 +926,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
    * `running` here and resumes at 65. Deterministic code decides; no model is
    * asked, and a failure to record it cannot fail the turn.
    */
-  await mirror?.finish(applied?.valid ? applied.def : null);
+  await mirror?.finish(applied?.valid ? applied.def : null, charge);
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation

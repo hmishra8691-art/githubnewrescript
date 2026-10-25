@@ -243,16 +243,32 @@ export function dependenciesMet(step: ExecStep, byId: ReadonlyMap<string, ExecSt
 }
 
 /** counts for the execution panel — real rows, never an animation */
-export function taskProgress(task: Pick<ExecTask, "steps">): { total: number; completed: number; failed: number; pending: number; running: number; blocked: number } {
-  let completed = 0, failed = 0, pending = 0, running = 0, blocked = 0;
+/*
+ * A TOMBSTONE IS NOT WORK (audit M5, 2026-10-25).
+ *
+ * `total` was `steps.length`, which counts rows a re-plan DELETED. A task
+ * with two completed steps and one tombstone read as 2 of 3: the panel's
+ * headline said every step was done, the bar sat at 66 %, the counter said
+ * "1 to go", and the time estimate multiplied the per-step average by work
+ * that will never run — all at once, on the §6 mechanism that creates
+ * tombstones in the first place. `phase: "validating"` also requires
+ * `completed === total` and so became unreachable after any re-plan.
+ *
+ * A tombstone is kept as a row so the reply can say what was dropped. It is
+ * not counted here, and `tombstoned` is reported separately for anything
+ * that wants to mention it.
+ */
+export function taskProgress(task: Pick<ExecTask, "steps">): { total: number; completed: number; failed: number; pending: number; running: number; blocked: number; tombstoned: number } {
+  let completed = 0, failed = 0, pending = 0, running = 0, blocked = 0, tombstoned = 0;
   for (const s of task.steps) {
     if (s.status === "completed") completed++;
+    else if (s.status === "tombstoned") tombstoned++;
     else if (s.status === "failed") failed++;
     else if (s.status === "running") running++;
     else if (s.status === "blocked") blocked++;
     else if (s.status === "pending" || s.status === "retrying") pending++;
   }
-  return { total: task.steps.length, completed, failed, pending, running, blocked };
+  return { total: task.steps.length - tombstoned, completed, failed, pending, running, blocked, tombstoned };
 }
 
 /** what a resumed task has spent so far, summed from the step rows */

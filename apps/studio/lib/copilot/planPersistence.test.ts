@@ -79,8 +79,21 @@ test("#1 planDependencies: an edge is two items naming the same object, in plan 
   // case, surrounding space and quotes do not make a different object
   const loose = planDependencies([item("a", [" q5 "]), item("b", ["“Q5”"])]);
   assert.deepEqual(loose.get("b"), ["a"]);
-  // an item with no objects is an island
-  assert.deepEqual(planDependencies([item("a", ["Q1"]), item("b", [])]).get("b"), []);
+  /*
+   * AUDIT M6 (2026-10-25). This used to assert that an item with no objects
+   * is an island. `objects` is OPTIONAL in the plan schema and defaulted to
+   * `[]`, so a model that simply omits it produced a completely edgeless
+   * plan and a re-plan then invalidated nothing downstream of anything. An
+   * item nothing can be reasoned about is now assumed to depend on
+   * everything before it: that costs a rebuild, where the alternative
+   * silently keeps stale work.
+   */
+  assert.deepEqual(planDependencies([item("a", ["Q1"]), item("b", [])]).get("b"), ["a"], "an unreadable item is not an island");
+  assert.deepEqual(planDependencies([item("a", []), item("b", ["Q1"])]).get("b"), ["a"], "and an unreadable EARLIER item is assumed to matter");
+  /* a kind that reads the whole survey depends on all of it, whatever it names */
+  const withAnalysis = [item("q1", ["Q1"]), item("q2", ["Q2"]), item("an", ["Analysis plan"], { kind: "analysis" })];
+  assert.deepEqual(planDependencies(withAnalysis).get("an"), ["q1", "q2"], "the analysis plan is downstream of every question item");
+  assert.deepEqual(dependentsOf(withAnalysis, ["q1"]), ["an"], "so changing a question re-runs the analysis built on it");
   // every earlier item that shares an object is an edge, not only the nearest
   assert.deepEqual(planDependencies([item("a", ["Q1"]), item("b", ["Q1"]), item("c", ["Q1"])]).get("c"), ["a", "b"]);
   assert.deepEqual(itemObjects(item("x", ["Q5", "q5", " Q5 "])), ["q5"]);
@@ -174,6 +187,7 @@ test("#8 with the flag off the slices of one build share a task row, and nothing
     setStatus: (id, st, r) => store.setStatus(id, st, r),
     earliestIncomplete: (id) => store.earliestIncomplete(id),
     stale: (ms, limit) => store.stale(ms, limit),
+    addExtraCharge: (id, amt) => store.addExtraCharge(id, amt),
   };
   const first = await loadOrCreatePlan({ surveyId: "sv-8", request: BIG_REQUEST, plan: BASE_PLAN, mode: "generate", env: {} }, spied);
   assert.ok(first?.fresh);

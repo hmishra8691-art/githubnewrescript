@@ -79,7 +79,7 @@ export interface Mirror {
   /** one built item, committed as it returns */
   step(itemId: string, raw: unknown, usage?: StepUsage): Promise<void>;
   /** the slice ended: the deliverable decides whether this is `completed` or still `running` */
-  finish(def: SurveyDefinition | null): Promise<void>;
+  finish(def: SurveyDefinition | null, turnCharge?: number): Promise<void>;
 }
 
 export interface MirrorStart {
@@ -137,10 +137,23 @@ export async function mirrorStart(input: MirrorStart): Promise<Mirror | null> {
           }), "commit");
         } catch (e) { quiet("commit", e); }
       },
-      async finish(def) {
+      async finish(def, turnCharge) {
         try {
           const fresh = await withTimeout(store.load(task.id), "reload the task");
           if (!fresh) return;
+          /*
+           * WHAT THE TURN SPENT THAT NO STEP CARRIES (audit M7). The repair
+           * pass and the coverage pass belong to the turn, not to any one
+           * plan item, so the sum of the step rows is always short of what
+           * the customer was charged. The remainder is recorded against the
+           * task, and `charge` is the two added together — otherwise the
+           * column is useless to reconcile against `api_calls`.
+           */
+          if (typeof turnCharge === "number" && turnCharge > 0) {
+            const attributed = fresh.steps.reduce((n, x) => n + (x.usage?.charge ?? 0), 0);
+            const extra = turnCharge - attributed;
+            if (extra > 1e-9) await withTimeout(store.addExtraCharge(task.id, extra), "record the turn's own spend");
+          }
           /*
            * COMPLETION IS NOT DECLARED FROM THE REPLY. Every step may have
            * come back and the deliverable still be short — 64 questions of

@@ -279,7 +279,7 @@ test("earliestIncomplete: where a resumed task picks up, and null when there is 
   await s.commit(t.id, "c", { output: 3, idempotencyKey: "idem-c" });
   assert.equal(await s.earliestIncomplete(t.id), null);
   assert.equal(await s.earliestIncomplete("no-task"), null);
-  assert.deepEqual(taskProgress((await s.load(t.id))!), { total: 3, completed: 3, failed: 0, pending: 0, running: 0, blocked: 0 });
+  assert.deepEqual(taskProgress((await s.load(t.id))!), { total: 3, completed: 3, failed: 0, pending: 0, running: 0, blocked: 0, tombstoned: 0 });
 });
 
 test("stale: tasks left open past the window, finished ones never", async () => {

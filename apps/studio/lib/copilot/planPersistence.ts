@@ -82,6 +82,7 @@ import { taskResumeEnabled } from "./resume.ts";
 import { contentWords, interpretRequest, isLongBrief, scopeCategories } from "@rescript/engine";
 import type { DeliverableSpec, ExecStep, ExecTask, TaskKind } from "@rescript/engine";
 import type { ChangePlan, ChangePlanItem } from "./changePlan.ts";
+import { specFromRequest } from "./deliverable.ts";
 import type { TaskStore } from "./taskStore.ts";
 
 /* ------------------------------------------------------------- the flag */
@@ -159,14 +160,55 @@ export function decodeItemRef(step: Pick<ExecStep, "inputRef">): { objects: stri
  * kind, not the wording, not the reason. The result maps each item id to the
  * ids it depends on, in plan order; the first item never depends on anything.
  */
+/*
+ * A KIND THAT READS THE WHOLE SURVEY DEPENDS ON ALL OF IT (audit M6).
+ *
+ * `analysis` and `design` items are not about one question. The plan prompt
+ * says so itself — "the analysis plan is one item" — so an analysis item
+ * names `["Analysis plan"]` and shares no object with the question items it
+ * is derived from. Under an objects-only rule it had NO dependencies, and
+ * changing a question never re-ran the analysis built on it.
+ */
+const WHOLE_SURVEY: ReadonlySet<string> = new Set(["analysis", "design"]);
+
+/**
+ * WHAT DEPENDS ON WHAT, and the honest limits of it (audit M6, 2026-10-25).
+ *
+ * The only signal available is `ChangePlanItem.objects`, which is OPTIONAL in
+ * the schema, defaulted to `[]` by `coerceChangePlan`, and written by the
+ * model in prose. It is not a dependency graph; it is a hint. Two failures
+ * follow from leaning on it alone, and both are addressed here as cheaply as
+ * they can honestly be:
+ *
+ *   • A MODEL THAT OMITS `objects` produced a completely edgeless plan, so a
+ *     re-plan invalidated nothing downstream of anything. An item with no
+ *     objects at all now depends on every earlier item: it cannot be reasoned
+ *     about, so it is not reused, which is the safe direction — it costs a
+ *     rebuild, where the alternative silently keeps stale work.
+ *   • A WHOLE-SURVEY KIND (analysis, design) now depends on every earlier
+ *     item regardless of objects, per the note above.
+ *
+ * What is NOT fixed, and cannot be here: the false-positive direction. The
+ * prompt's own example object is `"Screener"`, so two genuinely independent
+ * items that both name it are serialised, and editing one discards the
+ * other's validated output. That costs a rebuild, never a wrong answer, so
+ * it is the acceptable side to err on — but the real fix is for the plan
+ * stage to emit explicit dependencies rather than for this function to guess
+ * from a free-text field, and that is a change to the plan schema and prompt.
+ */
 export function planDependencies(items: readonly ChangePlanItem[]): Map<string, string[]> {
   const objects = items.map((it) => new Set(itemObjects(it)));
   const edges = new Map<string, string[]>();
   items.forEach((item, i) => {
     const mine = objects[i]!;
+    const earlier = items.slice(0, i).map((x) => x.id);
+    /* nothing to reason about, or a kind that reads the whole survey: everything before it */
+    if (!mine.size || WHOLE_SURVEY.has(item.kind)) { edges.set(item.id, earlier); return; }
     const on: string[] = [];
     for (let j = 0; j < i; j++) {
       const theirs = objects[j]!;
+      /* an earlier item with no objects is equally unreadable, so it is assumed to matter */
+      if (!theirs.size) { on.push(items[j]!.id); continue; }
       for (const o of mine) if (theirs.has(o)) { on.push(items[j]!.id); break; }
     }
     edges.set(item.id, on);
@@ -256,14 +298,28 @@ export function taskKindFor(request: string, plan: ChangePlan | null = null): Ta
 }
 
 /** what "done" means for this task, asserting only what the request actually promised */
+/*
+ * ONE READER OF THE REQUEST, NOT THREE (audit L1, 2026-10-25).
+ *
+ * This used to re-read the request with regexes of its own, and disagreed
+ * with `specFromRequest` — the one the tests exercise — in two ways that
+ * mattered: it could not produce a `scored_exam` spec at all, so §5's
+ * question count, key coverage and key-leak scan never ran on a real task;
+ * and it captured a language DISPLAY NAME ("Urdu") where `lintLanguage`
+ * keys by ISO code, so a translation task could never reach `completed`.
+ *
+ * `specFromRequest` is now the single reader. The kind still comes from
+ * `taskKindFor`, which sees the plan as well as the request, and is passed
+ * in as a hint so the two cannot diverge again — except for `scored_exam`,
+ * which only the spec reader can recognise (an exam IS a survey build to
+ * `scopeCategories`), so its verdict is allowed to win.
+ */
 export function deliverableFor(request: string, kind: TaskKind, plan: ChangePlan | null = null): DeliverableSpec {
-  const spec: DeliverableSpec = { kind };
-  const count = /(\d{1,3})\s*(?:-|\s)?(?:question|सवाल|प्रश्न)/i.exec(request);
-  if (count && Number(count[1]) > 0 && Number(count[1]) <= 500) spec.questionCount = Number(count[1]);
-  if (kind === "translation") {
-    const lang = /\b(?:into|in|to)\s+([A-Z][a-z]{2,14})\b/.exec(request);
-    if (lang) spec.language = lang[1]!;
-  }
+  const read = specFromRequest(request);
+  const spec: DeliverableSpec = read.kind === "scored_exam" && kind === "survey_build"
+    ? read
+    : { ...read, kind };
+  if (spec.kind !== "translation") delete spec.language;
   /*
    * NO `invariants` HERE (audit C1, 2026-10-25). This used to set
    * `["every approved plan item built"]`, which is not an invariant name —

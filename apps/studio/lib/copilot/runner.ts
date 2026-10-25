@@ -367,8 +367,22 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
        */
       const stepDeadline = Math.min(sliceDeadline, Math.max(t0 + minStepMs, softStop));
       const ctrl = new AbortController();
+      /*
+       * A THROW IS A FAILED STEP, NOT A FAILED SLICE (audit M3, 2026-10-25).
+       *
+       * Only a RETURNED `{error}` used to be handled. A `buildStep` that
+       * threw propagated out of `runSlice`, so `finish()` never ran: the
+       * caller got an exception instead of a `SliceResult`, the task status
+       * was never written, and the step in flight kept its lease for the
+       * full reclaim window. Committed steps survived, but everything the
+       * slice knew about what to do next was lost — and `runner.test.ts`
+       * encoded that as expected with `assert.rejects` rather than flagging
+       * it. A contract that says "returns what remains" has to return.
+       */
+      const guarded = buildStep(step, { signal: ctrl.signal, deadline: stepDeadline, attempt, batchSize: batch, summary: taskSummary(task0), tier: tierFor(step) })
+        .catch((e: unknown) => ({ error: e }) as BuildStepResult);
       const r = await withDeadline(
-        buildStep(step, { signal: ctrl.signal, deadline: stepDeadline, attempt, batchSize: batch, summary: taskSummary(task0), tier: tierFor(step) }),
+        guarded,
         stepDeadline - t0, sleep,
       );
       slowest = Math.max(slowest, now() - t0);
@@ -376,7 +390,7 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
       if (r === OVERRUN) {
         ctrl.abort();
         /* out of time, not broken: the row goes back to `retrying`, keeps its count, and a later slice runs it */
-        await store.fail(taskId, step.stepId, { kind: "transient", message: stepFailureMessage("transient"), retryable: true });
+        await store.fail(taskId, step.stepId, { kind: "transient", message: stepFailureMessage("transient"), retryable: true, maxAttempts: maxRetries + 1 });
         stop = now() >= softStop ? "soft_stop" : "budget";
         break;
       }
@@ -387,7 +401,7 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
 
         if (isTerminalFailure(f.kind)) {
           /* nothing a later slice can do: the STEP stops, the TASK and every output are preserved */
-          await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: false });
+          await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: false, maxAttempts: maxRetries + 1 });
           failed.push({ id: step.stepId, kind: f.kind, message: stepFailureMessage(f.kind) });
           await store.setStatus(taskId, "failed", { ok: false, problems: [stepFailureMessage(f.kind)] });
           stop = "terminal";
@@ -399,14 +413,14 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
           const current = batch ?? step.batchSize;
           const next = current && current > 1 ? Math.max(1, Math.floor(current / 2)) : null;
           if (next && splits < MAX_SPLITS) { batch = next; splits++; continue; }
-          await store.fail(taskId, step.stepId, { kind: "permanent", message: stepFailureMessage("permanent"), retryable: false });
+          await store.fail(taskId, step.stepId, { kind: "permanent", message: stepFailureMessage("permanent"), retryable: false, maxAttempts: maxRetries + 1 });
           failed.push({ id: step.stepId, kind: "permanent", message: stepFailureMessage("permanent") });
           break;
         }
 
         /* BOUNDED retries: the count is on the row, so it survives the worker and a slice cannot reset it */
         attempt++;
-        await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: true });
+        await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: true, maxAttempts: maxRetries + 1 });
         if (attempt > maxRetries) {
           failed.push({ id: step.stepId, kind: f.kind, message: stepFailureMessage(f.kind) });
           break;
