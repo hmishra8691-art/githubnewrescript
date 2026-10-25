@@ -24,10 +24,20 @@ production). It returns `release` — `RESCRIPT_RELEASE`, else `VERCEL_GIT_COMMI
 characters — and a probed migration level with the first gap named. No key, no token, no user
 data: it is safe to screenshot.
 
-- **If `release` is at or after `2600148b` (2026-10-18)** the 90 s stage cap is live, and the
-  ~160 s stop users are seeing is the first-item hole this branch fixes.
-- **If it is older**, production has no stage cap at all. That is a second, independent cause
-  of the same symptom, and deploying this branch fixes both at once.
+- **If `release` is at or after `2600148b` (2026-10-18)** the 90 s stage cap is live. The
+  remaining ~160 s case is then a single plan item that needs longer than the clock, which
+  **this branch does not fix** (see below).
+- **If it is older**, production has no stage cap at all — a second, independent cause of the
+  same symptom, which deploying this branch does fix, because the 2026-10-17 cap comes with it.
+
+**Correction, 2026-10-25.** An earlier version of this runbook, the PR description and the
+commit message of `096555b2` all said this branch fixed the ~160 s stop at its cause. It did
+not. The attempted fix made every item's deadline shorter, so a survey whose first item
+legitimately needed 91–150 s stopped working altogether and failed again on every Resume. It
+was reverted on 2026-10-25; `lib/copilot/stageCap.test.ts` now pins the original guard and
+explains why. The multi-item case was already handled by the `slowest * 1.5` heuristic; the
+single-slow-item case needs the durable runner, which is not yet wired. **Do not expect this
+deploy to change the ~160 s symptom unless production predates the cap.**
 
 ---
 
@@ -66,8 +76,9 @@ Deploy `main` to the Studio as usual. On this deploy:
 | `COPILOT_TASK_DUAL_WRITE` | leave unset (defaults **on**) | the task and step rows are written |
 | `COPILOT_TASK_RESUME` | leave unset (defaults **off**) | the browser's `done[]` is still the source of truth for what is built |
 
-So after this deploy the behaviour a researcher sees is **unchanged**, except that the ~160 s
-first-item stop is gone. Two things are now true that were not before: the rows are
+So after this deploy the behaviour a researcher sees is **unchanged** (see the correction in
+step 0: the ~160 s stop is not addressed by this branch). Two things are now true that were
+not before: the rows are
 accumulating, and `/api/platform` will report migration 0074 as missing — which is expected
 until step 3.
 

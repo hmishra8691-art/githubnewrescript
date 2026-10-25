@@ -613,35 +613,40 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       const item = approved[i];
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
       /*
-       * THE STAGE CAP IS NOT CONDITIONAL ON SOMETHING HAVING BEEN BUILT
-       * ALREADY (2026-10-24). Until now both halves of this test sat behind
-       * `newlyBuilt.length`, so the 90 s cap engaged only AFTER an item had
-       * come back: a request whose FIRST item was slow ran to `itemDeadline`
-       * (150 s) and could sit open and silent to ~160 s — the very symptom
-       * the 2026-10-17 cap was added to remove, still reachable on the first
-       * item. The cap now applies to every item; the "is there time for
-       * another one" test, which only means anything once an item has been
-       * timed, keeps its guard.
+       * WHY THIS WHOLE TEST SITS BEHIND `newlyBuilt.length`, AND MUST (2026-10-25).
+       *
+       * A 2026-10-24 change split this in two and made the soft-stop half
+       * unconditional, reasoning that a request whose FIRST item is slow is
+       * never capped. That reasoning was right and the change was wrong,
+       * twice over:
+       *
+       *   • At i = 0 `Date.now()` is a few hundred ms, far below `softStop`,
+       *     so an unconditional test does not fire there anyway — it fixed
+       *     nothing. What it did do is break out with NOTHING BUILT when the
+       *     work before this loop (auth, the survey, the research context,
+       *     the brief layering) ran past 90 s, which lands in the
+       *     `!built.length` path below and makes the browser DISCARD its
+       *     checkpoint.
+       *   • The `slowest * 1.5` half already prevents the case that actually
+       *     reaches ~160 s with more than one item: an item that took 80 s
+       *     stops the next one from starting, because 1.5 × 80 s does not
+       *     fit in what is left.
+       *
+       * The case that remains — ONE item that itself needs more than the
+       * clock — cannot be fixed by stopping earlier, only by not having to
+       * finish it in this request. Cutting it short (a bounded per-item
+       * deadline) makes a survey that used to build in 150 s fail at 90 s and
+       * fail again on every Resume, which is strictly worse than being slow.
+       * That case belongs to the durable runner, not to this loop.
        */
-      if (Date.now() >= softStop) break;
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
-      if (newlyBuilt.length && itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5)) break;
+      if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
       /* streaming, and the page has gone (or the stream was dropped): nothing more is started for nobody — what is built was already sent as checkpoints */
       if (sink?.cancelled) break;
       sink?.progress({ stage: "item", item: i + 1, of: approved.length, id: item.id, label: item.title });
       /* §3: the item's own exact passages of the stored brief (a quota table, a hypothesis, a definitions table) — not the whole brief */
       const hit = useBriefLayers ? itemPassagesFor(briefSections, item) : { text: "", ids: [] as string[] };
       const itemPassages = hit.text;
-      /*
-       * AND THIS ITEM CANNOT OUTLIVE THE CAP EITHER. Stopping BEFORE an item
-       * is only half the fix: the first item, started inside the cap, used to
-       * be given the whole 150 s. It is given until the cap instead, with a
-       * floor of MIN_ITEM_MS so a slice that starts late still gets a fair
-       * attempt. An item cut here falls into the existing `if (!built.length)`
-       * path and is handed back as a retryable failure in about 90 s, not a
-       * silent 160 s.
-       */
-      const stepDeadline = Math.min(itemDeadline, Math.max(Date.now() + MIN_ITEM_MS, softStop));
       /*
        * #11: THIS ITEM'S GUIDES — the build's core (one cached block, the same on every item) and what the item itself
        * needs, read from its kind, title, objects and its own brief passages; the whole build's set when nothing can be
@@ -656,7 +661,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       const t0 = Date.now();
       try {
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
-          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: stepDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
+          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
