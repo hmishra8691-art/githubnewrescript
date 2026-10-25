@@ -592,13 +592,21 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     const finalize = body.finalize === true;
     /*
      * THE DURABLE MIRROR (2026-10-24). The browser's checkpoint above is
-     * still the source of truth for what is built; these rows are WRITTEN so
-     * that an operator can later make them the source (COPILOT_TASK_RESUME)
-     * without a deploy. Best-effort by construction: `mirrorStart` returns
+     * the source of truth for what is built, on BOTH settings of
+     * COPILOT_TASK_RESUME — that flag moves the plan reconciliation, not
+     * this route's `done[]`, and wiring the route's read to these rows is a
+     * code change still to come. Best-effort by construction: `mirrorStart` returns
      * null for a turn too small to deserve a task row and for any failure at
      * all, and nothing below it can fail this turn.
      */
-    mirror = await mirrorStart({ surveyId, request: message, plan, mode, definition: def, planFirst: body.planFirst !== false });
+    /*
+     * THE APPROVED ITEMS, NOT THE WHOLE PLAN (audit H4). The researcher may
+     * tick a subset; `executedPlan` is that subset and it is what this
+     * request will build. Seeding the task from `plan` left a `pending` step
+     * for every unapproved item, so the task could never be complete, and
+     * the cron swept it as unfinished work for ever.
+     */
+    mirror = await mirrorStart({ surveyId, request: message, plan: executedPlan, mode, definition: def, planFirst: body.planFirst !== false });
     /* mergeable: built earlier and not yet in a proposal; the rest of `prior` is context for the next item's prompt */
     const built: { item: typeof approved[number]; raw: unknown }[] = approved.filter((it) => prior.has(it.id) && !prior.get(it.id)!.applied).map((item) => ({ item, raw: prior.get(item.id)!.raw }));
     const newlyBuilt: { id: string; raw: unknown }[] = [];

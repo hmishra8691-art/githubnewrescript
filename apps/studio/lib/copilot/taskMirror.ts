@@ -25,6 +25,37 @@ import { taskStoreFor, type TaskStore } from "./taskStore.ts";
 import { taskDualWriteEnabled } from "./resume.ts";
 import { checkDeliverable, nextStatusFor } from "./deliverable.ts";
 
+/*
+ * A STALL IS NOT A REJECTION (audit H5, 2026-10-25).
+ *
+ * Every call here was wrapped in try/catch, which handles a store that
+ * FAILS and does nothing at all about a store that simply never answers.
+ * These calls are awaited on the turn's hot path, inside the 90 s stage cap,
+ * so a Supabase that accepts a query and holds it blocked the generation
+ * until the platform killed the function at 180 s — and the request returned
+ * no JSON at all, which is the exact failure mode the durable rows were
+ * added to prevent.
+ *
+ * The ceiling is deliberately mean. Nothing here is on the critical path for
+ * correctness: the browser's checkpoint is still the source of truth, so a
+ * mirror call that is slow is a mirror call worth abandoning.
+ */
+const START_MS = 3_000;
+const STEP_MS = 2_000;
+
+class MirrorTimeout extends Error {
+  constructor(what: string, ms: number) { super(`the task store did not answer within ${ms} ms (${what})`); }
+}
+
+function withTimeout<T>(p: Promise<T>, what: string, ms = STEP_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new MirrorTimeout(what, ms)), ms);
+    /* unref so a pending ceiling never keeps a serverless invocation alive */
+    (timer as unknown as { unref?: () => void }).unref?.();
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 /** said once per process, so a log is not a wall of the same sentence */
 let warned = false;
 function quiet(where: string, e: unknown): null {
@@ -71,8 +102,8 @@ export interface MirrorStart {
 export async function mirrorStart(input: MirrorStart): Promise<Mirror | null> {
   if (!taskDualWriteEnabled()) return null;
   try {
-    const store = await taskStoreFor(input.surveyId);
-    const loaded = await loadOrCreatePlan({
+    const store = await withTimeout(taskStoreFor(input.surveyId), "open the store", START_MS);
+    const loaded = await withTimeout(loadOrCreatePlan({
       surveyId: input.surveyId,
       request: input.request,
       plan: input.plan,
@@ -81,7 +112,7 @@ export async function mirrorStart(input: MirrorStart): Promise<Mirror | null> {
       customerId: input.customerId,
       createdBy: input.createdBy,
       planFirst: input.planFirst,
-    }, store);
+    }, store), "load or create the task", START_MS);
     if (!loaded) return null;
     const task = loaded.task;
     return {
@@ -89,16 +120,26 @@ export async function mirrorStart(input: MirrorStart): Promise<Mirror | null> {
       reconciliation: { fresh: loaded.fresh, reused: loaded.reused, redone: loaded.redone, tombstoned: loaded.tombstoned },
       async step(itemId, raw, usage) {
         try {
-          await store.commit(task.id, itemId, {
+          /*
+           * THE STEP'S OWN KEY, NOT ONE MADE UP HERE (audit H1).
+           * The plan seeds each step with `idemOf(surveyId, item.id,
+           * itemFingerprint(item))` — content-addressed, so the same item of
+           * the same plan is the same delivery in any slice, in any process.
+           * This used to compose `${task.id}:${planVersion}:${itemId}`
+           * instead, which changed whenever a new task row was minted and so
+           * could never collide with the earlier delivery it was supposed to
+           * deduplicate.
+           */
+          const seeded = task.steps.find((x) => x.stepId === itemId)?.idempotencyKey;
+          await withTimeout(store.commit(task.id, itemId, {
             output: raw, usage,
-            /* stable across retries and slices: the same item of the same plan version is one delivery */
-            idempotencyKey: `${task.id}:${task.planVersion}:${itemId}`,
-          });
+            idempotencyKey: seeded || `${task.surveyId}:${itemId}:${task.planVersion}`,
+          }), "commit");
         } catch (e) { quiet("commit", e); }
       },
       async finish(def) {
         try {
-          const fresh = await store.load(task.id);
+          const fresh = await withTimeout(store.load(task.id), "reload the task");
           if (!fresh) return;
           /*
            * COMPLETION IS NOT DECLARED FROM THE REPLY. Every step may have
@@ -108,7 +149,7 @@ export async function mirrorStart(input: MirrorStart): Promise<Mirror | null> {
            */
           const report = def ? checkDeliverable(fresh.deliverable, def) : undefined;
           const status = report ? nextStatusFor(fresh, report) : "running";
-          await store.setStatus(task.id, status, report);
+          await withTimeout(store.setStatus(task.id, status, report), "record the status");
         } catch (e) { quiet("finish", e); }
       },
     };

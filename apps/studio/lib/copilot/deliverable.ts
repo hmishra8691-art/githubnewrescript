@@ -41,6 +41,7 @@ import {
   lintElementIds,
   lintEmbeddedPiping,
   lintLanguage,
+  surveyLanguages,
   lintLoops,
   lintStructure,
   lintSurveyLogic,
@@ -399,7 +400,19 @@ export function checkDeliverable(spec: DeliverableSpec, def: SurveyDefinition, c
   if (spec.kind === "translation") {
     const lang = spec.language;
     if (!lang) problems.push("The translation task has no target language in its deliverable spec.");
-    else {
+    else if (!surveyLanguages(def).some((l) => l.code === lang)) {
+      /*
+       * THE GATE THE LIVE PATH USES MUST BE THE STRICT ONE (audit H10).
+       * `translationComplete` in translationTask.ts refuses a language the
+       * survey does not serve; this branch — the one `taskMirror` actually
+       * calls — did not, so a survey configured for `en` with every string
+       * translated into `fr` reported the `fr` task COMPLETE. `lintLanguage`
+       * answers "ready" for a language nobody will ever be served, which is
+       * true and useless on its own.
+       */
+      measured.language = lang;
+      problems.push(`“${lang}” is not one of this survey's languages, so nothing would ever be served in it — add it to the survey's languages first.`);
+    } else {
       const report = lintLanguage(def, lang);
       measured.language = lang;
       measured.mandatory = report.mandatory;

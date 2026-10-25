@@ -158,7 +158,7 @@ test("#7 the read flag defaults OFF and is read per call", () => {
   for (const v of ["on", "ON", "1", "true", "yes"]) assert.equal(planResumeEnabled({ [PLAN_RESUME_ENV]: v }), true, v);
 });
 
-test("#8 with the flag off nothing is read back, but the task is still written (dual-write)", async () => {
+test("#8 with the flag off the slices of one build share a task row, and nothing in it is read back", async () => {
   const store = isolatedTaskStore();
   const opened: string[] = [];
   /* a delegating spy: a class instance cannot be spread, so every method is forwarded by hand */
@@ -179,11 +179,25 @@ test("#8 with the flag off nothing is read back, but the task is still written (
   assert.ok(first?.fresh);
   await finishAll(store, first.task.id);
   const second = await loadOrCreatePlan({ surveyId: "sv-8", request: BIG_REQUEST, plan: BASE_PLAN, mode: "generate", env: {} }, spied);
-  assert.ok(second?.fresh, "the flag is off: the open task is not loaded, a new one is minted");
-  assert.notEqual(second.task.id, first.task.id);
-  assert.equal(second.resumeRead, false);
-  assert.deepEqual(opened, [], "openFor is never called with the flag off");
-  assert.deepEqual(second.reused, [], "nothing is claimed as reused");
+  /*
+   * AUDIT H1 (2026-10-25). This used to assert the opposite — that the flag
+   * being off meant a NEW task every time. That was the bug: one build is
+   * several HTTP slices, so a 100-question generation left five sibling
+   * rows, none of them complete, all swept by the cron for ever, and the
+   * idempotency key was scoped to a task id that changed under it so the
+   * unique index could never deduplicate anything.
+   *
+   * Which row to write to and whether to believe its contents are different
+   * questions. The task is now found and appended to unconditionally; the
+   * flag still decides whether anything is read back.
+   */
+  assert.equal(second?.fresh, false, "the slices of one build share one task row");
+  assert.equal(second!.task.id, first.task.id);
+  assert.equal(second!.resumeRead, false);
+  assert.deepEqual(opened, ["sv-8", "sv-8"], "openFor is called on every turn now — to FIND the row, not to trust it");
+  assert.deepEqual(second!.reused, [], "and nothing in it is claimed as reused");
+  assert.deepEqual(second!.redone, []);
+  assert.deepEqual(second!.tombstoned, []);
 });
 
 /* ------------------------------------------- 4. does it continue the task? */
@@ -318,17 +332,36 @@ test("#14 a new item is added, not 'built again', and it invalidates what depend
   assert.deepEqual(r2.reused, ["p1", "p2", "p3", "p4"]);
 });
 
-test("#15 rule 1: completed is not enough — a step without a valid check is not reused", async () => {
+/*
+ * AUDIT H3 (2026-10-25). This used to assert that an UNCHECKED completed step
+ * is not reused. Nothing in the production path ever writes a verdict — the
+ * turn commits `{output, usage, idempotencyKey}` and the store defaults
+ * validation to `"unchecked"` — so that rule made reuse unreachable: every
+ * continuation rebuilt and re-billed work that was already done, while the
+ * store quietly kept the rows. "Nobody looked" is not "it is wrong".
+ *
+ * A completed step is reused unless something checked it and said INVALID.
+ * Reuse is still guarded where it matters: a changed item arrives with a
+ * different idempotency key and is unseated, and a step whose inputs moved
+ * arrives `blocked`.
+ */
+test("#15 rule 1: an unchecked completed step IS reused; an invalid one is not", async () => {
   const store = isolatedTaskStore();
   const made = await loadOrCreatePlan({ surveyId: "sv-15", request: BIG_REQUEST, plan: BASE_PLAN, mode: "generate", env: ON }, store);
   assert.ok(made);
   const task = await finishAll(store, made.task.id, "unchecked");
   const r = reconcilePlan(task, BASE_PLAN);
-  assert.deepEqual(r.reused, [], "nothing validated, so nothing is reused");
-  assert.deepEqual(r.redone, [], "and nothing is claimed to be redone either — the instruction changed nothing");
-  assert.deepEqual(r.outstanding, ["p1", "p2", "p3", "p4", "p5"]);
+  assert.deepEqual(r.reused, ["p1", "p2", "p3", "p4", "p5"], "work that is done is not done again");
+  assert.deepEqual(r.redone, [], "the instruction changed nothing");
+  assert.deepEqual(r.outstanding, []);
   assert.equal(r.unchanged, true, "no write is needed");
-  assert.match(describeReconciliation({ ...r, fresh: false }), /^No completed step could be reused\. Nothing is being built again\.$/);
+
+  const invalid = await finishAll(isolatedTaskStore(), (await loadOrCreatePlan({ surveyId: "sv-15b", request: BIG_REQUEST, plan: BASE_PLAN, mode: "generate", env: ON }, store))!.task.id, "invalid")
+    .catch(() => null);
+  if (invalid) {
+    const r2 = reconcilePlan(invalid, BASE_PLAN);
+    assert.deepEqual(r2.reused, [], "a step something checked and rejected is never reused");
+  }
 });
 
 test("#16 a resume with no new plan reuses what is validated and claims nothing else", async () => {

@@ -177,9 +177,21 @@ export function interruptedFailure(cp: Checkpoint): TurnFailure {
  * reversible with an environment variable and a restart — no deploy, no
  * migration, no code change.
  *
- * `COPILOT_TASK_RESUME=on` (also 1/true/yes) makes the server's own rows the
- * source of truth for what is already built. Anything else — unset, empty,
- * "off" — keeps the browser's checkpoint as the source, exactly as today.
+ * WHAT THE FLAG ACTUALLY DOES TODAY (corrected, audit H2, 2026-10-25).
+ *
+ * `COPILOT_TASK_RESUME=on` (also 1/true/yes) makes `loadOrCreatePlan`
+ * RECONCILE against the open task's rows: a completed step is reused rather
+ * than rebuilt, a changed item is invalidated, a deleted one is tombstoned.
+ * Off, the task row is still found and appended to — the slices of one build
+ * share a row either way — but nothing in it is read back.
+ *
+ * It does NOT yet switch what the TURN ROUTE believes is built. That is
+ * still `sanitizeDone(body.done, …)`, the browser's checkpoint, on both
+ * settings. Wiring the route's own read to these rows is a code change, not
+ * a flag; until it lands, this flag moves the PLAN, not the ITEM OUTPUTS.
+ * An earlier version of this comment, of the turn route's, and of the
+ * deployment runbook all said otherwise, and an operator who believed them
+ * would think they had switched the resume source when they had not.
  *
  * `COPILOT_PLAN_RESUME` (the plan-read switch, lib/copilot/planPersistence.ts)
  * turns this on too: reading a persisted plan back and then ignoring what its

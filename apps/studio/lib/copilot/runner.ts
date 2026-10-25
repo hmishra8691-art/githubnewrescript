@@ -291,9 +291,28 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
     let status: TaskStatus = task.status;
     let report: DeliverableReport | undefined = task.report;
     if (!outstanding.length && why !== "terminal" && status !== "failed" && status !== "cancelled") {
-      report = opts.check ? await opts.check(task) : { ok: true, problems: [] };
-      status = report.ok ? "completed" : "running";
-      await store.setStatus(taskId, status, report);
+      /*
+       * A MISSING CHECK IS NOT A PASS (audit H9, 2026-10-25).
+       *
+       * This read `opts.check ? await opts.check(task) : { ok: true }`, so a
+       * caller that passed no deliverable gate — which is every production
+       * caller today — completed the task unconditionally the moment its
+       * steps had all run. That is a second completion gate, answering yes
+       * without looking, directly against §9: completion is decided by one
+       * deterministic check of the deliverable, or it is not decided.
+       *
+       * With no check the steps are done and the task stays `running`. It is
+       * the honest answer: this runner has nothing left to build and no
+       * standing to say the thing the researcher asked for exists.
+       */
+      if (opts.check) {
+        report = await opts.check(task);
+        status = report.ok ? "completed" : "running";
+        await store.setStatus(taskId, status, report);
+      } else {
+        status = "running";
+        await store.setStatus(taskId, status, task.report);
+      }
     }
     return {
       taskId, built, remaining: outstanding, failed,
@@ -397,6 +416,27 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
         if (now() + wait + Math.min(minStepMs, opts.budgetMs) > Math.min(sliceDeadline, softStop)) { stop = "backoff"; break; }
         await sleep(wait);
         if (sink?.cancelled || opts.signal?.aborted) { stop = "cancelled"; break; }
+        /*
+         * RE-CLAIM BEFORE BUILDING AGAIN (audit H8, 2026-10-25).
+         *
+         * `fail(retryable)` moves the step to `retrying` and CLEARS its
+         * lease — correct, because a worker that dies during the backoff
+         * must not hold the step for a reclaim window. But this loop then
+         * went straight back into `buildStep` without taking the lease
+         * again, so for the whole backoff and the whole next attempt the
+         * step was unleased and immediately claimable. The cron sweep is a
+         * second runner by design, so two workers could build and bill the
+         * same step: the unique index still kept one row, but both provider
+         * calls had already been paid for.
+         *
+         * Losing the race is not a failure. Another worker has the step and
+         * will commit it; this slice simply moves on.
+         */
+        const again = await store.claim(taskId, { staleSeconds, maxAttempts: maxRetries + 1 }).catch(() => null);
+        if (!again || again.step.stepId !== step.stepId) {
+          stop = again ? "drained" : stop;
+          break;
+        }
         continue;
       }
 

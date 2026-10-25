@@ -74,7 +74,7 @@ Deploy `main` to the Studio as usual. On this deploy:
 | Flag | Set it to | Effect |
 |---|---|---|
 | `COPILOT_TASK_DUAL_WRITE` | leave unset (defaults **on**) | the task and step rows are written |
-| `COPILOT_TASK_RESUME` | leave unset (defaults **off**) | the browser's `done[]` is still the source of truth for what is built |
+| `COPILOT_TASK_RESUME` | leave unset (defaults **off**) | `loadOrCreatePlan` does not reconcile against the stored rows. Note it never changed what the turn route believes is built — that is the browser's `done[]` on either setting (audit H2) |
 
 So after this deploy the behaviour a researcher sees is **unchanged** (see the correction in
 step 0: the ~160 s stop is not addressed by this branch). Two things are now true that were
@@ -136,15 +136,22 @@ really doing its job before anything depends on it.
 
 ---
 
-## 5. Switch the read over — the only risky step
+## 5. Switch the plan read over — the only risky step
 
 ```
 COPILOT_TASK_RESUME=on
 ```
 
 One variable, one restart. No deploy, no migration, no code change. `COPILOT_PLAN_RESUME` is
-honoured as the older name and moves the same switch, so there is no way to turn on the plan
-read while leaving the step read off.
+honoured as the older name and moves the same switch.
+
+**What this does and does not do (corrected, audit H2).** On, `loadOrCreatePlan` reconciles
+the new plan against the open task: a completed step is reused instead of rebuilt, a changed
+item is invalidated, a deleted one is tombstoned. It does **not** change what the turn route
+believes is already built — that is still `sanitizeDone(body.done, …)`, the browser's
+checkpoint, on both settings. An earlier version of this runbook described this flag as
+switching the source of truth for built items. It never did; wiring the route's read to these
+rows is a code change still to come.
 
 **Do this on one environment first**, and watch for the two failure shapes that matter:
 

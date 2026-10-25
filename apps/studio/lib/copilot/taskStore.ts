@@ -626,7 +626,18 @@ class SupabaseTaskStore implements TaskStore {
   /** the probe: one id, which fails with 42P01 / PGRST205 when migration 0074 has not been applied */
   async probe(surveyId: string) {
     const db = await this.db();
-    const { error } = await db.from(TASKS).select("id").eq("survey_id", surveyId).limit(1);
+    /*
+     * THE SWEEP HAS NO SURVEY OF ITS OWN (audit H7, 2026-10-25).
+     *
+     * `survey_id` is a uuid column, so probing it with the cron's `""`
+     * raised 22P02 ("invalid input syntax for type uuid"). That is neither
+     * 42P01 nor PGRST205, so `tableMissing` said no and `storeWithFallback`
+     * rethrew — into the cron route's outer catch, which answered 503. On
+     * every single run, for the life of the job. An empty survey id means
+     * "every survey", so the probe simply asks whether the table answers.
+     */
+    const q = db.from(TASKS).select("id").limit(1);
+    const { error } = await (surveyId ? q.eq("survey_id", surveyId) : q);
     if (error) throw error;
   }
 

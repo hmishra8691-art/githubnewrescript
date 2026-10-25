@@ -159,6 +159,27 @@ function scripted(opts: { ms?: number; clock?: { sleep(ms: number): Promise<void
 
 /* ============================================================== the tests */
 
+
+/*
+ * A DELIBERATE PASS (audit H9, 2026-10-25). `runSlice` no longer completes a
+ * task when the caller supplies no deliverable gate — "nobody looked" is not
+ * "it is fine". The tests below are about durability, idempotency and
+ * budget, not about what "done" means, so they hand it a gate that passes
+ * and keep asserting `completed`. The test directly below this comment is
+ * the one that pins the new default.
+ */
+const PASSES = async () => ({ ok: true, problems: [] });
+
+test("a slice with no deliverable gate leaves the task running, however many steps finished", async () => {
+  const clock = virtualClock();
+  const store = memoryStore(taskOf(["a", "b"]), clock.now);
+  const s = scripted();
+  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  assert.equal(r.remaining.length, 0, "there is nothing left to build");
+  assert.equal(r.status, "running", "and the runner still does not claim the deliverable exists");
+  assert.equal((await store.load("t1"))!.status, "running");
+});
+
 test("nextRunnableSteps is pure over the graph: outstanding, dependencies met, in plan order", () => {
   const t = taskOf(["a", "b", "c", "d", "e"]);
   t.steps[0].status = "completed";
@@ -196,7 +217,7 @@ test("a worker killed mid-slice: every step that returned is durable, and no com
 
   /* a NEW worker, after the reclaim window: it picks up at the earliest incomplete step */
   const second = scripted();
-  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: second.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, staleSeconds: 0 });
+  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: second.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, staleSeconds: 0, check: PASSES });
   assert.deepEqual(r.built, ["c", "d"], "it resumed from the earliest incomplete step");
   assert.equal(r.remaining.length, 0);
   assert.equal(r.status, "completed");
@@ -244,7 +265,7 @@ test("delivering the same job twice is one artefact set and one charge", async (
   const clock = virtualClock();
   const store = memoryStore(taskOf(["a", "b", "c"]), clock.now);
   const first = scripted();
-  const r1 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: first.build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const r1 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: first.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.equal(r1.status, "completed");
   const spend = taskSpend(store.raw());
   assert.equal(spend.charge, 0.06, "three steps, three settled calls");
@@ -252,7 +273,7 @@ test("delivering the same job twice is one artefact set and one charge", async (
 
   /* the same job again — a double click, a retried cron, a second tab */
   const again = scripted();
-  const r2 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: again.build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const r2 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: again.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.deepEqual(r2.built, []);
   assert.equal(again.calls.length, 0, "not one model call for work already delivered");
   assert.equal(store.deliveries.length, 3, "one artefact set");
@@ -287,7 +308,7 @@ test("a context limit halves the batch and splits the step — it is never retri
     if ((ctx.batchSize ?? 0) > 10) return { error: { name: "ProviderError", kind: "bad_request", contextTooLong: true, detail: "prompt is too long" } };
     return { output: { built: s.stepId }, usage: USAGE, batchSizeUsed: ctx.batchSize };
   };
-  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.deepEqual(tried, [20, 10], "halved, not repeated at the same size");
   assert.deepEqual(r.built, ["a"]);
   const row = store.rows()[0];
@@ -303,7 +324,7 @@ test("a step too big at a batch of one is not retried for ever: it stops, classi
   const store = memoryStore(t, clock.now);
   let n = 0;
   const build: BuildStep = async () => { n++; return { error: { kind: "bad_request", contextTooLong: true } }; };
-  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.equal(n, 2, "20 → 1 is one halving, then it stops");
   assert.equal(r.failed[0]?.kind, "permanent");
   assert.equal(store.rows()[0].status, "failed");
@@ -337,7 +358,7 @@ test("a terminal failure stops the step, preserves the task, and says something 
     n++;
     return { error: { kind: "auth", status: 401, detail: "invalid x-api-key" } };
   };
-  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const r = await runSlice("t1", { budgetMs: 300_000, store, buildStep: build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.equal(n, 1, "a refused key is not retried");
   assert.equal(r.stoppedBy, "terminal");
   assert.equal(r.failed[0]?.kind, "auth");
@@ -395,7 +416,7 @@ test("a slice spends only its own budget and hands the rest back", async () => {
   assert.equal(r.built.length + r.remaining.length, 6);
   assert.ok(clock.now() <= 20_000);
   /* a second slice carries straight on, and nothing is built twice */
-  const t2 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  const t2 = await runSlice("t1", { budgetMs: 300_000, store, buildStep: s.build, now: clock.now, sleep: clock.sleep, minStepMs: 10, check: PASSES });
   assert.equal(t2.status, "completed");
   assert.equal(s.calls.length, 6);
   assert.equal(store.deliveries.length, 6);

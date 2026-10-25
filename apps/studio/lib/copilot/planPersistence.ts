@@ -393,8 +393,27 @@ export interface Reconciliation {
 const idemOf = (surveyId: string, itemId: string, fp: string): string => `${surveyId}:${itemId}:${fp}`;
 
 /** a step is reusable only when it COMPLETED and a deterministic check said the output is good */
+/*
+ * WHAT MAY BE REUSED (audit H3, 2026-10-25).
+ *
+ * This required `validation.status === "valid"`. Nothing in the production
+ * path ever writes a verdict — the turn commits `{output, usage,
+ * idempotencyKey}` and the store defaults validation to `"unchecked"` — so
+ * every completed step read as unusable, §6 rule 1 was dead, and the reply
+ * said "No completed step could be reused" on every continuation while
+ * `planRevision` quietly kept the rows. Two halves wrong in opposite
+ * directions.
+ *
+ * A completed step is now reusable unless something actually checked it and
+ * said it was INVALID. That is safe because reuse is already guarded where
+ * it matters: a step whose item changed comes back with a different
+ * idempotency key and is unseated (taskStore.planRevision), and a step whose
+ * inputs moved comes back `blocked`. `"unchecked"` means nobody looked, not
+ * that it is wrong, and refusing to reuse it costs a full rebuild and a
+ * second charge for work that is already done.
+ */
 export function isReusable(step: Pick<ExecStep, "status" | "validation">): boolean {
-  return step.status === "completed" && step.validation?.status === "valid";
+  return step.status === "completed" && step.validation?.status !== "invalid";
 }
 
 /**
@@ -567,9 +586,38 @@ export async function loadOrCreatePlan(input: LoadOrCreateInput, store: TaskStor
   const resumeRead = planResumeEnabled(input.env ?? process.env);
   const request = String(input.request ?? "");
 
-  if (resumeRead) {
+  /*
+   * WHICH ROW TO WRITE TO IS NOT THE SAME QUESTION AS WHETHER TO TRUST IT
+   * (audit H1, 2026-10-25).
+   *
+   * This used to look for an open task only when the resume flag was on.
+   * With the flag off — the shipped default — every HTTP slice of one build
+   * therefore INSERTED A NEW TASK, each seeded with the full step set and
+   * each recording only the items that slice happened to build. A
+   * 100-question build over five slices left five sibling rows, none of them
+   * complete, all of them swept by the cron for ever. It also scoped the
+   * idempotency key to a task id that changed every slice, so the unique
+   * index the migration exists for could never match across slices: the
+   * duplicate-delivery guard was inert in exactly the case it was written
+   * for.
+   *
+   * Attaching to the open task is therefore unconditional. What the flag
+   * still gates is READING ITS CONTENTS BACK — reconciliation, and reusing a
+   * completed step's output instead of building it again. With the flag off
+   * the task is found and appended to, and every step is rebuilt exactly as
+   * before; the rows merely stop multiplying.
+   */
+  {
     const open = await store.openFor(input.surveyId).catch(() => null);
     if (open && continuesTask(open, input.surveyId, request, now).continues) {
+      if (!resumeRead) {
+        /* write to it, believe nothing in it: the browser's `done[]` is still the source of truth */
+        return {
+          task: open, plan: input.plan ?? planFromTask(open), fresh: false,
+          reused: [], redone: [], tombstoned: [], added: [],
+          planVersion: open.planVersion, resumeRead, why: decision.why,
+        };
+      }
       if (input.plan?.items.length) {
         const r = reconcilePlan(open, input.plan);
         const task = r.unchanged ? open : await store.revise(open.id, r.planVersion, r.steps, r.tombstoned);
