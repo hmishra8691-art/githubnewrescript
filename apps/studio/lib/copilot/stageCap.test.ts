@@ -1,0 +1,122 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/*
+ * THE STAGE CAP, AND A FIX THAT WAS WORSE THAN THE BUG (2026-10-25).
+ *
+ * 2026-10-17 added STAGE_SOFT_MS = 90 s: past it no NEW plan item is started,
+ * what is built is handed back as a checkpoint, and the browser asks for the
+ * next batch. The test sits behind `newlyBuilt.length`.
+ *
+ * On 2026-10-24 that guard was split in two, the soft-stop half made
+ * unconditional, and each item given its own deadline bounded by the cap
+ * (`stepDeadline`), on the reasoning that a request whose FIRST item is slow
+ * is never capped and can sit open to ~160 s. The reasoning was right. The
+ * fix was wrong on both halves, and this file now exists to stop it being
+ * made again:
+ *
+ *   • UNCONDITIONAL SOFT STOP — at i = 0 the clock reads a few hundred ms, far
+ *     below `softStop`, so the test does not fire there and nothing was
+ *     fixed. What it did do is break out with nothing built whenever the work
+ *     BEFORE the loop (auth, the survey, the research context, the brief
+ *     layering, and the durable mirror's first round trip) ran past 90 s —
+ *     straight into the `!built.length` path, which answers `unusable`, and
+ *     `unusable` is in the browser's `forget()` list, so the checkpoint is
+ *     DISCARDED. A new way to lose work, in the name of not losing work.
+ *
+ *   • BOUNDED PER-ITEM DEADLINE — `min(itemDeadline, max(now + MIN_ITEM_MS,
+ *     softStop))` is a `min` against `itemDeadline` evaluated while
+ *     `now < softStop`, so it was never larger and in production always
+ *     smaller: the first item went from 150 s to 90 s and every later item
+ *     from `150 − t` to `max(30, 90 − t)`. An item that legitimately needed
+ *     91–150 s stopped working: it timed out, the turn failed, and Resume
+ *     re-entered with the same cap and timed out again. A survey that used to
+ *     build became one that could never build.
+ *
+ * What actually remains, and who owns it. The multi-item case is already
+ * handled by the `slowest * 1.5` half: an item that took 80 s stops the next
+ * from starting, because 1.5 × 80 s does not fit in what is left. The case
+ * that reaches ~160 s is ONE item that itself needs more than the clock, and
+ * no amount of stopping earlier fixes that — you cannot checkpoint the middle
+ * of a single model call. It is fixed by not having to finish it in this
+ * request, which is the durable runner's job (lib/copilot/runner.ts), not
+ * this loop's. Being slow beats being impossible.
+ */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const route = readFileSync(join(here, "..", "..", "app", "api", "copilot", "turn", "route.ts"), "utf8");
+const loop = route.slice(route.indexOf("if (!finalize) for (let i = 0"), route.indexOf("const failedIds"));
+
+test("the budgets are unchanged: 165 s route, 90 s stage, 15 s gate reserve, 30 s minimum item", () => {
+  assert.match(route, /const ROUTE_BUDGET_MS = 165_000;/, "the route clock is not raised");
+  assert.match(route, /const STAGE_SOFT_MS = 90_000;/, "the stage cap is still 90 s");
+  assert.match(route, /const GATE_RESERVE_MS = 15_000;/);
+  assert.match(route, /const MIN_ITEM_MS = 30_000;/);
+  assert.match(route, /export const maxDuration = 180;/);
+});
+
+test("the stop test is ONE statement and stays behind `newlyBuilt.length`", () => {
+  assert.ok(loop.length > 0, "the item loop is found");
+  assert.match(
+    loop,
+    /if \(newlyBuilt\.length && \(itemDeadline - Date\.now\(\) < Math\.max\(MIN_ITEM_MS, slowest \* 1\.5\) \|\| Date\.now\(\) >= softStop\)\) break;/,
+    "both halves in one test, guarded",
+  );
+  assert.doesNotMatch(
+    loop,
+    /\n\s*if \(Date\.now\(\) >= softStop\) break;/,
+    "an UNGUARDED soft stop breaks with nothing built and makes the browser discard its checkpoint",
+  );
+});
+
+test("no per-item deadline is bounded by the cap: the item call gets the full item deadline", () => {
+  assert.doesNotMatch(route, /stepDeadline/, "a bounded per-item deadline makes a slow item permanently unbuildable");
+  assert.match(route, /deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA/, "the item call uses the item deadline");
+  assert.equal((route.match(/const itemDeadline = deadline - GATE_RESERVE_MS;/g) ?? []).length, 1);
+});
+
+test("the arithmetic: the `slowest * 1.5` half already stops a SECOND item running into an overrun", () => {
+  const ROUTE_BUDGET_MS = 165_000, GATE_RESERVE_MS = 15_000, STAGE_SOFT_MS = 90_000, MIN_ITEM_MS = 30_000;
+  const startedAt = 0;
+  const itemDeadline = startedAt + ROUTE_BUDGET_MS - GATE_RESERVE_MS;   // 150 s
+  const softStop = startedAt + Math.min(STAGE_SOFT_MS, ROUTE_BUDGET_MS); // 90 s
+  const stops = (now: number, slowest: number, built: number) =>
+    built > 0 && (itemDeadline - now < Math.max(MIN_ITEM_MS, slowest * 1.5) || now >= softStop);
+
+  assert.equal(stops(80_000, 80_000, 1), true, "after a slow 80 s item the next does not start (1.5x does not fit)");
+  assert.equal(stops(95_000, 5_000, 1), true, "past the 90 s cap nothing new starts, however fast the items are");
+  assert.equal(stops(20_000, 20_000, 1), false, "two quick items still both run");
+  assert.equal(stops(0, 0, 0), false, "the FIRST item always gets its attempt — this is the point of the guard");
+  assert.equal(stops(95_000, 5_000, 0), false, "even a late start attempts one item rather than returning nothing");
+});
+
+test("the known limitation is a limitation, not a regression: one slow item may still reach the item deadline", () => {
+  /*
+   * Asserted so that it is a deliberate, visible property rather than a
+   * surprise — and so the next person to notice it reaches for the runner
+   * instead of shortening the item again.
+   */
+  const itemDeadline = 165_000 - 15_000;
+  assert.equal(itemDeadline, 150_000, "a single item may run to 150 s; the gate reserve then takes it to ~165 s");
+  assert.match(route, /ONE item that itself needs more than the/, "the route says so where the guard is");
+  assert.match(route, /belongs to the durable runner, not to this loop/, "and says who owns it");
+});
+
+test("the durable mirror cannot fail the turn: every call is optional-chained and the module swallows its own errors", () => {
+  assert.match(route, /await mirrorStart\(\{/, "the mirror is started in the execute stage");
+  for (const call of [/await mirror\?\.step\(/, /await mirror\?\.finish\(/]) assert.match(route, call);
+  assert.doesNotMatch(route, /await mirror\.step\(|await mirror\.finish\(/, "never called without the optional chain");
+  const mirrorSrc = readFileSync(join(here, "taskMirror.ts"), "utf8");
+  assert.ok((mirrorSrc.match(/catch \(e\)/g) ?? []).length >= 3, "start, commit and finish each catch");
+});
+
+test("the completion gate runs against the APPLIED survey, never the editor's copy", () => {
+  assert.match(route, /await mirror\?\.finish\(applied\?\.valid \? applied\.def : null, charge\);/, "with the turn's own spend, so the task total reconciles (audit M7)");
+  assert.ok(
+    route.indexOf("await mirror?.finish(applied?.valid") > route.indexOf("let applied = reply.actions.length"),
+    "the gate is after the actions are applied to a clone",
+  );
+});

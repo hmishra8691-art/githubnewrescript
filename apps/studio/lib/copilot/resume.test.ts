@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CHECKPOINT_TTL_MS, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, STATUS, waitBeforeRetry, type Checkpoint } from "./resume.ts";
+import { CHECKPOINT_TTL_MS, clearCheckpoint, failureOfResponse, interruptedFailure, isTemporary, loadCheckpoint, mergeBuilt, pausedFailure, pendingIds, saveCheckpoint, STATUS, TASK_RESUME_ENV, taskDualWriteEnabled, taskResumeEnabled, waitBeforeRetry, type Checkpoint } from "./resume.ts";
 import { describeFailure } from "./failure.ts";
 
 const mem = () => { const m = new Map<string, string>(); return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, v); }, removeItem: (k: string) => { m.delete(k); }, _m: m }; };
@@ -76,4 +76,22 @@ test("the card's words: statuses for each moment, no status codes, and a paused 
   const i = interruptedFailure(cp({ built: [{ id: "a", raw: 0 }, { id: "b", raw: 0 }], items: ["a", "b", "c", "d"] }));
   assert.equal(i.code, "interrupted"); assert.match(i.message, /2 of 4 items already built/);
   for (const t of [STATUS.waiting, STATUS.resuming, STATUS.ready, f.message, i.message]) assert.doesNotMatch(t, /\b(401|403|429)\b/);
+});
+
+test("reading what is built from the database is OFF until an operator says otherwise, and the dual write is ON", () => {
+  /* the switch is reversible with an environment variable and a restart — no deploy, no migration */
+  assert.equal(taskResumeEnabled({}), false, "unset means the browser's checkpoint, exactly as today");
+  assert.equal(taskResumeEnabled({ COPILOT_TASK_RESUME: "" }), false);
+  assert.equal(taskResumeEnabled({ COPILOT_TASK_RESUME: "off" }), false);
+  assert.equal(taskResumeEnabled({ COPILOT_TASK_RESUME: "maybe" }), false, "anything that is not plainly on is off");
+  for (const v of ["on", "1", "true", "YES", " on "]) assert.equal(taskResumeEnabled({ COPILOT_TASK_RESUME: v }), true, v);
+  /* one operator switch moves the whole read: the plan flag turns this on too, and an explicit setting still wins */
+  assert.equal(taskResumeEnabled({ COPILOT_PLAN_RESUME: "on" }), true);
+  assert.equal(taskResumeEnabled({ COPILOT_PLAN_RESUME: "off" }), false);
+  assert.equal(taskResumeEnabled({ COPILOT_PLAN_RESUME: "on", COPILOT_TASK_RESUME: "off" }), false);
+  assert.equal(TASK_RESUME_ENV, "COPILOT_TASK_RESUME");
+  /* the rows must be written all along, or turning the read on later would be a lie */
+  assert.equal(taskDualWriteEnabled({}), true);
+  assert.equal(taskDualWriteEnabled({ COPILOT_TASK_DUAL_WRITE: "on" }), true);
+  for (const v of ["off", "0", "false", "NO"]) assert.equal(taskDualWriteEnabled({ COPILOT_TASK_DUAL_WRITE: v }), false, v);
 });

@@ -8,6 +8,9 @@ import { aiReadyFor, connectionFor } from "@/lib/byok/connect";
 import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
+import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
+import { startBatchedTranslation, translationTargets } from "@/lib/copilot/translationRouting";
+import { taskStoreFor } from "@/lib/copilot/taskStore";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
@@ -261,6 +264,36 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const analysisTurn = analysisIntent(message) || mode === "generate";
   // languages: the translation guide, and the named questions' elements with their existing translations
   const translationTurn = translationIntent(message);
+  /*
+   * A LARGE TRANSLATION IS A TASK, NOT A TURN (§7, 2026-10-25).
+   *
+   * A string travels twice in one turn — the source up in the prompt, the
+   * translation back in the single JSON reply — so a survey with a few
+   * hundred mandatory strings produces a reply at the edge of truncation,
+   * and a truncated reply loses EVERY key in it because nothing was written
+   * down on the way. Several target languages is worse: one turn can write
+   * one language, so the rest were silently dropped.
+   *
+   * Past the threshold the work becomes an inventory-driven, resumable task
+   * — batches saved through `recordTranslation` as they are accepted, each
+   * key checked for its placeholders and piping, completion gated on
+   * `lintLanguage(def, lang).ready`. Below it NOTHING CHANGES: a small
+   * translation is still one turn, exactly as today.
+   */
+  const batchedTranslation = !translationTurn ? null : await startBatchedTranslation(await taskStoreFor(surveyId), {
+    surveyId, def, languages: translationTargets(def, message).languages, request: message,
+    ...(ctx.customerId ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  }).catch(() => null);
+  if (batchedTranslation) {
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: "answer", reply: batchedTranslation.reason, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
+      validation: null, passages: {},
+      task: { id: batchedTranslation.task.id, ids: batchedTranslation.tasks.map((t) => t.id), keys: batchedTranslation.keys, steps: batchedTranslation.steps },
+      context: { mode, promptChars: 0, cached: false, modelCalled: false, batchedTranslation: true },
+      usage: { charge: 0 },
+    });
+  }
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const listFillTurn = listFillIntent(message);
@@ -426,6 +459,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   let planFailures: { id: string; failure: TurnFailure }[] = [];
   let planPending: string[] = [];
   let executedPlan: ChangePlan | null = null;
+  /* the durable mirror of this turn, started in the execute stage and closed once the actions have been applied to a clone */
+  let mirror: Mirror | null = null;
   /* this request's clock and what the provider told us on the way */
   const fakeProvider = aiProviderName() === "fake";
   const budgetMs = fakeProvider && Number.isFinite(Number(body.budgetMs)) && Number(body.budgetMs) > 0 ? Number(body.budgetMs) : ROUTE_BUDGET_MS;
@@ -587,6 +622,25 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
      */
     const prior = sanitizeDone(body.done, new Set(plan.items.map((i) => i.id)));
     const finalize = body.finalize === true;
+    /*
+     * THE DURABLE MIRROR (2026-10-24). The browser's checkpoint above is
+     * the source of truth for what is built, on BOTH settings of
+     * COPILOT_TASK_RESUME — that flag moves the plan reconciliation, not
+     * this route's `done[]`, and wiring the route's read to these rows is a
+     * code change still to come. Best-effort by construction: `mirrorStart` returns
+     * null for a turn too small to deserve a task row and for any failure at
+     * all, and nothing below it can fail this turn.
+     */
+    /*
+     * THE APPROVED ITEMS, NOT THE WHOLE PLAN (audit H4). The researcher may
+     * tick a subset; `executedPlan` is that subset and it is what this
+     * request will build. Seeding the task from `plan` left a `pending` step
+     * for every unapproved item, so the task could never be complete, and
+     * the cron swept it as unfinished work for ever.
+     */
+    mirror = await mirrorStart({ surveyId, request: message, plan: executedPlan, mode, definition: def, planFirst: body.planFirst !== false,
+      /* L3: a row nobody owns cannot be attributed to a tenant, billed against, or swept on anyone's behalf */
+      ...(ctx.customerId ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { createdBy: ctx.userId } : {}) });
     /* mergeable: built earlier and not yet in a proposal; the rest of `prior` is context for the next item's prompt */
     const built: { item: typeof approved[number]; raw: unknown }[] = approved.filter((it) => prior.has(it.id) && !prior.get(it.id)!.applied).map((item) => ({ item, raw: prior.get(item.id)!.raw }));
     const newlyBuilt: { id: string; raw: unknown }[] = [];
@@ -600,6 +654,33 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     if (!finalize) for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
       if (prior.has(item.id) && !prior.get(item.id)!.applied) continue;
+      /*
+       * WHY THIS WHOLE TEST SITS BEHIND `newlyBuilt.length`, AND MUST (2026-10-25).
+       *
+       * A 2026-10-24 change split this in two and made the soft-stop half
+       * unconditional, reasoning that a request whose FIRST item is slow is
+       * never capped. That reasoning was right and the change was wrong,
+       * twice over:
+       *
+       *   • At i = 0 `Date.now()` is a few hundred ms, far below `softStop`,
+       *     so an unconditional test does not fire there anyway — it fixed
+       *     nothing. What it did do is break out with NOTHING BUILT when the
+       *     work before this loop (auth, the survey, the research context,
+       *     the brief layering) ran past 90 s, which lands in the
+       *     `!built.length` path below and makes the browser DISCARD its
+       *     checkpoint.
+       *   • The `slowest * 1.5` half already prevents the case that actually
+       *     reaches ~160 s with more than one item: an item that took 80 s
+       *     stops the next one from starting, because 1.5 × 80 s does not
+       *     fit in what is left.
+       *
+       * The case that remains — ONE item that itself needs more than the
+       * clock — cannot be fixed by stopping earlier, only by not having to
+       * finish it in this request. Cutting it short (a bounded per-item
+       * deadline) makes a survey that used to build in 150 s fail at 90 s and
+       * fail again on every Resume, which is strictly worse than being slow.
+       * That case belongs to the durable runner, not to this loop.
+       */
       /* not enough of this request's time left for another item: it, and the rest, are pending — handed back, not lost */
       if (newlyBuilt.length && (itemDeadline - Date.now() < Math.max(MIN_ITEM_MS, slowest * 1.5) || Date.now() >= softStop)) break;
       /* streaming, and the page has gone (or the stream was dropped): nothing more is started for nobody — what is built was already sent as checkpoints */
@@ -636,6 +717,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
         newlyBuilt.push({ id: item.id, raw: itemRaw });
         /* the item, kept by the page the moment it exists: a connection lost after this costs only the item in flight */
         sink?.checkpoint(item.id, itemRaw);
+        /* and kept by the SERVER, so a connection lost after this costs nothing at all once the read is switched over */
+        await mirror?.step(item.id, itemRaw, { tokensIn: m.event?.inputUnits ?? undefined, tokensOut: m.event?.outputUnits ?? undefined, charge: m.event?.customerCharge, model: m.event?.model ?? undefined });
         slowest = Math.max(slowest, Date.now() - t0);
         done.push(builtLine(item, itemRaw));
         /* #11: an action whose guide this item was not sent — judged by the gate as any other; logged, and offered to the repair with its guide */
@@ -663,6 +746,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       return failedTurn(waiting ? { ...failure, retryAfterMs: waiting.retryAfterMs || failure.retryAfterMs } : failure, prompt.length);
     }
     if (planPending.length && !finalize) {
+      await mirror?.finish(null, charge);
       /* a checkpoint: what was built in this request, what is still to do, why it stopped — the browser stores it and carries on */
       return NextResponse.json({
         ok: true, stage: "progress", built: newlyBuilt, builtIds: built.map((b) => b.item.id), pending: planPending, failed: planFailures,
@@ -867,6 +951,14 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       }
     }
   }
+  /*
+   * THE COMPLETION GATE, and the only place it can honestly run: `applied.def`
+   * is the survey as this turn would leave it. A task whose every step came
+   * back but whose deliverable is short — 64 questions of 100 — stays
+   * `running` here and resumes at 65. Deterministic code decides; no model is
+   * asked, and a failure to record it cannot fail the turn.
+   */
+  await mirror?.finish(applied?.valid ? applied.def : null, charge);
   const diff = applied?.valid ? diffSurveys(def, applied.def) : null;
   const passages = passageIds.length || reply.sources.length ? await describePassages(store, surveyId, docs, [...passageIds, ...reply.sources.flatMap((x) => x.passages)]) : {};
   // a citation to a passage that does not exist is not a citation: dropped, and a "document" claim with none left is only a recommendation

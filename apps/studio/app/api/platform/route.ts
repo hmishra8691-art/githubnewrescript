@@ -99,6 +99,7 @@ const PROBES: { migration: string; what: string; table: string; column?: string 
   { migration: "0071", what: "live human-moderated sessions (rooms, invitations, members, signalling, recorded chunks, back-room notes)", table: "live_room_tracks", column: "transcript" },
   /* G3 2026-10-22 */
   { migration: "0072", what: "alerts (channels with sealed webhook URLs, rules, the outbox, the delivery log) and panel recruitment (sealed signing secrets, panel entries)", table: "panel_entries", column: "outcome" },
+  { migration: "0074", what: "durable Intelligent Mode tasks and steps (a long generation that survives the page)", table: "intelligent_steps", column: "idempotency_key" },
 ];
 
 export async function GET(_req: NextRequest) {

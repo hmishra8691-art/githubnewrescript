@@ -28,6 +28,10 @@
     {
       "path": "/api/cron/notifications",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/intelligent-tasks",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

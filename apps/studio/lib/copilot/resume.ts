@@ -164,3 +164,52 @@ export function interruptedFailure(cp: Checkpoint): TurnFailure {
     next: ["Resume continues from where it stopped — nothing is generated twice and nothing needs to be typed again.", ...(cp.built.length ? ["Or review what is already built."] : [])],
   };
 }
+
+/* --------------------------------------- where "what is built" is read from */
+
+/**
+ * THE SWITCH FROM THE BROWSER'S CHECKPOINT TO THE DATABASE, off by default.
+ *
+ * The durable task rows are written from the first deploy (dual write), but
+ * what the next request BELIEVES is built still comes from the browser's
+ * `done[]` until an operator says otherwise. That ordering is deliberate: a
+ * wrong read means items built twice or items never built, and it must be
+ * reversible with an environment variable and a restart — no deploy, no
+ * migration, no code change.
+ *
+ * WHAT THE FLAG ACTUALLY DOES TODAY (corrected, audit H2, 2026-10-25).
+ *
+ * `COPILOT_TASK_RESUME=on` (also 1/true/yes) makes `loadOrCreatePlan`
+ * RECONCILE against the open task's rows: a completed step is reused rather
+ * than rebuilt, a changed item is invalidated, a deleted one is tombstoned.
+ * Off, the task row is still found and appended to — the slices of one build
+ * share a row either way — but nothing in it is read back.
+ *
+ * It does NOT yet switch what the TURN ROUTE believes is built. That is
+ * still `sanitizeDone(body.done, …)`, the browser's checkpoint, on both
+ * settings. Wiring the route's own read to these rows is a code change, not
+ * a flag; until it lands, this flag moves the PLAN, not the ITEM OUTPUTS.
+ * An earlier version of this comment, of the turn route's, and of the
+ * deployment runbook all said otherwise, and an operator who believed them
+ * would think they had switched the resume source when they had not.
+ *
+ * `COPILOT_PLAN_RESUME` (the plan-read switch, lib/copilot/planPersistence.ts)
+ * turns this on too: reading a persisted plan back and then ignoring what its
+ * steps already built would be the worst of both, so one operator switch
+ * moves the whole read. Setting this one explicitly still wins.
+ */
+export const TASK_RESUME_ENV = "COPILOT_TASK_RESUME";
+export function taskResumeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  const own = (env.COPILOT_TASK_RESUME ?? "").trim();
+  return /^(?:on|1|true|yes)$/i.test(own || (env.COPILOT_PLAN_RESUME ?? "").trim());
+}
+
+/**
+ * The dual write — every built item committed to the task rows as well as
+ * sent to the page — is ON unless an operator switches it off, because a read
+ * that is turned on later is only safe if the rows were being written all
+ * along. `COPILOT_TASK_DUAL_WRITE=off` (also 0/false/no) stops it.
+ */
+export function taskDualWriteEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return !/^(?:off|0|false|no)$/i.test((env.COPILOT_TASK_DUAL_WRITE ?? "").trim());
+}

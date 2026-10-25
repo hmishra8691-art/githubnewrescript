@@ -200,3 +200,5 @@ export * from "./uxDuplicates.js";
 export * from "./panels.js";
 export * from "./notifyEvents.js";
 export * from "./integrationActions.js";
+/* durable execution state: the task and step types the copilot runner persists (2026-10-24) */
+export * from "./execPlan.js";
