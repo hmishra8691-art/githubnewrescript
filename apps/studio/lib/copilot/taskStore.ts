@@ -105,6 +105,15 @@ export interface TaskStore {
   /** replace the step set for a new plan version, preserving completed steps (R2's reconciliation writes through this) */
   revise(taskId: string, planVersion: number, steps: Omit<ExecStep, "taskId" | "retryCount">[], tombstoned: string[]): Promise<ExecTask>;
   setStatus(taskId: string, status: TaskStatus, report?: ExecTask["report"]): Promise<void>;
+  /**
+   * Pause a task that nothing is wrong with. A background slice may not run
+   * when the author has lost the edit right, the project is frozen, the turn
+   * ran on the researcher's own key, or the wallet cannot cover another
+   * slice. Every step built is intact and the task finishes the moment the
+   * obstacle is removed, so `failed` would be a lie. Clearing it (`null`)
+   * puts the task back to `running`.
+   */
+  pause(taskId: string, blocked: NonNullable<ExecTask["blocked"]> | null): Promise<void>;
   /** the earliest step that is not finished — where a resumed task picks up */
   earliestIncomplete(taskId: string): Promise<ExecStep | null>;
   /** tasks left running or pending past their reclaim window, for the cron continuation */
@@ -280,6 +289,8 @@ export interface ClientTask {
   planVersion: number;
   deliverable: DeliverableSpec;
   report?: ExecTask["report"];
+  /** why a paused task is waiting for a person, with the sentence the panel shows */
+  blocked?: ExecTask["blocked"];
   progress: ReturnType<typeof taskProgress>;
   spend: ReturnType<typeof taskSpend>;
   steps: ClientStep[];
@@ -312,6 +323,7 @@ export function redactForClient(task: ExecTask): ClientTask {
     status: task.status,
     planVersion: task.planVersion,
     deliverable: task.deliverable,
+    blocked: task.blocked,
     report: task.report
       ? { ok: task.report.ok, problems: (task.report.problems ?? []).map(scrubSecrets), measured: task.report.measured }
       : undefined,
@@ -505,6 +517,16 @@ export class MemoryTaskStore implements TaskStore {
     if (!t) return;
     t.status = status;
     if (report) t.report = report;
+    /* a task that is running again is not blocked by anything */
+    if (status !== "needs_attention") t.blocked = undefined;
+    t.updatedAt = Date.now();
+  }
+
+  async pause(taskId: string, blocked: NonNullable<ExecTask["blocked"]> | null): Promise<void> {
+    const t = this.read(taskId);
+    if (!t) return;
+    if (blocked) { t.status = "needs_attention"; t.blocked = { ...blocked, at: blocked.at ?? Date.now() }; }
+    else { t.blocked = undefined; if (t.status === "needs_attention") t.status = "running"; }
     t.updatedAt = Date.now();
   }
 
@@ -628,6 +650,9 @@ function taskFromRow(r: Row, steps: ExecStep[]): ExecTask {
     deliverable: (r.deliverable as DeliverableSpec | null) ?? { kind: String(r.kind) as TaskKind },
     steps,
     report: (r.report as ExecTask["report"] | null) ?? undefined,
+    blocked: r.blocked_reason
+      ? { reason: String(r.blocked_reason) as NonNullable<ExecTask["blocked"]>["reason"], message: String(r.blocked_message ?? ""), at: time(r.blocked_at) }
+      : undefined,
     createdAt: time(r.created_at),
     updatedAt: time(r.updated_at),
   };
@@ -833,6 +858,16 @@ class SupabaseTaskStore implements TaskStore {
     const db = await this.db();
     const patch: Row = { status };
     if (report) patch.report = report;
+    if (status !== "needs_attention") { patch.blocked_reason = null; patch.blocked_message = null; patch.blocked_at = null; }
+    const { error } = await db.from(TASKS).update(patch).eq("id", taskId);
+    if (error) throw new Error(error.message);
+  }
+
+  async pause(taskId: string, blocked: NonNullable<ExecTask["blocked"]> | null): Promise<void> {
+    const db = await this.db();
+    const patch: Row = blocked
+      ? { status: "needs_attention", blocked_reason: blocked.reason, blocked_message: blocked.message.slice(0, 500), blocked_at: new Date(blocked.at ?? Date.now()).toISOString() }
+      : { status: "running", blocked_reason: null, blocked_message: null, blocked_at: null };
     const { error } = await db.from(TASKS).update(patch).eq("id", taskId);
     if (error) throw new Error(error.message);
   }

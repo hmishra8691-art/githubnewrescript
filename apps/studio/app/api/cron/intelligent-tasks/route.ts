@@ -3,6 +3,15 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { taskStoreFor } from "@/lib/copilot/taskStore";
 import { runSlice, stepBuilderFor, RECLAIM_SECONDS } from "@/lib/copilot/runner";
+import type { ExecTask } from "@rescript/engine";
+import { backgroundContextFor, isRefused, refusalMessage } from "@/lib/copilot/background";
+import { checkDeliverable } from "@/lib/copilot/deliverable";
+/*
+ * Imported for its side effect: this is what registers the item path with
+ * the runner. Without it `stepBuilderFor` returns null, the job reports that
+ * it skipped, and nothing is ever built in the background.
+ */
+import { loadDefinition } from "@/lib/copilot/backgroundBuild";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +71,7 @@ async function run(req: Request): Promise<NextResponse> {
   let advanced = 0;
   let built = 0;
   let skipped = 0;
+  let paused = 0;
   let more = false;
   const problems: { task: string; error: string }[] = [];
 
@@ -75,10 +85,42 @@ async function run(req: Request): Promise<NextResponse> {
         const store = await taskStoreFor(t.surveyId);
         const task = await store.load(t.id);
         if (!task) { skipped++; continue; }
+        /*
+         * MAY THIS TASK BE ADVANCED AT ALL, RIGHT NOW? Three questions, asked
+         * before anything is spent: does its author still hold the edit right
+         * on this project, is this the platform's key rather than a person's
+         * own, and can the wallet cover another slice within the task's
+         * ceiling. A no PAUSES the task with a sentence for the researcher —
+         * `needs_attention`, not `failed`, because every step already built is
+         * intact and it finishes as soon as the obstacle is gone.
+         */
+        const allowed = await backgroundContextFor(task);
+        if (isRefused(allowed)) {
+          /* an UNVERIFIED refusal is a missing answer, not a decided one: leave the task alone and ask again next sweep */
+          if (!allowed.refused.unverified) {
+            await store.pause(t.id, { reason: allowed.refused.kind, message: refusalMessage(allowed.refused) }).catch(() => undefined);
+            paused++;
+          } else skipped++;
+          continue;
+        }
         const buildStep = await stepBuilderFor(task);
         /* no item path registered in this process: say so, do not invent one */
         if (!buildStep) { skipped++; continue; }
-        const r = await runSlice(t.id, { budgetMs: SLICE_MS, store, buildStep });
+        /*
+         * The deliverable is the ONLY gate on `completed` (§9). The runner
+         * refuses to complete a task without one, deliberately, so the cron
+         * supplies the same check the turn route uses.
+         */
+        /*
+         * No definition, no verdict. `runSlice` with no `check` leaves the
+         * task `running` — which is the honest answer when the thing the
+         * deliverable is about could not be read.
+         */
+        const def = await loadDefinition(t.surveyId);
+        const r = await runSlice(t.id, {
+          budgetMs: SLICE_MS, store, buildStep,
+          ...(def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {}),
+        });
         advanced++;
         built += r.built.length;
         /* the provider asked us to come back: the next task would meet the same wall, so the rest is the next run's */
@@ -88,10 +130,10 @@ async function run(req: Request): Promise<NextResponse> {
       }
     }
     if (stale.length >= TASKS) more = true;
-    if (advanced || skipped || problems.length) {
-      console.info("[rescript:intelligent-tasks] slices run", { stale: stale.length, advanced, built, skipped, failed: problems.length, more, ms: Date.now() - startedAt });
+    if (advanced || skipped || paused || problems.length) {
+      console.info("[rescript:intelligent-tasks] slices run", { stale: stale.length, advanced, built, skipped, paused, failed: problems.length, more, ms: Date.now() - startedAt });
     }
-    return NextResponse.json({ ok: true, stale: stale.length, advanced, built, skipped, failed: problems.length, more });
+    return NextResponse.json({ ok: true, stale: stale.length, advanced, built, skipped, paused, failed: problems.length, more });
   } catch (e) {
     console.error("[rescript:intelligent-tasks] sweep failed", { error: (e as Error).message });
     return NextResponse.json({ ok: false, advanced, built, error: (e as Error).message }, { status: 503 });

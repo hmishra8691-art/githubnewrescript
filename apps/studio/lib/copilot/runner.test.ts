@@ -128,6 +128,7 @@ function memoryStore(task: ExecTask, now: () => number): MemStore {
       return (t.status === "running" || t.status === "pending") && now() - last >= olderThanMs ? [{ id: t.id, surveyId: t.surveyId }] : [];
     },
     async addExtraCharge(_id: string, amount: number) { extraCharge += amount; },
+    async pause(_id: string, b: NonNullable<ExecTask["blocked"]> | null) { t.blocked = b ?? undefined; if (b) t.status = "needs_attention"; },
   };
 }
 

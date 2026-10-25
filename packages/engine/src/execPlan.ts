@@ -38,11 +38,33 @@ export type TaskKind =
   | "other";
 
 export type TaskStatus =
-  | "pending"    // rows exist, nothing claimed yet
-  | "running"    // at least one slice has run
-  | "completed"  // every step completed AND the deliverable spec passed
-  | "failed"     // a permanent failure stopped it; steps are preserved
+  | "pending"          // rows exist, nothing claimed yet
+  | "running"          // at least one slice has run
+  | "completed"        // every step completed AND the deliverable spec passed
+  | "needs_attention"  // nothing is wrong with the work; something outside it stops a slice running
+  | "failed"           // a permanent failure stopped it; steps are preserved
   | "cancelled";
+
+/**
+ * WHY A TASK IS WAITING FOR A PERSON RATHER THAN A WORKER (2026-10-25).
+ *
+ * A background slice runs with nobody present, so it has to answer three
+ * questions before it spends anything: may this task's author still edit
+ * this project, is this the platform's key rather than someone's own, and
+ * can the wallet cover another slice. A no to any of them is NOT a failure
+ * of the work — every step already built is intact and the task will finish
+ * the moment the obstacle is removed — so it pauses here instead.
+ *
+ * `failed` would be a lie: it says the generation could not be done. These
+ * say it could, and something outside it is in the way.
+ */
+export type TaskBlocked =
+  | "no_author"   // the task has no recorded author to act for
+  | "no_right"    // the author no longer holds the edit right on this project
+  | "locked"      // the project is frozen
+  | "byok"        // the turn ran on the researcher's own provider key
+  | "wallet"      // the wallet cannot cover another slice
+  | "ceiling";    // the task has spent the allowance its plan justifies
 
 /**
  * A step's life. `blocked` is a step whose inputs a re-plan invalidated;
@@ -218,6 +240,8 @@ export interface ExecTask {
   steps: ExecStep[];
   /** the last deliverable check, so the panel can show WHY a task is not done */
   report?: DeliverableReport;
+  /** set with `needs_attention`: what is in the way, and one sentence for the researcher */
+  blocked?: { reason: TaskBlocked; message: string; at?: number };
   createdAt?: number;
   updatedAt?: number;
 }

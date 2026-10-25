@@ -188,6 +188,7 @@ test("#8 with the flag off the slices of one build share a task row, and nothing
     earliestIncomplete: (id) => store.earliestIncomplete(id),
     stale: (ms, limit) => store.stale(ms, limit),
     addExtraCharge: (id, amt) => store.addExtraCharge(id, amt),
+    pause: (id, b) => store.pause(id, b),
   };
   const first = await loadOrCreatePlan({ surveyId: "sv-8", request: BIG_REQUEST, plan: BASE_PLAN, mode: "generate", env: {} }, spied);
   assert.ok(first?.fresh);

@@ -9,6 +9,8 @@ import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
+import { startBatchedTranslation, translationTargets } from "@/lib/copilot/translationRouting";
+import { taskStoreFor } from "@/lib/copilot/taskStore";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
@@ -262,6 +264,36 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const analysisTurn = analysisIntent(message) || mode === "generate";
   // languages: the translation guide, and the named questions' elements with their existing translations
   const translationTurn = translationIntent(message);
+  /*
+   * A LARGE TRANSLATION IS A TASK, NOT A TURN (§7, 2026-10-25).
+   *
+   * A string travels twice in one turn — the source up in the prompt, the
+   * translation back in the single JSON reply — so a survey with a few
+   * hundred mandatory strings produces a reply at the edge of truncation,
+   * and a truncated reply loses EVERY key in it because nothing was written
+   * down on the way. Several target languages is worse: one turn can write
+   * one language, so the rest were silently dropped.
+   *
+   * Past the threshold the work becomes an inventory-driven, resumable task
+   * — batches saved through `recordTranslation` as they are accepted, each
+   * key checked for its placeholders and piping, completion gated on
+   * `lintLanguage(def, lang).ready`. Below it NOTHING CHANGES: a small
+   * translation is still one turn, exactly as today.
+   */
+  const batchedTranslation = !translationTurn ? null : await startBatchedTranslation(await taskStoreFor(surveyId), {
+    surveyId, def, languages: translationTargets(def, message).languages, request: message,
+    ...(ctx.customerId ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { createdBy: ctx.userId } : {}),
+  }).catch(() => null);
+  if (batchedTranslation) {
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: "answer", reply: batchedTranslation.reason, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
+      validation: null, passages: {},
+      task: { id: batchedTranslation.task.id, ids: batchedTranslation.tasks.map((t) => t.id), keys: batchedTranslation.keys, steps: batchedTranslation.steps },
+      context: { mode, promptChars: 0, cached: false, modelCalled: false, batchedTranslation: true },
+      usage: { charge: 0 },
+    });
+  }
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const listFillTurn = listFillIntent(message);

@@ -61,7 +61,7 @@ create table if not exists public.intelligent_tasks (
                 )),
   /* what the researcher asked, verbatim — the same text 0047 already keeps */
   request       text not null default '',
-  status        text not null default 'pending' check (status in ('pending','running','completed','failed','cancelled')),
+  status        text not null default 'pending' check (status in ('pending','running','completed','needs_attention','failed','cancelled')),
   /* bumped by a re-plan; steps carry the version they were planned under */
   plan_version  integer not null default 1,
   /* the DeliverableSpec: what "done" means, decided by deterministic code and never by a model */
@@ -108,6 +108,26 @@ create trigger intelligent_tasks_touch before update on public.intelligent_tasks
 /* the survey foreign key NOT VALID then validated, as 0047 does (an inline reference waits on surveys' lock) */
 /* idempotent for a database that already has the table from an earlier apply of this file */
 alter table public.intelligent_tasks add column if not exists extra_charge numeric(14,6) not null default 0;
+/*
+ * WHY A TASK IS WAITING FOR A PERSON (2026-10-25). A background slice may
+ * not run when the author has lost the edit right, the project is frozen,
+ * the turn ran on the researcher's own provider key, or the wallet cannot
+ * cover another slice. None of those is a failure of the work — every step
+ * built is intact — so the task pauses as `needs_attention` and records
+ * which of them it was, with the sentence the panel shows.
+ */
+do $$
+begin
+  /* widen the status check for a table created before `needs_attention` existed */
+  alter table public.intelligent_tasks drop constraint if exists intelligent_tasks_status_check;
+  alter table public.intelligent_tasks add constraint intelligent_tasks_status_check
+    check (status in ('pending','running','completed','needs_attention','failed','cancelled'));
+exception when others then null;
+end $$;
+
+alter table public.intelligent_tasks add column if not exists blocked_reason text;
+alter table public.intelligent_tasks add column if not exists blocked_message text;
+alter table public.intelligent_tasks add column if not exists blocked_at timestamptz;
 
 alter table public.intelligent_tasks drop constraint if exists intelligent_tasks_survey_id_fkey;
 alter table public.intelligent_tasks add constraint intelligent_tasks_survey_id_fkey
