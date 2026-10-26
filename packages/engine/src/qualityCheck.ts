@@ -1,4 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
+import { designGeneratorRegistry } from "@rescript/schema";
 import { lintSurveyLogic, type LogicIssue } from "./lintLogic.js";
 import { lintVariables } from "./variables.js";
 import { validateFlowStructure } from "./flowTree.js";
@@ -80,7 +81,7 @@ const AREA_NOTES: Record<string, string> = {
   structure: "Every question is on a page, and the flow nests legally.",
   variables: "No two things export the same variable name.",
   quotas: "Every quota can fill, and no cell is full before fielding starts.",
-  designs: "Every conjoint or MaxDiff question points at a design this survey holds.",
+  designs: "Every conjoint or MaxDiff question points at a design this survey holds, and that design shows every item or level to someone and keeps the rules it was given.",
   listfill: "Every List Fill has a source and somewhere to put what it allocates.",
   deployment: "The survey has an end, a deployment slug and at least one question.",
 };
@@ -117,6 +118,59 @@ function deploymentIssues(def: SurveyDefinition): LogicIssue[] {
   return out;
 }
 
+/**
+ * IS THE DESIGN ITSELF SOUND, not merely present (2026-10-26).
+ *
+ * Until now the only design rule was that a question's `designRef` resolved.
+ * A MaxDiff with an item nobody is ever shown, or a CBC whose rows break the
+ * researcher's own prohibitions, passed the gate and went to field; the
+ * generators had measured exactly that all along (`measureMaxDiffDesign`,
+ * `measureConjointDesign` — the numbers the Designs panel displays) and
+ * nothing read the measurement.
+ *
+ * The verdict comes from the generator that owns the method, through the
+ * schema's registry, because `@rescript/designs` depends on this package and
+ * the engine must never import it (dependency-boundaries R3). Where the
+ * Studio has loaded the generators, the rules apply; where it has not — a
+ * bare engine, a test — there are no design rules and the check behaves
+ * exactly as before.
+ *
+ * ONLY DESIGNS IN USE are checked. An unreferenced design in `def.designs`
+ * is work in progress, and a publish gate that fails on a draft nobody has
+ * wired up is a gate people learn to ignore.
+ */
+function designIssues(def: SurveyDefinition): LogicIssue[] {
+  const out: LogicIssue[] = [];
+  const byId = new Map((def.designs ?? []).map((d) => [d.id, d]));
+  const seen = new Set<string>();
+  for (const q of def.questions ?? []) {
+    const ref = (q as { settings?: { designRef?: unknown } }).settings?.designRef;
+    const id = typeof ref === "string" ? ref : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const design = byId.get(id);
+    /* a reference that does not resolve is already reported by the logic lint */
+    if (!design) continue;
+    const plugin = designGeneratorRegistry.get(design.kind);
+    if (!plugin?.inspect) continue;
+    try {
+      for (const issue of plugin.inspect(design)) {
+        out.push({ level: issue.level, path: `settings.designRef.${q.code ?? q.id}`, message: issue.message });
+      }
+    } catch (e) {
+      /*
+       * A check that throws must not become a design that passes — the same
+       * rule the logic lint follows above.
+       */
+      out.push({
+        level: "error", path: `settings.designRef.${q.code ?? q.id}`,
+        message: `The design “${design.name || design.id}” could not be checked: ${e instanceof Error ? e.message : String(e)}.`,
+      });
+    }
+  }
+  return out;
+}
+
 export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
   const collected: LogicIssue[] = [];
 
@@ -129,6 +183,9 @@ export function runQualityCheck(def: SurveyDefinition): QualityCheckResult {
       message: `The logic could not be analysed: ${e instanceof Error ? e.message : String(e)}`,
     });
   }
+
+  /* is each design in use actually sound, not merely present */
+  collected.push(...designIssues(def));
 
   /* duplicate variable names, in the same shape as everything else */
   for (const problem of lintVariables(def)) {
