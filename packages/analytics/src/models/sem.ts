@@ -506,7 +506,19 @@ export function fitSem(input: SemInput, opts: SemOptions = {}): ModelRun<SemOutp
   if (exo.length) { const k = exo.length; const Sx = new Float64Array(k * k); exo.forEach((a, i) => exo.forEach((b, jj) => { Sx[i * k + jj] = S[a * p + b]; })); const Lx = cholesky(Sx, k); logDetB += Lx ? logDetFromChol(Lx, k) : exo.reduce((t, a) => t + Math.log(S[a * p + a]), 0); }
   const baselineChisq = Math.max(0, N * (logDetB - logDetS));
   const baselineDf = moments - p - (exo.length * (exo.length - 1)) / 2;
-  const cfi = baselineChisq > 0 || chisq > 0 ? 1 - Math.max(chisq - df, 0) / Math.max(baselineChisq - baselineDf, chisq - df, 0) : null;
+  /*
+   * CFI (audit S7). The denominator is max(χ²₀ − df₀, χ² − df, 0), and when
+   * both non-centralities are at or below zero it is exactly 0. The old guard
+   * tested the two χ² STATISTICS rather than the two non-centralities, so
+   * 0/0 came through as NaN — and `Math.max(0, NaN)` is NaN, so the clip
+   * below did not catch it either. A model fitting at least as well as its df
+   * was published with CFI null, which the dashboard renders as 0 and reads
+   * as "below conventional cut-offs": χ²(1) = 0.278, p = .598, SRMR = .021
+   * was reported as a poor fit. A model at or better than its df fits
+   * perfectly by this index, so CFI = 1, as lavaan does.
+   */
+  const cfiDen = Math.max(baselineChisq - baselineDf, chisq - df, 0);
+  const cfi = cfiDen > 0 ? 1 - Math.max(chisq - df, 0) / cfiDen : 1;
   const tli = df > 0 && baselineDf > 0 ? (baselineChisq / baselineDf - chisq / df) / (baselineChisq / baselineDf - 1) : null;
   const rmsea = df > 0 ? Math.sqrt(Math.max(chisq - df, 0) / (df * N)) : null;
   const rmseaLow = df > 0 ? Math.sqrt(lambdaFor(chisq, df, 0.95) / (df * N)) : null;
@@ -518,7 +530,7 @@ export function fitSem(input: SemInput, opts: SemOptions = {}): ModelRun<SemOutp
   const LSig = cholesky(Sig, p)!;
   let trSS = 0; for (let i = 0; i < p; i++) for (let j = 0; j < p; j++) trSS += S[i * p + j] * ev.Sinv[j * p + i];
   const logLik = -0.5 * N * (p * Math.log(2 * Math.PI) + logDetFromChol(LSig, p) + trSS);
-  const fitOut: SemFit = { n: N, npar: q, chisq, df, pvalue: df > 0 ? chiSquareP(chisq, df) : null, baselineChisq, baselineDf, cfi: cfi == null ? null : Math.min(1, Math.max(0, cfi)), tli, rmsea, rmseaLow, rmseaHigh, srmr, logLik, aic: -2 * logLik + 2 * q, bic: -2 * logLik + q * Math.log(N) };
+  const fitOut: SemFit = { n: N, npar: q, chisq, df, pvalue: df > 0 ? chiSquareP(chisq, df) : null, baselineChisq, baselineDf, cfi: Math.min(1, Math.max(0, cfi)), tli, rmsea, rmseaLow, rmseaHigh, srmr, logLik, aic: -2 * logLik + 2 * q, bic: -2 * logLik + q * Math.log(N) };
   if (df === 0) diagnostics.push(diag("just_identified", "info", "The model is just-identified (df = 0): it reproduces the covariances exactly, so χ², CFI, TLI and RMSEA say nothing about fit."));
   const r2 = model.vars.map((v, i) => ({ v, i })).filter(({ i }) => model.entries.some((e) => e.matrix === "A" && e.r === i)).map(({ v, i }) => ({ variable: v, r2: C[i * m + i] > 0 ? 1 - Smat[i * m + i] / C[i * m + i] : NaN }));
   residualCorrelations.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual));

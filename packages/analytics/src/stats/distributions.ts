@@ -1,8 +1,10 @@
 /**
  * Probability distributions used by the tests: normal, Student t, chi-square,
  * F, plus the log-gamma / incomplete beta / incomplete gamma they rest on.
- * Numerical Recipes-style series and continued fractions; accurate to ~1e-10,
- * which is far beyond what a survey p-value needs.
+ * Numerical Recipes-style series and continued fractions, checked against
+ * scipy to ~1e-15 — far beyond what a survey p-value needs, but the cost of
+ * getting there is a few more terms, and a p-value above 1 is not a rounding
+ * difference a client will forgive.
  */
 
 export function logGamma(x: number): number {
@@ -69,12 +71,52 @@ function betaCF(x: number, a: number, b: number): number {
 
 /* ------------------------------------------------------------ normal */
 
+/**
+ * erfc to ~1e-15 relative: Taylor series below |x| < 2, Lentz continued
+ * fraction beyond. It lives here rather than beside its one previous caller
+ * in `bootstrap.ts` because `normalCdf` needs it (audit S6).
+ */
+export function erfc(x: number): number {
+  if (x < 0) return 2 - erfc(-x);
+  if (x < 2) {
+    // erf(x) = 2/√π Σ (−1)^n x^(2n+1) / (n! (2n+1))
+    let sum = x, term = x;
+    for (let n = 1; n < 200; n++) {
+      term *= -x * x / n;
+      const add = term / (2 * n + 1);
+      sum += add;
+      if (Math.abs(add) < 1e-17 * Math.abs(sum)) break;
+    }
+    return 1 - (2 / Math.sqrt(Math.PI)) * sum;
+  }
+  // erfc(x) = exp(−x²)/√π · 1/(x + 1/2 / (x + 1 / (x + 3/2 / (x + …))))
+  const tiny = 1e-300;
+  let f = x, C = x, D = 0;
+  for (let n = 1; n < 500; n++) {
+    const an = n / 2;
+    D = x + an * D; D = Math.abs(D) < tiny ? 1 / tiny : 1 / D;
+    C = x + an / C; if (Math.abs(C) < tiny) C = tiny;
+    const delta = C * D;
+    f *= delta;
+    if (Math.abs(delta - 1) < 1e-16) break;
+  }
+  return Math.exp(-x * x) / (Math.sqrt(Math.PI) * f);
+}
+
+/**
+ * Φ(z) to double precision.
+ *
+ * This was the Abramowitz–Stegun 26.2.17 five-term polynomial, whose maximum
+ * absolute error is 1.74e-07 — and whose worst point is z = 0, where it
+ * returned 0.4999998255363571 instead of 0.5, so the two-sided p of a zero z
+ * came out at 1.0000003489272857. Every z-based p-value in the package
+ * carried that error (Mann–Whitney, Wilcoxon, Cochran–Armitage, both
+ * proportion tests, the logit z-tests); everything routed through `gammaP` or
+ * `betaI` — χ², t, F — was already accurate to 3e-16. One function, one fix
+ * (audit S6). Φ(0) is now exactly 0.5.
+ */
 export function normalCdf(z: number): number {
-  // Abramowitz-Stegun 7.1.26 via erf, then refined with Hart-like precision
-  const t = 1 / (1 + 0.2316419 * Math.abs(z));
-  const d = 0.3989422804014327 * Math.exp(-z * z / 2);
-  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return z > 0 ? 1 - p : p;
+  return 0.5 * erfc(-z / Math.SQRT2);
 }
 /** Inverse normal CDF (Acklam), used for confidence intervals. */
 export function normalQuantile(p: number): number {

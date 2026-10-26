@@ -63,6 +63,43 @@ export interface DesignGeneratorPlugin<C = Record<string, unknown>> {
     summary?: Record<string, unknown>;
   };
   validateConfig?(config: C): string[];
+  /**
+   * WHETHER A GENERATED DESIGN IS SOUND, measured on the rows the survey
+   * actually holds (2026-10-26).
+   *
+   * The generators have always measured this — `measureMaxDiffDesign` and
+   * `measureConjointDesign` read the rows themselves, and the Studio's
+   * Designs panel shows the numbers. Nothing ever stopped an unsound design
+   * being fielded: the publish gate only checked that a question's
+   * `designRef` pointed at a design the survey holds, not that the design
+   * was any good. A MaxDiff with an item nobody is ever shown, or a CBC
+   * whose rows break the researcher's own prohibitions, passed and went to
+   * field, and surfaced as unusable utilities after the sample was paid for.
+   *
+   * This is the seam that fixes it. The engine's `runQualityCheck` asks the
+   * registry, so the rule lives with the generator that owns the method and
+   * the engine never imports `@rescript/designs` (dependency-boundaries R3).
+   * A plugin that does not implement it contributes no design rules, exactly
+   * as before.
+   *
+   * `level` is a judgement about the STUDY, not about tidiness:
+   *   "error"    no amount of sample can rescue this — an item or level that
+   *              is never shown has no utility to estimate, and rows that
+   *              break a prohibition are not the design the researcher asked
+   *              for. These refuse a publish.
+   *   "warning"  the design is usable and imperfect: show-count spread,
+   *              pair co-occurrence, positional skew, efficiency. Said with
+   *              the real numbers so the researcher can judge, never
+   *              blocking — a gate people learn to override is not a gate.
+   */
+  inspect?(design: DesignReference): DesignQualityIssue[];
+}
+
+/** One thing worth saying about a stored design, in the publish gate's terms. */
+export interface DesignQualityIssue {
+  level: "error" | "warning";
+  /** the researcher's sentence; carries the measured numbers, never a code */
+  message: string;
 }
 
 export interface ExportPlugin {
