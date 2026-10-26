@@ -1,4 +1,5 @@
 import { Rng } from "../models/rng.js";
+import { erfc } from "./distributions.js";
 
 /**
  * BOOTSTRAP CONFIDENCE INTERVALS FOR AN INDIRECT EFFECT (advanced models from
@@ -25,34 +26,7 @@ import { Rng } from "../models/rng.js";
 
 /* ------------------------------------------------------------ a precise normal (the BCa levels need it) */
 
-/** erfc to ~1e-15 relative: series below |x| < 2, Lentz continued fraction beyond */
-function erfc(x: number): number {
-  if (x < 0) return 2 - erfc(-x);
-  if (x < 2) {
-    // erf(x) = 2/√π Σ (−1)^n x^(2n+1) / (n! (2n+1))
-    let sum = x, term = x;
-    for (let n = 1; n < 200; n++) {
-      term *= -x * x / n;
-      const add = term / (2 * n + 1);
-      sum += add;
-      if (Math.abs(add) < 1e-17 * Math.abs(sum)) break;
-    }
-    return 1 - (2 / Math.sqrt(Math.PI)) * sum;
-  }
-  // erfc(x) = exp(−x²)/√π · 1/(x + 1/2 / (x + 1 / (x + 3/2 / (x + …))))
-  const tiny = 1e-300;
-  let f = x, C = x, D = 0;
-  for (let n = 1; n < 500; n++) {
-    const an = n / 2;
-    D = x + an * D; D = Math.abs(D) < tiny ? 1 / tiny : 1 / D;
-    C = x + an / C; if (Math.abs(C) < tiny) C = tiny;
-    const delta = C * D;
-    f *= delta;
-    if (Math.abs(delta - 1) < 1e-16) break;
-  }
-  return Math.exp(-x * x) / (Math.sqrt(Math.PI) * f);
-}
-/** Φ(z) to double precision */
+/** Φ(z) to double precision. `erfc` moved to `distributions.ts` when `normalCdf` was fixed to use it too (audit S6). */
 export const phi = (z: number): number => 0.5 * erfc(-z / Math.SQRT2);
 /** Φ⁻¹(p): Acklam's rational approximation polished by two Halley steps on the precise Φ */
 export function phiInv(p: number): number {

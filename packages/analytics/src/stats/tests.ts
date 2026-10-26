@@ -282,12 +282,13 @@ export function proportionTest(x1: number, n1: number, x2?: number, n2?: number,
   if (n2 == null || x2 == null) {
     const p = x1 / n1, se = Math.sqrt((p0 * (1 - p0)) / n1);
     const z = se ? (p - p0) / se : 0;
-    return { test: "proportion_one_sample", statistic: z, p: 2 * (1 - normalCdf(Math.abs(z))), detail: { p, p0, n: n1 } };
+    return { test: "proportion_one_sample", statistic: z, p: Math.min(1, 2 * (1 - normalCdf(Math.abs(z)))), detail: { p, p0, n: n1 } };
   }
   const p1 = x1 / n1, p2 = x2 / n2, pool = (x1 + x2) / (n1 + n2);
   const se = Math.sqrt(pool * (1 - pool) * (1 / n1 + 1 / n2));
   const z = se ? (p1 - p2) / se : 0;
-  return { test: "proportion_two_sample", statistic: z, p: 2 * (1 - normalCdf(Math.abs(z))), effectSize: { name: "Cohen's h", value: 2 * Math.asin(Math.sqrt(p1)) - 2 * Math.asin(Math.sqrt(p2)) }, detail: { p1, p2, n1, n2, difference: p1 - p2 } };
+  /* the clamp the other tests in this file already had: the two proportion tests were the only ones without it, which is how `proportionTest(50, 100, 50, 100)` reached a crosstab as p = 1.0000003 (audit S6) */
+  return { test: "proportion_two_sample", statistic: z, p: Math.min(1, 2 * (1 - normalCdf(Math.abs(z)))), effectSize: { name: "Cohen's h", value: 2 * Math.asin(Math.sqrt(p1)) - 2 * Math.asin(Math.sqrt(p2)) }, detail: { p1, p2, n1, n2, difference: p1 - p2 } };
 }
 
 /**

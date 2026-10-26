@@ -429,7 +429,28 @@ export function hbSummarise(state: HbState, data: HbData): HbOutput {
     return { name, mean, sd, lo: quantileSorted(all, 0.025), hi: quantileSorted(all, 0.975), rhat: constant ? 1 : chains.length > 1 || xs[0].length >= 8 ? splitRhat(xs) : NaN, ess: constant ? all.length : effectiveSize(xs), popSd };
   });
   const varying = mu.filter((m) => m.sd > 1e-12);
-  const maxRhat = varying.length ? Math.max(...varying.map((m) => m.rhat).filter(Number.isFinite)) : 1;
+  /*
+   * A R̂ that could not be computed is not a R̂ that passed (audit S2).
+   *
+   * `.filter(Number.isFinite)` discarded BOTH of `splitRhat`'s failure modes
+   * — NaN when a chain has fewer than four kept draws, and Infinity when the
+   * chains sit at different constant values, which is the worst
+   * non-convergence there is — and `Math.max()` of the empty array that left
+   * behind is −Infinity, which then failed the `Number.isFinite` guard on the
+   * diagnostic below. So "R̂ undefined" silently became "R̂ passed".
+   *
+   * With a single kept draw it is worse again: every parameter has sd 0,
+   * takes the `constant` shortcut to rhat 1, drops out of `varying`, and the
+   * check passes vacuously. A run of four total draws — reachable from the
+   * user-settable thin and draws — was published as "Converged — estimates
+   * below are valid", with a 95% credible interval of [0.9646, 0.9646].
+   *
+   * Infinity is now kept so that it trips rhat_high, and having too few draws
+   * to compute R̂ at all is an error in its own right.
+   */
+  const maxRhat = varying.length ? Math.max(...varying.map((m) => m.rhat)) : 1;
+  const keptPerChain = Math.min(...chains.map((c) => c.kept));
+  const rhatUnavailable = Number.isNaN(maxRhat) || keptPerChain < 4;
   const minEss = varying.length ? Math.min(...varying.map((m) => m.ess)) : K;
   const u = new Float64Array(Math.max(2, ...data.respondents.map((r) => Math.max(...Array.from(r.taskSizes as ArrayLike<number>)))));
   let totLL = 0, totNull = 0, totTasks = 0;
@@ -457,8 +478,9 @@ export function hbSummarise(state: HbState, data: HbData): HbOutput {
   const meanDrawLogLik = chains.reduce((t, c) => t + c.llDraws.reduce((s, v) => s + v, 0), 0) / Math.max(1, K);
   // verdicts
   if (chains.length < 2) diagnostics.push(diag("single_chain", "warning", "Only one chain was run, so R̂ compares the two halves of that chain; run two or more chains for a proper convergence check."));
-  if (Number.isFinite(maxRhat) && maxRhat > 1.1) diagnostics.push(diag("rhat_high", "error", `The chains have not converged: the largest R̂ on the population means is ${maxRhat.toFixed(2)} (should be below 1.1). Increase the burn-in and draws; these utilities are not reported as valid.`));
-  else if (Number.isFinite(maxRhat) && maxRhat > 1.05) diagnostics.push(diag("rhat_borderline", "warning", `The largest R̂ is ${maxRhat.toFixed(3)} — acceptable (< 1.1) but more iterations would make the estimates firmer.`));
+  if (rhatUnavailable) diagnostics.push(diag("rhat_unavailable", "error", `R̂ could not be computed${keptPerChain < 4 ? `: only ${keptPerChain} draw${keptPerChain === 1 ? " was" : "s were"} kept per chain` : " for at least one population mean"} — a split-R̂ needs at least four draws per chain. Convergence cannot be judged, so these utilities are not reported as valid; raise the number of draws or lower the thinning interval.`));
+  else if (maxRhat > 1.1) diagnostics.push(diag("rhat_high", "error", `The chains have not converged: the largest R̂ on the population means is ${Number.isFinite(maxRhat) ? maxRhat.toFixed(2) : "unbounded — the chains sit at different constant values"} (should be below 1.1). Increase the burn-in and draws; these utilities are not reported as valid.`));
+  else if (maxRhat > 1.05) diagnostics.push(diag("rhat_borderline", "warning", `The largest R̂ is ${maxRhat.toFixed(3)} — acceptable (< 1.1) but more iterations would make the estimates firmer.`));
   if (minEss < 100) diagnostics.push(diag("ess_low", "warning", `The smallest effective sample size of a population mean is ${minEss.toFixed(0)} — fewer than 100 effectively independent draws; credible intervals are rough. Run more draws.`));
   for (const c of chainsOut) {
     if (c.acceptance < 0.1 || c.acceptance > 0.6) diagnostics.push(diag("acceptance", "warning", `Chain ${c.chain}: acceptance rate ${(c.acceptance * 100).toFixed(0)}% after burn-in (target ${(o.targetAcceptance * 100).toFixed(0)}%) — the burn-in may be too short for the jump size to settle.`));

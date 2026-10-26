@@ -126,9 +126,25 @@ test("logistic and multinomial regression fit separable-ish data sensibly", () =
   assert.ok(!("error" in m));
   assert.ok(m.coefficients[1].estimate > 0 && m.coefficients[1].oddsRatio! > 1);
   assert.ok(m.accuracy >= 0.8); assert.ok(m.mcFaddenR2 > 0.3 && m.mcFaddenR2 < 1);
-  const cat = x.map((v) => (v < 4 ? "low" : v < 8 ? "mid" : "high"));
-  const mn = multinomialLogistic(cat, { predictors: [{ name: "x", values: x }] });
-  assert.ok(!("error" in mn)); assert.equal(mn.equations.length, 2); assert.ok(mn.mcFaddenR2 > 0.5);
+  /*
+   * The multinomial outcome has to OVERLAP with the predictor (audit S5).
+   *
+   * This fixture used to be `v < 4 ? "low" : v < 8 ? "mid" : "high"` over the
+   * twelve x values above — a category x determines exactly, so the MLE does
+   * not exist. The estimator added a ridge to the information matrix before
+   * testing it for singularity, fitted it anyway, and returned coefficients
+   * of 406 and -74.8 with standard errors of 9320 and p = 0.965; this test
+   * asserted that was fine. It is refused now, and `auditFixes.test.ts` pins
+   * the refusal. Rotating every fifth label leaves a strong but estimable
+   * relationship: McFadden R2 around 0.25, largest SE around 1.0.
+   */
+  const rot: Record<string, string> = { low: "mid", mid: "high", high: "low" };
+  const xs: number[] = [], cat: string[] = [];
+  for (let i = 0; i < 96; i++) { const v = i % 12; xs.push(v); const b = v < 4 ? "low" : v < 8 ? "mid" : "high"; cat.push(i % 5 === 0 ? rot[b] : b); }
+  const mn = multinomialLogistic(cat, { predictors: [{ name: "x", values: xs }] });
+  assert.ok(!("error" in mn), "error" in (mn as { error?: string }) ? (mn as { error: string }).error : "");
+  assert.equal(mn.equations.length, 2); assert.ok(mn.converged); assert.ok(mn.mcFaddenR2 > 0.2 && mn.mcFaddenR2 < 1);
+  assert.ok(mn.equations.every((e) => e.coefficients.every((c) => c.se != null && Number.isFinite(c.se) && c.se < 10)), "an estimable design has usable standard errors");
 });
 
 test("mediation: full mediation shows indirect ≈ total and small direct", () => {

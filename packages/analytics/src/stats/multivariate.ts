@@ -173,28 +173,73 @@ export interface FactorResult {
   communalities: number[];
 }
 
-function varimax(L: Matrix, maxIter = 50): Matrix {
+/**
+ * Varimax by Kaiser's pairwise planar rotations.
+ *
+ * This replaces a gradient ascent by polar decomposition that had two
+ * problems (audit S3). Its gradient used each variable's ROW sum of squares —
+ * that variable's communality — where the varimax gradient needs the FACTOR's
+ * column sum, so it climbed the wrong surface: of 400 random loading
+ * matrices, 127 finished short of the optimum, the worst by 48%.
+ *
+ * Correcting the gradient alone was not enough, because that iteration cannot
+ * leave a stationary point. On two clean blocks of three variables every
+ * loading comes out at ±0.71 on both factors; the true gradient there is
+ * zero, so the rotation never starts. That configuration is a saddle, not a
+ * maximum — the optimum rotates it to clean simple structure, and the package
+ * test that covered it had been passing on a tie-break in the fourth decimal.
+ *
+ * Kaiser's algorithm takes the factors two at a time and rotates each pair by
+ * the angle that maximises the criterion for that pair, in closed form: with
+ * u = x² − y² and v = 2xy summed over the p variables,
+ *   tan 4φ = (2Σuv − 2ΣuΣv/p) / (Σ(u²−v²) − ((Σu)² − (Σv)²)/p).
+ * `atan2` selects the maximum rather than one of the three other stationary
+ * angles in the period, and a pair rotation can only raise the criterion.
+ * Checked against a brute-force search over every planar rotation: it reaches
+ * the optimum on the saddle case, on the 48%-short case, on clean simple
+ * structure and on all 400 random matrices, with no shortfall anywhere.
+ *
+ * Raw (un-normalised) varimax, as before: Kaiser row normalisation is a
+ * different estimator and is not what this code targeted.
+ */
+function varimax(L: Matrix, maxSweeps = 100): Matrix {
   const p = L.length, k = L[0]?.length ?? 0;
-  if (k < 2) return L;
-  let R: Matrix = Array.from({ length: k }, (_, i) => Array.from({ length: k }, (_, j) => (i === j ? 1 : 0)));
-  const mult = (A: Matrix, B: Matrix) => A.map((row) => B[0].map((_, j) => row.reduce((t, v, i) => t + v * B[i][j], 0)));
-  let d = 0;
-  for (let it = 0; it < maxIter; it++) {
-    const Lr = mult(L, R);
-    const u = Lr.map((row) => row.map((v) => v ** 3 - (v * row.reduce((t, x) => t + x * x, 0)) / p));
-    // R = (L' u) svd → use eigen on (L'u)'(L'u)
-    const Lt = L[0].map((_, j) => L.map((row) => row[j]));
-    const B = mult(Lt, u);
-    const BtB = mult(B[0].map((_, j) => B.map((row) => row[j])), B);
-    const { values, vectors } = symmetricEigen(BtB);
-    const invSqrt = vectors.map((row) => row.map((v, j) => v / Math.sqrt(Math.max(values[j], 1e-12))));
-    const V = mult(vectors, invSqrt[0].map((_, j) => invSqrt.map((row) => row[j])));
-    R = mult(B, V);
-    const dNew = values.reduce((t, v) => t + Math.sqrt(Math.max(v, 0)), 0);
-    if (Math.abs(dNew - d) < 1e-7) break;
-    d = dNew;
+  if (k < 2 || p < 2) return L.map((row) => row.slice());
+  const A = L.map((row) => row.slice());
+  const criterion = () => {
+    let s = 0;
+    for (let j = 0; j < k; j++) {
+      let q = 0, r = 0;
+      for (let i = 0; i < p; i++) { const v = A[i][j]; q += v ** 4; r += v * v; }
+      s += (p * q - r * r) / (p * p);
+    }
+    return s;
+  };
+  let last = -Infinity;
+  for (let sweep = 0; sweep < maxSweeps; sweep++) {
+    for (let j = 0; j < k - 1; j++) for (let l = j + 1; l < k; l++) {
+      let sU = 0, sV = 0, sUU = 0, sVV = 0, sUV = 0;
+      for (let i = 0; i < p; i++) {
+        const x = A[i][j], y = A[i][l];
+        const u = x * x - y * y, v = 2 * x * y;
+        sU += u; sV += v; sUU += u * u; sVV += v * v; sUV += u * v;
+      }
+      const num = 2 * (p * sUV - sU * sV), den = p * (sUU - sVV) - (sU * sU - sV * sV);
+      if (Math.abs(num) < 1e-14 && Math.abs(den) < 1e-14) continue;
+      const phi = Math.atan2(num, den) / 4;
+      if (Math.abs(phi) < 1e-13) continue;
+      const c = Math.cos(phi), s = Math.sin(phi);
+      for (let i = 0; i < p; i++) {
+        const x = A[i][j], y = A[i][l];
+        A[i][j] = c * x + s * y;
+        A[i][l] = -s * x + c * y;
+      }
+    }
+    const now = criterion();
+    if (now - last < 1e-13 * Math.max(1, Math.abs(now))) break;
+    last = now;
   }
-  return mult(L, R);
+  return A;
 }
 
 export function factorAnalysis(columns: { name: string; values: (number | null | undefined)[] }[], opts: { method?: "pca" | "principal_axis"; factors?: number; rotation?: "none" | "varimax" } = {}): FactorResult | { error: string } {
@@ -209,14 +254,31 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
   const z = standardize(data).rows;
   const corr = correlationMatrix(columns.map((c, j) => ({ name: c.name, values: keep.map((i) => c.values[i]) })));
   let R: Matrix = corr.r.map((row) => row.map((v) => v ?? 0));
+  /* the correlation matrix with unities on the diagonal, kept before principal_axis reduces it in place (audit S4) */
+  const R0 = R.map((row) => row.slice());
   if (method === "principal_axis") {
-    // replace the diagonal with squared multiple correlations (communality estimates), iterate a few times
+    // replace the diagonal with squared multiple correlations (communality estimates)
     const inv = inverse(R);
     if (inv) R = R.map((row, i) => row.map((v, j) => (i === j ? 1 - 1 / inv[i][i] : v)));
   }
   const eig = symmetricEigen(R);
+  /*
+   * Reported eigenvalues, "% of variance" and the Kaiser factor count all
+   * come from the UNREDUCED correlation matrix — SPSS's "Initial Eigenvalues"
+   * column (audit S4).
+   *
+   * For principal_axis the matrix that is decomposed for the loadings has SMC
+   * communalities on its diagonal, so its trace is Σ SMC rather than p and
+   * its lower eigenvalues are negative. Dividing those by p anyway produced
+   * six negative "% of variance" entries and a cumulative that FELL from
+   * 60.3% to 52.8% as factors were added, rendered straight into the
+   * "Eigenvalues and variance explained" table. The loadings still come from
+   * the reduced matrix — that is what makes this principal axis and not PCA.
+   * For method "pca" nothing is reduced, so nothing here changes.
+   */
+  const initial = method === "principal_axis" ? symmetricEigen(R0).values : eig.values;
   const total = p;
-  const factors = opts.factors ?? Math.max(1, eig.values.filter((v) => v > 1).length);
+  const factors = opts.factors ?? Math.max(1, initial.filter((v) => v > 1).length);
   let loadings: Matrix = columns.map((_, i) => eig.vectors[i].slice(0, factors).map((v, f) => v * Math.sqrt(Math.max(eig.values[f], 0))));
   const rotation = opts.rotation ?? (factors > 1 ? "varimax" : "none");
   if (rotation === "varimax") loadings = varimax(loadings);
@@ -253,9 +315,9 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
     kmo = r2 + q2 ? r2 / (r2 + q2) : null;
   }
   return {
-    method, variables: columns.map((c) => c.name), eigenvalues: eig.values,
-    explained: eig.values.map((v) => (v / total) * 100),
-    cumulative: eig.values.reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? 0) + (v / total) * 100], []),
+    method, variables: columns.map((c) => c.name), eigenvalues: initial,
+    explained: initial.map((v) => (v / total) * 100),
+    cumulative: initial.reduce<number[]>((acc, v) => [...acc, (acc.at(-1) ?? 0) + (v / total) * 100], []),
     loadings, factors, rotation, kmo, scores, cases: keep, communalities,
   };
 }
