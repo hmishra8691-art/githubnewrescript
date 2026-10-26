@@ -3,6 +3,7 @@ import type { Dataset } from "../dataset.js";
 import type { TestResult } from "../stats/tests.js";
 import { answeredCases, weightedN } from "../dataset.js";
 import { canonicalJson, fnv1a } from "../canonical.js";
+import { REPORT_LOCALE } from "../format.js";
 
 export const MIN_BASE = 30;
 
@@ -115,7 +116,7 @@ export function makeResult(
    * FRONT of the warnings, ahead of the low-base note, because no other
    * caveat on the screen matters if this one is true.
    */
-  if (ds.truncatedAt) warnings.unshift(`This analysis was computed on the first ${ds.truncatedAt.toLocaleString()} responses only — the study has more. Every base, percentage and test below describes that subset, not the whole study. Narrow the dataset (environment, status or date range) to bring it under the limit.`);
+  if (ds.truncatedAt) warnings.unshift(`This analysis was computed on the first ${ds.truncatedAt.toLocaleString(REPORT_LOCALE)} responses only — the study has more. Every base, percentage and test below describes that subset, not the whole study. Narrow the dataset (environment, status or date range) to bring it under the limit.`);
   /*
    * Say which results ignore the weights (S-6). These kinds compute their tests and models on respondents counted once
    * each; the "effective sample size is reduced" line below would imply they used the weights, so they get the
@@ -143,6 +144,6 @@ export function nth(i: number): string { return ["first", "second", "third", "fo
 
 export function fmtNum(x: number | null | undefined, d = 1): string {
   if (x == null || !Number.isFinite(x)) return "—";
-  return x.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: 0 });
+  return x.toLocaleString(REPORT_LOCALE, { maximumFractionDigits: d, minimumFractionDigits: 0 });
 }
 export function fmtPct(x: number | null | undefined, d = 0): string { return x == null ? "—" : `${fmtNum(x, d)}%`; }

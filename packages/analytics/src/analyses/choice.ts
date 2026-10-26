@@ -8,6 +8,7 @@ import { cvaAnalysis } from "../conjoint/cva.js";
 import { menuModelTables, menuTasks } from "../conjoint/menu.js";
 import { scenariosFor, simulatorTables } from "../conjoint/simulatorTables.js";
 import { numericValues, type UtilityModel } from "../conjoint/simulator.js";
+import { REPORT_LOCALE } from "../format.js";
 
 /** dual-response None codings (F4): "dual" = forced choice + a buy/no-buy task (Sawtooth's default); "single_none" = one task with None chosen when they would not buy; "forced" = the forced choice only (no None) */
 export type DualCoding = "dual" | "single_none" | "forced";
@@ -177,7 +178,7 @@ export function choiceQuestionFor(ds: Dataset, name: string): { id: string; type
   return q ? { id: q.id, type: q.type } : null;
 }
 
-const samplingWarning = (respondents: number, step: number) => `The model was fitted on every ${step === 2 ? "second" : `${step}th`} respondent (about ${Math.ceil(respondents / step).toLocaleString()} of ${respondents.toLocaleString()}) to keep the run within its time limit; counts and shares of choice use everyone. Estimates from this many respondents are already very precise.`;
+const samplingWarning = (respondents: number, step: number) => `The model was fitted on every ${step === 2 ? "second" : `${step}th`} respondent (about ${Math.ceil(respondents / step).toLocaleString(REPORT_LOCALE)} of ${respondents.toLocaleString(REPORT_LOCALE)}) to keep the run within its time limit; counts and shares of choice use everyone. Estimates from this many respondents are already very precise.`;
 
 /** the most respondents whose tasks go into the model fit; beyond it every k-th respondent is used and the result says so (audit F-3) */
 export const MAX_MODEL_RESPONDENTS = 25_000;

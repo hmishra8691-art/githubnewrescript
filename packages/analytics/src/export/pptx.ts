@@ -22,6 +22,7 @@ import { chartPicture } from "../chartPictures.js";
 import { chartDecimals, chartFormatCode } from "../chartFormat.js";
 import { divergingLayout, divergingSeriesOrder, stackShares } from "../chartLayout.js";
 import { methodologyBlock, methodologyLines } from "../reportPages.js";
+import { REPORT_LOCALE } from "../format.js";
 
 export interface ExportItem { title: string; result: AnalysisResult; chart?: ChartSpec; caption?: string; tableId?: string }
 
@@ -359,7 +360,7 @@ export async function buildPptx(rawInput: PptxInput): Promise<Buffer> {
     if (block.type === "kpi") {
       const s = p.addSlide(); decorate(s, block.title ?? result.name);
       const kpis = result.chart.kpis ?? [];
-      kpis.slice(0, 4).forEach((k, i) => { const x = 0.6 + i * ((W - 1.2) / Math.min(4, kpis.length)); s.addShape(p.ShapeType.roundRect, { x, y: 1.6, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1.8, fill: { color: "F5F7FA" }, line: { color: "D9DEE6" }, rectRadius: 0.1 }); s.addText(`${typeof k.value === "number" ? k.value.toLocaleString() : k.value}${k.unit ?? ""}`, { x, y: 1.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1, fontSize: 30, bold: true, color: primary, align: "center", fontFace: font }); s.addText(k.label, { x, y: 2.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 0.5, fontSize: 12, color: subtle, align: "center", fontFace: font }); });
+      kpis.slice(0, 4).forEach((k, i) => { const x = 0.6 + i * ((W - 1.2) / Math.min(4, kpis.length)); s.addShape(p.ShapeType.roundRect, { x, y: 1.6, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1.8, fill: { color: "F5F7FA" }, line: { color: "D9DEE6" }, rectRadius: 0.1 }); s.addText(`${typeof k.value === "number" ? k.value.toLocaleString(REPORT_LOCALE) : k.value}${k.unit ?? ""}`, { x, y: 1.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 1, fontSize: 30, bold: true, color: primary, align: "center", fontFace: font }); s.addText(k.label, { x, y: 2.7, w: (W - 1.2) / Math.min(4, kpis.length) - 0.2, h: 0.5, fontSize: 12, color: subtle, align: "center", fontFace: font }); });
       s.addText(result.advice?.basis ?? `Base: n = ${result.base.n}`, { x: 0.6, y: 4.8, w: W - 1.2, h: 0.3, fontSize: 9, color: subtle, fontFace: font });
       return;
     }

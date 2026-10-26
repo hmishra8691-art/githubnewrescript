@@ -16,6 +16,7 @@ import type { ResultTable } from "../types.js";
 import { categoricalColumn, categoriesOf, type Dataset } from "../dataset.js";
 import { pct, round } from "../analyses/common.js";
 import { demandCurve, optimiseProduct, productPrice, sensitivity, simulateShares, willingnessToPay, type SimOptions, type SimProduct, type UtilityModel } from "./simulator.js";
+import { REPORT_LOCALE } from "../format.js";
 
 export interface SimulatorSpec {
   products?: SimProduct[];
@@ -74,8 +75,8 @@ export function simulatorTables(m: UtilityModel, spec: SimulatorSpec, ds: Datase
   tables.push({
     id: `${pre}_shares`, title: `Market simulator${spec.name ? ` — ${spec.name}` : ""}: ${ruleWords[res.rule]}`,
     columns: [{ key: "product", label: "Product" }, { key: "levels", label: "Levels" }, { key: "share", label: "Share %", type: "pct", decimals: 1 },
-      ...(anyPrice ? [{ key: "price", label: "Price", type: "number" as const, decimals: 2 }, { key: "revenue", label: `Revenue per ${size.toLocaleString()} people`, type: "number" as const, decimals: 0 }] : []),
-      ...(anyCost ? [{ key: "profit", label: `Profit per ${size.toLocaleString()} people`, type: "number" as const, decimals: 0 }] : [])],
+      ...(anyPrice ? [{ key: "price", label: "Price", type: "number" as const, decimals: 2 }, { key: "revenue", label: `Revenue per ${size.toLocaleString(REPORT_LOCALE)} people`, type: "number" as const, decimals: 0 }] : []),
+      ...(anyCost ? [{ key: "profit", label: `Profit per ${size.toLocaleString(REPORT_LOCALE)} people`, type: "number" as const, decimals: 0 }] : [])],
     rows: [
       ...res.products.map((p, j) => ({ product: p.name + (p.extrapolated ? " (price extrapolated)" : ""), levels: Object.entries(products[j].levels).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("; "), share: pct(p.share * 100), ...(anyPrice ? { price: money(p.price), revenue: p.revenue == null ? null : round(p.revenue, 0) } : {}), ...(anyCost ? { profit: p.profit == null ? null : round(p.profit, 0) } : {}) })),
       ...(res.none != null ? [{ product: "None", levels: "No purchase", share: pct(res.none * 100) }] : []),
@@ -97,7 +98,7 @@ export function simulatorTables(m: UtilityModel, spec: SimulatorSpec, ds: Datase
     const j = productIndex(products, typeof spec.demand === "object" ? spec.demand.product : undefined);
     const d = demandCurve(m, products, j, { ...so, points: typeof spec.demand === "object" ? spec.demand.points : undefined });
     if (d) {
-      tables.push({ id: `${pre}_demand`, title: `Demand curve — ${products[j].name} across the tested price range`, columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "share", label: "Share %", type: "pct", decimals: 1 }, { key: "revenue", label: `Revenue per ${size.toLocaleString()} people`, type: "number", decimals: 0 }, { key: "elasticity", label: "Arc elasticity", type: "number", decimals: 2 }],
+      tables.push({ id: `${pre}_demand`, title: `Demand curve — ${products[j].name} across the tested price range`, columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "share", label: "Share %", type: "pct", decimals: 1 }, { key: "revenue", label: `Revenue per ${size.toLocaleString(REPORT_LOCALE)} people`, type: "number", decimals: 0 }, { key: "elasticity", label: "Arc elasticity", type: "number", decimals: 2 }],
         rows: d.rows.map((r) => ({ price: money(r.price), share: pct(r.share * 100), revenue: round(r.revenue, 0), elasticity: r.elasticity == null ? null : round(r.elasticity, 2) })),
         notes: ["Other products keep their prices. Arc elasticity = % change in share ÷ % change in price between neighbouring points (below −1: demand is elastic there).", `Revenue is highest at ${d.revenueMaxPrice.toFixed(2)} within the tested range — not a recommendation by itself (costs, competitors' reactions and the share/volume gap are outside the model).`] });
       insights.push(`${products[j].name}: revenue is highest at a price of ${d.revenueMaxPrice.toFixed(2)} within the tested range.`);
@@ -123,11 +124,11 @@ export function simulatorTables(m: UtilityModel, spec: SimulatorSpec, ds: Datase
   if (spec.optimize) {
     const j = productIndex(products, spec.optimize.product);
     const o = optimiseProduct(m, products, j, { ...so, objective: spec.optimize.objective, fixed: spec.optimize.fixed, isLegal: opts.isLegal });
-    const unit = o.objective === "share" ? "Share %" : o.objective === "revenue" ? `Revenue per ${size.toLocaleString()} people` : `Profit per ${size.toLocaleString()} people`;
+    const unit = o.objective === "share" ? "Share %" : o.objective === "revenue" ? `Revenue per ${size.toLocaleString(REPORT_LOCALE)} people` : `Profit per ${size.toLocaleString(REPORT_LOCALE)} people`;
     const fmt = (v: number) => (o.objective === "share" ? pct(v * 100) : round(v, 0));
     tables.push({ id: `${pre}_optimise`, title: `Product optimisation — ${products[j].name} (maximise ${o.objective})`, columns: [{ key: "rank", label: "Rank", type: "number", decimals: 0 }, { key: "levels", label: "Configuration" }, { key: "price", label: "Price", type: "number", decimals: 2 }, { key: "value", label: unit, type: o.objective === "share" ? "pct" : "number", decimals: o.objective === "share" ? 1 : 0 }],
       rows: o.top.map((t, k) => ({ rank: k + 1, levels: Object.entries(t.levels).filter(([, v]) => v).map(([a, v]) => `${a}: ${v}`).join("; "), price: money(t.price ?? productPrice(m, { ...products[j], levels: t.levels })), value: fmt(t.value) })),
-      notes: [`${o.exhaustive ? "Every" : "A seeded search over"} configuration${o.exhaustive ? "" : "s"} (${o.evaluations.toLocaleString()} evaluated of ${o.space.toLocaleString()}); competitors fixed${spec.optimize.fixed?.length ? `; fixed: ${spec.optimize.fixed.join(", ")}` : ""}; prohibited combinations excluded. Current configuration: ${fmt(o.current)}.`, "An optimum against a fixed market — competitors would react; read it as which levels matter most, not as a launch plan."] });
+      notes: [`${o.exhaustive ? "Every" : "A seeded search over"} configuration${o.exhaustive ? "" : "s"} (${o.evaluations.toLocaleString(REPORT_LOCALE)} evaluated of ${o.space.toLocaleString(REPORT_LOCALE)}); competitors fixed${spec.optimize.fixed?.length ? `; fixed: ${spec.optimize.fixed.join(", ")}` : ""}; prohibited combinations excluded. Current configuration: ${fmt(o.current)}.`, "An optimum against a fixed market — competitors would react; read it as which levels matter most, not as a launch plan."] });
     if (o.best) insights.push(`Best ${products[j].name} for ${o.objective}: ${Object.entries(o.best.levels).filter(([, v]) => v).map(([a, v]) => `${a} ${v}`).join(", ")}${o.best.price != null ? ` at ${o.best.price.toFixed(2)}` : ""}.`);
   }
   return { tables, insights, warnings };

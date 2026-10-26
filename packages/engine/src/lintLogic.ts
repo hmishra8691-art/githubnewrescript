@@ -42,6 +42,7 @@ import { effectiveScale } from "./scale.js";
 import { EMBEDDED_MEANINGLESS } from "./smartOperators.js";
 import { containsReplacementFor } from "./containsOperator.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
+import { DEFAULT_NUMBER_LOCALE } from "./localization.js";
 
 /**
  * Logic configuration linting (reqs §30–31).
@@ -1674,7 +1675,7 @@ export function lintLoops(def: SurveyDefinition): LogicIssue[] {
           const sizes = [...ancestors, n].map((l) => maxLoopIterations(def, l));
           if (sizes.every((s): s is number => typeof s === "number")) {
             const product = sizes.reduce((a, b) => a * b, 1);
-            if (product > MAX_LOOP_PRODUCT) push("warning", "nesting", `Loop "${n.loopVar}" and the loops around it can produce up to ${product.toLocaleString()} iterations together — the runtime stops at ${MAX_LOOP_PRODUCT.toLocaleString()} and trims the innermost loop.`);
+            if (product > MAX_LOOP_PRODUCT) push("warning", "nesting", `Loop "${n.loopVar}" and the loops around it can produce up to ${product.toLocaleString(DEFAULT_NUMBER_LOCALE)} iterations together — the runtime stops at ${MAX_LOOP_PRODUCT.toLocaleString(DEFAULT_NUMBER_LOCALE)} and trims the innermost loop.`);
           }
         }
 
