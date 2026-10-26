@@ -105,3 +105,35 @@ test("S7: CFI stays a number across a sweep, and a real model is unchanged", () 
     if (chisq - df > 0) assert.ok(cfi != null && cfi < 1, `a misfitting model should score below 1, got ${cfi} (χ² ${chisq}, df ${df})`);
   }
 });
+
+/* ============================================================ S15 — SEM runs a second start */
+
+test("S15: a clean SEM model agrees with itself from a dispersed start", () => {
+  /*
+   * The damped retry inside `fitSem` runs only when the FIRST start fails to
+   * converge, so a start that converged was published with no check at all
+   * and a model sitting in a local optimum came out labelled converged with
+   * fit indices attached. `lca.ts` has always run twenty random starts and
+   * reported how many reached the best log-likelihood; SEM now runs one
+   * dispersed start and keeps the better solution.
+   *
+   * The point of this test is that it must not cry wolf: a well-behaved
+   * model has one optimum and the warning must stay silent.
+   */
+  const rng = new Rng(11);
+  const n = 400, f: number[] = [];
+  for (let i = 0; i < n; i++) f.push(rng.normal());
+  const data = {
+    a: f.map((v) => 0.9 * v + 0.4 * rng.normal()),
+    b: f.map((v) => 0.8 * v + 0.4 * rng.normal()),
+    c: f.map((v) => 0.85 * v + 0.4 * rng.normal()),
+    d: f.map((v) => 0.75 * v + 0.4 * rng.normal()),
+  };
+  const run = fitSem({ syntax: "F =~ a + b + c + d", data });
+  assert.equal(run.status, "done", JSON.stringify(run.diagnostics));
+  assert.ok(!run.diagnostics.some((d) => d.code === "local_optimum"),
+    `a single-optimum model must not be flagged: ${JSON.stringify(run.diagnostics)}`);
+  // and the solution is the real one, not something a dispersed start wandered into
+  assert.ok(run.output!.fit.chisq >= 0 && run.output!.fit.df === 2);
+  for (const e of run.output!.estimates) if (e.se != null) assert.ok(Number.isFinite(e.se) && e.se >= 0);
+});

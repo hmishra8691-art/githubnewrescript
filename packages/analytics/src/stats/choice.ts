@@ -101,7 +101,16 @@ export function conditionalLogit(allSets: ChoiceSet[], p: number, opts: { maxIte
   const warnings: string[] = [];
   let raw = evaluate(beta);
   let cur = penalised(beta, raw);
-  ll = cur.L;
+  /*
+   * `logLikelihood` is the LIKELIHOOD, not the objective being maximised
+   * (audit S12). It used to be the penalised value, so it carried
+   * −(ridge/2)·Σβ² into `mcFaddenR2` and into ACBC's RLH. Negligible on a
+   * normal fit (−3.6e-04 over 200 choice sets) and not negligible under
+   * separation, where it reported −0.0524 against a true −0.0093 and an R²
+   * of 0.9992 against 0.9999. The ridge earns its place in the optimisation;
+   * it has none in a reported fit statistic.
+   */
+  ll = raw.L;
   for (iter = 1; iter <= maxIter; iter++) {
     const negH = cur.H.map((r) => r.map((v) => -v));
     const inv = inverse(negH);
@@ -110,7 +119,7 @@ export function conditionalLogit(allSets: ChoiceSet[], p: number, opts: { maxIte
     let t = 1, next = beta.map((b, i) => b + step[i]), rawNext = evaluate(next), ev = penalised(next, rawNext);
     while (ev.L < cur.L && t > 1e-4) { t /= 2; next = beta.map((b, i) => b + t * step[i]); rawNext = evaluate(next); ev = penalised(next, rawNext); }
     const change = Math.abs(ev.L - cur.L);
-    beta = next; cur = ev; raw = rawNext; ll = ev.L;
+    beta = next; cur = ev; raw = rawNext; ll = rawNext.L;
     /* the change is judged against the size of the likelihood: an absolute 1e-8 is below the floating-point noise of a log-likelihood in the hundreds of thousands, so large samples never "converged" and ran all 100 iterations, line search and all (audit F-3) */
     if (change < 1e-8 * Math.max(1, Math.abs(ev.L))) { converged = true; break; }
   }

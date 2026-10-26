@@ -17,6 +17,14 @@ export interface KMeansResult {
   withinSS: number;
   totalSS: number;
   iterations: number;
+  /**
+   * Whether the assignments stopped changing, or `maxIter` simply ran out
+   * (audit S13). There was no way to tell the two apart: the same data with
+   * `maxIter: 1` returned `iterations: 2` and a different `withinSS`, with
+   * nothing in the result to say the run had been cut short. `rimWeights` in
+   * this file has always reported it.
+   */
+  converged: boolean;
   /** average silhouette over a sample — a fit indicator that needs no labels */
   silhouette: number | null;
 }
@@ -44,7 +52,7 @@ export function kMeans(rows: number[][], k: number, seed = 42, maxIter = 100): K
     for (; idx < n - 1; idx++) { pick -= d[idx]; if (pick <= 0) break; }
     centroids.push(rows[idx].slice());
   }
-  let assignments = new Array(n).fill(0), iter = 0;
+  let assignments = new Array(n).fill(0), iter = 0, converged = false;
   for (iter = 0; iter < maxIter; iter++) {
     const next = rows.map((r) => { let best = 0, bd = Infinity; centroids.forEach((c, ci) => { const d = dist2(r, c); if (d < bd) { bd = d; best = ci; } }); return best; });
     const changed = next.some((a, i) => a !== assignments[i]);
@@ -54,7 +62,7 @@ export function kMeans(rows: number[][], k: number, seed = 42, maxIter = 100): K
       if (!members.length) continue;
       centroids[c] = members[0].map((_, j) => members.reduce((t, r) => t + r[j], 0) / members.length);
     }
-    if (!changed) break;
+    if (!changed) { converged = true; break; }
   }
   const grand = rows[0].map((_, j) => rows.reduce((t, r) => t + r[j], 0) / n);
   const withinSS = rows.reduce((t, r, i) => t + dist2(r, centroids[assignments[i]]), 0);
@@ -81,7 +89,8 @@ export function kMeans(rows: number[][], k: number, seed = 42, maxIter = 100): K
     }
     silhouette = cnt ? sum / cnt : null;
   }
-  return { k, assignments, centroids, sizes, withinSS, totalSS, iterations: iter + 1, silhouette };
+  /* `iter + 1` counted one pass too many when the loop ran out rather than settling */
+  return { k, assignments, centroids, sizes, withinSS, totalSS, iterations: converged ? iter + 1 : maxIter, converged, silhouette };
 }
 
 /* ------------------------------------------------------------ hierarchical */
@@ -278,7 +287,15 @@ export function factorAnalysis(columns: { name: string; values: (number | null |
    */
   const initial = method === "principal_axis" ? symmetricEigen(R0).values : eig.values;
   const total = p;
-  const factors = opts.factors ?? Math.max(1, initial.filter((v) => v > 1).length);
+  /*
+   * `opts.factors` comes straight from an analysis definition and was never
+   * checked against the number of variables (audit S11). `loadings` is built
+   * by `.slice(0, factors)` and so could not exceed p, but the scores below
+   * read `loadings[k][f]` for every requested f — so `factors: 9` on eight
+   * variables produced 400 non-finite score entries, and `factors: -1` gave
+   * seven columns of loadings against none of scores.
+   */
+  const factors = Math.min(p, Math.max(1, Math.round(opts.factors ?? Math.max(1, initial.filter((v) => v > 1).length))));
   let loadings: Matrix = columns.map((_, i) => eig.vectors[i].slice(0, factors).map((v, f) => v * Math.sqrt(Math.max(eig.values[f], 0))));
   const rotation = opts.rotation ?? (factors > 1 ? "varimax" : "none");
   if (rotation === "varimax") loadings = varimax(loadings);
@@ -371,10 +388,53 @@ export interface WeightingResult {
   weights: number[];
   iterations: number;
   converged: boolean;
+  /**
+   * Whether the declared cap holds on the weights actually returned (audit
+   * S10). False only when the bounds cannot be met at mean 1 at all — they
+   * exclude 1, or every weight is pinned to one of them.
+   */
+  capFeasible: boolean;
   efficiency: number;
   designEffect: number;
   min: number; max: number;
   achieved: { variable: string; category: string; target: number; achieved: number }[];
+}
+
+/**
+ * BRING THE WEIGHTS TO MEAN 1 WITHOUT BREAKING THE CAP (audit S10).
+ *
+ * The raking loop caps each weight and then divides the vector by its mean,
+ * which undoes the cap it just applied: 95 cases of "A" and 5 of "B" against
+ * targets of 10% and 90% with `cap: [0.2, 5]` returned a maximum of 11.36 —
+ * 2.27× the declared bound — because after capping the mean was 0.44 and
+ * 5/0.44 is 11.36. The weights a caller receives are the ones that end up in
+ * every base and every effective n, so the bound has to hold on those.
+ *
+ * Trim and redistribute, the standard method: clip to the bounds, then bring
+ * the mean back to 1 by moving only the weights that are NOT sitting on a
+ * bound, and repeat. The fixed point has mean exactly 1 with every weight
+ * inside the cap, and it exists whenever lo ≤ 1 ≤ hi. When it does not —
+ * bounds that exclude 1, or every weight pinned — the weights are returned
+ * clipped, and `capFeasible` says so rather than quietly breaching either
+ * the cap or the normalisation.
+ */
+function normaliseWithinCap(w: number[], lo: number, hi: number, maxRounds = 50): { w: number[]; feasible: boolean } {
+  const n = w.length;
+  const clip = (xs: number[]) => xs.map((x) => Math.min(hi, Math.max(lo, x)));
+  if (!n) return { w, feasible: true };
+  if (!(lo <= 1 && 1 <= hi)) return { w: clip(w), feasible: false };
+  let out = w;
+  for (let round = 0; round < maxRounds; round++) {
+    out = clip(out);
+    const sum = out.reduce((a, b) => a + b, 0);
+    if (Math.abs(sum - n) <= 1e-9 * n) return { w: out, feasible: true };
+    let freeSum = 0, pinnedSum = 0;
+    for (const x of out) { if (x > lo + 1e-12 && x < hi - 1e-12) freeSum += x; else pinnedSum += x; }
+    const f = freeSum > 0 ? (n - pinnedSum) / freeSum : NaN;
+    if (!Number.isFinite(f) || f <= 0) return { w: out, feasible: false };
+    out = out.map((x) => (x > lo + 1e-12 && x < hi - 1e-12 ? x * f : x));
+  }
+  return { w: clip(out), feasible: false };
 }
 
 /**
@@ -409,6 +469,14 @@ export function rimWeights(cases: Record<string, string | null | undefined>[], t
     w = w.map((x) => x / mean);
     if (maxChange < 1e-6) { converged = true; break; }
   }
+  /*
+   * The cap is enforced on what is returned, before anything is measured
+   * from it: the design effect, the achieved margins and the min/max below
+   * all have to describe the weights the caller actually gets. On a problem
+   * the raking solves cleanly no weight sits on a bound and this is a no-op.
+   */
+  const capped = normaliseWithinCap(w, lo, hi);
+  w = capped.w;
   const sumW = w.reduce((a, b) => a + b, 0), sumW2 = w.reduce((a, b) => a + b * b, 0);
   const deff = (n * sumW2) / (sumW * sumW);
   const achieved: WeightingResult["achieved"] = [];
@@ -419,5 +487,5 @@ export function rimWeights(cases: Record<string, string | null | undefined>[], t
   }
   let min = Infinity, max = -Infinity;
   for (const x of w) { if (x < min) min = x; if (x > max) max = x; }
-  return { weights: w, iterations: iter + 1, converged, efficiency: 1 / deff, designEffect: deff, min, max, achieved };
+  return { weights: w, iterations: iter + 1, converged, capFeasible: capped.feasible, efficiency: 1 / deff, designEffect: deff, min, max, achieved };
 }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { conditionalLogit, type ChoiceSet } from "./choice.js";
 import { erfc, normalCdf } from "./distributions.js";
 import { proportionTest } from "./tests.js";
-import { factorAnalysis } from "./multivariate.js";
+import { factorAnalysis, kMeans, rimWeights } from "./multivariate.js";
 import { mediation, multinomialLogistic, ols } from "./regression.js";
 
 /**
@@ -278,4 +278,84 @@ test("S4: principal-axis percentages are never negative and never fall", () => {
     assert.equal(r.eigenvalues.length, cols.length);
     assert.ok(r.factors >= 1 && r.factors <= cols.length);
   }
+});
+
+/* ============================================================ S10 — the rim-weight cap */
+
+test("S10: the weights returned are inside the cap that was declared", () => {
+  /*
+   * The raking loop caps each weight and then divides the vector by its mean,
+   * which undoes the cap it just applied. 95 "A" against 5 "B" with targets
+   * of 10% and 90% and a cap of [0.2, 5] returned a maximum of 11.36 — 2.27×
+   * the bound — because the capped mean was 0.44 and 5/0.44 is 11.36.
+   */
+  const cases = [...Array.from({ length: 95 }, () => ({ g: "A" })), ...Array.from({ length: 5 }, () => ({ g: "B" }))];
+  const r = rimWeights(cases, [{ variable: "g", targets: { A: 10, B: 90 } }], { cap: [0.2, 5] });
+  for (const w of r.weights) assert.ok(w >= 0.2 - 1e-9 && w <= 5 + 1e-9, `weight ${w} is outside [0.2, 5]`);
+  close(r.max, 5, 1e-9, "the largest weight sits exactly on the bound");
+  close(r.weights.reduce((a, b) => a + b, 0) / r.weights.length, 1, 1e-9, "and the mean is still 1");
+  assert.equal(r.capFeasible, true);
+
+  // a problem the raking solves cleanly is untouched: no weight on a bound, margins still exact
+  const easy = rimWeights(
+    [...Array.from({ length: 50 }, () => ({ g: "A" })), ...Array.from({ length: 50 }, () => ({ g: "B" }))],
+    [{ variable: "g", targets: { A: 60, B: 40 } }], { cap: [0.2, 5] });
+  assert.ok(easy.converged && easy.capFeasible);
+  close(easy.weights.reduce((a, b) => a + b, 0) / 100, 1, 1e-12, "mean 1");
+  for (const a of easy.achieved) close(a.achieved, a.target, 1e-5, `${a.category} margin`);
+
+  // bounds that exclude 1 cannot be met at mean 1, and say so instead of breaching one or the other
+  const impossible = rimWeights(cases, [{ variable: "g", targets: { A: 10, B: 90 } }], { cap: [2, 5] });
+  assert.equal(impossible.capFeasible, false);
+  for (const w of impossible.weights) assert.ok(w >= 2 - 1e-9 && w <= 5 + 1e-9, "the cap still holds on what is returned");
+});
+
+/* ============================================================ S11 — the factor count */
+
+test("S11: asking for more factors than there are variables does not produce NaN scores", () => {
+  let seed = 99;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const nrm = () => { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const f1 = Array.from({ length: 300 }, nrm), f2 = Array.from({ length: 300 }, nrm);
+  const cols = Array.from({ length: 8 }, (_, j) => ({ name: `v${j}`, values: f1.map((v, i) => (j < 4 ? v : f2[i]) * 0.8 + 0.6 * nrm()) }));
+  // `factors: 9` on eight variables gave 400 non-finite score entries; `factors: -1` gave none at all
+  for (const want of [9, 12, -1, 0, 2.6]) {
+    const r = factorAnalysis(cols, { factors: want });
+    assert.ok(!("error" in r));
+    assert.ok(r.factors >= 1 && r.factors <= cols.length, `factors: ${want} reported ${r.factors}`);
+    assert.equal(r.loadings[0].length, r.factors);
+    assert.equal(r.scores[0]?.length ?? 0, r.factors, `factors: ${want} loadings and scores disagree`);
+    for (const row of r.scores) for (const v of row) assert.ok(Number.isFinite(v), `factors: ${want} produced a non-finite score`);
+  }
+});
+
+/* ============================================================ S12 — the reported likelihood */
+
+test("S12: logLikelihood is the likelihood, not the penalised objective", () => {
+  const sets = binary(140, 60);
+  // the closed form for a 2-alternative binary design: 140·log(.7) + 60·log(.3)
+  const exact = 140 * Math.log(0.7) + 60 * Math.log(0.3);
+  for (const ridge of [0, 1e-3, 1e-2]) {
+    const f = conditionalLogit(sets, 1, { ridge });
+    // it used to carry −(ridge/2)·Σβ²: −122.17321936 against −122.17286041 at the default ridge
+    close(f.logLikelihood, exact, 1e-6, `ridge ${ridge}`);
+    close(f.mcFaddenR2, 1 - exact / (-200 * Math.log(2)), 1e-6, `McFadden R² at ridge ${ridge}`);
+  }
+  // and it no longer moves with the penalty
+  const a = conditionalLogit(sets, 1, { ridge: 0 }).logLikelihood;
+  const b = conditionalLogit(sets, 1, { ridge: 1e-2 }).logLikelihood;
+  assert.ok(Math.abs(a - b) < 1e-5, `the reported likelihood moved with the ridge: ${a} vs ${b}`);
+});
+
+/* ============================================================ S13 — kMeans convergence */
+
+test("S13: kMeans says whether it settled or ran out of iterations", () => {
+  const rows = [[0, 0], [0.1, 0.2], [0.2, 0], [-0.1, 0.1], [5, 5], [5.1, 5.2], [4.9, 5], [5.2, 4.8]];
+  const full = kMeans(rows, 2, 7);
+  assert.equal(full.converged, true);
+  assert.ok(full.iterations >= 1 && full.iterations <= 100);
+  // cut short: the same data returned a different withinSS with nothing to say the run was incomplete
+  const cut = kMeans(rows, 2, 7, 1);
+  assert.equal(cut.converged, false);
+  assert.equal(cut.iterations, 1, "`iter + 1` counted one pass too many when the loop ran out");
 });
