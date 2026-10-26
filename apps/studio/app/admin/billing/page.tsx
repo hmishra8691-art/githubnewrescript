@@ -3,6 +3,7 @@ import React from "react";
 import { AccountHeader } from "@/components/AccountHeader";
 import { useSession } from "@/lib/useSession";
 import { fmtMoney, fmtWhen, LEVEL_CLASS, LEVEL_WORD, PRESET_AMOUNTS, STATE_WORD, UsageTable, type UsageRow } from "@/components/billing/shared";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * BILLING ADMINISTRATION (billing brief §2, §8, §13, §17, §18, §22).
@@ -509,7 +510,7 @@ function RatesTab({ say }: { say: (t: string, ok?: boolean) => void }) {
             <tr key={r.id} data-testid="rate-row" data-id={r.id}>
               <td className="muted" style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{r.id}</td>
               <td>{r.provider} / {r.service} / {r.model ?? "—"}{r.side ? <span className="muted"> ({r.side})</span> : null}{r.estimated && <span className="badge neutral" style={{ marginLeft: 6 }}>estimate</span>}</td>
-              <td>{r.unitSize === 1 ? r.unit : `${r.unitSize.toLocaleString()} ${r.unit}s`}</td>
+              <td>{r.unitSize === 1 ? r.unit : `${r.unitSize.toLocaleString(DEFAULT_NUMBER_LOCALE)} ${r.unit}s`}</td>
               <td>{fmtMoney(r.providerCost, r.currency)}</td>
               <td>{r.markupPct}%</td>
               <td>{r.customerRate == null ? <span className="muted">model</span> : fmtMoney(r.customerRate, r.currency)}</td>

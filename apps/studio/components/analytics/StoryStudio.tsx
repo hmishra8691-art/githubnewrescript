@@ -6,6 +6,7 @@ import {
 } from "@rescript/analytics/story";
 import { StoryShare } from "./StoryShare";
 import { StoryApi, ApiError, reportMeasurer, type StoryPayload, type StoryListItem, type RevisionPreview, type DesignReading, type BrandReading, type RenderView } from "./storyApi";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * ANIMATED RESEARCH REPORTS — Results → Reports → Create report.
@@ -517,7 +518,7 @@ function ExportPanel({ api, id, payload, dirty, criticalCount, onChange }: { api
     <div className="st-export" data-testid="st-export">
       <div className="card">
         <b>Before you render</b>
-        <div className="muted" data-testid="st-estimate">{payload.timing.width}×{payload.timing.height}, {fmtSec(est.seconds)} long, {est.scenes} scenes — {est.note}. About {Math.max(1, Math.round(est.renderSeconds / 60))} min to render, ~{est.storageMB} MB.{est.narrationCharacters ? ` Narration: ${est.narrationCharacters.toLocaleString()} characters through the speech service.` : ""}</div>
+        <div className="muted" data-testid="st-estimate">{payload.timing.width}×{payload.timing.height}, {fmtSec(est.seconds)} long, {est.scenes} scenes — {est.note}. About {Math.max(1, Math.round(est.renderSeconds / 60))} min to render, ~{est.storageMB} MB.{est.narrationCharacters ? ` Narration: ${est.narrationCharacters.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters through the speech service.` : ""}</div>
         {payload.timing.pacingNote && <div className="ax-note">{payload.timing.pacingNote}</div>}
         <div className="row" style={{ marginTop: 8 }}>
           {payload.story.outputs.pptx && <button className="btn primary small" disabled={!!blocked || busy !== null} title={blocked ?? ""} onClick={() => start("pptx")} data-testid="st-export-pptx">{busy === "pptx" ? "Building and checking…" : "Export PowerPoint"}</button>}

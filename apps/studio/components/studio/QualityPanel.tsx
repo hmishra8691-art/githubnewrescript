@@ -3,6 +3,7 @@ import React from "react";
 import { Loading } from "@/components/ui/Loading";
 import { CATEGORY_LABELS } from "@rescript/quality";
 import { useStudio } from "./store";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * Data → Quality: the dashboard and the review workflow.
@@ -137,14 +138,14 @@ export function QualityPanel({ include }: { include: Include }) {
       <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "stretch" }} data-testid="quality-summary">
         <div className="card" style={{ padding: 10, minWidth: 150 }}>
           <div className="muted" style={{ fontSize: 12.5 }}>Total responses</div>
-          <div style={{ fontSize: 22, fontWeight: 600 }} data-testid="q-total">{data.total.toLocaleString()}</div>
+          <div style={{ fontSize: 22, fontWeight: 600 }} data-testid="q-total">{data.total.toLocaleString(DEFAULT_NUMBER_LOCALE)}</div>
           <div className="muted" style={{ fontSize: 12.5 }}>{data.strictness ? `${data.strictness} strictness` : ""}</div>
         </div>
         {VERDICTS.map((v) => (
           <button key={v} className="card" data-testid={`q-verdict-${v}`} title={VERDICT_HINT[v]} onClick={() => setFilter((f) => ({ ...f, verdict: f.verdict === v ? null : v }))}
             style={{ padding: 10, minWidth: 120, textAlign: "left", cursor: "pointer", borderColor: filter.verdict === v ? VERDICT_COLOR[v] : undefined, borderWidth: filter.verdict === v ? 2 : 1 }}>
             <div className="muted" style={{ fontSize: 12.5 }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: VERDICT_COLOR[v], marginRight: 5 }} />{v}</div>
-            <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byVerdict?.[v] ?? 0).toLocaleString()}</div>
+            <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byVerdict?.[v] ?? 0).toLocaleString(DEFAULT_NUMBER_LOCALE)}</div>
           </button>
         ))}
         <div className="muted" style={{ alignSelf: "center", fontSize: 12, maxWidth: 150 }} title="The verdict is what the evidence supports; the band is where the risk score falls. A high band with weak, correlated evidence is REVIEW, not FLAGGED.">verdict ← evidence · band ← risk score →</div>
@@ -152,7 +153,7 @@ export function QualityPanel({ include }: { include: Include }) {
           <button key={c} className="card" data-testid={`q-class-${c}`} onClick={() => setFilter((f) => ({ ...f, cls: f.cls === c ? null : c }))}
             style={{ padding: 10, minWidth: 120, textAlign: "left", cursor: "pointer", borderColor: filter.cls === c ? CLASS_COLOR[c] : undefined, borderWidth: filter.cls === c ? 2 : 1 }}>
             <div className="muted" style={{ fontSize: 12.5 }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: CLASS_COLOR[c], marginRight: 5 }} />{fmtClass(c)}</div>
-            <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byClass[c] ?? 0).toLocaleString()}</div>
+            <div style={{ fontSize: 20, fontWeight: 600 }}>{(data.byClass[c] ?? 0).toLocaleString(DEFAULT_NUMBER_LOCALE)}</div>
           </button>
         ))}
         <div className="card" style={{ padding: 10, minWidth: 180 }}>

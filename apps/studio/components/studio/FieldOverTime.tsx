@@ -2,6 +2,7 @@
 import React from "react";
 import type { FieldBucket, Pace } from "@rescript/analytics";
 import { describePace } from "@rescript/analytics";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 type Env = "TEST" | "LIVE";
 type Bucket = "hour" | "day" | "week";
@@ -248,8 +249,8 @@ export function FieldOverTime({
             <div className={p.verdict === "behind" || p.verdict === "stalled" ? "near" : ""}
               style={{ width: `${Math.min(100, (p.delivered ?? 0) * 100)}%` }} />
           </div>
-          <strong>{p.completes.toLocaleString()}</strong>
-          <span className="muted">/ {p.target.toLocaleString()}</span>
+          <strong>{p.completes.toLocaleString(DEFAULT_NUMBER_LOCALE)}</strong>
+          <span className="muted">/ {p.target.toLocaleString(DEFAULT_NUMBER_LOCALE)}</span>
           <span className="muted">
             {d.targetSource === "suppliers" ? "target from supplier contracts" : "target"}
           </span>
@@ -289,13 +290,13 @@ export function FieldOverTime({
       />
 
       <div className="row qd-config-facts" style={{ marginTop: 6, marginBottom: 4 }} data-testid="fw-series-summary">
-        <span className="chip">{d.summary.starts.toLocaleString()} started</span>
-        <span className="chip">{d.summary.completes.toLocaleString()} completed</span>
-        <span className="chip">{d.summary.screened.toLocaleString()} screened out</span>
+        <span className="chip">{d.summary.starts.toLocaleString(DEFAULT_NUMBER_LOCALE)} started</span>
+        <span className="chip">{d.summary.completes.toLocaleString(DEFAULT_NUMBER_LOCALE)} completed</span>
+        <span className="chip">{d.summary.screened.toLocaleString(DEFAULT_NUMBER_LOCALE)} screened out</span>
         {d.summary.incidence !== null && <span className="chip">{d.summary.incidence}% incidence</span>}
         {d.summary.peak && (
           <span className="chip">
-            Best {d.bucket}: {d.summary.peak.completes.toLocaleString()} ({bucketLabel(d.summary.peak.bucketStart, d.bucket)})
+            Best {d.bucket}: {d.summary.peak.completes.toLocaleString(DEFAULT_NUMBER_LOCALE)} ({bucketLabel(d.summary.peak.bucketStart, d.bucket)})
           </span>
         )}
         {d.summary.quietBuckets > 0 && (
@@ -381,8 +382,8 @@ function LiveHalf({
       <div className="row qd-config-facts" style={{ marginBottom: 4 }} data-testid="fw-live-facts">
         <span className="chip">Last complete {fmtAgo(pulse.lastCompleteAt)}</span>
         <span className="chip">Last start {fmtAgo(pulse.lastStartAt)}</span>
-        <span className="chip">{pulse.totalCompletes.toLocaleString()} completes all told</span>
-        <span className="chip">{pulse.totalPartials.toLocaleString()} partials</span>
+        <span className="chip">{pulse.totalCompletes.toLocaleString(DEFAULT_NUMBER_LOCALE)} completes all told</span>
+        <span className="chip">{pulse.totalPartials.toLocaleString(DEFAULT_NUMBER_LOCALE)} partials</span>
         <span className="muted" style={{ fontSize: 12.5 }}>
           &ldquo;In field&rdquo; means a partial touched in the last {activeMinutes} minutes.
         </span>
@@ -392,7 +393,7 @@ function LiveHalf({
       {positions.length > 0 && (
         <details className="card" style={{ padding: "8px 12px", marginTop: 6 }} data-testid="fw-dropoff">
           <summary style={{ cursor: "pointer", fontSize: 13.5 }}>
-            Where the {(pulse.inField + totalStalled).toLocaleString()} open sessions are sitting
+            Where the {(pulse.inField + totalStalled).toLocaleString(DEFAULT_NUMBER_LOCALE)} open sessions are sitting
           </summary>
           <table className="grid" style={{ marginTop: 8 }}>
             <thead>
