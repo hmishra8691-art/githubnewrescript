@@ -1,5 +1,6 @@
 import type { SurveyDefinition, UxBehavior } from "@rescript/schema";
 import { resolveUxTarget, validateUxScript } from "./ux.js";
+import { DEFAULT_NUMBER_LOCALE } from "./localization.js";
 
 /**
  * THE OLD "CUSTOM CODE" FIELDS, MOVED INTO THE ONE SCRIPT PIPELINE.
@@ -82,7 +83,7 @@ export function migrateLegacyCustomCode(input: SurveyDefinition): LegacyScriptMi
     if (q.customJs !== undefined && !q.customJs.trim()) { delete q.customJs; continue; }
     if (!q.customJs) continue;
     const script = wrapQuestionScript(q, q.customJs);
-    if (script.length > MAX) { blocked.push({ where: String(q.code), errors: [`the custom JavaScript of ${q.code} is longer than the ${MAX.toLocaleString()} characters a script may hold, so it stays where it is`] }); continue; }
+    if (script.length > MAX) { blocked.push({ where: String(q.code), errors: [`the custom JavaScript of ${q.code} is longer than the ${MAX.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters a script may hold, so it stays where it is`] }); continue; }
     const target = resolveUxTarget(def, String(q.code));
     if (typeof target === "string") { blocked.push({ where: String(q.code), errors: [target] }); continue; }
     add({ id: idFor("q", q.id), label: `${q.code} custom JavaScript`, target, effects: [], script, source: "question_custom_js", createdAt: now }, String(q.code));
@@ -92,7 +93,7 @@ export function migrateLegacyCustomCode(input: SurveyDefinition): LegacyScriptMi
   if (brandingJs) {
     const script = wrapSurveyScript(brandingJs);
     const target = resolveUxTarget(def, "survey");
-    if (script.length > MAX || typeof target === "string") blocked.push({ where: "survey", errors: [script.length > MAX ? `the survey's custom JavaScript is longer than ${MAX.toLocaleString()} characters` : String(target)] });
+    if (script.length > MAX || typeof target === "string") blocked.push({ where: "survey", errors: [script.length > MAX ? `the survey's custom JavaScript is longer than ${MAX.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters` : String(target)] });
     else {
       add({ id: idFor("survey", "branding"), label: "Survey custom JavaScript", target, effects: [], script, source: "branding_custom_js", createdAt: now }, "survey");
       delete def.branding.customJs;

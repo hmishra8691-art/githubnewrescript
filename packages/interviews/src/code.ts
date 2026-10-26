@@ -24,6 +24,8 @@
  * whether tests passed is a different product. The reviewer reads the code.
  */
 
+import { DEFAULT_NUMBER_LOCALE } from "@rescript/engine";
+
 export const CODE_LANGUAGES = [
   "javascript", "typescript", "python", "java", "csharp", "cpp", "go", "rust", "sql", "plain",
 ] as const;
@@ -116,12 +118,12 @@ export function checkCodeSettings(raw: unknown): { errors: string[]; warnings: s
     errors.push(`"${String(bag.language)}" is not a language the editor knows.`);
   }
   if (bag.starter !== undefined && typeof bag.starter === "string" && bag.starter.length > CODE_STARTER_MAX_CHARS) {
-    errors.push(`Starter code can be at most ${CODE_STARTER_MAX_CHARS.toLocaleString()} characters.`);
+    errors.push(`Starter code can be at most ${CODE_STARTER_MAX_CHARS.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters.`);
   }
   if (bag.maxChars !== undefined) {
     const n = Number(bag.maxChars);
     if (!Number.isFinite(n) || n <= 0) errors.push("The size limit has to be a positive number of characters.");
-    else if (n > CODE_MAX_CHARS_CEILING) errors.push(`The size limit cannot exceed ${CODE_MAX_CHARS_CEILING.toLocaleString()} characters.`);
+    else if (n > CODE_MAX_CHARS_CEILING) errors.push(`The size limit cannot exceed ${CODE_MAX_CHARS_CEILING.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters.`);
     else if (n < 200) warnings.push(`${n} characters is very little room for code — a few lines at most.`);
   }
   if (bag.language === "plain" && bag.allowLanguageChoice === false) {
@@ -156,7 +158,7 @@ export function checkCodeAnswer(
   if (text.length > settings.maxChars) {
     return {
       ok: false, code: "too_long",
-      error: `That is ${text.length.toLocaleString()} characters; this question allows ${settings.maxChars.toLocaleString()}.`,
+      error: `That is ${text.length.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters; this question allows ${settings.maxChars.toLocaleString(DEFAULT_NUMBER_LOCALE)}.`,
     };
   }
   let language: CodeLanguage = settings.language;

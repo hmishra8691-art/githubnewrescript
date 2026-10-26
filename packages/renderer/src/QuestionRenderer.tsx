@@ -102,6 +102,15 @@ export interface QRProps {
   /** the respondent's language's interface strings (engine `uiStringsFor`); absent = English */
   ui?: Record<string, string>;
   /**
+   * The language the respondent is seeing, as a `surveyLanguages` code.
+   *
+   * Separate from `ui`, which is already-resolved strings: this is the code
+   * itself, so a renderer can reach the rest of that language's
+   * configuration — its locale and its number separators — rather than
+   * falling back on the browser's. Absent means the survey's source language.
+   */
+  language?: string;
+  /**
    * A value stored BESIDE the answer, at `<answer key>__<suffix>` — the same
    * convention as `__voice` and `__probe_n`. Video Rating's optional comment
    * is `__comment`, so the rating stays a number and every report that reads

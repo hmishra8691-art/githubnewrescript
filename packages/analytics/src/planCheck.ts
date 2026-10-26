@@ -5,6 +5,7 @@ import { scaleOf } from "./questionChart.js";
 import type { PlannedCrosstab, PlannedTest, SurveyDefinition } from "@rescript/schema";
 import { isNonQuestionVariable } from "@rescript/engine";
 import { checkSemSyntax } from "./models/sem.js";
+import { REPORT_LOCALE } from "./format.js";
 
 /**
  * ONE CHECK FOR EVERY ANALYSIS BEFORE IT IS KEPT — generated or hand-built.
@@ -120,7 +121,7 @@ export function missingInputs(def: AnalysisDefinition, variables: readonly Varia
       /* F4 2026-10-22: ACBC (acbc_task) and menu-based conjoint are estimated by HB too */
       if (vs.length === 1 && meta?.questionType && meta.questionType !== "conjoint_task" && meta.questionType !== "maxdiff_task" && meta.questionType !== "acbc_task") need(`Hierarchical Bayes needs a CBC, ACBC, menu-based (conjoint) or MaxDiff question; ${vs[0]} is a ${meta.questionType.replace(/_/g, " ")} question.`);
       const iters = (Number(o.burnIn ?? 5000) || 0) + (Number(o.draws ?? 5000) || 0);
-      if (iters > 200_000) need(`Burn-in plus draws is ${iters.toLocaleString()} iterations per chain — the limit is 200,000.`);
+      if (iters > 200_000) need(`Burn-in plus draws is ${iters.toLocaleString(REPORT_LOCALE)} iterations per chain — the limit is 200,000.`);
       break;
     }
     case "lca": {

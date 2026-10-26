@@ -13,6 +13,7 @@ import { expandBattery } from "./basics.js";
 import { CORRECTION_WORDS, pairwiseComparisons, type CorrectionMethod } from "../posthoc.js";
 import { bootstrapIndirect } from "../stats/bootstrap.js";
 import { mcdonaldOmega } from "../models/omega.js";
+import { REPORT_LOCALE } from "../format.js";
 
 const sigWord = (p: number | null | undefined, alpha = 0.05) => (p == null ? "could not be tested" : p < alpha ? "is statistically significant" : "is not statistically significant");
 /** "…differs significantly from X" / "…does not differ significantly from X" / "…could not be tested against X" — a sentence, not a suffix. */
@@ -486,7 +487,7 @@ export function cluster(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const HIERARCHICAL_MAX_ROWS = 1_500;
   if (method === "hierarchical" && rows.length > HIERARCHICAL_MAX_ROWS) {
     return makeResult(def, ds, { tables: [], chart: {},
-      warnings: [`Hierarchical clustering is limited to ${HIERARCHICAL_MAX_ROWS.toLocaleString()} complete cases and this analysis has ${rows.length.toLocaleString()}. Use k-means, which handles this size, or filter to a smaller base.`],
+      warnings: [`Hierarchical clustering is limited to ${HIERARCHICAL_MAX_ROWS.toLocaleString(REPORT_LOCALE)} complete cases and this analysis has ${rows.length.toLocaleString(REPORT_LOCALE)}. Use k-means, which handles this size, or filter to a smaller base.`],
       recommendedCharts: ["segment_size"], totalCases });
   }
   if (method === "hierarchical") {

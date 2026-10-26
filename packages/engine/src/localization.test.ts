@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { SurveyDefinition } from "@rescript/schema";
+import { Localization, SurveyDefinition } from "@rescript/schema";
 import {
   translatableElements, localizeDefinition, resolveLanguage, offeredLanguages, lintLanguage, languageReady,
   recordTranslation, setTranslationStatus, audioFor, audioStale, applyGlossary, glossaryFor, textHash, uiText, uiStringsFor,
-  translationRows, applyTranslationRows, formatNumber, formatDate, languageDirection, searchLanguages, K, LANGUAGE_VARIABLE,
+  translationRows, applyTranslationRows, formatNumber, formatDate, localeFormatFor, languageDirection, searchLanguages, K, LANGUAGE_VARIABLE,
   createResponseState, buildVariableDictionary, flattenVariables, validatePage, resolvePiping, compileFlow, evaluateCondition,
   effectiveLocalization,
 } from "./index.js";
@@ -249,6 +249,37 @@ test("IMPORT / EXPORT: rows carry element key, question, source, translation, st
   assert.equal(res.localization.translations.es["q:q1:opt:1"].origin, "import");
   assert.ok(res.localization.languages.some((l) => l.code === "pt"), "a new language in the file is added as a draft");
   assert.equal(res.localization.audio.find((a) => a.language === "pt")?.kind, "url");
+});
+
+test("localeFormatFor resolves the study's own locale, never the reader's", () => {
+  /*
+   * The step the ACBC renderer depends on. Its prices used to be
+   * `price.toLocaleString()` with no locale, which takes the one the
+   * RESPONDENT'S BROWSER was configured with — so the same price read
+   * "2,50,000" for a respondent in India and "250,000" for one in the United
+   * States, in the same study, on the same stimulus. `localeFormatFor` and
+   * `formatNumber` had always done the job properly; nothing outside this
+   * package had ever called them.
+   */
+  const def = base();
+  def.localization = Localization.parse({
+    sourceLanguage: "en", sourceLocale: "en-GB",
+    languages: [
+      { code: "hi", locale: "hi-IN", status: "live" },
+      { code: "de", locale: "de-DE", status: "live", format: { decimal: ",", thousands: "." } },
+    ],
+  });
+
+  assert.equal(localeFormatFor(def, "en").locale, "en-GB", "the source language uses the source locale");
+  assert.equal(localeFormatFor(def, "hi").locale, "hi-IN");
+  assert.equal(formatNumber(250_000, localeFormatFor(def, "hi")), "2,50,000", "an Indian version groups in lakhs");
+  assert.equal(formatNumber(250_000, localeFormatFor(def, "en")), "250,000", "and the English version does not");
+  // a study's own separators still override the locale's
+  assert.equal(formatNumber(1234.5, localeFormatFor(def, "de")), "1.234,5");
+  // a language the study does not define falls back rather than throwing
+  assert.ok(localeFormatFor(def, "zz").locale.length > 0);
+  // the whole point: the answer depends on the survey, not on this process
+  assert.notEqual(localeFormatFor(def, "hi").locale, localeFormatFor(def, "en").locale);
 });
 
 test("FORMATTING and DIRECTION follow the locale; the library is searchable by country", () => {

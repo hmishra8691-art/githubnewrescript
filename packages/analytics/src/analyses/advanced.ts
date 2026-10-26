@@ -27,6 +27,7 @@ import { fitSem, type SemEstimate } from "../models/sem.js";
 import { MODELS_VERSION, intOpt, nowMs } from "../models/spec.js";
 import { dualCodingOf } from "./choice.js";
 import { menuHbTables, prepareSuiteHb, suiteHbPost, type SuiteHbPrep } from "../conjoint/hbSuite.js";
+import { REPORT_LOCALE } from "../format.js";
 
 const r3 = (x: number | null | undefined) => round(x, 3);
 
@@ -257,7 +258,7 @@ export function hb(def: AnalysisDefinition, ds: Dataset, totalCases: number): An
   const r = hbJobStart(def, ds, budget, nowMs, totalCases);
   if (r.result) return r.result;
   const secs = Math.ceil((r.projectedMs ?? budget * 2) / 1000);
-  return refused(def, ds, totalCases, `This hierarchical Bayes run needs about ${secs} s (${r.progress.total.toLocaleString()} iterations per chain for ${ds.cases.length.toLocaleString()} respondents) — longer than one request allows, so no partial result is shown. Run it from the analysis builder, which runs HB as a background job with progress, or reduce burn-in / draws in Options.`, ["attribute_importance"]);
+  return refused(def, ds, totalCases, `This hierarchical Bayes run needs about ${secs} s (${r.progress.total.toLocaleString(REPORT_LOCALE)} iterations per chain for ${ds.cases.length.toLocaleString(REPORT_LOCALE)} respondents) — longer than one request allows, so no partial result is shown. Run it from the analysis builder, which runs HB as a background job with progress, or reduce burn-in / draws in Options.`, ["attribute_importance"]);
 }
 
 /* ================================================================== LCA */

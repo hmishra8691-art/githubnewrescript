@@ -27,6 +27,7 @@ import type { DesignConfig, EvidenceLevel, FrozenChartData, Scene, SceneVisual, 
 import { STORY_SCHEMA } from "./types.js";
 import { freezeChartData, freezeTable, recommendStoryChart } from "./charts.js";
 import { defaultDesign } from "./design.js";
+import { REPORT_LOCALE } from "../format.js";
 
 export interface SampleFacts {
   /** completes in the dataset the run used */
@@ -134,9 +135,9 @@ export function planStoryReport(def: SurveyDefinition, run: RunWithResults, opts
   if (!excluded.has("method")) {
     const s = opts.sample;
     const facts = [
-      { label: "Completes analysed", value: `${s.analysed.toLocaleString()} (${s.environment.toLowerCase()} responses)` },
+      { label: "Completes analysed", value: `${s.analysed.toLocaleString(REPORT_LOCALE)} (${s.environment.toLowerCase()} responses)` },
       ...(s.fieldwork?.from || s.fieldwork?.to ? [{ label: "Fieldwork", value: `${s.fieldwork.from ?? "…"} → ${s.fieldwork.to ?? "…"}` }] : []),
-      ...(s.dataset === "clean" ? [{ label: "Data quality", value: s.completesBeforeQuality != null ? `${s.analysed.toLocaleString()} of ${s.completesBeforeQuality.toLocaleString()} completes passed the quality checks; ${(s.completesBeforeQuality - s.analysed).toLocaleString()} excluded` : "Only completes that passed the quality checks" }] : [{ label: "Data quality", value: "All complete responses (no quality exclusions applied)" }]),
+      ...(s.dataset === "clean" ? [{ label: "Data quality", value: s.completesBeforeQuality != null ? `${s.analysed.toLocaleString(REPORT_LOCALE)} of ${s.completesBeforeQuality.toLocaleString(REPORT_LOCALE)} completes passed the quality checks; ${(s.completesBeforeQuality - s.analysed).toLocaleString(REPORT_LOCALE)} excluded` : "Only completes that passed the quality checks" }] : [{ label: "Data quality", value: "All complete responses (no quality exclusions applied)" }]),
       ...(r?.population ? [{ label: "Population", value: short(r.population, 120) }] : []),
       ...(r?.methodology ? [{ label: "Method", value: short(r.methodology, 120) }] : []),
       { label: "Significance", value: `α = 0.05${run.corrections ? `; ${run.corrections.method === "bh" ? "Benjamini–Hochberg" : run.corrections.method === "bonferroni" ? "Bonferroni" : "Holm"} correction within each hypothesis` : ""}` },

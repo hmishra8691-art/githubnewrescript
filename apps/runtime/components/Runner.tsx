@@ -1892,6 +1892,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           def={def}
           q={probe.pq}
           ui={ui}
+          language={lang}
           state={state}
           loop={null}
           value={state.answers[probe.pq.id]}
@@ -1995,6 +1996,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
             def={def}
             q={q}
             ui={ui}
+            language={lang}
             state={state}
             loop={pageStep.loop ?? null}
             value={state.answers[key]}

@@ -314,6 +314,19 @@ export function languageDirection(code: string, cfg?: LanguageConfig): "ltr" | "
 }
 
 /** The BCP-47 tag for a language version: its configured locale, else the library default. */
+/**
+ * The locale for text that is NOT addressed to a respondent in their own
+ * language: lint messages, validation errors, limits quoted back to a
+ * programmer. `(125000).toLocaleString()` with no locale takes the one the
+ * process was started under, so a loop-nesting warning read "1,25,000" on a
+ * machine with Indian settings and "125,000" everywhere else — a difference
+ * that reached the Studio and broke a test on a developer's own laptop.
+ *
+ * Text a RESPONDENT reads is a different question with a different answer:
+ * that follows the survey's own language, through `localeFormatFor`.
+ */
+export const DEFAULT_NUMBER_LOCALE = "en-US";
+
 export function languageLocale(code: string, cfg?: LanguageConfig): string {
   return cfg?.locale ?? languageInfo(code)?.locales[0]?.tag ?? code;
 }

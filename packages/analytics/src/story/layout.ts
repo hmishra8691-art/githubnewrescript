@@ -20,6 +20,7 @@ import { contrast, ensureContrast, isDark, mix } from "./design.js";
 import { displayDecimals } from "./charts.js";
 import { formatValue, valueDomain } from "./charts.js";
 import { fitText, type Measurer } from "./measure.js";
+import { REPORT_LOCALE } from "../format.js";
 
 /* ------------------------------------------------------------ geometry */
 
@@ -221,7 +222,7 @@ export function layoutScene(scene: Scene, ctx: LayoutContext): LaidOutScene {
     const v = scene.visual;
     const base = v.type === "chart" ? v.data.base : v.type === "table" ? v.table.base : null;
     const srcNames = [...new Set(scene.notes.sources.map((s) => s.name))].slice(0, 2);
-    if (srcNames.length || base != null) lines.push([srcNames.length ? `Source: ${srcNames.join("; ")}` : "", base != null ? `Base: n = ${base.toLocaleString()}` : "", v.type === "chart" ? `Values: ${v.data.measure}` : ""].filter(Boolean).join(" · "));
+    if (srcNames.length || base != null) lines.push([srcNames.length ? `Source: ${srcNames.join("; ")}` : "", base != null ? `Base: n = ${base.toLocaleString(REPORT_LOCALE)}` : "", v.type === "chart" ? `Values: ${v.data.measure}` : ""].filter(Boolean).join(" · "));
     if (v.type === "chart" && v.data.significanceTested && v.data.series.some((s) => s.sig?.some(Boolean))) lines.push("Letters mark a value significantly higher than the column with that letter (95% confidence).");
     for (const f of scene.notes.footnotes.slice(0, 2)) lines.push(f);
     for (const c of scene.notes.caveats.slice(0, 2)) lines.push(`Note: ${c}`);
