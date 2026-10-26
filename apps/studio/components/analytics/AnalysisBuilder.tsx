@@ -10,6 +10,7 @@ import { ResultView, downloadPng, downloadSvg } from "./ResultView";
 import { Chart } from "./charts/Chart";
 import type { TableFormatting } from "./ProTable";
 import type { ModelJobView } from "@/lib/modelJobState";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * THE ANALYSIS BUILDER (§3–§5). Analysis type → variables → filters → segments →
@@ -527,7 +528,7 @@ export function AnalysisBuilder(p: BuilderProps) {
         <span className="grow" />
         {stage === "builder" && section > 0 && <button className="btn small" onClick={() => setSection(section - 1)}>Back</button>}
         {stage === "builder" && section < 4 && <button className="btn small" onClick={() => setSection(section + 1)}>Next</button>}
-        {job && job.status === "running" && <span className="ax-job" data-testid="ax-job-progress" data-pct={job.progress.pct} role="status">Hierarchical Bayes: {job.progress.done.toLocaleString()} of {job.progress.total.toLocaleString()} iterations per chain ({job.progress.pct}%){job.progress.projectedMs && job.progress.done ? ` · about ${Math.max(1, Math.round((job.progress.projectedMs * (1 - job.progress.done / Math.max(1, job.progress.total))) / 1000))} s left` : ""} <button type="button" className="btn small" onClick={() => { cancelJob.current = true; }} data-testid="ax-job-cancel">Cancel</button></span>}
+        {job && job.status === "running" && <span className="ax-job" data-testid="ax-job-progress" data-pct={job.progress.pct} role="status">Hierarchical Bayes: {job.progress.done.toLocaleString(DEFAULT_NUMBER_LOCALE)} of {job.progress.total.toLocaleString(DEFAULT_NUMBER_LOCALE)} iterations per chain ({job.progress.pct}%){job.progress.projectedMs && job.progress.done ? ` · about ${Math.max(1, Math.round((job.progress.projectedMs * (1 - job.progress.done / Math.max(1, job.progress.total))) / 1000))} s left` : ""} <button type="button" className="btn small" onClick={() => { cancelJob.current = true; }} data-testid="ax-job-cancel">Cancel</button></span>}
         {!canRun && <span className="ax-error" data-testid="ax-run-missing" role="status">{readiness.missing.join(" ")}</span>}
         {canRun && readiness.warnings.length > 0 && <span className="muted" style={{ fontSize: 12.5 }} data-testid="ax-run-warning">{readiness.warnings.join(" ")}</span>}
         <button className="btn primary" disabled={!canRun || running} onClick={run} data-testid="ax-run" data-ready={canRun ? "1" : "0"} title={canRun ? undefined : readiness.missing.join(" ")}>{running ? "Running…" : stale ? "Run again" : "Run analysis"}</button>

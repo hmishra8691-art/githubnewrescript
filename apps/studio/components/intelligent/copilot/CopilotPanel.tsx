@@ -18,6 +18,7 @@ import { apiCallWords, canReapply, canRestore, isChange, sourceWord, statusWord,
 import { formatCharge } from "../../../lib/import/chat";
 import type { Copilot, PanelTab } from "./useCopilot";
 import { describeDocMerge, mergeDocActions } from "../../../lib/copilot/mergeDoc";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * THE RIGHT-HAND PANEL of the copilot workspace (the copilot brief §10, §12,
@@ -579,7 +580,7 @@ function OpEntry({ o, all, rec, copilot, def, readOnly, onSelect, onRestore, war
         {change && <b data-testid="cp-op-n">{changeLabel(o.changeN)}</b>}
         <span className={`cp-op-status s-${o.status}`} data-testid="cp-op-status">{statusWord(o.status)}</span>
         <span className="cp-op-source" data-testid="cp-op-source">{sourceWord(o.source)}</span>
-        {time && <span className="iqi-dim" title={time.toLocaleString()}>{time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
+        {time && <span className="iqi-dim" title={time.toLocaleString(DEFAULT_NUMBER_LOCALE)}>{time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         <span className="iq-spacer" />
         {o.status === "reverted" && <span className="iqi-dim">undone</span>}
         {restore.offered && <button type="button" className="iq-btn" disabled={readOnly} onClick={() => onRestore()} data-testid="cp-undo-change" title={restore.latest ? "Take this change back, as one operation" : "Restore the survey to before this change — later changes go with it (you are asked first)"}>Restore{restore.latest ? "" : "…"}</button>}

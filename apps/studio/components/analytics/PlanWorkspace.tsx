@@ -8,6 +8,7 @@ import { AxApi, type ApplyResponse, type PlanPayload, type Row, type RunResult, 
 import { Chart, ResultTableView } from "./charts/Chart";
 import { Icon } from "../ui/Icon";
 import { AdvancedModelsCard, AdvancedReadingPanel, MethodOptions, isAdvancedPlanItem, optionsPatch } from "./AdvancedModels";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * THE ANALYSIS PLAN WORKSPACE — Results → Data Analytics → Analysis plan.
@@ -207,7 +208,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
               { l: "Configured", v: ov.configured, s: `${items.length - ov.configured - ov.invalid} not applied yet`, t: "ap-kpi-configured" },
               { l: "Charts", v: ov.charts, s: `${ov.run} with results`, t: "ap-kpi-charts" },
               { l: "Need attention", v: ov.invalid + ov.stale, s: ov.invalid ? `${ov.invalid} cannot run` : ov.stale ? `${ov.stale} to update` : "nothing", t: "ap-kpi-attention" },
-            ].map((k) => <div key={k.l} className="metric" data-testid={k.t}><span className="metric-v">{k.v.toLocaleString()}</span><span className="metric-l">{k.l}</span><span className="ax-kpi-sub">{k.s}</span></div>)}
+            ].map((k) => <div key={k.l} className="metric" data-testid={k.t}><span className="metric-v">{k.v.toLocaleString(DEFAULT_NUMBER_LOCALE)}</span><span className="metric-l">{k.l}</span><span className="ax-kpi-sub">{k.s}</span></div>)}
           </div>
           <div className="ap-two">
             <div className="card">
@@ -217,7 +218,7 @@ export function PlanWorkspace(p: PlanWorkspaceProps) {
                 <li><b>Applied</b> — {applied ? `${new Date(applied.startedAt).toLocaleString()} on ${applied.environment.toLowerCase()} data · ${applied.status}${applied.current ? "" : " · the plan has changed since"}` : data.applyAvailable ? "never" : "not recorded on this database (migration 0050)"}.</li>
                 <li><b>Computed</b> — {data.run ? `${data.run.items} analyses run ${timeAgo(data.run.computedAt)} on ${data.run.n} ${data.run.environment.toLowerCase()} completes (${data.run.trigger})` : "no run yet"}{data.dataChangedSinceApply ? ` · ${dataN - (data.run?.n ?? 0)} new completes since — apply again to refresh` : ""}.</li>
                 {timingLine(data.run?.timing, data.run?.items ?? 0) && <li data-testid="ap-run-timing"><b>Took</b> — {timingLine(data.run?.timing, data.run?.items ?? 0)}.</li>}
-                <li><b>Data</b> — {dataN.toLocaleString()} complete {p.dataset.environment === "ALL" ? "" : p.dataset.environment.toLowerCase() + " "}responses{p.dataset.dataset === "clean" ? " (clean only)" : ""}{dataN ? "" : " — outputs are configured now and fill when data arrives"}.</li>
+                <li><b>Data</b> — {dataN.toLocaleString(DEFAULT_NUMBER_LOCALE)} complete {p.dataset.environment === "ALL" ? "" : p.dataset.environment.toLowerCase() + " "}responses{p.dataset.dataset === "clean" ? " (clean only)" : ""}{dataN ? "" : " — outputs are configured now and fill when data arrives"}.</li>
                 <li><b>Outputs</b> — {data.report ? "findings report" : "no report yet"}{data.dashboard ? ", dashboard" : ", no dashboard yet"}, {ov.charts} chart{ov.charts === 1 ? "" : "s"}.</li>
               </ul>
             </div>

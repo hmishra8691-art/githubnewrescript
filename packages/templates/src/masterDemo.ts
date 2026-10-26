@@ -120,7 +120,18 @@ export function buildMasterDemoSurvey(surveyId = "master-demo"): SurveyDefinitio
   };
   const conjoint = designGeneratorRegistry.get("conjoint")!.generate(conjointConfig, 20260901);
 
-  const maxdiffConfig = { items: MAXDIFF_ITEMS, itemsPerTask: 5, tasks: 9, versions: 2 };
+  /*
+   * `balance: "optimized"` is not decoration — without it this design draws
+   * two quality warnings on the project's own publish gate, which is what
+   * the gate's message tells you to do about them: "Use the optimized
+   * algorithm, or add tasks or versions". Greedy leaves a pair sharing a task
+   * between 1 and 4 times against an ideal of 2.73, and an item appearing in
+   * a given position between 0 and 4 times against an ideal of 1.5 — an item
+   * that never appears in a position is compared from a weaker footing, and
+   * respondents favour the top of a list. Optimized turns those into 2–4 and
+   * 1–2, the smallest spreads these counts allow.
+   */
+  const maxdiffConfig = { items: MAXDIFF_ITEMS, itemsPerTask: 5, tasks: 9, versions: 2, balance: "optimized" as const };
   const maxdiff = designGeneratorRegistry.get("maxdiff")!.generate(maxdiffConfig, 20260902);
 
   const STATEMENTS = [

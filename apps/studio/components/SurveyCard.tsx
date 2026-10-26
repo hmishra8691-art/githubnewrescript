@@ -2,6 +2,7 @@
 import React from "react";
 import { fmtMoney, LEVEL_CLASS, LEVEL_WORD, Progress } from "@/components/billing/shared";
 import { accessLabel } from "@rescript/access";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * One survey project on the dashboard.
@@ -133,7 +134,7 @@ export function relativeTime(iso: string | null | undefined): string {
 }
 
 const num = (v: number | null | undefined) =>
-  v == null ? "—" : v.toLocaleString();
+  v == null ? "—" : v.toLocaleString(DEFAULT_NUMBER_LOCALE);
 
 function Stat({ label, value, title, onClick }: {
   label: string; value: React.ReactNode; title?: string; onClick?: () => void;

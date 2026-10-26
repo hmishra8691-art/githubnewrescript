@@ -5,6 +5,7 @@ import { dedupeFindings } from "@rescript/analytics";
 import { AxApi, type PlanPayload, type Row } from "./api";
 import type { WsTab } from "./navigation";
 import { RunBaseCaption } from "./BaseCaption";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * FINDINGS — what matters, and is it reliable? (Phase 5)
@@ -71,7 +72,7 @@ export function FindingsView({ api, dataset, analyses, onOpenAnalysis, onTab }: 
                     {a && <button className="btn small" onClick={() => onOpenAnalysis(a)} data-testid="ax-finding-open">Open analysis</button>}
                   </div>
                   {f.detail && <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{f.detail}</div>}
-                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>From “{f.analysis.name}” · base {f.evidence.n.toLocaleString()}{f.hypotheses.length ? ` · bears on ${f.hypotheses.join(", ")}` : ""}</div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>From “{f.analysis.name}” · base {f.evidence.n.toLocaleString(DEFAULT_NUMBER_LOCALE)}{f.hypotheses.length ? ` · bears on ${f.hypotheses.join(", ")}` : ""}</div>
                 </li>);
             })}
           </ol>

@@ -5,6 +5,7 @@ import {
   coerceEmbedded, detectValueType, testEmbeddedValue, testReferences, type EmbeddedField,
 } from "@rescript/engine";
 import { compactWidthCh, previewText, insertAt } from "@/lib/flow/flowEd";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * VALUE FIELDS OF THE SURVEY FLOW (document 15/10/2026, items B and E).
@@ -89,7 +90,7 @@ export function StoredAsPreview({ dataType, raw, piped }: { dataType: EmbeddedDa
       {p.truncated && (
         <button type="button" className="btn small ghost" data-testid="ed-preview-expand" aria-expanded={all}
           onClick={() => setAll((v) => !v)}>
-          {all ? "show less" : `show all (${p.length.toLocaleString()} characters)`}
+          {all ? "show less" : `show all (${p.length.toLocaleString(DEFAULT_NUMBER_LOCALE)} characters)`}
         </button>
       )}
     </div>

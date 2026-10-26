@@ -75,6 +75,18 @@ export interface HbOptions {
   draws?: number;
   thin?: number;
   seed?: number;
+  /**
+   * The SCALE of the inverse-Wishart prior, not the prior variance it
+   * produces (audit S15). V₀ = ν₀ · priorVariance · I with ν₀ = p + priorDf,
+   * so E[Σ_kk] = ν₀ · priorVariance / (ν₀ − p − 1) = (p + priorDf) /
+   * (priorDf − 1) · priorVariance — at the defaults that is (p + 5)/4, which
+   * sampling confirms: 2.75 at p = 6, 6.29 at p = 20, 11.24 at p = 40, all
+   * for `priorVariance: 1`. This is bayesm's and Sawtooth's convention and
+   * the header states the formula, but the name reads like the variance
+   * itself, and at p = 40 with N = 300 it inflates the reported heterogeneity
+   * variance by roughly 40%. Lower it, or raise `priorDf`, if the prior is
+   * doing more work than intended.
+   */
   priorVariance?: number;
   /** additional prior degrees of freedom (ν₀ = p + priorDf) */
   priorDf?: number;

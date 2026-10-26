@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * Shared pieces of the metered-usage screens — the project's Usage tab, the
@@ -16,7 +17,7 @@ export const fmtMoney = (n: number | null | undefined, currency = "USD"): string
 };
 export const fmtQty = (n: number, unit: string): string => {
   const abs = Math.abs(n);
-  const num = abs >= 1000 ? Math.round(n).toLocaleString() : abs >= 1 ? (Number.isInteger(n) ? n.toLocaleString() : n.toFixed(2)) : n.toFixed(3);
+  const num = abs >= 1000 ? Math.round(n).toLocaleString(DEFAULT_NUMBER_LOCALE) : abs >= 1 ? (Number.isInteger(n) ? n.toLocaleString(DEFAULT_NUMBER_LOCALE) : n.toFixed(2)) : n.toFixed(3);
   const plural = abs === 1 ? unit : unit === "GB-month" ? "GB-months" : /[A-Z]$/.test(unit) ? unit : `${unit}s`;
   return `${num} ${plural}`;
 };
@@ -72,7 +73,7 @@ export function describeRow(r: UsageRow): string {
 }
 export function describeQuantity(r: UsageRow): string {
   if (r.inputUnits != null || r.outputUnits != null) {
-    const n = (x: number) => Math.round(x).toLocaleString();
+    const n = (x: number) => Math.round(x).toLocaleString(DEFAULT_NUMBER_LOCALE);
     // the breakdown the charge was priced from: input (of which read from the provider's cache, at its cheaper rate) and output
     return `${n((r.inputUnits ?? 0) + (r.outputUnits ?? 0))} tokens (${n(r.inputUnits ?? 0)} in${r.cachedInputUnits ? `, ${n(r.cachedInputUnits)} cached` : ""} · ${n(r.outputUnits ?? 0)} out)`;
   }

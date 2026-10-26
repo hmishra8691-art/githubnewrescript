@@ -7,6 +7,7 @@ import { STATUS_META, relativeTime } from "@/components/SurveyCard";
 import { fmtMoney } from "@/components/billing/shared";
 import type { ModuleStatus } from "@/lib/projectOverview";
 import { CollaboratorsButton } from "@/components/studio/CollaboratorsPanel";
+import { DEFAULT_NUMBER_LOCALE } from "@/lib/number";
 
 /**
  * THE PROJECT OVERVIEW (dashboard brief §2) — the page a project opens on.
@@ -59,7 +60,7 @@ export function ProjectOverview({ surveyDbId }: { surveyDbId: string }) {
   const href = (tab: string) => (tab === "analytics" ? `/analytics?survey=${surveyDbId}` : tab.startsWith("analytics:") ? `/analytics?survey=${surveyDbId}&tab=${tab.slice(10)}` : `/studio/${surveyDbId}?tab=${tab}`);
   const p = data?.project;
   const meta = p ? STATUS_META[p.status] ?? { label: p.status, tone: "draft", hint: "" } : null;
-  const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString());
+  const num = (v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toLocaleString(DEFAULT_NUMBER_LOCALE));
   /* an older server sends no capability list: offer everything, as before — the routes decide either way */
   const allowed = (cap: string) => !p?.capabilities || p.capabilities.includes(cap);
 

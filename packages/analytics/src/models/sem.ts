@@ -425,6 +425,35 @@ export function fitSem(input: SemInput, opts: SemOptions = {}): ModelRun<SemOutp
     if (f2.converged || (Number.isFinite(f2.f) && !(f2.f > fit.f))) fit = f2;
   }
   if (!fit.converged || !Number.isFinite(fit.f)) return stop("failed", "not_converged", `The estimator did not converge (largest gradient ${Number.isFinite(fit.gradMax) ? fit.gradMax.toExponential(1) : "undefined"} after ${fit.iterations} iterations). No estimates or fit indices are reported. Check the model for under-identification, very different variable scales, or an over-ambitious structure.`);
+  /*
+   * A SECOND START, WHICH LCA HAS ALWAYS HAD AND THIS DID NOT (audit S15).
+   *
+   * The damped retry above runs only when the first start FAILS to converge.
+   * A start that converged was published with no check at all, so a
+   * structural model that settled into a local optimum came out labelled
+   * converged and carrying fit indices, with nothing to say another solution
+   * existed. `lca.ts` runs twenty random starts and reports how many reached
+   * the best log-likelihood; one dispersed start is the cheap version of the
+   * same idea, and SEM fits here are small enough to afford it.
+   *
+   * The better solution wins. Disagreement is reported either way: it means
+   * the surface has more than one optimum, so a third start could find
+   * another and the reported one should not be read as the answer.
+   */
+  let rivalF: number | null = null;
+  if (maxIter >= 50) {
+    const dispersed = startValues(model, S).map((v, i) => v * (i % 2 ? 1.6 : 0.6) + 0.1);
+    const rival = optimise(model, S, logDetS, dispersed, maxIter);
+    if (rival.converged && Number.isFinite(rival.f)) {
+      const tol = 1e-6 * Math.max(1, Math.abs(fit.f));
+      if (Math.abs(rival.f - fit.f) > tol) {
+        /* keep the better solution, remember the worse one for the warning */
+        const better = rival.f < fit.f ? rival : fit;
+        rivalF = (rival.f < fit.f ? fit : rival).f;
+        fit = better;
+      }
+    }
+  }
   const ev = evaluate(model, S, logDetS, fit.theta)!;
   const { C, Smat } = ev.imp;
   const m = model.m;
@@ -532,6 +561,7 @@ export function fitSem(input: SemInput, opts: SemOptions = {}): ModelRun<SemOutp
   const logLik = -0.5 * N * (p * Math.log(2 * Math.PI) + logDetFromChol(LSig, p) + trSS);
   const fitOut: SemFit = { n: N, npar: q, chisq, df, pvalue: df > 0 ? chiSquareP(chisq, df) : null, baselineChisq, baselineDf, cfi: Math.min(1, Math.max(0, cfi)), tli, rmsea, rmseaLow, rmseaHigh, srmr, logLik, aic: -2 * logLik + 2 * q, bic: -2 * logLik + q * Math.log(N) };
   if (df === 0) diagnostics.push(diag("just_identified", "info", "The model is just-identified (df = 0): it reproduces the covariances exactly, so χ², CFI, TLI and RMSEA say nothing about fit."));
+  if (rivalF != null) diagnostics.push(diag("local_optimum", "warning", `Two starting points reached different solutions — discrepancy ${fit.f.toExponential(3)} against ${rivalF.toExponential(3)}. The better one is reported, but this likelihood surface has more than one optimum, so a third start could find another again. Simplify the model, or put the variables on comparable scales.`));
   const r2 = model.vars.map((v, i) => ({ v, i })).filter(({ i }) => model.entries.some((e) => e.matrix === "A" && e.r === i)).map(({ v, i }) => ({ variable: v, r2: C[i * m + i] > 0 ? 1 - Smat[i * m + i] / C[i * m + i] : NaN }));
   residualCorrelations.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual));
   return {
