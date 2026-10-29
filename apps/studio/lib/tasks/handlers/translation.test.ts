@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
-import { applySurveyActions, coerceSurveyActions, localizeDefinition, surveyStructureHash, translationCoverage, translationInventory, registerBuiltinQuestionTypes } from "@rescript/engine";
+import { applySurveyActions, coerceSurveyActions, estimateTaskSize, localizeDefinition, surveyStructureHash, translationCoverage, translationInventory, registerBuiltinQuestionTypes } from "@rescript/engine";
 import { __resetTaskRegistry, pickTaskPlanner } from "../registry.ts";
 import { __resetFakeResponders, registerFakeResponder, fakeResponse } from "../fakeResponders.ts";
 import { taskResult } from "../engine.ts";
@@ -81,6 +81,20 @@ test("planner score: the count is read off the survey — a large inventory or s
   assert.equal(m("which strings are untranslated in Urdu?", big), 0);
   assert.equal(m("Add an NPS question", big), 0);
   assert.equal(pickTaskPlanner({ message: "translate the first 10 questions into Urdu", survey: big })?.planner.id, "translation", "beats the generic planner");
+});
+
+test("the turn's decision (turnTask.ts: the estimate OR a planner at ≥ 0.9): the 78-question Urdu request is a task, 'the first 10 questions' is a task by size, a 4-question survey stays in the turn", () => {
+  setup();
+  const decide = (message: string, survey: SurveyDefinition) => { const e = estimateTaskSize({ message, survey }); const p = pickTaskPlanner({ message, survey }); return { task: e.task || (!!p && p.score >= 0.9), planner: p?.planner.id ?? null, score: p?.score ?? 0, units: e.units }; };
+  const big = bigSurvey(78);
+  assert.deepEqual(decide("सर्वे को उर्दू में ट्रांस्लेट कर दो", big), { task: true, planner: "translation", score: 0.95, units: 78 });
+  const ten = decide("translate the first 10 questions into Urdu", big);
+  assert.equal(ten.task, true, "ten questions: a task by the size estimate (TASK_MIN_TRANSLATE), planned by the translation planner — never prose");
+  assert.equal(ten.planner, "translation");
+  assert.equal(ten.units, 10);
+  const small = decide("translate the survey into Urdu", bigSurvey(4));
+  assert.equal(small.task, false, "four questions: the in-turn path, as before");
+  assert.equal(small.planner, "translation");
 });
 
 /* ------------------------------------------------------------ whole tasks on the base runner */
