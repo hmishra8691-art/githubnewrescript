@@ -21,6 +21,8 @@ export * from "./advancedMethods.js";
 export * from "./advancedIntent.js";
 export * from "./analysisActions.js";
 export * from "./localizationActions.js";
+/* translation as a task — the deterministic half: masked inventory, adaptive batches, validation, coverage (2026-10-29, ported from K3) */
+export * from "./translationTask.js";
 export * from "./quotaActions.js";
 export * from "./listFillActions.js";
 export * from "./methodActions.js";

@@ -3,7 +3,7 @@ import { LANGUAGE_LIBRARY, LANGUAGE_ROUTING_MODES, LANGUAGE_STATUSES } from "@re
 import type { IdMinter } from "./questionOps.js";
 import {
   effectiveLocalization, translatableElements, recordTranslation, setTranslationStatus, confirmTranslation, glossaryFor, languageName, languageReady,
-  lintLanguage, surveyLanguages, textHash, type TranslatableElement,
+  lintLanguage, surveyLanguages, textHash, setSourceText, type TranslatableElement,
 } from "./localization.js";
 import { stripHtmlText } from "./html.js";
 import { placeholderMismatch, wrongScript } from "./placeholders.js";
@@ -34,7 +34,13 @@ import { placeholderMismatch, wrongScript } from "./placeholders.js";
  */
 
 export type TranslationTarget = string;
-export interface TranslationSpec { target: TranslationTarget; text: string }
+/**
+ * `sourceHash` (optional, 2026-10-25 — translation tasks): the textHash of the source the translation was made FROM.
+ * When the survey's source changed in between (a durable task translated a snapshot; the researcher edited Q5 while
+ * it ran), the translation is stored as OUTDATED against the old hash — never stamped as current for words it did not
+ * translate — and a replacement of the wording is refused for that element.
+ */
+export interface TranslationSpec { target: TranslationTarget; text: string; sourceHash?: string }
 
 export type LocalizationAction =
   | { op: "add_language"; code: string; locale?: string; country?: string; name?: string; notes?: string; enabled?: boolean }
@@ -44,7 +50,15 @@ export type LocalizationAction =
   | { op: "approve_translations"; language: string; targets?: TranslationTarget[]; status?: "approved" | "reviewed" }
   | { op: "confirm_translations"; language: string; targets?: TranslationTarget[] }
   | { op: "set_language_routing"; order?: string[]; urlParam?: string; embeddedField?: string; countryMap?: Record<string, string>; rules?: { when: string | Condition; language: string; label?: string }[]; allowSwitch?: boolean; fallback?: string; merge?: boolean }
-  | { op: "set_glossary"; entries?: { source: string; targets?: Record<string, string>; doNotTranslate?: boolean; notes?: string }[]; remove?: string[] };
+  | { op: "set_glossary"; entries?: { source: string; targets?: Record<string, string>; doNotTranslate?: boolean; notes?: string }[]; remove?: string[] }
+  /*
+   * 2026-10-25 (translation tasks): REPLACE THE SOURCE WORDING in place, element by element ("make this survey
+   * Urdu", not "add an Urdu version"). The one localization action that writes outside `def.localization`: only
+   * the text field each element key names (setSourceText); codes, logic, piping and scripts are untouched, and
+   * the same checks as set_translations apply (pipes / placeholders / HTML / script of `language`). With
+   * `sourceLanguage: true` (a whole survey replaced) the survey's source language becomes `language`.
+   */
+  | { op: "replace_wording"; entries: TranslationSpec[]; language?: string; sourceLanguage?: boolean };
 
 /**
  * Within one batch the language must exist before anything is written into
@@ -59,12 +73,13 @@ export function localizationRank(op: string): number {
     case "approve_translations": case "confirm_translations": return 3;
     case "set_language_status": case "set_language_routing": return 4;
     case "remove_language": return 5;
-    default: return 2; // set_translations
+    default: return 2; // set_translations, replace_wording
   }
 }
 
 export const LOCALIZATION_ACTION_OPS = [
   "add_language", "remove_language", "set_language_status", "set_translations", "approve_translations", "confirm_translations", "set_language_routing", "set_glossary",
+  "replace_wording",
 ] as const;
 const OPS = new Set<string>(LOCALIZATION_ACTION_OPS);
 export const isLocalizationOp = (op: string): boolean => OPS.has(op);
@@ -98,10 +113,18 @@ export function coerceLocalizationAction(op: string, o: Record<string, unknown>)
     case "set_translations": {
       const code = langCode(o.language ?? o.lang ?? o.code); if (!code) return "set_translations needs a language";
       const entries = Array.isArray(o.entries ?? o.translations) ? (o.entries ?? o.translations as unknown[]) as unknown[] : [];
-      const list: TranslationSpec[] = entries.map((e) => { const x = (e ?? {}) as Record<string, unknown>; const target = str(x.target ?? x.key ?? x.element, 120); const text = typeof x.text === "string" ? x.text.slice(0, 8000) : typeof x.translation === "string" ? x.translation.slice(0, 8000) : undefined; return target && text !== undefined ? { target, text } : null; }).filter((x): x is TranslationSpec => !!x).slice(0, 400);
+      const list: TranslationSpec[] = entries.map((e) => { const x = (e ?? {}) as Record<string, unknown>; const target = str(x.target ?? x.key ?? x.element, 120); const text = typeof x.text === "string" ? x.text.slice(0, 8000) : typeof x.translation === "string" ? x.translation.slice(0, 8000) : undefined; const sh = typeof x.sourceHash === "string" && /^[a-z0-9]{1,16}$/.test(x.sourceHash) ? x.sourceHash : undefined; return target && text !== undefined ? { target, text, ...(sh ? { sourceHash: sh } : {}) } : null; }).filter((x): x is TranslationSpec => !!x).slice(0, 400);
       if (!list.length) return "set_translations needs entries with target and text";
       const status = str(o.status);
       return { op, language: base(code), entries: list, ...(status === "edited" ? { status: "edited" as const } : {}), ...(o.overwriteApproved === true ? { overwriteApproved: true } : {}) };
+    }
+    case "replace_wording": {
+      const code = langCode(o.language ?? o.lang);
+      const entries = Array.isArray(o.entries ?? o.translations) ? (o.entries ?? o.translations as unknown[]) as unknown[] : [];
+      const list: TranslationSpec[] = entries.map((e) => { const x = (e ?? {}) as Record<string, unknown>; const target = str(x.target ?? x.key ?? x.element, 120); const text = typeof x.text === "string" ? x.text.slice(0, 8000) : undefined; const sh = typeof x.sourceHash === "string" && /^[a-z0-9]{1,16}$/.test(x.sourceHash) ? x.sourceHash : undefined; return target && text !== undefined ? { target, text, ...(sh ? { sourceHash: sh } : {}) } : null; }).filter((x): x is TranslationSpec => !!x).slice(0, 400);
+      if (o.sourceLanguage === true && !code) return "replace_wording with sourceLanguage needs the language";
+      if (!list.length && o.sourceLanguage !== true) return "replace_wording needs entries with target and text";
+      return { op, entries: list, ...(code ? { language: base(code) } : {}), ...(o.sourceLanguage === true ? { sourceLanguage: true } : {}) };
     }
     case "approve_translations": case "confirm_translations": {
       const code = langCode(o.language ?? o.lang ?? o.code); if (!code) return `${op} needs a language`;
@@ -336,6 +359,16 @@ export function applyLocalizationAction(def: SurveyDefinition, a: LocalizationAc
         if (problem) { refused.push(`${el.label}: ${problem}`); continue; }
         const misses = glossaryMisses(el.source, e.text, loc, a.language);
         if (misses.length) warnings.push(`${el.label} (${a.language}): the glossary prefers ${misses.join(", ")}`);
+        if (e.sourceHash && e.sourceHash !== textHash(el.source)) {
+          /* translated from words the element no longer has: kept (better than the source language), marked outdated against the hash it was made from */
+          loc = recordTranslation(loc, a.language, el.key, e.text, el.source, { origin: "ai", status: "outdated", by: env.by, now: env.now });
+          const entry = loc.translations[a.language]?.[el.key];
+          if (entry) entry.sourceHash = e.sourceHash;
+          warnings.push(`${el.label} (${a.language}): its source text changed after it was translated — stored as outdated; re-translate it`);
+          written++;
+          if (el.questionId) touched.add(el.questionId);
+          continue;
+        }
         loc = recordTranslation(loc, a.language, el.key, e.text, el.source, { origin: "ai", status: a.status ?? "ai", by: env.by, now: env.now });
         written++;
         if (el.questionId) touched.add(el.questionId);
@@ -345,6 +378,38 @@ export function applyLocalizationAction(def: SurveyDefinition, a: LocalizationAc
       if (refused.length) warnings.push(...refused.map((r) => `Not translated — ${r}`));
       const approvedKept = kept ? ` (${plural(kept, "approved translation")} kept — ask to overwrite them if you mean to)` : "";
       return { description: `${languageName(a.language)}: ${plural(written, "translation")} written${approvedKept}`, warnings, touched: [...touched] };
+    }
+    case "replace_wording": {
+      const elements = translatableElements(def);
+      const glossary = effectiveLocalization(def).glossary ?? [];
+      const refused: string[] = [];
+      let written = 0;
+      const touched = new Set<string>();
+      for (const e of a.entries) {
+        const el = resolveTranslationTarget(def, elements, e.target, env.question);
+        if (!el) { refused.push(`${e.target}: not an element of this survey`); continue; }
+        if (el.kind === "ui") { refused.push(`${el.label}: an interface string has no wording of its own to replace — add it as a language version instead`); continue; }
+        if (e.sourceHash && e.sourceHash !== textHash(el.source)) { refused.push(`${el.label}: its wording changed after it was translated — translate it again`); continue; }
+        const problem = translationProblem(el.source, e.text, glossary, a.language ?? "");
+        if (problem) { refused.push(`${el.label}: ${problem}`); continue; }
+        if (!setSourceText(def, el.key, e.text)) { refused.push(`${el.label}: could not be written`); continue; }
+        written++;
+        if (el.questionId) touched.add(el.questionId);
+      }
+      if (!written && refused.length) fail(refused.join("; "));
+      if (refused.length) warnings.push(...refused.map((r) => `Not replaced — ${r}`));
+      let switched = "";
+      if (a.sourceLanguage && a.language) {
+        const loc = locOf(def);
+        if (loc.languages.some((l) => l.code === a.language)) warnings.push(`The source language stays ${languageName(loc.sourceLanguage)}: the survey also has a ${languageName(a.language)} version — remove it first to make ${languageName(a.language)} the source.`);
+        else if (loc.sourceLanguage !== a.language) {
+          const known = LANGUAGE_LIBRARY.find((l) => l.code === a.language);
+          loc.sourceLanguage = a.language;
+          loc.sourceLocale = known?.locales[0]?.tag;
+          switched = ` — the survey's source language is now ${languageName(a.language)}`;
+        }
+      }
+      return { description: `Wording replaced: ${plural(written, "element")}${a.language ? ` in ${languageName(a.language)}` : ""}${switched}`, warnings, touched: [...touched] };
     }
     case "approve_translations": case "confirm_translations": {
       let loc = locOf(def);
@@ -416,6 +481,7 @@ export function describeLocalizationAction(a: LocalizationAction): string {
     case "confirm_translations": return `Confirm the outdated ${languageName(a.language)} translations`;
     case "set_language_routing": return "Set the language routing";
     case "set_glossary": return "Change the glossary";
+    case "replace_wording": return `Replace the wording of ${a.entries.length} element${a.entries.length === 1 ? "" : "s"}${a.language ? ` with ${languageName(a.language)}` : ""}`;
   }
 }
 
