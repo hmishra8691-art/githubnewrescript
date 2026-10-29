@@ -55,6 +55,21 @@ const reply1 = { kind: "edit", reply: "Habits.", actions: [{ op: "create_questio
 const reply2 = { kind: "edit", reply: "Close.", actions: [{ op: "create_question", ref: "THANKS", type: "long_text", text: "Anything else?" }] };
 const execute = (extra) => turn({ surveyId: "sandbox", message, definition: BLANK, mode: "generate", stage: "execute", plan, items: ["p1", "p2"], done: [], ...extra });
 
+/*
+ * THE MIRROR ROWS THIS SUITE LEAVES BEHIND. Every execute request dual-writes a task row for the sandbox (the
+ * durable mirror), and the sandbox's memory store survives a dev-server restart (dumped to a file outside
+ * production) — so a `progress` answer leaves a task "running" that the Intelligent Mode panel would reattach in
+ * the next suite. Closed here: the open sandbox tasks before this suite (an earlier run's), and the ones it made.
+ */
+const DONE = new Set(["completed", "failed", "cancelled"]);
+async function closeOpenTasks() {
+  const r = await fetch(`${STUDIO}/api/copilot/tasks?surveyId=sandbox`).then((x) => x.json()).catch(() => null);
+  let n = 0;
+  for (const t of r?.tasks ?? []) if (!DONE.has(t.status)) { n++; await fetch(`${STUDIO}/api/copilot/tasks/${t.id}/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: "sandbox" }) }).catch(() => {}); }
+  return n;
+}
+console.log(`  …   ${await closeOpenTasks()} open sandbox task(s) from earlier runs cancelled`);
+
 /* ================================================================ (a) */
 console.log("— (a) a slow single item completes in one request —");
 {
@@ -135,4 +150,5 @@ console.log("— (c) a later item is bounded by what is left after a slow first 
   ok("the continuation builds only p2 from the checkpoint (one item call), stage executed");
 }
 
+console.log(`  …   ${await closeOpenTasks()} mirror task(s) this suite left running cancelled`);
 console.log(`\nstage-cap-api-test: ${passed} checks passed`);
