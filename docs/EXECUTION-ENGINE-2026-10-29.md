@@ -177,7 +177,7 @@ results in "Step 2 results" below.
   suite's panel — that was the first `production-intents` failure, fixed by the stage-cap suite cancelling its own
   tasks; no routing change was needed anywhere):
   `production-intents` **7/7** · `copilot` **11/11** · `copilot-streaming` **6/6** · `engine-11-14` **10/10** ·
-  `methods-intelligent` **5/5** · `intelligent-engine` **3 ok, then dev-server OOM at [3]** ("a provider timeout
+  `methods-intelligent` **14/14** · `intelligent-engine` **3 ok, then dev-server OOM at [3]** ("a provider timeout
   mid-stage": the memcg killed `next-server` at 4.4 GB / 3.5 GB rss on two runs, the supervisor restarted it, the
   page's navigation timed out) — not a pass, reproducible at the same step · `engine-15-19` **30 ok, then OOM at
   #19 LAYOUT** (Chromium "Page crashed" on reload while the Studio was being restarted) — not a pass ·
