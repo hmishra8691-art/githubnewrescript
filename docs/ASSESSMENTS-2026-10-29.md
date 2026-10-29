@@ -1,8 +1,8 @@
-# Assessments — part A: schema, scoring, the hidden key, results (2026-10-29, step 4A)
+# Assessments — part A (schema, scoring, the hidden key, results) and part B (Studio screens, exam task, browser proof) — 2026-10-29, steps 4A and 4B
 
 K4's assessment work (branch `k-work-2026-10-25`, never merged, never SQL- or browser-tested) ported by hand onto
 `feat/persistent-execution-engine`. This is the first half of the assessments goal (`/tmp/p0/E3-TASK.md`). The Studio
-screens, Intelligent Mode's exam planner and the browser suite are step 4B.
+screens, Intelligent Mode's exam planner and the browser suite are step 4B — see "Part B" at the end.
 
 Production case: a 104-question UPSC General Studies paper exists with no scoring, and "for every question show
 what was correct, what I selected, explanations and weak areas" timed out twice (164 s) because it was sent to the
@@ -107,7 +107,7 @@ table)
 | Preview / test without a database | `POST <runtime>/api/assessment/sandbox {"action":"launch","definition":…}` → `takeUrl` `/x/<token>`; take it, submit, results; reload with `?attempt=<id>` |
 | Programmer preview | Studio Preview → the paper's end page shows the report with the PREVIEW badge; tick "as a respondent" to render exactly the stripped payload |
 | Stored scores | table `public.assessment_results` (migration **0076**) |
-| Word answer key / results | `exportAssessmentDocx` in `@rescript/exporters` (no Studio button or route yet; that is 4B) |
+| Word answer key / results | `exportAssessmentDocx` in `@rescript/exporters`; since 4B: Data Analytics → Assessment results → **Download Word** (`GET /api/surveys/<id>/assessment?format=docx`) |
 | Intelligent Mode | single-turn actions `set_answer_key`, `clear_answer_key`, `set_assessment` (guide sent on exam / quiz / answer-key / marks requests) |
 
 **Env vars:** none new. The sandbox routes work only when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` are unset.
@@ -153,11 +153,141 @@ unit and source-shape tests and the typecheck.
 - The Studio's own definition routes (editor, preview postMessage) still carry the key, by design: they are the
   programmer's.
 
-## 4B still to do
+## Part B — the Studio screens, the exam task, the browser proof (2026-10-29, step 4B)
 
-- Studio key editor (Properties → Assessment)
-- settings card (Survey Settings → Assessment)
-- analytics card (Data Analytics → Assessment results: distribution, pass rate, item analysis, Word download route)
-- Intelligent Mode guide and actions described in words, with "for every question show …" answered without a model
-- exam planner (`scored_exam` task kind on E1's registry: content batches with keys, then `assessment.validate`)
-- browser suite
+### What changed
+
+**Studio**
+- `components/studio/AssessmentQuestionSection.tsx`: Properties → **Assessment (answer key)**. It covers the correct
+  option(s), marks, negative marks, multi-answer partial credit (on multi-select only), topic / subtopic, difficulty,
+  the explanation, a "why this is wrong" note per option, and "not scored". It writes `question.assessment` through
+  the panel's ordinary `patch`, which is one undo step and the same shape `set_answer_key` writes. It renders
+  **nothing** unless the survey is a test and the question is a choice question (single / multi / dropdown / image
+  choice).
+- `components/studio/AssessmentSettingsCard.tsx`: Survey Settings → **Assessment**, below Quality.
+  - Until the box is ticked, the card is one checkbox, "This survey is a test or quiz".
+  - Once ticked:
+    - title
+    - marks per correct answer, marks deducted per wrong answer
+    - multi-answer credit
+    - pass % or pass marks
+    - **Respondent sees results**: after submitting (the default), never, or per question during the paper. "Per
+      question" shows a visible `role="alert"` warning that the key is sent to the browser.
+    - the six report sections
+    - weak-area threshold, expected number of questions
+    - a live validation chip
+    - in the sandbox only, **Take the test (sandbox)**
+  - Unticking keeps every key (`enabled: false`).
+- `components/analytics/AssessmentCard.tsx`: Data Analytics → Home → **Assessment results**. It renders nothing
+  unless the survey is a scored paper. It shows:
+  - n, mean, median, SD and pass rate
+  - the 10-band score distribution
+  - the topic table
+  - the item analysis (p, corrected r(pb), flags)
+  - a Live / Test switch and **Download Word**
+- `app/api/surveys/[id]/assessment/route.ts` (pure part in `lib/assessmentResults.ts`):
+  - **Gate:** `requireUser` → `requireProjectFor(…, "project.read")`, then `responses.read`, because the scores are
+    response data.
+  - **Data:** completed, non-deleted responses of the chosen environment. A response's `assessment_results` (0076) row
+    is used when it was scored against the current key fingerprint. Otherwise the response is re-scored from its
+    answers. Before 0076 is applied, every response is re-scored.
+  - **Word:** `?format=docx` returns `exportAssessmentDocx` (answer-key sheet, marking, distribution and item
+    analysis).
+  - **Sandbox** (no database only, 403 otherwise): `POST {action:"launch", definition}` hands the paper to the
+    runtime's in-memory store. `GET ?key=<observer>` reads that paper's attempts, and adding `&format=docx` returns
+    its Word file. The runtime sandbox's `responses` action can return the definition for that, bound to the observer
+    key.
+
+**Intelligent Mode**
+- `lib/tasks/handlers/assessment.ts` registers the `"assessment"` planner (task kind **`scored_exam`**) through
+  `registerAssessmentTasks()` in `handlers/index.ts`.
+  - **Score:** 0.95 for a new paper of 20 or more questions, which forces a task (the generation planner scores an
+    exam at 0.7).
+  - **Requests it catches:** "create a 100-question UPSC paper …", the production 650-character Hindi brief, and the
+    terse "100 questions, General Studies, UPSC, answer key, 2 marks, −0.66".
+  - **Plan:**
+    1. `assessment.settings`: a deterministic `set_assessment`. `markingFrom` reads the marking (UPSC Prelims GS
+       gives +2 / −0.66; it also reads "+4 / −1", "negative marking of 0.66 for each wrong", "one third" and "pass at
+       40 %"). Results are shown after submitting, with every report section on.
+    2. The **generation planner's exam batches** (`buildGenerationSteps` with `assessment`). Each batch's own
+       actions are `create_question` plus one `set_answer_key` per question. The engine gate and the batch-scoped
+       assessment validator check them before they are kept. Batches hold 20 questions or fewer, with codes fixed up
+       front.
+    3. `gen.validate`, which now waits for the settings.
+    4. `assessment.validate` (deterministic): every respondent question keyed, every key on an existing option,
+       exactly N graded questions, and explanations and topics present. When it passes, it pins `expectedQuestions`.
+  - The same check is registered as the **completion validator `assessment.validate`** (it judges only this
+    planner's tasks). The base's `scored_exam` deliverable gate (4A, one scorer and one leak check) also applies.
+- "For every question show what was correct, what I selected, explanations and weak areas" (EN / HI) gets **no model
+  call and no task**.
+  - `assessmentReportTurn` answers it in `/api/copilot/turn` before billing and before the plan-first path, with
+    `modelCalled: false` and `charge: 0`.
+  - The answer says where the results page and the analytics card are.
+  - It proposes only the `set_assessment` that turns the report on, when the report is off.
+  - It names questions without a key and never invents keys.
+  - Not caught: build requests ("create … and a report of weak areas" goes to the planner), "add …" requests, and
+    surveys that are not about a paper.
+
+### Where to find it
+
+| Screen | Where |
+|---|---|
+| Make a survey a test | Survey Programming → **Survey Settings** → section **Assessment** → tick "This survey is a test or quiz" |
+| Answer key per question | Questions → select a choice question → **Properties** → **Assessment (answer key)** (visible only once the survey is a test) |
+| Try the paper as a respondent | Preview → tick "as a respondent"; Test Survey link `/t/<client>/<study>`; in the database-less sandbox: Survey Settings → Assessment → **Take the test (sandbox)** → `/x/<token>` |
+| Scores across respondents | **Data Analytics** → Home → **Assessment results** card (Live / Test) |
+| Word answer key + analysis | that card → **Download Word** (`GET /api/surveys/<id>/assessment?format=docx[&env=test]`) |
+| Intelligent Mode | "100 questions, General Studies, UPSC, answer key, 2 marks, −0.66" → a durable `scored_exam` task in the execution panel; "for every question show what was correct, what I selected, explanations and weak areas" → an immediate answer, no model |
+
+No new env vars and no new migration (the card reads 0076 when it is applied).
+
+### Verification (2026-10-29, main tree)
+
+| Check | Command | Result |
+|---|---|---|
+| Studio lib units | `cd apps/studio && node --experimental-strip-types --no-warnings --test 'lib/**/*.test.ts'` | 1039 / 0. New: `assessmentResults.test.ts` 4, `tasks/handlers/assessment.test.ts` 7, including the acceptance: Hindi UPSC brief → 1 task, 100 questions, 100 keyed, +2 / −0.66. `copilot.test.ts` green. `engine.test.ts` test A now expects planner `assessment` |
+| Typecheck | `npx tsc --noEmit -p .` in apps/studio and apps/runtime | clean, clean |
+| Public docs | `node scripts/gen-public-docs.mjs --check` | current (no new actions) |
+| Auth guards | `node scripts/auth-guard-audit.mjs` | 256 handlers, 0 problems |
+| Boundaries | `node scripts/dependency-boundaries.mjs` | 0 violations |
+| Browser: assessments | `flock /tmp/p0/heavy.lock /tmp/p0/fresh.sh assessment-test.mjs` | **ok, 7 / 7 checks** (85 s); see below |
+| Browser: regressions | the same, one suite each, task file removed first | `properties-accordion-test` ok, `master-demo-test` ok (15 checks), `qa-fixes-test` ok; `analytics-test` **not green**, see below |
+
+What `assessment-test` covered:
+- An ordinary survey shows no new section.
+- The settings were set, and the per-question warning appeared and cleared.
+- Six questions were keyed through the UI.
+- `/x/<token>`: the page source and every runtime payload before submission carried no key, explanation or mistake
+  note.
+- The results page showed the score 4.02 (= 3 × 2 − 3 × 0.66), and selected / correct / explanation for every
+  question, topics and weak areas.
+- A reload was re-scored identically.
+- The analytics card showed n = 1, pass rate 0 %, the distribution, 2 topics and 6 items, and the Word download
+  returned a valid `.docx`.
+
+`analytics-test` failed three times, each time memory or a cold compile on this 7 GB box, never an assertion:
+- run 1: a 30 s `goto` timeout at §8, while `/share/[token]` was cold-compiling (27.8 s)
+- run 2: **OOM at §8** (the cgroup OOM killer killed next-server, 4.4 GB, while compiling `/share`)
+- run 3 (runtime stopped to free memory): **OOM at §10** after 91 checks passed (next-server 5.1 GB, Chromium killed)
+
+Not run in 4B: a run against Supabase with 0076 applied (the database path of the route); the Intelligent-Mode
+browser suites for the exam task (the task is proven in units through `runTaskInProcess`); the other browser suites.
+
+### Honest limits (part B)
+
+- **The key editor covers choice questions only** (single, multi, dropdown, image choice), as the engine scores only
+  those. There is no numeric exact / range or text-match key; E3's goal lists them.
+- **The sandbox analytics card** works only in the tab that launched "Take the test", because the observer key is
+  kept in sessionStorage. A runtime restart forgets the paper. The browser suite fakes the analytics page's survey
+  list and workspace endpoints, as `analytics-test` does, because there is no database. The card, the assessment route
+  and the Word export are real.
+- **The database path of `/api/surveys/[id]/assessment`** (responses + `assessment_results`) is covered by the pure
+  unit (`researcherAssessment`) and the typecheck only. It has not run against Postgres / Supabase.
+- **The analytics card is on the Home view only.** It reads at most 5,000 completed responses per environment. The
+  CSV score columns (`SCORE`, `PCT`, …) are still not in the response exports (4A limit).
+- **The exam task's quality checks are structural.** They confirm 100 keyed questions, keys on real options, and
+  explanations and topics present. They do not check whether a key is factually right. The model writes it; the
+  programmer reviews it in Properties → Assessment.
+- **Recognising the follow-up is a deterministic phrase reader** (`REPORT_FOLLOW_UP` + `assessmentIntent`). A
+  phrasing it misses goes to the model as before.
+- **Settings card errors:** typing an out-of-range number is clamped (pass %, weak %), not shown as an error.
