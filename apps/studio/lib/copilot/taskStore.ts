@@ -412,7 +412,7 @@ const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toStr
  * project (those go to the table), and nothing credential-shaped is in a row.
  */
 const DUMP_ENABLED = () => process.env.NODE_ENV !== "production" && (process.env.RESCRIPT_TASKS_DUMP ?? "") !== "off";
-const dumpPath = () => join(process.env.RESCRIPT_TASKS_DIR || join(tmpdir(), "rescript-tasks-sandbox"), "tasks.json");
+const dumpPath = () => join(process.env.RESCRIPT_TASKS_DIR || join(tmpdir(), "rescript-tasks-sandbox"), "intelligent-tasks.json");
 const DUMP_G = globalThis as unknown as { __rescriptTaskDumpLoaded?: boolean; __rescriptTaskDumpTimer?: ReturnType<typeof setTimeout> | null };
 function loadDump(into: Map<string, MemTask>): void {
   if (DUMP_G.__rescriptTaskDumpLoaded || !DUMP_ENABLED()) return;
@@ -421,7 +421,11 @@ function loadDump(into: Map<string, MemTask>): void {
     const file = dumpPath();
     if (!existsSync(file)) return;
     const raw = JSON.parse(readFileSync(file, "utf8")) as { seq?: number; tasks?: (Omit<MemTask, "committed" | "claimedAt"> & { committed?: [string, string][]; claimedAt?: [string, number][] })[] };
-    for (const t of raw.tasks ?? []) if (t && typeof t.id === "string" && !into.has(t.id)) into.set(t.id, { ...t, committed: new Map(t.committed ?? []), claimedAt: new Map(t.claimedAt ?? []) } as MemTask);
+    for (const t of raw.tasks ?? []) {
+      /* only rows of this store's shape: anything else in the file is ignored, never loaded as a task */
+      if (!t || typeof t.id !== "string" || typeof t.surveyId !== "string" || !Array.isArray(t.steps) || into.has(t.id)) continue;
+      into.set(t.id, { ...t, committed: new Map(t.committed ?? []), claimedAt: new Map(t.claimedAt ?? []) } as MemTask);
+    }
     if (typeof raw.seq === "number" && raw.seq > memSeq) memSeq = raw.seq;
   } catch { /* an unreadable dump is an empty one */ }
 }
