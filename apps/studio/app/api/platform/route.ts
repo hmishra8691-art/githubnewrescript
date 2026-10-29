@@ -204,6 +204,19 @@ export async function GET(_req: NextRequest) {
         canReachRealRecipients: cfg.configured && cfg.tier === "production",
       };
     })(),
+    /*
+     * THE EXECUTION ENGINE'S SWITCHES (2026-10-29, docs/EXECUTION-ENGINE-2026-10-29.md) — presence and value only,
+     * never a key. `tasks` is plan-first routing of non-trivial requests; the rest are the knobs the runbook names.
+     */
+    executionEngine: {
+      tasks: (process.env.COPILOT_TASKS ?? "").trim().toLowerCase() !== "off",
+      advanceMs: Number(process.env.COPILOT_TASK_ADVANCE_MS) > 0 ? Number(process.env.COPILOT_TASK_ADVANCE_MS) : 60_000,
+      dualWrite: (process.env.COPILOT_TASK_DUAL_WRITE ?? "").trim().toLowerCase() !== "off",
+      resume: /^(on|1|true|yes)$/i.test((process.env.COPILOT_TASK_RESUME ?? process.env.COPILOT_PLAN_RESUME ?? "").trim()),
+      cron: !!(process.env.CRON_SECRET ?? "").trim(),
+      durable: probed && applied.includes("0074"),
+      batches: { simple: process.env.TASK_BATCH_SIMPLE ?? "20", complex: process.env.TASK_BATCH_COMPLEX ?? "6", edit: process.env.TASK_BATCH_EDIT ?? "20", logic: process.env.TASK_BATCH_LOGIC ?? "40" },
+    },
     viewer: { isPlatformAdmin: isAdmin, signedIn: !!user, email: user?.email ?? null },
   }, { headers: { "cache-control": "no-store" } });
 }
