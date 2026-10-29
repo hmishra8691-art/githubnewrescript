@@ -598,6 +598,58 @@ function pushVisited(state: ResponseState, pageId: string): void {
   const stack = visitedStack(state);
   if (stack[stack.length - 1] !== pageId) stack.push(pageId);
   (state.meta ??= {})[VISITED_KEY] = stack;
+  markSeen(state, pageId);
+}
+
+/*
+ * EVERY PAGE EVER SHOWN, unlike the trail above, which Back (and a backward
+ * section jump) trims. Section navigation's "visited" means seen, not "on the
+ * current Back trail": a respondent who jumps from Polity back to History has
+ * still visited Polity.
+ */
+const SEEN_KEY = "__seen";
+
+/** Pages the respondent has been shown and left (and those a section jump left), in first-seen order. */
+export function seenPages(state: ResponseState): string[] {
+  const v = state.meta?.[SEEN_KEY];
+  return Array.isArray(v) ? [...(v as string[])] : [];
+}
+
+export function markSeen(state: ResponseState, pageId: string): void {
+  const v = state.meta?.[SEEN_KEY];
+  const seen = Array.isArray(v) ? (v as string[]) : [];
+  if (!seen.includes(pageId)) seen.push(pageId);
+  (state.meta ??= {})[SEEN_KEY] = seen.slice(-2000);
+}
+
+/**
+ * The visited-page stack (LOGIC-04), read-only, oldest first — what Back pops.
+ * Section navigation (sectionNav.ts) reads it to decide which pages count as
+ * visited and rewrites it after a jump so Back afterwards behaves.
+ */
+export function visitedPages(state: ResponseState): string[] {
+  return [...visitedStack(state)];
+}
+
+/** Replace the visited-page stack (section navigation after a jump; a resume restoring it). */
+export function setVisitedPages(state: ResponseState, pageIds: string[]): void {
+  (state.meta ??= {})[VISITED_KEY] = pageIds.filter((p) => typeof p === "string").slice(-2000);
+}
+
+/**
+ * Land on the step at `idx` exactly as Next lands on a page: the non-page steps
+ * from there are executed, and the arrival work (pruning, prefill, defaults)
+ * runs on the page that is settled on. Section navigation's forward jump —
+ * the caller has already decided the step is a reachable page.
+ */
+export function arriveAt(
+  def: SurveyDefinition,
+  state: ResponseState,
+  quotaCounts: QuotaCounts,
+  idx: number,
+  view: VisibilityOptions = {},
+): NavigationResult {
+  return moveForward(def, state, quotaCounts, idx, [], view);
 }
 
 /**
@@ -809,6 +861,7 @@ export function start(
 ): NavigationResult {
   state.stepIndex = -1;
   if (state.meta && VISITED_KEY in state.meta) delete state.meta[VISITED_KEY];
+  if (state.meta && SEEN_KEY in state.meta) delete state.meta[SEEN_KEY];
   if (opts.startAt) {
     // seeded answers stand for pages already submitted, so the values those
     // submits would have derived (calculations, loop variables) exist too
