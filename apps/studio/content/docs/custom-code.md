@@ -73,10 +73,20 @@ Declarations are checked against the CSS property grammar and a ban-list (no `be
 
 A behaviour's `script` is the survey's JavaScript. It runs in one sandboxed iframe per script (`sandbox="allow-scripts"`, opaque origin, no network, no storage) against **two things**:
 
-1. the frozen `rs` api: `rs.listen(event, target | "self", fn)`, `rs.getAnswer(code)`, `rs.getQuestion(code)`, `rs.getBlock()`, `rs.getPage()`, `rs.addClass`, `rs.removeClass`, `rs.toggleClass`, `rs.animate`, `rs.setStyle`, `rs.clearStyle`, `rs.show`, `rs.hide`, `rs.showMessage`, `rs.hideMessage`, `rs.scrollTo`, `rs.focus` (each takes a target first), `rs.after(ms, fn)`, `rs.log(...)`. Events: `answer, change, select, deselect, click, hover, page, complete` (with aliases such as `page_enter` → `page`, `select_option` → `select`);
+1. the frozen `rs` api: `rs.listen(event, target | "self", fn)`, `rs.getAnswer(code)`, `rs.getQuestion(code)`, `rs.getBlock()`, `rs.getPage()`, `rs.addClass`, `rs.removeClass`, `rs.toggleClass`, `rs.animate`, `rs.setStyle`, `rs.clearStyle`, `rs.show`, `rs.hide`, `rs.showMessage`, `rs.hideMessage`, `rs.scrollTo`, `rs.focus` (each takes a target first), `rs.after(ms, fn)`, `rs.log(...)`, `rs.popup(text, {title, placement, target, dismiss})`, `rs.closePopup()`, and the navigation requests `rs.goToPage(pageIdOrCode)` and `rs.goToSection(blockIdOrTitle)` (below). Events: `answer, change, select, deselect, click, hover, page, complete` (with aliases such as `page_enter` → `page`, `select_option` → `select`);
 2. **the page's own DOM** — a live mirror of the page the script is for: `document.querySelector` / `querySelectorAll` / `closest` / `matches`, `classList`, `style`, `dataset`, `getAttribute` / `setAttribute`, `textContent`, `MutationObserver` and `addEventListener` on any element or on `document` all behave as written. Real clicks, input, change, focus and key events are forwarded to the listeners a script registered, **once per event**.
 
 `rs.listen` and the DOM api coexist in the same script; they do not double-fire.
+
+**Navigation from a script.** A script cannot press Next or Back, and never could. It can ASK the survey to go somewhere: `rs.goToPage("p3")` (a page id, one loop iteration `p3@apple`, or the code of a question on the page) and `rs.goToSection("Geography")` (a flow block id or its title). The request goes to the survey, which checks it with **the same rule as the built-in section navigator** (Survey Settings → Navigation): going back to an earlier page is always allowed (unless the survey has no navigator and hides Back); going forward is allowed only to sections already visited (`visited` — every page in between must validate, as if Next were pressed) or, with `free`, to any page reachable with the current answers — never a page hidden by logic, never past an end, a quota check or a skip rule that fires. A refused request leaves the respondent where they are and is logged with the reason (`rs.goToSection("Polity") refused: You can only jump to sections you have already visited.`) to the browser console and the preview inspector. For a bar of section buttons, use the built-in navigator rather than building one in a script.
+
+```js
+// a "jump to Geography" link under the History intro
+const a = document.createElement("button");
+a.textContent = "Go to Geography";
+a.addEventListener("click", () => rs.goToSection("Geography"));
+document.querySelector('[data-qid="q_hist_intro"]').appendChild(a);
+```
 
 Use the real hooks — a selector that matches nothing is logged to the console with the one to use: the Next/Submit button is `[data-testid="rs-next"]`, Back `[data-testid="rs-back"]`, a question's card `[data-qid="<question id>"]`, an option `[data-rs-el="option"]`, the navigation row `.rs-nav`, the progress bar `.rs-progress-fill`. (`.next-button`, `#next` and `.question` do not exist.)
 

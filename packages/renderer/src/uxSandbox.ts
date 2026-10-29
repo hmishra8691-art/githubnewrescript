@@ -87,6 +87,9 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
       send("popup", [text == null ? "" : String(text), keep]);
     },
     closePopup: function () { send("closePopup", []); },
+    /* SECTION NAVIGATION: a request the HOST checks with the engine's rule (refused jumps are logged with the reason) */
+    goToPage: function (pageIdOrCode) { send("goToPage", [pageIdOrCode == null ? "" : String(pageIdOrCode)]); },
+    goToSection: function (blockIdOrTitle) { send("goToSection", [blockIdOrTitle == null ? "" : String(blockIdOrTitle)]); },
     log: function () { send("log", Array.prototype.map.call(arguments, String)); }
   };
   ["addClass","removeClass","toggleClass","animate","setStyle","clearStyle","show","hide","showMessage","hideMessage","scrollTo","focus"].forEach(function (n) { rs[n] = function () { send(n, Array.prototype.slice.call(arguments, 0, 3)); }; });

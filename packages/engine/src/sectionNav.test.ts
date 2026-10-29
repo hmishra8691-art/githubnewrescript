@@ -258,3 +258,12 @@ test("server replay: accepts a free jump the engine allows, refuses the same pay
 function compileFlowResult(def: SurveyDefinition, st: ResponseState) {
   return { steps: compileFlow(def, st), stepIndex: st.stepIndex };
 }
+
+test("scripts: rs.goToPage / rs.goToSection pass the script gate (the host decides with goToPage)", async () => {
+  const { validateUxScript, UX_SCRIPT_API } = await import("./ux.js");
+  assert.ok(UX_SCRIPT_API.includes("goToPage") && UX_SCRIPT_API.includes("goToSection"));
+  const def = paper({ sectionNav: "visited" });
+  assert.deepEqual(validateUxScript(`rs.listen("click", "self", function () { rs.goToSection("Geography"); });`, def).errors, []);
+  assert.deepEqual(validateUxScript(`rs.goToPage("p3");`, def).errors, []);
+  assert.match(validateUxScript(`rs.jumpTo("p3");`, def).errors.join(" "), /rs\.jumpTo is not part of the survey api/);
+});

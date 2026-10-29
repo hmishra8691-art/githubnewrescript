@@ -1786,7 +1786,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     }
     if (!r.ok) {
       setNavNote(r.reason ?? "That section is not available.");
-      if (source === "script") setLogs((l) => [...l, `[script] navigation to "${target}" refused: ${r.reason ?? r.refusal}`]);
+      // a script's refusal is logged by the UX layer with the call that made it (rs.goToSection("…") refused: …)
       force();
       return { ok: false, reason: r.reason ?? r.refusal };
     }
@@ -1800,7 +1800,6 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     setNavNote(null);
     setGate(null);
     gateConfirmedRef.current = false;
-    if (source === "script") setLogs((l) => [...l, `[script] navigated to "${target}" (${r.via})`]);
     const landed = r.steps[r.stepIndex];
     if (conversational && landed?.kind === "page") setConvo({ pageId: landed.pageId, index: 0 });
     force();
@@ -2219,7 +2218,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           shown={pageStep ? shownQuestions.map((q) => q.id) : []}
           pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
-          onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])} />
+          onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
+          onNavigate={(target, as) => jumpTo(target, as, "script")} />
       )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
