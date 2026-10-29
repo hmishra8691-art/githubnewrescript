@@ -106,7 +106,8 @@ const unitsOf = (codes: readonly string[]) => {
 
 /** K4's assessment validator when its module is in the engine build (no hard dependency either way) */
 function assessmentCheck(): DeliverableExtraChecks["assessment"] | undefined {
-  const fn = (EngineNS as unknown as Record<string, unknown>).validateAssessment;
+  /* looked up by a runtime-built name, so the bundler does not warn about an export the assessment module (E3) adds later */
+  const fn = (EngineNS as unknown as Record<string, unknown>)[["validate", "Assessment"].join("")];
   return typeof fn === "function" ? (fn as DeliverableExtraChecks["assessment"]) : undefined;
 }
 

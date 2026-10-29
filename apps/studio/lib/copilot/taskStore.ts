@@ -43,6 +43,9 @@ import {
   type TaskKind, type TaskStatus, type TaskSummary,
 } from "@rescript/engine";
 import { dbConfigured, memoryOf, storeWithFallback } from "./durable.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 /* ------------------------------------------------------------ the shape */
 
@@ -401,6 +404,43 @@ export interface MemTask extends ExecTask {
 let memSeq = 0;
 const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toString(36)}`;
 
+/*
+ * THE SANDBOX'S MEMORY SURVIVES A DEV-SERVER RESTART (2026-10-29). The memory store is this process's; the
+ * sandbox has no database row, and a dev server that is recompiled or OOM-killed mid-task used to lose every row
+ * — the page then reattached to nothing. Outside production the shared map is dumped to a small JSON file after
+ * each mutation (debounced) and read back once when the process starts. Never in production, never for a real
+ * project (those go to the table), and nothing credential-shaped is in a row.
+ */
+const DUMP_ENABLED = () => process.env.NODE_ENV !== "production" && (process.env.RESCRIPT_TASKS_DUMP ?? "") !== "off";
+const dumpPath = () => join(process.env.RESCRIPT_TASKS_DIR || join(tmpdir(), "rescript-tasks-sandbox"), "tasks.json");
+const DUMP_G = globalThis as unknown as { __rescriptTaskDumpLoaded?: boolean; __rescriptTaskDumpTimer?: ReturnType<typeof setTimeout> | null };
+function loadDump(into: Map<string, MemTask>): void {
+  if (DUMP_G.__rescriptTaskDumpLoaded || !DUMP_ENABLED()) return;
+  DUMP_G.__rescriptTaskDumpLoaded = true;
+  try {
+    const file = dumpPath();
+    if (!existsSync(file)) return;
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { seq?: number; tasks?: (Omit<MemTask, "committed" | "claimedAt"> & { committed?: [string, string][]; claimedAt?: [string, number][] })[] };
+    for (const t of raw.tasks ?? []) if (t && typeof t.id === "string" && !into.has(t.id)) into.set(t.id, { ...t, committed: new Map(t.committed ?? []), claimedAt: new Map(t.claimedAt ?? []) } as MemTask);
+    if (typeof raw.seq === "number" && raw.seq > memSeq) memSeq = raw.seq;
+  } catch { /* an unreadable dump is an empty one */ }
+}
+function scheduleDump(tasks: Map<string, MemTask>): void {
+  if (!DUMP_ENABLED()) return;
+  if (DUMP_G.__rescriptTaskDumpTimer) return;
+  const t = setTimeout(() => {
+    DUMP_G.__rescriptTaskDumpTimer = null;
+    try {
+      const file = dumpPath();
+      mkdirSync(join(file, ".."), { recursive: true });
+      const list = [...tasks.values()].slice(-40).map((x) => ({ ...x, committed: [...x.committed], claimedAt: [...x.claimedAt] }));
+      writeFileSync(file, JSON.stringify({ seq: memSeq, tasks: list }));
+    } catch { /* a dump that cannot be written loses nothing a dev server did not already risk */ }
+  }, 250);
+  (t as unknown as { unref?: () => void }).unref?.();
+  DUMP_G.__rescriptTaskDumpTimer = t;
+}
+
 /**
  * The contract's reference implementation. Every mutation happens in one
  * synchronous run of the method body — no `await` between the read and the
@@ -410,9 +450,16 @@ const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toStr
 export class MemoryTaskStore implements TaskStore {
   readonly durable = false;
   private tasks: Map<string, MemTask>;
-  constructor(tasks: Map<string, MemTask> = memoryOf<MemTask>("intelligentTasks")) { this.tasks = tasks; }
+  private shared: boolean;
+  constructor(tasks?: Map<string, MemTask>) {
+    this.shared = !tasks;
+    this.tasks = tasks ?? memoryOf<MemTask>("intelligentTasks");
+    if (this.shared) loadDump(this.tasks);
+  }
 
   private read(taskId: string): MemTask | null { return this.tasks.get(taskId) ?? null; }
+  /** after every mutation of the shared map */
+  private touch(): void { if (this.shared) scheduleDump(this.tasks); }
 
   async create(input: CreateTaskInput): Promise<ExecTask> {
     const id = newId("task");
@@ -430,6 +477,7 @@ export class MemoryTaskStore implements TaskStore {
       committed: new Map(), claimedAt: new Map(),
     };
     this.tasks.set(id, t);
+    this.touch();
     return snapshot(t);
   }
 
@@ -481,6 +529,7 @@ export class MemoryTaskStore implements TaskStore {
       t.claimedAt.set(s.stepId, now);
       t.status = "running";
       t.updatedAt = now;
+      this.touch();
       return { step: structuredClone(s), claimedAt: now };
     }
     return null;
@@ -525,6 +574,7 @@ export class MemoryTaskStore implements TaskStore {
     s.failureMessage = undefined;
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
+    this.touch();
     return structuredClone(s);
   }
 
@@ -541,6 +591,7 @@ export class MemoryTaskStore implements TaskStore {
     s.finishedAt = Date.now();
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
+    this.touch();
     return structuredClone(s);
   }
 
@@ -550,6 +601,7 @@ export class MemoryTaskStore implements TaskStore {
     t.steps = planRevision(t.steps, taskId, planVersion, steps, tombstoned);
     t.planVersion = planVersion;
     t.updatedAt = Date.now();
+    this.touch();
     return snapshot(t);
   }
 
@@ -561,6 +613,7 @@ export class MemoryTaskStore implements TaskStore {
     /* a task that is running again is not blocked by anything */
     if (status !== "needs_attention") t.blocked = undefined;
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async pause(taskId: string, blocked: NonNullable<ExecTask["blocked"]> | null): Promise<void> {
@@ -569,6 +622,7 @@ export class MemoryTaskStore implements TaskStore {
     if (blocked) { t.status = "needs_attention"; t.blocked = { ...blocked, at: blocked.at ?? Date.now() }; }
     else { t.blocked = undefined; if (t.status === "needs_attention") t.status = "running"; }
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async earliestIncomplete(taskId: string): Promise<ExecStep | null> {
@@ -596,6 +650,7 @@ export class MemoryTaskStore implements TaskStore {
     if (!t) return;
     t.extraCharge = (t.extraCharge ?? 0) + amount;
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async release(taskId: string, stepId: string): Promise<void> {
@@ -605,6 +660,7 @@ export class MemoryTaskStore implements TaskStore {
     s.status = "pending";
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async listFor(surveyId: string, limit = 20): Promise<ExecTask[]> {
@@ -622,7 +678,7 @@ export class MemoryTaskStore implements TaskStore {
       t.claimedAt.delete(s.stepId);
       out.push(s.stepId);
     }
-    if (out.length) t.updatedAt = Date.now();
+    if (out.length) { t.updatedAt = Date.now(); this.touch(); }
     return out;
   }
 }
