@@ -86,6 +86,7 @@ import {
 } from "@rescript/engine";
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
+import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
 import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
@@ -144,6 +145,13 @@ export interface RunnerProps {
    * and live are decided by the route that served the page.
    */
   respondentView?: boolean;
+  /**
+   * ASSESSMENTS (step 4A, 2026-10-29): where a completed paper's results come from when there is no session save to
+   * return them — the sandbox take page (`/x/[token]`, a runtime with no database). See AssessmentResults.tsx.
+   */
+  assessmentSubmit?: { url: string; token: string };
+  /** PREVIEW ONLY: the Studio's full definition (answer key included) the preview scores against locally, badge-marked */
+  previewScoringDef?: SurveyDefinition;
 }
 
 type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; status?: number } | { ok: true; skipped: true };
@@ -421,7 +429,7 @@ export function Runner(props: RunnerProps) {
   );
 }
 
-function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers, listFillCounts, respondentView }: RunnerProps) {
+function RunnerInner({ definition: loadedDef, mode, session: initialSession, sessionBoot, quotaCounts: initialCounts, urlParams, build, startAt, seedAnswers, listFillCounts, respondentView, assessmentSubmit, previewScoringDef }: RunnerProps) {
   /*
    * WHO IS LOOKING (brief 19/10/2026, hidden questions). `mode` is set by the
    * route that served this page — `/preview`, `/t/…` (test) or `/s/…` and
@@ -479,6 +487,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * known. `saved` holds a resumed row's answers and position.
    */
   const [session, setSession] = React.useState<RunnerProps["session"] | undefined>(initialSession);
+  /* ASSESSMENTS (step 4A): the results page after a completed paper — from the server, never the definition */
+  const assessmentResults = useAssessmentResults({ def: loadedDef, mode, sessionId: session?.sessionId ?? null, build, assessmentSubmit, previewScoringDef });
   const [bootError, setBootError] = React.useState<string | null>(null);
   const [bootAttempt, setBootAttempt] = React.useState(0);
   /**
@@ -809,6 +819,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     endPreviewBalance(sourceDef.meta.id, previewBalanceSession.current, "release");
     previewBalanceSession.current = `preview-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     setEnded(null);
+    assessmentResults.reset();
     setErrors([]);
     setProbe(null);
     skippedProbesRef.current = new Set();
@@ -1669,6 +1680,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         return;
       }
       setFinalSave({ kind: "saved" });
+      void assessmentResults.obtain("response" in out ? out.response : null, nav.endStatus ?? "complete", state.answers as Record<string, unknown>);
       if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
       /* a finished preview starts clean next time, exactly as a finished
          response does — the resume is for an interview in progress */
@@ -1697,6 +1709,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     force();
     const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
     setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
+    if (out.ok) void assessmentResults.obtain("response" in out ? out.response : null, ended?.status ?? "complete", state.answers as Record<string, unknown>);
     if (out.ok && sessionBoot) {
       clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
       if (session) clearPending(session.sessionId);
@@ -1793,6 +1806,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
                 : uiText(ui, "terminated", undefined, "The survey has ended.")}
         </h2>
       )}
+      {/* ASSESSMENTS (step 4A): the results report, from the server's score, per the paper's show-results policy */}
+      {assessmentResults.node}
       {ended.redirectUrl && mode !== "live" && (
         <p style={{ color: "var(--rs-subtle)" }} data-testid="rs-would-redirect">
           (test mode: would redirect to {ended.redirectUrl})

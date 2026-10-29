@@ -21,6 +21,7 @@
 @import "./variants/gamified.css";
 @import "./variants/experimental.css";
 @import "./variants/conversational.css";
+@import "./variants/assessment.css";
 /* ============================================================================
    RESCRIPT QUESTION RENDERING — the one stylesheet for rendered survey content.
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/admin";
 import { getCachedVersionDefinition } from "@rescript/quality/server";
 import { definitionAccess, isVersionId, DENY_CACHE_CONTROL, type DeploymentRow } from "@/lib/definitionAccess";
+import { respondentDefinition } from "@/lib/assessmentPayload";
 
 /**
  * THE CACHEABLE HALF OF THE RESPONDENT RUNTIME (P0-1: Fast Origin Transfer).
@@ -68,7 +69,8 @@ export async function GET(_req: NextRequest, { params }: { params: { versionId: 
     return NextResponse.json({ error: "not found" }, { status: 404, headers: { "cache-control": "no-store" } });
   }
 
-  return NextResponse.json(definition, {
+  // ASSESSMENTS (step 4A, 2026-10-29): the answer key, explanations and mistake notes never leave the server before submission
+  return NextResponse.json(respondentDefinition(definition), {
     headers: { "cache-control": access.cacheControl },
   });
 }

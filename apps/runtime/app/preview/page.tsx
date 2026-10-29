@@ -2,6 +2,7 @@
 import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
 import { Runner } from "@/components/Runner";
+import { respondentDefinition } from "@/lib/assessmentPayload";
 
 /**
  * In-memory preview: the Studio posts the survey definition into this page
@@ -114,6 +115,7 @@ export default function PreviewPage() {
    * names the definition on screen — version and when it was last saved — so
    * "am I looking at my change?" is answerable without guessing.
    */
+  const respondentPreviewDef = stripForRespondent(def);
   const saved = def.meta.updatedAt
     ? new Date(def.meta.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : null;
@@ -137,7 +139,10 @@ export default function PreviewPage() {
           It IS keyed on the entry point, so a new block preview starts over. */}
       <Runner
         key={`${entry?.startAt ?? ""}|${JSON.stringify(entry?.answers ?? null)}`}
-        definition={def}
+        /* ASSESSMENTS (step 4A): "as a respondent" renders exactly what a respondent receives — the answer key
+           stripped; the programmer's own copy still scores the preview's results page (badge-marked) */
+        definition={respondentView ? respondentPreviewDef : def}
+        previewScoringDef={def}
         mode="preview"
         startAt={entry?.startAt}
         seedAnswers={entry?.answers}
@@ -160,4 +165,12 @@ function findNodeTitle(nodes: any[], id: string): string | null {
     }
   }
   return null;
+}
+
+/** the stripped definition, memoised per definition object (the Studio pushes a new object on every edit) */
+const stripped = new WeakMap<object, SurveyDefinition>();
+function stripForRespondent(def: SurveyDefinition): SurveyDefinition {
+  let out = stripped.get(def);
+  if (!out) { out = respondentDefinition(def); stripped.set(def, out); }
+  return out;
 }

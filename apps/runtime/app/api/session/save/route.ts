@@ -7,6 +7,8 @@ import { checkSubmission, quotaIncrements, hasExactBalance, type ResponseState, 
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents } from "@/lib/notifyEmit";
+import { assessmentResultRow, scoreForSubmission } from "@/lib/assessmentPayload";
+import type { RespondentAssessmentReport } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 
@@ -150,6 +152,7 @@ export async function POST(req: NextRequest) {
   // Finalize: quota counts for THIS environment (test and live are counted
   // apart — migration 0006; before it, the two-argument call counts live only)
   let quality: { classification: string; riskScore: number; qualityScore: number } | null = null;
+  let assessment: RespondentAssessmentReport | null = null;
   if (completed && newStatus !== "in_progress") {
     if (def && newStatus === "complete") {
       const state = {
@@ -215,6 +218,26 @@ export async function POST(req: NextRequest) {
       const customerId = Array.isArray(cust) ? cust[0]?.customer_id : cust?.customer_id;
       if (customerId) void recordSessionUsage({ customerId, surveyId: existing.survey_id, environment: existing.is_test ? "TEST" : "LIVE", sessionId }, { eventType: "SURVEY_RESPONSE", quantity: 1, metadata: { sessionId: sessionId.slice(0, 8), versionId: existing.version_id } });
     }
+    /*
+     * ASSESSMENTS (K4 2026-10-25, ported 2026-10-29 — migration 0076): a completed paper is scored HERE, against
+     * the server's definition (the respondent never had the key), deterministically (engine scoreAssessment).
+     * The full result is stored per session in `assessment_results` (upsert on session_id, so a retried final
+     * save cannot duplicate it); the respondent gets only the report sections the paper shows (null when its
+     * results are never shown). Never fails the save: the answers are the data and the score is recomputable —
+     * before 0076 is applied, /api/session/assessment re-scores from the answers.
+     */
+    if (newStatus === "complete") {
+      try {
+        const scored = scoreForSubmission(def, answers);
+        if (scored) {
+          assessment = scored.report;
+          const { error: aErr } = await db.from("assessment_results").upsert(assessmentResultRow(existing, sessionId, scored.result), { onConflict: "session_id" });
+          if (aErr) console.error("[rescript:assessment] storing the score failed (answers saved)", { sessionId: sessionId.slice(0, 8), error: aErr.message });
+        }
+      } catch (e) {
+        console.error("[rescript:assessment] scoring failed (answers saved)", { sessionId: sessionId.slice(0, 8), error: (e as Error).message });
+      }
+    }
     /* G3 2026-10-22: survey fieldwork alerts — a quota-full end, completes milestones (never blocks the save) */
     if (newStatus === "quota_full" || newStatus === "complete") await surveyFieldworkEvents(db, { surveyId: existing.survey_id, status: newStatus, isTest: !!existing.is_test, sampleSize: def?.research?.sampleSize ?? null, title: def?.meta.title ?? null });
     // the quality engine, on the final state of the row
@@ -244,7 +267,7 @@ export async function POST(req: NextRequest) {
     }
   }
   return NextResponse.json({
-    ok: true, quality,
+    ok: true, quality, ...(assessment ? { assessment } : {}),
     environment: existing.is_test ? "TEST" : "LIVE",
     respondentCode: existing.respondent_code ?? null,
     status: newStatus,
