@@ -181,8 +181,8 @@ results in "Step 2 results" below.
   mid-stage": the memcg killed `next-server` at 4.4 GB / 3.5 GB rss on two runs, the supervisor restarted it, the
   page's navigation timed out) — not a pass, reproducible at the same step · `engine-15-19` **30 ok, then OOM at
   #19 LAYOUT** (Chromium "Page crashed" on reload while the Studio was being restarted) — not a pass ·
-  `analysis-plan` **0 ok, OOM at §1** (`/analytics` compiled in 18.5 s, then the dev server was killed; a retry is
-  recorded in the progress file). None of the three failures is a plan-first routing failure: no suite reached a
+  `analysis-plan` first run **0 ok, OOM at §1** (`/analytics` compiled in 18.5 s, then the dev server was killed),
+  retry on a fresh server **35/35**. None of the three failures is a plan-first routing failure: no suite reached a
   turn that became a task where a single reply was expected.
 - **Not run in step 2:** `ux-copilot-test.mjs`, `logic-dialog-test.mjs` (in the original brief's list, not in
   step 2's), a second run of `engine-15-19`.
