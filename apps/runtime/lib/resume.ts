@@ -249,3 +249,40 @@ export function readPreviewState(previewId: string): PendingAnswers | null {
 export function clearPreviewState(previewId: string): void {
   try { window.sessionStorage.removeItem(PREVIEW_KEY(previewId)); } catch { /* ignore */ }
 }
+
+/* ------------------------------------------------------------ section navigation trail
+ *
+ * SECTION NAVIGATION (2026-10-30): the Back trail and the pages seen live in
+ * `state.meta`, which is never posted (it is not an answer and must not reach
+ * an export). A reload would lose them — the navigator would forget which
+ * sections were visited and Back would fall back to compiled order. They are
+ * kept in THIS browser beside the resume pointer: localStorage for a live /
+ * test session (keyed by session id), sessionStorage for a preview. Another
+ * device resumes without them; the engine then derives "visited" from the
+ * answers and the position (sectionNav.ts), which is the honest fallback.
+ */
+export interface NavTrail { visited: string[]; seen: string[]; at: number }
+const NAV_KEY = (key: string) => `rescript:nav:${key}`;
+const cleanIds = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(-2000) : [];
+
+export function writeNavTrail(key: string, trail: { visited: string[]; seen: string[] }, preview = false): void {
+  try {
+    const store = preview ? window.sessionStorage : window.localStorage;
+    store.setItem(NAV_KEY(key), JSON.stringify({ visited: cleanIds(trail.visited), seen: cleanIds(trail.seen), at: Date.now() }));
+  } catch { /* blocked storage — Back falls back to compiled order */ }
+}
+
+export function readNavTrail(key: string, preview = false): NavTrail | null {
+  try {
+    const store = preview ? window.sessionStorage : window.localStorage;
+    const raw = store.getItem(NAV_KEY(key));
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<NavTrail>;
+    if (!p || typeof p !== "object") return null;
+    return { visited: cleanIds(p.visited), seen: cleanIds(p.seen), at: typeof p.at === "number" ? p.at : 0 };
+  } catch { return null; }
+}
+
+export function clearNavTrail(key: string, preview = false): void {
+  try { (preview ? window.sessionStorage : window.localStorage).removeItem(NAV_KEY(key)); } catch { /* ignore */ }
+}

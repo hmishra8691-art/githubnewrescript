@@ -83,6 +83,15 @@ import {
   invalidateStalePreviewAnswers,
   punchDerivedQuestions,
   prefillQuestions,
+  goToPage,
+  sectionOutline,
+  sectionNavMode,
+  submitGate,
+  visitedPages,
+  seenPages,
+  setVisitedPages,
+  markSeen,
+  type SubmitGate,
 } from "@rescript/engine";
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
@@ -93,7 +102,9 @@ import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
   cachePreviewState, readPreviewState, clearPreviewState, mergeResumeSnapshot,
+  readNavTrail, writeNavTrail, clearNavTrail,
 } from "@/lib/resume";
+import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
 import type { ResponseTelemetry } from "@rescript/quality";
@@ -619,6 +630,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   };
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
+  /* SECTION NAVIGATION (2026-10-30): the navigator's last refusal, the Submit gate on screen, and "submit anyway" once agreed */
+  const [navNote, setNavNote] = React.useState<string | null>(null);
+  const [gate, setGate] = React.useState<SubmitGate | null>(null);
+  const gateConfirmedRef = React.useRef(false);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   /** the warning set the respondent has already been shown on this page */
@@ -1026,6 +1041,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
        */
       nav = resumeAt(def, state, counts, saved.stepIndex, view);
       savedRef.current = null;
+      /* section navigation: the Back trail and the sections seen, kept in this browser (lib/resume.ts) */
+      if (sectionNavMode(def) !== "off") {
+        const trail = readNavTrail(session?.sessionId ?? previewStateId, mode === "preview");
+        if (trail) { setVisitedPages(state, trail.visited); for (const p of trail.seen) markSeen(state, p); }
+      }
       if (stale?.invalidated.length) {
         /*
          * The resumed page is drawn as it stands, so the punches that read a
@@ -1489,6 +1509,23 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     ackWarnRef.current = null;
     setErrors([]);
     /*
+     * THE SUBMIT GATE (free section navigation, engine `submitGate`): when
+     * this Next would end the survey, every page on the path is checked —
+     * the pages a jump skipped were never validated. Unanswered required
+     * questions refuse Submit and are listed per section with a way there;
+     * an assessment only asks "N unanswered — submit anyway?".
+     */
+    if (sectionNavMode(def) === "free") {
+      const g = submitGate(def, state, counts, view);
+      if (g.finishing && (!g.ok || (g.needsConfirm && !gateConfirmedRef.current))) {
+        setGate(g);
+        force();
+        return;
+      }
+      gateConfirmedRef.current = false;
+      setGate(null);
+    }
+    /*
      * "SHOW A MESSAGE WHEN NEXT IS PRESSED" — options whose popup is set to
      * appear on the way out. The answers are valid, nothing has been
      * allocated or recorded as left yet, so this is the last point where the
@@ -1615,6 +1652,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       stepIndex: state.stepIndex,
     };
     let stamp: number | undefined;
+    if (sectionNavMode(def) !== "off" && (session || mode === "preview")) {
+      writeNavTrail(session?.sessionId ?? previewStateId, { visited: visitedPages(state), seen: seenPages(state) }, mode === "preview");
+    }
     if (session && mode !== "preview") {
       stamp = cachePending(session.sessionId, snapshot);
     } else if (mode === "preview") {
@@ -1682,6 +1722,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       setFinalSave({ kind: "saved" });
       void assessmentResults.obtain("response" in out ? out.response : null, nav.endStatus ?? "complete", state.answers as Record<string, unknown>);
       if (sessionBoot) clearResume(sessionBoot.mode, sessionBoot.surveyDbId);
+      if (sectionNavMode(def) !== "off") clearNavTrail(session?.sessionId ?? previewStateId, mode === "preview");
       /* a finished preview starts clean next time, exactly as a finished
          response does — the resume is for an interview in progress */
       if (mode === "preview") {
@@ -1725,6 +1766,48 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * has an index above 0 and nothing before it to show.
    */
   const backPossible = !!pageStep && hasPreviousPage(def, state, counts, view);
+
+  /*
+   * SECTION NAVIGATION (2026-10-30): a jump from the navigator, the Submit
+   * gate's list, or a survey script (`rs.goToPage` / `rs.goToSection`, posted
+   * by the UX sandbox and checked HERE with the same engine rule). A refusal
+   * leaves the respondent where they are and says why — never silently.
+   */
+  const navMode = sectionNavMode(def);
+  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" = "nav") => {
+    if (!pageStep || ended || advancingRef.current) return { ok: false, reason: "The survey is busy." };
+    let r: ReturnType<typeof goToPage>;
+    try {
+      r = goToPage(def, state, target, counts, view, { as });
+    } catch (e) {
+      console.error("[rescript:runtime] could not jump", e);
+      setFatal(fatalOf(e, "navigation"));
+      return { ok: false, reason: (e as Error).message };
+    }
+    if (!r.ok) {
+      setNavNote(r.reason ?? "That section is not available.");
+      if (source === "script") setLogs((l) => [...l, `[script] navigation to "${target}" refused: ${r.reason ?? r.refusal}`]);
+      force();
+      return { ok: false, reason: r.reason ?? r.refusal };
+    }
+    if (r.refusal === undefined && r.stepIndex === state.stepIndex && r.via === undefined) { setNavNote(null); return { ok: true }; }
+    ackRef.current.text = null;
+    telemetryRef.current?.leavePage();
+    setSteps(r.steps);
+    notePage(r.steps, r.stepIndex, "jump");
+    checkpoint();
+    setErrors([]);
+    setNavNote(null);
+    setGate(null);
+    gateConfirmedRef.current = false;
+    if (source === "script") setLogs((l) => [...l, `[script] navigated to "${target}" (${r.via})`]);
+    const landed = r.steps[r.stepIndex];
+    if (conversational && landed?.kind === "page") setConvo({ pageId: landed.pageId, index: 0 });
+    force();
+    window.scrollTo({ top: 0 });
+    return { ok: true };
+  };
+  const outline = navMode !== "off" && pageStep && !ended ? sectionOutline(def, state, counts, { ...view }) : [];
   const handleBack = () => {
     ackRef.current.text = null;
     telemetryRef.current?.leavePage();
@@ -2085,6 +2168,12 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {mediaGate.held && (
         <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
       )}
+      {gate && (
+        <SubmitGatePanel gate={gate}
+          onGo={(pageId) => { setGate(null); jumpTo(pageId, "page", "gate"); }}
+          onCancel={() => { setGate(null); force(); }}
+          onConfirm={() => { gateConfirmedRef.current = true; setGate(null); void handleNext(); }} />
+      )}
       <div className="rs-nav">
         {b.buttons.showBack && (backPossible || (conversational && convoIndex > 0)) ? (
           <button type="button" data-testid="rs-back" data-rs-button="back" className={`rs-btn secondary ${b.buttons.style}`} onClick={conversational ? convoBack : handleBack}>
@@ -2164,6 +2253,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${progress}%` }} /></div>
           {b.layout.progressStyle === "percent" && <div className="rs-progress-label">{progress}%</div>}
         </>
+      )}
+      {outline.length > 1 && (
+        <SectionNav outline={outline} position={def.navigation?.position ?? "top"} note={navNote}
+          onJump={(id) => { jumpTo(id, "section", "nav"); }} />
       )}
       {content}
       {b.footerHtml && (
