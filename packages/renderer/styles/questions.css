@@ -1109,7 +1109,7 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-section-nav-note:empty { display: none; }
 .rs-section-nav-note { margin-block: 8px 0; padding-block: 6px; padding-inline: 10px; font-size: 0.9em; color: var(--rs-error, #b42318); border-inline-start: 3px solid var(--rs-error, #b42318); background: var(--rs-surface, #fff); }
 @media (min-width: 900px) {
-  .rs-section-nav-side { position: fixed; inset-block-start: calc(var(--rs-stack-h, 0px) + 24px); inset-inline-start: 16px; inline-size: 13rem; }
+  .rs-section-nav-side { position: fixed; inset-block-start: calc(var(--rs-stack-top, 0px) + var(--rs-toolbar-h, 0px) + 24px); inset-inline-start: 16px; inline-size: 13rem; z-index: 2; }
   .rs-section-nav-side .rs-section-nav-list { flex-direction: column; flex-wrap: nowrap; }
   .rs-section-nav-side .rs-section-nav-item { inline-size: 100%; }
 }

@@ -634,6 +634,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const [navNote, setNavNote] = React.useState<string | null>(null);
   const [gate, setGate] = React.useState<SubmitGate | null>(null);
   const gateConfirmedRef = React.useRef(false);
+  /** the latest Next handler — "Submit anyway" presses it once the previous Next's latch has opened */
+  const nextRef = React.useRef<(() => Promise<void>) | null>(null);
+  /** the latest jumpTo (a jump clicked while Next is still settling is replayed, not dropped) */
+  const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   /** the warning set the respondent has already been shown on this page */
@@ -1458,6 +1462,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const handleNext = once(async () => {
     await handleNextInner();
   });
+  nextRef.current = handleNext;
 
   const handleNextInner = async () => {
     if (!pageStep) return;
@@ -1737,6 +1742,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       }
     } else {
       notePage(nav.steps, nav.stepIndex, "next");
+      setNavNote(null);
       checkpoint();
       window.scrollTo({ top: 0 });
     }
@@ -1774,8 +1780,18 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * leaves the respondent where they are and says why — never silently.
    */
   const navMode = sectionNavMode(def);
-  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" = "nav") => {
-    if (!pageStep || ended || advancingRef.current) return { ok: false, reason: "The survey is busy." };
+  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" = "nav", attempt = 0): { ok: boolean; reason?: string } => {
+    /*
+     * Next holds its latch for a minimum interval (MIN_ADVANCE_MS) after the
+     * page has already changed. A section click inside that interval is a
+     * real request on the page now shown — replay it once the latch opens
+     * rather than dropping it without a word.
+     */
+    if (advancingRef.current && !ended) {
+      if (attempt < 60) { setTimeout(() => { jumpRef.current?.(target, as, source, attempt + 1); }, 50); return { ok: true }; }
+      return { ok: false, reason: "The survey is busy — try again." };
+    }
+    if (!pageStep || ended) return { ok: false, reason: "There is no page to navigate from." };
     let r: ReturnType<typeof goToPage>;
     try {
       r = goToPage(def, state, target, counts, view, { as });
@@ -1786,6 +1802,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     }
     if (!r.ok) {
       setNavNote(r.reason ?? "That section is not available.");
+      if (source === "script" && attempt > 0) console.warn(`[rescript:script] navigation to "${target}" refused: ${r.reason ?? r.refusal}`);
       // a script's refusal is logged by the UX layer with the call that made it (rs.goToSection("…") refused: …)
       force();
       return { ok: false, reason: r.reason ?? r.refusal };
@@ -1806,6 +1823,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     window.scrollTo({ top: 0 });
     return { ok: true };
   };
+  jumpRef.current = jumpTo;
   const outline = navMode !== "off" && pageStep && !ended ? sectionOutline(def, state, counts, { ...view }) : [];
   const handleBack = () => {
     ackRef.current.text = null;
@@ -1819,6 +1837,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       return;
     }
     notePage(nav.steps, nav.stepIndex, "back");
+    setNavNote(null);
     // RUNTIME-06: persist the position Back landed on, so a reload resumes here
     checkpoint();
     setErrors([]);
@@ -2171,7 +2190,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         <SubmitGatePanel gate={gate}
           onGo={(pageId) => { setGate(null); jumpTo(pageId, "page", "gate"); }}
           onCancel={() => { setGate(null); force(); }}
-          onConfirm={() => { gateConfirmedRef.current = true; setGate(null); void handleNext(); }} />
+          onConfirm={() => {
+      gateConfirmedRef.current = true;
+      setGate(null);
+      // the refused Next may still hold its latch (MIN_ADVANCE_MS): press again once it opens, never drop the click
+      const press = (n = 0) => { if (advancingRef.current && n < 60) { setTimeout(() => press(n + 1), 50); return; } void nextRef.current?.(); };
+      press();
+    }} />
       )}
       <div className="rs-nav">
         {b.buttons.showBack && (backPossible || (conversational && convoIndex > 0)) ? (
