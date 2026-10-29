@@ -125,6 +125,19 @@ export interface TaskStore {
   stale(olderThanMs: number, limit?: number): Promise<{ id: string; surveyId: string }[]>;
   /** spend the turn made outside any step — the repair and coverage passes (audit M7) */
   addExtraCharge(taskId: string, amount: number): Promise<void>;
+  /**
+   * Hand a claimed step back WITHOUT spending an attempt (2026-10-29): a
+   * handler said the task is blocked by something outside the work, so the
+   * step goes back to `pending` with its lease cleared and its count intact.
+   */
+  release(taskId: string, stepId: string): Promise<void>;
+  /** this survey's tasks, newest first — the panel's list and the reattach after a reload */
+  listFor(surveyId: string, limit?: number): Promise<ExecTask[]>;
+  /**
+   * A person's Retry (2026-10-29): the named failed/blocked step — or every one when none is named — goes back to
+   * `pending` with a fresh attempt budget. Nothing completed is touched; returns the ids revived.
+   */
+  retry(taskId: string, stepId?: string): Promise<string[]>;
 }
 
 /** the default reclaim window, in seconds — longer than the 165s route budget, so a live slice is never stolen from */
@@ -584,6 +597,34 @@ export class MemoryTaskStore implements TaskStore {
     t.extraCharge = (t.extraCharge ?? 0) + amount;
     t.updatedAt = Date.now();
   }
+
+  async release(taskId: string, stepId: string): Promise<void> {
+    const t = this.read(taskId);
+    const s = t?.steps.find((x) => x.stepId === stepId);
+    if (!t || !s || s.status !== "running") return;
+    s.status = "pending";
+    t.claimedAt.delete(stepId);
+    t.updatedAt = Date.now();
+  }
+
+  async listFor(surveyId: string, limit = 20): Promise<ExecTask[]> {
+    return [...this.tasks.values()].filter((t) => t.surveyId === surveyId).sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, limit).map(snapshot);
+  }
+
+  async retry(taskId: string, stepId?: string): Promise<string[]> {
+    const t = this.read(taskId);
+    if (!t) return [];
+    const out: string[] = [];
+    for (const s of t.steps) {
+      if (stepId && s.stepId !== stepId) continue;
+      if (s.status !== "failed" && s.status !== "blocked" && s.status !== "retrying") continue;
+      s.status = "pending"; s.retryCount = 0; s.failureKind = undefined; s.failureMessage = undefined;
+      t.claimedAt.delete(s.stepId);
+      out.push(s.stepId);
+    }
+    if (out.length) t.updatedAt = Date.now();
+    return out;
+  }
 }
 
 /** the task without the memory store's bookkeeping, deep-copied so a caller cannot reach into the store */
@@ -915,6 +956,30 @@ class SupabaseTaskStore implements TaskStore {
 
   async earliestIncomplete(taskId: string): Promise<ExecStep | null> {
     return earliestIncompleteStep({ steps: await this.steps(taskId) });
+  }
+
+  async release(taskId: string, stepId: string): Promise<void> {
+    const db = await this.db();
+    const { error } = await db.from(STEPS).update({ status: "pending", claimed_at: null }).eq("task_id", taskId).eq("step_id", stepId).eq("status", "running");
+    if (error) throw new Error(error.message);
+  }
+
+  async listFor(surveyId: string, limit = 20): Promise<ExecTask[]> {
+    const db = await this.db();
+    const { data, error } = await db.from(TASKS).select("*").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(limit);
+    if (error) throw new Error(error.message);
+    const out: ExecTask[] = [];
+    for (const r of (data ?? []) as Row[]) out.push(taskFromRow(r, await this.steps(String(r.id))));
+    return out;
+  }
+
+  async retry(taskId: string, stepId?: string): Promise<string[]> {
+    const db = await this.db();
+    let q = db.from(STEPS).update({ status: "pending", retry_count: 0, failure_kind: null, failure_message: null, claimed_at: null }).eq("task_id", taskId).in("status", ["failed", "blocked", "retrying"]);
+    if (stepId) q = q.eq("step_id", stepId);
+    const { data, error } = await q.select("step_id");
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Row[]).map((r) => String(r.step_id));
   }
 
   async stale(olderThanMs: number, limit = 50): Promise<{ id: string; surveyId: string }[]> {

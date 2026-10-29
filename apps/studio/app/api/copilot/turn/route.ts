@@ -10,6 +10,8 @@ import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
 import { startBatchedTranslation, translationTargets } from "@/lib/copilot/translationRouting";
+/* plan first (2026-10-29): a non-trivial request becomes a task of small steps before any model call — docs/EXECUTION-ENGINE-2026-10-29.md */
+import { taskForTurn } from "@/lib/tasks/turnTask";
 import { taskStoreFor } from "@/lib/copilot/taskStore";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
@@ -160,7 +162,7 @@ export async function POST(req: NextRequest) {
 
 async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireUser>>, sink: TurnSink | null): Promise<Response> {
   const startedAt = Date.now();
-  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; themeImages?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown };
+  let body: { surveyId?: unknown; message?: unknown; definition?: unknown; selectedId?: unknown; memory?: TurnMemory; mode?: unknown; fake?: unknown; scope?: unknown; themeImage?: unknown; themeImages?: unknown; quotaCounts?: unknown; analysisRun?: unknown; stage?: unknown; planFirst?: unknown; plan?: unknown; items?: unknown; aiOnce?: unknown; done?: unknown; finalize?: unknown; faults?: unknown; budgetMs?: unknown; task?: unknown; forceTask?: unknown; planner?: unknown };
   try { body = await req.json(); } catch { return isFailure(authed) ? authed.response : NextResponse.json({ error: "bad json" }, { status: 400 }); }
   /* TEST SEAM, fake provider only: how the stand-in streams (chunks, pauses, a failure part-way) and how the stream itself behaves (heartbeat interval, a scripted drop) */
   const fakeStreamSeam = aiProviderName() === "fake" ? streamSeam((body as { fakeStream?: unknown }).fakeStream) : null;
@@ -294,6 +296,19 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       usage: { charge: 0 },
     });
   }
+  /*
+   * PLAN FIRST (2026-10-29). Read here — after the request is classified and the translation hook above has had
+   * its say, and BEFORE any model call — the deterministic size estimate and the registered planners' match. A
+   * non-trivial request becomes a durable task of small steps (one model call each, checkpointed as each
+   * completes, resumable by the page or the cron) and the turn answers `stage: "task"`; a trivial one falls
+   * through to the single-turn path unchanged. The theme assistant, `stage: "plan" / "execute"`, `task: false`
+   * and a scripted fake reply never come here (turnTask.ts).
+   */
+  const asTask = await taskForTurn({ body, message, def, surveyId, scope: { meter, ctx, ...consent }, ...(ctx.customerId && ctx.customerId !== "sandbox" ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { userId: ctx.userId } : {}), deadline: startedAt + Math.min(ROUTE_BUDGET_MS, 90_000), signal: req.signal, mode }).catch((e: unknown) => {
+    console.warn("[rescript:copilot]", JSON.stringify({ event: "plan-first task failed; single-turn path", surveyId, error: ((e as Error)?.message ?? "").slice(0, 200) }));
+    return null;
+  });
+  if (asTask) return asTask;
   // quotas: the guide, every cell with its condition and where the check sits, the review, and the live counts the Studio sent
   const quotaTurn = quotaIntent(message);
   const listFillTurn = listFillIntent(message);
@@ -701,9 +716,18 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       itemGuides[item.id] = { guides: sentGuides, core: sel?.core ?? [], why: sel?.why ?? {}, ...(sel?.fallback ? { fallback: true as const } : {}), chars: sentGuides.reduce((n, g) => n + GUIDE_TEXT[g].length, 0) };
       const itemPrompt = basePrompt(false) + itemPassages + executeItemPrompt(plan, item, i, approved, done);
       const t0 = Date.now();
+      /*
+       * THE PER-ITEM DEADLINE (2026-10-29, D-1). The FIRST item of a request keeps the whole item deadline
+       * (150 s): an item that legitimately needs 91–150 s still builds, exactly as audit C2 required. Every item
+       * after it is bounded by one stage cap plus one minimum item from its own start — never larger than the
+       * item deadline, so nothing is lost, and a later item cannot sit on the clock past what the checkpoint can
+       * explain. The fix that matters is upstream: `coerceChangePlan` now splits an item that promises more
+       * than ~12 simple / ~5 complex questions, so an item that needs 150 s is no longer planned.
+       */
+      const callDeadline = newlyBuilt.length ? Math.min(itemDeadline, t0 + STAGE_SOFT_MS + MIN_ITEM_MS) : itemDeadline;
       try {
         const m = await measured({ ...consent, estimateText: COPILOT_SYSTEM_PROMPT + itemPrompt, maxTokens: ib.expectedTokens, operation: `copilot_${mode}_item` }, itemPrompt,
-          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: itemDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
+          () => fitting((c) => { const p = basePrompt(c) + itemPassages + executeItemPrompt(plan, item, i, approved, c ? done.slice(-12) : done); return shared(`item:${item.id}`, p, () => model(() => completeJson(...copilotCall(p, stableExtra, core ? { core } : {}), ib.maxTokens, { timeoutMs: ib.timeoutMs, deadline: callDeadline, schema: COPILOT_REPLY_SCHEMA, continuations: ib.continuations, operation: `copilot_${mode}_item`, onEvent, ...live("reply", `item:${item.id}${c ? ":compact" : ""}`, fakes[newlyBuilt.length]) }))); }), hit.ids, { ...(core ? { core } : {}), guides: sentGuides });
         if (!m.ok) {
           const r = refusalResponse(m);
           const body = await r.json().catch(() => ({})) as Record<string, unknown>;
@@ -741,6 +765,23 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     const failedIds = new Set(planFailures.map((f) => f.id));
     planPending = approved.filter((it) => !built.some((b) => b.item.id === it.id) && !failedIds.has(it.id)).map((it) => it.id);
     if (!built.length) {
+      /*
+       * A SLOW FIRST ITEM IS A CHECKPOINT, NOT A LOSS (2026-10-29, D-1). The provider paused us (a rate limit, a
+       * timeout at the item deadline, a dropped connection) before the first item of this request came back:
+       * nothing was built, everything is still pending — which is exactly what a `progress` checkpoint says. The
+       * browser keeps what earlier requests built, waits, and asks again (three empty rounds, then it stops with
+       * the failure). The `!built.length` failure path below is for a refusal or an unusable answer, where a
+       * retry as-is cannot help.
+       */
+      if (waiting && !finalize && !halted) {
+        await mirror?.finish(null, charge);
+        return NextResponse.json({
+          ok: true, stage: "progress", built: [], builtIds: [], pending: planPending, failed: planFailures,
+          waiting: { retryAfterMs: waiting.retryAfterMs, failure: { ...waiting.failure, retryAfterMs: waiting.retryAfterMs || undefined } },
+          context: { mode, promptChars: prompt.length, cached: false, provider: providerNote(events), elapsedMs: Date.now() - startedAt, firstItemPaused: true, ...(capacityNotice() ? { notice: capacityNotice() } : {}), ...contextMeta(), workflow: await keepWorkflow(false) },
+          usage: { charge },
+        });
+      }
       /* nothing built, nothing to keep: a failure to retry as it is (the browser holds the request) */
       const failure = halted ?? waiting?.failure ?? planFailures[0]?.failure ?? describeFailure("unusable");
       return failedTurn(waiting ? { ...failure, retryAfterMs: waiting.retryAfterMs || failure.retryAfterMs } : failure, prompt.length);

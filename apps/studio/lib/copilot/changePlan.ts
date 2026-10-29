@@ -62,8 +62,51 @@ export const CHANGE_PLAN_SCHEMA = {
 const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
 const strs = (v: unknown, max: number, len: number): string[] => (Array.isArray(v) ? v.map((x) => str(x, len)).filter((x): x is string => !!x).slice(0, max) : []);
 
-/** The gate on a plan reply: null when it carries no item. Ids are made stable (p1, p2 …) when the model gave none or repeated them. */
-export function coerceChangePlan(raw: unknown, opts: { maxQuestions?: number } = {}): ChangePlan | null {
+/*
+ * ITEMS SMALL ENOUGH TO BUILD IN ONE CALL (2026-10-29, the D-1 fix). The execute loop gives every item its own
+ * model call under the route's clock; an item that itself needs more than the clock cannot be checkpointed in the
+ * middle of its call (audit C2), so the only safe fix is to PLAN SMALLER ITEMS. A `create` item whose words
+ * promise more than ~12 simple questions (or ~5 complex ones — grids, matrices, heavy logic, scripts) is split
+ * here into parts of at most that many, deterministically, with ids `<id>.1`, `<id>.2`, … so the browser's
+ * `done[]` checkpoint and the task rows name the same things. Idempotent: a part is never split again.
+ */
+export const MAX_SIMPLE_PER_ITEM = 12;
+export const MAX_COMPLEX_PER_ITEM = 5;
+const COMPLEX_ITEM = /\b(?:grids?|matri(?:x|ces)|likert|batter(?:y|ies)|conjoint|max[- ]?diff|skip logic|display logic|branch\w*|loops?|scripts?|javascript|piping)\b/i;
+const ITEM_COUNT = /(\d{1,4})\s*[-–]?\s*(?:questions?|items?|statements?|mcqs?|प्रश्न|सवाल|سوال(?:ات)?)\b/i;
+
+/** how many questions an item's words promise, if they say (its objects' Q-codes count too) */
+export function itemQuestionCount(item: Pick<ChangePlanItem, "title" | "detail" | "objects">): number | null {
+  const text = `${item.title} ${item.detail ?? ""}`;
+  const m = ITEM_COUNT.exec(text);
+  if (m) { const n = Number(m[1]); if (n >= 1 && n <= 2000) return n; }
+  const codes = (item.objects ?? []).filter((o) => /^Q\d+$/i.test(o.trim()));
+  return codes.length >= 2 ? codes.length : null;
+}
+
+export function splitLargeItems(items: ChangePlanItem[]): ChangePlanItem[] {
+  const out: ChangePlanItem[] = [];
+  for (const item of items) {
+    if (item.kind !== "create" || /\.\d+$/.test(item.id)) { out.push(item); continue; }
+    const n = itemQuestionCount(item);
+    const cap = COMPLEX_ITEM.test(`${item.title} ${item.detail ?? ""}`) ? MAX_COMPLEX_PER_ITEM : MAX_SIMPLE_PER_ITEM;
+    if (!n || n <= cap) { out.push(item); continue; }
+    const parts = Math.ceil(n / cap);
+    for (let k = 0; k < parts; k++) {
+      const from = k * cap + 1, to = Math.min(n, (k + 1) * cap);
+      out.push({
+        ...item,
+        id: `${item.id}.${k + 1}`,
+        title: `${item.title} (part ${k + 1} of ${parts}: questions ${from}–${to})`,
+        detail: `${item.detail ? `${item.detail} ` : ""}Write ONLY questions ${from}–${to} of this item's ${n} (${to - from + 1} question${to - from === 0 ? "" : "s"}); the other parts write the rest, codes continue in order.`.slice(0, 800),
+      });
+    }
+  }
+  return out.slice(0, 60);
+}
+
+/** The gate on a plan reply: null when it carries no item. Ids are made stable (p1, p2 …) when the model gave none or repeated them. Large items are split (above). */
+export function coerceChangePlan(raw: unknown, opts: { maxQuestions?: number; splitLarge?: boolean } = {}): ChangePlan | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   if (!Array.isArray(o.items)) return null;
@@ -79,8 +122,10 @@ export function coerceChangePlan(raw: unknown, opts: { maxQuestions?: number } =
     return { id, title, kind, objects: strs(x.objects, 20, 60), reason: str(x.reason, 400) ?? "", ...(str(x.detail, 800) ? { detail: str(x.detail, 800) } : {}) };
   }).filter((x): x is ChangePlanItem => !!x).slice(0, 30);
   if (!items.length) return null;
-  return { summary: str(o.summary, 600) ?? `${items.length} change${items.length === 1 ? "" : "s"}`, items, questions: strs(o.questions, Math.max(0, Math.min(5, opts.maxQuestions ?? 5)), 300), assumptions: strs(o.assumptions, 20, 300) };
+  const sized = opts.splitLarge === false ? items : splitLargeItems(items);
+  return { summary: str(o.summary, 600) ?? `${sized.length} change${sized.length === 1 ? "" : "s"}`, items: sized, questions: strs(o.questions, Math.max(0, Math.min(5, opts.maxQuestions ?? 5)), 300), assumptions: strs(o.assumptions, 20, 300) };
 }
+
 
 /**
  * A PASTED BRIEF IS PLANNED, NOT QUESTIONED BACK (production evidence, 2026-10-16: a 25k-character brief got

@@ -4,7 +4,7 @@ import { taskProgress, taskSpend, type ExecStep, type ExecTask, type StepFailure
 import type { ClaimedStep, CreateTaskInput, TaskStore } from "./taskStore.ts";
 import {
   MAX_STEP_RETRIES, nextRunnableSteps, outstandingStepIds, readFailure, runSlice, setStepBuilder, stepBuilderFor,
-  stepFailureMessage, taskSummary, tierFor, type BuildStep, type BuildStepResult,
+  stepFailureMessage, taskSummary, tierFor, type BuildStep, type BuildStepResult, splitPlan, repairPlan, tombstonesOf,
 } from "./runner.ts";
 
 /*
@@ -128,7 +128,10 @@ function memoryStore(task: ExecTask, now: () => number): MemStore {
       return (t.status === "running" || t.status === "pending") && now() - last >= olderThanMs ? [{ id: t.id, surveyId: t.surveyId }] : [];
     },
     async addExtraCharge(_id: string, amount: number) { extraCharge += amount; },
-    async pause(_id: string, b: NonNullable<ExecTask["blocked"]> | null) { t.blocked = b ?? undefined; if (b) t.status = "needs_attention"; },
+    async pause(_id: string, b: NonNullable<ExecTask["blocked"]> | null) { t.blocked = b ?? undefined; if (b) t.status = "needs_attention"; else if (t.status === "needs_attention") t.status = "running"; },
+    async release(_id: string, stepId: string) { const s = find(stepId); if (s.status === "running") { s.status = "pending"; leases.delete(stepId); } },
+    async listFor() { return [clone(t)]; },
+    async retry() { return []; },
   };
 }
 
@@ -508,4 +511,52 @@ test("the cron's build seam: nothing registered means the job skips honestly, ne
   setStepBuilder(async () => s.build);
   assert.equal(await stepBuilderFor(t), s.build);
   setStepBuilder(null);
+});
+
+/* ------------------------------------------------------------ the handler contract's plan revisions (2026-10-29) */
+
+test("splitPlan: the split step is tombstoned, its children inherit its dependencies, and its dependants are rewired to all the children", () => {
+  const task = {
+    steps: [
+      { taskId: "t", stepId: "s", planVersion: 1, dependsOn: [], status: "completed", idempotencyKey: "k-s", retryCount: 0 },
+      { taskId: "t", stepId: "b1", planVersion: 1, dependsOn: ["s"], status: "running", idempotencyKey: "k-b1", retryCount: 0 },
+      { taskId: "t", stepId: "l1", planVersion: 1, dependsOn: ["b1"], status: "pending", idempotencyKey: "k-l1", retryCount: 0 },
+    ],
+  } as unknown as ExecTask;
+  const out = splitPlan(task, "b1", [
+    { stepId: "b1a", planVersion: 2, dependsOn: [], status: "pending", idempotencyKey: "k-b1a" },
+    { stepId: "b1b", planVersion: 2, dependsOn: [], status: "pending", idempotencyKey: "k-b1b" },
+  ]);
+  assert.deepEqual(out.map((s) => `${s.stepId}:${s.status}:${s.dependsOn.join("+")}`), ["s:completed:", "b1:tombstoned:s", "b1a:pending:s", "b1b:pending:s", "l1:pending:b1a+b1b"]);
+});
+
+test("repairPlan: the repair sits right after its step, depends on it, and the step's dependants wait for the repair too; a second insertion is a no-op", () => {
+  const task = {
+    steps: [
+      { taskId: "t", stepId: "b1", planVersion: 1, dependsOn: [], status: "completed", idempotencyKey: "k-b1", retryCount: 0 },
+      { taskId: "t", stepId: "b2", planVersion: 1, dependsOn: [], status: "pending", idempotencyKey: "k-b2", retryCount: 0 },
+      { taskId: "t", stepId: "v", planVersion: 1, dependsOn: ["b1", "b2"], status: "pending", idempotencyKey: "k-v", retryCount: 0 },
+    ],
+  } as unknown as ExecTask;
+  const rep = { stepId: "b1r1", planVersion: 2, dependsOn: [], status: "pending" as const, idempotencyKey: "k-b1r1" };
+  const out = repairPlan(task, "b1", rep);
+  assert.deepEqual(out.map((s) => `${s.stepId}:${s.dependsOn.join("+")}`), ["b1:", "b1r1:b1", "b2:", "v:b1+b2+b1r1"]);
+  const again = repairPlan({ steps: out.map((s) => ({ ...s, taskId: "t", retryCount: 0 })) } as ExecTask, "b1", rep);
+  assert.equal(again.length, 4);
+  assert.deepEqual(tombstonesOf({ steps: [{ stepId: "x", status: "tombstoned" }, { stepId: "y", status: "pending" }] as ExecStep[] }), ["x"]);
+});
+
+test("a `blocked` build pauses the task (needs_attention) and releases the step without an attempt; a paused task runs nothing", async () => {
+  const clock = virtualClock();
+  const store = memoryStore(taskOf(["a", "b"]), clock.now);
+  const r = await runSlice("t1", { budgetMs: 60_000, store, buildStep: async () => ({ blocked: { reason: "auth", message: "The key was refused." } }), now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  assert.equal(r.stoppedBy, "blocked");
+  assert.equal(r.status, "needs_attention");
+  const t = (await store.load("t1"))!;
+  assert.equal(t.blocked?.reason, "auth");
+  assert.equal(t.steps[0]!.status, "pending");
+  assert.equal(t.steps[0]!.retryCount, 0);
+  const again = await runSlice("t1", { budgetMs: 60_000, store, buildStep: async () => ({ output: {} }), now: clock.now, sleep: clock.sleep, minStepMs: 10 });
+  assert.equal(again.stoppedBy, "paused");
+  assert.deepEqual(again.built, []);
 });
