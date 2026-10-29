@@ -412,6 +412,10 @@ export function checkDeliverable(spec: DeliverableSpec, def: SurveyDefinition, c
        */
       measured.language = lang;
       problems.push(`“${lang}” is not one of this survey's languages, so nothing would ever be served in it — add it to the survey's languages first.`);
+    } else if (spec.scopedQuestions) {
+      /* part of the survey (2026-10-29): the scope's 100 % coverage is the translation family's completion validator's verdict; launch-readiness is not asked of a partial translation */
+      measured.language = lang;
+      measured.scopedQuestions = spec.scopedQuestions;
     } else {
       const report = lintLanguage(def, lang);
       measured.language = lang;

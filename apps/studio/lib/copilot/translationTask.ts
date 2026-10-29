@@ -295,14 +295,22 @@ export function refreshOutdated(def: SurveyDefinition): Localization {
 /* ===================================================== done, and where to resume */
 
 /**
- * THE COMPLETION GATE, and the only one. Launch-readiness is
- * `lintLanguage(def, lang).ready` plus the configured-language rule. A task
- * that was asked for a SCOPE (the whole survey, the first ten questions …)
- * also passes the scope's units: then the engine's `translationCoverage` must
- * find 100 % of them current and valid — nothing missing, stale, corrupted,
- * untranslated, in the wrong script or duplicated within a question. Nothing
- * here decides for itself that a language is finished, and the issues come
- * through verbatim so the panel can say which keys are short.
+ * THE COMPLETION GATE, and the only one — two questions, one place:
+ *
+ *   no `units`     is the LANGUAGE ready to be served? `lintLanguage(def,
+ *                  lang).ready` (every mandatory string) plus the
+ *                  configured-language rule — the base's verdict, what
+ *                  `checkDeliverable` asks of a whole-survey task
+ *   with `units`   is the SCOPE done? A task asked for "the first ten
+ *                  questions" (or the whole survey) passes the scope's units
+ *                  and the engine's `translationCoverage` must find 100 % of
+ *                  them current and valid — nothing missing, stale, corrupted,
+ *                  untranslated, in the wrong script or duplicated within a
+ *                  question. Readiness is still measured and reported, but a
+ *                  partial scope is not asked to make the language ready.
+ *
+ * Nothing here decides for itself that a language is finished, and the issues
+ * come through verbatim so the panel can say which keys are short.
  */
 export function translationComplete(def: SurveyDefinition, lang: string, opts: { units?: readonly EngineUnit[] } = {}): DeliverableReport {
   const configured = surveyLanguages(def).some((l) => l.code === lang);
@@ -310,12 +318,12 @@ export function translationComplete(def: SurveyDefinition, lang: string, opts: {
   const blocking = r.issues.filter((i) => i.blocking);
   const problems: string[] = [];
   if (!configured) problems.push(`“${lang}” is not one of this survey's languages — add it before the translation can be complete.`);
-  if (!r.ready) {
+  const coverage = opts.units ? translationCoverage(def, lang, [...opts.units]) : null;
+  if (!r.ready && !coverage) {
     problems.push(`${r.name}: ${r.mandatory - r.missing} of ${r.mandatory} mandatory strings translated (${r.completion}%).`);
     for (const i of blocking) problems.push(`${i.key} (${i.label}): ${i.message}`);
   }
   const missingKeys = r.issues.filter((i) => i.kind === "missing").map((i) => i.key);
-  const coverage = opts.units ? translationCoverage(def, lang, [...opts.units]) : null;
   if (coverage && !coverage.complete) {
     problems.push(`${r.name}: ${coverage.translated} of ${coverage.total} strings in scope have a current, valid translation (${coverage.percent}%).`);
     for (const k of coverage.missing.slice(0, 20)) problems.push(`${k}: no translation.`);
@@ -326,7 +334,7 @@ export function translationComplete(def: SurveyDefinition, lang: string, opts: {
   }
   const firstGap = coverage ? coverage.missing[0] ?? coverage.stale[0] ?? coverage.invalid[0]?.key : undefined;
   return {
-    ok: problems.length === 0 && r.ready && (!coverage || coverage.complete),
+    ok: problems.length === 0 && (coverage ? coverage.complete : r.ready),
     problems,
     measured: {
       language: lang,
