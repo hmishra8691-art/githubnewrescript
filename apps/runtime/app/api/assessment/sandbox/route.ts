@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
  *   { action: "launch", definition }               → { token, observerKey, takeUrl }  (the Studio / a test, server to server)
  *   { action: "submit", token, answers }           → { attemptId, assessment }        (the respondent's page)
  *   { action: "result", token, attemptId }         → { assessment, reproduced }       (a reload re-scores; token-bound)
- *   { action: "responses", observerKey }           → attempts, CSV with score columns, item analysis (the researcher)
+ *   { action: "responses", observerKey, withDefinition? } → attempts, CSV with score columns, item analysis (the researcher;
+ *                                                    the definition too when asked — for the Studio's Word export)
  */
 export async function POST(req: NextRequest) {
   const noStore = { headers: { "cache-control": "no-store" } };
@@ -32,7 +33,8 @@ export async function POST(req: NextRequest) {
   if (action === "responses") {
     const p = paperByObserver(String(body.observerKey ?? ""));
     if (!p) return NextResponse.json({ error: "unknown paper" }, { status: 404, ...noStore });
-    return NextResponse.json({ ok: true, title: p.def.meta.title, ...paperResponses(p) }, noStore);
+    /* withDefinition: the Studio's Word export of a sandbox paper — the observer key (returned only to the launcher, who sent this definition) is the credential */
+    return NextResponse.json({ ok: true, title: p.def.meta.title, ...paperResponses(p), ...(body.withDefinition === true ? { definition: p.def } : {}) }, noStore);
   }
   const p = paperByToken(String(body.token ?? ""));
   if (!p) return NextResponse.json({ error: "unknown paper" }, { status: 404, ...noStore });

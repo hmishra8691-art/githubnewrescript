@@ -4,6 +4,7 @@ import type { AssessmentSettings } from "@rescript/schema";
 import { AssessmentSettings as AssessmentSettingsSchema } from "@rescript/schema";
 import { gradedQuestions, validateAssessment } from "@rescript/engine";
 import { useStudio } from "./store";
+import { SANDBOX_OBSERVER_KEY } from "../analytics/AssessmentCard";
 
 /**
  * ASSESSMENT — the survey-wide card (Survey Settings, below Quality; K4 2026-10-25, ported 2026-10-29 step 4B;
@@ -32,6 +33,24 @@ export function AssessmentSettingsCard() {
   const v = on ? validateAssessment(s.def, { requireExplanations: false }) : null;
   const graded = on ? gradedQuestions(s.def).length : 0;
   const num = (x: string) => (x.trim() === "" ? undefined : Number(x));
+  const sandbox = s.surveyDbId === "sandbox";
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState<string | null>(null);
+  /* SANDBOX ONLY (no database): hand the paper to the runtime's in-memory store and open its take page /x/<token>.
+     The tab is opened inside the click (a window opened after an await is a blocked pop-up). The observer key is
+     kept in this tab so Data Analytics → Assessment results can read this paper's attempts. */
+  const take = async () => {
+    setBusy(true); setMsg(null);
+    const w = window.open("", "_blank");
+    try {
+      const r = await fetch("/api/surveys/sandbox/assessment", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "launch", definition: s.def }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { w?.close(); setMsg(j.error ?? `could not start the test (${r.status})`); return; }
+      try { window.sessionStorage.setItem(SANDBOX_OBSERVER_KEY, String(j.observerKey ?? "")); } catch { /* private mode: results still on the take page */ }
+      if (w) { w.opener = null; w.location.href = j.takeUrl; } else window.open(j.takeUrl, "_blank", "noopener");
+      setMsg("The test opened in a new tab. Submit it there; the results are on that page and in Data Analytics → Assessment results.");
+    } catch (e) { w?.close(); setMsg((e as Error).message); } finally { setBusy(false); }
+  };
 
   return (
     <div data-testid="assessment-settings">
@@ -96,6 +115,12 @@ export function AssessmentSettingsCard() {
               {v.warnings.slice(0, 10).map((i, k) => <li key={`w${k}`} className="warn">{i.message}</li>)}
             </ul>
           )}
+          {sandbox && (
+            <div className="row" style={{ gap: 6, marginTop: 8 }}>
+              <button type="button" className="btn small" data-testid="assessment-take" disabled={busy || graded === 0} onClick={take}>{busy ? "…" : "Take the test (sandbox)"}</button>
+            </div>
+          )}
+          {msg && <p className="muted" style={{ fontSize: 12.5 }} data-testid="assessment-msg">{msg}</p>}
           <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
             Key each question under <strong>Properties → Assessment</strong>. Try the paper with <strong>Preview</strong> (tick “as a respondent” to see exactly what a respondent receives) or <strong>Test Survey</strong>; scores, item analysis and the Word answer key are in <strong>Data Analytics → Assessment results</strong>.
           </p>
