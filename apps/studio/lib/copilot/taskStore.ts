@@ -320,6 +320,8 @@ export interface ClientTask {
   /** the planner that made the plan, and the deliverables it recorded (our own short phrases — never the request, which is prompt material) */
   planner?: string;
   deliverables?: string[];
+  /** the planner's completion criteria — our own strings ("questions>=100", "design_valid:cbc"), never the request */
+  completion?: string[];
   progress: ReturnType<typeof taskProgress>;
   spend: ReturnType<typeof taskSpend>;
   steps: ClientStep[];
@@ -355,6 +357,7 @@ export function redactForClient(task: ExecTask): ClientTask {
     blocked: task.blocked,
     ...(task.planner ? { planner: task.planner } : {}),
     ...(task.summary ? { deliverables: (task.summary.deliverables ?? []).map((d) => scrubSecrets(String(d)).slice(0, 200)) } : {}),
+    ...(task.completion ? { completion: task.completion.map((c) => scrubSecrets(String(c)).slice(0, 200)) } : {}),
     report: task.report
       ? { ok: task.report.ok, problems: (task.report.problems ?? []).map(scrubSecrets), measured: task.report.measured }
       : undefined,
