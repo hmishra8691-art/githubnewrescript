@@ -21,6 +21,7 @@ The definition is one JSON object validated by a schema (`@rescript/schema`, `Su
 | `localization` | languages, translations, glossary, audio, routing |
 | `research` | the research design: objective, hypotheses, constructs, KPIs, audience, the analysis plan — see [The Research Engine](research-engine) |
 | `ux` | styles, animations and behaviours — see [Custom code](custom-code) |
+| `navigation` | section navigation (optional): `sectionNav` (`off` — the default, Next / Back only \| `visited` — jump back anywhere, forward only to sections already visited \| `free` — jump anywhere reachable, skipped required questions checked at Submit) and `position` (`top` \| `side`). See [Logic](logic) → Section navigation |
 | `variables`, `namingTemplates`, `variableNaming` | the generated variable dictionary and the naming conventions in force |
 | `deployment`, `quality`, `imports`, `meta_extensions`, `logicFlow` | deployment settings, data-quality rules, import provenance, a free bag for extensions, the logic graph the Logic tab draws |
 
