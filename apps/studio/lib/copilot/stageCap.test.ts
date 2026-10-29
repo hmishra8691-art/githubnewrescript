@@ -97,6 +97,30 @@ test("a 91–150 s single item still completes (audit C2); a 170 s first item yi
   assert.ok(callDeadline(85_000, 2) <= itemDeadline);
 });
 
+test("a SLOW first item, not only a paused one, reaches the checkpoint: the provider's deadline is a retryable timeout, the meter rethrows it, the loop waits (D-1 close-out, 2026-10-29)", () => {
+  /*
+   * The chain a 170 s first item takes in production, pinned link by link so the `progress` path above is not
+   * a path only a 429 can reach: the item call carries `callDeadline` → `completeJson` turns its own abort at
+   * that deadline into ProviderError { kind: "timeout", exhausted } → "timeout" is RETRYABLE → `meteredCore`
+   * rethrows (never swallows into { ok: false }) → the loop's catch sees a retryable provider error and sets
+   * `waiting` (retryAfterMs 0 for a timeout) → nothing built + waiting → stage "progress", pending = all.
+   * The behavioural proof on the route's seams is scripts/stage-cap-api-test.mjs.
+   */
+  const ai = readFileSync(join(here, "..", "..", "..", "..", "packages", "ai", "src", "index.ts"), "utf8");
+  const provider = readFileSync(join(here, "..", "..", "..", "..", "packages", "ai", "src", "provider.ts"), "utf8");
+  const meterRun = readFileSync(join(here, "..", "meterRun.ts"), "utf8");
+  assert.match(ai, /if \(\(e as Error\)\?\.name === "AbortError"\) \{\s*throw new ProviderError\(\{ kind: "timeout", detail: `\$\{Math\.round\(timeoutMs \/ 1000\)\} seconds`, exhausted: true \}\);/, "an abort at the deadline is a timeout ProviderError");
+  assert.match(ai, /const timeoutMs = Number\.isFinite\(options\.deadline\) \? Math\.max\(1_000, Math\.min\(askedMs, Math\.round\(\(options\.deadline as number\) - startedAt\)\)\) : askedMs;/, "the caller's deadline is the call's timeout");
+  assert.match(provider, /const RETRYABLE: ReadonlySet<ProviderErrorKind> = new Set\(\[[^\]]*"timeout"[^\]]*\]\);/, "a timeout is retryable");
+  assert.ok((meterRun.match(/\} catch \(e\) \{\s*(?:if \(holdOk\) )?await meter\.release\(hold(?:Ok)?\)\.catch\(\(\) => \{\}\);\s*throw e;/g) ?? []).length >= 2, "the meter releases its hold and rethrows — the error reaches the loop");
+  assert.match(loop, /\} catch \(e\) \{\s*const failure = failureOfError\(e, `plan item \$\{item\.id\}`\);\s*if \(isProviderError\(e\) && \(e\.retryable \|\| !\["bad_request"\]\.includes\(e\.kind\)\)\) \{/, "the loop's catch classifies a provider error");
+  assert.match(loop, /if \(e\.retryable\) waiting = \{ retryAfterMs: Math\.max\(0, Math\.round\(e\.retryAfterMs \?\? \(e\.kind === "timeout" \? 0 : 5000 \+ Math\.random\(\) \* 5000\)\)\), failure \};/, "a retryable error (a timeout among them) WAITS, it does not halt");
+  assert.ok(loop.indexOf("if (e.retryable) waiting =") < loop.indexOf("planFailures.push({ id: item.id, failure });"), "and breaks before the item could be marked failed");
+  /* the fake provider never waits on a deadline: the suite scripts the same error after a delay */
+  assert.match(ai, /if \(aiProviderName\(\) === "fake"\) \{[\s\S]*?reportFake\("chat", systemText \+ user, 20\);\s*return \{\};/, "the fake completeJson answers at once (so a slow item is scripted as delay + timeout)");
+  assert.match(route, /if \(f\?\.delayMs\) await sleepMs\(Math\.min\(5000, f\.delayMs\)\);\s*if \(f\?\.kind\) throw new ProviderError\(\{ kind: f\.kind, status: f\.status, retryAfterMs: f\.retryAfterMs, detail: "scripted", host: "fake", exhausted: true \}\);/, "the seam: a delay, then a scripted ProviderError");
+});
+
 test("the arithmetic: the `slowest * 1.5` half already stops a SECOND item running into an overrun", () => {
   const ROUTE_BUDGET_MS = 165_000, GATE_RESERVE_MS = 15_000, STAGE_SOFT_MS = 90_000, MIN_ITEM_MS = 30_000;
   const startedAt = 0;

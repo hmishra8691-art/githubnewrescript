@@ -151,4 +151,16 @@ is obtained.
 
 ## Step 2 results
 
-(appended as each item finishes; see `/tmp/p0/E1-STEP2.md` for the raw lines)
+(appended as each item finishes)
+
+- **Large-survey suite, fresh run:** `large-survey-task-test.mjs` 5/5 (B1 18 bounded slices / 53 steps, B2, B3 reload
+  midway: 250 questions, 107 display rules, 2 skips, 1 quota, 1 randomizer, final check on the editor's survey) in 229 s.
+- **H proof (item 2):** no route change was needed — a slow first item takes the same path as a paused one
+  (`completeJson` throws a retryable `timeout` ProviderError at the item deadline, `meteredCore` rethrows, the loop
+  sets `waiting`, nothing built → `stage: "progress"`, `pending` = all, `firstItemPaused: true`). Pinned link by link
+  in `lib/copilot/stageCap.test.ts` (9/9) and proved on the route's `budgetMs` / `faults` seams by
+  `scripts/stage-cap-api-test.mjs` (7/7): (a) a 4 s item on a 5 s item deadline completes in one request; (b) a first
+  item that times out → progress, built [], pending [p1, p2], no top-level failure, the next request builds both; with
+  p1 already in `done[]` → builtIds [p1], pending [p2]; (c) after a 5 s first item on a 35 s item deadline the second
+  item is held back (max(30 s, 1.5 × slowest) does not fit) and the continuation builds only p2. The 1.5 × slowest
+  arm on its own needs an item > 20 s and the seam's delay is capped at 5 s: it stays an arithmetic test.
