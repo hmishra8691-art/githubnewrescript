@@ -14,6 +14,7 @@ import { RandomizeAxes } from "./RandomizeAxes";
 import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
+import { AssessmentSettingsCard } from "./AssessmentSettingsCard";
 import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
@@ -22,6 +23,7 @@ import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
 import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
+import { AssessmentQuestionSection } from "./AssessmentQuestionSection";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -1242,6 +1244,9 @@ export function SurveySettings() {
 
       <QualitySettings />
 
+      {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): one "this survey is a test or quiz" checkbox; marking, pass mark, results policy and report sections only once ticked */}
+      <AssessmentSettingsCard />
+
       {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
       <h3 className="sec" id="research-design">Research design</h3>
       <p className="muted" style={{ fontSize: 12.5, marginTop: -4 }}>
@@ -1568,6 +1573,9 @@ function PropertiesPanelBody() {
         * live in Branding.
         */}
       {q.type !== "html" && showSec("AI conversation") && <AiQuestionSection q={q} patch={patch} />}
+
+      {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): the answer key, marks, topic and explanation — renders nothing unless the survey is a test/quiz and the question is a choice question */}
+      {showSec("Assessment answer key") && <AssessmentQuestionSection q={q} patch={patch} />}
 
       {hasCap("carry_forward") && showSec("Carry-forward") && (
       <CollapsibleSection id="carry-forward" title="Carry-forward (dynamic options)" active={!!q.carryForward}>

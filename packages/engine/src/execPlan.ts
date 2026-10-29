@@ -229,6 +229,12 @@ export interface DeliverableSpec {
   questionCount?: number;
   /** the target language of a translation task */
   language?: string;
+  /**
+   * 2026-10-29 (translation tasks): a translation of PART of the survey ("the first 10 questions", "Q3–Q7") — the
+   * number of questions in scope. The deliverable is then the scope's 100 % coverage (judged by the translation
+   * family's completion validator), not the language's launch-readiness, which the rest of the survey decides.
+   */
+  scopedQuestions?: number;
   /** a scored exam: the key must cover this many items, and must not reach the respondent */
   keyCoverage?: number;
   /** a scored exam: marks for right, wrong and skipped */

@@ -1,78 +1,79 @@
 /**
- * TRANSLATION AS A REAL TASK KIND. — Owner: R4 (2026-10-24).
+ * TRANSLATION AS A REAL TASK KIND — the Studio layer. — Owner: R4 (2026-10-24); thinned onto the engine 2026-10-29.
  *
- * The copilot could already ask a model for translations, but it did so as
- * one turn against one prompt: nothing enumerated what had to be translated,
- * nothing batched it, nothing wrote the result through the localization
- * store, and nothing decided when the language was DONE. The primitives for
- * all four already existed and the copilot's translation path used none of
- * them:
+ * Since 2026-10-29 every decision that does not need a model is made ONCE, in
+ * `packages/engine/src/translationTask.ts` (ported from K3): the masked
+ * inventory by stable element key (`translationInventory`), the adaptive
+ * batches with translation memory (`planTranslationBatches`), the per-unit
+ * verdict on what came back (`validateTranslatedUnit`: lost or invented
+ * sentinels, placeholders, HTML, an untranslated string, the wrong script, a
+ * glossary term), the resume set by source hash (`pendingTranslationKeys`) and
+ * the 100 % coverage check (`translationCoverage`). This module adds only what
+ * the Studio needs around those and keeps the names the base's callers and
+ * tests use:
  *
- *   translatableElements  packages/engine/src/localization.ts:212
- *                         every respondent-facing string, by stable key, with
- *                         `mandatory` saying which ones a language is not
- *                         ready without
- *   placeholderMismatch   packages/engine/src/placeholders.ts:93
- *                         the ONE placeholder grammar: pipes, `${…}`,
- *                         `[[…]]`, `{word}` parameters and question codes must
- *                         come back byte-identical
- *   recordTranslation     packages/engine/src/localization.ts:609
- *                         one write, with the source hash and the status, and
- *                         the previous text kept in history
- *   markOutdated          packages/engine/src/localization.ts:631
- *                         a source edited after its translation
- *   lintLanguage          packages/engine/src/localization.ts:753
- *                         per-language completion over the MANDATORY strings,
- *                         the blocking issue list, and `ready`
- *
- * This module is the task layer over them: an inventory, batches of a
- * tuneable size, a deterministic check of what came back, a write through
- * `recordTranslation`, a completion gate that is `lintLanguage(def, lang).ready`
- * and nothing else, and a resume point at the first missing or invalid key.
+ *   translationInventory(def, lang)   the engine's inventory with each unit's
+ *                                     STATE in `lang` (missing / outdated /
+ *                                     invalid / translated), mandatory first
+ *   translationBatches(units, size)   the engine's planner capped at `size`
+ *                                     unique strings per batch, with the
+ *                                     1-based positions the panel shows
+ *   checkTranslationBatch(units, …)   the engine's verdict per key, worded for
+ *                                     the panel; nothing refused is written
+ *   applyTranslationBatch             one write per accepted key through
+ *                                     `recordTranslation` (the source hash
+ *                                     travels, so a later edit goes stale)
+ *   translationComplete(def, lang)    THE ONE GATE: `lintLanguage(def, lang)
+ *                                     .ready` + the configured-language rule,
+ *                                     and — when a scope is given — the
+ *                                     engine's `translationCoverage` over it
+ *                                     (100 % of the scope, nothing stale or
+ *                                     invalid). The task handler's verify
+ *                                     step and the completion validator call
+ *                                     this and nothing else.
+ *   translationResumeFrom             the first key that is missing, stale,
+ *                                     invalid or blocking — never the first
+ *                                     key of the language
  *
  * It never calls `taskStoreFor`: the store is injected, so the runner, the
  * route and the tests all supply their own.
  */
-import type { Localization, SurveyDefinition, TranslationEntry } from "@rescript/schema";
+import type { GlossaryEntry, Localization, SurveyDefinition, TranslationEntry } from "@rescript/schema";
 import {
   effectiveLocalization,
   lintLanguage,
   markOutdated,
-  placeholderKeys,
-  placeholderMismatch,
+  pendingTranslationKeys,
+  planTranslationBatches,
   recordTranslation,
   surveyLanguages,
   textHash,
-  translatableElements,
+  translationCoverage,
+  translationInventory as engineInventory,
+  validateTranslatedUnit,
   type DeliverableReport,
   type DeliverableSpec,
   type ExecStep,
   type ExecTask,
-  type TranslatableElement,
+  type TranslationScope,
+  type TranslationUnit as EngineUnit,
 } from "@rescript/engine";
 import type { CreateTaskInput, TaskStore } from "./taskStore.ts";
 
-/** the default batch — tuneable per task, halved by the runner on a context limit */
+/** the default batch — unique strings per batch; tuneable per task, halved by the runner on a context limit */
 export const DEFAULT_TRANSLATION_BATCH = 40;
 
 /* ===================================================== the inventory */
 
-export type UnitState = "missing" | "outdated" | "translated";
+/** `invalid`: text is stored but the engine refuses it (a lost pipe, the wrong script, identical to the source …) */
+export type UnitState = "missing" | "outdated" | "invalid" | "translated";
 
-export interface TranslationUnit {
-  key: string;
-  kind: TranslatableElement["kind"];
-  label: string;
-  source: string;
-  mandatory: boolean;
-  order: number;
-  questionId?: string;
-  questionCode?: string;
+export interface TranslationUnit extends EngineUnit {
   /**
-   * THE PROTECTED STRUCTURE of this string — pipes, variables, loop
-   * references, `{word}` parameters and the question codes the source names.
-   * Every one must come back byte-identical; they are listed separately so a
-   * prompt can show them and `checkTranslationBatch` can refuse what lost one.
+   * THE PROTECTED STRUCTURE of this string — the engine's masked tokens:
+   * pipes, variables, loop references, `{word}` parameters, question codes,
+   * HTML, scripts, URLs, e-mail addresses and glossary terms. Every one must
+   * come back byte-identical; they are listed so a prompt can show them.
    */
   protectedTokens: string[];
   state: UnitState;
@@ -87,6 +88,8 @@ export interface TranslationInventory {
   optional: number;
   missing: number;
   outdated: number;
+  /** stored but refused by the engine's validator */
+  invalid: number;
   /**
    * STRUCTURAL ELEMENTS THAT ARE NOT TEXT and are never sent anywhere: the
    * element keys themselves, the protected tokens inside the strings, and the
@@ -100,39 +103,32 @@ export interface TranslationInventory {
     tokens: string[];
     excluded: { what: string; count: number }[];
   };
+  /** respondent-facing text the language-version system does not carry (said, never hidden) */
+  notCovered: string[];
 }
 
-const stateOf = (entry: TranslationEntry | undefined, source: string): UnitState => {
+const storedState = (entry: TranslationEntry | undefined, sourceHash: string): "missing" | "outdated" | "stored" => {
   if (!entry || entry.status === "not_translated" || !entry.text.trim()) return "missing";
-  if (entry.status === "outdated" || (entry.sourceHash && entry.sourceHash !== textHash(source))) return "outdated";
-  return "translated";
+  if (entry.status === "outdated" || (entry.sourceHash && entry.sourceHash !== sourceHash)) return "outdated";
+  return "stored";
 };
 
 /**
  * WHAT THIS LANGUAGE STILL NEEDS, in editor order, mandatory strings first.
- * Built from `translatableElements` — never from a second walk of the
- * definition.
+ * The engine's inventory (masked, by stable key, with the source hash) plus
+ * each unit's state in `lang` — never a second walk of the definition.
  */
-export function translationInventory(def: SurveyDefinition, lang: string): TranslationInventory {
+export function translationInventory(def: SurveyDefinition, lang: string, scope: TranslationScope = {}): TranslationInventory {
   const loc = effectiveLocalization(def);
   const table = loc.translations[lang] ?? {};
-  const elements = translatableElements(def);
+  const inv = engineInventory(def, scope);
+  const pending = new Set(pendingTranslationKeys(def, lang, inv.units));
   const tokens = new Set<string>();
-  const units: TranslationUnit[] = elements.map((el) => {
-    const protectedTokens = placeholderKeys(el.source);
-    for (const t of protectedTokens) tokens.add(t);
-    return {
-      key: el.key,
-      kind: el.kind,
-      label: el.label,
-      source: el.source,
-      mandatory: el.mandatory,
-      order: el.order,
-      ...(el.questionId ? { questionId: el.questionId } : {}),
-      ...(el.questionCode ? { questionCode: el.questionCode } : {}),
-      protectedTokens,
-      state: stateOf(table[el.key], el.source),
-    };
+  const units: TranslationUnit[] = inv.units.map((u) => {
+    for (const t of u.tokens) tokens.add(t);
+    const stored = storedState(table[u.key], u.sourceHash);
+    const state: UnitState = stored === "stored" ? (pending.has(u.key) ? "invalid" : "translated") : stored;
+    return { ...u, protectedTokens: [...u.tokens], state };
   });
   /* mandatory first, then editor order — a resumed task finishes what blocks a launch before what does not */
   units.sort((a, b) => (a.mandatory === b.mandatory ? a.order - b.order : a.mandatory ? -1 : 1));
@@ -153,7 +149,9 @@ export function translationInventory(def: SurveyDefinition, lang: string): Trans
     optional: units.filter((u) => !u.mandatory).length,
     missing: units.filter((u) => u.state === "missing").length,
     outdated: units.filter((u) => u.state === "outdated").length,
+    invalid: units.filter((u) => u.state === "invalid").length,
     protectedStructure: { elementKeys: units.length, tokens: [...tokens].sort(), excluded },
+    notCovered: inv.notCovered,
   };
 }
 
@@ -165,21 +163,31 @@ export interface TranslationBatch {
   from: number;
   to: number;
   units: TranslationUnit[];
+  /** unique strings the batch sends (identical wordings are translated once) */
+  segments: number;
+  chars: number;
 }
 
-/** what still needs doing: missing first, then outdated; mandatory before optional */
+/** what still needs doing: missing, outdated or invalid; mandatory before optional */
 export function outstandingUnits(inv: TranslationInventory, opts: { includeOptional?: boolean } = {}): TranslationUnit[] {
   const include = opts.includeOptional !== false;
   return inv.units.filter((u) => u.state !== "translated" && (include || u.mandatory));
 }
 
-export function translationBatches(units: TranslationUnit[], size = DEFAULT_TRANSLATION_BATCH): TranslationBatch[] {
+/**
+ * THE ENGINE'S ADAPTIVE BATCHES capped at `size` unique strings: a question's
+ * elements stay together, an identical wording is sent once and written to
+ * every key that carries it, a string with nothing to translate (numbers,
+ * tokens only) is left out — it is copied through, never sent.
+ */
+export function translationBatches(units: TranslationUnit[], size = DEFAULT_TRANSLATION_BATCH, maxChars = Number.MAX_SAFE_INTEGER): TranslationBatch[] {
   const n = Math.max(1, Math.floor(size));
-  const out: TranslationBatch[] = [];
-  for (let i = 0; i < units.length; i += n) {
-    out.push({ index: out.length, from: i + 1, to: Math.min(i + n, units.length), units: units.slice(i, i + n) });
-  }
-  return out;
+  const byKey = new Map(units.map((u) => [u.key, u]));
+  const position = new Map(units.map((u, i) => [u.key, i + 1]));
+  return planTranslationBatches(units, { maxItems: n, maxChars, minItems: 1 }).map((b) => {
+    const ps = b.keys.map((k) => position.get(k) ?? 0).filter(Boolean);
+    return { index: b.index, from: Math.min(...ps), to: Math.max(...ps), units: b.keys.map((k) => byKey.get(k)!).filter(Boolean), segments: b.segments, chars: b.chars };
+  });
 }
 
 /** one step row per batch, ready for `TaskStore.create` / `TaskStore.revise` */
@@ -201,7 +209,7 @@ export function translationSteps(batches: TranslationBatch[], planVersion = 1, t
 export interface BatchProblem {
   key: string;
   label: string;
-  kind: "empty" | "placeholder" | "unknown_key" | "missing";
+  kind: "empty" | "placeholder" | "unknown_key" | "missing" | "untranslated" | "wrong_script";
   message: string;
 }
 
@@ -211,17 +219,19 @@ export interface BatchCheck {
   problems: BatchProblem[];
   /** keys the model did not answer at all */
   missingKeys: string[];
-  /** keys whose answer broke the protected structure */
+  /** keys whose answer broke the protected structure, is untranslated, or is in the wrong script */
   invalidKeys: string[];
 }
 
 /**
- * DETERMINISTIC CHECK OF ONE BATCH, before a single character is written.
- * A translation that lost a pipe, a `{label}`, a `[[loop.item]]` or a
- * question code is refused by key; the rest of the batch is still written,
- * so a bad key costs one key and not forty.
+ * DETERMINISTIC CHECK OF ONE BATCH, before a single character is written —
+ * the engine's `validateTranslatedUnit` per key, worded for the panel. A
+ * translation that lost a pipe, a `{label}`, a `[[loop.item]]`, a question
+ * code or an HTML tag, one still in the source language or in the wrong
+ * script for `lang`, is refused by key; the rest of the batch is still
+ * written, so a bad key costs one key and not forty.
  */
-export function checkTranslationBatch(units: readonly TranslationUnit[], answered: Record<string, string>): BatchCheck {
+export function checkTranslationBatch(units: readonly TranslationUnit[], answered: Record<string, string>, lang = "", glossary: GlossaryEntry[] = []): BatchCheck {
   const byKey = new Map(units.map((u) => [u.key, u]));
   const accepted: BatchCheck["accepted"] = [];
   const problems: BatchProblem[] = [];
@@ -234,21 +244,12 @@ export function checkTranslationBatch(units: readonly TranslationUnit[], answere
       continue;
     }
     const text = String(raw ?? "");
-    if (!text.trim()) {
-      problems.push({ key, label: unit.label, kind: "empty", message: `${unit.label}: the translation is empty.` });
-      invalidKeys.push(key);
-      continue;
-    }
-    const pm = placeholderMismatch(unit.source, text);
-    if (pm) {
-      problems.push({
-        key, label: unit.label, kind: "placeholder",
-        message: `${unit.label}: the protected structure differs — source has ${pm.source.length ? pm.source.join(" ") : "none"}, the translation has ${pm.translation.length ? pm.translation.join(" ") : "none"}${pm.missing.length ? ` (missing ${pm.missing.join(" ")})` : ""}${pm.extra.length ? ` (invented ${pm.extra.join(" ")})` : ""}. Ids, piping, placeholders and scripts must come through byte-identical.`,
-      });
-      invalidKeys.push(key);
-      continue;
-    }
-    accepted.push({ key, text, source: unit.source });
+    const issue = validateTranslatedUnit(unit, text, lang, glossary);
+    if (!issue) { accepted.push({ key, text, source: unit.source }); continue; }
+    invalidKeys.push(key);
+    const kind: BatchProblem["kind"] = issue.kind === "empty" ? "empty" : issue.kind === "untranslated" ? "untranslated" : issue.kind === "wrong_script" ? "wrong_script" : "placeholder";
+    const tail = kind === "placeholder" ? " Ids, piping, placeholders, HTML and scripts must come through byte-identical." : "";
+    problems.push({ key, label: unit.label, kind, message: `${unit.label}: ${issue.message}.${tail}` });
   }
 
   const missingKeys = units.filter((u) => !(u.key in (answered ?? {}))).map((u) => u.key);
@@ -286,7 +287,7 @@ export function applyTranslationBatch(
   return { localization: next, written };
 }
 
-/** a source string edited after its translation goes `outdated`, never silently kept */
+/** a source string edited after its translation goes `outdated`, never silently kept (the inventory's state already reads the hash; this stamps the rows) */
 export function refreshOutdated(def: SurveyDefinition): Localization {
   return markOutdated(def);
 }
@@ -294,24 +295,46 @@ export function refreshOutdated(def: SurveyDefinition): Localization {
 /* ===================================================== done, and where to resume */
 
 /**
- * THE COMPLETION GATE, and the only one: `lintLanguage(def, lang).ready`.
- * Nothing here decides for itself that a language is finished, and the
- * blocking issues come through verbatim so the panel can say which keys are
- * short.
+ * THE COMPLETION GATE, and the only one — two questions, one place:
+ *
+ *   no `units`     is the LANGUAGE ready to be served? `lintLanguage(def,
+ *                  lang).ready` (every mandatory string) plus the
+ *                  configured-language rule — the base's verdict, what
+ *                  `checkDeliverable` asks of a whole-survey task
+ *   with `units`   is the SCOPE done? A task asked for "the first ten
+ *                  questions" (or the whole survey) passes the scope's units
+ *                  and the engine's `translationCoverage` must find 100 % of
+ *                  them current and valid — nothing missing, stale, corrupted,
+ *                  untranslated, in the wrong script or duplicated within a
+ *                  question. Readiness is still measured and reported, but a
+ *                  partial scope is not asked to make the language ready.
+ *
+ * Nothing here decides for itself that a language is finished, and the issues
+ * come through verbatim so the panel can say which keys are short.
  */
-export function translationComplete(def: SurveyDefinition, lang: string): DeliverableReport {
+export function translationComplete(def: SurveyDefinition, lang: string, opts: { units?: readonly EngineUnit[] } = {}): DeliverableReport {
   const configured = surveyLanguages(def).some((l) => l.code === lang);
   const r = lintLanguage(def, lang);
   const blocking = r.issues.filter((i) => i.blocking);
   const problems: string[] = [];
   if (!configured) problems.push(`“${lang}” is not one of this survey's languages — add it before the translation can be complete.`);
-  if (!r.ready) {
+  const coverage = opts.units ? translationCoverage(def, lang, [...opts.units]) : null;
+  if (!r.ready && !coverage) {
     problems.push(`${r.name}: ${r.mandatory - r.missing} of ${r.mandatory} mandatory strings translated (${r.completion}%).`);
     for (const i of blocking) problems.push(`${i.key} (${i.label}): ${i.message}`);
   }
   const missingKeys = r.issues.filter((i) => i.kind === "missing").map((i) => i.key);
+  if (coverage && !coverage.complete) {
+    problems.push(`${r.name}: ${coverage.translated} of ${coverage.total} strings in scope have a current, valid translation (${coverage.percent}%).`);
+    for (const k of coverage.missing.slice(0, 20)) problems.push(`${k}: no translation.`);
+    for (const k of coverage.stale.slice(0, 20)) problems.push(`${k}: its source text changed after it was translated.`);
+    for (const i of coverage.invalid.slice(0, 20)) problems.push(`${i.key} (${i.label}): ${i.message}`);
+    const more = coverage.missing.length + coverage.stale.length + coverage.invalid.length - Math.min(20, coverage.missing.length) - Math.min(20, coverage.stale.length) - Math.min(20, coverage.invalid.length);
+    if (more > 0) problems.push(`… and ${more} more.`);
+  }
+  const firstGap = coverage ? coverage.missing[0] ?? coverage.stale[0] ?? coverage.invalid[0]?.key : undefined;
   return {
-    ok: problems.length === 0 && r.ready,
+    ok: problems.length === 0 && (coverage ? coverage.complete : r.ready),
     problems,
     measured: {
       language: lang,
@@ -323,9 +346,24 @@ export function translationComplete(def: SurveyDefinition, lang: string): Delive
       completion: r.completion,
       blocking: blocking.length,
       ready: r.ready,
-      ...(missingKeys.length ? { resumeKey: missingKeys[0], missingKeys: missingKeys.length } : {}),
+      ...(missingKeys.length ? { resumeKey: missingKeys[0], missingKeys: missingKeys.length } : firstGap ? { resumeKey: firstGap } : {}),
+      ...(coverage ? { scope: coverage.total, covered: coverage.translated, coverage: coverage.percent, stale: coverage.stale.length, invalid: coverage.invalid.length, rtl: coverage.rtl } : {}),
     },
   };
+}
+
+/**
+ * THE QUEUE A RESUMED TRANSLATION WORKS THROUGH: what is missing, outdated or
+ * refused by the engine's validator, plus what is translated but blocking
+ * for `lintLanguage` (two options with the same words), mandatory strings
+ * first and then editor order.
+ */
+export function translationQueue(def: SurveyDefinition, lang: string, includeOptional = true): TranslationUnit[] {
+  const inv = translationInventory(def, lang);
+  const outstanding = outstandingUnits(inv, { includeOptional });
+  const blocked = new Set(lintLanguage(def, lang).issues.filter((i) => i.blocking && i.kind !== "missing").map((i) => i.key));
+  const invalid = inv.units.filter((u) => u.state === "translated" && blocked.has(u.key) && (includeOptional || u.mandatory));
+  return [...outstanding, ...invalid].sort((a, b) => (a.mandatory === b.mandatory ? a.order - b.order : a.mandatory ? -1 : 1));
 }
 
 export interface TranslationResume {
@@ -345,19 +383,14 @@ export interface TranslationResume {
  * or blocked by a QA issue — never the first key of the language.
  */
 export function translationResumeFrom(def: SurveyDefinition, lang: string, size = DEFAULT_TRANSLATION_BATCH): TranslationResume | null {
-  const inv = translationInventory(def, lang);
-  const outstanding = outstandingUnits(inv);
-  const blockedKeys = new Set(lintLanguage(def, lang).issues.filter((i) => i.blocking && i.kind !== "missing").map((i) => i.key));
-  const invalid = inv.units.filter((u) => u.state === "translated" && blockedKeys.has(u.key));
-  const queue = [...outstanding, ...invalid].sort((a, b) => (a.mandatory === b.mandatory ? a.order - b.order : a.mandatory ? -1 : 1));
+  const queue = translationQueue(def, lang);
   const first = queue[0];
   if (!first) return null;
-  const position = queue.indexOf(first) + 1;
   return {
     key: first.key,
     label: first.label,
-    position,
-    batchIndex: Math.floor((position - 1) / Math.max(1, Math.floor(size))),
+    position: 1,
+    batchIndex: 0,
     remaining: queue.length,
     reason: first.state === "missing" ? "missing" : first.state === "outdated" ? "outdated" : "invalid",
   };
@@ -391,6 +424,7 @@ export async function createTranslationTask(store: TaskStore, input: Translation
   const units = outstandingUnits(inv, { includeOptional: input.includeOptional });
   if (!units.length) return null;
   const batches = translationBatches(units, input.batchSize ?? DEFAULT_TRANSLATION_BATCH);
+  if (!batches.length) return null; // only copy-through strings outstanding: nothing a model is needed for
   const create: CreateTaskInput = {
     surveyId: input.surveyId,
     ...(input.customerId ? { customerId: input.customerId } : {}),

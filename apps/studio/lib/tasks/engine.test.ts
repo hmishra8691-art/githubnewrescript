@@ -204,7 +204,9 @@ const UPSC = "मुझे UPSC प्रीलिम्स की तैया�
 test("A: the production UPSC request (650 chars, Hindi, 100 questions) plans as a task of small steps and completes with exactly 100 questions", async () => {
   __resetTaskRegistry(); __resetFakeResponders();
   const r = await runTaskInProcess({ message: UPSC, definition: empty() });
-  assert.equal(r.task.planner, "generation");
+  /* the brief asks for an answer key (सही उत्तर) and is UPSC: since step 4B the assessment planner builds it (generation batches with keys) */
+  assert.equal(r.task.planner, "assessment");
+  assert.equal(r.task.kind, "scored_exam");
   const batches = r.task.steps.filter((s) => s.kind === "gen.batch");
   assert.ok(batches.length >= 5 && batches.length <= 20, `batches ${batches.length}`);
   for (const b of batches) assert.ok((b.batchSize ?? 0) <= 20, `batch ${b.stepId} of ${b.batchSize}`);

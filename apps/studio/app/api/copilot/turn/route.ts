@@ -9,10 +9,9 @@ import { providerById, identityOf, aiIdentity } from "@rescript/ai";
 import { outputBudget } from "@/lib/copilot/budget";
 import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemReplies, planRetryPrompt, planStagePrompt, sanitizeDone, type ChangePlan } from "@/lib/copilot/changePlan";
 import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
-import { startBatchedTranslation, translationTargets } from "@/lib/copilot/translationRouting";
 /* plan first (2026-10-29): a non-trivial request becomes a task of small steps before any model call — docs/EXECUTION-ENGINE-2026-10-29.md */
 import { taskForTurn } from "@/lib/tasks/turnTask";
-import { taskStoreFor } from "@/lib/copilot/taskStore";
+import { assessmentReportTurn } from "@/lib/tasks/handlers/assessment";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
@@ -230,6 +229,27 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const parsed = SurveyDefinition.safeParse(body.definition);
   if (!parsed.success) return NextResponse.json({ error: "send the survey as it is open in the editor (definition)" }, { status: 400 });
   const def = parsed.data;
+  /*
+   * THE PER-QUESTION RESULTS REPORT IS NOT MODEL WORK (step 4B, 2026-10-29). "For every question show what was
+   * correct, what I selected, explanations and weak areas" timed out twice in production (164 s) because it was sent
+   * to the model. Correct / selected / scores / weak areas exist only after a respondent submits and are computed on
+   * the server (the results page; Data Analytics → Assessment results), so the answer is deterministic: where they
+   * are, and — when the paper's report is off — the one set_assessment that switches it on. No model call, no charge,
+   * before the plan-first path (a 104-question "every question" request would otherwise size as a task).
+   */
+  const reportTurn = body.scope === "theme" || body.stage === "execute" || body.stage === "plan" ? null : assessmentReportTurn(message, def);
+  if (reportTurn) {
+    const acts = coerceSurveyActions(reportTurn.actions).actions;
+    const ap = acts.length ? applySurveyActions(def, acts) : null;
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: acts.length ? "proposal" : "answer", reply: reportTurn.reply, plan: [], actions: acts, rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
+      validation: ap ? { valid: ap.valid, results: ap.results, errors: ap.errors, destructive: ap.destructive, warnings: ap.warnings, summary: [], diff: null, uxOnly: ap.uxOnly, structureUnchanged: ap.structureUnchanged } : null,
+      passages: {},
+      context: { mode: "question", assessmentReport: true, modelCalled: false, promptChars: 0, cached: false },
+      usage: { charge: 0 },
+    });
+  }
   const billing = await billingProjectFor(user, surveyId);
   if ("response" in billing) return billing.response;
   const { meter, ctx } = billing;
@@ -267,38 +287,16 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   // languages: the translation guide, and the named questions' elements with their existing translations
   const translationTurn = translationIntent(message);
   /*
-   * A LARGE TRANSLATION IS A TASK, NOT A TURN (§7, 2026-10-25).
+   * A LARGE TRANSLATION IS A TASK, NOT A TURN (§7, 2026-10-25; on the one engine since 2026-10-29).
    *
-   * A string travels twice in one turn — the source up in the prompt, the
-   * translation back in the single JSON reply — so a survey with a few
-   * hundred mandatory strings produces a reply at the edge of truncation,
-   * and a truncated reply loses EVERY key in it because nothing was written
-   * down on the way. Several target languages is worse: one turn can write
-   * one language, so the rest were silently dropped.
-   *
-   * Past the threshold the work becomes an inventory-driven, resumable task
-   * — batches saved through `recordTranslation` as they are accepted, each
-   * key checked for its placeholders and piping, completion gated on
-   * `lintLanguage(def, lang).ready`. Below it NOTHING CHANGES: a small
-   * translation is still one turn, exactly as today.
+   * The translation hook that stood here (`startBatchedTranslation`, its own step rows) is gone: the registered
+   * translation planner (lib/tasks/handlers/translation.ts) answers through the plan-first path below. It reads
+   * the count OFF THE SURVEY — the strings still to translate in the requested scope against
+   * `LARGE_TRANSLATION_KEYS`, or several target languages — and forces a task past either line; under both the
+   * size estimate decides, and a small translation is still one turn, exactly as before.
    */
-  const batchedTranslation = !translationTurn ? null : await startBatchedTranslation(await taskStoreFor(surveyId), {
-    surveyId, def, languages: translationTargets(def, message).languages, request: message,
-    ...(ctx.customerId ? { customerId: ctx.customerId } : {}), ...(ctx.userId ? { createdBy: ctx.userId } : {}),
-  }).catch(() => null);
-  if (batchedTranslation) {
-    return NextResponse.json({
-      ok: true,
-      reply: { kind: "answer", reply: batchedTranslation.reason, plan: [], actions: [], rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
-      validation: null, passages: {},
-      task: { id: batchedTranslation.task.id, ids: batchedTranslation.tasks.map((t) => t.id), keys: batchedTranslation.keys, steps: batchedTranslation.steps },
-      context: { mode, promptChars: 0, cached: false, modelCalled: false, batchedTranslation: true },
-      usage: { charge: 0 },
-    });
-  }
   /*
-   * PLAN FIRST (2026-10-29). Read here — after the request is classified and the translation hook above has had
-   * its say, and BEFORE any model call — the deterministic size estimate and the registered planners' match. A
+   * PLAN FIRST (2026-10-29). Read here — after the request is classified and BEFORE any model call — the deterministic size estimate and the registered planners' match. A
    * non-trivial request becomes a durable task of small steps (one model call each, checkpointed as each
    * completes, resumable by the page or the cron) and the turn answers `stage: "task"`; a trivial one falls
    * through to the single-turn path unchanged. The theme assistant, `stage: "plan" / "execute"`, `task: false`

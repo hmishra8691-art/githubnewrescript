@@ -8,6 +8,7 @@ import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
 import { normalizeQuestion } from "./questionContent.js";
 import { ExactBalance } from "./balance.js";
+import { QuestionAssessment } from "./assessment.js";
 
 /**
  * Question model.
@@ -1526,6 +1527,11 @@ const QuestionObject = z.object({
    * a default from the type and the research design.
    */
   analysis: QuestionAnalysis.optional(),
+  /**
+   * ASSESSMENT (2026-10-25, ported 2026-10-29): the answer key and marking of
+   * this question — see assessment.ts. Stripped from every respondent payload.
+   */
+  assessment: QuestionAssessment.optional(),
   /**
    * A CUSTOM COMPONENT'S TEMPLATE — the markup its script drives. On every
    * other type this used to be a second, rival copy of the question's

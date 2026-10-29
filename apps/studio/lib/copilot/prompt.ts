@@ -6,6 +6,7 @@ import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanInt
 import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
 import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthesisGuide.ts";
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
+import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 /* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
 import { NOTICES, type ReplyLanguage } from "./notices.ts";
@@ -301,10 +302,11 @@ The survey has ONE source language (given above). A language version is translat
 Targets (in set_translations entries): "Q5" (its text), "Q5.instruction", "Q5.option:2" or "Q5.option:<label>", "Q5.row:r1" / "Q5.row:<label>", "Q5.column:<label>", "Q5.scale:low|high", "Q5.validation:1", "meta:title", "meta:description", "block:<title>", "end:complete", "ui:required", "ui:review_errors", "button:next|back|submit".
 Rules you must keep, or the engine refuses the entry: every {{pipe}}, {placeholder} (including {label}), \${var} and [[loop]] token exactly as in the source (same count, same spelling), and every question code the source names (Q7, Q7.R1); written in the target language's own script (no Russian in Latin letters, no Japanese in romaji); the same HTML tags, balanced; never an empty text; glossary terms marked do-not-translate (brand names) exactly as written; the glossary's preferred wording for a term. Translate for a questionnaire: natural, the register the language's notes ask for (formal "Sie" / "usted" unless told otherwise), the same meaning and the same scale anchors in order, options kept distinct from each other, units and date/number conventions as the locale writes them. Do not "localize" the research meaning — a 5-point agreement scale stays a 5-point agreement scale.
 Scope: "translate this section / block" means every element of every question in it; "translate the survey" means every element the outline shows; "translate Q5" means its text, instruction, options and rows. The outline lists the languages the survey has, their completion, and — on a translation turn — each named question's elements with any existing translation and status (approved ones are kept unless the researcher asks to overwrite: add "overwriteApproved": true only then). Translate the OUTDATED ones when asked to re-translate; confirm_translations when the researcher says the old wording still fits.
-REPLACE THE WORDING OR ADD A VERSION — decide, never ask: when the researcher wants THIS survey's own wording in the language ("make all the questions Marathi", "मराठी में कर दो", "इसे ही पूरा मराठी कर दो", "change the text to English", "update it", "nothing separate") rewrite the source wording in place — update_question (text, options, rows, scale labels) and rename_block for every element in scope, codes and logic unchanged; when respondents are to be OFFERED the language, or a version / translation is named ("add Marathi", "a Marathi version", "let respondents choose") → add_language + set_translations. Neither said ("ask the questions in Marathi", "मराठी मदे विचारा") → add the language version (the source stays as it is) and say in one sentence that the source wording can be replaced instead.
+REPLACE THE WORDING OR ADD A VERSION — decide, never ask: when the researcher wants THIS survey's own wording in the language ("make all the questions Marathi", "मराठी में कर दो", "इसे ही पूरा मराठी कर दो", "change the text to English", "update it", "nothing separate") rewrite the source wording in place — replace_wording (the same targets as set_translations; rows, options, scale labels, end messages keep their codes) for every element in scope, codes and logic unchanged; when respondents are to be OFFERED the language, or a version / translation is named ("add Marathi", "a Marathi version", "let respondents choose") → add_language + set_translations. Neither said ("ask the questions in Marathi", "मराठी मदे विचारा") → add the language version (the source stays as it is) and say in one sentence that the source wording can be replaced instead.
 ACTIONS:
 {"op":"add_language","code":"de","locale":"de-DE","country":"DE","notes":"formal register"}
 {"op":"set_translations","language":"de","entries":[{"target":"Q5","text":"Wie wahrscheinlich ist es, dass Sie {{BRAND}} kaufen?"},{"target":"Q5.option:1","text":"Sehr unwahrscheinlich"},{"target":"Q5.instruction","text":"Bitte eine Antwort auswählen"}],"status":"ai"}
+{"op":"replace_wording","language":"mr","entries":[{"target":"Q5","text":"…"},{"target":"Q5.row:r1","text":"…"}]}   // the source wording itself; "sourceLanguage":true (whole survey replaced) makes mr the source
 {"op":"approve_translations","language":"de","targets":["Q5","Q5.option:1"]}   // without targets: every translated element; "status":"reviewed" for review only
 {"op":"confirm_translations","language":"de","targets":["Q5"]}   // outdated → still fits the new source
 {"op":"set_language_status","code":"de","status":"ready|live|draft|in_review","enabled":true}   // ready/live are refused while blocking issues remain
@@ -523,6 +525,8 @@ export function copilotUserPrompt(input: {
   aiInterview?: boolean;
   /** 2026-10-22 (G3): the panels & alerts guide (connect_panel, configure_alerts) — absent = read from the message */
   integrations?: boolean;
+  /** 2026-10-25 (K4, ported 2026-10-29): the assessment guide (set_answer_key, set_assessment) — absent = read from the message */
+  assessment?: boolean;
   /** documents and reports — sent when the request names one (reportingIntent) */
   reporting?: boolean;
   /** 2026-10-22 (#11): the qualitative-synthesis guide — absent = read from the message (a staged item sets every switch itself) */
@@ -567,6 +571,8 @@ export function copilotUserPrompt(input: {
     if (input.aiInterview ?? aiInterviewIntent(input.message)) parts.push(COPILOT_AI_INTERVIEW_GUIDE);
     /* 2026-10-22 (G3): panel recruitment and alert routing (connect_panel, configure_alerts) */
     if (input.integrations ?? integrationsIntent(input.message)) parts.push(COPILOT_INTEGRATIONS_GUIDE);
+    /* 2026-10-25 (K4, ported 2026-10-29): scored tests — the answer key and the paper's marking; results are computed, never written */
+    if (input.assessment ?? assessmentIntent(input.message)) parts.push(COPILOT_ASSESSMENT_GUIDE);
     /* 2026-10-22 (F2): writing up the coded data, double-coding, reels, text group sessions — the Studio's cards do it; the guide names the sentence */
     if (input.qualSynthesis ?? qualSynthesisIntent(input.message)) parts.push(COPILOT_QUAL_SYNTHESIS_GUIDE);
     if (input.reporting ?? reportingIntent(input.message)) parts.push(REPORTING_GUIDE);

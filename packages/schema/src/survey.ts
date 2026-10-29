@@ -11,6 +11,7 @@ import { ListFill } from "./listFill.js";
 import { MediaDisplay } from "./mediaDisplay.js";
 import { QualStudy } from "./qualStudy.js";
 import { AlertSettings, PanelConfig } from "./integrations.js";
+import { AssessmentSettings } from "./assessment.js";
 
 /** Named display-logic rules that can target anything (requirement §6). */
 export const DisplayRule = z.object({
@@ -865,6 +866,8 @@ export const SurveyDefinition = z.object({
   panels: z.array(PanelConfig).optional(),
   /** ALERTS (2026-10-22, see integrations.ts): which study events go to which channels. Absent = the organisation's defaults. */
   alerts: AlertSettings.optional(),
+  /** ASSESSMENT (2026-10-25, ported 2026-10-29, see assessment.ts): scoring, pass mark and the results report. Absent on every survey that is not a test. */
+  assessment: AssessmentSettings.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

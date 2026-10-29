@@ -369,6 +369,7 @@ export function redactForClient(task: ExecTask): ClientTask {
       dependsOn: [...s.dependsOn],
       status: s.status,
       ...(s.kind ? { kind: s.kind } : {}),
+      ...(s.modelTier ? { modelTier: s.modelTier } : {}),
       ...(typeof s.input?.units === "number" && Number.isFinite(s.input.units) ? { units: s.input.units as number } : {}),
       ...(rangeOfInput(s.input) ? { range: rangeOfInput(s.input)! } : {}),
       title: s.title === undefined ? undefined : scrubSecrets(s.title),

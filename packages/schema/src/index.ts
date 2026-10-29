@@ -18,3 +18,4 @@ export * from "./analysisPlan.js";
 export * from "./qualStudy.js";
 export * from "./aiInterview.js";
 export * from "./integrations.js";
+export * from "./assessment.js";

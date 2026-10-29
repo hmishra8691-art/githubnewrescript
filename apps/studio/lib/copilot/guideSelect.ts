@@ -1,4 +1,4 @@
-import { ANALYSIS_ACTION_OPS, AI_INTERVIEW_ACTION_OPS, LIST_FILL_ACTION_OPS, LOCALIZATION_ACTION_OPS, METHOD_ACTION_OPS, QUAL_ACTION_OPS, QUOTA_ACTION_OPS, RESEARCH_ACTION_OPS } from "@rescript/engine";
+import { ANALYSIS_ACTION_OPS, AI_INTERVIEW_ACTION_OPS, ASSESSMENT_ACTION_OPS, LIST_FILL_ACTION_OPS, LOCALIZATION_ACTION_OPS, METHOD_ACTION_OPS, QUAL_ACTION_OPS, QUOTA_ACTION_OPS, RESEARCH_ACTION_OPS } from "@rescript/engine";
 import { COPILOT_ANALYSIS_GUIDE, COPILOT_FINDINGS_GUIDE, COPILOT_QUOTA_GUIDE, COPILOT_TRANSLATION_GUIDE, COPILOT_UX_GUIDE, UX_ACTION_OP, findingsIntent, quotaIntent, reportingIntent, translationIntent } from "./prompt.ts";
 import { COPILOT_LIST_FILL_GUIDE, listFillIntent } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE, methodsIntent } from "./methodsGuide.ts";
@@ -6,6 +6,7 @@ import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent } from "./resear
 import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
+import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import type { ChangePlanItem } from "./changePlan.ts";
 
 /**
@@ -33,26 +34,26 @@ import type { ChangePlanItem } from "./changePlan.ts";
  * `COPILOT_ITEM_GUIDES=off` (server env) restores the old behaviour: every item gets the build's guides.
  */
 
-export type GuideId = "ux" | "analysis" | "translation" | "quota" | "listFill" | "methods" | "findings" | "research" | "qual" | "aiInterview" | "integrations" | "reporting";
+export type GuideId = "ux" | "analysis" | "translation" | "quota" | "listFill" | "methods" | "findings" | "research" | "qual" | "aiInterview" | "integrations" | "assessment" | "reporting";
 /** the order `copilotUserPrompt` adds them in (and `COPILOT_STABLE_GUIDES` lists them in) */
-export const GUIDE_ORDER: readonly GuideId[] = ["ux", "analysis", "translation", "quota", "listFill", "methods", "findings", "research", "qual", "aiInterview", "integrations", "reporting"];
+export const GUIDE_ORDER: readonly GuideId[] = ["ux", "analysis", "translation", "quota", "listFill", "methods", "findings", "research", "qual", "aiInterview", "integrations", "assessment", "reporting"];
 export const GUIDE_TEXT: Record<GuideId, string> = {
   ux: COPILOT_UX_GUIDE, analysis: COPILOT_ANALYSIS_GUIDE, translation: COPILOT_TRANSLATION_GUIDE, quota: COPILOT_QUOTA_GUIDE, listFill: COPILOT_LIST_FILL_GUIDE,
-  methods: COPILOT_METHODS_GUIDE, findings: COPILOT_FINDINGS_GUIDE, research: COPILOT_RESEARCH_GUIDE, qual: COPILOT_QUAL_GUIDE, aiInterview: COPILOT_AI_INTERVIEW_GUIDE, integrations: COPILOT_INTEGRATIONS_GUIDE, reporting: REPORTING_GUIDE,
+  methods: COPILOT_METHODS_GUIDE, findings: COPILOT_FINDINGS_GUIDE, research: COPILOT_RESEARCH_GUIDE, qual: COPILOT_QUAL_GUIDE, aiInterview: COPILOT_AI_INTERVIEW_GUIDE, integrations: COPILOT_INTEGRATIONS_GUIDE, assessment: COPILOT_ASSESSMENT_GUIDE, reporting: REPORTING_GUIDE,
 };
 
 /** the guide switches of `copilotUserPrompt`, by their own names */
 export interface GuideFlags {
   ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; listFill?: boolean; methods?: boolean; findings?: boolean;
-  researchPlan?: boolean; qual?: boolean; aiInterview?: boolean; integrations?: boolean; reporting?: boolean; qualSynthesis?: boolean;
+  researchPlan?: boolean; qual?: boolean; aiInterview?: boolean; integrations?: boolean; assessment?: boolean; reporting?: boolean; qualSynthesis?: boolean;
 }
-const FLAG_OF: Record<GuideId, keyof GuideFlags> = { ux: "ux", analysis: "analysis", translation: "translation", quota: "quota", listFill: "listFill", methods: "methods", findings: "findings", research: "researchPlan", qual: "qual", aiInterview: "aiInterview", integrations: "integrations", reporting: "reporting" };
+const FLAG_OF: Record<GuideId, keyof GuideFlags> = { ux: "ux", analysis: "analysis", translation: "translation", quota: "quota", listFill: "listFill", methods: "methods", findings: "findings", research: "researchPlan", qual: "qual", aiInterview: "aiInterview", integrations: "integrations", assessment: "assessment", reporting: "reporting" };
 
 export const guidesOf = (f: GuideFlags): GuideId[] => GUIDE_ORDER.filter((g) => !!f[FLAG_OF[g]]);
 /** every switch set explicitly — so `copilotUserPrompt` reads nothing from the message for an item */
 export function flagsOf(ids: readonly GuideId[], qualSynthesis = false): Required<GuideFlags> {
   const on = new Set(ids);
-  return { ux: on.has("ux"), analysis: on.has("analysis"), translation: on.has("translation"), quota: on.has("quota"), listFill: on.has("listFill"), methods: on.has("methods"), findings: on.has("findings"), researchPlan: on.has("research"), qual: on.has("qual"), aiInterview: on.has("aiInterview"), integrations: on.has("integrations"), reporting: on.has("reporting"), qualSynthesis };
+  return { ux: on.has("ux"), analysis: on.has("analysis"), translation: on.has("translation"), quota: on.has("quota"), listFill: on.has("listFill"), methods: on.has("methods"), findings: on.has("findings"), researchPlan: on.has("research"), qual: on.has("qual"), aiInterview: on.has("aiInterview"), integrations: on.has("integrations"), assessment: on.has("assessment"), reporting: on.has("reporting"), qualSynthesis };
 }
 /** guide texts, in order — what `copilotCall` lifts into the cached core block */
 export const guideTexts = (ids: readonly GuideId[]): string[] => GUIDE_ORDER.filter((g) => ids.includes(g)).map((g) => GUIDE_TEXT[g]);
@@ -64,6 +65,7 @@ const OPS_OF: [GuideId, readonly string[]][] = [
   ["methods", METHOD_ACTION_OPS], ["qual", [...QUAL_ACTION_OPS, ...RESEARCH_ACTION_OPS]], ["aiInterview", AI_INTERVIEW_ACTION_OPS],
   ["research", ["set_research", "add_hypothesis", "set_hypothesis", "remove_hypothesis"]],
   ["integrations", ["connect_panel", "disconnect_panel", "configure_alerts"]],
+  ["assessment", ASSESSMENT_ACTION_OPS],
 ];
 /** the guide whose shapes an action op is written from (null: the system prompt's own vocabulary — questions, blocks, logic) */
 export function guideForOp(op: string): GuideId | null {
@@ -141,6 +143,7 @@ export function itemGuideSelection(input: { item: ChangePlanItem; build: GuideFl
   if (qualIntent(text)) want("qual", "names qualitative work");
   if (aiInterviewIntent(text)) want("aiInterview", "names AI interviews");
   if (integrationsIntent(text)) want("integrations", "names a panel or alerts");
+  if (assessmentIntent(withPassages) || build.assessment) want("assessment", assessmentIntent(text) ? "names a test / answer key" : "an assessment build");
   if (item.kind === "analysis" || /\banaly[sz]\w*|\bcrosstabs?\b|\bderived variables?\b|\bsignificance tests?\b/i.test(head)) want("analysis", "the analysis plan");
   if (buildingOutputs && findingsIntent(text)) want("findings", "answers from results");
   if (buildingOutputs && reportingIntent(text)) want("reporting", "a document or report");

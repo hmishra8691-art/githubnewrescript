@@ -43,3 +43,5 @@ export { brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingR
 
 export { MediaGateContext, useMediaHold, useMediaGateState, type MediaGate } from "./mediaGate";
 export { showOptionPopup, announceSelection } from "./optionPopup";
+/* assessments (ported 2026-10-29): the respondent's results report, rendered from the server's score */
+export { AssessmentReport, type AssessmentReportProps } from "./AssessmentReport";

@@ -32,7 +32,9 @@ export type TranslatableKind =
   | "scale_label" | "validation_message" | "probe_prompt"
   | "page_title" | "end_message" | "quota_message" | "button" | "ui"
   /* 2026-10-22 (#14c): a behaviour's popup / message text and title (show_popup, show_message effects) */
-  | "ux_text";
+  | "ux_text"
+  /* 2026-10-25 (translation tasks): a scale point's own label is a `scale_label`; the words beside a number, and a rating's comment box */
+  | "unit_label" | "comment_prompt";
 
 export interface TranslatableElement {
   /** the stable address: `q:<qid>:text`, `q:<qid>:opt:<code>`, `flow:<nodeId>:message`, `ui:required`… */
@@ -66,6 +68,12 @@ export const K = {
   colPlaceholder: (qid: string, colId: string) => `q:${qid}:colph:${colId}`,
   colOpt: (qid: string, colId: string, code: string | number) => `q:${qid}:col:${colId}:opt:${code}`,
   scale: (qid: string, which: string) => `q:${qid}:scale:${which}`,
+  /** a label on one point of a scale (`settings.scalePointLabels[point]`) */
+  scalePoint: (qid: string, point: string | number) => `q:${qid}:scalept:${point}`,
+  /** the author's words beside a number (`settings.affixText`, else Quantity's `unitLabel`) */
+  affix: (qid: string, which: "affixText" | "unitLabel") => `q:${qid}:${which === "affixText" ? "affix" : "unit"}`,
+  /** a rating's comment-box prompt (`settings.commentPrompt`) */
+  commentPrompt: (qid: string) => `q:${qid}:comment`,
   validation: (qid: string, index: number) => `q:${qid}:validation:${index}`,
   probePrompt: (qid: string) => `q:${qid}:probe`,
   pageTitle: (nodeId: string) => `flow:${nodeId}:title`,
@@ -243,6 +251,11 @@ export function translatableElements(def: SurveyDefinition): TranslatableElement
     for (const which of ["npsLeftLabel", "npsRightLabel", "sliderLeftLabel", "sliderRightLabel"] as const) {
       if (typeof s[which] === "string") add(K.scale(q.id, which), "scale_label", s[which] as string, `${q.code} · ${which.replace(/Label$/, "").replace(/([A-Z])/g, " $1").toLowerCase()} label`, base, false);
     }
+    /* 2026-10-25: the point labels of a scale, the words beside a number and a rating's comment prompt — optional (never block a launch) */
+    const points = s.scalePointLabels as Record<string, string> | undefined;
+    if (points && typeof points === "object") for (const [pt, label] of Object.entries(points)) if (typeof label === "string") add(K.scalePoint(q.id, pt), "scale_label", label, `${q.code} · scale point ${pt} label`, { ...base, code: pt }, false);
+    for (const which of ["affixText", "unitLabel"] as const) if (typeof s[which] === "string") add(K.affix(q.id, which), "unit_label", s[which] as string, `${q.code} · ${which === "affixText" ? "text beside the number" : "unit"}`, base, false);
+    if (typeof s.commentPrompt === "string") add(K.commentPrompt(q.id), "comment_prompt", s.commentPrompt as string, `${q.code} · comment prompt`, base, false);
     (q.validation ?? []).forEach((rule, i) => add(K.validation(q.id, i), "validation_message", rule.message, `${q.code} · validation message ${i + 1}`, base, false));
     if (q.probe?.prompt) add(K.probePrompt(q.id), "probe_prompt", q.probe.prompt, `${q.code} · follow-up wording`, base);
   }
@@ -313,7 +326,6 @@ export function languageDirection(code: string, cfg?: LanguageConfig): "ltr" | "
   return cfg?.direction ?? languageInfo(code)?.direction ?? "ltr";
 }
 
-/** The BCP-47 tag for a language version: its configured locale, else the library default. */
 /**
  * The locale for text that is NOT addressed to a respondent in their own
  * language: lint messages, validation errors, limits quoted back to a
@@ -327,6 +339,7 @@ export function languageDirection(code: string, cfg?: LanguageConfig): "ltr" | "
  */
 export const DEFAULT_NUMBER_LOCALE = "en-US";
 
+/** The BCP-47 tag for a language version: its configured locale, else the library default. */
 export function languageLocale(code: string, cfg?: LanguageConfig): string {
   return cfg?.locale ?? languageInfo(code)?.locales[0]?.tag ?? code;
 }
@@ -402,6 +415,10 @@ export function localizeDefinition(def: SurveyDefinition, lang: string | null | 
     const settings = { ...q.settings } as Record<string, unknown>;
     if (typeof s.placeholder === "string") settings.placeholder = t(K.qPlaceholder(q.id), s.placeholder);
     for (const which of ["npsLeftLabel", "npsRightLabel", "sliderLeftLabel", "sliderRightLabel"]) if (typeof s[which] === "string") settings[which] = t(K.scale(q.id, which), s[which] as string);
+    const points = s.scalePointLabels as Record<string, string> | undefined;
+    if (points && typeof points === "object") settings.scalePointLabels = Object.fromEntries(Object.entries(points).map(([pt, label]) => [pt, typeof label === "string" ? t(K.scalePoint(q.id, pt), label) ?? label : label]));
+    for (const which of ["affixText", "unitLabel"] as const) if (typeof s[which] === "string") settings[which] = t(K.affix(q.id, which), s[which] as string);
+    if (typeof s.commentPrompt === "string") settings.commentPrompt = t(K.commentPrompt(q.id), s.commentPrompt as string);
     return {
       ...q,
       text: t(K.qText(q.id), q.text) ?? q.text,
@@ -1176,4 +1193,68 @@ function localizeUx<U extends NonNullable<SurveyDefinition["ux"]>>(ux: U, t: (be
     return { ...b, effects };
   });
   return changed ? { ...ux, behaviors } : ux;
+}
+
+/* ------------------------------------------------- replacing the source */
+
+/**
+ * WRITE THE SOURCE WORDING OF ONE ELEMENT, by its stable key (2026-10-25, translation tasks — "make this survey
+ * Urdu" rather than "add an Urdu version"). The exact inverse of the addressing `translatableElements` uses: only the
+ * text field the key names changes; ids, codes, conditions, variables, scripts and settings are untouched. Returns
+ * false when the key names nothing in this survey, or an element with no source field of its own (`ui:*` — the
+ * runtime's interface strings have defaults, not authored text). Mutates `def`.
+ */
+export function setSourceText(def: SurveyDefinition, key: string, text: string): boolean {
+  if (key === "meta:title") { def.meta.title = text; return true; }
+  if (key === "meta:description") { def.meta.description = text; return true; }
+  let m = /^q:([^:]+):(.+)$/.exec(key);
+  if (m) {
+    const q = def.questions.find((x) => x.id === m![1]);
+    if (!q) return false;
+    const part = m[2];
+    const s = q.settings as Record<string, unknown>;
+    const same = (a: unknown, b: string) => String(a) === b;
+    let p: RegExpExecArray | null;
+    switch (part) {
+      case "text": q.text = text; return true;
+      case "instruction": q.instruction = text; return true;
+      case "description": q.description = text; return true;
+      case "placeholder": s.placeholder = text; return true;
+      case "probe": if (!q.probe) return false; q.probe = { ...q.probe, prompt: text }; return true;
+      case "comment": s.commentPrompt = text; return true;
+      case "affix": s.affixText = text; return true;
+      case "unit": s.unitLabel = text; return true;
+    }
+    if ((p = /^opt:(.+)$/.exec(part))) { const o = (q.options ?? []).find((x) => same(x.code, p![1])); if (!o) return false; o.label = text; return true; }
+    if ((p = /^optalt:(.+)$/.exec(part))) { const o = (q.options ?? []).find((x) => same(x.code, p![1])); if (!o) return false; o.imageAlt = text; return true; }
+    if ((p = /^row:(.+)$/.exec(part))) { const r = (q.rows ?? []).find((x) => same(x.code, p![1])); if (!r) return false; r.label = text; return true; }
+    if ((p = /^rowph:(.+)$/.exec(part))) { const r = (q.rows ?? []).find((x) => same(x.code, p![1])); if (!r) return false; r.placeholder = text; return true; }
+    if ((p = /^col:([^:]+):opt:(.+)$/.exec(part))) { const c = (q.columns ?? []).find((x) => x.id === p![1]); const o = c?.options?.find((x) => same(x.code, p![2])); if (!o) return false; o.label = text; return true; }
+    if ((p = /^colph:(.+)$/.exec(part))) { const c = (q.columns ?? []).find((x) => x.id === p![1]); if (!c) return false; c.placeholder = text; return true; }
+    if ((p = /^col:(.+)$/.exec(part))) { const c = (q.columns ?? []).find((x) => x.id === p![1]); if (!c) return false; c.label = text; return true; }
+    if ((p = /^scale:(.+)$/.exec(part))) { if (!["npsLeftLabel", "npsRightLabel", "sliderLeftLabel", "sliderRightLabel"].includes(p[1])) return false; s[p[1]] = text; return true; }
+    if ((p = /^scalept:(.+)$/.exec(part))) { const pts = s.scalePointLabels as Record<string, string> | undefined; if (!pts || !(p[1] in pts)) return false; s.scalePointLabels = { ...pts, [p[1]]: text }; return true; }
+    if ((p = /^validation:(\d+)$/.exec(part))) { const rule = (q.validation ?? [])[Number(p[1])]; if (!rule) return false; rule.message = text; return true; }
+    return false;
+  }
+  if ((m = /^flow:([^:]+):(title|message)$/.exec(key))) {
+    let hit = false;
+    walkFlow(def.flow as FlowNode[], (n) => {
+      const node = n as unknown as { id: string; type: string; title?: string; message?: string };
+      if (hit || node.id !== m![1]) return;
+      if (m![2] === "title") node.title = text; else if (node.type === "end") node.message = text; else return;
+      hit = true;
+    });
+    return hit;
+  }
+  if ((m = /^quota:([^:]+):message$/.exec(key))) { const qt = (def.quotas ?? []).find((x) => x.id === m![1]); if (!qt?.onFull) return false; qt.onFull = { ...qt.onFull, message: text }; return true; }
+  if ((m = /^branding:buttons:(next|back|submit)$/.exec(key))) { const b = def.branding?.buttons as Record<string, unknown> | undefined; if (!b) return false; b[`${m[1]}Label`] = text; return true; }
+  if ((m = /^ux:([^:]+):(\d+):(text|title)$/.exec(key))) {
+    const b = (def.ux?.behaviors ?? []).find((x) => x.id === m![1]);
+    const e = b?.effects[Number(m[2])] as { do?: string; text?: string; title?: string } | undefined;
+    if (!e || (e.do !== "show_popup" && e.do !== "show_message")) return false;
+    e[m[3] as "text" | "title"] = text;
+    return true;
+  }
+  return false;
 }

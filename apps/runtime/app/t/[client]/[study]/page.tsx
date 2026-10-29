@@ -1,6 +1,7 @@
 import { loadTestBuild } from "@/lib/deployment";
 import { loadQuotaCounts } from "@/lib/session";
 import { Runner } from "@/components/Runner";
+import { respondentDefinition } from "@/lib/assessmentPayload";
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +64,8 @@ export default async function TestSurveyPage({
   const quotaCounts = await loadQuotaCounts(dep.surveyId, true);
   return (
     <Runner
-      definition={dep.definition}
+      /* ASSESSMENTS (step 4A): a test link is a respondent payload too — the key is scored on the server after submit */
+      definition={respondentDefinition(dep.definition)}
       mode="test"
       sessionBoot={{
         client: params.client,

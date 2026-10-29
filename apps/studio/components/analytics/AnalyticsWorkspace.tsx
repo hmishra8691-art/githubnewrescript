@@ -1,5 +1,6 @@
 "use client";
 import { Warnings } from "./Warnings";
+import { AssessmentCard } from "./AssessmentCard";
 import React from "react";
 import type { AnalysisDefinition, ChartSpec, DatasetSpec, ReportTheme, VariableMeta } from "@rescript/analytics";
 import { ANALYSIS_KINDS } from "@rescript/analytics";
@@ -279,6 +280,8 @@ function Home({ home, analyses, onOpen, onNew, onTab, canEdit, api, refresh, pla
   return (
     <div className="ax-home" data-testid="ax-home">
       <PlanCard plan={plan} onTab={onTab} surveyId={surveyId} />
+      {/* ASSESSMENT RESULTS (K4, ported 2026-10-29): renders nothing unless the survey is a scored paper */}
+      <AssessmentCard surveyId={surveyId} />
       {/* the two ways to start work, side by side — neither is wide enough to
           deserve a row of its own once the page uses the whole display */}
       <div className="ax-home-start">

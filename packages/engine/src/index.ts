@@ -21,9 +21,14 @@ export * from "./advancedMethods.js";
 export * from "./advancedIntent.js";
 export * from "./analysisActions.js";
 export * from "./localizationActions.js";
+/* translation as a task — the deterministic half: masked inventory, adaptive batches, validation, coverage (2026-10-29, ported from K3) */
+export * from "./translationTask.js";
 export * from "./quotaActions.js";
 export * from "./listFillActions.js";
 export * from "./methodActions.js";
+/* assessments: deterministic scoring, the respondent stripping and leak check, and the answer-key actions (K4 2026-10-25, ported 2026-10-29) */
+export * from "./assessment.js";
+export * from "./assessmentActions.js";
 export * from "./optionActions.js";
 export * from "./actionValidation.js";
 export * from "./impact.js";

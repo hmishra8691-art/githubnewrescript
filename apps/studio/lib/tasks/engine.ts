@@ -134,6 +134,12 @@ export function deliverableOf(kind: TaskKind, request: string, completion: reado
   for (const line of completion) {
     const m = /^questions\s*(>=|=)\s*(\d+)$/i.exec(String(line).trim());
     if (m) spec.questionCount = Number(m[2]);
+    /* a translation planner's line names the language as a CODE and the scope — the sentence's own words ("उर्दू", "en arabe") need no second reader */
+    const t = /^translation:([a-z-]+):(version|replace):(all|q=(.*))$/.exec(String(line).trim());
+    if (t && kind === "translation") {
+      if (!spec.language) spec.language = t[1];
+      if (t[4]) spec.scopedQuestions = t[4].split(",").filter(Boolean).length;
+    }
   }
   return spec;
 }

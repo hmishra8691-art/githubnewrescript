@@ -208,7 +208,9 @@ export function wrongScript(source: string, translation: string, lang: string, o
   const expected = expectedScripts(lang);
   if (!expected) return null;
   // what a translator should have translated: the text without its tokens, kept terms and copied names
-  let t = String(translation ?? "").replace(/<[^>]*>/g, " ").replace(/&[A-Za-z#0-9]+;/g, " ");
+  // an inline script / style block, a URL or an e-mail address is code, not words (2026-10-25, translation tasks)
+  let t = String(translation ?? "").replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&[A-Za-z#0-9]+;/g, " ")
+    .replace(/\b(?:https?:\/\/|www\.)\S+|\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/gi, " ");
   for (const p of placeholdersIn(t).sort((a, b) => b.start - a.start)) t = `${t.slice(0, p.start)} ${t.slice(p.end)}`;
   for (const k of opts.keep ?? []) if (k.trim()) t = t.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"), " ");
   const names = new Set((String(source ?? "").replace(/<[^>]*>/g, " ").match(/\p{L}[\p{L}\p{N}'’-]*/gu) ?? []).filter((w) => /^\p{Lu}/u.test(w) || /\p{Lu}/u.test(w.slice(1))));

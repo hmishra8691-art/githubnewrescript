@@ -6,7 +6,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (26): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`
+**Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
 **Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
 
@@ -14,7 +14,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Analysis** (12): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`, `update_crosstab`, `update_analysis_test`, `reorder_analysis_plan`
 
-**Localization** (8): `add_language`, `remove_language`, `set_language_status`, `set_translations`, `approve_translations`, `confirm_translations`, `set_language_routing`, `set_glossary`
+**Localization** (9): `add_language`, `remove_language`, `set_language_status`, `set_translations`, `approve_translations`, `confirm_translations`, `set_language_routing`, `set_glossary`, `replace_wording`
 
 **Quotas** (6): `create_quota`, `update_quota`, `add_quota_cells`, `remove_quota_cells`, `delete_quota`, `set_quota_check`
 
@@ -165,7 +165,15 @@ export type LocalizationAction =
   | { op: "approve_translations"; language: string; targets?: TranslationTarget[]; status?: "approved" | "reviewed" }
   | { op: "confirm_translations"; language: string; targets?: TranslationTarget[] }
   | { op: "set_language_routing"; order?: string[]; urlParam?: string; embeddedField?: string; countryMap?: Record<string, string>; rules?: { when: string | Condition; language: string; label?: string }[]; allowSwitch?: boolean; fallback?: string; merge?: boolean }
-  | { op: "set_glossary"; entries?: { source: string; targets?: Record<string, string>; doNotTranslate?: boolean; notes?: string }[]; remove?: string[] };
+  | { op: "set_glossary"; entries?: { source: string; targets?: Record<string, string>; doNotTranslate?: boolean; notes?: string }[]; remove?: string[] }
+  /*
+   * 2026-10-25 (translation tasks): REPLACE THE SOURCE WORDING in place, element by element ("make this survey
+   * Urdu", not "add an Urdu version"). The one localization action that writes outside `def.localization`: only
+   * the text field each element key names (setSourceText); codes, logic, piping and scripts are untouched, and
+   * the same checks as set_translations apply (pipes / placeholders / HTML / script of `language`). With
+   * `sourceLanguage: true` (a whole survey replaced) the survey's source language becomes `language`.
+   */
+  | { op: "replace_wording"; entries: TranslationSpec[]; language?: string; sourceLanguage?: boolean };
 ```
 
 ## Quota actions
