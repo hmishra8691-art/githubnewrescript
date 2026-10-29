@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
   const authed = await requireUser(req);
   /* signed out: refused here (only the fake provider's sandbox may continue — checked again, by survey id, in taskAccess) */
   if (isFailure(authed) && aiProviderName() !== "fake") return authed.response;
-  let body: { surveyId?: unknown; budgetMs?: unknown; stepId?: unknown; aiOnce?: unknown } = {};
+  let body: { surveyId?: unknown; budgetMs?: unknown; stepId?: unknown; aiOnce?: unknown; maxSteps?: unknown } = {};
   try { body = await req.json(); } catch { /* an empty body is fine for most actions */ }
   const a = await taskAccess(authed, body.surveyId ?? req.nextUrl.searchParams.get("surveyId"), "survey.edit", body.aiOnce === true ? "once" : undefined);
   if ("response" in a) return a.response;
@@ -32,7 +32,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     case "advance": {
       if (t.status === "completed" || t.status === "cancelled" || t.status === "failed") return NextResponse.json({ ok: true, task: viewOf(t), slice: null });
       const budgetMs = typeof body.budgetMs === "number" && body.budgetMs > 0 ? Math.min(body.budgetMs, ADVANCE_BUDGET_MS) : ADVANCE_BUDGET_MS;
-      const r = await advanceForRequest({ store: a.store, scope: a.scope, task: t, budgetMs, signal: req.signal });
+      /* TEST SEAM (fake provider only): at most this many steps in the slice — a "killed" slice, one step at a time */
+      const maxSteps = aiProviderName() === "fake" && typeof body.maxSteps === "number" && body.maxSteps > 0 ? Math.round(body.maxSteps) : undefined;
+      const r = await advanceForRequest({ store: a.store, scope: a.scope, task: t, budgetMs, signal: req.signal, ...(maxSteps ? { maxSteps } : {}) });
       const after = (await a.store.load(t.id)) ?? t;
       return NextResponse.json({ ok: true, task: viewOf(after), slice: { built: r.built, remaining: r.remaining.length, failed: r.failed.map((f) => ({ id: f.id, kind: f.kind })), stoppedBy: r.stoppedBy, ...(r.retryAfterMs ? { retryAfterMs: r.retryAfterMs } : {}) }, usage: { charge: r.spend.charge } });
     }

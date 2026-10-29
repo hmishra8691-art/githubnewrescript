@@ -881,7 +881,9 @@ export function useCopilot(opts: {
   }, [s.surveyDbId, cloudOnce]);
   const taskQuery = `surveyId=${encodeURIComponent(s.surveyDbId)}`;
   const driveTask = React.useCallback(async (entryId: string, taskId: string): Promise<void> => {
-    if (taskDrivers.current.has(taskId)) return;
+    /* one driver per task; a driver told to stop (Pause) is replaced by the next (Resume) even before it has noticed */
+    const prev = taskDrivers.current.get(taskId);
+    if (prev && !prev.stop) return;
     const h = { stop: false };
     taskDrivers.current.set(taskId, h);
     let fails = 0;
@@ -899,7 +901,7 @@ export function useCopilot(opts: {
         const wait = !v ? Math.min(30_000, 1000 * 2 ** Math.min(fails, 5)) : !drive ? 2500 : slice?.retryAfterMs ? Math.min(60_000, slice.retryAfterMs) : slice?.stoppedBy === "backoff" ? 3000 : 250;
         await new Promise((res) => setTimeout(res, wait));
       }
-    } finally { taskDrivers.current.delete(taskId); }
+    } finally { if (taskDrivers.current.get(taskId) === h) taskDrivers.current.delete(taskId); }
   }, [opts, taskCall, taskQuery]);
   driveTaskRef.current = driveTask;
   /* leaving the page stops this page's loop (the cron carries the task on); coming back reattaches */
