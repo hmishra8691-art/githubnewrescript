@@ -33,14 +33,14 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
       readOnlyIgnored?: boolean }
   | { op: "delete_question"; target: string }
-  | { op: "move_question"; target: string; block?: string; after?: string }
+  | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
   | { op: "add_skip"; from: string; when: CondInput; to: string }
   | { op: "clear_skips"; target: string }

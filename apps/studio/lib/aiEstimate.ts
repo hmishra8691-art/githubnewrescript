@@ -30,7 +30,7 @@ export function meterModel(provider: string, model: string | null, kind: "chat" 
 }
 
 /** what a model call is expected to cost: the prompt's size, the reply's cap, the number of requests — and the tier, the large model when none is named */
-export interface AiEstimate { estimateText: string; maxTokens: number; requests?: number; operation: string; tier?: AiModelTier; /** the researcher's explicit one-time consent to send this call while the project runs Internal (the copilot's "send this once") */ consent?: "once"; /** §3 measurement: extra usage-event metadata (workflow id, stage, retries, prompt size); a function is read after the call */ meta?: Record<string, unknown> | (() => Record<string, unknown>) }
+export interface AiEstimate { estimateText: string; maxTokens: number; requests?: number; operation: string; tier?: AiModelTier; /** the researcher's explicit one-time consent to send this call while the project runs Internal (the copilot's "send this once") */ consent?: "once"; /** §3 measurement: extra usage-event metadata (workflow id, stage, retries, prompt size); a function is read after the call */ meta?: Record<string, unknown> | (() => Record<string, unknown>); /** execution engine (2026-10-29): one logical call of one step attempt — a duplicated settle charges once */ idempotencyKey?: string }
 
 /** The usage spec an AI call is reserved (and estimated) at — one definition for `meteredAi` and `estimateAi`. */
 export function aiSpec(eventType: string, est: AiEstimate): UsageSpec {
@@ -40,5 +40,6 @@ export function aiSpec(eventType: string, est: AiEstimate): UsageSpec {
     eventType, provider: meterProvider(providerName, "chat"), service: "chat", model: meterModel(providerName, aiModelName(est.tier), "chat"),
     inputUnits: (estimateTokens(est.estimateText) + 120) * reqs, outputUnits: est.maxTokens * reqs,
     metadata: { operation: est.operation },
+    ...(est.idempotencyKey ? { idempotencyKey: est.idempotencyKey } : {}),
   };
 }

@@ -32,6 +32,7 @@ import { sandboxFind, sandboxGet, sandboxLines, sandboxPut, sandboxTheme, fromBa
 import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCard } from "../../../lib/copilot/reportThemeTurn";
 import { qualTurn, runQualCard, type QualCard } from "./qualTurn";
 import type { QualRequest } from "@rescript/engine";
+import type { TaskClientView } from "../../../lib/tasks/service";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -62,7 +63,9 @@ export interface CopilotEntry {
   kind: "copilot";
   text: string;
   heard?: HeardTranscript;
-  status: "thinking" | "ready" | "failed" | "empty" | "plan";
+  status: "thinking" | "ready" | "failed" | "empty" | "plan" | "task";
+  /** a planned task (2026-10-29, docs/EXECUTION-ENGINE-2026-10-29.md): the persisted plan's state, refreshed by the page's drive loop */
+  task?: TaskClientView;
   reply?: CopilotReply;
   /** the change plan the model proposed before building (Phase 2): read, ticked and approved here; `approved` once it was built */
   changePlan?: ChangePlan & { approved?: string[]; failures?: { id: string; failure: TurnFailure }[] };
@@ -700,6 +703,16 @@ export function useCopilot(opts: {
       if (r.status === 501) { setAvailable(false); failTurn(d, 501, "not_configured"); return "unavailable"; }
       if (!r.ok || !d || d.ok === false) { failTurn(d, r.status, r.status === 402 || r.status === 423 ? "wallet" : "provider"); return "handled"; }
       setAvailable(true);
+      if (d.stage === "task" && d.task) {
+        /* PLAN FIRST (2026-10-29): the request became a persisted task of small steps — the execution panel shows it, the drive loop runs it */
+        const tv = d.task as TaskClientView;
+        forget();
+        const reply = d.reply as CopilotReply | undefined;
+        opts.patch(id, { status: "task", task: tv, ...(reply ? { reply } : {}), progress: undefined, usage: d.usage as { charge: number }, context: d.context as CopilotEntry["context"], opKey: recordOp({ prompt: text, source: "model", status: "clarify", intent: { ...read, mode: "task", kind: "task" }, statusDetail: `Planned as a task (${tv.id}, ${tv.progress.total} steps)`, apiCalls: [call(d)] }) });
+        setTaskDurable(d.durable === true);
+        void driveTaskRef.current?.(id, tv.id);
+        return "handled";
+      }
       if (d.stage === "plan" && d.plan) {
         // the change plan: read and approved before anything is built
         const plan = d.plan as ChangePlan;
@@ -839,6 +852,110 @@ export function useCopilot(opts: {
     opts.push({ id: cp.entryId, kind: "copilot", text: cp.text, status: "failed", error: failure.message, failure, ...(cp.kind === "build" ? { changePlan: { ...(cp.plan as ChangePlan), approved: cp.items ?? [] }, work: { built: cp.built.length, total, pending: pendingIds(cp.items ?? [], cp.built, cp.failed).length, failed: cp.failed.length } } : {}) });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.surveyDbId]);
+
+  /*
+   * THE EXECUTION PANEL'S DRIVER (2026-10-29, docs/EXECUTION-ENGINE-2026-10-29.md). The task lives on the server;
+   * this page only carries it on (POST …/advance: one slice of one or two steps under the researcher's own meter,
+   * safe to repeat and to run beside the cron) and shows its persisted state. A reload, a navigation away and
+   * back, a dropped connection: the effect below finds the survey's open task again and reattaches. Nothing here
+   * decides success — the panel shows what the server says, and the work carries on in the background (the cron)
+   * when this page is gone.
+   */
+  const [taskDurable, setTaskDurable] = React.useState(false);
+  const taskDrivers = React.useRef(new Map<string, { stop: boolean }>());
+  const taskDriveRef = React.useRef(true);
+  const taskBudgetRef = React.useRef<number | null>(null);
+  const driveTaskRef = React.useRef<((entryId: string, taskId: string) => Promise<void>) | null>(null);
+  React.useEffect(() => {
+    /* TEST SEAMS (fake provider only): `__rescriptCopilotTaskDrive(false)` stops the page's own advance loop (the panel then only polls); `__rescriptCopilotTaskBudget(ms)` caps each advance */
+    const w = window as unknown as { __rescriptCopilotTaskDrive?: (on: boolean) => void; __rescriptCopilotTaskBudget?: (ms: number | null) => void };
+    w.__rescriptCopilotTaskDrive = (on) => { taskDriveRef.current = on !== false; };
+    w.__rescriptCopilotTaskBudget = (ms) => { taskBudgetRef.current = typeof ms === "number" && ms > 0 ? ms : null; };
+    return () => { delete w.__rescriptCopilotTaskDrive; delete w.__rescriptCopilotTaskBudget; };
+  }, []);
+  const taskCall = React.useCallback(async (path: string, body?: Record<string, unknown>): Promise<{ status: number; d: Record<string, unknown> | null }> => {
+    try {
+      const r = body ? await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ surveyId: s.surveyDbId, ...(cloudOnce ? { aiOnce: true } : {}), ...body }) }) : await fetch(path, { cache: "no-store" });
+      return { status: r.status, d: await r.json().catch(() => null) as Record<string, unknown> | null };
+    } catch { return { status: 0, d: null }; }
+  }, [s.surveyDbId, cloudOnce]);
+  const taskQuery = `surveyId=${encodeURIComponent(s.surveyDbId)}`;
+  const driveTask = React.useCallback(async (entryId: string, taskId: string): Promise<void> => {
+    /* one driver per task; a driver told to stop (Pause) is replaced by the next (Resume) even before it has noticed */
+    const prev = taskDrivers.current.get(taskId);
+    if (prev && !prev.stop) return;
+    const h = { stop: false };
+    taskDrivers.current.set(taskId, h);
+    let fails = 0;
+    try {
+      while (!h.stop) {
+        const drive = taskDriveRef.current;
+        const r = drive ? await taskCall(`/api/copilot/tasks/${taskId}/advance`, { ...(taskBudgetRef.current ? { budgetMs: taskBudgetRef.current } : {}) }) : await taskCall(`/api/copilot/tasks/${taskId}?${taskQuery}`);
+        if (h.stop) break;
+        const v = r.d?.task as TaskClientView | undefined;
+        if (v) { opts.patch(entryId, { task: v, usage: { charge: Number(v.spend?.charge) || 0 } }); fails = 0; } else fails++;
+        if (r.status === 404 || r.status === 401 || r.status === 403 || fails > 6) break;
+        if (v && v.drive !== "advance") break;
+        const slice = r.d?.slice as { stoppedBy?: string; retryAfterMs?: number } | null | undefined;
+        /* a dropped connection or a server restart: wait and carry on (the server kept everything) */
+        const wait = !v ? Math.min(30_000, 1000 * 2 ** Math.min(fails, 5)) : !drive ? 2500 : slice?.retryAfterMs ? Math.min(60_000, slice.retryAfterMs) : slice?.stoppedBy === "backoff" ? 3000 : 250;
+        await new Promise((res) => setTimeout(res, wait));
+      }
+    } finally { if (taskDrivers.current.get(taskId) === h) taskDrivers.current.delete(taskId); }
+  }, [opts, taskCall, taskQuery]);
+  driveTaskRef.current = driveTask;
+  /* leaving the page stops this page's loop (the cron carries the task on); coming back reattaches */
+  React.useEffect(() => () => { for (const h of taskDrivers.current.values()) h.stop = true; }, []);
+  const reattachedRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (reattachedRef.current === s.surveyDbId) return;
+    reattachedRef.current = s.surveyDbId;
+    void (async () => {
+      const r = await taskCall(`/api/copilot/tasks?${taskQuery}`);
+      const v = r.d?.task as TaskClientView | null | undefined;
+      setTaskDurable(r.d?.durable === true);
+      if (!v || v.status === "cancelled" || v.status === "completed" || v.status === "failed") return;
+      const existing = (opts.entries as CopilotEntry[]).find((e) => e.task?.id === v.id);
+      const entryId = existing?.id ?? uid("copilot");
+      if (!existing) opts.push({ id: entryId, kind: "copilot", text: v.deliverables?.length ? `Task: ${v.deliverables.join(", ")}` : "A task in progress", status: "task", task: v });
+      if (v.drive === "advance") void driveTask(entryId, v.id);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s.surveyDbId]);
+  /** the panel's buttons: pause / resume / retry / cancel — then carry on driving when it runs again */
+  const taskAction = React.useCallback(async (entryId: string, action: "pause" | "cancel" | "resume" | "retry" | "advance" | "refresh", stepId?: string): Promise<void> => {
+    const e = (opts.entries as CopilotEntry[]).find((x) => x.id === entryId);
+    const tid = e?.task?.id;
+    if (!tid) return;
+    if (action === "pause" || action === "cancel") { const h = taskDrivers.current.get(tid); if (h) h.stop = true; }
+    const r = action === "refresh" ? await taskCall(`/api/copilot/tasks/${tid}?${taskQuery}`) : action === "advance" ? { d: null, status: 0 } : await taskCall(`/api/copilot/tasks/${tid}/${action}`, stepId ? { stepId } : {});
+    const v = r.d?.task as TaskClientView | undefined;
+    if (v) opts.patch(entryId, { task: v });
+    if (action === "advance" || (v && v.drive === "advance")) void driveTask(entryId, tid);
+  }, [opts, taskCall, taskQuery, driveTask]);
+  /** the completed task's result, opened as ONE proposal in the ordinary review → Apply (History, undo) */
+  const openTaskResult = React.useCallback(async (entryId: string): Promise<{ ok: boolean; reason?: string }> => {
+    const e = (opts.entries as CopilotEntry[]).find((x) => x.id === entryId);
+    const tid = e?.task?.id;
+    if (!tid || e.task?.status !== "completed") return { ok: false, reason: "The task has not completed." };
+    const r = await taskCall(`/api/copilot/tasks/${tid}?${taskQuery}&result=1`);
+    const res = r.d?.result as { actions?: SurveyAction[] } | null | undefined;
+    if (!res) return { ok: false, reason: "The result could not be read — try again." };
+    const actions = Array.isArray(res.actions) ? res.actions : [];
+    const reply: CopilotReply = { kind: actions.length ? "proposal" : "answer", reply: actions.length ? `The task is complete: ${actions.length} change${actions.length === 1 ? "" : "s"} are ready to review.` : "The task is complete; it proposed no change.", plan: [], actions, rejected: [], findings: [], assumptions: [], questions: [], sources: [] };
+    const opKey = actions.length ? recordProposal(e.text, actions, { source: "model", intent: { engine: "model", mode: "task", kind: "proposal" }, apiCalls: [{ route: "/api/copilot/tasks", mode: "task", charge: Number(e.task?.spend?.charge) || 0 }] }, session.openOp) : undefined;
+    if (actions.length) {
+      opts.patchAll((x) => (x.proposal === "open" ? { proposal: "superseded" } : null));
+      setSession((x) => {
+        const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
+        return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: e.text, actions }) }, openOp: opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
+      });
+    }
+    opts.patch(entryId, { status: "ready", reply, ...(actions.length ? { proposal: "open" as const, opKey } : {}), usage: { charge: Number(e.task?.spend?.charge) || 0 } });
+    return { ok: true };
+  }, [opts, taskCall, taskQuery, recordProposal, session.openOp, setSession, stale, s.def]);
+  /** the task the execution panel shows: the newest entry that carries one */
+  const activeTask = React.useMemo(() => { const es = (opts.entries as CopilotEntry[]).filter((e) => e.kind === "copilot" && e.task); const e = es[es.length - 1]; return e ? { entryId: e.id, task: e.task! } : null; }, [opts.entries]);
 
   /** a change plan the researcher does not want: the card says so, nothing was built or charged beyond the plan */
   const cancelPlan = React.useCallback((entryId: string) => {
@@ -1400,6 +1517,7 @@ export function useCopilot(opts: {
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, undoLast, uploadDocs, deleteDoc, refreshDocs,
     downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,
+    taskAction, openTaskResult, activeTask, taskDurable,
     executionMode, setExecutionMode, cloudOnce, setCloudOnce, workflow, workflowInfo, workflowError, workflowLoading, workflowObjective, refreshWorkflow, showWorkflow, runWorkflowStep,
     themeImage, themeImageError, attachThemeImage, clearThemeImage: () => setThemeImage(null),
     quotaCounts, quotaCountsAt, refreshQuotaCounts,

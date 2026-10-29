@@ -64,7 +64,18 @@ export type TaskBlocked =
   | "locked"      // the project is frozen
   | "byok"        // the turn ran on the researcher's own provider key
   | "wallet"      // the wallet cannot cover another slice
-  | "ceiling";    // the task has spent the allowance its plan justifies
+  | "ceiling"     // the task has spent the allowance its plan justifies
+  /*
+   * WHAT A STEP HANDLER CAN SAY (2026-10-29, the ported K contract). A
+   * handler's `blocked` result names what it needs — a key an administrator
+   * must fix, a setting, credit with the provider, or an answer from the
+   * researcher — and the runner PAUSES the task with it. Same rule as the
+   * six above: nothing is wrong with the work, something outside it is in
+   * the way. `budget` from a handler maps to `wallet`.
+   */
+  | "auth"        // the AI provider refused the configured key
+  | "config"      // a model name, a setting, provider credit
+  | "user_input"; // the handler needs an answer from the researcher before it can go on
 
 /**
  * A step's life. `blocked` is a step whose inputs a re-plan invalidated;
@@ -168,6 +179,21 @@ export interface ExecStep {
   batchSizeUsed?: number;
   /** where the input came from: a plan item id, a brief passage, a translation key range */
   inputRef?: string;
+  /*
+   * THE HANDLER CONTRACT (2026-10-29, ported from K1/K2 onto this engine). A
+   * step planned by a registered `TaskPlanner` carries the `kind` of the
+   * `StepHandler` that builds it and the handler's own `input` (a batch's
+   * slots, a range of codes, a repair's errors). A step without a `kind` is
+   * a plan item of the existing survey_build path and is built by the item
+   * path (`backgroundBuild`). Additive: every row written before this field
+   * existed reads as `kind` undefined.
+   */
+  kind?: string;
+  input?: Record<string, unknown>;
+  /** steps in one group may run side by side (they depend on nothing in the group) */
+  parallelGroup?: string;
+  /** which model tier the handler asks for; the runner's `tierFor` decides when absent */
+  modelTier?: "small" | "standard" | "strong";
   /** the model's reply for this step; large outputs may be a storage reference instead */
   output?: unknown;
   validation?: StepValidation;
@@ -240,10 +266,34 @@ export interface ExecTask {
   steps: ExecStep[];
   /** the last deliverable check, so the panel can show WHY a task is not done */
   report?: DeliverableReport;
+  /*
+   * WHAT A PLANNED TASK KEEPS BESIDE ITS STEPS (2026-10-29). `summary` is
+   * the concise persisted requirements and decisions a step is told instead
+   * of the whole brief (K's `TaskSummary`); `completion` the planner's
+   * criteria strings the deliverable check reads (`parseCompletionCriteria`);
+   * `planner` which registered planner made the plan; `base` the survey the
+   * plan was made against, so `ctx.draft` is a deterministic replay of the
+   * completed steps' actions over it — on this server, on another, or in the
+   * cron with the page closed. All optional: a plan-item task has none.
+   */
+  summary?: TaskSummary;
+  completion?: string[];
+  planner?: string;
+  base?: unknown;
   /** set with `needs_attention`: what is in the way, and one sentence for the researcher */
   blocked?: { reason: TaskBlocked; message: string; at?: number };
   createdAt?: number;
   updatedAt?: number;
+}
+
+/** concise persisted requirements/decisions — never the whole brief (K's TaskSummary, kept verbatim for the handlers) */
+export interface TaskSummary {
+  goal: string;
+  deliverables: string[];
+  constraints: string[];
+  decisions: string[];
+  language?: string;
+  sourceTurnIds: string[];
 }
 
 /* --------------------------------------------------------- pure helpers */

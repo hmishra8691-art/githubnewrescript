@@ -40,9 +40,12 @@
 import {
   classifyStepFailure, dependenciesMet, earliestIncompleteStep, isTerminalFailure, taskProgress, taskSpend,
   type DeliverableSpec, type ExecStep, type ExecTask, type StepFailureKind, type StepStatus, type StepUsage,
-  type TaskKind, type TaskStatus,
+  type TaskKind, type TaskStatus, type TaskSummary,
 } from "@rescript/engine";
 import { dbConfigured, memoryOf, storeWithFallback } from "./durable.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 /* ------------------------------------------------------------ the shape */
 
@@ -54,6 +57,11 @@ export interface CreateTaskInput {
   request: string;
   deliverable: DeliverableSpec;
   steps: Omit<ExecStep, "taskId" | "retryCount">[];
+  /* the handler contract's task fields (2026-10-29): optional, a plan-item task has none */
+  summary?: TaskSummary;
+  completion?: string[];
+  planner?: string;
+  base?: unknown;
 }
 
 /** a step claimed for this slice: the row, and the lease that makes it ours */
@@ -120,6 +128,19 @@ export interface TaskStore {
   stale(olderThanMs: number, limit?: number): Promise<{ id: string; surveyId: string }[]>;
   /** spend the turn made outside any step — the repair and coverage passes (audit M7) */
   addExtraCharge(taskId: string, amount: number): Promise<void>;
+  /**
+   * Hand a claimed step back WITHOUT spending an attempt (2026-10-29): a
+   * handler said the task is blocked by something outside the work, so the
+   * step goes back to `pending` with its lease cleared and its count intact.
+   */
+  release(taskId: string, stepId: string): Promise<void>;
+  /** this survey's tasks, newest first — the panel's list and the reattach after a reload */
+  listFor(surveyId: string, limit?: number): Promise<ExecTask[]>;
+  /**
+   * A person's Retry (2026-10-29): the named failed/blocked step — or every one when none is named — goes back to
+   * `pending` with a fresh attempt budget. Nothing completed is touched; returns the ids revived.
+   */
+  retry(taskId: string, stepId?: string): Promise<string[]>;
 }
 
 /** the default reclaim window, in seconds — longer than the 165s route budget, so a live slice is never stolen from */
@@ -269,6 +290,11 @@ export interface ClientStep {
   planVersion: number;
   dependsOn: string[];
   status: StepStatus;
+  /** the handler's kind ("gen.batch"); absent on a plan item */
+  kind?: string;
+  /** the execution panel's hints, read from the step's input (never the input itself): how many units and which range */
+  units?: number;
+  range?: { from: number; to: number };
   title?: string;
   batchSize?: number;
   batchSizeUsed?: number;
@@ -291,6 +317,11 @@ export interface ClientTask {
   report?: ExecTask["report"];
   /** why a paused task is waiting for a person, with the sentence the panel shows */
   blocked?: ExecTask["blocked"];
+  /** the planner that made the plan, and the deliverables it recorded (our own short phrases — never the request, which is prompt material) */
+  planner?: string;
+  deliverables?: string[];
+  /** the planner's completion criteria — our own strings ("questions>=100", "design_valid:cbc"), never the request */
+  completion?: string[];
   progress: ReturnType<typeof taskProgress>;
   spend: ReturnType<typeof taskSpend>;
   steps: ClientStep[];
@@ -324,6 +355,9 @@ export function redactForClient(task: ExecTask): ClientTask {
     planVersion: task.planVersion,
     deliverable: task.deliverable,
     blocked: task.blocked,
+    ...(task.planner ? { planner: task.planner } : {}),
+    ...(task.summary ? { deliverables: (task.summary.deliverables ?? []).map((d) => scrubSecrets(String(d)).slice(0, 200)) } : {}),
+    ...(task.completion ? { completion: task.completion.map((c) => scrubSecrets(String(c)).slice(0, 200)) } : {}),
     report: task.report
       ? { ok: task.report.ok, problems: (task.report.problems ?? []).map(scrubSecrets), measured: task.report.measured }
       : undefined,
@@ -334,6 +368,9 @@ export function redactForClient(task: ExecTask): ClientTask {
       planVersion: s.planVersion,
       dependsOn: [...s.dependsOn],
       status: s.status,
+      ...(s.kind ? { kind: s.kind } : {}),
+      ...(typeof s.input?.units === "number" && Number.isFinite(s.input.units) ? { units: s.input.units as number } : {}),
+      ...(rangeOfInput(s.input) ? { range: rangeOfInput(s.input)! } : {}),
       title: s.title === undefined ? undefined : scrubSecrets(s.title),
       batchSize: s.batchSize,
       batchSizeUsed: s.batchSizeUsed,
@@ -350,6 +387,12 @@ export function redactForClient(task: ExecTask): ClientTask {
   };
 }
 
+/** `input.range` when it is `{from, to}` numbers — a panel hint, never the input itself */
+function rangeOfInput(input: Record<string, unknown> | undefined): { from: number; to: number } | null {
+  const r = input?.range as { from?: unknown; to?: unknown } | undefined;
+  return r && typeof r.from === "number" && typeof r.to === "number" ? { from: r.from, to: r.to } : null;
+}
+
 /* ------------------------------------------------------- the memory store */
 
 export interface MemTask extends ExecTask {
@@ -364,6 +407,42 @@ export interface MemTask extends ExecTask {
 let memSeq = 0;
 const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toString(36)}`;
 
+/*
+ * THE SANDBOX'S MEMORY SURVIVES A DEV-SERVER RESTART (2026-10-29). The memory store is this process's; the
+ * sandbox has no database row, and a dev server that is recompiled or OOM-killed mid-task used to lose every row
+ * — the page then reattached to nothing. Outside production the shared map is dumped to a small JSON file after
+ * each mutation (debounced) and read back once when the process starts. Never in production, never for a real
+ * project (those go to the table), and nothing credential-shaped is in a row.
+ */
+const DUMP_ENABLED = () => process.env.NODE_ENV !== "production" && (process.env.RESCRIPT_TASKS_DUMP ?? "") !== "off";
+const dumpPath = () => join(process.env.RESCRIPT_TASKS_DIR || join(tmpdir(), "rescript-tasks-sandbox"), "intelligent-tasks.json");
+const DUMP_G = globalThis as unknown as { __rescriptTaskDumpLoaded?: boolean };
+function loadDump(into: Map<string, MemTask>): void {
+  if (DUMP_G.__rescriptTaskDumpLoaded || !DUMP_ENABLED()) return;
+  DUMP_G.__rescriptTaskDumpLoaded = true;
+  try {
+    const file = dumpPath();
+    if (!existsSync(file)) return;
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { seq?: number; tasks?: (Omit<MemTask, "committed" | "claimedAt"> & { committed?: [string, string][]; claimedAt?: [string, number][] })[] };
+    for (const t of raw.tasks ?? []) {
+      /* only rows of this store's shape: anything else in the file is ignored, never loaded as a task */
+      if (!t || typeof t.id !== "string" || typeof t.surveyId !== "string" || !Array.isArray(t.steps) || into.has(t.id)) continue;
+      into.set(t.id, { ...t, committed: new Map(t.committed ?? []), claimedAt: new Map(t.claimedAt ?? []) } as MemTask);
+    }
+    if (typeof raw.seq === "number" && raw.seq > memSeq) memSeq = raw.seq;
+  } catch { /* an unreadable dump is an empty one */ }
+}
+function scheduleDump(tasks: Map<string, MemTask>): void {
+  if (!DUMP_ENABLED()) return;
+  /* written at once, not debounced: a dev server killed a moment after a mutation must find that mutation on restart */
+  try {
+    const file = dumpPath();
+    mkdirSync(join(file, ".."), { recursive: true });
+    const list = [...tasks.values()].slice(-40).map((x) => ({ ...x, committed: [...x.committed], claimedAt: [...x.claimedAt] }));
+    writeFileSync(file, JSON.stringify({ seq: memSeq, tasks: list }));
+  } catch { /* a dump that cannot be written loses nothing a dev server did not already risk */ }
+}
+
 /**
  * The contract's reference implementation. Every mutation happens in one
  * synchronous run of the method body — no `await` between the read and the
@@ -373,9 +452,16 @@ const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toStr
 export class MemoryTaskStore implements TaskStore {
   readonly durable = false;
   private tasks: Map<string, MemTask>;
-  constructor(tasks: Map<string, MemTask> = memoryOf<MemTask>("intelligentTasks")) { this.tasks = tasks; }
+  private shared: boolean;
+  constructor(tasks?: Map<string, MemTask>) {
+    this.shared = !tasks;
+    this.tasks = tasks ?? memoryOf<MemTask>("intelligentTasks");
+    if (this.shared) loadDump(this.tasks);
+  }
 
   private read(taskId: string): MemTask | null { return this.tasks.get(taskId) ?? null; }
+  /** after every mutation of the shared map */
+  private touch(): void { if (this.shared) scheduleDump(this.tasks); }
 
   async create(input: CreateTaskInput): Promise<ExecTask> {
     const id = newId("task");
@@ -384,11 +470,16 @@ export class MemoryTaskStore implements TaskStore {
       id, surveyId: input.surveyId, customerId: input.customerId, createdBy: input.createdBy,
       kind: input.kind, request: input.request, status: "pending", planVersion: 1,
       deliverable: input.deliverable,
+      ...(input.summary ? { summary: structuredClone(input.summary) } : {}),
+      ...(input.completion ? { completion: [...input.completion] } : {}),
+      ...(input.planner ? { planner: input.planner } : {}),
+      ...(input.base !== undefined ? { base: structuredClone(input.base) } : {}),
       steps: input.steps.map((s) => ({ ...s, taskId: id, retryCount: 0, planVersion: s.planVersion ?? 1 })),
       createdAt: now, updatedAt: now,
       committed: new Map(), claimedAt: new Map(),
     };
     this.tasks.set(id, t);
+    this.touch();
     return snapshot(t);
   }
 
@@ -440,6 +531,7 @@ export class MemoryTaskStore implements TaskStore {
       t.claimedAt.set(s.stepId, now);
       t.status = "running";
       t.updatedAt = now;
+      this.touch();
       return { step: structuredClone(s), claimedAt: now };
     }
     return null;
@@ -484,6 +576,7 @@ export class MemoryTaskStore implements TaskStore {
     s.failureMessage = undefined;
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
+    this.touch();
     return structuredClone(s);
   }
 
@@ -500,6 +593,7 @@ export class MemoryTaskStore implements TaskStore {
     s.finishedAt = Date.now();
     t.claimedAt.delete(stepId);
     t.updatedAt = Date.now();
+    this.touch();
     return structuredClone(s);
   }
 
@@ -509,6 +603,7 @@ export class MemoryTaskStore implements TaskStore {
     t.steps = planRevision(t.steps, taskId, planVersion, steps, tombstoned);
     t.planVersion = planVersion;
     t.updatedAt = Date.now();
+    this.touch();
     return snapshot(t);
   }
 
@@ -520,6 +615,7 @@ export class MemoryTaskStore implements TaskStore {
     /* a task that is running again is not blocked by anything */
     if (status !== "needs_attention") t.blocked = undefined;
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async pause(taskId: string, blocked: NonNullable<ExecTask["blocked"]> | null): Promise<void> {
@@ -528,6 +624,7 @@ export class MemoryTaskStore implements TaskStore {
     if (blocked) { t.status = "needs_attention"; t.blocked = { ...blocked, at: blocked.at ?? Date.now() }; }
     else { t.blocked = undefined; if (t.status === "needs_attention") t.status = "running"; }
     t.updatedAt = Date.now();
+    this.touch();
   }
 
   async earliestIncomplete(taskId: string): Promise<ExecStep | null> {
@@ -555,6 +652,36 @@ export class MemoryTaskStore implements TaskStore {
     if (!t) return;
     t.extraCharge = (t.extraCharge ?? 0) + amount;
     t.updatedAt = Date.now();
+    this.touch();
+  }
+
+  async release(taskId: string, stepId: string): Promise<void> {
+    const t = this.read(taskId);
+    const s = t?.steps.find((x) => x.stepId === stepId);
+    if (!t || !s || s.status !== "running") return;
+    s.status = "pending";
+    t.claimedAt.delete(stepId);
+    t.updatedAt = Date.now();
+    this.touch();
+  }
+
+  async listFor(surveyId: string, limit = 20): Promise<ExecTask[]> {
+    return [...this.tasks.values()].filter((t) => t.surveyId === surveyId).sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, limit).map(snapshot);
+  }
+
+  async retry(taskId: string, stepId?: string): Promise<string[]> {
+    const t = this.read(taskId);
+    if (!t) return [];
+    const out: string[] = [];
+    for (const s of t.steps) {
+      if (stepId && s.stepId !== stepId) continue;
+      if (s.status !== "failed" && s.status !== "blocked" && s.status !== "retrying") continue;
+      s.status = "pending"; s.retryCount = 0; s.failureKind = undefined; s.failureMessage = undefined;
+      t.claimedAt.delete(s.stepId);
+      out.push(s.stepId);
+    }
+    if (out.length) { t.updatedAt = Date.now(); this.touch(); }
+    return out;
   }
 }
 
@@ -596,6 +723,10 @@ function stepFromRow(r: Row): ExecStep {
     batchSize: num(r.batch_size),
     batchSizeUsed: num(r.batch_size_used),
     inputRef: (r.input_ref as string | null) ?? undefined,
+    kind: (r.kind as string | null) ?? undefined,
+    input: r.input && typeof r.input === "object" ? (r.input as Record<string, unknown>) : undefined,
+    parallelGroup: (r.parallel_group as string | null) ?? undefined,
+    modelTier: (r.model_tier as ExecStep["modelTier"] | null) ?? undefined,
     output: r.output ?? undefined,
     validation: r.validation_status
       ? { status: String(r.validation_status) as "unchecked" | "valid" | "invalid", errors: errs.length ? errs : undefined }
@@ -622,6 +753,10 @@ function stepToRow(taskId: string, s: Omit<ExecStep, "taskId" | "retryCount"> & 
     batch_size: s.batchSize ?? null,
     batch_size_used: s.batchSizeUsed ?? null,
     input_ref: s.inputRef ?? null,
+    kind: s.kind ?? null,
+    input: s.input ?? null,
+    parallel_group: s.parallelGroup ?? null,
+    model_tier: s.modelTier ?? null,
     output: s.output ?? null,
     validation_status: s.validation?.status ?? "unchecked",
     validation_errors: s.validation?.errors ?? [],
@@ -650,6 +785,10 @@ function taskFromRow(r: Row, steps: ExecStep[]): ExecTask {
     deliverable: (r.deliverable as DeliverableSpec | null) ?? { kind: String(r.kind) as TaskKind },
     steps,
     report: (r.report as ExecTask["report"] | null) ?? undefined,
+    summary: r.summary && typeof r.summary === "object" ? (r.summary as TaskSummary) : undefined,
+    completion: Array.isArray(r.completion) ? (r.completion as string[]) : undefined,
+    planner: (r.planner as string | null) ?? undefined,
+    base: r.base ?? undefined,
     blocked: r.blocked_reason
       ? { reason: String(r.blocked_reason) as NonNullable<ExecTask["blocked"]>["reason"], message: String(r.blocked_message ?? ""), at: time(r.blocked_at) }
       : undefined,
@@ -713,6 +852,7 @@ class SupabaseTaskStore implements TaskStore {
     const { data, error } = await db.from(TASKS).insert({
       survey_id: input.surveyId, customer_id: input.customerId ?? null, created_by: input.createdBy ?? null,
       kind: input.kind, request: input.request, deliverable: input.deliverable, plan_version: 1, status: "pending",
+      summary: input.summary ?? null, completion: input.completion ?? null, planner: input.planner ?? null, base: input.base ?? null,
     }).select("*").single();
     if (error) throw new Error(error.message);
     const id = String((data as Row).id);
@@ -874,6 +1014,30 @@ class SupabaseTaskStore implements TaskStore {
 
   async earliestIncomplete(taskId: string): Promise<ExecStep | null> {
     return earliestIncompleteStep({ steps: await this.steps(taskId) });
+  }
+
+  async release(taskId: string, stepId: string): Promise<void> {
+    const db = await this.db();
+    const { error } = await db.from(STEPS).update({ status: "pending", claimed_at: null }).eq("task_id", taskId).eq("step_id", stepId).eq("status", "running");
+    if (error) throw new Error(error.message);
+  }
+
+  async listFor(surveyId: string, limit = 20): Promise<ExecTask[]> {
+    const db = await this.db();
+    const { data, error } = await db.from(TASKS).select("*").eq("survey_id", surveyId).order("created_at", { ascending: false }).limit(limit);
+    if (error) throw new Error(error.message);
+    const out: ExecTask[] = [];
+    for (const r of (data ?? []) as Row[]) out.push(taskFromRow(r, await this.steps(String(r.id))));
+    return out;
+  }
+
+  async retry(taskId: string, stepId?: string): Promise<string[]> {
+    const db = await this.db();
+    let q = db.from(STEPS).update({ status: "pending", retry_count: 0, failure_kind: null, failure_message: null, claimed_at: null }).eq("task_id", taskId).in("status", ["failed", "blocked", "retrying"]);
+    if (stepId) q = q.eq("step_id", stepId);
+    const { data, error } = await q.select("step_id");
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Row[]).map((r) => String(r.step_id));
   }
 
   async stale(olderThanMs: number, limit = 50): Promise<{ id: string; surveyId: string }[]> {

@@ -12,6 +12,12 @@ import { checkDeliverable } from "@/lib/copilot/deliverable";
  * it skipped, and nothing is ever built in the background.
  */
 import { loadDefinition } from "@/lib/copilot/backgroundBuild";
+/*
+ * THE HANDLER TASKS (2026-10-29): a task planned by a registered planner is
+ * built by its step handlers under the background's meter; a plan-item task
+ * keeps the item path above. One builder decides which, by the rows.
+ */
+import { backgroundBuilderForTask, backgroundCheck, isHandlerTask } from "@/lib/tasks/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,7 +109,8 @@ async function run(req: Request): Promise<NextResponse> {
           } else skipped++;
           continue;
         }
-        const buildStep = await stepBuilderFor(task);
+        const handlerTask = isHandlerTask(task);
+        const buildStep = handlerTask ? await backgroundBuilderForTask(task, { meter: allowed.meter, ctx: allowed.ctx }) : await stepBuilderFor(task);
         /* no item path registered in this process: say so, do not invent one */
         if (!buildStep) { skipped++; continue; }
         /*
@@ -116,10 +123,10 @@ async function run(req: Request): Promise<NextResponse> {
          * task `running` — which is the honest answer when the thing the
          * deliverable is about could not be read.
          */
-        const def = await loadDefinition(t.surveyId);
+        const def = handlerTask ? null : await loadDefinition(t.surveyId);
         const r = await runSlice(t.id, {
           budgetMs: SLICE_MS, store, buildStep,
-          ...(def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {}),
+          ...(handlerTask ? { check: (cur: ExecTask) => backgroundCheck(cur) } : def ? { check: async (cur: ExecTask) => checkDeliverable(cur.deliverable, def) } : {}),
         });
         advanced++;
         built += r.built.length;

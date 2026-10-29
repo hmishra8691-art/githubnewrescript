@@ -260,6 +260,15 @@ const LOCK_EXEMPT = {
     "records the project's client, manager, fieldwork dates and deadline (\u00a760). Recording a deadline "
     + "is not an act of authorship on the questionnaire, and blocking it behind a colleague's edit lock "
     + "would stop a project manager doing their job",
+  "copilot/tasks/route.ts POST":
+    "plans a non-trivial copilot request into task rows (intelligent_tasks / intelligent_steps, migration 0074) under "
+    + "survey.edit — the same capability the turn route bills under. A task is a plan and its step outputs; the "
+    + "definition is never written here: the result is applied by the page through the ordinary review → Apply, "
+    + "which holds the lock (execution engine, 2026-10-29)",
+  "copilot/tasks/[id]/[action]/route.ts POST":
+    "advances, pauses, resumes, retries or cancels task rows (intelligent_steps) under survey.edit — a slice runs "
+    + "model calls under the caller's own meter and commits step outputs to the task's rows; the survey definition "
+    + "is never written here, so a colleague's edit lock would buy nothing (execution engine, 2026-10-29)",
   "copilot/workflow/route.ts POST":
     "reads the research workflow (project.read) and, with setMode, records the project's AI execution choice "
     + "in surveys.settings — the same project-configuration bag the config route writes under survey.edit, "

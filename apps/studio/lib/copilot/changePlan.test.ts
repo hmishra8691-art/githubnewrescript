@@ -53,3 +53,30 @@ test("the items' replies merge in plan order into one proposal, with the plan ca
   assert.equal(empty.reply, "Built 1 item of the plan.");
   assert.deepEqual(empty.actions, []);
 });
+
+/* ------------------------------------------------------------ items small enough to build in one call (2026-10-29) */
+import { itemQuestionCount, splitLargeItems, MAX_COMPLEX_PER_ITEM, MAX_SIMPLE_PER_ITEM } from "./changePlan.ts";
+
+test("a create item promising more than ~12 simple (or ~5 complex) questions is split into parts with stable ids; the parts are never split again", () => {
+  const plan = coerceChangePlan({ kind: "plan", summary: "s", items: [
+    { id: "p1", title: "Record the design", kind: "design", reason: "r" },
+    { id: "p2", title: "Add a 40-question General Studies block", kind: "create", objects: ["General Studies"], reason: "r" },
+    { id: "p3", title: "Add the 12-row satisfaction grid questions", kind: "create", reason: "r", detail: "a matrix with 12 questions" },
+    { id: "p4", title: "Add 8 profile questions", kind: "create", reason: "r" },
+  ] })!;
+  const ids = plan.items.map((i) => i.id);
+  assert.deepEqual(ids.slice(0, 1), ["p1"]);
+  assert.deepEqual(ids.filter((i) => i.startsWith("p2")), ["p2.1", "p2.2", "p2.3", "p2.4"], "40 simple → 4 parts of ≤ 12");
+  assert.deepEqual(ids.filter((i) => i.startsWith("p3")), ["p3.1", "p3.2", "p3.3"], "12 complex → 3 parts of ≤ 5");
+  assert.deepEqual(ids.filter((i) => i.startsWith("p4")), ["p4"], "8 simple stays whole");
+  assert.match(plan.items.find((i) => i.id === "p2.4")!.title, /part 4 of 4: questions 37–40/);
+  assert.match(plan.items.find((i) => i.id === "p2.1")!.detail ?? "", /Write ONLY questions 1–12 of this item's 40/);
+  /* the browser sends the plan back on execute: the same items, the same ids */
+  const again = coerceChangePlan({ kind: "plan", summary: "s", items: plan.items })!;
+  assert.deepEqual(again.items.map((i) => i.id), ids);
+  assert.equal(itemQuestionCount({ title: "Add the screener", objects: ["Q1", "Q2", "Q3"] }), 3);
+  assert.equal(itemQuestionCount({ title: "Add the screener", objects: ["Screener"] }), null);
+  assert.equal(MAX_SIMPLE_PER_ITEM, 12); assert.equal(MAX_COMPLEX_PER_ITEM, 5);
+  assert.equal(coerceChangePlan({ kind: "plan", items: [{ id: "a", title: "Add a 40-question block", kind: "create", reason: "r" }] }, { splitLarge: false })!.items.length, 1, "the seam to keep an item whole");
+  void splitLargeItems;
+});

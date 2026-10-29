@@ -117,4 +117,15 @@ export const NOTICES = {
       default: return "I could not turn this brief into a plan yet. Say which part to plan first — for example the research design and the screener — and I will plan the rest from there.";
     }
   },
+  /** a non-trivial request became a task of small steps (2026-10-29): the execution panel drives it; the page may be closed */
+  plannedAsTask(lang: ReplyLanguage, steps: number, units: number, what: string): string {
+    const u = units > 1 ? units : 0;
+    switch (lang) {
+      case "hi": return `यह काम बड़ा है, इसलिए इसे ${steps} छोटे ${plural(steps, "चरण", "चरणों")} में बाँटा गया है${u ? ` (${u} ${what})` : ""}। हर चरण पूरा होते ही सहेजा जाता है — Execution पैनल में प्रगति देखें; पेज बंद करने पर भी काम जारी रहता है।`;
+      case "hinglish": return `Yeh kaam bada hai, isliye ise ${steps} chhote ${plural(steps, "step", "steps")} mein baanta gaya hai${u ? ` (${u} ${what})` : ""}. Har step poora hote hi save ho jaata hai — Execution panel mein progress dekhiye; page band karne par bhi kaam chalta rehta hai.`;
+      case "mr": return `हे काम मोठे आहे, म्हणून ते ${steps} छोट्या ${plural(steps, "टप्प्यात", "टप्प्यांत")} विभागले आहे${u ? ` (${u} ${what})` : ""}. प्रत्येक टप्पा पूर्ण होताच जतन होतो — Execution पॅनेलमध्ये प्रगती पहा; पेज बंद केले तरी काम सुरू राहते.`;
+      case "ur": return `یہ کام بڑا ہے، اس لیے اسے ${steps} چھوٹے ${plural(steps, "مرحلے", "مراحل")} میں بانٹا گیا ہے${u ? ` (${u} ${what})` : ""}۔ ہر مرحلہ مکمل ہوتے ہی محفوظ ہو جاتا ہے — Execution پینل میں پیش رفت دیکھیں؛ صفحہ بند کرنے پر بھی کام جاری رہتا ہے۔`;
+      default: return `This is a large piece of work, so it has been planned as ${steps} small step${steps === 1 ? "" : "s"}${u ? ` (${u} ${what})` : ""}. Each step is saved the moment it completes — watch the Execution panel; the work carries on if you close this page.`;
+    }
+  },
 };

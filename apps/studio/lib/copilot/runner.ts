@@ -26,7 +26,7 @@
  */
 import {
   classifyStepFailure, dependenciesMet, isOutstanding, isTerminalFailure, taskProgress, taskSpend,
-  type ExecStep, type ExecTask, type StepFailureKind, type StepUsage, type TaskStatus, type DeliverableReport,
+  type ExecStep, type ExecTask, type StepFailureKind, type StepUsage, type TaskStatus, type DeliverableReport, type TaskBlocked,
 } from "@rescript/engine";
 import type { TaskStore } from "./taskStore.ts";
 import { waitBeforeRetry } from "./resume.ts";
@@ -52,9 +52,31 @@ export const RECLAIM_SECONDS = 180;
  * repair all stay where they are. The runner only decides when to call this,
  * with what deadline, and what to do with what comes back.
  */
+/*
+ * THE HANDLER CONTRACT'S ANSWERS (2026-10-29). A step built by a registered
+ * handler (lib/tasks/types.ts, through lib/tasks/service.ts `handlerBuildStep`)
+ * can say more than "here is the output" or "it failed": it can ask for the
+ * plan to CHANGE. The runner — which owns WHEN, never HOW — turns each into a
+ * store operation and nothing else:
+ *
+ *   `split`    the step was too big for one answer: it is TOMBSTONED and its
+ *              `replaceWith` children take its place (same dependencies; its
+ *              dependants are rewired to the children) — a plan revision
+ *              through `store.revise`, never a retry of the same size;
+ *   `repair`   the output is KEPT and committed, and a targeted repair step is
+ *              inserted after it, which the step's dependants now wait for;
+ *   `blocked`  nothing is wrong with the work, something outside it is in the
+ *              way (a key, a setting, credit, an answer from the researcher):
+ *              the task is PAUSED with the reason (`needs_attention`), the
+ *              step goes back to `pending` without spending an attempt.
+ */
+export type StepSeed = Omit<ExecStep, "taskId" | "retryCount">;
+
 export type BuildStepResult =
-  | { output: unknown; usage?: StepUsage; batchSizeUsed?: number; validation?: ExecStep["validation"] }
-  | { error: unknown };
+  | { output: unknown; usage?: StepUsage; batchSizeUsed?: number; validation?: ExecStep["validation"]; /** keep the output, add this repair step after it */ repair?: StepSeed }
+  | { error: unknown }
+  | { split: StepSeed[]; reason: string; usage?: StepUsage }
+  | { blocked: { reason: TaskBlocked; message: string }; usage?: StepUsage };
 
 export interface BuildContext {
   /** aborted when the step outlives its own deadline, so an obedient build stops paying for itself */
@@ -90,7 +112,9 @@ export type SliceStop =
   | "terminal"   // a failure no later slice can fix
   | "backoff"    // the next try does not fit in this slice
   | "max_steps"  // the caller asked for a bounded number of steps
-  | "done";      // the task was already finished
+  | "done"       // the task was already finished
+  | "blocked"    // a handler said something outside the work is in the way: the task is paused (needs_attention)
+  | "paused";    // the task was already paused (needs_attention) when the slice began: nothing was run
 
 export interface SliceResult {
   taskId: string;
@@ -129,6 +153,8 @@ export interface RunSliceOptions {
   /** test seams */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /** the per-step deadline's clock, when a test needs instant backoffs but a real deadline (defaults to `sleep`) */
+  deadlineSleep?: (ms: number) => Promise<void>;
   rand?: () => number;
   softStopMs?: number;
   minStepMs?: number;
@@ -203,6 +229,8 @@ export interface FailureFacts {
   kind: StepFailureKind;
   retryAfterMs?: number;
   retryable: boolean;
+  /** a sentence in OUR OWN WORDS (a handler's `ownWords: true`), never a provider's; the safe default otherwise */
+  message?: string;
 }
 
 const SAFE_MESSAGE: Readonly<Record<StepFailureKind, string>> = {
@@ -227,14 +255,15 @@ export function stepFailureMessage(kind: StepFailureKind): string {
  * re-decides what `classifyStepFailure` already decided.
  */
 export function readFailure(e: unknown): FailureFacts {
-  const x = (e ?? {}) as { kind?: unknown; hint?: unknown; retryAfterMs?: unknown; contextTooLong?: unknown; code?: unknown; name?: unknown };
+  const x = (e ?? {}) as { kind?: unknown; hint?: unknown; retryAfterMs?: unknown; contextTooLong?: unknown; code?: unknown; name?: unknown; message?: unknown; ownWords?: unknown };
   const hint = x.contextTooLong === true ? "context_limit" as const
     : x.hint === "invalid_output" || x.hint === "context_limit" || x.hint === "permanent" ? x.hint
     : undefined;
   const providerKind = typeof x.kind === "string" ? x.kind : typeof x.code === "string" ? x.code : undefined;
   const kind = classifyStepFailure(providerKind, hint);
   const retryAfterMs = typeof x.retryAfterMs === "number" && x.retryAfterMs > 0 ? Math.round(x.retryAfterMs) : undefined;
-  return { kind, retryAfterMs, retryable: !isTerminalFailure(kind) };
+  const message = x.ownWords === true && typeof x.message === "string" && x.message.trim() ? x.message.trim().slice(0, 500) : undefined;
+  return { kind, retryAfterMs, retryable: !isTerminalFailure(kind), ...(message ? { message } : {}) };
 }
 
 /* --------------------------------------------------------- the slice */
@@ -265,6 +294,7 @@ async function withDeadline<T>(p: Promise<T>, ms: number, sleep: (n: number) => 
 export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<SliceResult> {
   const now = opts.now ?? Date.now;
   const sleep = opts.sleep ?? realSleep;
+  const deadlineSleep = opts.deadlineSleep ?? sleep;
   const rand = opts.rand ?? Math.random;
   const { store, buildStep, sink } = opts;
   const softStopMs = opts.softStopMs ?? STAGE_SOFT_MS;
@@ -323,9 +353,11 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
   };
 
   if (task0.status === "completed" || task0.status === "failed" || task0.status === "cancelled") return finish("done");
+  /* paused by a person's absence or a handler's `blocked`: a slice does not run it — Resume (or the page's own advance, which clears a background-only refusal) does */
+  if (task0.status === "needs_attention") return finish("paused");
   if (task0.status === "pending") await store.setStatus(taskId, "running");
 
-  const total = task0.steps.length;
+  let total = task0.steps.length;
   let index = task0.steps.filter((s) => !isOutstanding(s)).length;
 
   for (;;) {
@@ -383,7 +415,7 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
         .catch((e: unknown) => ({ error: e }) as BuildStepResult);
       const r = await withDeadline(
         guarded,
-        stepDeadline - t0, sleep,
+        stepDeadline - t0, deadlineSleep,
       );
       slowest = Math.max(slowest, now() - t0);
 
@@ -395,15 +427,35 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
         break;
       }
 
+      if ("blocked" in r) {
+        /* the step is released without spending an attempt; the task waits for a person */
+        if (r.usage?.charge) await store.addExtraCharge(taskId, r.usage.charge).catch(() => undefined);
+        await store.release(taskId, step.stepId);
+        await store.pause(taskId, { reason: r.blocked.reason, message: r.blocked.message });
+        stop = "blocked";
+        break;
+      }
+
+      if ("split" in r) {
+        /* too big for one answer: tombstone it, put its children in its place, rewire its dependants — a plan revision, not a retry */
+        if (r.usage?.charge) await store.addExtraCharge(taskId, r.usage.charge).catch(() => undefined);
+        const cur = (await store.load(taskId)) ?? task0;
+        const revised = await store.revise(taskId, cur.planVersion + 1, splitPlan(cur, step.stepId, r.split), [step.stepId, ...tombstonesOf(cur)]);
+        total = revised.steps.filter((s) => s.status !== "tombstoned").length;
+        sink?.progress({ stepId: step.stepId, index, of: total, label: `${step.title ?? step.stepId}: split into ${r.split.length}` });
+        break;
+      }
+
       if ("error" in r) {
         const f = readFailure(r.error);
         if (f.retryAfterMs) retryAfterMs = Math.max(retryAfterMs ?? 0, f.retryAfterMs);
 
         if (isTerminalFailure(f.kind)) {
           /* nothing a later slice can do: the STEP stops, the TASK and every output are preserved */
-          await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: false, maxAttempts: maxRetries + 1 });
-          failed.push({ id: step.stepId, kind: f.kind, message: stepFailureMessage(f.kind) });
-          await store.setStatus(taskId, "failed", { ok: false, problems: [stepFailureMessage(f.kind)] });
+          const said = f.message ?? stepFailureMessage(f.kind);
+          await store.fail(taskId, step.stepId, { kind: f.kind, message: said, retryable: false, maxAttempts: maxRetries + 1 });
+          failed.push({ id: step.stepId, kind: f.kind, message: said });
+          await store.setStatus(taskId, "failed", { ok: false, problems: [said] });
           stop = "terminal";
           break;
         }
@@ -420,9 +472,9 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
 
         /* BOUNDED retries: the count is on the row, so it survives the worker and a slice cannot reset it */
         attempt++;
-        await store.fail(taskId, step.stepId, { kind: f.kind, message: stepFailureMessage(f.kind), retryable: true, maxAttempts: maxRetries + 1 });
+        await store.fail(taskId, step.stepId, { kind: f.kind, message: f.message ?? stepFailureMessage(f.kind), retryable: true, maxAttempts: maxRetries + 1 });
         if (attempt > maxRetries) {
-          failed.push({ id: step.stepId, kind: f.kind, message: stepFailureMessage(f.kind) });
+          failed.push({ id: step.stepId, kind: f.kind, message: f.message ?? stepFailureMessage(f.kind) });
           break;
         }
         const wait = waitBeforeRetry({ retryAfterMs: f.retryAfterMs }, attempt - 1, rand);
@@ -461,6 +513,12 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
       });
       built.push(step.stepId);
       sink?.checkpoint(step.stepId, r.output);
+      if (r.repair) {
+        /* the kept output is committed above; the repair step follows it and the step's dependants wait for the repair */
+        const cur = (await store.load(taskId)) ?? task0;
+        const revised = await store.revise(taskId, cur.planVersion + 1, repairPlan(cur, step.stepId, r.repair), tombstonesOf(cur));
+        total = revised.steps.filter((s) => s.status !== "tombstoned").length;
+      }
       break;
     }
 
@@ -468,6 +526,54 @@ export async function runSlice(taskId: string, opts: RunSliceOptions): Promise<S
   }
 
   return finish(stoppedBy);
+}
+
+/* ------------------------------------------------- plan revisions */
+
+/** the ids already tombstoned: `planRevision` revives an unlisted tombstone as pending, so every revision names them again */
+export function tombstonesOf(task: Pick<ExecTask, "steps">): string[] {
+  return task.steps.filter((s) => s.status === "tombstoned").map((s) => s.stepId);
+}
+
+/** every live step as a seed the store's `revise` accepts (a completed step keeps its key, so `planRevision` keeps its row) */
+function seedsOf(task: ExecTask): StepSeed[] {
+  return task.steps.map(({ taskId: _t, retryCount: _r, ...rest }) => rest);
+}
+
+/**
+ * The plan with `stepId` replaced by `children`: the children inherit the
+ * step's own dependencies (unless they name their own), and every step that
+ * depended on it now depends on all of them. Pure; tested in runner.test.ts.
+ */
+export function splitPlan(task: ExecTask, stepId: string, children: StepSeed[]): StepSeed[] {
+  const parent = task.steps.find((s) => s.stepId === stepId);
+  const ids = new Set(children.map((c) => c.stepId));
+  const out: StepSeed[] = [];
+  for (const seed of seedsOf(task)) {
+    if (seed.stepId === stepId) {
+      out.push({ ...seed, status: "tombstoned" });
+      for (const c of children) out.push({ ...c, status: "pending", dependsOn: [...new Set([...(c.dependsOn ?? []).filter((d) => d !== stepId), ...(parent?.dependsOn ?? [])])] });
+      continue;
+    }
+    if (seed.dependsOn.includes(stepId) && !ids.has(seed.stepId)) out.push({ ...seed, dependsOn: [...new Set([...seed.dependsOn.filter((d) => d !== stepId), ...ids])] });
+    else out.push(seed);
+  }
+  return out;
+}
+
+/** the plan with `repair` inserted right after `stepId`; the repair depends on the step, and the step's dependants on the repair too */
+export function repairPlan(task: ExecTask, stepId: string, repair: StepSeed): StepSeed[] {
+  if (task.steps.some((s) => s.stepId === repair.stepId)) return seedsOf(task);
+  const out: StepSeed[] = [];
+  for (const seed of seedsOf(task)) {
+    if (seed.stepId === stepId) {
+      out.push(seed);
+      out.push({ ...repair, status: "pending", dependsOn: [...new Set([...(repair.dependsOn ?? []), stepId])] });
+      continue;
+    }
+    out.push(seed.dependsOn.includes(stepId) ? { ...seed, dependsOn: [...new Set([...seed.dependsOn, repair.stepId])] } : seed);
+  }
+  return out;
 }
 
 /* -------------------------------------------- the cron's build seam */

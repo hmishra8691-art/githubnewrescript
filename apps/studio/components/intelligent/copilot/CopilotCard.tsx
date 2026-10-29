@@ -22,7 +22,7 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents }: {
   /** kept documents and report themes (2026-10-18): Download without regenerating, Regenerate, theme Apply / Save as */
   documents?: DocumentActions;
   entry: CopilotEntry;
@@ -52,6 +52,10 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
   onResumeNow?(entryId: string): void;
   /** let the saved work go */
   onDiscard?(entryId: string): void;
+  /** a planned task (2026-10-29): open its finished result as one proposal */
+  onReviewTask?(entryId: string): void;
+  /** a planned task: show the execution panel */
+  onShowTask?(): void;
   counts: { label: string; value: number }[] | null;
   canApply: boolean;
   /** the proposal's actions the Studio refused, each with its reason — shown here, so a disabled Apply is never a mystery */
@@ -83,7 +87,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
       )}
       <div className={`iq-card cp-card${entry.status === "failed" ? " blocked" : ""}${r?.kind === "proposal" ? " proposal" : " answer"}`}>
         <div className="iq-card-head">
-          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? (entry.changePlan?.approved ? "BUILDING THE PLAN" : "THINKING") : entry.status === "plan" ? "CHANGE PLAN" : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
+          <span className="iq-kicker"><Icon name="sparkle" size={11} /> {entry.status === "thinking" ? (entry.changePlan?.approved ? "BUILDING THE PLAN" : "THINKING") : entry.status === "plan" ? "CHANGE PLAN" : entry.status === "task" ? (entry.task?.status === "completed" ? "TASK COMPLETE" : entry.task?.status === "needs_attention" ? "TASK PAUSED" : entry.task?.status === "failed" ? "TASK STOPPED" : entry.task?.status === "cancelled" ? "TASK CANCELLED" : "PLANNED TASK") : entry.status === "failed" ? (entry.failure?.title ?? "COULD NOT ANSWER") : state === "applied" ? appliedKicker(save, n) : state === "superseded" ? "REVISED BELOW" : state === "cancelled" ? "CANCELLED" : r?.kind === "proposal" ? "PROPOSED" : r?.kind === "review" ? "REVIEW" : r?.kind === "clarify" ? "QUESTION" : "COPILOT"}</span>
           {entry.context?.researchUsed && <span className="iq-source" title={`${entry.context.passages.length} passage(s) from your research documents were used`} data-testid="cp-research-used">research · {entry.context.passages.length}</span>}
           {entry.engine && <span className="iq-source cp-engine-badge" data-testid="cp-engine" data-category={entry.engine.category ?? ""} title="Interpreted and checked by the Studio's own survey engine — no language model was called, nothing was charged">internal engine · no model call</span>}
           {entry.context?.cached && <span className="iq-source" title="The same request was answered moments ago; no new model call was made">cached</span>}
@@ -135,6 +139,22 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
           </div>
         )}
         {entry.status === "plan" && entry.changePlan && <PlanCard entry={entry} def={def} onSelect={onSelect} onExecute={onExecutePlan} onCancel={onCancelPlan} onAnswer={onAnswer} />}
+        {entry.status === "task" && entry.task && (
+          /* a planned task (2026-10-29): the rows live in the execution panel; the card says where it stands and offers the result once it is done */
+          <div className="cp-task" data-testid="cp-task" data-task-id={entry.task.id} data-task-status={entry.task.status}>
+            <p className="iqi-dim" data-testid="cp-task-line">
+              {entry.task.progress.completed} of {entry.task.progress.total} step{entry.task.progress.total === 1 ? "" : "s"} done
+              {entry.task.progress.failed ? ` · ${entry.task.progress.failed} failed` : ""}
+              {entry.task.spend?.charge ? ` · ${entry.task.spend.charge.toFixed(2)} credits so far` : ""}
+              {entry.task.status === "needs_attention" && entry.task.blocked ? ` — ${entry.task.blocked.message}` : ""}
+              {entry.task.status === "running" || entry.task.status === "pending" ? " — each step is saved as it completes; this continues in the background when you close this page." : ""}
+            </p>
+            <div className="row" style={{ gap: 8 }}>
+              {onShowTask && <button type="button" className="iq-btn" data-testid="cp-task-show" onClick={onShowTask}>Execution panel</button>}
+              {entry.task.status === "completed" && onReviewTask && <button type="button" className="iq-btn primary" data-testid="cp-task-review" onClick={() => onReviewTask(entry.id)}>Review the result</button>}
+            </div>
+          </div>
+        )}
         {entry.coverage && (
           /* the research coverage of a generated survey (Phase 3): every hypothesis measured, every question serving the design */
           <p className={`cp-coverage${entry.coverage.ok ? " ok" : " warn"}`} data-testid="cp-coverage" data-ok={entry.coverage.ok ? "1" : "0"}>

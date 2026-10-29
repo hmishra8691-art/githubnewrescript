@@ -74,6 +74,9 @@ export function ExecutionPanel({
   durable,
   onRetry,
   onCancel,
+  onPause,
+  onResume,
+  onReview,
   busy,
 }: {
   /**
@@ -86,6 +89,12 @@ export function ExecutionPanel({
   durable?: boolean;
   onRetry?(): void;
   onCancel?(): void;
+  /** a planned task (2026-10-29): stop after the step in flight; Resume carries on */
+  onPause?(): void;
+  /** a paused or stopped task: run again from the earliest incomplete step */
+  onResume?(): void;
+  /** a completed task: open its result as one proposal */
+  onReview?(): void;
   busy?: boolean;
 }) {
   const view = React.useMemo(() => (task ? executionView(task, { durable }) : null), [task, durable]);
@@ -107,8 +116,17 @@ export function ExecutionPanel({
           <div className="iq-label">Execution · {num(view.completed)} of {num(view.total)}</div>
           <span className={`cp-sev v-${SEVERITY[view.phase]}`} data-testid="ex-phase"><Icon name={PHASE_ICON[view.phase]} size={12} /> {view.phase}</span>
           <span className="grow" />
+          {onPause && (view.status === "running" || view.status === "pending") && (
+            <button type="button" className="iq-btn" data-testid="ex-pause" disabled={busy} onClick={onPause} title="Stop after the step that is running; Resume carries on from the next one">Pause</button>
+          )}
+          {onResume && (view.status === "needs_attention" || view.status === "failed") && (
+            <button type="button" className="iq-btn primary" data-testid="ex-resume" disabled={busy} onClick={onResume} title="Carry on from the earliest incomplete step — completed steps are not run again">Resume</button>
+          )}
           {onRetry && (view.phase === "recovering" || view.phase === "needs attention") && (
             <button type="button" className="iq-btn" data-testid="ex-retry" disabled={busy} onClick={onRetry} title="Run the next slice now — completed steps are not run again">Continue now</button>
+          )}
+          {onReview && view.status === "completed" && (
+            <button type="button" className="iq-btn primary" data-testid="ex-review" disabled={busy} onClick={onReview} title="Open the finished result as one proposal to review and apply">Review the result</button>
           )}
           {onCancel && view.status !== "completed" && view.status !== "cancelled" && (
             <button type="button" className="iq-btn" data-testid="ex-cancel" disabled={busy} onClick={onCancel} title="Stop after the step that is running; everything already built is kept">Stop</button>
@@ -136,6 +154,9 @@ export function ExecutionPanel({
         </div>
 
         <div className="iqi-dim" data-testid="ex-estimate" data-known={view.estimate.known}>{view.estimate.text}</div>
+        {(view.status === "running" || view.status === "pending") && (
+          <div className="iqi-dim" data-testid="ex-background">Each step is saved the moment it completes. This continues in the background when you close this page{view.durable ? "" : " — on this server only, until the task tables are in place"}.</div>
+        )}
 
         {!view.durable && (
           <p className="iq-error" data-testid="ex-memory"><Icon name="warning" size={12} /> {view.durabilityNote}</p>
