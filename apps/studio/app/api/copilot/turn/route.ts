@@ -11,6 +11,7 @@ import { CHANGE_PLAN_SCHEMA, coerceChangePlan, executeItemPrompt, mergeItemRepli
 import { mirrorStart, type Mirror } from "@/lib/copilot/taskMirror";
 /* plan first (2026-10-29): a non-trivial request becomes a task of small steps before any model call — docs/EXECUTION-ENGINE-2026-10-29.md */
 import { taskForTurn } from "@/lib/tasks/turnTask";
+import { assessmentReportTurn } from "@/lib/tasks/handlers/assessment";
 import { COPILOT_REPLY_SCHEMA, replyCallOptions } from "@/lib/copilot/replySchema";
 /* response streaming (2026-10-18, docs/COPILOT-STREAMING-2026-10-18.md): the same turn, reported to a sink while it works */
 import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/copilot/stream";
@@ -228,6 +229,27 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const parsed = SurveyDefinition.safeParse(body.definition);
   if (!parsed.success) return NextResponse.json({ error: "send the survey as it is open in the editor (definition)" }, { status: 400 });
   const def = parsed.data;
+  /*
+   * THE PER-QUESTION RESULTS REPORT IS NOT MODEL WORK (step 4B, 2026-10-29). "For every question show what was
+   * correct, what I selected, explanations and weak areas" timed out twice in production (164 s) because it was sent
+   * to the model. Correct / selected / scores / weak areas exist only after a respondent submits and are computed on
+   * the server (the results page; Data Analytics → Assessment results), so the answer is deterministic: where they
+   * are, and — when the paper's report is off — the one set_assessment that switches it on. No model call, no charge,
+   * before the plan-first path (a 104-question "every question" request would otherwise size as a task).
+   */
+  const reportTurn = body.scope === "theme" || body.stage === "execute" || body.stage === "plan" ? null : assessmentReportTurn(message, def);
+  if (reportTurn) {
+    const acts = coerceSurveyActions(reportTurn.actions).actions;
+    const ap = acts.length ? applySurveyActions(def, acts) : null;
+    return NextResponse.json({
+      ok: true,
+      reply: { kind: acts.length ? "proposal" : "answer", reply: reportTurn.reply, plan: [], actions: acts, rejected: [], findings: [], assumptions: [], questions: [], sources: [] },
+      validation: ap ? { valid: ap.valid, results: ap.results, errors: ap.errors, destructive: ap.destructive, warnings: ap.warnings, summary: [], diff: null, uxOnly: ap.uxOnly, structureUnchanged: ap.structureUnchanged } : null,
+      passages: {},
+      context: { mode: "question", assessmentReport: true, modelCalled: false, promptChars: 0, cached: false },
+      usage: { charge: 0 },
+    });
+  }
   const billing = await billingProjectFor(user, surveyId);
   if ("response" in billing) return billing.response;
   const { meter, ctx } = billing;

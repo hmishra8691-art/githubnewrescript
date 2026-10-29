@@ -12,10 +12,12 @@
 import { registerGenericTasks } from "./generic.ts";
 import { registerGenerationTasks } from "./generation.ts";
 import { registerTranslationTasks } from "./translation.ts";
+import { registerAssessmentTasks } from "./assessment.ts";
 
 export function registerAllTaskHandlers(): void {
   /* idempotent by construction (last registration wins), so there is no module flag to defeat a test's registry reset */
   registerGenericTasks();
   registerGenerationTasks();
   registerTranslationTasks();
+  registerAssessmentTasks();
 }
