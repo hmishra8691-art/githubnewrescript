@@ -19,6 +19,7 @@
  *   lintLanguage              packages/engine/src/localization.ts:753
  *   validateActionOutcome     packages/engine/src/actionValidation.ts:66
  *   plannedItemReadiness      packages/analytics/src/planCheck.ts:371
+ *   validateAssessment, scoreAssessment, assessmentKeyLeaks   packages/engine/src/assessment.ts (scored exams, step 4A)
  *   SurveyDefinition          packages/schema/src/survey.ts:740       (import / runtime schema)
  *
  * WHY A SPEC AND NOT A COUNT OF STEPS. A generation that stopped at question
@@ -28,9 +29,11 @@
  * distinction is `nextStatusFor` below: a short deliverable keeps the task
  * running; only a terminally classified step failure makes it `failed`.
  */
-import { SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
+import { AssessmentSettings as AssessmentSettingsSchema, SurveyDefinition as SurveyDefinitionSchema } from "@rescript/schema";
 import type { Question, SurveyDefinition } from "@rescript/schema";
 import {
+  assessmentKeyLeaks,
+  assessmentSettings,
   buildVariableDictionary,
   conjointMethodOf,
   conjointPlanReadiness,
@@ -47,9 +50,11 @@ import {
   lintSurveyLogic,
   lintVariables,
   sameVariableName,
+  scoreAssessment,
   taskProgress,
   taskSpend,
   validateActionOutcome,
+  validateAssessment,
   type DeliverableReport,
   type DeliverableSpec,
   type ExecStep,
@@ -63,20 +68,23 @@ import { plannedItemReadiness } from "@rescript/analytics";
 /* ============================================================ the exam key */
 
 /**
- * A SCORED EXAM'S ANSWER KEY — deliberately NOT part of `SurveyDefinition`.
+ * A SCORED EXAM'S ANSWER KEY — ONE MODEL, ONE SCORER, ONE LEAK CHECK
+ * (step 4A, 2026-10-29).
  *
- * The runtime serves the published definition verbatim
- * (apps/runtime/app/api/runtime-definition/[versionId]/route.ts →
- * `getCachedVersionDefinition`, packages/quality/src/server.ts:263) and the
- * Runner localises the same object in the browser
- * (apps/runtime/components/Runner.tsx:592). Anything inside the definition is
- * therefore readable by the respondent, with the browser's dev tools and no
- * more. The precedent the schema already sets is the panel signing secret:
- * "sealed in the database (0072), never here" (packages/schema/src/survey.ts).
+ * The 25 Oct remediation kept the key BESIDE the definition because the
+ * runtime served the stored definition verbatim. Since step 4A the key lives
+ * in `question.assessment` (packages/schema/src/assessment.ts) and every
+ * respondent payload goes through the engine's `stripAssessmentForRespondent`
+ * (runtime `lib/assessmentPayload.ts`). This file no longer scores or scans
+ * anything itself:
  *
- * So the key travels beside the definition, never in it, and `examKeyLeaks`
- * is the deterministic gate that proves it: a scored_exam task cannot be
- * `completed` while the served definition carries anything key-shaped.
+ *   scoreExam      → engine `scoreAssessment` on the definition with the key folded in
+ *   examKeyLeaks   → engine `assessmentKeyLeaks` (walks what a respondent is served)
+ *   the gate       → engine `validateAssessment` (key on a real option, single vs multi, marks)
+ *
+ * `ExamAnswerKey` stays as an INPUT shape (a planner or an import may still
+ * hand a key over separately); `examKeyToAssessment` folds it into the
+ * definition so the one engine path judges it.
  */
 export interface ExamScoringRule {
   /** marks added for a right answer */
@@ -108,7 +116,7 @@ export interface ExamAnswerKey {
 
 /** extra inputs a kind needs that the definition does not carry */
 export interface DeliverableContext {
-  /** a scored exam's key, read from wherever the scoring engine keeps it */
+  /** a scored exam's key handed over beside the definition (absent: the definition's own `question.assessment` keys) */
   examKey?: ExamAnswerKey | null;
   /** planned analysis items, for the `analysis` kind */
   analysisItems?: Parameters<typeof plannedItemReadiness>[0][];
@@ -116,38 +124,41 @@ export interface DeliverableContext {
   analysisVariables?: Parameters<typeof plannedItemReadiness>[1];
 }
 
-/* ===================================================== the leak scan */
+const UNCLASSIFIED = "Unclassified";
 
 /**
- * Property names that mean "this is the answer". A definition is walked in
- * full — settings, meta_extensions, calculations, scripts, embedded data —
- * because the definition is served whole.
+ * Fold a separately-held key into a COPY of the definition as
+ * `question.assessment` + `def.assessment` (the rule → default marks), so the
+ * engine's scorer and validator judge it. Key items naming a question the
+ * definition does not have are returned in `unscored`, never scored. Without
+ * a definition, a bare single-choice question per key item stands in.
  */
-const KEY_SHAPED = /^(answer_?key|answers?_?key|correct|correct_?answers?|correct_?codes?|correct_?options?|is_?correct|marking_?scheme|marking_?key|scoring_?key|answer_?sheet)$/i;
-
-/** keys of a definition that a respondent never receives are still checked: there are none */
-export function examKeyLeaks(def: SurveyDefinition): string[] {
-  const found: string[] = [];
-  const seen = new Set<unknown>();
-  const walk = (v: unknown, path: string): void => {
-    if (!v || typeof v !== "object") return;
-    if (seen.has(v)) return;
-    seen.add(v);
-    if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${path}[${i}]`)); return; }
-    for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
-      if (KEY_SHAPED.test(k)) found.push(`${path}.${k} carries an answer key — the respondent is served this definition verbatim, so the key must live outside it.`);
-      walk(child, `${path}.${k}`);
-    }
-  };
-  walk(def as unknown, "definition");
-  /* a script can smuggle the key as text rather than as a property */
-  for (const s of def.scripts ?? []) {
-    const body = String((s as { code?: unknown }).code ?? "");
-    if (/\banswer_?key\b|\bcorrectAnswer\b|\bmarkingScheme\b/i.test(body)) {
-      found.push(`definition.scripts.${s.id ?? s.name ?? "?"} mentions an answer key in its source — a respondent can read every script.`);
-    }
+export function examKeyToAssessment(key: ExamAnswerKey, def?: SurveyDefinition): { def: SurveyDefinition; unscored: string[] } {
+  const base: SurveyDefinition = def
+    ? (structuredClone(def) as SurveyDefinition)
+    : ({ meta: { id: key.surveyId, title: key.surveyId }, questions: key.items.map((i) => ({ id: i.questionId, code: i.questionId, variableName: i.questionId, type: "single_select", text: "", options: [] })), flow: [], calculations: [] } as unknown as SurveyDefinition);
+  const byId = new Map(base.questions.map((q) => [q.id, q]));
+  const unscored: string[] = [];
+  for (const q of base.questions) delete (q as { assessment?: unknown }).assessment;
+  for (const item of key.items) {
+    const q = byId.get(item.questionId);
+    if (!q) { unscored.push(item.questionId); continue; }
+    q.assessment = { correct: [item.correct], topic: item.topic ?? UNCLASSIFIED, ...(item.marks !== undefined ? { marks: item.marks } : {}) };
   }
-  return found;
+  base.assessment = AssessmentSettingsSchema.parse({
+    ...(base.assessment ?? {}),
+    enabled: true,
+    defaultMarks: key.rule.correct,
+    defaultNegativeMarks: Math.max(0, -key.rule.incorrect),
+  });
+  return { def: base, unscored };
+}
+
+/* ===================================================== the leak scan */
+
+/** THE leak check is the engine's (`assessmentKeyLeaks`): it walks what a respondent is actually served. */
+export function examKeyLeaks(def: SurveyDefinition): string[] {
+  return assessmentKeyLeaks(def);
 }
 
 /* ===================================================== exam scoring */
@@ -180,18 +191,14 @@ export interface ExamResult {
   unscored: string[];
 }
 
-const blank = (v: unknown): boolean =>
-  v == null || v === "" || (Array.isArray(v) && v.filter((x) => x !== "" && x != null).length === 0);
-
-const asCode = (v: unknown): string => {
-  if (Array.isArray(v)) { const xs = v.filter((x) => x !== "" && x != null); return xs.length === 1 ? String(xs[0]) : xs.map(String).sort().join("|"); }
-  return String(v);
-};
+const pct1 = (score: number, max: number) => (max > 0 ? Math.round((score / max) * 1000) / 10 : 0);
+const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * SCORING IN APPLICATION CODE, from the saved answers and the key — never in
- * the survey, never by a model. `answers` is keyed the way the response state
- * keys them (`answerKey(questionId)` with no loop, i.e. the question id).
+ * SCORING IN APPLICATION CODE, from the saved answers and the key — a thin
+ * view over the engine's `scoreAssessment` (the one scorer). `answers` is keyed
+ * the way the response state keys them (the question id). The rule's
+ * `skipped` marks (normally 0) are added per unattempted question.
  */
 export function scoreExam(
   key: ExamAnswerKey,
@@ -199,31 +206,20 @@ export function scoreExam(
   opts: { def?: SurveyDefinition; weakBelow?: number } = {},
 ): ExamResult {
   const weakBelow = opts.weakBelow ?? 50;
-  const known = opts.def ? new Set(opts.def.questions.map((q) => q.id)) : null;
-  const topics = new Map<string, TopicScore>();
-  const unscored: string[] = [];
-  let correct = 0, incorrect = 0, skipped = 0, score = 0, max = 0, asked = 0;
-
-  for (const item of key.items) {
-    if (known && !known.has(item.questionId)) { unscored.push(item.questionId); continue; }
-    asked++;
-    const topicName = item.topic ?? "Unclassified";
-    const t = topics.get(topicName) ?? topics.set(topicName, { topic: topicName, asked: 0, correct: 0, incorrect: 0, skipped: 0, score: 0, max: 0, pct: 0 }).get(topicName)!;
-    const full = item.marks ?? key.rule.correct;
-    t.asked++; t.max += full; max += full;
-    const given = answers[item.questionId];
-    if (blank(given)) { skipped++; t.skipped++; score += key.rule.skipped; t.score += key.rule.skipped; continue; }
-    if (asCode(given) === String(item.correct)) { correct++; t.correct++; score += full; t.score += full; continue; }
-    incorrect++; t.incorrect++; score += key.rule.incorrect; t.score += key.rule.incorrect;
-  }
-
-  const byTopic = [...topics.values()].map((t) => ({ ...t, pct: t.max > 0 ? Math.round((t.score / t.max) * 1000) / 10 : 0 }));
-  byTopic.sort((a, b) => a.topic.localeCompare(b.topic));
-  const weakAreas = byTopic.filter((t) => t.asked > 0 && t.pct < weakBelow).sort((a, b) => a.pct - b.pct).map((t) => t.topic);
+  const { def, unscored } = examKeyToAssessment(key, opts.def);
+  const r = scoreAssessment(def, answers);
+  const skippedMarks = key.rule.skipped;
+  const byTopic: TopicScore[] = r.topics.map((t) => {
+    const score = r2(t.marks + t.unattempted * skippedMarks);
+    return { topic: t.topic, asked: t.questions, correct: t.correct, incorrect: t.incorrect + t.partial, skipped: t.unattempted, score, max: t.maxMarks, pct: pct1(score, t.maxMarks) };
+  }).sort((a, b) => a.topic.localeCompare(b.topic));
+  const score = r2(r.marks + r.unattempted * skippedMarks);
   return {
-    asked, answered: correct + incorrect, correct, incorrect, skipped, score, max,
-    pct: max > 0 ? Math.round((score / max) * 1000) / 10 : 0,
-    byTopic, weakAreas, unscored,
+    asked: r.totalQuestions, answered: r.attempted, correct: r.correct, incorrect: r.incorrect + r.partial, skipped: r.unattempted,
+    score, max: r.maxMarks, pct: pct1(score, r.maxMarks),
+    byTopic,
+    weakAreas: byTopic.filter((t) => t.asked > 0 && t.pct < weakBelow).sort((a, b) => a.pct - b.pct).map((t) => t.topic),
+    unscored,
   };
 }
 
@@ -436,29 +432,41 @@ export function checkDeliverable(spec: DeliverableSpec, def: SurveyDefinition, c
   }
 
   if (spec.kind === "scored_exam") {
-    const key = ctx.examKey ?? null;
+    /*
+     * ONE GATE (step 4A): the key — handed over beside the definition, or the
+     * definition's own question.assessment — is judged by the engine's
+     * validateAssessment, and what a respondent is served by assessmentKeyLeaks.
+     */
     const need = spec.keyCoverage ?? spec.questionCount ?? 0;
-    measured.keyItems = key?.items.length ?? 0;
-    if (!key) problems.push("No answer key was supplied to the deliverable check — a scored exam is not done until its key is in the scoring engine's store.");
-    else {
-      const byId = new Map((def.questions ?? []).map((q) => [q.id, q]));
-      const dangling = key.items.filter((i) => !byId.has(i.questionId));
-      if (dangling.length) problems.push(`${dangling.length} key item${dangling.length === 1 ? "" : "s"} name a question this survey does not have (${dangling.slice(0, 5).map((d) => d.questionId).join(", ")}).`);
-      const badCode = key.items.filter((i) => {
-        const q = byId.get(i.questionId);
-        return q && Array.isArray(q.options) && q.options.length > 0 && !q.options.some((o) => String(o.code) === String(i.correct));
-      });
-      if (badCode.length) problems.push(`${badCode.length} key item${badCode.length === 1 ? "" : "s"} mark an option code the question does not offer (${badCode.slice(0, 5).map((d) => `${d.questionId}=${d.correct}`).join(", ")}).`);
-      const dupes = key.items.map((i) => i.questionId).filter((id, i, xs) => xs.indexOf(id) !== i);
-      if (dupes.length) problems.push(`The key marks ${new Set(dupes).size} question${new Set(dupes).size === 1 ? "" : "s"} more than once.`);
-      if (need > 0 && key.items.length < need) {
-        measured.resumeAt = Math.min(Number(measured.resumeAt ?? Infinity), key.items.length + 1);
-        problems.push(`The answer key covers ${key.items.length} of ${need} questions — ${need - key.items.length} still to key, resuming at question ${key.items.length + 1}.`);
+    const key = ctx.examKey ?? null;
+    const folded = key ? examKeyToAssessment(key, def) : null;
+    const keyed = folded ? folded.def : def;
+    const inDefinition = !key && keyed.questions.some((q) => q.assessment && !q.assessment.ungraded);
+    if (!key && !inDefinition) {
+      measured.keyItems = 0;
+      problems.push("No answer key was supplied to the deliverable check, and no question carries one — a scored exam is not done until every question is keyed (set_answer_key).");
+    } else {
+      if (folded?.unscored.length) problems.push(`${folded.unscored.length} key item${folded.unscored.length === 1 ? "" : "s"} name a question this survey does not have (${folded.unscored.slice(0, 5).join(", ")}).`);
+      if (key) {
+        const dupes = key.items.map((i) => i.questionId).filter((id, i, xs) => xs.indexOf(id) !== i);
+        if (dupes.length) problems.push(`The key marks ${new Set(dupes).size} question${new Set(dupes).size === 1 ? "" : "s"} more than once.`);
+      }
+      const v = validateAssessment(keyed, { requireSettings: false });
+      const keyedCount = keyed.questions.filter((q) => q.assessment && !q.assessment.ungraded && (q.assessment.correct ?? []).length > 0).length;
+      measured.keyItems = keyedCount;
+      const unknown = v.errors.filter((e) => e.code === "key_unknown_option");
+      if (unknown.length) problems.push(`${unknown.length} key item${unknown.length === 1 ? "" : "s"} mark an option code the question does not offer (${unknown.slice(0, 5).map((e) => e.questionCode ?? e.questionId).join(", ")}).`);
+      for (const e of v.errors.filter((x) => x.code !== "key_unknown_option" && x.code !== "no_key").slice(0, 20)) problems.push(e.message);
+      if (need > 0 && keyedCount < need) {
+        measured.resumeAt = Math.min(Number(measured.resumeAt ?? Infinity), keyedCount + 1);
+        problems.push(`The answer key covers ${keyedCount} of ${need} questions — ${need - keyedCount} still to key, resuming at question ${keyedCount + 1}.`);
       }
     }
     const rule = spec.scoring;
-    if (!rule) problems.push("No scoring rule in the spec — marks for right, wrong and skipped must be stated before an exam can be marked.");
-    else measured.scoring = `${rule.correct}/${rule.incorrect}/${rule.skipped}`;
+    const settings = assessmentSettings(def);
+    if (rule) measured.scoring = `${rule.correct}/${rule.incorrect}/${rule.skipped}`;
+    else if (settings) measured.scoring = `${settings.defaultMarks}/${-settings.defaultNegativeMarks}/0`;
+    else problems.push("No scoring rule in the spec or the paper's settings — marks for right, wrong and skipped must be stated before an exam can be marked.");
     const leaks = examKeyLeaks(def);
     measured.keyLeaks = leaks.length;
     problems.push(...leaks);

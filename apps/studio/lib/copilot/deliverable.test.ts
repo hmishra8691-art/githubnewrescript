@@ -199,6 +199,56 @@ test("scoring is computed in application code from the saved answers, with negat
   assert.equal(stray.max, r.max, "the stray item adds no marks");
 });
 
+/* ============================================ ONE SCORER, ONE LEAK CHECK (step 4A) */
+
+test("4A: the gate reads the key from question.assessment, through the engine's validator and leak check", () => {
+  const keyed = (n: number, over: Record<string, unknown> = {}) => {
+    const raw = JSON.parse(JSON.stringify(exam(n)));
+    raw.questions.forEach((q: { assessment?: unknown }, i: number) => { q.assessment = { correct: [String((i % 4) + 1)], topic: TOPICS[i % TOPICS.length] }; });
+    raw.assessment = { defaultMarks: 2, defaultNegativeMarks: 0.66, ...over };
+    return SurveyDefinition.parse(raw);
+  };
+  /* in the definition, stripped for respondents: done, no leak, the rule read from the paper */
+  const ok = checkDeliverable({ kind: "scored_exam", questionCount: 100, keyCoverage: 100 }, keyed(100));
+  assert.equal(ok.ok, true, ok.problems.join(" | "));
+  assert.equal(ok.measured!.keyItems, 100);
+  assert.equal(ok.measured!.keyLeaks, 0);
+  assert.equal(ok.measured!.scoring, "2/-0.66/0");
+  /* a key on an option the question does not offer — the engine's key_unknown_option */
+  const bad = JSON.parse(JSON.stringify(keyed(100)));
+  bad.questions[4].assessment.correct = ["9"];
+  const r = checkDeliverable({ kind: "scored_exam", questionCount: 100, keyCoverage: 100 }, SurveyDefinition.parse(bad));
+  assert.ok(r.problems.some((p) => /mark an option code the question does not offer \(Q5\)/.test(p)), r.problems.join(" | "));
+  /* per_question results put the key in the browser: the leak check names it */
+  const pq = checkDeliverable({ kind: "scored_exam", questionCount: 100, keyCoverage: 100 }, keyed(100, { showResults: "per_question" }));
+  assert.equal(pq.ok, false);
+  assert.ok(Number(pq.measured!.keyLeaks) >= 100);
+  /* partly keyed: incomplete and resumable */
+  const part = JSON.parse(JSON.stringify(keyed(100)));
+  for (const q of part.questions.slice(60)) delete q.assessment;
+  const pr = checkDeliverable({ kind: "scored_exam", questionCount: 100, keyCoverage: 100 }, SurveyDefinition.parse(part));
+  assert.equal(pr.measured!.resumeAt, 61);
+  assert.ok(pr.problems.some((p) => /answer key covers 60 of 100/.test(p)), pr.problems.join(" | "));
+});
+
+test("4A: scoreExam is the engine's scoreAssessment — same marks for the separate key and the in-definition key", async () => {
+  const { scoreAssessment } = await import("@rescript/engine");
+  const def = exam(8);
+  const key: ExamAnswerKey = { surveyId: "upsc", rule: { correct: 2, incorrect: -0.5, skipped: 0 }, items: def.questions.map((q, i) => ({ questionId: q.id, correct: String((i % 4) + 1), topic: TOPICS[i % TOPICS.length] })) };
+  const answers = { q1: "1", q2: "1", q3: "3", q5: ["1"] };
+  const viaKey = scoreExam(key, answers, { def });
+  const raw = JSON.parse(JSON.stringify(def));
+  raw.questions.forEach((q: { assessment?: unknown }, i: number) => { q.assessment = { correct: [String((i % 4) + 1)], topic: TOPICS[i % TOPICS.length] }; });
+  raw.assessment = { defaultMarks: 2, defaultNegativeMarks: 0.5 };
+  const engine = scoreAssessment(SurveyDefinition.parse(raw), answers);
+  assert.equal(viaKey.score, engine.marks);
+  assert.equal(viaKey.max, engine.maxMarks);
+  assert.deepEqual([viaKey.correct, viaKey.incorrect, viaKey.skipped], [engine.correct, engine.incorrect, engine.unattempted]);
+  /* the definition passed in is never modified */
+  assert.equal(def.questions[0].assessment, undefined);
+  assert.equal(def.assessment, undefined);
+});
+
 /* ============================================ THE SURVEY-BUILD BATTERY */
 
 test("the build battery runs the existing validators: ids, logic, structure, quotas, variables, embedded data", () => {

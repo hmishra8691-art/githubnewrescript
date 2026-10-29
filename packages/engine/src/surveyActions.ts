@@ -33,6 +33,7 @@ import { applyResearchAction, coerceResearchAction, describeResearchAction, isRe
 import { applyQualAction, coerceQualAction, describeQualAction, isQualOp, qualGuideDiff, qualSectionChanges, QUAL_ACTION_OPS, type QualAction } from "./qualActions.js";
 import { AI_INTERVIEW_ACTION_OPS, applyAiInterviewAction, coerceAiInterviewAction, describeAiInterviewAction, isAiInterviewOp, type AiInterviewAction } from "./aiInterviewActions.js";
 import { INTEGRATION_ACTION_OPS, applyIntegrationAction, coerceIntegrationAction, describeIntegrationAction, integrationsDiff, isIntegrationOp, type IntegrationAction } from "./integrationActions.js";
+import { ASSESSMENT_ACTION_OPS, applyAssessmentAction, coerceAssessmentAction, describeAssessmentAction, isAssessmentOp, type AssessmentAction } from "./assessmentActions.js";
 import { validateActionOutcome, type ActionIssue } from "./actionValidation.js";
 import { impactOfAction, type ImpactReport } from "./impact.js";
 import { applyRename } from "./variableUsage.js";
@@ -142,7 +143,9 @@ export type SurveyAction =
   /* qualitative: the guide run as AI-moderated 1:1 interviews — see aiInterviewActions.ts; writes def.qualStudy.aiModeration only */
   | AiInterviewAction
   /* panel recruitment and alerts (2026-10-22, G3) — see integrationActions.ts; they write def.panels / def.alerts (and, for the survey link, embedded data and empty end redirects) */
-  | IntegrationAction;
+  | IntegrationAction
+  /* assessments (K4 2026-10-25, ported 2026-10-29) — see assessmentActions.ts; they write question.assessment / def.assessment and nothing else */
+  | AssessmentAction;
 
 export const SURVEY_ACTION_OPS = [
   "create_block", "rename_block", "delete_block", "create_question", "update_question", "delete_question", "move_question",
@@ -151,7 +154,7 @@ export const SURVEY_ACTION_OPS = [
   ...UX_ACTION_OPS,
   ...ANALYSIS_ACTION_OPS,
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
-  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS,
+  ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
 ] as const;
 
 /** Friendly question types → the Studio variant that makes them. */
@@ -417,6 +420,8 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (aia !== null) return aia;
       const ia = op ? coerceIntegrationAction(op, o) : null;
       if (ia !== null) return ia;
+      const asa = op ? coerceAssessmentAction(op, o) : null;
+      if (asa !== null) return asa;
       return op ? `unknown action “${op}”` : "an action needs an op";
     }
   }
@@ -493,7 +498,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   // …and translations name the question texts as they will be: last of all
   // …and a hypothesis's own actions read the list set_research writes (research intelligence, 2026-10-17: "set_hypothesis per
   // hypothesis" beside set_research in one generation ran first and was refused — "the research design has no hypotheses")
-  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) ? 0.5 : 0);
+  const rank = (a: SurveyAction) => (isLocalizationOp(a.op) ? 4 + localizationRank(a.op) / 10 : isAnalysisOp(a.op) ? 3 : HYPOTHESIS_OPS.has(a.op) ? 2.5 : a.op === "set_research" ? 2 : isUxOp(a.op) ? 1 : isQuotaOp(a.op) || isListFillOp(a.op) || isAssessmentOp(a.op) ? 0.5 : 0);
   const order = actions.map((a, index) => ({ a, index })).sort((x, y) => rank(x.a) - rank(y.a));
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
@@ -1055,6 +1060,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       }
       // qualitative: the interview guide run as AI-moderated 1:1 interviews — def.qualStudy.aiModeration only
       // panel recruitment and alerts (G3): def.panels / def.alerts; the survey link's embedded capture and empty end redirects
+      // assessments: question.assessment / def.assessment; every correct option resolved against the question's options
+      if (isAssessmentOp(a.op)) {
+        const r = applyAssessmentAction(def, a as AssessmentAction, { question: (x) => tryQuestion(ctx, x) });
+        ctx.uxWarnings.push(...r.warnings);
+        return r;
+      }
       if (isIntegrationOp(a.op)) {
         const r = applyIntegrationAction(def, a as IntegrationAction);
         ctx.uxWarnings.push(...r.warnings);
@@ -1533,7 +1544,7 @@ export function describeAction(a: SurveyAction): string {
       const where = a.field ? `${a.target} ${a.field}` : a.target;
       return a.value === null ? `Remove the default value of ${where}` : `Default value of ${where}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
     }
-    default: return isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
+    default: return isAssessmentOp(a.op) ? describeAssessmentAction(a as AssessmentAction) : isIntegrationOp(a.op) ? describeIntegrationAction(a as IntegrationAction) : isAiInterviewOp(a.op) ? describeAiInterviewAction(a as AiInterviewAction) : isQualOp(a.op) ? describeQualAction(a as QualAction) : isResearchOp(a.op) ? describeResearchAction(a as ResearchAction) : isOptionOp(a.op) ? describeOptionAction(a as OptionAction) : isQuotaOp(a.op) ? describeQuotaAction(a as QuotaAction) : isListFillOp(a.op) ? describeListFillAction(a as ListFillAction) : isMethodOp(a.op) ? describeMethodAction(a as MethodAction) : isLocalizationOp(a.op) ? describeLocalizationAction(a as LocalizationAction) : describeAnalysisAction(a as AnalysisAction);
   }
 }
 

@@ -6,6 +6,7 @@ import { COPILOT_QUAL_GUIDE, COPILOT_RESEARCH_GUIDE, qualIntent, researchPlanInt
 import { COPILOT_AI_INTERVIEW_GUIDE, aiInterviewIntent } from "./aiInterviewGuide.ts";
 import { COPILOT_QUAL_SYNTHESIS_GUIDE, qualSynthesisIntent } from "./qualSynthesisGuide.ts";
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
+import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import { REPORTING_GUIDE } from "./reportingGuide.ts";
 /* production intents (2026-10-18): what speech-to-text writes for "Q1", "JavaScript", "popup", "in Marathi" */
 import { NOTICES, type ReplyLanguage } from "./notices.ts";
@@ -524,6 +525,8 @@ export function copilotUserPrompt(input: {
   aiInterview?: boolean;
   /** 2026-10-22 (G3): the panels & alerts guide (connect_panel, configure_alerts) — absent = read from the message */
   integrations?: boolean;
+  /** 2026-10-25 (K4, ported 2026-10-29): the assessment guide (set_answer_key, set_assessment) — absent = read from the message */
+  assessment?: boolean;
   /** documents and reports — sent when the request names one (reportingIntent) */
   reporting?: boolean;
   /** 2026-10-22 (#11): the qualitative-synthesis guide — absent = read from the message (a staged item sets every switch itself) */
@@ -568,6 +571,8 @@ export function copilotUserPrompt(input: {
     if (input.aiInterview ?? aiInterviewIntent(input.message)) parts.push(COPILOT_AI_INTERVIEW_GUIDE);
     /* 2026-10-22 (G3): panel recruitment and alert routing (connect_panel, configure_alerts) */
     if (input.integrations ?? integrationsIntent(input.message)) parts.push(COPILOT_INTEGRATIONS_GUIDE);
+    /* 2026-10-25 (K4, ported 2026-10-29): scored tests — the answer key and the paper's marking; results are computed, never written */
+    if (input.assessment ?? assessmentIntent(input.message)) parts.push(COPILOT_ASSESSMENT_GUIDE);
     /* 2026-10-22 (F2): writing up the coded data, double-coding, reels, text group sessions — the Studio's cards do it; the guide names the sentence */
     if (input.qualSynthesis ?? qualSynthesisIntent(input.message)) parts.push(COPILOT_QUAL_SYNTHESIS_GUIDE);
     if (input.reporting ?? reportingIntent(input.message)) parts.push(REPORTING_GUIDE);
