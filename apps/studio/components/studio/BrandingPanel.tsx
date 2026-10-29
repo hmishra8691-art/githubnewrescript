@@ -640,6 +640,47 @@ export function BrandingPanel() {
         </label>
       </div>
 
+      {/*
+        * SECTION NAVIGATION (2026-10-30, engine sectionNav.ts): a survey-level
+        * behaviour (def.navigation), beside the Back button because it is the
+        * same question — how a respondent moves. The engine, the runtime's
+        * navigator, rs.goToPage / rs.goToSection and the save route's replay
+        * all read this one setting.
+        */}
+      <h3 className="sec" id="navigation">Navigation</h3>
+      <div data-testid="nav-settings">
+        {([
+          ["off", "Off", "Next and Back only — the survey as it has always run."],
+          ["visited", "Visited sections", "A bar of the survey's sections: back to any earlier section, forward only to sections already visited."],
+          ["free", "Free", "Jump to any section reachable with the answers so far."],
+        ] as const).map(([value, label, hint]) => (
+          <label key={value} className="row" style={{ gap: 6, alignItems: "flex-start", marginBottom: 6 }}>
+            <input type="radio" name="section-nav" value={value} data-testid={`nav-mode-${value}`}
+              checked={(s.def.navigation?.sectionNav ?? "off") === value}
+              onChange={() => s.update((d) => { d.navigation = { sectionNav: value, position: d.navigation?.position ?? "top" }; })} />
+            <span><b>{label}</b> <span className="muted">— {hint}</span></span>
+          </label>
+        ))}
+        {(s.def.navigation?.sectionNav ?? "off") !== "off" && (
+          <>
+            <label className="f" style={{ width: 220 }}><span>Position</span>
+              <select className="select" data-testid="nav-position" value={s.def.navigation?.position ?? "top"}
+                onChange={(e) => s.update((d) => { d.navigation = { sectionNav: d.navigation?.sectionNav ?? "visited", position: e.target.value as "top" | "side" }; })}>
+                <option value="top">Bar above the page</option>
+                <option value="side">Side rail (wide screens)</option>
+              </select></label>
+            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+              The navigator lists the survey&apos;s blocks — give each section its own block. It never jumps past an end, a quota check or a skip rule that fires, or to a page hidden by logic.
+            </p>
+            {s.def.navigation?.sectionNav === "free" && (
+              <p className="muted" data-testid="nav-free-note" style={{ fontSize: 12, margin: "4px 0 0" }}>
+                Pages a respondent jumps over are not checked when they jump: required questions left unanswered are listed per section at Submit, and Submit waits until they are answered. In an assessment, unanswered questions count as unattempted and Submit only asks the respondent to confirm.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+
       <h3 className="sec">Styles, animations &amp; scripts (survey-wide)</h3>
       <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
 

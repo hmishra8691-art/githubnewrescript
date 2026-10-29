@@ -267,3 +267,22 @@ test("scripts: rs.goToPage / rs.goToSection pass the script gate (the host decid
   assert.deepEqual(validateUxScript(`rs.goToPage("p3");`, def).errors, []);
   assert.match(validateUxScript(`rs.jumpTo("p3");`, def).errors.join(" "), /rs\.jumpTo is not part of the survey api/);
 });
+
+test("set_navigation: the copilot's settings action — coerced, applied, described, look-only, and refused when it changes nothing", async () => {
+  const { applySurveyActions, coerceSurveyActions } = await import("./surveyActions.js");
+  const def = paper();
+  const c = coerceSurveyActions([{ op: "set_navigation", sectionNav: "free", position: "side" }, { op: "set_navigation", sectionNav: "anywhere" }, { op: "add_section_navigator", mode: "on" }]);
+  assert.equal(c.rejected.length, 1);
+  assert.match(c.rejected[0].reason, /sectionNav is off, visited .* or free/);
+  const r = applySurveyActions(def, [c.actions[0]], { uxOnly: true });
+  assert.equal(r.results[0].ok, true, r.errors.join("; "));
+  assert.deepEqual(r.def.navigation, { sectionNav: "free", position: "side" });
+  assert.equal(r.uxOnly, true, "a navigation change is a look-and-behaviour change");
+  assert.ok(r.warnings.some((w) => /not validated until Submit/.test(w)));
+  assert.deepEqual((c.actions[1] as { sectionNav?: string }).sectionNav, "visited", "\"on\" reads as visited");
+  const again = applySurveyActions(r.def, [c.actions[0]]);
+  assert.equal(again.results[0].ok, false);
+  assert.match(again.errors.join(" "), /already free/);
+  const off = applySurveyActions(r.def, [{ op: "set_navigation", sectionNav: "off" } as never]);
+  assert.equal(off.def.navigation?.sectionNav, "off");
+});

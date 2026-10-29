@@ -118,3 +118,19 @@ Verbs: `SELECT` / `PUNCH`, `DESELECT` / `UNSELECT` / `UNPUNCH`, `CLEAR`, `SET �
 ## What the engine checks at the change
 
 Every edit — from the editor, from a sentence or from a model — is applied to a copy and validated before it is shown: a condition that reads a question asked later, an operator the source cannot answer (`contains` on a number), a comparison with an option that no longer exists, a cycle, a validation kind the type does not support, a skip to a question before its source. Each is refused with the object named and, where one is obvious, the corrected action offered. What a batch newly breaks elsewhere (a planned test now reading an open text, a translation whose source changed) is reported with it.
+
+## Section navigation
+
+A survey can show a **section navigator** — a bar (or a side rail on wide screens) listing its blocks, so a respondent can move between sections such as History, Geography and Polity on an exam paper. Turn it on in **Branding & Theme → Navigation** (beside the Back button settings), or ask Intelligent Mode to "add a section navigator" (`set_navigation`). Each section is one block: the navigator lists the blocks that have something to show, each with its state — visited, current, *answered x of y*, locked.
+
+| Setting | Going back | Going forward |
+|---|---|---|
+| **Off** (default) | Back only | Next only |
+| **Visited sections** | to any earlier section | only to sections already visited — as if Next were pressed through every page in between, so each of them must still be valid |
+| **Free** | to any earlier section | to any section reachable with the answers so far — the pages jumped over are not checked yet |
+
+Whatever the setting, a jump never lands on a page hidden by logic, never goes past an end, a quota check or a skip rule that fires, and never enters a loop iteration that does not exist. A refused jump leaves the respondent where they are and says why. Back after a jump returns to the page before it on the respondent's own path.
+
+**Submit in free mode.** Next on the last page checks every page on the path: required questions left unanswered are listed per section, each with a link, and Submit waits until they are answered. In an **assessment** an unanswered question is simply unattempted, so Submit asks "*N questions unanswered — submit anyway?*" instead. The server's replay of the interview applies the same rule (`RUNTIME_SERVER_VALIDATION`): it accepts a jump the engine allows and flags one it does not.
+
+Survey scripts can ask for a jump with `rs.goToPage(...)` / `rs.goToSection(...)` — see [Custom code](custom-code) — and the same rule decides.

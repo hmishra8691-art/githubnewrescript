@@ -1540,6 +1540,7 @@ export function describeAction(a: SurveyAction): string {
     case "remove_behavior": return `Remove behaviour ${a.id}`;
     case "set_theme": return a.label ? `Theme “${a.label}”` : "Change the theme";
     case "set_custom_html": return a.html === null ? `Remove the custom HTML of ${a.target}` : `Custom HTML on ${a.target}`;
+    case "set_navigation": return a.sectionNav === "off" ? "Switch the section navigator off" : `Section navigation${a.sectionNav ? `: ${a.sectionNav}` : ""}${a.position ? ` (${a.position})` : ""}`;
     case "set_default_value": {
       const where = a.field ? `${a.target} ${a.field}` : a.target;
       return a.value === null ? `Remove the default value of ${where}` : `Default value of ${where}: ${Array.isArray(a.value) ? a.value.join(", ") : a.value}`;
