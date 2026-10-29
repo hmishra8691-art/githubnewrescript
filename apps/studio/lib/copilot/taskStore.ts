@@ -40,7 +40,7 @@
 import {
   classifyStepFailure, dependenciesMet, earliestIncompleteStep, isTerminalFailure, taskProgress, taskSpend,
   type DeliverableSpec, type ExecStep, type ExecTask, type StepFailureKind, type StepStatus, type StepUsage,
-  type TaskKind, type TaskStatus,
+  type TaskKind, type TaskStatus, type TaskSummary,
 } from "@rescript/engine";
 import { dbConfigured, memoryOf, storeWithFallback } from "./durable.ts";
 
@@ -54,6 +54,11 @@ export interface CreateTaskInput {
   request: string;
   deliverable: DeliverableSpec;
   steps: Omit<ExecStep, "taskId" | "retryCount">[];
+  /* the handler contract's task fields (2026-10-29): optional, a plan-item task has none */
+  summary?: TaskSummary;
+  completion?: string[];
+  planner?: string;
+  base?: unknown;
 }
 
 /** a step claimed for this slice: the row, and the lease that makes it ours */
@@ -269,6 +274,11 @@ export interface ClientStep {
   planVersion: number;
   dependsOn: string[];
   status: StepStatus;
+  /** the handler's kind ("gen.batch"); absent on a plan item */
+  kind?: string;
+  /** the execution panel's hints, read from the step's input (never the input itself): how many units and which range */
+  units?: number;
+  range?: { from: number; to: number };
   title?: string;
   batchSize?: number;
   batchSizeUsed?: number;
@@ -291,6 +301,9 @@ export interface ClientTask {
   report?: ExecTask["report"];
   /** why a paused task is waiting for a person, with the sentence the panel shows */
   blocked?: ExecTask["blocked"];
+  /** the planner that made the plan, and the deliverables it recorded (our own short phrases — never the request, which is prompt material) */
+  planner?: string;
+  deliverables?: string[];
   progress: ReturnType<typeof taskProgress>;
   spend: ReturnType<typeof taskSpend>;
   steps: ClientStep[];
@@ -324,6 +337,8 @@ export function redactForClient(task: ExecTask): ClientTask {
     planVersion: task.planVersion,
     deliverable: task.deliverable,
     blocked: task.blocked,
+    ...(task.planner ? { planner: task.planner } : {}),
+    ...(task.summary ? { deliverables: (task.summary.deliverables ?? []).map((d) => scrubSecrets(String(d)).slice(0, 200)) } : {}),
     report: task.report
       ? { ok: task.report.ok, problems: (task.report.problems ?? []).map(scrubSecrets), measured: task.report.measured }
       : undefined,
@@ -334,6 +349,9 @@ export function redactForClient(task: ExecTask): ClientTask {
       planVersion: s.planVersion,
       dependsOn: [...s.dependsOn],
       status: s.status,
+      ...(s.kind ? { kind: s.kind } : {}),
+      ...(typeof s.input?.units === "number" && Number.isFinite(s.input.units) ? { units: s.input.units as number } : {}),
+      ...(rangeOfInput(s.input) ? { range: rangeOfInput(s.input)! } : {}),
       title: s.title === undefined ? undefined : scrubSecrets(s.title),
       batchSize: s.batchSize,
       batchSizeUsed: s.batchSizeUsed,
@@ -348,6 +366,12 @@ export function redactForClient(task: ExecTask): ClientTask {
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
+}
+
+/** `input.range` when it is `{from, to}` numbers — a panel hint, never the input itself */
+function rangeOfInput(input: Record<string, unknown> | undefined): { from: number; to: number } | null {
+  const r = input?.range as { from?: unknown; to?: unknown } | undefined;
+  return r && typeof r.from === "number" && typeof r.to === "number" ? { from: r.from, to: r.to } : null;
 }
 
 /* ------------------------------------------------------- the memory store */
@@ -384,6 +408,10 @@ export class MemoryTaskStore implements TaskStore {
       id, surveyId: input.surveyId, customerId: input.customerId, createdBy: input.createdBy,
       kind: input.kind, request: input.request, status: "pending", planVersion: 1,
       deliverable: input.deliverable,
+      ...(input.summary ? { summary: structuredClone(input.summary) } : {}),
+      ...(input.completion ? { completion: [...input.completion] } : {}),
+      ...(input.planner ? { planner: input.planner } : {}),
+      ...(input.base !== undefined ? { base: structuredClone(input.base) } : {}),
       steps: input.steps.map((s) => ({ ...s, taskId: id, retryCount: 0, planVersion: s.planVersion ?? 1 })),
       createdAt: now, updatedAt: now,
       committed: new Map(), claimedAt: new Map(),
@@ -596,6 +624,10 @@ function stepFromRow(r: Row): ExecStep {
     batchSize: num(r.batch_size),
     batchSizeUsed: num(r.batch_size_used),
     inputRef: (r.input_ref as string | null) ?? undefined,
+    kind: (r.kind as string | null) ?? undefined,
+    input: r.input && typeof r.input === "object" ? (r.input as Record<string, unknown>) : undefined,
+    parallelGroup: (r.parallel_group as string | null) ?? undefined,
+    modelTier: (r.model_tier as ExecStep["modelTier"] | null) ?? undefined,
     output: r.output ?? undefined,
     validation: r.validation_status
       ? { status: String(r.validation_status) as "unchecked" | "valid" | "invalid", errors: errs.length ? errs : undefined }
@@ -622,6 +654,10 @@ function stepToRow(taskId: string, s: Omit<ExecStep, "taskId" | "retryCount"> & 
     batch_size: s.batchSize ?? null,
     batch_size_used: s.batchSizeUsed ?? null,
     input_ref: s.inputRef ?? null,
+    kind: s.kind ?? null,
+    input: s.input ?? null,
+    parallel_group: s.parallelGroup ?? null,
+    model_tier: s.modelTier ?? null,
     output: s.output ?? null,
     validation_status: s.validation?.status ?? "unchecked",
     validation_errors: s.validation?.errors ?? [],
@@ -650,6 +686,10 @@ function taskFromRow(r: Row, steps: ExecStep[]): ExecTask {
     deliverable: (r.deliverable as DeliverableSpec | null) ?? { kind: String(r.kind) as TaskKind },
     steps,
     report: (r.report as ExecTask["report"] | null) ?? undefined,
+    summary: r.summary && typeof r.summary === "object" ? (r.summary as TaskSummary) : undefined,
+    completion: Array.isArray(r.completion) ? (r.completion as string[]) : undefined,
+    planner: (r.planner as string | null) ?? undefined,
+    base: r.base ?? undefined,
     blocked: r.blocked_reason
       ? { reason: String(r.blocked_reason) as NonNullable<ExecTask["blocked"]>["reason"], message: String(r.blocked_message ?? ""), at: time(r.blocked_at) }
       : undefined,
@@ -713,6 +753,7 @@ class SupabaseTaskStore implements TaskStore {
     const { data, error } = await db.from(TASKS).insert({
       survey_id: input.surveyId, customer_id: input.customerId ?? null, created_by: input.createdBy ?? null,
       kind: input.kind, request: input.request, deliverable: input.deliverable, plan_version: 1, status: "pending",
+      summary: input.summary ?? null, completion: input.completion ?? null, planner: input.planner ?? null, base: input.base ?? null,
     }).select("*").single();
     if (error) throw new Error(error.message);
     const id = String((data as Row).id);

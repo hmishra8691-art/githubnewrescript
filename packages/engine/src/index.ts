@@ -202,3 +202,8 @@ export * from "./notifyEvents.js";
 export * from "./integrationActions.js";
 /* durable execution state: the task and step types the copilot runner persists (2026-10-24) */
 export * from "./execPlan.js";
+/* plan first or one turn — the deterministic size estimate (2026-10-29, ported from K1) */
+export * from "./taskEstimate.js";
+/* large generation as a plan of small steps, and the structured deliverable check (2026-10-29, ported from K2) */
+export * from "./deliverableValidation.js";
+export * from "./generationPlan.js";

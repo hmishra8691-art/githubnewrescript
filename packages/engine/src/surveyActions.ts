@@ -98,14 +98,14 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
       readOnlyIgnored?: boolean }
   | { op: "delete_question"; target: string }
-  | { op: "move_question"; target: string; block?: string; after?: string }
+  | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
   | { op: "add_skip"; from: string; when: CondInput; to: string }
   | { op: "clear_skips"; target: string }
@@ -301,7 +301,7 @@ function coerceOne(item: unknown): SurveyAction | string {
       if (!type || !text) return "create_question needs type and text";
       return {
         op, type, text: text.slice(0, 4000),
-        ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(str(o.block) ? { block: str(o.block) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}),
+        ...(str(o.ref) ? { ref: str(o.ref) } : {}), ...(str(o.block) ? { block: str(o.block) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}), ...(str(o.before) && !str(o.after) ? { before: str(o.before) } : {}),
         ...(bool(o.newPage) ? { newPage: true } : {}), ...(str(o.code) ? { code: str(o.code) } : {}), ...(str(o.variable) ? { variable: str(o.variable) } : {}),
         ...(options(o.options) ? { options: options(o.options) } : {}), ...(strs(o.rows) ? { rows: strs(o.rows) } : {}), ...(scale(o.scale) ? { scale: scale(o.scale) } : {}),
         ...(bool(o.required) !== undefined ? { required: bool(o.required) } : {}), ...(bool(o.randomize) ? { randomize: true } : {}),
@@ -342,7 +342,7 @@ function coerceOne(item: unknown): SurveyAction | string {
       return Object.keys(a).length > 2 ? a : "update_question changes nothing";
     }
     case "delete_question": { const target = str(o.target); return target ? { op, target } : "delete_question needs a target"; }
-    case "move_question": { const target = str(o.target); if (!target || (!str(o.block) && !str(o.after))) return "move_question needs a target and a block or after"; return { op, target, ...(str(o.block) ? { block: str(o.block) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}) }; }
+    case "move_question": { const target = str(o.target); if (!target || (!str(o.block) && !str(o.after) && !str(o.before))) return "move_question needs a target and a block, after or before"; return { op, target, ...(str(o.block) ? { block: str(o.block) } : {}), ...(str(o.after) ? { after: str(o.after) } : {}), ...(str(o.before) && !str(o.after) ? { before: str(o.before) } : {}) }; }
     case "set_display_logic": { const target = str(o.target); if (!target) return "set_display_logic needs a target"; const raw = o.expression !== undefined ? o.expression : o.condition !== undefined ? o.condition : o.when; const e = raw === null ? null : condIn(raw); if (e === undefined) return "set_display_logic needs an expression or a condition (or null to remove it)"; return { op, target, expression: e }; }
     case "add_skip": { const from = str(o.from), when = condIn(o.when ?? o.condition), to = str(o.to); return from && when && to ? { op, from, when, to } : "add_skip needs from, when and to"; }
     case "clear_skips": { const target = str(o.target); return target ? { op, target } : "clear_skips needs a target"; }
@@ -476,7 +476,14 @@ type PageNode = Extract<FlowNode, { type: "page" }>;
  * 21:23: "popup when the age is 18+" → the min-18 validation refused, the popup kept).
  */
 const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypothesis"]);
-export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean } = {}): ApplyActionsOutcome {
+/*
+ * `lite` (durable tasks, 2026-10-29, ported from K2): a REPLAY of actions that were already judged — the task
+ * runner rebuilding a step's draft from completed steps — skips the before/after quality reviews and the impact
+ * review that only produce WARNINGS for a person to read. Every action is still gated and validated exactly as
+ * before, and the result must still pass the schema; only `warnings` is reduced to the UX warnings and
+ * `structureUnchanged` is not computed (false).
+ */
+export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
   const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
@@ -513,7 +520,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
         results.push({ index, op: a.op, ok: false, description: describeAction(a), error: blocking.map((i) => i.message).join(" "), touched: [], issues, ...(blocking.find((i) => i.suggestion)?.suggestion ? { suggestion: blocking.find((i) => i.suggestion)!.suggestion } : {}) });
         return;
       }
-      const impact = IMPACT_OPS.has(a.op) ? impactOfAction(snapshot, ctx.def, a, r.touched ?? []) : undefined;
+      const impact = IMPACT_OPS.has(a.op) && !opts.lite ? impactOfAction(snapshot, ctx.def, a, r.touched ?? []) : undefined;
       results.push({ index, op: a.op, ok: true, description: r.description, touched: r.touched ?? [], ...(r.destructive ? { destructive: r.destructive } : {}), ...(issues.length ? { issues } : {}), ...(impact && impact.count ? { impact } : {}) });
     } catch (e) {
       def = snapshot; ctx.def = def;
@@ -562,6 +569,7 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
       return { def: before, results: results.map((r) => (r.ok ? { ...r, ok: false, error: blockedBy } : r)), errors: [...errors, blockedBy], warnings: [], destructive: [], refs: Object.fromEntries(ctx.refs), valid: false, uxOnly: false, structureUnchanged: false };
     }
   }
+  if (opts.lite) return { def: after, results, errors, warnings: [...new Set(ctx.uxWarnings)].slice(0, 40), destructive: results.filter((r) => r.ok && r.destructive).map((r) => r.destructive!), refs: Object.fromEntries([...ctx.refs, ...ctx.uxRefs]), valid: true, uxOnly: results.filter((r) => r.ok).length > 0 && results.filter((r) => r.ok).every((r) => isUxOp(r.op)), structureUnchanged: false };
   const baseline = SurveyDefinitionSchema.safeParse(before);
   const structureUnchanged = JSON.stringify(withoutPresentation(baseline.success ? baseline.data : before)) === JSON.stringify(withoutPresentation(after));
   const applied = results.filter((r) => r.ok);
@@ -659,7 +667,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const sem = a.semantic ?? inferSemantic(q);
       const semApplied = applySemantic(q, sem);
       // place it
-      const { pageId, index } = placement(ctx, a.block, a.after);
+      const { pageId, index } = placement(ctx, a.block, a.after, undefined, a.before);
       def.questions.push(q);
       const page = listPages(def.flow as unknown[]).find((p) => p.node.id === pageId)!.node as PageNode;
       page.questionIds.splice(index, 0, q.id);
@@ -793,12 +801,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
     }
     case "move_question": {
       const q = resolveQuestion(ctx, a.target);
-      const { pageId, index } = placement(ctx, a.block, a.after, q.id);
+      const { pageId, index } = placement(ctx, a.block, a.after, q.id, a.before);
       for (const p of listPages(def.flow as unknown[])) (p.node as PageNode).questionIds = (p.node as PageNode).questionIds.filter((x) => x !== q.id);
       const page = listPages(def.flow as unknown[]).find((p) => p.node.id === pageId)!.node as PageNode;
       page.questionIds.splice(Math.min(index, page.questionIds.length), 0, q.id);
       const block = listBlocks(def.flow as unknown[]).find((b) => b.pages.some((p) => p.node.questionIds.includes(q.id)));
-      return { description: `Moved ${q.code}${block?.title ? ` to “${block.title}”` : ""}${a.after ? ` after ${a.after}` : ""}`, touched: [q.id] };
+      return { description: `Moved ${q.code}${block?.title ? ` to “${block.title}”` : ""}${a.after ? ` after ${a.after}` : a.before ? ` before ${a.before}` : ""}`, touched: [q.id] };
     }
     case "set_display_logic": {
       const blockId = tryBlock(ctx, a.target);
@@ -1145,8 +1153,15 @@ function resolveTop(ctx: Ctx, ref: string): string {
 }
 
 /** where a new or moved question goes: after a question, at the end of a block, or at the end of the last block */
-function placement(ctx: Ctx, block: string | undefined, after: string | undefined, moving?: string): { pageId: string; index: number } {
+function placement(ctx: Ctx, block: string | undefined, after: string | undefined, moving?: string, before?: string): { pageId: string; index: number } {
   const def = ctx.def;
+  if (!after && before) {
+    const q = resolveQuestion(ctx, before);
+    if (q.id === moving) fail("a question cannot be moved before itself");
+    const page = listPages(def.flow as unknown[]).find((p) => p.node.questionIds.includes(q.id)) ?? fail(`${q.code} is not on a page`);
+    const ids = page.node.questionIds.filter((x: string) => x !== moving);
+    return { pageId: page.node.id, index: ids.indexOf(q.id) };
+  }
   if (after) {
     const q = resolveQuestion(ctx, after);
     if (q.id === moving) fail("a question cannot be moved after itself");

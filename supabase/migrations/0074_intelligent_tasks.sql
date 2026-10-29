@@ -134,6 +134,22 @@ alter table public.intelligent_tasks add constraint intelligent_tasks_survey_id_
   foreign key (survey_id) references public.surveys(id) on delete cascade not valid;
 alter table public.intelligent_tasks validate constraint intelligent_tasks_survey_id_fkey;
 
+/*
+ * THE HANDLER CONTRACT (2026-10-29) — additive, because this file is applied
+ * nowhere but scratch. A task planned by a registered planner (generation,
+ * translation, assessments) keeps beside its steps: the concise persisted
+ * SUMMARY a step is told instead of the whole brief, the planner's
+ * COMPLETION criteria the deliverable check reads, which PLANNER made the
+ * plan, and the BASE survey the plan was made against — so a step's draft is
+ * a deterministic replay of the completed steps over it, on this server, on
+ * another, or in the cron with the page closed. A plan-item task (the
+ * existing survey_build path) has none of them and reads as before.
+ */
+alter table public.intelligent_tasks add column if not exists summary    jsonb;
+alter table public.intelligent_tasks add column if not exists completion jsonb;
+alter table public.intelligent_tasks add column if not exists planner    text;
+alter table public.intelligent_tasks add column if not exists base       jsonb;
+
 /* ------------------------------------------------------------ the steps */
 
 create table if not exists public.intelligent_steps (
@@ -198,6 +214,19 @@ create unique index if not exists intelligent_steps_idem_key on public.intellige
 create index if not exists intelligent_steps_task_idx on public.intelligent_steps (task_id, ordinal, created_at);
 create index if not exists intelligent_steps_open_idx on public.intelligent_steps (task_id, status, claimed_at)
   where status in ('pending','running','retrying');
+
+/*
+ * A STEP BUILT BY A HANDLER (2026-10-29) carries the handler's `kind`
+ * ("gen.batch", "translation.batch", …) and its own `input` (a batch's slots,
+ * a range of codes, a repair's errors); `parallel_group` marks steps that may
+ * run side by side and `model_tier` the tier the handler asked for. A step
+ * without a kind is a plan item of the existing survey_build path. Additive:
+ * every row written before these columns existed reads as kind null.
+ */
+alter table public.intelligent_steps add column if not exists kind           text;
+alter table public.intelligent_steps add column if not exists input          jsonb;
+alter table public.intelligent_steps add column if not exists parallel_group text;
+alter table public.intelligent_steps add column if not exists model_tier     text check (model_tier is null or model_tier in ('small','standard','strong'));
 
 drop trigger if exists intelligent_steps_touch on public.intelligent_steps;
 create trigger intelligent_steps_touch before update on public.intelligent_steps
