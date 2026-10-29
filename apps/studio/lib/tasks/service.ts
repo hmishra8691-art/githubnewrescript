@@ -84,7 +84,7 @@ export async function advanceForRequest(i: AdvanceInput): Promise<SliceResult> {
 
 /** a task planned by a registered planner is built by its handlers; a plan-item task (no planner) is the item path's and cannot be driven here */
 export function isHandlerTask(task: Pick<ExecTask, "planner" | "steps">): boolean {
-  return !!task.planner || task.steps.some((s) => !!s.kind);
+  return !!task.planner || (Array.isArray(task.steps) && task.steps.some((s) => !!s.kind));
 }
 
 function builderFor(deps: TaskEngineDeps, task: ExecTask): BuildStep {

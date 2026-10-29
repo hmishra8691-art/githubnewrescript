@@ -413,7 +413,7 @@ const newId = (p: string) => `${p}_${Date.now().toString(36)}_${(memSeq++).toStr
  */
 const DUMP_ENABLED = () => process.env.NODE_ENV !== "production" && (process.env.RESCRIPT_TASKS_DUMP ?? "") !== "off";
 const dumpPath = () => join(process.env.RESCRIPT_TASKS_DIR || join(tmpdir(), "rescript-tasks-sandbox"), "intelligent-tasks.json");
-const DUMP_G = globalThis as unknown as { __rescriptTaskDumpLoaded?: boolean; __rescriptTaskDumpTimer?: ReturnType<typeof setTimeout> | null };
+const DUMP_G = globalThis as unknown as { __rescriptTaskDumpLoaded?: boolean };
 function loadDump(into: Map<string, MemTask>): void {
   if (DUMP_G.__rescriptTaskDumpLoaded || !DUMP_ENABLED()) return;
   DUMP_G.__rescriptTaskDumpLoaded = true;
@@ -431,18 +431,13 @@ function loadDump(into: Map<string, MemTask>): void {
 }
 function scheduleDump(tasks: Map<string, MemTask>): void {
   if (!DUMP_ENABLED()) return;
-  if (DUMP_G.__rescriptTaskDumpTimer) return;
-  const t = setTimeout(() => {
-    DUMP_G.__rescriptTaskDumpTimer = null;
-    try {
-      const file = dumpPath();
-      mkdirSync(join(file, ".."), { recursive: true });
-      const list = [...tasks.values()].slice(-40).map((x) => ({ ...x, committed: [...x.committed], claimedAt: [...x.claimedAt] }));
-      writeFileSync(file, JSON.stringify({ seq: memSeq, tasks: list }));
-    } catch { /* a dump that cannot be written loses nothing a dev server did not already risk */ }
-  }, 250);
-  (t as unknown as { unref?: () => void }).unref?.();
-  DUMP_G.__rescriptTaskDumpTimer = t;
+  /* written at once, not debounced: a dev server killed a moment after a mutation must find that mutation on restart */
+  try {
+    const file = dumpPath();
+    mkdirSync(join(file, ".."), { recursive: true });
+    const list = [...tasks.values()].slice(-40).map((x) => ({ ...x, committed: [...x.committed], claimedAt: [...x.claimedAt] }));
+    writeFileSync(file, JSON.stringify({ seq: memSeq, tasks: list }));
+  } catch { /* a dump that cannot be written loses nothing a dev server did not already risk */ }
 }
 
 /**
