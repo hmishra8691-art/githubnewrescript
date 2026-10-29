@@ -7,7 +7,7 @@ import {
   applyTranslationAnswers, batchedTranslationComplete, nextTranslationBatch, resolveLanguage,
   routeTranslation, startBatchedTranslation, translationTargets,
 } from "./translationRouting.ts";
-import { translationInventory, translationResumeFrom, outstandingUnits } from "./translationTask.ts";
+import { translationInventory, translationResumeFrom, outstandingUnits, translationBatches, translationQueue } from "./translationTask.ts";
 import { checkDeliverable } from "./deliverable.ts";
 import { isolatedTaskStore } from "./taskStore.ts";
 
@@ -98,7 +98,9 @@ test("a questionnaire past the key threshold is batched, and the number that dec
   assert.equal(route.mandatory, report.missing, "every mandatory string is outstanding, and that is what lintLanguage counts");
   assert.equal(route.mandatory, mandatoryKeys(def, "de").length, "…which is the inventory, built from translatableElements");
   assert.equal(route.keys, translationInventory(def, "de").units.length, "the batches cover every string, optional ones included");
-  assert.equal(route.batches, Math.ceil(route.keys / route.batchSize));
+  /* 2026-10-29: the batches are the engine's adaptive ones (a question's elements together, an identical wording — "Q{n} option 1" masked — sent once) */
+  assert.equal(route.batches, translationBatches(translationQueue(def, "de"), route.batchSize).length);
+  assert.ok(route.batches >= 1 && route.batches < Math.ceil(route.keys / route.batchSize), "translation memory: fewer batches than fixed-size slicing would need");
   assert.match(route.reason, /resumable task/);
 
   /* the boundary is a number, not a mood — and it is overridable */
@@ -174,8 +176,8 @@ test("a part-translated language resumes at the first missing key, and plans onl
   const store = isolatedTaskStore();
   const started = (await startBatchedTranslation(store, { surveyId: "big", def: done, languages: ["de"], request: "Finish the German", threshold: 10, batchSize: 20 }))!;
   assert.ok(started);
-  assert.equal(started.task.steps.length, Math.ceil(outstandingUnits(translationInventory(done, "de")).length / 20), "the steps cover what is outstanding, not the whole survey");
-  assert.ok(started.task.steps.length < Math.ceil(translationInventory(fresh, "de").units.length / 20), "which is fewer than a translation from scratch");
+  assert.equal(started.task.steps.length, translationBatches(outstandingUnits(translationInventory(done, "de")), 20).length, "the steps cover what is outstanding, not the whole survey");
+  assert.ok(started.task.steps.length < translationBatches(translationInventory(fresh, "de").units, 20).length, "which is fewer than a translation from scratch");
 
   /* the resume point, and the batch that starts there, are the same key */
   assert.equal(started.resumeAt.de!.key, firstMissing);

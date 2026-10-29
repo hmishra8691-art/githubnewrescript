@@ -82,18 +82,23 @@ test("the inventory is built from translatableElements, with the protected struc
 test("batches are a tuneable size and become one step row each, with the key range the panel shows", () => {
   const inv = translationInventory(survey(), "de");
   const units = outstandingUnits(inv);
+  /* 2026-10-29: the engine's adaptive batches — at most `size` UNIQUE strings each, a question's elements together, every outstanding key in exactly one batch */
   const b = translationBatches(units, 4);
-  assert.equal(b.length, Math.ceil(units.length / 4));
-  assert.deepEqual([b[0].from, b[0].to], [1, 4]);
-  assert.equal(b[b.length - 1].to, units.length);
-  assert.equal(translationBatches(units, 1).length, units.length, "the size is tuneable all the way down");
-  assert.equal(translationBatches(units).length, Math.ceil(units.length / DEFAULT_TRANSLATION_BATCH));
+  assert.ok(b.length >= Math.ceil(units.length / 8) && b.length <= units.length, `${b.length} batches for ${units.length} keys`);
+  for (const x of b) assert.ok(x.segments <= 4 && x.segments >= 1, JSON.stringify({ s: x.segments }));
+  const all = b.flatMap((x) => x.units.map((u) => u.key));
+  assert.equal(new Set(all).size, all.length, "no key twice");
+  assert.deepEqual(new Set(all), new Set(units.filter((u) => !u.copyThrough).map((u) => u.key)), "every key with words to translate, once");
+  assert.equal(b[0].from, 1);
+  assert.ok(b.every((x) => x.from >= 1 && x.to <= units.length && x.from <= x.to), "the positions the panel shows are inside the outstanding list");
+  assert.equal(translationBatches(units, 1).length, new Set(units.filter((u) => !u.copyThrough).map((u) => u.masked.replace(/\s+/g, " ").trim())).size, "the size is tuneable all the way down: one unique string per batch");
+  assert.ok(translationBatches(units).length <= Math.ceil(units.length / DEFAULT_TRANSLATION_BATCH) + 1);
 
   const steps = translationSteps(b, 1, "loc");
   assert.equal(steps.length, b.length);
-  assert.equal(steps[0].title, `Translate keys 1–4`);
-  assert.equal(steps[0].inputRef, "keys 1-4");
-  assert.equal(steps[0].batchSize, 4);
+  assert.equal(steps[0].title, `Translate keys ${b[0].from}–${b[0].to}`);
+  assert.equal(steps[0].inputRef, `keys ${b[0].from}-${b[0].to}`);
+  assert.equal(steps[0].batchSize, b[0].units.length);
   assert.equal(new Set(steps.map((s) => s.idempotencyKey)).size, steps.length, "one idempotency key per batch — no double billing on a resume");
 });
 
@@ -115,9 +120,10 @@ test("a translation whose ids, piping, placeholders or scripts differ from the s
   assert.equal(check.ok, false);
   assert.deepEqual(check.accepted.map((a) => a.key), ["q:q1:text"], "only the clean key is written");
   assert.deepEqual(check.invalidKeys.sort(), ["q:q2:instruction", "q:q2:text", "q:q3:text"]);
-  assert.ok(check.problems.some((p) => p.key === "q:q2:text" && /missing \{\{Q1\}\}/.test(p.message)), JSON.stringify(check.problems));
+  /* 2026-10-29: the verdict and its wording are the engine's (validateTranslatedUnit → translationProblem) */
+  assert.ok(check.problems.some((p) => p.key === "q:q2:text" && /\{\{Q1\}\} is missing/.test(p.message)), JSON.stringify(check.problems));
   assert.ok(check.problems.some((p) => p.key === "q:q3:text" && /\$\{first_name\}/.test(p.message)));
-  assert.ok(check.problems.some((p) => p.key === "q:q2:instruction" && /missing Q1/.test(p.message)));
+  assert.ok(check.problems.some((p) => p.key === "q:q2:instruction" && /Q1 is missing/.test(p.message)));
   assert.ok(check.problems.some((p) => p.kind === "unknown_key" && p.key === "q:q9:text"));
   assert.ok(check.problems.every((p) => /byte-identical/.test(p.message) || p.kind !== "placeholder"));
 

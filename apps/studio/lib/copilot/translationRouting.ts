@@ -71,9 +71,10 @@ import {
   applyTranslationBatch,
   checkTranslationBatch,
   createTranslationTask,
-  outstandingUnits,
+  translationBatches,
   translationComplete,
   translationInventory,
+  translationQueue,
   translationResumeFrom,
   type BatchCheck,
   type BatchProblem,
@@ -248,20 +249,6 @@ const plural = (count: number, one: string, many: string): string => `${count} $
 const andList = (xs: readonly string[]): string => (xs.length <= 1 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
 
 /**
- * THE QUEUE A RESUMED TRANSLATION WORKS THROUGH, and the one
- * `translationResumeFrom` points into: what is missing or outdated, plus what
- * is translated but blocking (a lost placeholder, two options with the same
- * words), mandatory strings first and then editor order.
- */
-function translationQueue(def: SurveyDefinition, lang: string, includeOptional: boolean): TranslationUnit[] {
-  const inv = translationInventory(def, lang);
-  const outstanding = outstandingUnits(inv, { includeOptional });
-  const blocked = new Set(lintLanguage(def, lang).issues.filter((i) => i.blocking && i.kind !== "missing").map((i) => i.key));
-  const invalid = inv.units.filter((u) => u.state === "translated" && blocked.has(u.key) && (includeOptional || u.mandatory));
-  return [...outstanding, ...invalid].sort((a, b) => (a.mandatory === b.mandatory ? a.order - b.order : a.mandatory ? -1 : 1));
-}
-
-/**
  * DECIDE, WITHOUT SIDE EFFECTS. Nothing here reads the request text, writes a
  * row, or touches the store: given the survey and the target codes it returns
  * the verdict, the number that produced it, and the sentence to show.
@@ -301,7 +288,7 @@ export function routeTranslation(def: SurveyDefinition, languages: readonly stri
 
   const mandatory = work.reduce((n, w) => n + w.outstanding, 0);
   const keys = work.reduce((n, w) => n + w.outstandingAll, 0);
-  const batches = work.reduce((n, w) => n + Math.ceil(w.outstandingAll / batchSize), 0);
+  const batches = targets.reduce((n, lang) => n + translationBatches(translationQueue(def, lang, includeOptional), batchSize).length, 0);
   const bySize = mandatory >= threshold;
   const byLanguages = targets.length >= languageThreshold;
   const batched = keys > 0 && (bySize || byLanguages);
@@ -403,7 +390,7 @@ export function applyTranslationAnswers(
   const asked = opts.keys?.length ? opts.keys : Object.keys(answered ?? {});
   const units: TranslationUnit[] = [];
   for (const k of asked) { const u = byKey.get(k); if (u && !units.includes(u)) units.push(u); }
-  const check = checkTranslationBatch(units, answered ?? {});
+  const check = checkTranslationBatch(units, answered ?? {}, language, effectiveLocalization(def).glossary ?? []);
   const { localization, written } = applyTranslationBatch(effectiveLocalization(def), language, check.accepted, {
     origin: opts.origin ?? "ai",
     ...(opts.status ? { status: opts.status } : {}),
