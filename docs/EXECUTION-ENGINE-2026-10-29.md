@@ -124,10 +124,8 @@ session and is being re-run as part of this step; the result is recorded in the 
 report, not assumed here.
 
 Step 2 of this close-out adds: the H proof on the execute loop's seams (`scripts/stage-cap-api-test.mjs`), the SQL
-test (`scripts/intelligent-tasks-sql-test.sql`, 0074 applied twice on scratch Postgres 16) and the regression set
-(`production-intents`, `intelligent-engine`, `copilot`, `copilot-streaming`, `engine-11-14`, `engine-15-19`,
-`methods-intelligent`, `analysis-plan`) — each result is appended to this doc's "Step 2 results" section below as it
-is obtained.
+test (`scripts/intelligent-tasks-sql-test.sql`, 0074 applied twice on scratch Postgres 16) and the regression set —
+results in "Step 2 results" below.
 
 ## Honest limits
 
@@ -164,3 +162,27 @@ is obtained.
   p1 already in `done[]` → builtIds [p1], pending [p2]; (c) after a 5 s first item on a 35 s item deadline the second
   item is held back (max(30 s, 1.5 × slowest) does not fit) and the continuation builds only p2. The 1.5 × slowest
   arm on its own needs an item > 20 s and the seam's delay is capped at 5 s: it stays an arithmetic test.
+- **SQL (item 3):** scratch Postgres 16 (a copy of the cluster through 0070), `0071`–`0075` applied, then `0074` a
+  SECOND time — all exit 0; `scripts/intelligent-tasks-sql-test.sql` 7/7 sections PASS: tables / RLS (one deny-all
+  policy each, no grant, the claim not executable by anon or authenticated) / the 2026-10-29 columns / indexes and
+  triggers once after two applies; shapes (statuses, kinds, model tier, failure kind, one row per step id, one row
+  per idempotency key); the claim (once, by ordinal, dependencies, a `running` step reclaimed after the 180 s window
+  and the reclaim costs an attempt, max attempts, `retrying` runnable, blocked / failed / tombstoned never); commit
+  idempotency (a second delivery updates no row, a second row with the key is refused, totals recompute the same,
+  `extra_charge` the visible remainder); split / tombstone (children claimed in order, the dependant waits for them,
+  a tombstoned dependency counts as met); RLS (`authenticated` with a project membership and `anon` see nothing and
+  cannot insert; the superuser, standing in for the service role, reads); cascades.
+- **Regression suites (item 4),** one at a time through `fresh.sh` with the sandbox task dump removed before each
+  (the dump survives a restart by design, so an unfinished mirror task of one suite was reattached by the next
+  suite's panel — that was the first `production-intents` failure, fixed by the stage-cap suite cancelling its own
+  tasks; no routing change was needed anywhere):
+  `production-intents` **7/7** · `copilot` **11/11** · `copilot-streaming` **6/6** · `engine-11-14` **10/10** ·
+  `methods-intelligent` **5/5** · `intelligent-engine` **3 ok, then dev-server OOM at [3]** ("a provider timeout
+  mid-stage": the memcg killed `next-server` at 4.4 GB / 3.5 GB rss on two runs, the supervisor restarted it, the
+  page's navigation timed out) — not a pass, reproducible at the same step · `engine-15-19` **30 ok, then OOM at
+  #19 LAYOUT** (Chromium "Page crashed" on reload while the Studio was being restarted) — not a pass ·
+  `analysis-plan` **0 ok, OOM at §1** (`/analytics` compiled in 18.5 s, then the dev server was killed; a retry is
+  recorded in the progress file). None of the three failures is a plan-first routing failure: no suite reached a
+  turn that became a task where a single reply was expected.
+- **Not run in step 2:** `ux-copilot-test.mjs`, `logic-dialog-test.mjs` (in the original brief's list, not in
+  step 2's), a second run of `engine-15-19`.
