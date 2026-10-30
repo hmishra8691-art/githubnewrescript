@@ -162,6 +162,9 @@ const SANDBOX_DOC = uxSandboxDoc({ aliases: UX_SCRIPT_EVENT_ALIASES });
 const COMMANDS_PER_SECOND = 200;
 /** how long a frame outlives its page, so a click on Next that was already sent to it is handled once */
 const SCRIPT_GRACE_MS = 150;
+/** D8: the host pings each frame this often; a frame that misses HEARTBEAT_MISSES in a row while the page is shown is stopped */
+const HEARTBEAT_MS = 2000;
+const HEARTBEAT_MISSES = 3;
 /**
  * pages that are closing but not yet undone. A new page's script must start from
  * the survey as it is, not from the previous page's script's changes (two pages'
@@ -366,8 +369,10 @@ export function UxLayer(p: UxLayerProps) {
       frame.srcdoc = SANDBOX_DOC;
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
       const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
-      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
+      let beat: ReturnType<typeof setInterval> | null = null;
+      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
+      let awaiting = 0, missed = 0, beatN = 0;
       const resolve = (spec: unknown): UxTarget | null => {
         if (spec === "self" || spec == null) return b.target;
         const t = resolveUxTarget(def, spec, look);
@@ -385,8 +390,29 @@ export function UxLayer(p: UxLayerProps) {
         const a = Array.isArray(m.args) ? m.args : [];
         const str = (x: unknown) => (typeof x === "string" ? x : x == null ? "" : String(x)).slice(0, 600);
         switch (m.cmd) {
+          case "pong": awaiting = 0; missed = 0; break;
           case "ready": {
             host.started = true;
+            /*
+             * THE HEARTBEAT (S0b D8). Every HEARTBEAT_MS the host pings the frame; a frame that misses
+             * HEARTBEAT_MISSES pings in a row while the page is shown is stuck (an endless promise chain, a
+             * catastrophic regex, an allocation storm), so it is disposed, everything it changed is put back and
+             * the script is logged "stopped: not responding". This only helps when the browser runs the
+             * sandboxed frame OUT of process: a frame that shares the page's thread freezes this timer too.
+             */
+            if (!beat) beat = setInterval(() => {
+              if (typeof document !== "undefined" && document.visibilityState === "hidden") { awaiting = 0; missed = 0; return; }
+              if (awaiting) missed++;
+              if (missed >= HEARTBEAT_MISSES) {
+                report(`stopped: not responding (no answer to ${HEARTBEAT_MISSES} heartbeats in ${(HEARTBEAT_MS * HEARTBEAT_MISSES) / 1000} s) — its changes were undone`, "warn");
+                host.dispose();
+                for (const u of host.undo) u.run();
+                host.undo.length = 0;
+                return;
+              }
+              awaiting = ++beatN;
+              frame.contentWindow?.postMessage({ __rsux: 1, type: "ping", n: beatN }, "*");
+            }, HEARTBEAT_MS);
             for (const f of Array.from(closing)) f();
             const questions: Record<string, unknown> = {};
             for (const q of def.questions) questions[String(q.code)] = { code: String(q.code), type: q.type, text: plainText(q.text ?? ""), options: (q.options ?? []).map((o) => ({ code: String(o.code), label: plainText(o.label) })) };

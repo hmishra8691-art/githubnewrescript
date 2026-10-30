@@ -52,9 +52,46 @@ export const UX_FORWARDED_EVENTS = ["click", "input", "change", "focusin", "focu
 /** how many iterations one entry (the script, an event, a timer) may run before it is stopped */
 export const UX_LOOP_LIMIT = 100_000;
 
+/** how many promise reactions / queued microtasks one entry may run before it is stopped (D8) */
+export const UX_MICROTASK_LIMIT = 10_000;
+
+/**
+ * BOUNDED MICROTASK CHAINS (S0b, audit D8). The loop guard counts loop iterations, but
+ * `function f() { Promise.resolve().then(f); } f();` never loops and never yields to a task, so it froze the
+ * frame (and, when the browser runs the sandboxed frame on the page's thread, the page). Inside the frame only,
+ * `Promise.prototype.then` (which `catch` and `finally` go through) and `queueMicrotask` wrap their callbacks in a
+ * counter that the same `slice()` that resets the loop counter resets; past UX_MICROTASK_LIMIT the callbacks are
+ * dropped until the next entry (so the chain ends — a throw would only re-enter the chain through promise
+ * adoption) and the error, worded like the loop guard's, is reported once through `fail` to the inspector. `await` on a native promise does not go
+ * through `then` and is not counted (an `await` inside a loop is still bounded by the loop guard).
+ *
+ * Kept as source text so the unit test can run exactly what the frame runs, in a vm context of its own.
+ * Expects `window`, `CFG.microLimit` and (optionally) `fail(err)`; declares `microReset()`.
+ */
+export const UX_MICROTASK_GUARD = String.raw`
+  var micro = 0, microOver = false;
+  function microReset() { micro = 0; microOver = false; }
+  /* false once over the limit: the callback is dropped (the chain ends), the error is reported once per entry */
+  function microTick() {
+    if (microOver) return false;
+    if (++micro <= CFG.microLimit) return true;
+    microOver = true;
+    var err = new Error("a promise chain ran more than " + CFG.microLimit + " steps in one go, so the script was stopped (is it endless?)");
+    if (typeof fail === "function") fail(err);
+    return false;
+  }
+  (function () {
+    var P = window.Promise, nativeThen = P.prototype.then;
+    var wrap = function (fn) { return typeof fn === "function" ? function (v) { if (!microTick()) return undefined; return fn(v); } : fn; };
+    Object.defineProperty(P.prototype, "then", { configurable: false, writable: false, value: function then(a, b) { return nativeThen.call(this, wrap(a), wrap(b)); } });
+    var nativeQM = window.queueMicrotask;
+    if (typeof nativeQM === "function") window.queueMicrotask = function (fn) { return nativeQM.call(window, function () { if (microTick()) fn(); }); };
+  })();
+`;
+
 export function uxSandboxDoc(config: { aliases: Record<string, string> }): string {
-  const cfg = JSON.stringify({ aliases: config.aliases, loopLimit: UX_LOOP_LIMIT, forwarded: UX_FORWARDED_EVENTS });
-  return SANDBOX_HTML.replace("__CFG__", () => cfg.replace(/</g, "\\u003c"));
+  const cfg = JSON.stringify({ aliases: config.aliases, loopLimit: UX_LOOP_LIMIT, microLimit: UX_MICROTASK_LIMIT, forwarded: UX_FORWARDED_EVENTS });
+  return SANDBOX_HTML.replace("__MICRO__", () => UX_MICROTASK_GUARD).replace("__CFG__", () => cfg.replace(/</g, "\\u003c"));
 }
 
 const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'"></head><body><script>
@@ -64,7 +101,8 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
   var handlers = [], answers = {}, meta = { questions: {} };
   var loops = 0;
   var ready = false;
-  function slice() { loops = 0; }
+__MICRO__
+  function slice() { loops = 0; microReset(); }
   window.__g = function () { if (++loops > CFG.loopLimit) throw new Error("a loop ran more than " + CFG.loopLimit + " times in one go, so the script was stopped (is it endless?)"); };
   function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
   function fail(e) { send("error", [String(e && e.message || e)]); }
@@ -354,6 +392,7 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
     }
     else if (m.type === "sync") { if (ready) applyTree(m.tree); }
     else if (m.type === "answers") { answers = m.answers || {}; }
+    else if (m.type === "ping") { send("pong", [m.n]); }   /* D8: the host's heartbeat — a frame that cannot answer is stopped */
     else if (m.type === "dom") { if (ready) deliver(m); }
     else if (m.type === "event") { handlers.forEach(function (h) { if (h.ev === m.ev && (h.target === m.target || (h.target === "self" && m.self))) { slice(); try { h.fn(m.payload); } catch (err) { fail(err); } } }); }
   });
