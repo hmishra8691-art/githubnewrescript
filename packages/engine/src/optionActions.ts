@@ -18,6 +18,7 @@ import { usedNames } from "./variableUsage.js";
 import { stripHtmlText } from "./html.js";
 import { K, moveTranslationKey } from "./localization.js";
 import { applyMediaAction, coerceMediaAction, describeMediaAction, MEDIA_ACTION_OPS, type MediaAction } from "./mediaActions.js";
+import { applyLogicScriptAction, coerceLogicScriptAction, describeLogicScriptAction, LOGIC_SCRIPT_ACTION_OPS, type LogicScriptAction } from "./logicScriptActions.js";
 
 /**
  * THE OPTION, ORDER AND HOUSEKEEPING ACTIONS (Intelligent Mode Phase 2) —
@@ -70,12 +71,14 @@ export type OptionAction =
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
   | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
   /* S2b: a question's stimulus and option images — see mediaActions.ts */
-  | MediaAction;
+  | MediaAction
+  /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
+  | LogicScriptAction;
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
-  ...MEDIA_ACTION_OPS,
+  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -110,6 +113,7 @@ const first = (o: Record<string, unknown>, ...keys: string[]): unknown => keys.m
 export function coerceOptionAction(op: string, o: Record<string, unknown>): OptionAction | string | null {
   if (!isOptionOp(op)) return null;
   if ((MEDIA_ACTION_OPS as readonly string[]).includes(op)) return coerceMediaAction(o);
+  if ((LOGIC_SCRIPT_ACTION_OPS as readonly string[]).includes(op)) return coerceLogicScriptAction(op, o);
   switch (op) {
     case "update_option": {
       const target = str(o.target ?? o.question, 120), option = ref(o.option);
@@ -508,6 +512,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
   const warnings: string[] = [];
   switch (a.op) {
     case "set_question_media": return applyMediaAction(def, a, { question: env.question, ids: env.ids });
+    case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
       const q = questionOrFail(env, a.target);
       const options = (q.options ?? []) as Option[];
@@ -875,6 +880,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
 export function describeOptionAction(a: OptionAction): string {
   switch (a.op) {
     case "set_question_media": return describeMediaAction(a);
+    case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;
     case "reorder_options": return `Reorder the options of ${a.target}`;
     case "set_option_randomization": return `${a.enabled ? "Randomize" : "Stop randomizing"} the ${a.scope ?? "options"} of ${a.target}`;

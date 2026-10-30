@@ -326,7 +326,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const qScope = questionnaireScope({ message, mode, themeOnly: themeScope, uxOnly: cls.uxOnly, focusCount: focusIds.length, questionCount: def.questions.length });
   /* S2a D10: a debug / explain request about a script — the script in full, its check and the field health the page sent (sanitised) */
   const scriptQ = scriptQuestion(def, message) ? { text: message, health: sanitizeScriptHealthLite((body as { scriptHealth?: unknown }).scriptHealth) } : undefined;
-  const outline = copilotOutline(def, { selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope, ...(scriptQ ? { scriptQuestion: scriptQ } : {}) });
+  const outline = copilotOutline(def, { message, selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope, ...(scriptQ ? { scriptQuestion: scriptQ } : {}) });
   /*
    * §3 THE RESEARCH CONTEXT OF A LONG BRIEF (2026-10-18). Kept per survey AND owner (never another survey's,
    * never another organisation's). Checked against the survey's research design on every turn: the definition

@@ -182,6 +182,8 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
     summary: "create_loop {from, to, over | items, loopVar}: the same questions asked for each item" },
   { id: "popups", name: "Popups and messages", need: /\bpop-?ups?\b|\bmodal\b|\btool-?tips?\b|\bmessage when\b/i, actions: ["create_behavior"],
     summary: "create_behavior effect show_popup / show_message on select_option (closes by itself), or rs.popup / rs.closePopup in a script" },
+  { id: "logic_scripts", name: "Logic scripts (Scripts panel)", need: /\blogic script\b|\bscripts panel\b|\bon_(?:load|change|submit|validate|complete)\b/i, actions: ["create_logic_script", "update_logic_script", "remove_logic_script", "set_logic_script_enabled"],
+    summary: "create_logic_script {name, scope survey|page|question, ref, event on_load|on_change|on_validate|on_submit|on_complete, code}: ctx get/set/getCalc/setCalc/getEmbedded/setEmbedded/flag — only for what native punch / calculation / validation cannot say (a computation across loop iterations, inspecting a loop)" },
 ];
 
 /* ------------------------------------------------------------ the sandbox */

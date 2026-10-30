@@ -44,3 +44,14 @@ test("copilotUserPrompt adds it only when named", () => {
   assert.doesNotMatch(copilotUserPrompt({ ...base, message: "add a heatmap", planOnly: true }), /QUESTION VARIANTS/);
   assert.doesNotMatch(copilotUserPrompt({ ...base, message: "add a heatmap", variants: false }), /QUESTION VARIANTS/);
 });
+
+import { copilotOutline } from "./outline.ts";
+import { SurveyDefinition } from "@rescript/schema";
+test("S2b item 4: the outline shows a logic script the request names with its full code", () => {
+  const code = `var t = 0;\n${"// padding line\n".repeat(20)}setCalc('SPEND_TOTAL', t);`;
+  const def = SurveyDefinition.parse({ meta: { id: "s", code: "S", title: "x" }, questions: [], flow: [{ type: "end", id: "e", status: "complete" }], scripts: [{ id: "ls1", name: "Spend total", scope: "survey", event: "on_change", code }] });
+  const named = copilotOutline(def, { message: "change the Spend total script to include Q6" });
+  assert.ok(named.includes("FULL CODE") && named.includes("setCalc('SPEND_TOTAL', t);"), named);
+  const other = copilotOutline(def, { message: "add a question" });
+  assert.ok(!other.includes("FULL CODE") && other.includes("update_logic_script"));
+});

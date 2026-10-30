@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (14): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`
+**Options and design** (18): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -113,7 +113,9 @@ export type OptionAction =
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
   | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
   /* S2b: a question's stimulus and option images — see mediaActions.ts */
-  | MediaAction;
+  | MediaAction
+  /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
+  | LogicScriptAction;
 ```
 
 ## Question media (set_question_media)
@@ -126,6 +128,18 @@ export type MediaAction = {
   items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
   requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
 };
+```
+
+## Scripts-panel (logic) scripts
+
+From `packages/engine/src/logicScriptActions.ts`:
+
+```ts
+export type LogicScriptAction =
+  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string }
+  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string }
+  | { op: "remove_logic_script"; script: string }
+  | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
 ```
 
 ## UX actions
