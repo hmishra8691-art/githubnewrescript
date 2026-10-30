@@ -101,3 +101,14 @@ test("logic scripts: on_load enters the page; on_change plays its question; on_v
   assert.deepEqual(buildScenarios(looped, items[0]!).slice(0, 2).map((x) => [x.id, x.iteration ?? 0]), [["enter", 0], ["enter-2", 1]], "the first two iterations");
   assert.equal(page.questionIds.length, 3);
 });
+
+test("a survey-scoped script is hosted on the first page that shows a question; a log-only script expects no effect", () => {
+  const def = structuredClone(base);
+  const blk = (def.flow as { type: string; children?: unknown[] }[]).find((n) => n.type === "block")!;
+  blk.children!.unshift({ type: "page", id: "p_empty", questionIds: [] });
+  assert.equal(hostPage(def, {})!.pageId, (blk.children![1] as { id: string }).id, "the empty page is skipped");
+  assert.equal(scriptDeclarations("rs.log('survey script');").effectful, false);
+  assert.equal(scriptDeclarations("rs.listen('change', 'self', function(){ rs.addClass('Q3', 'x'); });").effectful, true);
+  assert.equal(scriptDeclarations("var b = document.createElement('div');").effectful, true);
+  assert.equal(scriptDeclarations("set('H', 1);").effectful, true);
+});

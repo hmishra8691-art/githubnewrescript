@@ -3,8 +3,9 @@ import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { UNSUPPORTED_MESSAGE, reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
-import { proposalCodeItems, expectsFromActions, codeItemsSignature, verificationSummary, executionReportText, VERDICT_NEEDS_REPAIR, type VerificationReport } from "@rescript/engine";
+import { proposalCodeItems, expectsFromActions, codeItemsSignature, executionReportText, VERDICT_NEEDS_REPAIR, type VerificationReport } from "@rescript/engine";
 import { runVerification } from "../../../lib/copilot/verify/harness";
+import { verifyProposal } from "../../../lib/copilot/verify/orchestrate";
 import type { WorkflowResponse } from "../../../app/api/copilot/workflow/route";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
@@ -824,34 +825,32 @@ export function useCopilot(opts: {
     const sig = codeItemsSignature(items);
     if (verifySigRef.current === sig) return;
     verifySigRef.current = sig;
-    setVerify({ signature: sig, status: "running", repaired: repairsRef.current });
-    void (async () => {
-      let report: VerificationReport;
-      try { report = await runVerification(full.after, items); }
-      catch (e) { report = { signature: sig, at: new Date().toISOString(), durationMs: 0, items: [], verdicts: items.map((i) => ({ key: i.key, label: i.label, verdict: "not-run" as const, summary: `Could not be run here: ${e instanceof Error ? e.message : String(e)}`, detail: [], scenarios: 0 })) }; }
-      if (verifySigRef.current !== sig) return;
-      const sum = verificationSummary(report);
-      /* the report in the operation history (intelligent_operations): the verdicts in the intent, each item's line as a warning */
-      const k = openOpRef.current;
-      const cur = k ? recorder.list().find((o) => o.key === k) : undefined;
-      if (k && cur) void updateOp(k, { intent: { ...cur.intent, verify: sum.text.slice(0, 300), verifyVerdicts: report.verdicts.map((v) => `${v.label}: ${v.verdict}`).join("; ").slice(0, 480), verifyMs: report.durationMs, verifyRepairs: repairsRef.current }, warnings: [...cur.warnings.filter((w) => !w.startsWith("Test session: ")), ...report.verdicts.map((v) => `Test session: ${v.label} — ${v.summary}`.slice(0, 480))] });
-      const failing = report.verdicts.filter(VERDICT_NEEDS_REPAIR);
-      if (failing.length && repairsRef.current < 1 && modeRef.current !== "internal") {
-        repairsRef.current++;
-        setVerify({ signature: sig, status: "repairing", report, repaired: repairsRef.current, ok: false, summary: sum.text });
+    /* the state machine (lib/copilot/verify/orchestrate.ts) guarantees an end: running ≤ 25 s, the one repair ≤ 90 s */
+    void verifyProposal({
+      signature: sig, items,
+      run: () => runVerification(full.after, items),
+      repair: (report) => {
+        const failing = report.verdicts.filter(VERDICT_NEEDS_REPAIR);
         const names = failing.map((v) => `“${v.label}”`).join(", ");
-        await askRef.current(`Repair the script${failing.length === 1 ? "" : "s"} that did not pass the test session: ${names}`, undefined, undefined, undefined, { verifyRepair: { report: executionReportText(report), items: failing.map((v) => ({ key: v.key, label: v.label, verdict: v.verdict })) } }).catch(() => "handled");
-        /* the repair changed nothing that runs (it failed, or answered in words): this report stands — after React has
-           committed the turn's revision, if there was one (its new signature then owns the card) */
-        await new Promise((r) => setTimeout(r, 250));
-        if (verifySigRef.current === sig) setVerify({ signature: sig, status: "done", report, repaired: repairsRef.current, ok: false, summary: sum.text });
-        return;
-      }
-      setVerify({ signature: sig, status: "done", report, repaired: repairsRef.current, ok: !failing.length, summary: sum.text });
-    })();
+        return askRef.current(`Repair the script${failing.length === 1 ? "" : "s"} that did not pass the test session: ${names}`, undefined, undefined, undefined, { verifyRepair: { report: executionReportText(report), items: failing.map((v) => ({ key: v.key, label: v.label, verdict: v.verdict })) } }).catch(() => "handled");
+      },
+      canRepair: () => { if (repairsRef.current >= 1 || modeRef.current === "internal") return false; repairsRef.current++; return true; },
+      current: () => verifySigRef.current === sig,
+      repaired: () => repairsRef.current,
+      onState: (st) => {
+        setVerify((v) => (st.status === "done" && v?.signature === st.signature && v.anyway ? { ...st, anyway: true } : st));
+        if (st.status !== "running" && st.report && st.status !== "repairing") {
+          /* the report in the operation history (intelligent_operations): the verdicts in the intent, each item's line as a warning */
+          const report = st.report;
+          const k = openOpRef.current;
+          const cur = k ? recorder.list().find((o) => o.key === k) : undefined;
+          if (k && cur) void updateOp(k, { intent: { ...cur.intent, verify: (st.summary ?? "").slice(0, 300), verifyVerdicts: report.verdicts.map((v) => `${v.label}: ${v.verdict}`).join("; ").slice(0, 480), verifyMs: report.durationMs, verifyRepairs: repairsRef.current }, warnings: [...cur.warnings.filter((w) => !w.startsWith("Test session: ")), ...report.verdicts.map((v) => `Test session: ${v.label} — ${v.summary}`.slice(0, 480))] });
+        }
+      },
+    });
   }, [session.proposal, full]); // eslint-disable-line react-hooks/exhaustive-deps
-  /** Apply waits for the test session, and after a failure needs "Apply anyway" */
-  const verifyBlocks = !!verify && (verify.status !== "done" || (!verify.ok && !verify.anyway));
+  /** Apply waits for the test session (bounded: ≤ 25 s), and after a failure — or while the one repair runs — needs "Apply anyway" */
+  const verifyBlocks = !!verify && (verify.status === "running" || (!verify.ok && !verify.anyway));
 
   /** the approved items of a change plan, built one call each into one proposal on the same card */
   const executePlan = React.useCallback(async (entryId: string, items: string[]): Promise<void> => {
@@ -1396,7 +1395,7 @@ export function useCopilot(opts: {
     if (!session.proposal || !state) return { ok: false, reason: "There is nothing to apply." };
     if (s.readOnly) return { ok: false, reason: "This project is read-only right now." };
     /* S2c: never while its scripts are still running in the test session (after a failure, "Apply anyway" is the researcher's explicit choice) */
-    if (verifyRef.current && verifyRef.current.status !== "done") return { ok: false, reason: "The proposal's scripts are still running in a test session — apply once it has finished." };
+    if (verifyRef.current && verifyRef.current.status === "running") return { ok: false, reason: "The proposal's scripts are still running in a test session — apply once it has finished." };
     if (stale) {
       // replay onto the survey as it is now, and ask again: the researcher approves what will actually happen
       setSession((x) => ({ ...x, proposal: x.proposal ? rebaseProposal(x.proposal, s.def) : null, confirmed: false }));

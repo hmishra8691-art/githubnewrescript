@@ -16,7 +16,7 @@ export function VerifyCard({ verify, compact, onApplyAnyway, canApply }: { verif
     <div className={`cp-block ${status === "failed" ? "err" : status === "ok" ? "" : "warn"}`} data-testid="cp-verify" data-status={status} data-repaired={verify.repaired}>
       <div className="iq-label">
         {status === "running" ? "Running in a test session…"
-          : status === "repairing" ? "The test session found a problem — asking the copilot to fix it…"
+          : status === "repairing" ? "The test session found a problem — asking the copilot to fix it… (or apply it as it is)"
           : status === "ok" ? (verdicts.every((v) => v.verdict === "not-run") ? "Checked — could not be run here" : "Ran in a test session")
           : verify.repaired ? "Still failing after one repair — review before applying" : "Did not pass the test session"}
       </div>
@@ -31,7 +31,7 @@ export function VerifyCard({ verify, compact, onApplyAnyway, canApply }: { verif
         </ul>
       )}
       {verify.report && !compact && <p className="iqi-dim" data-testid="cp-verify-meta">{verdicts.reduce((n, v) => n + v.scenarios, 0)} scenarios in {(verify.report.durationMs / 1000).toFixed(1)} s — in this browser, with the survey's real page, sandbox and write channel; nothing saved.{verify.report.truncated ? " The 20-second limit was reached: the remaining items were not run." : ""}</p>}
-      {status === "failed" && !verify.anyway && onApplyAnyway && (
+      {(status === "failed" || status === "repairing") && !verify.anyway && onApplyAnyway && (
         <button type="button" className="iq-btn" data-testid="cp-apply-anyway" disabled={canApply === false} onClick={onApplyAnyway} title="Apply the proposal although its scripts did not pass the test session">Apply anyway</button>
       )}
     </div>

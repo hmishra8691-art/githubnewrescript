@@ -160,8 +160,10 @@ export function hostPage(def: SurveyDefinition, item: Pick<VerifyItem, "question
     const p = pages.find((x) => x.pageId === item.pageId) ?? (questionByRef(def, item.pageId) ? pages.find((x) => x.questionIds.includes(questionByRef(def, item.pageId)!.id)) : undefined);
     if (p) return p;
   }
-  if (item.blockId) { const p = pages.find((x) => x.blockId === item.blockId); if (p) return p; }
-  return pages[0]!;
+  if (item.blockId) { const p = pages.find((x) => x.blockId === item.blockId && x.questionIds.length) ?? pages.find((x) => x.blockId === item.blockId); if (p) return p; }
+  /* a survey-scoped script: the first page that shows a question (an empty page, or one of hidden variables only, hosts nothing to run against) */
+  const shows = (x: HostPage) => x.questionIds.some((id) => { const q = def.questions.find((y) => y.id === id); return !!q && !/^(?:hidden|embedded_data|experiment)$/.test(q.type) && !(q.settings as { hidden?: boolean } | undefined)?.hidden; });
+  return pages.find(shows) ?? pages.find((x) => x.questionIds.length) ?? pages[0]!;
 }
 
 /* ------------------------------------------------------------------ declarations */
@@ -180,7 +182,11 @@ export interface ScriptDeclarations {
   raisesErrors: boolean;
   /** api.onChange (a custom component) */
   componentOnChange: boolean;
+  /** the code can change something observable (an rs effect, a write, a DOM change, an error); false: it only reads / logs — no effect is expected */
+  effectful: boolean;
 }
+
+const EFFECTFUL = /\brs\s*\.\s*(?:addClass|removeClass|toggleClass|setStyle|clearStyle|show|hide|showMessage|hideMessage|popup|closePopup|animate|scrollTo|focus|goToPage|goToSection|setAnswer|setEmbedded|setCalc|flag|error)\s*\(|\b(?:ctx\s*\.\s*)?(?:set|setCalc|setEmbedded|flag|error)\s*\(|\bapi\s*\.\s*setValue\s*\(|createElement|append(?:Child)?\s*\(|insert(?:Before|AdjacentHTML|AdjacentElement)\s*\(|classList|\.style\b|textContent\s*=|innerHTML\s*=|innerText\s*=|setAttribute\s*\(|removeAttribute\s*\(|\.hidden\s*=|\.remove\s*\(|\.disabled\s*=/;
 
 export function scriptDeclarations(code: string): ScriptDeclarations {
   const src = String(code ?? "");
@@ -196,6 +202,7 @@ export function scriptDeclarations(code: string): ScriptDeclarations {
     writes: [...new Set(refs.filter((r) => r.via === "call" && r.write).map((r) => r.name))],
     raisesErrors: /\b(?:rs\s*\.\s*)?error\s*\(/.test(src),
     componentOnChange: /\bapi\s*\.\s*onChange\s*\(/.test(src),
+    effectful: EFFECTFUL.test(src),
   };
 }
 
@@ -469,7 +476,8 @@ export function itemVerdict(rec: ItemRecord, expect?: ScriptExpect): ItemVerdict
   if (ex && !ex.met) return { ...base, verdict: "ran-no-effect", summary: `Ran in a test session (${n} scenario${n === 1 ? "" : "s"}), but not as expected: ${ex.why}`, detail: [ex.why], expectMet: false };
   if (!effects.length && !noneExpected) return { ...base, verdict: "ran-no-effect", summary: `Ran in a test session (${n} scenario${n === 1 ? "" : "s"}), no errors — but it did nothing visible in any of them (a selector, event or condition that never matches?)${saved}`, detail: [`no observable effect in: ${rec.scenarios.map((s) => s.label).join("; ")}`] };
   const first = effects[0];
-  const said = first ? `${effectWords(first.e)}${first.s !== "enter the page" ? ` on “${first.s.replace(/^select “(.+)” in .+$/, "$1")}”` : " when the page opened"}` : "no effect, as expected";
+  const logged = rec.scenarios.flatMap((s) => s.logs)[0];
+  const said = first ? `${effectWords(first.e)}${first.s !== "enter the page" ? ` on “${first.s.replace(/^select “(.+)” in .+$/, "$1")}”` : " when the page opened"}` : logged ? `it only logs (“${logged.slice(0, 60)}”), as written` : "no effect, as expected";
   return { ...base, verdict: "ran-ok", summary: `Ran in a test session: ${n} scenario${n === 1 ? "" : "s"}, ${said}, no errors${saved}`, detail: [], ...(ex ? { expectMet: true } : {}) };
 }
 

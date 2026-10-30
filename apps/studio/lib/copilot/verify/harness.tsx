@@ -21,14 +21,14 @@ import { createRoot, type Root } from "react-dom/client";
 import type { SurveyDefinition, UxTarget, Question } from "@rescript/schema";
 import {
   createResponseState, setAnswer, applyScriptWrite, validatePage, withComponentBehaviors, prepareLogicScripts, logicSnapshot,
-  logicStatics, logicScriptScope, buildScenarios, fillAnswers, hostPage, itemVerdict, savedWriteProblems, codeItemsSignature,
+  logicStatics, logicScriptScope, buildScenarios, scriptDeclarations, fillAnswers, hostPage, itemVerdict, savedWriteProblems, codeItemsSignature,
   type ResponseState, type ScriptWrite, type VerifyItem, type ItemRecord, type ScenarioRecord, type ObservedEffect, type VerificationReport,
   type Scenario, type CheckedWrite, type HostPage,
 } from "@rescript/engine";
 import { QuestionRenderer, UxLayer, LogicFrameHost, brandingVars, widthModeClass, brandingClasses, type UxTrace, type UxAskFrames, type UxScriptIssue } from "@rescript/renderer";
 
-export const ITEM_LIMIT_MS = 5000;
-export const PROPOSAL_LIMIT_MS = 20000;
+import { ITEM_LIMIT_MS, PROPOSAL_LIMIT_MS } from "./orchestrate";
+export { ITEM_LIMIT_MS, PROPOSAL_LIMIT_MS };
 /** how long a frame gets to start, and to react to one step */
 const READY_MS = 1500;
 const SETTLE_MS = 160;
@@ -187,7 +187,7 @@ export async function runVerification(def: SurveyDefinition, items: VerifyItem[]
       opts.onItem?.(records.length, items.length);
     }
   } finally { box.remove(); }
-  return { signature: codeItemsSignature(items), at: new Date().toISOString(), durationMs: Date.now() - t0, items: records, verdicts: records.map((r) => itemVerdict(r, items.find((i) => i.key === r.key)?.expect)), ...(truncated ? { truncated } : {}) };
+  return { signature: codeItemsSignature(items), at: new Date().toISOString(), durationMs: Date.now() - t0, items: records, verdicts: records.map((r) => { const it = items.find((i) => i.key === r.key); return itemVerdict(r, it?.expect ?? (it && !scriptDeclarations(it.code).effectful ? { effect: "none" } : undefined)); }), ...(truncated ? { truncated } : {}) };
 }
 
 async function runItem(def0: SurveyDefinition, item: VerifyItem, box: HTMLElement, limitMs: number, seed: number): Promise<ItemRecord> {

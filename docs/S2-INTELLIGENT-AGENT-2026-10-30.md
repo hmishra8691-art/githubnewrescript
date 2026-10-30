@@ -381,3 +381,15 @@ OOM deaths (dmesg, memory cgroup): the Studio `next-server` was killed twice dur
 | 1 Survey Understanding | partial | **present** (S2a: classification, script questions, owner sentences; S2b: logic scripts and scripts in the graph) |
 | 2 JavaScript Capability | partial | **present** (S2b: `capabilityRegistry.ts`, test-synced with the sandbox API, events, variants and actions) |
 | 3 Execution and Verification | missing | **present** (S2c), with the limits above |
+
+## S2c follow-up: the terminal-state guarantee (regression found in production-intents-test)
+
+**What happened.** `production-intents-test.mjs` (7/7 at `1c9c1fa`) failed at "ACCEPTED NOW": its proposal adds `set_custom_code` on `__survey__` with `rs.log('survey script')`. The test session judged a script that only logs as `ran-no-effect`, asked for the one repair (no scripted reply under the fake provider), and Apply then stayed disabled — in this run because a failing verdict needs "Apply anyway"; in the reporter's run the card stayed on "Running the scripts in a test session first", i.e. nothing bounded the running / repairing states except the harness's own limits and the repair turn coming back.
+
+**The fix.**
+- `apps/studio/lib/copilot/verify/orchestrate.ts` (new, no React): `verifyProposal` is the state machine, with hard deadlines (`withDeadline` never rejects, never waits past its deadline). **running ≤ 25 s** (`VERIFY_HARD_LIMIT_MS` = the 20 s proposal limit + 5 s grace; a harness that never settles or throws ends as `not-run` for every item, with the reason, and Apply opens); **repairing ≤ 90 s** (`REPAIR_WAIT_MS`; a repair that does not come back, fails, or answers in words ends as the previous verdict, failing). `useCopilot` now only supplies `run` / `repair` / `current` to it.
+- **Apply waits only while running.** During the repair and after a failing verdict, "Apply anyway" is offered (`verifyBlocks` and `apply()` block only `running`).
+- **A script that only reads or logs** (no rs effect, write, DOM change or error call — `scriptDeclarations(code).effectful` is false) is run with "no effect expected": `ran-ok`, "it only logs (“survey script”), as written".
+- **A survey-scoped script** is hosted on the first page that shows a question (not an empty page or one of hidden variables only).
+- Unit tests: `lib/copilot/verify/orchestrate.test.ts` (6: a harness that never settles → `not-run` within the budget; one that throws; a repair that never comes back → `done`, failing, within the repair budget; a revision hands the card on; the one repair is not repeated; `withDeadline`); engine `scriptVerify.test` +1 (survey host page, `effectful`), `scriptVerdict.test` +1 (log-only).
+- Verification (Studio heap 4,600 MB, `fresh.sh`): `production-intents-test` **7/7**, `im-verify-test` **8/8**, `copilot-test` (`--no-runtime`, with the coordinator's `46f9700` wait) **11/11**, `age-script-p0-test` **10/10**, `style-script-p0-test` **11/11**. Units: engine **2522/2522**, Studio lib **1089/1089**; Studio typecheck 0 errors. One OOM kill of the Studio `next-server` (dmesg, uptime 14,733 s) during this batch; every suite passed.

@@ -89,3 +89,9 @@ test("the save payload: an accepted write is in the state AND in what the Runner
   assert.match(savedWriteProblems(state, [{ kind: "answer", target: "other", value: 5 }])[0]!, /not labelled as script-written/);
   assert.match(savedWriteProblems(state, [{ kind: "calculated", target: "NOPE", value: 1 }])[0]!, /accepted but not in the response state/);
 });
+
+test("a script that only logs, run with no effect expected: ran-ok, and the card says it only logs", () => {
+  const v = itemVerdict(rec([sc("enter", "enter the page", { logs: ["survey script"] })]), { effect: "none" });
+  assert.equal(v.verdict, "ran-ok");
+  assert.equal(v.summary, "Ran in a test session: 1 scenario, it only logs (“survey script”), as written, no errors");
+});
