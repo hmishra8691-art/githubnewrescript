@@ -362,7 +362,17 @@ function applyOne(def: SurveyDefinition, state: ResponseState, write: ScriptWrit
       const calc = def.calculations.find((c) => c.targetVariable === write.name);
       // a declared calculation recomputes its variable whenever its trigger runs (on_change, on_page_submit, on_complete)
       if (calc) return refuse(`${write.name} is computed by calculation ${calc.id} (${calc.trigger}) — a script value would be overwritten when it runs; change the calculation, or write a variable of the script's own`);
-      if (!isScalar(write.value)) return refuse(`variable ${write.name} holds text, a number or true/false`);
+      /*
+       * S1b: a list or a record of plain values is accepted too — the Scripts panel always could (the master demo's
+       * INVALID_BRANDS, `[{code, label}]`, is the `variable` source of a loop) — within the size limits.
+       */
+      if (!isScalar(write.value)) {
+        if (!Array.isArray(write.value) && !isObj(write.value)) return refuse(`variable ${write.name} holds text, a number, true/false, or a list / record of them`);
+        let json = "";
+        try { json = JSON.stringify(write.value) ?? ""; } catch { return refuse(`variable ${write.name}: the value cannot be stored`); }
+        if (json.length > SCRIPT_WRITE_LIMITS.json) return refuse(`variable ${write.name}: the value is longer than ${SCRIPT_WRITE_LIMITS.json.toLocaleString("en")} characters of JSON`);
+        if ((Array.isArray(write.value) ? write.value.length : Object.keys(write.value).length) > SCRIPT_WRITE_LIMITS.items) return refuse(`variable ${write.name}: more than ${SCRIPT_WRITE_LIMITS.items} items`);
+      }
       if (typeof write.value === "string" && write.value.length > SCRIPT_WRITE_LIMITS.text) return refuse(`the text is longer than ${SCRIPT_WRITE_LIMITS.text.toLocaleString("en")} characters`);
       const value = write.value as string | number | boolean | null;
       const isNew = !Object.prototype.hasOwnProperty.call(state.calculated, write.name);

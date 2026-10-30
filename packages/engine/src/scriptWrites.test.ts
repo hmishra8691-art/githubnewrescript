@@ -154,7 +154,9 @@ test("punches and calculations recompute after a script write, as after a respon
   assert.equal(s.calculated.MY_VAR, "hi");
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "PAGE_SCORE", value: 3 }, survey()).reason!, /computed by calculation c_submit \(on_page_submit\)/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "SRC_TWICE", value: 1 }, survey()).reason!, /computed by calculation c_twice/);
-  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "MY_VAR", value: { a: 1 } }, survey()).reason!, /holds text, a number/);
+  // S1b: a list / record is accepted (the Scripts panel's INVALID_BRANDS); a function-like or oversized one is not
+  assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "MY_LIST", value: [{ code: "1", label: "x" }] }, survey()).ok, true);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "MY_BIG", value: Array.from({ length: 501 }, (_, i) => i) }, survey()).reason!, /more than 500 items/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_BRAND_COUNT", value: 1 }, survey()).reason!, /computed by the engine/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "Q_NUM", value: 1 }, survey()).reason!, /is a question/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "bad name!", value: 1 }, survey()).reason!, /not a valid/);

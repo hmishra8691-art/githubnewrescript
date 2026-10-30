@@ -31,7 +31,15 @@ import { codeGate, gateReason, LOGIC_PARAMS, logicScriptBody, loopCounter } from
  * What this still is NOT: a security boundary. It runs in the page's realm;
  * the gate is static and a name assembled at run time on an object the
  * script declared is not seen. The runtime CSP stops such code from sending
- * anything off the page; S1 moves these scripts into the sandboxed frame.
+ * anything off the page.
+ *
+ * S1b (2026-10-30): THIS MAIN-THREAD RUNNER IS NO LONGER HOW A RESPONDENT'S
+ * PAGE RUNS SCRIPTS. The runtime sends logic scripts to a sandboxed frame
+ * (`logicSandbox.ts` — the same `ctx`, writes as requests through
+ * `applyScriptWrite`). `runScript` / `runScripts` remain for exactly two
+ * callers: the runtime's temporary escape hatch `RUNTIME_LEGACY_SCRIPTS=main`
+ * (one release) and unit tests. `createScriptCtx` is also what the host uses to
+ * evaluate a script's literal `expr()` / `pipe()` arguments for the frame.
  */
 
 /*
@@ -148,6 +156,15 @@ export interface ScriptRunResult {
   refusedScripts?: string[];
 }
 
+/** what a script sees of one iteration (shared with the sandbox snapshot, logicSandbox.ts) */
+export function loopItemView(l: LoopContext): LoopItemView {
+  return {
+    code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
+    first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
+    references: { ...(l.references ?? {}) },
+  };
+}
+
 export function createScriptCtx(
   def: SurveyDefinition,
   state: ResponseState,
@@ -155,11 +172,7 @@ export function createScriptCtx(
   result: ScriptRunResult,
 ): ScriptCtx {
   const refToId = (ref: string) => getQuestionByCodeOrVar(def, ref)?.id ?? ref;
-  const viewOf = (l: LoopContext): LoopItemView => ({
-    code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
-    first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
-    references: { ...(l.references ?? {}) },
-  });
+  const viewOf = loopItemView;
   /*
    * Built once per script run and cached, because a script in a loop calls
    * these per iteration and walking the whole definition each time would turn
@@ -321,6 +334,26 @@ export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult):
  * was matched and those scripts — written, enabled, and listed in the editor
  * — silently never ran.
  */
+/**
+ * The scripts an event runs, in definition order: enabled, this event, in scope (see `runScripts`), and whose
+ * `when` guard holds against the answers as they are now. Shared by the main-thread runner and the sandbox
+ * (`prepareLogicScripts`), so both select exactly the same scripts.
+ */
+export function selectScripts(
+  def: SurveyDefinition,
+  state: ResponseState,
+  event: CustomScript["event"],
+  opts?: { scopeRef?: string | string[]; loop?: LoopContext | null; only?: "scoped" },
+): CustomScript[] {
+  const refs = opts?.scopeRef === undefined ? [] : Array.isArray(opts.scopeRef) ? opts.scopeRef : [opts.scopeRef];
+  return def.scripts.filter((script) => {
+    if (!script.enabled || script.event !== event) return false;
+    if (script.scope === "survey" ? opts?.only === "scoped" : !(script.ref && refs.includes(script.ref))) return false;
+    // the script's guard: an ordinary condition, any nesting, against the answers as they are now
+    return !(script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null }));
+  });
+}
+
 export function runScripts(
   def: SurveyDefinition,
   state: ResponseState,
@@ -332,7 +365,7 @@ export function runScripts(
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
     if (script.scope === "survey" ? opts?.only === "scoped" : !(script.ref && refs.includes(script.ref))) continue;
-    // the script's guard: an ordinary condition, any nesting, against the answers as they are now
+    // the script's guard: an ordinary condition, any nesting, against the answers as they are now (re-read per script: earlier scripts mutate the state here)
     if (script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null })) continue;
     const own: ScriptRunResult = { logs: [], errors: [] };
     const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
