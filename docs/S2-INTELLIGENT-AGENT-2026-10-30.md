@@ -190,7 +190,7 @@ OOM deaths recorded (dmesg, memory cgroup 6.27 GB): Studio `next-server` killed 
 - **`while(true)` is still accepted** at authoring. It is loop-guarded at run time, as before.
 
 ## What S2b and S2c do
-S2b is done (Part B below). S2c (the Execution and Verification layer) is not started.
+S2b is done (Part B below). S2c (the Execution and Verification layer) is done (Part C below).
 
 - **S2c:** the Execution and Verification layer.
   - Each proposed script runs on a mirrored page before the card says it is ready.
@@ -248,7 +248,7 @@ Commits on `feat/persistent-execution-engine` after `7ab9bdd`: item 1 `1d90ebe`,
 |---|---|---|
 | 1. Research capability registry (`capabilities.ts`) | in place (methodologies, types, analysis, exports) | unchanged |
 | 2. JavaScript capability registry | prose in the UX guide; `UX_SCRIPT_API` a bare list | **data** (`capabilityRegistry.ts`), test-synced with `UX_SCRIPT_API`, `UX_SCRIPT_EVENTS`, `variants.ts` and `SURVEY_ACTION_OPS`; gate refusals and explanations read routes from it; the variant guide is rendered from it |
-| 3. Execution / verification | "checked, not run yet" | unchanged — **S2c** |
+| 3. Execution / verification | "checked, not run yet" | unchanged — **S2c** (done: Part C) |
 
 ## Verification (S2b, 2026-10-30)
 
@@ -283,3 +283,80 @@ OOM deaths recorded (dmesg, memory cgroup): Studio `next-server` killed at uptim
 - **The variant guide is chosen by words**: a sentence that names an interaction in other words gets no catalogue (the gate still refuses an undeclared setting with the declared list, and the repair call carries the reason).
 - **Nothing is executed before it is proposed** — logic scripts included ("checked by the logic-script gate, not run yet"). That is S2c.
 - **A model's own output was not measured**: fake provider only; the deterministic paths and the gate's handling of model-shaped replies are what is verified.
+
+---
+
+# S2c — part C: the Execution and Verification layer (2026-10-30)
+
+Commits on `feat/persistent-execution-engine` after `1c9c1fa`: item 1 `2909ef1`, item 2, item 3, item 4, item 5, item 6 (this doc) — see `git log`.
+
+The owner's requirement: "Execution and Verification Engine: writes code, executes it safely, checks actual survey behaviour, and verifies that responses are saved correctly." A proposal that contains code is no longer presented as ready until it has run.
+
+## How it works
+
+1. **Which items run** (`packages/engine/src/scriptVerify.ts` `proposalCodeItems`). Every behaviour script, enabled Scripts-panel (logic) script and custom component code that is new or changed in the proposal's clone against the survey before it. Removed items are not run. Model proposals and engine-only proposals go through the same path (the hook watches the open proposal, not who wrote it).
+2. **Where they run** (`apps/studio/lib/copilot/verify/harness.tsx`, browser-side, no new dependency). An off-screen container in the Studio's own page (`data-testid="cp-verify-stage"`, removed when done) draws the page that hosts the item (`hostPage`: its question's page, its page, its block's first page, else the first page) with:
+   - the real `QuestionRenderer` for each question of the page, in a survey shell with the theme;
+   - the real `UxLayer` — its sandboxed frames, mirror DOM, write channel (`onScriptWrite` → `applyScriptWrite` with the scope the Runner gives), validate/submit lifecycle (`lifecycleRef`);
+   - for a logic script, the real `LogicFrameHost` with `prepareLogicScripts` / `logicSnapshot` (the Runner's `runLogicEvent`, for exactly this script); its writes go through `applyScriptWrite` with `logicScriptScope`.
+   Only the item's own script runs on the stage (other scripts would blur what it did). The state is in memory (`createResponseState`), nothing is posted, no store is written, the draft is never touched. Limits: **5 s per item, 20 s per proposal**; a pause that takes > 2 s longer than asked means the page's thread was blocked (`timeout`).
+3. **Scenarios** (`buildScenarios`, seeded with mulberry32 so a set is reproducible). Always "enter the page" (page/load scripts). Trigger questions are read from the code: `rs.listen` events and targets ("self" = its question), DOM listeners (`addEventListener` input/change/click/key…) on `[data-qid]` hooks and its own question, a logic `on_change` script's question/page, a component's `api.onChange`, and the questions it reads (`scriptLiteralRefs`) that are on the page (≤ 3 triggers). For a choice: each option once (≤ 6) and select-then-clear; a number: empty, min, max, typical (declared `min_value`/`max_value`, else 0–100); a text: empty, one character, typical. `validate` / `submit` listeners and logic `on_validate` / `on_submit` / `on_complete`: Next with valid answers and — where a rule exists (the script raises `error()`, or a question of the page has validation) — with invalid-looking ones. A page in a loop: the first two iterations. Answers are **played as a respondent gives them**: a click on the option's input, typing into the box with React's own setter and `input` + `change` events, so a script that listens to the page's DOM events hears what it would hear in the survey; only what has no control (clearing a single choice) is set directly.
+4. **What is recorded per scenario** (renderer `UxLayer` new prop `onTrace`, `DomBridge` option `onOp`, sandbox `fail` now reports the error's line): the frame starting; every effect the host applied with the number of elements it actually changed (a removal of an absent class counts nothing); every mirror op (class / style / attr / create / replace / remove) and the question it touched; refusals (an unresolved target, a refused style, a hide of an answer input, refused navigation, a DOM op the bridge refused); thrown errors and rejections with the line; `rs.log` lines; write requests accepted (with the state's value afterwards) or refused (with the engine's reason); Next's outcome (built-in `validatePage` errors, the script's `validate` errors, a logic script's `error()`); watchdog / rate-limit stops and the sandbox's endless-loop and endless-promise-chain guards; duration.
+5. **Verdict** (`itemVerdict`):
+
+| Verdict | When | Repair? |
+|---|---|---|
+| `ran-ok` | no error and at least one observable effect, or `expect.effect: "none"` | no |
+| `ran-no-effect` | it ran and did nothing observable in any scenario, or not what its `expect` said | yes |
+| `ran-error` | it threw (scenario, message, line), or an accepted value is missing from the state / save payload | yes |
+| `blocked` | refused at run time: the code gate, a DOM op / navigation the host refused, a write the engine refused | yes |
+| `timeout` | the watchdog, the rate limit, the loop / promise-chain guard, a logic frame that never answered, a blocked page thread | yes |
+| `not-run` | the harness could not run it here (no page shows it, its frame did not start, its event never happens in a playable scenario, the 20 s limit) — not the script's fault | no |
+
+   When the 5 s budget runs out between scenarios, the scenarios played stand and the summary says how many were not played — a harness limit is never reported as the script's timeout.
+6. **"Responses are saved correctly"** (`packages/engine/src/savePayload.ts`). The Runner's save body is now built by `responseSavePayload(state)` (`Runner.tsx` `saveBody` spreads it). For every accepted write, `savedWriteProblems` checks the value is in the response state, equals what the harness saw, is in the payload exactly as it would be serialised and posted, and is labelled in `scriptWrites` (the server's replay reads that label). A miss is `ran-error`.
+7. **`expect`** — an optional field on `create_behavior` / `update_behavior` (coerced in `behFields`) and `create_logic_script` / `update_logic_script`: `{ on: "select Q1=2" | "enter" | "next" | "answer Q3=17" | "clear Q1", effect: "class rs-highlight on Q5" | "message" | "popup" | "write Q9" | "error" | "none" }`. Matched to its item by id, label, target question, or — one hint, one item — directly; checked by `expectHolds`; **never stored** in the definition. The UX guide says scripts are run and names the field.
+8. **In the turn** (`useCopilot`): whenever the open proposal's code items change (their signature: code, event, scope, target, expect), the harness runs; `VerifyCard` on the turn card and in *Changes* says "Running in a test session…", then per item "Ran in a test session: 5 scenarios, added class rs-highlight to Q5 on “Brand B”, no errors" / the error / "Could not be run here: …". Apply waits (`verifyBlocks`; `apply()` also refuses while it runs). A failing verdict asks the copilot for **one** repair turn (`Repair the script … that did not pass the test session: “…”`) whose body carries `verifyRepair` — the route sanitises it (`sanitizeVerifyRepair`, ≤ 4,000 characters, ≤ 10 items), fences it as untrusted (it quotes what scripts printed), adds `executionRepairNote` after the guides (new repair reason `"execution"`, `context.repairReason`), and the reply becomes a revision of the open proposal, which is run again. Still failing (or the repair answered in words): "Still failing after one repair — review before applying" and Apply needs the explicit **Apply anyway**. The gate's "checked … not run yet — try it in Preview" is shown as "checked and run in a test session" / "… it did not pass" / "checked, could not be run here: <reason>" (`withRunNote`).
+9. **History**: the report is written to the open operation (`intelligent_operations`): `intent.verify` (the summary), `intent.verifyVerdicts`, `intent.verifyMs`, `intent.verifyRepairs`, and one `warnings` line per item ("Test session: <label> — <summary>").
+10. **The human preview** (`UxPreview`) now passes `onLog` to `UxLayer` and lists what the scripts say (`data-testid="cp-ux-log"`, audit SE-12 / IM-13).
+
+## Where to find it
+- Intelligent Mode → any request whose proposal contains a script ("highlight Q5 when Brand B is picked in Q1", "warn when the total of Q6 and Q7 exceeds 100%"): the card and *Changes* show the test session (`data-testid="cp-verify"`, items `cp-verify-item` with `data-verdict`); after a failed repair, `cp-apply-anyway`. *History* → the operation's warnings carry the verdicts.
+- Engine exports: `proposalCodeItems`, `expectsFromActions`, `coerceExpect`, `hostPage`, `surveyPages`, `scriptDeclarations`, `buildScenarios`, `fillAnswers`, `answerShape`, `numericBounds`, `typicalAnswer`, `itemVerdict`, `expectHolds`, `verificationSummary`, `executionReportText`, `codeItemsSignature`, `VERDICT_NEEDS_REPAIR`; `responseSavePayload`, `savedWriteProblems`.
+- Renderer: `UxLayerProps.onTrace` / type `UxTrace`; `DomBridgeOptions.onOp`.
+- Studio: `lib/copilot/verify/harness.tsx` (`runVerification`, `ITEM_LIMIT_MS`, `PROPOSAL_LIMIT_MS`), `components/intelligent/copilot/VerifyCard.tsx`, `prompt.ts` (`executionRepairNote`, `sanitizeVerifyRepair`, `EXECUTION_REPAIR_REASON`).
+- Route: `/api/copilot/turn` body `verifyRepair: { report, items }`; response `context.repairReason: "execution"`, `context.verifyRepair.items`. TEST SEAM: under the fake provider an execution repair without a scripted reply answers `unusable` at once.
+- Public docs: `apps/studio/content/docs/intelligent-mode.md` ("Scripts are run before they are offered"); `actions-reference.md` regenerated (the logic-script types show `expect`).
+- No environment variables, no migrations, no new dependencies.
+
+## Limits (what the test session cannot show)
+- **Layout-dependent effects.** The stage is off-screen at 820 px: a script that measures positions, scroll or visibility, depends on the viewport or phone width, or animates, is judged by what it changed (classes, styles, elements), not by how it looks.
+- **Time.** Each item has 5 s: `rs.after` timers longer than about a second, countdowns and effects after a delay are not observed; a script with many trigger questions may have scenarios left unplayed (said in the summary).
+- **Network-dependent media** cannot load (no network in the sandbox, and the stage does not fetch media); what a script does when a clip ends is not simulated.
+- **Not simulated:** other respondents' data (quota counts are empty), the server's replay and its checks after the save, URL parameters and embedded data from the panel, cross-page navigation (`rs.goToPage` is answered "would go to …" and counted as an effect), the respondent's language switch, loop iterations beyond the second, a loop's own context for UX scripts (the iteration is re-entered, not re-keyed), custom components whose element is not on the hosting page.
+- **The verdict reads effects, not intent.** A script that changes the wrong thing still "ran" — unless the model's `expect` names what it should do. `expect` is optional; without it, "did something visible without an error" is `ran-ok`.
+- **The browser is the Studio's.** Verified in headless Chromium; another browser may differ. A script that freezes a frame sharing the page's thread would freeze the Studio for as long as the sandbox's guards allow (the loop guard and the promise-chain guard stop the common cases; verified).
+- **One automatic repair** per proposal (the hook counts); a model's own repair quality was not measured (fake provider only).
+
+## Verification (S2c)
+VERIFICATION_TABLE
+
+## The owner's 10 steps and 3 layers after S2
+| Step | Audit (before S2) | After S2 (a + b + c) |
+|---|---|---|
+| 1 Understand | partial | **present**: behaviour vs look read correctly (S2a D9), debug/why/explain a script (D10), owner's 15 sentences all with a non-blocked path |
+| 2 Inspect | partial | **present**: script dossier in full with check and field health (D10), logic scripts in the outline, scripts in the dependency graph (S2b) |
+| 3 Plan (native vs script) | partial (guide text only) | **present as data**: the capability registry's native routes (`nativeRouteFor`) drive refusals and explanations; the guide remains prose for the model |
+| 4 Check compatibility | present (static, with gaps) | present: static gate + the variant settings rule; plus the run-time check (step 7/9) |
+| 5 Generate | partial | partial (by design: no libraries, no integrations): + logic-script actions, media, every declared variant setting |
+| 6 Integrate | present | present |
+| 7 **Execute** | **missing** | **present**: every code item runs on the real page / sandbox / logic frame in a test session before the proposal is ready |
+| 8 Validate | partial (static only) | **present**: static gate + run-time verdicts, refused writes and DOM ops with reasons, the save-payload check |
+| 9 **Test** | **missing** | **present**: deterministic, seeded scenarios per item (options, bounds, Next valid/invalid, loops); `expect` checked; one automatic repair |
+| 10 Report | present (static only) | present: per-item verdicts on the card and in History; "checked and run in a test session" replaces "not run yet" |
+
+| Layer | Before S2 | After S2 |
+|---|---|---|
+| 1 Survey Understanding | partial | **present** (S2a: classification, script questions, owner sentences; S2b: logic scripts and scripts in the graph) |
+| 2 JavaScript Capability | partial | **present** (S2b: `capabilityRegistry.ts`, test-synced with the sandbox API, events, variants and actions) |
+| 3 Execution and Verification | missing | **present** (S2c), with the limits above |

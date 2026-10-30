@@ -10,7 +10,7 @@
  *   STUDIO   the same request, with that script as the model's first answer: the Studio refuses it,
  *            says why (selectors that match nothing, Next disabled by a script, an init() that polls),
  *            the request reaches the UX guide, and the model's correction — validation for the age
- *            limit, a script for the live messages — is proposed, marked "checked, not run yet", applied
+ *            limit, a script for the live messages — is proposed, run in a test session (S2c: ran-ok), applied
  *   RUNTIME  the applied survey in the live runtime: empty / letters → no message, cannot continue;
  *            17 → "must be 18", cannot continue (the survey's own validation message); 18 → "eligible",
  *            continues; typed digit by digit; cleared; Back and forward again → the script starts once,
@@ -168,8 +168,12 @@ let applied;
   await page.waitForSelector('[data-testid="cp-panel-apply"]');
   assert.equal(await page.$('[data-testid="cp-refused"]'), null, "nothing refused in what is offered");
   const turnText = await page.$eval('[data-testid="cp-turn"]:last-of-type', (e) => e.textContent ?? "").catch(async () => (await page.textContent("body")) ?? "");
-  assert.match(turnText + (await page.textContent("body")), /not run yet — try it in Preview/, "the card says the script was checked, not tested");
-  ok("the corrected proposal (validation for the age limit + a script for the live messages) is offered, marked “checked, not run yet”");
+  /* S2c: the script is now RUN in a test session before the proposal is ready — the card says so, with the verdict */
+  await page.waitForFunction(() => ["ok", "failed"].includes(document.querySelector('[data-testid="cp-verify"]')?.getAttribute("data-status") ?? ""), null, { timeout: 60000 });
+  const verdict = await page.$eval('[data-testid="cp-verify-item"]', (e) => `${e.getAttribute("data-verdict")} ${e.textContent}`);
+  assert.match(verdict, /^ran-ok .*Ran in a test session: \d+ scenarios, .*no errors/, verdict);
+  assert.match(turnText + (await page.textContent("body")), /checked and run in a test session/, "the card says the script was checked AND run");
+  ok(`the corrected proposal (validation for the age limit + a script for the live messages) is offered after a test session: “${verdict.slice(7, 120)}”`);
 
   await page.click('[data-testid="cp-panel-apply"]');
   await page.waitForTimeout(700);

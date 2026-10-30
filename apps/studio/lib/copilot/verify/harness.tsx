@@ -97,6 +97,37 @@ function elementLabel(def: SurveyDefinition, el: Element | null): string {
 }
 const EFFECT_KIND: Record<string, string> = { show_message: "message", show_popup: "popup", set_style: "style" };
 
+/** a value typed into a box the way a browser does it (React's own setter, then input + change), so DOM listeners hear it */
+function typeInto(el: HTMLInputElement | HTMLTextAreaElement, v: string) {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, v);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+/**
+ * PLAY AN ANSWER AS A RESPONDENT GIVES IT: a click on the option, typing into the box — so a script that listens to
+ * the page's own DOM events (forwarded to its mirror) hears exactly what it would hear in the survey. Returns false
+ * when the page has no such control (a clear of a single choice, a widget without a plain input): the caller sets it.
+ */
+function drive(holder: HTMLElement, qid: string, value: unknown): boolean {
+  const card = holder.querySelector<HTMLElement>(`[data-qid="${CSS.escape(qid)}"]`);
+  if (!card) return false;
+  const choices = card.querySelectorAll<HTMLInputElement>('input[type="radio"], input[type="checkbox"]');
+  const box = card.querySelector<HTMLInputElement | HTMLTextAreaElement>('textarea, input:not([type="radio"]):not([type="checkbox"]):not([type="hidden"])');
+  if (value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length)) {
+    if (box && !choices.length) { typeInto(box, ""); return true; }
+    return false;
+  }
+  if (choices.length) {
+    const codes = Array.isArray(value) ? value : [value];
+    let n = 0;
+    for (const c of codes) { const i = card.querySelector<HTMLInputElement>(`input[value="${CSS.escape(String(c))}"]`); if (i && !i.disabled) { if (!i.checked) i.click(); n++; } }
+    return n === codes.length;
+  }
+  if (box && (typeof value === "string" || typeof value === "number")) { typeInto(box, String(value)); return true; }
+  return false;
+}
+
 /** run one logic script once (the Runner's runLogicEvent, for exactly this script) */
 async function runLogicOnce(def: SurveyDefinition, state: ResponseState, item: VerifyItem, host: LogicFrameHost, page: HostPage, rec: ScenarioRecord, writes: CheckedWrite[], ir: ItemRecord, value?: unknown): Promise<{ errors: { message: string; questionRef?: string }[] }> {
   const prep = prepareLogicScripts(def, state, (item.event ?? "on_load") as never, { ids: [item.id] });
@@ -219,14 +250,12 @@ async function runItem(def0: SurveyDefinition, item: VerifyItem, box: HTMLElemen
         if (over()) break;
         if (st.do === "answer" || st.do === "clear") {
           const v = st.do === "clear" ? undefined : st.value;
-          setAnswer(def, state, st.questionId, v);
-          apiRef.current?.set({ [st.questionId]: v });
+          if (!drive(holder, st.questionId, v)) { setAnswer(def, state, st.questionId, v); apiRef.current?.set({ [st.questionId]: v }); }
           await settle();
           if (logicHost && item.event === "on_change" && (item.scope !== "question" || item.questionId === st.questionId)) await runLogicOnce(def, state, item, logicHost, page, rec, writes, ir);
         } else if (st.do === "fill") {
           const v = fillAnswers(def, page.questionIds, st.valid, seed);
-          for (const [id, x] of Object.entries(v)) setAnswer(def, state, id, x ?? undefined);
-          apiRef.current?.set(v);
+          for (const [id, x] of Object.entries(v)) if (!drive(holder, id, x)) { setAnswer(def, state, id, x ?? undefined); apiRef.current?.set({ [id]: x ?? undefined }); }
           await settle();
         } else if (st.do === "next") {
           const questions = page.questionIds.map((id) => def.questions.find((q) => q.id === id)).filter((q): q is Question => !!q);

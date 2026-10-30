@@ -473,6 +473,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
   const fake = fakes[0] ?? null;
+  /* S2c, TEST SEAM: under the fake provider an execution repair is answered only by a scripted reply — the deterministic stand-in would otherwise invent one */
+  if (verifyRepair && aiProviderName() === "fake" && !fake) return NextResponse.json({ error: "No scripted repair reply (fake provider).", code: "unusable", failure: describeFailure("unusable") }, { status: 200 });
   let raw: unknown;
   let cached = false;
   /*

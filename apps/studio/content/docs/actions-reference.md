@@ -136,8 +136,8 @@ From `packages/engine/src/logicScriptActions.ts`:
 
 ```ts
 export type LogicScriptAction =
-  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string }
-  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string }
+  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string; /** S2c: checked in the test session, never stored */ expect?: ScriptExpect }
+  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string; expect?: ScriptExpect }
   | { op: "remove_logic_script"; script: string }
   | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
 ```
