@@ -195,6 +195,14 @@ export interface ResponseState {
   /** current position in the compiled step sequence */
   stepIndex: number;
   meta?: Record<string, unknown>;
+  /**
+   * S1a: every write a script made through the engine-checked channel (`scriptWrites.ts`) — script, kind,
+   * target, time; never the value. Posted with each save so the replay and the analyst can tell script-made
+   * values from the respondent's.
+   */
+  scriptWrites?: { script: string; kind: "answer" | "embedded" | "calculated" | "flag"; target: string; at: string }[];
+  /** how many of the oldest `scriptWrites` were dropped past the cap */
+  scriptWritesDropped?: number;
 }
 
 export function createResponseState(
