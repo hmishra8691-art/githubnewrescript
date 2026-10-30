@@ -201,7 +201,7 @@ before its Back save had left. The check now waits for the row to show the save 
   allowed. Real-browser coverage is the `ux-script-dom` check 7b.
 - **Browser coverage** is headless Chromium only.
 
-## What S0b still covers
+## What S0b still covered (done in part B, below)
 
 - **D2/D3 containment:**
   - check Manual component code and imported or Scripts-panel code on save;
@@ -211,3 +211,211 @@ before its Back save had left. The check now waits for the row to show the save 
 - **D8:** a heartbeat and wall-clock limit for sandbox frames (a frame watchdog).
 - **D7:** recompute punches and calculations on the server, then move production to `enforce` after a period of
   logging.
+
+---
+
+# Part B — S0b (2026-10-30)
+
+Branch `feat/persistent-execution-engine`, from `2118eb6` (the S0a docs fix). Defects D2, D3, D7 and D8 of the
+audit, plus the runtime Content-Security-Policy. This is **containment**: S1 moves Custom Component code and
+Scripts-panel code into the sandboxed frame; nothing here builds that.
+
+## What changed (part B)
+
+### D3 — one code gate for logic scripts (`def.scripts`)
+
+- **`packages/engine/src/codeGate.ts`** — `codeGate(code, "logic" | "component")`, on the shared tokenizer of
+  `scriptAst.ts` (`tokenize`, `declaredNames` — now exported; no second lexer). It refuses, with a reason each:
+  - `constructor`, `__proto__`, `prototype`, `globalThis`, `Function`, `eval`, `import`, `fetch`, `XMLHttpRequest`,
+    `WebSocket`, `EventSource`, `navigator`, `cookie`, storage, `postMessage`, `sendBeacon`, `Reflect`, `Proxy`,
+    `with`, `setInterval`, `getPrototypeOf`/`setPrototypeOf`, `__defineGetter__` and kin, `ownerDocument`,
+    `defaultView`, `contentWindow`, `contentDocument`, `opener`, and the loop counter `__g` — as a name or as a
+    property (`ctx.get.constructor`), and as a whole string literal (`o["constructor"]`);
+  - per flavour, bare globals (`window`, `document`, `self`, `top`, `parent`, `location`, `process`, `setTimeout`…
+    for logic scripts);
+  - computed access `X[…]` whose object is a bare name the script did not declare and is not one of its roots
+    (`navigator["send"+"Beacon"]`, `Math[k]`, `this[k]`), and any computed key built by joining strings;
+  - loops the existing `guardScriptLoops` cannot instrument (braceless); instrumented loops are bounded at
+    100,000 iterations per run (`loopCounter`);
+  - `exfiltrationProblems` (the regex check) is kept as an extra signal: its findings are reasons too;
+  - a parse check in the exact wrapper the code runs in (so `const get = …` is refused on save, not in a
+    respondent's browser).
+  Verdicts are memoised per (flavour, code), 400 entries.
+- **Run time** — `runScript` refuses code that fails the gate (`result.refused`, `failed: "refused: …"`) and runs
+  the loop-guarded form; `runScripts` logs `[name] refused: reason` (preview inspector) and lists
+  `refusedScripts`; the runtime's `Runner.tsx` wraps `runScripts` and `console.warn`s `[rescript:script] [name]
+  refused: …` in every mode (the only trace in live). A refused `custom_script` validation rule does not hold the
+  respondent. A page-scoped on_load that only produced refusals still shows them.
+- **Save** — the Scripts panel (`BrandingPanel.tsx` `ScriptsPanel` → `ScriptCodeField`) edits a draft and saves on
+  blur / "Save code" only when the gate passes; refused code is not saved and the reasons are listed. A refused
+  script cannot be switched on.
+- **Import** — QSF/Decipher/legacy imports (`packages/import/src/map.ts`) keep custom code `enabled:false`
+  ("pending review") and now start its notes with `Script check: passes.` or `Script check: refused — <reason>.`
+  `gateSurveyScripts(def)` switches off any failing script with the reason in its notes; it runs on the JSON view's
+  "validate & apply" (`JsonPanel.tsx`, with a toast naming the refused scripts) and on project creation from a
+  definition payload (`POST /api/surveys`).
+- **`applySurveyActions`** — no action writes `def.scripts` (only the `custom_script` rule names one), so there is
+  nothing to gate there.
+
+### D2 — Custom Component code through the same gate
+
+- Component flavour: roots `el` and `api`; `document` only for `createElement` / `createElementNS` /
+  `createTextNode` / `createDocumentFragment`; no `window`/`self`/`top`/`parent`/`location`/`Image`; everything in the
+  common list above.
+- **Manual Mode** — Properties → Component code (`PropertiesPanel.tsx` `ComponentJsField`): draft + gate on blur /
+  "Save code", refused with the reasons, not saved.
+- **Intelligent Mode** — `set_custom_code` on a component decides with `codeGate(…, "component")`
+  (`optionActions.ts`); the regex check is now one of its signals, not the decision.
+- **Run time** — `QuestionRenderer.tsx` `CustomComponent` runs only gated code, in strict mode (a top-level `this`
+  is no longer the window), with the loop counter. Refused code does not run: preview/test show "This component
+  could not run: refused by the script check — …" (`data-testid="rs-component-failed"`); every mode warns
+  `[rescript:component] <code>: refused, not run — …`. A component that throws shows the same notice with the error.
+
+### Runtime Content-Security-Policy (`RUNTIME_CSP`)
+
+- `apps/runtime/lib/csp.ts` builds the policy from the environment at boot; `apps/runtime/middleware.ts` sends it on
+  every runtime response except Next's static assets.
+- **Enforced:** `connect-src 'self'` + `SUPABASE_URL` (https, wss) + R2 storage (`R2_ENDPOINT` or
+  `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com`, plus `<bucket>.<host>` when `R2_FORCE_PATH_STYLE=0`) or
+  `MEDIA_STORAGE_URL` (memory store) + `AI_REALTIME_API_URL` + `LIVEKIT_URL` (https, wss; `*.livekit.cloud` for
+  LiveKit Cloud) + `RUNTIME_CSP_CONNECT` (operator list, scheme required); `form-action 'self'`; `base-uri 'self'`;
+  `object-src 'none'`. `frame-ancestors` is not set (the Studio frames the runtime; nothing set it before).
+- **Report-only twin:** the same plus `img-src`/`media-src 'self' data: blob: <storage>` and `script-src 'self'`.
+  There is no report endpoint, so no `report-uri`; findings are console-only. In `next dev` it reports every inline
+  and eval'd script (hundreds of console lines per page — expected; production has fewer).
+- What the runtime client connects to was enumerated by grep (`fetch(`, `new WebSocket`, `EventSource`,
+  `sendBeacon`, `RTCPeerConnection` in `apps/runtime` and `packages/renderer`): own-origin `/api/*`; signed storage
+  PUTs; the realtime SDP post; the LiveKit signalling socket. `GEOCODE_API_URL` is called by the server only. The
+  `livekit-client` module (from `LIVEKIT_CLIENT_URL`) is a script import, not restricted. WebRTC media/TURN is not
+  governed by `connect-src`.
+- `RUNTIME_CSP=enforce` (default) | `report` (the enforce policy as Report-Only) | `off`. Documented in
+  `.env.example`. There is no runtime readiness list on `/platform` (it reads the Studio's environment), so it is
+  not listed there.
+
+### D8 — sandbox frame watchdog
+
+- **(a) Bounded promise chains** — inside the frame only (`uxSandbox.ts` `UX_MICROTASK_GUARD`),
+  `Promise.prototype.then` (so `catch`/`finally`) and `queueMicrotask` count their callbacks per slice; the same
+  `slice()` that resets the loop counter resets it. Past 10,000 the callbacks are dropped until the next entry and
+  one error, worded like the loop guard's, reaches the inspector. (A throw was tried first: promise adoption
+  re-enters `then`, so the error cascaded into unhandled rejections — dropping ends the chain cleanly.) `then` is
+  made non-writable. `await` on a native promise is not counted.
+- **(b) Heartbeat** — the host (`UxLayer.tsx`) pings each frame every 2 s once it is ready; the frame answers
+  `pong`. Three missed pings in a row while the page is visible: the frame is disposed, the host undoes its effects
+  and the DomBridge its DOM changes, and `stopped: not responding (no answer to 3 heartbeats in 6 s) — its changes
+  were undone` is logged (inspector + `console.warn`). Hidden pages do not count. **This only helps when the
+  browser runs the sandboxed frame out of process.** Verified: in headless Chromium with default flags the frame
+  shares the page's renderer (a spinning frame froze the page; an allocating `await` recursion crashed the tab), so
+  nothing on the page can interrupt it; with `--site-per-process --enable-features=IsolateSandboxedIframes` the
+  spinning frame was stopped after ~8 s and the page kept answering. All sandboxed frames of one page share one
+  process there, so the other scripts' frames on the same page starve too and are stopped by the same rule.
+- **(c) Skipped** — refusing regexes with nested quantifiers: the 491-script corpus has two honest
+  `/^\d+(,\d+)*$/` that a simple nested-quantifier detector flags. Corpus verdicts are unchanged
+  (`scriptChecks.test` 21/21).
+
+### D7 — the save replay recomputes what it can
+
+- `checkSubmission` (`serverValidation.ts`) already replays from the row's seed and the posted answers, and that
+  replay applies derived punches on arrival and runs the calculations on submit — the result was discarded. It is
+  now compared with what was posted (`compareDerived`):
+  - answer keys of derived questions (hidden type or `settings.hidden` with punch rules; calculated type with an
+    expression, except AI-resolved ones) and of questions with a `recompute: "always"` punch rule;
+  - every calculated variable the replay wrote (calculations, loop and masking variables; a value only a script
+    sets stays as posted — the server runs no author code);
+  - exact-balance assignments (`RANDOMIZER_<ID>`, `<VAR>_VERSION`) against `balanceClaims`, the claims the server
+    stored (save route: `balance_claims` rows of the session, `active`/`completed`, mapped by the new
+    `balanceVariableForKey`).
+- Each difference is a soft problem `server_mismatch` with `questionId` or `variable`, `posted` and `server`,
+  summarised by `summariseValue` (numbers, codes and short code-like strings as they are; other text as
+  `<text, N chars>`; never an open end's text). `SubmissionCheck.recomputed` carries the server's values.
+- **`RUNTIME_SERVER_RECOMPUTE=off|log|store`** (default `log`), save route, database and sandbox paths: `log` adds
+  the mismatches to the existing submission-check log line; `store` writes the server's values for those fields
+  into the row instead of the posted ones; `off` skips the comparison. It runs inside the replay, so it needs
+  `RUNTIME_SERVER_VALIDATION` other than `off`. `RUNTIME_SERVER_VALIDATION` is unchanged.
+
+## Where to find it (part B)
+
+| Item | Code | Tests |
+|---|---|---|
+| D3 | `packages/engine/src/codeGate.ts`, `scripts.ts`, `validate.ts`, `scriptAst.ts`; `apps/runtime/components/Runner.tsx`; `apps/studio/components/studio/BrandingPanel.tsx` (Scripts panel), `JsonPanel.tsx`, `app/api/surveys/route.ts`; `packages/import/src/map.ts` | `packages/engine/src/codeGate.test.ts` (5 logic tests), `wave1.test.ts` (updated), `packages/templates/src/scriptGate.test.ts` (1), `packages/import/src/import.test.ts` (verdict) |
+| D2 | `codeGate.ts` (component flavour); `packages/renderer/src/QuestionRenderer.tsx` `CustomComponent`; `PropertiesPanel.tsx` `ComponentJsField`; `packages/engine/src/optionActions.ts` | `codeGate.test.ts` (4 component tests incl. the three S4 bypasses); `scripts/runtime-csp-test.mjs` |
+| CSP | `apps/runtime/lib/csp.ts`, `apps/runtime/middleware.ts`, `.env.example` | `apps/runtime/lib/csp.test.ts` (3); `scripts/runtime-csp-test.mjs` (7) |
+| D8 | `packages/renderer/src/uxSandbox.ts`, `UxLayer.tsx` | `packages/renderer/test/uxMicrotask.test.ts` (4); `scripts/ux-heartbeat-test.mjs` |
+| D7 | `packages/engine/src/serverValidation.ts`, `exactBalance.ts` (`balanceVariableForKey`); `apps/runtime/app/api/session/save/route.ts` | `packages/engine/src/serverRecompute.test.ts` (5); `packages/templates/src/serverCheck.test.ts` (now asserts zero mismatches) |
+
+What people see:
+
+- **Authors.** Scripts panel and Component code: "Not saved — the script check refused it:" with the reasons; the
+  draft stays until saved or discarded. Imported scripts' notes start with the verdict. JSON view: a toast names
+  any script switched off. Preview inspector: `[name] refused: …`; component notice "This component could not
+  run: …".
+- **Respondents.** No change for honest surveys. A refused script or component simply does not run.
+- **Operators.** `RUNTIME_CSP`, `RUNTIME_CSP_CONNECT`, `RUNTIME_SERVER_RECOMPUTE` (all runtime-only); the
+  submission-check log line now carries `server_mismatch` entries.
+
+## Verification (part B)
+
+| Check | Result |
+|---|---|
+| Engine units: `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | **2439/2440** in the full run (14 new: codeGate 9, serverRecompute 5). The one failure, `flowEmbeddedPiping` "C: random values — … fresh per:each", is a random collision (two draws equal); the file re-run alone is 24/24. Not touched by S0b. |
+| Schema units | 18/18 |
+| Renderer units: `node --experimental-strip-types --no-warnings --test packages/renderer/test/*.test.ts` | **8/8** (4 new: uxMicrotask) |
+| Runtime lib: `cd apps/runtime && node --experimental-strip-types --no-warnings --test 'lib/*.test.ts'` | **44/44** (3 new: csp) |
+| Studio lib: `cd apps/studio && node --experimental-strip-types --no-warnings --test 'lib/**/*.test.ts'` | 1046/1046 |
+| Templates (targeted): `node --test dist/scriptGate.test.js dist/serverCheck.test.js` | 1/1 and 6/6 (serverCheck now asserts zero `server_mismatch` on 5 templates × 3 seeds and the master-demo test paths, complete and partial) |
+| Import units: `cd packages/import && node --test dist/import.test.js` | 20/20 |
+| `scriptChecks.test` (491-script corpus verdicts) | 21/21 — verdicts unchanged |
+| `tsc --noEmit` studio / runtime / renderer | 0 / 0 / 0 errors |
+| `node scripts/gen-public-docs.mjs --check` (after regenerating) | current |
+| `node scripts/dependency-boundaries.mjs` | 0 violations (1977 files) |
+| `node scripts/auth-guard-audit.mjs` | 0 problems (256 handlers) |
+| Probes | `(()=>{}).constructor('return process')()`, `ctx.get.constructor(…)`, `globalThis.fetch` alias, `navigator["send"+"Beacon"]` → refused (logic and component flavours); `while(true){}` in a logic script → stopped at 100,000 |
+| Browser `runtime-csp-test.mjs` (new, via `fresh.sh`) | **7/7**: CSP + report-only headers; `fetch`/XHR/WebSocket to example.com blocked from the page; own `/api` reached; refused logic script logged and not run, good one ran; bad component shows its notice, good one ran; upload question takes a file (sandbox); page saved |
+| Browser `ux-heartbeat-test.mjs` (new, runtime only) | default Chromium: the frame shares the page's thread — the page froze (documented limit; exit 2, "NOTE"); `HB_ISOLATE=1` (`--site-per-process --enable-features=IsolateSandboxedIframes`): **3/3**, spinner stopped after ~8 s, mark undone, frame removed, page answers |
+| Browser `ux-script-dom-test.mjs` | 16/16 |
+| Browser `style-script-p0-test.mjs` | 11/11 |
+| Browser `age-script-p0-test.mjs` | 10/10 |
+| Browser `master-demo-test.mjs` | 15/15 |
+| Browser `section-nav-test.mjs` | 20/20 |
+| Browser `assessment-test.mjs` | 7/7 |
+| Browser `wave1-test.mjs` (question customJs) | 9/9 |
+| Browser `validation-kinds-test.mjs` (custom_script rule in the editor) | 6/6 |
+
+All browser suites above ran through `/tmp/p0/fresh.sh` with the Studio supervisor up; no out-of-memory death in
+these runs (the "Killed" lines in fresh.sh's output are fresh.sh restarting the runtime between suites).
+
+**Not run:** the other suites that carry `scripts:` fixtures (`stage-cap-api`, `engine-11-14`, `conjoint-p2`,
+`production-intents`, `demo-survey`, `loading-deadlock`, `listfill-intelligent`, `matrix-a11y`, `maxdiff-p1`,
+`popup-p3`) — time; the full templates and import package suites beyond the files listed; SQL (no migration in
+part B); a real R2 signed upload under the CSP; Safari/Firefox.
+
+## Honest limits (part B)
+
+- **The gate is static containment, not a boundary.** A forbidden name assembled at run time into a variable and
+  used on an object the script declared (`const k = a + b; obj[k]`) is not seen. Logic scripts and components
+  still run in the page's realm. The CSP is the backstop for sending data; DOM side effects of component code on
+  the page are not prevented. S1 moves both into the sandboxed frame.
+- **Refusals are new.** A legitimate script or component using `prototype` (`Array.prototype.slice.call`),
+  `window.*`, `document.querySelector` (components), `setTimeout` (logic scripts), braceless loops, or computed
+  access on a global is now refused, with the reason. All 16 template/master-demo scripts and the 19 logic-script
+  fixtures found in the repository pass unchanged; and so does the component code in the engine tests.
+- **CSP.** `connect-src` only — images, media and scripts are not restricted, so an `<img src>` built from data by
+  code that slipped through can still leak (the D4 host gates and the gate's `Image`/`.src` refusals cover the
+  known paths). The report-only policy is noisy in `next dev`. Operators who add a client-side integration must add
+  its origin to `RUNTIME_CSP_CONNECT`. Upload in the sandbox keeps the file in the browser (no storage) — the signed
+  PUT to R2 under the CSP was not exercised (no R2 here).
+- **D8.** The heartbeat cannot help a frame that shares the page's thread (headless Chromium default). `await`
+  chains are not counted. Regex backtracking is not refused.
+- **D7.** Only what the replay reaches is compared; it needs `RUNTIME_SERVER_VALIDATION≠off`. Values a script sets
+  (`setCalc`, `set`) are not recomputed. Balance claims are compared on the database path only (the sandbox's memory
+  store has no per-session lookup). Under `store`, quotas and List Fill still read the posted answers of that save.
+  Mismatches are soft: nothing is refused for them.
+
+## What S1 still has to do
+
+- Run Custom Component code and Scripts-panel / imported logic scripts in the sandboxed frame (component: an
+  `api.setValue` message channel; logic scripts: data in → `set`/`setCalc`/`error` out), and drop the main-thread
+  `new Function` paths.
+- Make the heartbeat effective everywhere (a worker or a guaranteed out-of-process frame).
+- Decide whether `RUNTIME_SERVER_RECOMPUTE=store` and `RUNTIME_SERVER_VALIDATION=enforce` become production
+  defaults after a log period.
