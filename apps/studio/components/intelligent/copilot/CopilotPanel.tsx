@@ -5,6 +5,7 @@ import { changeItems, compileAnimation, compileStyle, corpusFromHistory, describ
 import { Icon } from "../../ui/Icon";
 import { structureRows, changeLabel, uxPreviewScope, type OutlineRow, type ProposalState } from "../../../lib/copilot/client";
 import { UxPreview } from "./UxPreview";
+import { VerifyCard, withRunNote } from "./VerifyCard";
 import { AnalysisTab } from "./AnalysisTab";
 import { LanguagesTab } from "./LanguagesTab";
 import { QuotasTab, type QuotaImportNote } from "./QuotasTab";
@@ -140,7 +141,7 @@ function ChangesTab({ copilot, onSelect, onSelectKey, onSelectOption, onApply, a
   if (!p || !st) return <p className="cp-empty" data-testid="cp-no-proposal">No change is proposed. Ask the copilot for one — “create a survey to test my hypothesis”, “add a question measuring brand trust”, “randomize the brands” — and it appears here, exactly, before anything is written.</p>;
   const beforeRows = structureRows(p.base, st.diff, "before");
   const afterRows = structureRows(st.after, st.diff, "after");
-  const blocked = (st.destructive.length > 0 && !copilot.confirmed) || st.diff.empty || readOnly;
+  const blocked = (st.destructive.length > 0 && !copilot.confirmed) || st.diff.empty || readOnly || copilot.verifyBlocks;
   const allOut = !!count && count.total > 0 && count.included === 0;
   const partial = !!count && copilot.excluded.length > 0 && count.included < count.total;
   return (
@@ -172,7 +173,8 @@ function ChangesTab({ copilot, onSelect, onSelectKey, onSelectOption, onApply, a
           <label className="cp-confirm"><input type="checkbox" checked={copilot.confirmed} onChange={(e) => copilot.setConfirmed(e.target.checked)} data-testid="cp-confirm" /> I understand — apply these {st.destructive.length} change{st.destructive.length === 1 ? "" : "s"} too (undoable)</label>
         </div>
       )}
-      {(!st.diff.ux.empty || st.diff.theme.length > 0) && <UxChanges st={st} base={p.base} />}
+      <VerifyCard verify={copilot.verify} canApply={!readOnly && !st.diff.empty} onApplyAnyway={() => { copilot.setVerifyAnyway(); onApply(); }} />
+      {(!st.diff.ux.empty || st.diff.theme.length > 0) && <UxChanges st={st} base={p.base} verify={copilot.verify} />}
       {st.warnings.length > 0 && (
         <div className="cp-block warn" data-testid="cp-new-problems">
           <div className="iq-label">The result would have {st.warnings.length} new problem{st.warnings.length === 1 ? "" : "s"}</div>
@@ -201,7 +203,7 @@ function ChangesTab({ copilot, onSelect, onSelectKey, onSelectOption, onApply, a
       <div className="iq-actions">
         <button type="button" className="iq-btn" onClick={copilot.cancel} data-testid="cp-panel-cancel">Cancel</button>
         <span className="iq-spacer" />
-        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : allOut ? "Every change is excluded — tick at least one to apply" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : partial ? "Apply the ticked changes as one undoable change; the unticked ones are left out" : "Apply as one undoable change"} data-included={count?.included ?? ""} data-total={count?.total ?? ""}>{partial ? `Apply ${count!.included} of ${count!.total} changes` : "Apply changes"}</button>
+        <button type="button" className="iq-btn primary" onClick={onApply} disabled={blocked} data-testid="cp-panel-apply" title={readOnly ? "Read-only" : copilot.verify && copilot.verifyBlocks ? (copilot.verify.status === "done" ? "The scripts did not pass the test session — use “Apply anyway” to apply them as they are" : "Running the scripts in a test session first") : allOut ? "Every change is excluded — tick at least one to apply" : st.diff.empty ? (st.errors.length ? "Nothing to apply — the Studio refused every change (see why above)" : "Nothing to apply") : st.destructive.length && !copilot.confirmed ? "Confirm the destructive changes first" : partial ? "Apply the ticked changes as one undoable change; the unticked ones are left out" : "Apply as one undoable change"} data-included={count?.included ?? ""} data-total={count?.total ?? ""}>{partial ? `Apply ${count!.included} of ${count!.total} changes` : "Apply changes"}</button>
       </div>
     </div>
   );
@@ -228,7 +230,7 @@ function Outline({ rows, title, onSelect, def }: { rows: OutlineRow[]; title?: s
  * refused anything else), the preview on the real components, and the
  * generated code — scoped CSS and sandboxed scripts — for whoever wants it.
  */
-function UxChanges({ st, base }: { st: ProposalState; base: SurveyDefinition }) {
+function UxChanges({ st, base, verify }: { st: ProposalState; base: SurveyDefinition; verify: Copilot["verify"] }) {
   const scope = React.useMemo(() => uxPreviewScope(st.after, st.diff), [st.after, st.diff]);
   const ids = new Set([...st.diff.ux.added, ...st.diff.ux.changed].map((x) => x.id));
   const ux = st.after.ux ?? { styles: [], animations: [], behaviors: [] };
@@ -244,7 +246,7 @@ function UxChanges({ st, base }: { st: ProposalState; base: SurveyDefinition }) 
         ? <p className="cp-ux-safe" data-testid="cp-ux-structure-ok"><Icon name="check" size={12} /> {st.uxOnly ? "UX only — " : ""}the survey's questions, options, codes, logic and validation are unchanged.</p>
         : <p className="iqi-dim" data-testid="cp-ux-with-structure">This proposal also changes the survey's structure (listed above).</p>}
       <ul className="cp-ux-list" data-testid="cp-ux-items">
-        {st.uxNotes.map((n, i) => <li key={i}>{n}</li>)}
+        {st.uxNotes.map((n, i) => <li key={i}>{withRunNote(n, verify)}</li>)}
         {st.diff.ux.removed.map((x) => <li key={x.id} className="cp-from">Remove {x.kind} “{x.label}” ({x.target})</li>)}
       </ul>
       {st.diff.theme.length > 0 && (

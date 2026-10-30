@@ -902,10 +902,11 @@ export function IntelligentView() {
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
-                    canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
+                    canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed) && !copilot.verifyBlocks}
+                    verify={open ? copilot.verify : null} onApplyAnyway={() => { copilot.setVerifyAnyway(); void applyCopilot(); }}
                     refused={open ? copilot.state!.errors : []}
                     applyLabel={open && copilot.excluded.length ? "Apply the ticked changes" : undefined}
-                    applyTitle={s.readOnly ? "Read-only" : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
+                    applyTitle={s.readOnly ? "Read-only" : open && copilot.verify && copilot.verifyBlocks ? (copilot.verify.status === "done" ? "The scripts did not pass the test session — use “Apply anyway” to apply them as they are" : "Running the scripts in a test session first") : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
                 );
               }
               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;
