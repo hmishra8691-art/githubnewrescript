@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, balanceVariableForKey, sanitizeScriptWrites, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, balanceVariableForKey, sanitizeScriptWrites, sanitizeScriptHealth, redactionSet, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
@@ -122,6 +122,14 @@ export async function POST(req: NextRequest) {
    * survey keeps telemetry; a dedicated column is S1b/S1c's (see docs/S1-ONE-SCRIPT-ENGINE-2026-10-30.md).
    */
   if (keepTelemetry && scriptWrites.length) keepTelemetry.scriptWrites = scriptWrites;
+  /*
+   * S1c (D11 / SE-30) — SCRIPT HEALTH IS KEPT WHATEVER THE SURVEY'S TELEMETRY SWITCHES SAY. It describes the
+   * survey's code (which script failed, how, on which page, how often, in which browser class) — not the respondent:
+   * no timing, no typed text (messages are redacted again here against this save's own answers and embedded data).
+   * The runtime sends the session's whole list on every save; it replaces the stored one.
+   */
+  const scriptHealth = sanitizeScriptHealth(body?.scriptHealth, redactionSet(answers, embedded));
+  if (scriptHealth.length) { if (keepTelemetry) keepTelemetry.scriptHealth = scriptHealth; else update.telemetry = { scriptHealth }; }
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
   const isFinal = !!completed && newStatus !== "in_progress";
   if (seq != null) update.save_seq = seq;
@@ -384,6 +392,8 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     ...(nav.trail ? { nav: nav.trail } : {}),
     ...(seq != null ? { save_seq: seq } : {}),
     script_writes: sanitizeScriptWrites(body?.scriptWrites),
+    // S1c: the session's script failures, as the database path keeps them in telemetry.scriptHealth
+    script_health: sanitizeScriptHealth(body?.scriptHealth, redactionSet(body?.answers, body?.embedded)),
   });
   return NextResponse.json({ ok: true, environment: "TEST", respondentCode: row.respondent_code, status: newStatus, sandbox: true });
 }

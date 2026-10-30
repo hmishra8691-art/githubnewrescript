@@ -78,10 +78,19 @@ export interface UxLayerProps {
    * event and resolves with what each answered — or `timedOut` for a frame that did not answer within `timeoutMs`.
    */
   lifecycleRef?: React.MutableRefObject<UxAskFrames | null>;
+  /**
+   * S1c (D11 / SE-30) — LIVE SCRIPT HEALTH: every failure of a script on this page (its error, a gate refusal, a
+   * component that could not run, a refused write or navigation, a watchdog stop), structured, for the Runner's
+   * session collector. Called in every mode, unlike `onLog`.
+   */
+  onScriptIssue?: (issue: UxScriptIssue) => void;
 }
 
+/** S1c: one script failure as the layer reports it (kind: engine SCRIPT_HEALTH_KINDS) */
+export interface UxScriptIssue { script: string; name: string; kind: "ux_error" | "component_not_run" | "gate_refused" | "write_refused" | "navigation_refused" | "watchdog"; message: string }
+
 /** S1a: one frame's answer to a lifecycle event (see `lifecycleRef`) */
-export interface UxFrameAnswer { script: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
+export interface UxFrameAnswer { script: string; /** S1c: the behaviour's id */ id?: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
 export type UxAskFrames = (ev: "validate" | "submit", timeoutMs: number) => Promise<UxFrameAnswer[]>;
 
 /** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
@@ -211,6 +220,8 @@ export function UxLayer(p: UxLayerProps) {
   const scripts = React.useRef<ScriptHost[]>([]);
   const log = React.useRef(p.onLog);
   log.current = p.onLog;
+  const issueRef = React.useRef(p.onScriptIssue);
+  issueRef.current = p.onScriptIssue;
   const navigate = React.useRef(p.onNavigate);
   navigate.current = p.onNavigate;
   const writeRef = React.useRef(p.onScriptWrite);
@@ -384,10 +395,12 @@ export function UxLayer(p: UxLayerProps) {
        * nothing to open.
        */
       const where = `${b.label}${b.target.questionId ? ` (${byCode.get(b.target.questionId) ?? ""})` : ""}`;
-      const report = (text: string, level: "log" | "warn" | "error" = "log") => {
+      const report = (text: string, level: "log" | "warn" | "error" = "log", kind?: UxScriptIssue["kind"]) => {
         log.current?.(`[ux script “${b.label}”] ${level === "error" ? "ERROR: " : ""}${text}`);
         if (level === "error") console.error(`[rescript:script] ${where}: ${text}`);
         else if (level === "warn") console.warn(`[rescript:script] ${where}: ${text}`);
+        /* S1c: a failure is also counted for the survey's script health (the Runner's collector) */
+        if (kind) { try { issueRef.current?.({ script: b.id, name: b.label, kind, message: text }); } catch { /* never break the page */ } }
       };
       /*
        * Validated again here, not only when it was proposed: a definition can
@@ -402,14 +415,14 @@ export function UxLayer(p: UxLayerProps) {
       const component = isComponentBehavior(b) ? def.questions.find((q) => q.id === b.target.questionId) ?? null : null;
       if (component) {
         const g = codeGate(component.customJs ?? "", "component");
-        if (!g.ok) { report(`not run: ${gateReason(g)}`, "warn"); continue; }
+        if (!g.ok) { report(`not run: ${gateReason(g)}`, "warn", "component_not_run"); continue; }
       } else {
         const check = validateUxScript(b.script!, def);
-        if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn"); continue; }
+        if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn", "gate_refused"); continue; }
         for (const w of check.warnings) report(`note: ${w}`, "warn");
       }
       const mirrorRoot: HTMLElement | null = component ? root.querySelector<HTMLElement>(`[data-rs-component="${CSS.escape(component.id)}"]`) : root;
-      if (!mirrorRoot) { report("not run: the component is not on this page", "warn"); continue; }
+      if (!mirrorRoot) { report("not run: the component is not on this page", "warn", "component_not_run"); continue; }
       const frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts");
       frame.setAttribute("aria-hidden", "true");
@@ -436,7 +449,7 @@ export function UxLayer(p: UxLayerProps) {
         if (!m || m.__rsux !== 1 || typeof m.cmd !== "string") return;
         const now = Date.now();
         if (now - windowStart > 1000) { windowStart = now; count = 0; }
-        if (++count > COMMANDS_PER_SECOND) { report(`stopped: more than ${COMMANDS_PER_SECOND} commands a second`, "warn"); host.dispose(); return; }
+        if (++count > COMMANDS_PER_SECOND) { report(`stopped: more than ${COMMANDS_PER_SECOND} commands a second`, "warn", "watchdog"); host.dispose(); return; }
         const a = Array.isArray(m.args) ? m.args : [];
         const str = (x: unknown) => (typeof x === "string" ? x : x == null ? "" : String(x)).slice(0, 600);
         switch (m.cmd) {
@@ -454,7 +467,7 @@ export function UxLayer(p: UxLayerProps) {
               if (typeof document !== "undefined" && document.visibilityState === "hidden") { awaiting = 0; missed = 0; return; }
               if (awaiting) missed++;
               if (missed >= HEARTBEAT_MISSES) {
-                report(`stopped: not responding (no answer to ${HEARTBEAT_MISSES} heartbeats in ${(HEARTBEAT_MS * HEARTBEAT_MISSES) / 1000} s) — its changes were undone`, "warn");
+                report(`stopped: not responding (no answer to ${HEARTBEAT_MISSES} heartbeats in ${(HEARTBEAT_MS * HEARTBEAT_MISSES) / 1000} s) — its changes were undone`, "warn", "watchdog");
                 host.dispose();
                 for (const u of host.undo) u.run();
                 host.undo.length = 0;
@@ -525,12 +538,12 @@ export function UxLayer(p: UxLayerProps) {
             const fn = m.cmd === "goToPage" ? "rs.goToPage" : "rs.goToSection";
             if (!target) { report(`${fn} needs a ${m.cmd === "goToPage" ? "page id or question code" : "section id or title"}`, "warn"); break; }
             const nav = navigate.current;
-            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn"); break; }
+            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn", "navigation_refused"); break; }
             // after the current event finishes, so a click handler's own effects land on the page it was written for
             setTimeout(() => {
               const r = nav(target, m.cmd === "goToPage" ? "page" : "section");
               if (r.ok) report(`${fn}("${target}") — navigated`);
-              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn");
+              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn", "navigation_refused");
             }, 0);
             break;
           }
@@ -551,7 +564,7 @@ export function UxLayer(p: UxLayerProps) {
             try { result = fn ? fn(write, { id: b.id, label: b.label, target: b.target }) : { ok: false, reason: "writes are not available here" }; }
             catch (e) { result = { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
             if (result.ok) report(`${call} — written`);
-            else report(`${call} refused: ${result.reason ?? "not allowed"}`, "warn");
+            else report(`${call} refused: ${result.reason ?? "not allowed"}`, "warn", "write_refused");
             if (id) post({ type: "reply", id, result: { ok: !!result.ok, ...(result.reason ? { reason: result.reason } : {}) } });
             break;
           }
@@ -567,7 +580,7 @@ export function UxLayer(p: UxLayerProps) {
           case "ops": dom.apply(a[0]); break;
           case "want": dom.want(str(a[0])); break;
           case "resync": dom.resync((t) => post({ type: "sync", tree: t }), true); break;
-          case "error": report(str(a[0]), "error"); break;
+          case "error": report(str(a[0]), "error", "ux_error"); break;
           default: break;
         }
       }
@@ -602,7 +615,7 @@ export function UxLayer(p: UxLayerProps) {
       .filter((s) => s.started && s.listens.some((l) => l.ev === ev))
       .map((s) => new Promise<UxFrameAnswer>((resolve) => {
         const id = ++lifecycleN;
-        const timer = setTimeout(() => { s.waiting.delete(id); resolve({ script: s.behavior.label, timedOut: true }); }, timeoutMs);
+        const timer = setTimeout(() => { s.waiting.delete(id); resolve({ script: s.behavior.label, id: s.behavior.id, timedOut: true }); }, timeoutMs);
         s.waiting.set(id, (errors) => { clearTimeout(timer); resolve({ script: s.behavior.label, errors: errors ?? [] }); });
         s.frame.contentWindow?.postMessage({ __rsux: 1, type: "lifecycle", ev, id }, "*");
       })));

@@ -18,6 +18,7 @@ import { prepareLogicScripts, logicSnapshot } from "@rescript/engine";
 import type { LogicScriptOutcome, LogicSnapshot, PreparedLogicScript, ScriptWrite, ResponseState, LoopContext } from "@rescript/engine";
 import type { SurveyDefinition, CustomScript } from "@rescript/schema";
 import type { AskFrames } from "./scriptLifecycle";
+import type { ScriptIssue } from "./scriptHealth";
 
 /** on_load / on_change / on_complete: the most a run may take before it is given up */
 export const LOGIC_RUN_TIMEOUT_MS = 3000;
@@ -41,6 +42,8 @@ export interface LogicEventOutcome {
   timedOut: boolean;
   /** the frame was closed under the run (the page was left, or React mounted twice in dev): nothing applied, not a timeout */
   closed?: boolean;
+  /** S1c: the failures of this run for the session's script-health list (gate refusals, errors, timeouts, refused writes) */
+  issues: ScriptIssue[];
 }
 
 const callOf = (w: ScriptWrite) => w.kind === "answer" ? `set("${w.ref}")` : w.kind === "calculated" ? `setCalc("${w.name}")` : w.kind === "embedded" ? `setEmbedded("${w.name}")` : `flag("${w.name}")`;
@@ -60,9 +63,9 @@ export async function runLogicEvent(
     timeoutMs?: number;
   },
 ): Promise<LogicEventOutcome> {
-  const out: LogicEventOutcome = { logs: [], errors: [], ran: 0, refusedScripts: [], written: 0, refusedWrites: 0, timedOut: false };
+  const out: LogicEventOutcome = { logs: [], errors: [], ran: 0, refusedScripts: [], written: 0, refusedWrites: 0, timedOut: false, issues: [] };
   const prep = prepareLogicScripts(def, state, event, { scopeRef: opts.scopeRef, loop: opts.loop ?? null, only: opts.only, ids: opts.ids });
-  for (const r of prep.refused) { out.logs.push(`[${r.name}] refused: ${r.reason}`); out.refusedScripts.push(r.name); }
+  for (const r of prep.refused) { out.logs.push(`[${r.name}] refused: ${r.reason}`); out.refusedScripts.push(r.name); out.issues.push({ script: r.id, name: r.name, kind: "gate_refused", message: r.reason }); }
   if (!prep.scripts.length) return out;
   const names = prep.scripts.map((s) => s.name).join(", ");
   if (!opts.runner) { out.logs.push(`[${names}] not run: the script frame is not available here`); return out; }
@@ -79,21 +82,22 @@ export async function runLogicEvent(
   if (!results) {
     out.timedOut = true;
     out.logs.push(`[${names}] ${event}: no answer within ${timeoutMs} ms — not run, nothing written`);
+    for (const s of prep.scripts) out.issues.push({ script: s.id, name: s.name, kind: "logic_timeout", message: `${event}: no answer within ${timeoutMs} ms — not run, nothing written` });
     return out;
   }
   const answered = results;
   prep.scripts.forEach((script, i) => {
     const r = answered[i];
-    if (!r) { out.logs.push(`[${script.name}] ERROR: no result`); return; }
+    if (!r) { out.logs.push(`[${script.name}] ERROR: no result`); out.issues.push({ script: script.id, name: script.name, kind: "logic_error", message: `${event}: no result` }); return; }
     out.ran++;
     out.logs.push(...(r.logs ?? []).map((l) => `[${script.name}] ${l}`));
     out.errors.push(...(r.errors ?? []).filter((e) => e && typeof e.message === "string"));
-    if (r.failed) out.logs.push(`[${script.name}] ERROR: ${r.failed}`);
+    if (r.failed) { out.logs.push(`[${script.name}] ERROR: ${r.failed}`); out.issues.push({ script: script.id, name: script.name, kind: "logic_error", message: `${event}: ${r.failed}` }); }
     for (const w of r.writes ?? []) {
       let res: { ok: boolean; reason?: string };
       try { res = opts.apply(w, script); } catch (e) { res = { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
       if (res.ok) out.written++;
-      else { out.refusedWrites++; out.logs.push(`[${script.name}] ${callOf(w)} refused: ${res.reason ?? "not allowed"}`); }
+      else { out.refusedWrites++; out.logs.push(`[${script.name}] ${callOf(w)} refused: ${res.reason ?? "not allowed"}`); out.issues.push({ script: script.id, name: script.name, kind: "write_refused", message: `${callOf(w)} refused: ${res.reason ?? "not allowed"}` }); }
     }
   });
   return out;
@@ -121,14 +125,16 @@ export async function runCustomScriptRules(
   state: ResponseState,
   skipped: SkippedRule[],
   opts: { loop?: LoopContext | null; runner: LogicRunner | null; apply: (write: ScriptWrite, script: PreparedLogicScript) => { ok: boolean; reason?: string }; timeoutMs?: number },
-): Promise<{ errors: { questionId: string; message: string; severity?: "error" | "warning" }[]; logs: string[] }> {
+): Promise<{ errors: { questionId: string; message: string; severity?: "error" | "warning" }[]; logs: string[]; issues: ScriptIssue[] }> {
   const errors: { questionId: string; message: string; severity?: "error" | "warning" }[] = [];
   const logs: string[] = [];
+  const issues: ScriptIssue[] = [];
   for (const sk of skipped) {
     const script = def.scripts.find((s) => s.id === sk.script || s.name === sk.script);
     if (!script) continue;
     const o = await runLogicEvent(def, state, script.event, { ids: [script.id], value: sk.value ?? null, loop: opts.loop, runner: opts.runner, apply: opts.apply, timeoutMs: opts.timeoutMs });
     logs.push(...o.logs);
+    issues.push(...o.issues);
     // refused by the gate, or no answer in time: a script nobody can run must not hold the respondent
     if (!o.ran) continue;
     const sev = sk.severity && sk.severity !== "error" ? { severity: sk.severity } : {};
@@ -138,7 +144,7 @@ export async function runCustomScriptRules(
       errors.push({ questionId: sk.questionId ?? "", message: typeof m === "string" ? m : m.text, ...sev });
     }
   }
-  return { errors, logs };
+  return { errors, logs, issues };
 }
 
 /**

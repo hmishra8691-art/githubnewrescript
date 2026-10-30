@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import type { NavTrail } from "@rescript/engine";
+import type { NavTrail, ScriptHealthEntry } from "@rescript/engine";
 import { sandboxAvailable } from "./assessmentSandbox";
 
 /**
@@ -20,6 +20,8 @@ export interface SandboxRow {
   save_seq: number;
   /** S1a: the script-write paradata of the last save (`state.scriptWrites`, sanitised) */
   script_writes?: { script: string; kind: string; target: string; at: string }[];
+  /** S1c: the session's script failures (engine ScriptHealthEntry, sanitised) — `telemetry.scriptHealth` on the database path */
+  script_health?: ScriptHealthEntry[];
 }
 
 const G = globalThis as unknown as { __rescriptSessionSandbox?: { surveys: Map<string, SandboxSurvey>; rows: Map<string, SandboxRow> } };
@@ -54,3 +56,6 @@ export function startSandboxSession(survey: SandboxSurvey): SandboxRow {
   s.rows.set(row.session_id, row);
   return row;
 }
+
+/** S1c: a sandbox survey's rows (the Studio's script-health view in the sandbox reads them by the survey's token) */
+export const sandboxRowsOf = (token: string): SandboxRow[] => (sandboxSurvey(token) ? [...store().rows.values()].filter((r) => r.survey === token) : []);

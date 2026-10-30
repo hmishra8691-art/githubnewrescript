@@ -78,7 +78,7 @@ test("error() goes through the S1a lifecycle helper: mapped to the page's questi
   const life = await runScriptLifecycle(ask, "validate", { questions: def.questions.slice(0, 2) });
   assert.deepEqual(life.errors, [{ questionId: "q1", message: "stop here" }, { questionId: "", message: "page level" }]);
   assert.ok(lines.length > 0);
-  const slow = logicAsk("x", async () => ({ logs: [], errors: [], ran: 0, refusedScripts: [], written: 0, refusedWrites: 0, timedOut: true }));
+  const slow = logicAsk("x", async () => ({ logs: [], errors: [], ran: 0, refusedScripts: [], written: 0, refusedWrites: 0, timedOut: true, issues: [] }));
   const l2 = await runScriptLifecycle(slow, "validate", { questions: [] });
   assert.equal(l2.timedOut, 1);
   assert.deepEqual(l2.errors, []);

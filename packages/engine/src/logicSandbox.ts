@@ -88,13 +88,13 @@ export function prepareLogicScripts(
   state: ResponseState,
   event: CustomScript["event"],
   opts?: { scopeRef?: string | string[]; loop?: LoopContext | null; only?: "scoped"; ids?: string[] },
-): { scripts: PreparedLogicScript[]; refused: { name: string; reason: string }[] } {
+): { scripts: PreparedLogicScript[]; refused: { id: string; name: string; reason: string }[] } {
   const scripts: PreparedLogicScript[] = [];
-  const refused: { name: string; reason: string }[] = [];
+  const refused: { id: string; name: string; reason: string }[] = [];
   const list = opts?.ids ? def.scripts.filter((s) => opts.ids!.includes(s.id) && s.enabled !== false) : selectScripts(def, state, event, opts);
   for (const s of list) {
     const gate = codeGate(s.code, "logic");
-    if (!gate.ok) { refused.push({ name: s.name, reason: gateReason(gate) }); continue; }
+    if (!gate.ok) { refused.push({ id: s.id, name: s.name, reason: gateReason(gate) }); continue; }
     scripts.push({ id: s.id, name: s.name, scope: s.scope, ...(s.ref ? { ref: s.ref } : {}), params: [...LOGIC_PARAMS], body: logicScriptBody(gate.guarded) });
   }
   return { scripts, refused };

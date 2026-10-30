@@ -45,7 +45,7 @@ test("submit: rs.error does not stop the page (logged); no frames, nothing to do
   const r = await runScriptLifecycle(async () => [{ script: "S", errors: [{ message: "late" }] }], "submit", page);
   assert.deepEqual(r.errors, []);
   assert.match(r.logs[0], /ignored \(use "validate"\)/);
-  assert.deepEqual(await runScriptLifecycle(null, "validate", page), { errors: [], logs: [], asked: 0, timedOut: 0 });
+  assert.deepEqual(await runScriptLifecycle(null, "validate", page), { errors: [], logs: [], asked: 0, timedOut: 0, stalled: [] });
 });
 
 test("errors are capped at 20 per page", async () => {

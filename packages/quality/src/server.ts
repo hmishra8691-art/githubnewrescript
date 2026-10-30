@@ -63,7 +63,8 @@ export function rowToResponse(row: any): ResponseRecord {
     flags: row.flags ?? [],
     startedAt: row.started_at ?? null,
     completedAt: row.completed_at ?? null,
-    telemetry: row.telemetry ?? null,
+    // S1c: a row may hold only `{ scriptHealth }` (kept whatever the telemetry switches say) — that is not behavioural telemetry
+    telemetry: row.telemetry && row.telemetry.v === 1 ? row.telemetry : null,
     ipHash: row.ip_hash ?? null,
     deviceHash: row.device_hash ?? null,
     userAgent: row.user_agent ?? null,

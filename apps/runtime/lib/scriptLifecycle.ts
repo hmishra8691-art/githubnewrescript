@@ -15,7 +15,7 @@
 
 export type LifecycleEvent = "validate" | "submit";
 /** what one frame answered: the errors its handlers raised, or that it did not answer in time */
-export interface FrameAnswer { script: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
+export interface FrameAnswer { script: string; /** S1c: the UX behaviour's id (absent for a logic run, whose failures are counted by the run itself) */ id?: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
 /** the UxLayer's side: ask every frame that listens for `ev`, each bounded by `timeoutMs` */
 export type AskFrames = (ev: LifecycleEvent, timeoutMs: number) => Promise<FrameAnswer[]>;
 
@@ -31,6 +31,8 @@ export interface LifecycleOutcome {
   /** how many frames were asked / timed out */
   asked: number;
   timedOut: number;
+  /** S1c: the UX frames (behaviour id and label) that did not answer in time — for the session's script-health list */
+  stalled: { id: string; name: string }[];
 }
 
 export async function runScriptLifecycle(
@@ -39,7 +41,7 @@ export async function runScriptLifecycle(
   page: { questions: { id: string; code?: string | number; variableName?: string }[] },
   timeoutMs: number = LIFECYCLE_TIMEOUT_MS,
 ): Promise<LifecycleOutcome> {
-  const out: LifecycleOutcome = { errors: [], logs: [], asked: 0, timedOut: 0 };
+  const out: LifecycleOutcome = { errors: [], logs: [], asked: 0, timedOut: 0, stalled: [] };
   if (!ask) return out;
   let answers: FrameAnswer[] | "timeout";
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -66,6 +68,7 @@ export async function runScriptLifecycle(
     if (a.timedOut) {
       out.timedOut++;
       out.logs.push(`[ux script “${a.script}”] ${ev}: no answer within ${timeoutMs} ms — treated as no error`);
+      if (a.id) out.stalled.push({ id: a.id, name: a.script });
       continue;
     }
     for (const e of a.errors ?? []) {

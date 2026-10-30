@@ -104,6 +104,7 @@ import {
   logicStatics,
   logicScriptScope,
   withComponentBehaviors,
+  redactionSet,
   type LogicStatics,
   type PreparedLogicScript,
   type ScriptWriteResult,
@@ -140,7 +141,8 @@ import {
 } from "@/lib/resume";
 import { resumeSeq } from "@/lib/saveSeq";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
-import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
+import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
+import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
 import { runScriptLifecycle, LIFECYCLE_TIMEOUT_MS, type AskFrames } from "@/lib/scriptLifecycle";
 import { runLogicEvent, runCustomScriptRules, logicAsk, onChangeScheduler, LOGIC_RUN_TIMEOUT_MS, type LogicEventOutcome, type SkippedRule } from "@/lib/logicScripts";
 import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
@@ -236,6 +238,9 @@ function saveBody(session: NonNullable<RunnerProps["session"]>, state: ResponseS
     flags: state.flags,
     // S1a: which values sandboxed scripts wrote (script, target, time — never a value); the replay reads it
     scriptWrites: state.scriptWrites?.length ? state.scriptWrites : undefined,
+    // S1c (D11): this session's script failures (script, kind, page, first message without answer text, count) —
+    // stored by the server whatever the survey's telemetry switches say: it is about the survey's code
+    scriptHealth: scriptHealthPayload(session.sessionId),
     completed: done,
     surveyDbId: session.surveyDbId,
     // behavioural metadata for the quality engine — derived counts and
@@ -726,8 +731,25 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     logicHostRef.current = { key, host };
     return host;
   };
+  /**
+   * S1c (D11 / SE-30): this session's script-health collector (lib/scriptHealth.ts) — every script failure, counted
+   * per script / kind / page, travels with the saves. Messages are redacted against the response's own values.
+   */
+  const scriptHealth = () => sessionScriptHealth(session?.sessionId ?? "preview", () => createScriptHealthCollector({
+    browser: browserClass(detectDevice()),
+    redact: () => redactionSet(stateRef.current?.answers, stateRef.current?.embedded),
+    initial: readStoredScriptHealth(session?.sessionId),
+    onChange: (list) => writeStoredScriptHealth(session?.sessionId, list),
+  }));
+  const noteIssue = (i: ScriptIssue) => { try { scriptHealth().note(i); } catch { /* never break the page */ } };
+  /** a validate / submit round's lines, and the UX frames that did not answer in time */
+  const noteLife = (life: { logs: string[]; stalled?: { id: string; name: string }[] }, ev: string) => {
+    if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+    for (const x of life.stalled ?? []) noteIssue({ script: x.id, name: x.name, kind: "lifecycle_timeout", message: `${ev}: no answer within ${LIFECYCLE_TIMEOUT_MS} ms — treated as no error` });
+  };
   /** a logic run's lines: the inspector, and the console for what an author must see in a live interview (refusals, timeouts) */
-  const noteLogic = (o: Pick<LogicEventOutcome, "logs">) => {
+  const noteLogic = (o: Pick<LogicEventOutcome, "logs"> & { issues?: ScriptIssue[] }) => {
+    for (const i of o.issues ?? []) noteIssue(i);
     if (!o.logs.length) return;
     setLogs((l) => [...l, ...o.logs]);
     for (const line of o.logs) if (/^\[[^\]]*\] (refused: |.*\) refused: |.*: no answer within |not run: )/.test(line)) console.warn(`[rescript:script] ${line}`);
@@ -821,6 +843,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
     const st = allSteps[index];
     if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
+    if (st?.kind === "page") scriptHealth().setPage(st.pageId);
   };
   const canDebug = mode === "test" || mode === "preview";
   const [debug, setDebug] = React.useState(false);
@@ -1060,7 +1083,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     // collects too (so testers can see it in the inspector) but never posts
     telemetryRef.current?.dispose();
     telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
-    if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptTelemetry = telemetryRef.current.data;
+    if (mode !== "live" && typeof window !== "undefined") { (window as any).__rescriptTelemetry = telemetryRef.current.data; (window as any).__rescriptScriptHealth = scriptHealth(); }
     /*
      * The resume machinery, for the test suites — the same seam
      * `__rescriptState` and `__rescriptTelemetry` already use, and for the
@@ -1507,7 +1530,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const frameValidateFor = async (q: Question): Promise<ReturnType<typeof validatePage>> => {
     if (!lifecycleRef.current) return [];
     const life = await runScriptLifecycle(lifecycleRef.current, "validate", { questions: [q] });
-    if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+    noteLife(life, "validate");
     return life.errors.filter((e) => e.questionId === q.id);
   };
 
@@ -1668,7 +1691,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       }
       const ask = logicAsk(`logic ${event}`, (t) => runLogicEvent(def, state, event, { scopeRef: submitScope, loop: pageStep.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: t }), noteLogic);
       const life = await runScriptLifecycle(ask, "validate", { questions: pageQuestions }, LIFECYCLE_TIMEOUT_MS);
-      if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+      noteLife(life, "validate");
       return life.errors;
     };
     const validateErrs = await logicStep("on_validate");
@@ -1689,7 +1712,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      */
     if (!blockedEarly && lifecycleRef.current) {
       const life = await runScriptLifecycle(lifecycleRef.current, "validate", { questions });
-      if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+      noteLife(life, "validate");
       fromScripts.push(...life.errors);
     }
     const allErrs = [...errs, ...fromScripts];
@@ -1738,7 +1761,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      */
     if (lifecycleRef.current) {
       const life = await runScriptLifecycle(lifecycleRef.current, "submit", { questions });
-      if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+      noteLife(life, "submit");
     }
     /*
      * "SHOW A MESSAGE WHEN NEXT IS PRESSED" — options whose popup is set to
@@ -2524,7 +2547,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
           onNavigate={(target, as) => jumpTo(target, as, "script")}
-          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} />
+          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue} />
       )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
