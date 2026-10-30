@@ -108,6 +108,7 @@ import {
   cachePreviewState, readPreviewState, clearPreviewState, mergeResumeSnapshot,
   readNavTrail, writeNavTrail, clearNavTrail,
 } from "@/lib/resume";
+import { resumeSeq } from "@/lib/saveSeq";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
 import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
@@ -185,33 +186,48 @@ type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; st
  */
 const MIN_ADVANCE_MS = 350;
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
+/**
+ * SAVE ORDERING (audit 2026-10-30 D6, migration 0078). Every save carries `seq`, a per-session number that only
+ * grows (continued from the row's `save_seq` on resume and from the pending cache after a reload); the server writes
+ * an intermediate save only when its seq is newer than the row's and answers `{ stale: true }` otherwise. The body
+ * is built when the save is ASKED for (`saveBody`), not when it leaves, so a save queued behind another carries the
+ * snapshot and the seq of the same moment.
+ */
+function saveBody(session: NonNullable<RunnerProps["session"]>, state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null, seq?: number): string {
+  return JSON.stringify({
+    sessionId: session.sessionId,
+    status: state.status,
+    stepIndex: state.stepIndex,
+    answers: state.answers,
+    calculated: state.calculated,
+    embedded: state.embedded,
+    flags: state.flags,
+    completed: done,
+    surveyDbId: session.surveyDbId,
+    // behavioural metadata for the quality engine — derived counts and
+    // durations only (see lib/telemetry.ts); the server runs the engine on
+    // the final save
+    telemetry: telemetry ?? undefined,
+    // which build this test session is running (draft / requested version /
+    // current version), so the server assesses it with the settings the
+    // respondent actually ran — a draft-run session is recorded against the
+    // draft's base version, whose settings may be older
+    build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+    // section navigation (0077, responses.nav): the Back trail and the pages seen — validated by the server, never trusted to move anyone
+    nav: nav ?? undefined,
+    // D6 / 0078: this save's place in the session's sequence
+    seq: seq ?? undefined,
+  });
+}
+
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null, seq?: number, prebuilt?: string): Promise<SaveOutcome> {
   if (!session || mode === "preview") return { ok: true, skipped: true };
   try {
-    const body = JSON.stringify({
-      sessionId: session.sessionId,
-      status: state.status,
-      stepIndex: state.stepIndex,
-      answers: state.answers,
-      calculated: state.calculated,
-      embedded: state.embedded,
-      flags: state.flags,
-      completed: done,
-      surveyDbId: session.surveyDbId,
-      // behavioural metadata for the quality engine — derived counts and
-      // durations only (see lib/telemetry.ts); the server runs the engine on
-      // the final save
-      telemetry: telemetry ?? undefined,
-      // which build this test session is running (draft / requested version /
-      // current version), so the server assesses it with the settings the
-      // respondent actually ran — a draft-run session is recorded against the
-      // draft's base version, whose settings may be older
-      build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
-      // section navigation (0077, responses.nav): the Back trail and the pages seen — validated by the server, never trusted to move anyone
-      nav: nav ?? undefined,
-    });
+    const body = prebuilt ?? saveBody(session, state, done, telemetry, build, nav, seq);
     // keepalive lets the completion save outlive a redirect that follows it
-    const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store" });
+    // D6: intermediate saves leave one after another, so one that stalls must not hold the queue for ever (the pending cache keeps its work)
+    const signal = !done && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(20_000) : undefined;
+    const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store", signal });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: j.error ?? `save failed (${r.status})`, status: r.status };
     return { ok: true, response: j };
@@ -222,10 +238,11 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
 }
 
 /** The final save, retried with backoff: three attempts before the respondent is told. */
-async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
+async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"], nav?: NavTrail | null, seq?: number): Promise<SaveOutcome> {
   let last: SaveOutcome = { ok: false, error: "not attempted" };
   for (let attempt = 0; attempt < 3; attempt++) {
-    last = await persist(mode, session, state, true, telemetry, build, nav);
+    // a retry carries the same seq: the final save is guarded by status on the server, so it finalises once
+    last = await persist(mode, session, state, true, telemetry, build, nav, seq);
     if (last.ok) return last;
     // a 4xx will not change on retry (unknown/finalised session); a network error or 5xx might
     if (last.status && last.status < 500) return last;
@@ -515,6 +532,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * the same definition will never fix.
    */
   const [fatal, setFatal] = React.useState<FatalDetail | null>(null);
+  /** D6: the last save seq used by this session (see saveBody) and the chain that sends intermediate saves in order */
+  const saveSeqRef = React.useRef(0);
+  const saveChainRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number; nav?: unknown; savedAt?: string | null } | null>(null);
   /** §24: embedded data from this respondent's row on the invitation list. */
   const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
@@ -574,6 +594,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         if (!r.ok || !j.session) { setBootError(j.error ?? `The survey could not be started (${r.status}).`); return; }
         writeResume(sessionBoot.mode, sessionBoot.surveyDbId, j.session.sessionId);
         if (j.resumed && j.saved) { savedRef.current = j.saved; setResumed(true); }
+        // D6: continue the save sequence from the larger of the row's and this browser's unacknowledged one
+        saveSeqRef.current = resumeSeq(j.saved?.saveSeq, readPending(j.session.sessionId)?.seq);
         /*
          * A page whose save never reached the server. It is newer than
          * anything the server has for this session by definition — the cache
@@ -1125,7 +1147,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
       if (session && mode !== "preview") {
         setFinalSave({ kind: "saving" });
-        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave()).then((out) => {
+        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current).then((out) => {
           setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
           force();
         });
@@ -1687,8 +1709,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (sectionNavMode(def) !== "off" && (session || mode === "preview")) {
       writeNavTrail(session?.sessionId ?? previewStateId, { visited: visitedPages(state), seen: seenPages(state) }, mode === "preview");
     }
+    const seq = session && mode !== "preview" ? ++saveSeqRef.current : undefined;
     if (session && mode !== "preview") {
-      stamp = cachePending(session.sessionId, snapshot);
+      stamp = cachePending(session.sessionId, { ...snapshot, seq });
     } else if (mode === "preview") {
       /* the preview's own position, so a refresh comes back here rather
          than to page one — see cachePreviewState */
@@ -1698,10 +1721,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       // …and the configuration fingerprints (A66), so the next resume can tell a changed question from an unchanged one
       cachePreviewState(previewStateId, { ...snapshot, seed: state.seed, fingerprints: configFingerprints(def) });
     }
-    void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build, navForSave()).then((o) => {
+    /*
+     * D6: built now, sent after the previous intermediate save has settled — saves leave in the order they were
+     * made, and the server refuses any that still arrives older than what it has (seq).
+     */
+    const body = session && mode !== "preview" ? saveBody(session, state, false, telemetryRef.current?.data ?? null, build, navForSave(), seq) : undefined;
+    const send = () => persist(mode, session, state, false, null, build, null, seq, body).then((o) => {
       if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }
       console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
     });
+    saveChainRef.current = saveChainRef.current.then(send, send);
   };
 
   /** Leave the current page: telemetry, advance, and everything that follows. */
@@ -1744,7 +1773,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       telemetryRef.current?.submitted();
       setFinalSave({ kind: "saving" });
       force();
-      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
+      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current);
       if (!out.ok) {
         console.warn("[rescript:save] completion NOT saved", { session: session?.sessionId.slice(0, 8), error: out.error });
         setFinalSave({ kind: "failed", error: out.error });
@@ -1781,7 +1810,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!state) return;
     setFinalSave({ kind: "saving" });
     force();
-    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
+    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current);
     setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
     if (out.ok) void assessmentResults.obtain("response" in out ? out.response : null, ended?.status ?? "complete", state.answers as Record<string, unknown>);
     if (out.ok && sessionBoot) {
