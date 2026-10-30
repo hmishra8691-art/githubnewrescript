@@ -478,7 +478,7 @@
     "scope": "supported",
     "mode": "ux",
     "ux": true,
-    "uxOnly": true,
+    "uxOnly": false,
     "lookOnlySaid": false,
     "guides": {},
     "refs": [
@@ -1151,7 +1151,7 @@
     "scope": "supported",
     "mode": "ux",
     "ux": true,
-    "uxOnly": true,
+    "uxOnly": false,
     "lookOnlySaid": false,
     "guides": {},
     "refs": [

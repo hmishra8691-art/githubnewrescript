@@ -1,5 +1,5 @@
 import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
 import { createQuestionFromVariant } from "./questionCreate.js";
@@ -479,7 +479,29 @@ type PageNode = Extract<FlowNode, { type: "page" }>;
  * still allowed — stopping a respondent (an age limit, a format) is the question's validation, never
  * a script, and the UX guide tells the model so; refusing it left the request half done (2026-10-16
  * 21:23: "popup when the age is 18+" → the min-18 validation refused, the popup kept).
+ *
+ * `uxBehaviour` (S2a D9, 2026-10-30): the request, read as look-only, ALSO asks for behaviour ("…so option 3 is
+ * hidden when Q2 is 1"). With look-only inferred, the native ops that implement behaviour are then let through —
+ * option display logic, a skip, URL embedded data, a starting answer, a punch rule, validation, the section
+ * navigator, and a question switched to a variant of the same response model (a timed single choice) — because a
+ * script can do none of them (it cannot hide an option from the data, terminate, or write a starting answer).
+ * Questions, blocks, wording and codes stay refused. Said look-only ("don't change the logic") refuses them all.
  */
+const BEHAVIOUR_NATIVE_OPS = new Set(["update_option", "add_skip", "create_embedded", "set_default_value", "add_punch", "set_validation", "set_navigation", "update_question"]);
+const UPDATE_QUESTION_BEHAVIOUR_KEYS = new Set(["op", "target", "type", "settings"]);
+const UPDATE_OPTION_BEHAVIOUR_KEYS = new Set(["op", "target", "option", "visibleIf"]);
+/** a behavioural native op, admitted under inferred look-only: checked on its shape (and, for a type switch, after it is applied) */
+function behaviourNativeOp(a: SurveyAction): boolean {
+  if (!BEHAVIOUR_NATIVE_OPS.has(a.op)) return false;
+  const keys = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
+  if (a.op === "update_option") return keys.every((k) => UPDATE_OPTION_BEHAVIOUR_KEYS.has(k));
+  if (a.op === "update_question") return keys.every((k) => UPDATE_QUESTION_BEHAVIOUR_KEYS.has(k));
+  return true;
+}
+/** the look-only refusal: said (terminal — no answer can change it) or inferred from the words (repairable once, with this reason) */
+const lookOnlyRefusal = (inferred: boolean, op: string) => inferred
+  ? `this request reads as look-and-behaviour only (inferred from its words, not said), so ${op} is refused here — use a look or behaviour action, or one of the native behaviour actions (update_option visibleIf, add_skip, create_embedded, set_default_value, add_punch, set_validation, set_navigation, update_question to a variant of the same kind) if the request asks for behaviour; a new question or a wording change is its own request`
+  : "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them";
 const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypothesis"]);
 /*
  * `lite` (durable tasks, 2026-10-29, ported from K2): a REPLAY of actions that were already judged — the task
@@ -488,7 +510,7 @@ const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypo
  * before, and the result must still pass the schema; only `warnings` is reduced to the UX warnings and
  * `structureUnchanged` is not computed (false).
  */
-export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
+export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; uxBehaviour?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
   const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
@@ -503,12 +525,23 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
     ctx.def = def;
-    if (opts.uxOnly && !isUxOp(a.op) && !(opts.uxOnlyInferred && a.op === "set_validation")) {
-      results.push({ index, op: a.op, ok: false, description: describeAction(a), error: "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them", touched: [] });
+    const behaviourOk = !!(opts.uxOnly && opts.uxOnlyInferred && !isUxOp(a.op) && (a.op === "set_validation" || (opts.uxBehaviour && behaviourNativeOp(a))));
+    if (opts.uxOnly && !isUxOp(a.op) && !behaviourOk) {
+      results.push({ index, op: a.op, ok: false, description: describeAction(a), error: lookOnlyRefusal(!!opts.uxOnlyInferred, a.op), touched: [] });
       return;
     }
     try {
       const r = apply(ctx, a);
+      /* a type switch admitted as behaviour must keep the question's response model (single choice → a timed single choice) */
+      if (behaviourOk && a.op === "update_question" && a.type) {
+        const was = snapshot.questions.find((x) => x.id === (r.touched ?? [])[0]);
+        const now = ctx.def.questions.find((x) => x.id === (r.touched ?? [])[0]);
+        if (was && now && effectiveResponseModel(was) !== effectiveResponseModel(now)) {
+          def = snapshot; ctx.def = def;
+          results.push({ index, op: a.op, ok: false, description: describeAction(a), error: lookOnlyRefusal(true, `changing ${was.code} to another kind of question (${now.type})`), touched: [] });
+          return;
+        }
+      }
       /*
        * VALIDATED BEFORE IT IS ACCEPTED, not linted afterwards: a forward
        * reference, an operator the source cannot answer, a comparison with an

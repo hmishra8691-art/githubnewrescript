@@ -2,7 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SurveyDefinition } from "@rescript/schema";
 import { applySurveyActions, coerceSurveyActions, interpretRequest, DEFER_TO_GRAMMAR } from "@rescript/engine";
+import { registerBuiltinDesignGenerators } from "@rescript/designs";
 import { classifyRequest, lookOnlySaid, policyRefusal } from "./prompt.ts";
+
+/* the turn route loads the design generators (route.ts) — the conjoint gate needs them */
+registerBuiltinDesignGenerators();
 
 /**
  * THE OWNER'S 15 SENTENCES (Phase 4.4, 2026-10-30) — S2a's acceptance tests, plus the auditor's stand-ins that
@@ -65,7 +69,7 @@ const q = (r: { def: SurveyDefinition }, code: string) => r.def.questions.find((
  * TARGETS NOT MET YET (S2a item 1): a test labelled with an open defect is skipped with that id so the runner stays
  * green between commits. Each S2a item closes its id here; by the end of S2a this set is empty and removed.
  */
-const OPEN = new Set(["D9", "D10", "D16", "R6"]);
+const OPEN = new Set(["D10", "D16", "R6"]);
 const target = (id?: string) => (id && OPEN.has(id) ? { skip: `target, open defect ${id}` } : {});
 
 interface Owner { defect?: string; n: number; sentence: string; sel?: string; mode: string; ux: boolean; uxOnly: boolean; engine?: string; native: unknown[]; check?: (r: ReturnType<typeof assertApplied>) => void }
@@ -179,7 +183,7 @@ test("stand-in (D9): “Write a JavaScript that hides option 3 of Q5 when Q2 is 
 test("stand-in (D9): “terminate respondents under 18” — the native terminate skip is accepted", target("D9"), () => {
   const s = "Write a script to terminate respondents under 18 at Q9";
   assert.equal(gateFor(s).cls.uxOnly, false);
-  assertApplied(s, [{ op: "add_skip", target: "Q9", when: "Q9 < 18", to: "terminate" }]);
+  assertApplied(s, [{ op: "add_skip", from: "Q9", when: "Q9 < 18", to: "terminate" }]);
 });
 
 test("stand-in (D9): “Prefill Q9 with the URL parameter age” — embedded data from the URL + a piped default are accepted", target("D9"), () => {

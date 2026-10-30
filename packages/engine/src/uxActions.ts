@@ -468,6 +468,21 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       return { description: `Remove ${q.code}'s default value (${Array.isArray(was) ? was.join(", ") : String(was)})`, destructive: `Removes ${q.code}'s default value`, warnings: [], touched: [q.id] };
     }
     const probe = { ...q, settings: { ...q.settings, defaultValue: a.value } } as typeof q;
+    /*
+     * A PIPED DEFAULT ("{{age}}" from a URL parameter, "{{Q1}}") resolves only while a respondent answers, so it is
+     * checked on its names, not read on an empty response (S2a D9: "Prefill Q1 with the URL parameter age" —
+     * create_embedded + set_default_value "{{age}}" — was refused as "must be a number"). The runtime reads it as the
+     * field reads its answer, and writes nothing when it resolves to nothing.
+     */
+    const pipes = typeof a.value === "string" ? [...a.value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map((m) => m[1]) : [];
+    if (pipes.length && typeof a.value === "string") {
+      const known = (n: string) => { const base = n.split(/[.:|]/)[0]; return !!env.lookups.question(base) || (def.embeddedData ?? []).some((e) => (e as { name?: string }).name?.toLowerCase() === base.toLowerCase()) || def.questions.some((x) => x.variableName?.toLowerCase() === base.toLowerCase()); };
+      const unknown = pipes.filter((n) => !known(n));
+      if (unknown.length) fail(`${q.code}'s default pipes ${unknown.map((n) => `{{${n}}}`).join(", ")}, which is neither a question nor embedded data — create the embedded data first (create_embedded with source "url" for a URL parameter)`);
+      const had = settings.defaultValue !== undefined;
+      settings.defaultValue = a.value;
+      return { description: `${had ? "Change" : "Set"} ${q.code}'s default value to ${a.value} (piped) — filled in when the question is first shown, only if it has no answer yet and the pipe has a value`, ...(had ? { destructive: `Replaces ${q.code}'s default value` } : {}), warnings: [], touched: [q.id] };
+    }
     const read = defaultAnswerFor(probe, { def, state: createResponseState(def) });
     if (read === null) {
       const model = effectiveResponseModel(q);

@@ -762,7 +762,8 @@ export function useCopilot(opts: {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
           const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
           const uxOnlyInferred = !!(d.context as { uxOnlyInferred?: boolean } | undefined)?.uxOnlyInferred;
-          return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}) }) }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
+          const uxBehaviour = !!(d.context as { uxBehaviour?: boolean } | undefined)?.uxBehaviour;
+          return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}), ...(uxOnly && uxOnlyInferred && uxBehaviour ? { uxBehaviour } : {}) }) }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
         });
         patch.proposal = "open";
       }
