@@ -214,7 +214,8 @@ export class DomBridge {
     const el = this.element(op.n) as HTMLElement | null; if (!el || !el.style) return;
     const r = this.rec(el);
     const remember = (k: string) => { if (!r.stylePrev.has(k)) r.stylePrev.set(k, [el.style.getPropertyValue(k), el.style.getPropertyPriority(k)]); };
-    const c = checkDeclarations(op.set ?? {}, { target: this.o.owner });
+    // D4: a style set from a script loads nothing (url / image-set / @import / expression refused, with the reason)
+    const c = checkDeclarations(op.set ?? {}, { target: this.o.owner, origin: "script" });
     if (c.errors.length) this.say(c.errors.join("; "));
     for (const [k, v] of Object.entries(c.ok)) {
       remember(k);
@@ -248,7 +249,8 @@ export class DomBridge {
         const probe = document.createElement("div"); probe.setAttribute("style", v);
         const decls: Record<string, string> = {};
         for (let i = 0; i < probe.style.length; i++) { const k = probe.style[i]; decls[k] = probe.style.getPropertyValue(k); }
-        const c = checkDeclarations(decls, { target: this.o.owner });
+        const c = checkDeclarations(decls, { target: this.o.owner, origin: "script" });
+        if (c.errors.length) this.say(c.errors.join("; "));
         for (const [k, val] of Object.entries(c.ok)) el.style.setProperty(k, val);
       }
       else if (n === "id" && /^[\w-]{1,60}$/.test(v)) el.setAttribute("id", v);

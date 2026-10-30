@@ -312,6 +312,13 @@ export function exfiltrationProblems(code: string): string[] {
   if (/\bpostMessage\s*\(/.test(src) && !/\bpostMessage\s*\([^)]*,\s*(?:location\.origin|window\.location\.origin)\s*\)/.test(src)) say("postMessage to another window");
   if (/\b(?:window\s*\.\s*)?(?:location\s*(?:\.\s*(?:href|assign|replace)\s*[=(]|=)|open\s*\(\s*["'`]https?:)/.test(src)) say("navigation to another address");
   if (/https?:\/\/[^"'`\s]*(?:\{\{|\$\{)/.test(src)) say("an external address carrying piped or computed data");
+  /*
+   * D4 (audit 2026-10-30): a CSS url() / image-set() BUILT from pieces — `"url(" + x + ")"`, `url(${x})`, or a
+   * literal containing it joined to something computed — makes the browser fetch an address carrying data. The
+   * runtime refuses every url() set from code (checkDeclarations origin "script"); refusing the built ones here
+   * says why before anyone previews it.
+   */
+  if (/(?:\burl|image-set)\s*\([^\n]*?["'`]\s*\+|\+\s*["'`][^"'`\n]*(?:\burl|image-set)\s*\(|`[^`]*(?:\burl|image-set)\s*\([^`]*\$\{|\.\s*concat\s*\([^)]*(?:\burl|image-set)\s*\(/i.test(src)) say("a CSS url() built from code (a style that would load an address carrying data)");
   return [...new Set(out)];
 }
 

@@ -403,7 +403,7 @@ export function UxLayer(p: UxLayerProps) {
           case "removeClass": effect({ do: "remove_class", className: str(a[1]) }, resolve(a[0])); break;
           case "toggleClass": effect({ do: "toggle_class", className: str(a[1]) }, resolve(a[0])); break;
           case "animate": { const preset = str(a[1]); const opts = (a[2] && typeof a[2] === "object" ? a[2] : {}) as { duration?: number }; if (UX_PRESET_FRAMES[preset as keyof typeof UX_PRESET_FRAMES]) effect({ do: "animate", preset: preset as never, durationMs: Math.max(50, Math.min(10000, Number(opts.duration) || 450)) }, resolve(a[0])); else report(`“${preset}” is not a preset`); break; }
-          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style); if (c.errors.length) report(`${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
+          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style, { origin: "script" }); if (c.errors.length) report(`${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
           case "clearStyle": { const t = resolve(a[0]); if (t) for (const el of uxElements(root, t)) { for (const k of setByUx.get(el) ?? []) el.style.removeProperty(k); setByUx.delete(el); } break; }
           case "show": effect({ do: "show" }, resolve(a[0])); break;
           case "hide": effect({ do: "hide" }, resolve(a[0])); break;

