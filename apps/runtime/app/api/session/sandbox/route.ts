@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   if (body.action === "row") {
     const row = sandboxRow(String(body.sessionId ?? ""));
     if (!row) return NextResponse.json({ error: "unknown session" }, { status: 404, ...noStore });
-    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length }, noStore);
+    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length, saveSeq: row.save_seq }, noStore);
   }
   return NextResponse.json({ error: "unknown action" }, { status: 400, ...noStore });
 }
