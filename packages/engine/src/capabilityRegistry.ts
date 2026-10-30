@@ -1,5 +1,6 @@
 import { variantRegistry, questionSettingField, UNIVERSAL_VALIDATIONS, type QuestionVariantDef } from "@rescript/schema";
 import type { UX_SCRIPT_API, UX_SCRIPT_EVENTS } from "./ux.js";
+import type { LOGIC_HELPERS } from "./codeGate.js";
 
 /**
  * THE JAVASCRIPT CAPABILITY REGISTRY — layer 2 of the three (S2b, 2026-10-30; audit §6, D16/D18, AQ-16, IM-04/05).
@@ -192,37 +193,37 @@ type ApiMethod = (typeof UX_SCRIPT_API)[number];
 type ApiEvent = (typeof UX_SCRIPT_EVENTS)[number];
 
 /** every rs method and its effect — a method added to UX_SCRIPT_API and not here is a type error and a failed test */
-export const SANDBOX_API: Record<ApiMethod, { effect: string; write?: boolean }> = {
-  listen: { effect: "rs.listen(event, target?, fn) — run fn on an event (see the events)" },
-  getAnswer: { effect: "read an answer by code / variable" },
-  getQuestion: { effect: "a question's card element (by code)" },
-  getBlock: { effect: "a block's element" },
-  getPage: { effect: "the page element" },
-  addClass: { effect: "add a CSS class to a target" },
-  removeClass: { effect: "remove a CSS class" },
-  toggleClass: { effect: "toggle a CSS class" },
-  animate: { effect: "play a motion preset (fade-in, pop, pulse, shake …)" },
-  setStyle: { effect: "set inline styles on a target" },
-  clearStyle: { effect: "clear the inline styles it set" },
-  show: { effect: "show a target (look only — a hidden question still counts)" },
-  hide: { effect: "hide a target (look only — not display logic)" },
-  showMessage: { effect: "show a message under a target" },
-  hideMessage: { effect: "remove that message" },
-  scrollTo: { effect: "scroll to a target" },
-  focus: { effect: "focus a target" },
-  after: { effect: "rs.after(ms, fn) — run fn later, at most 60,000 ms" },
-  log: { effect: "write to the preview's script log" },
-  popup: { effect: "open the survey's own popup (title, placement center|anchored|top|inline)" },
-  closePopup: { effect: "close the survey's popup" },
-  goToPage: { effect: "ask to move to a page (the engine's navigation rule decides)" },
-  goToSection: { effect: "ask to move to a block / section" },
-  getEmbedded: { effect: "read an embedded field" },
-  getCalc: { effect: "read a calculated variable" },
-  setAnswer: { effect: "REQUEST an answer write — checked like the respondent's own input, within the write scope", write: true },
-  setEmbedded: { effect: "REQUEST an embedded-field write", write: true },
-  setCalc: { effect: "REQUEST a calculated-variable write (refused when its expression recomputes it)", write: true },
-  flag: { effect: "REQUEST a session flag", write: true },
-  error: { effect: "inside a \"validate\" handler: stop Next with this message" },
+export const SANDBOX_API: Record<ApiMethod, { sig: string; effect: string; write?: boolean }> = {
+  listen: { sig: "rs.listen(event, target?, fn)", effect: "rs.listen(event, target?, fn) — run fn on an event (see the events)" },
+  getAnswer: { sig: "rs.getAnswer(code)", effect: "read an answer by code / variable" },
+  getQuestion: { sig: "rs.getQuestion(code)", effect: "a question's card element (by code)" },
+  getBlock: { sig: "rs.getBlock()", effect: "a block's element" },
+  getPage: { sig: "rs.getPage()", effect: "the page element" },
+  addClass: { sig: "rs.addClass(target, className)", effect: "add a CSS class to a target" },
+  removeClass: { sig: "rs.removeClass(target, className)", effect: "remove a CSS class" },
+  toggleClass: { sig: "rs.toggleClass(target, className)", effect: "toggle a CSS class" },
+  animate: { sig: "rs.animate(target, preset, { duration }?)", effect: "play a motion preset (fade-in, pop, pulse, shake …)" },
+  setStyle: { sig: "rs.setStyle(target, { property: value })", effect: "set inline styles on a target" },
+  clearStyle: { sig: "rs.clearStyle(target)", effect: "clear the inline styles it set" },
+  show: { sig: "rs.show(target)", effect: "show a target (look only — a hidden question still counts)" },
+  hide: { sig: "rs.hide(target)", effect: "hide a target (look only — not display logic)" },
+  showMessage: { sig: "rs.showMessage(target, text)", effect: "show a message under a target" },
+  hideMessage: { sig: "rs.hideMessage(target)", effect: "remove that message" },
+  scrollTo: { sig: "rs.scrollTo(target)", effect: "scroll to a target" },
+  focus: { sig: "rs.focus(target)", effect: "focus a target" },
+  after: { sig: "rs.after(ms, fn)", effect: "rs.after(ms, fn) — run fn later, at most 60,000 ms" },
+  log: { sig: "rs.log(...values)", effect: "write to the preview's script log" },
+  popup: { sig: "rs.popup(text, { title, placement, dismiss }?)", effect: "open the survey's own popup (title, placement center|anchored|top|inline)" },
+  closePopup: { sig: "rs.closePopup()", effect: "close the survey's popup" },
+  goToPage: { sig: "rs.goToPage(pageIdOrCode)", effect: "ask to move to a page (the engine's navigation rule decides)" },
+  goToSection: { sig: "rs.goToSection(blockIdOrName)", effect: "ask to move to a block / section" },
+  getEmbedded: { sig: "rs.getEmbedded(name)", effect: "read an embedded field" },
+  getCalc: { sig: "rs.getCalc(name)", effect: "read a calculated variable" },
+  setAnswer: { sig: "rs.setAnswer(code, value)", effect: "REQUEST an answer write — checked like the respondent's own input, within the write scope", write: true },
+  setEmbedded: { sig: "rs.setEmbedded(name, value)", effect: "REQUEST an embedded-field write", write: true },
+  setCalc: { sig: "rs.setCalc(name, value)", effect: "REQUEST a calculated-variable write (refused when its expression recomputes it)", write: true },
+  flag: { sig: "rs.flag(name)", effect: "REQUEST a session flag", write: true },
+  error: { sig: "rs.error(message)", effect: "inside a \"validate\" handler: stop Next with this message" },
 };
 
 export const SANDBOX_EVENTS: Record<ApiEvent, string> = {
@@ -246,6 +247,51 @@ export const SANDBOX_LIMITS: readonly string[] = [
   "writes are requests (rs.setAnswer / setEmbedded / setCalc / flag) the engine decides: hidden, calculated and embedded targets from any script; any question the respondent is not looking at; a question-scoped script also its own question — never another question on screen",
   "runs on a mirror of the page in a sandboxed frame: .click(), .value =, preventDefault on the real page do nothing",
 ];
+
+/**
+ * THE LOGIC SCRIPT HELPERS (Scripts panel, `def.scripts`) — each one the sandbox's `ctx` gives a logic script, with
+ * its signature and effect (S3a: the code editor's completion reads these). Keyed by `LOGIC_HELPERS`: a helper added
+ * there and not here is a type error.
+ */
+export const LOGIC_HELPER_DOCS: Record<(typeof LOGIC_HELPERS)[number], { sig: string; effect: string; write?: boolean }> = {
+  get: { sig: "get(ref)", effect: "read an answer by question id / code / variable name" },
+  set: { sig: "set(ref, value)", effect: "REQUEST an answer write — applied after the script returns, checked like a respondent's answer", write: true },
+  getCalc: { sig: "getCalc(name)", effect: "read a calculated variable" },
+  setCalc: { sig: "setCalc(name, value)", effect: "REQUEST a calculated-variable write", write: true },
+  getEmbedded: { sig: "getEmbedded(name)", effect: "read an embedded field" },
+  setEmbedded: { sig: "setEmbedded(name, value)", effect: "REQUEST an embedded-field write", write: true },
+  expr: { sig: "expr(\"Q1 + Q2\")", effect: "evaluate a calc-DSL expression (its text written out)" },
+  pipe: { sig: "pipe(\"{{Q1}}\")", effect: "resolve piping tokens in a text (written out)" },
+  flag: { sig: "flag(name)", effect: "REQUEST a session flag", write: true },
+  loop: { sig: "loop", effect: "the current loop context ({ … , parent }) or null outside a loop" },
+  log: { sig: "log(...values)", effect: "write to the preview inspector's log" },
+  error: { sig: "error(message, ref?)", effect: "on_validate: register a validation error (stops Next)" },
+  getCurrentLoopItem: { sig: "getCurrentLoopItem(scope?)", effect: "the current iteration { code, label, index, count, references } or null" },
+  getCurrentLoopIndex: { sig: "getCurrentLoopIndex(scope?)", effect: "1-based iteration number, 0 outside a loop" },
+  getLoopCount: { sig: "getLoopCount(scope?)", effect: "how many iterations this loop runs, 0 outside a loop" },
+  getCurrentLoopReference: { sig: "getCurrentLoopReference(name, scope?)", effect: "the current item's value for a reference column" },
+  getLoopItems: { sig: "getLoopItems(scope?)", effect: "every iteration of the current loop, in order" },
+  getLoopAnswer: { sig: "getLoopAnswer(ref, itemCode, scope?)", effect: "another iteration's answer to a question" },
+  getElement: { sig: "getElement(id)", effect: "a plain copy of any element by its stable id" },
+  getQuestion: { sig: "getQuestion(ref)", effect: "a plain copy of a question (id / code / variable)" },
+  getOption: { sig: "getOption(id)", effect: "a plain copy of an option" },
+  getRow: { sig: "getRow(id)", effect: "a plain copy of a grid row" },
+  getColumn: { sig: "getColumn(id)", effect: "a plain copy of a grid column" },
+  getGroup: { sig: "getGroup(id)", effect: "a plain copy of a group" },
+};
+
+/**
+ * A CUSTOM COMPONENT'S API (`customJs`; `legacyScripts.ts` wrapComponentScript is the implementation): its element
+ * and its answer. The code gate's component flavour allows these roots only.
+ */
+export const COMPONENT_API: Record<string, { sig: string; effect: string }> = {
+  el: { sig: "el", effect: "the component's element (the Component HTML template, rendered)" },
+  api: { sig: "api", effect: "the component's answer: getValue / setValue / onChange" },
+  "api.getValue": { sig: "api.getValue()", effect: "the component's answer (its own last setValue until the survey confirms it)" },
+  "api.setValue": { sig: "api.setValue(value)", effect: "REQUEST the answer — checked by the survey; resolves { ok, reason }" },
+  "api.onChange": { sig: "api.onChange(fn)", effect: "fn(value) whenever the answer changes" },
+  "api.question": { sig: "api.question", effect: "{ id, code } of this question" },
+};
 
 /* ------------------------------------------------------------ the variants and their settings */
 
@@ -417,5 +463,5 @@ export function variantCatalogueText(opts: { families?: readonly string[]; max?:
 
 /** the whole layer as one object (for tests, the docs and an explain card) */
 export function jsCapabilityRegistry() {
-  return { features: NATIVE_FEATURES, api: SANDBOX_API, events: SANDBOX_EVENTS, limits: SANDBOX_LIMITS, routes: NATIVE_ROUTES, variants: variantCatalogue(), validationKinds: validationKinds() };
+  return { features: NATIVE_FEATURES, api: SANDBOX_API, logicHelpers: LOGIC_HELPER_DOCS, componentApi: COMPONENT_API, events: SANDBOX_EVENTS, limits: SANDBOX_LIMITS, routes: NATIVE_ROUTES, variants: variantCatalogue(), validationKinds: validationKinds() };
 }

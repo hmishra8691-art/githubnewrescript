@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { variantRegistry, questionSettingField, QUESTION_VARIANTS } from "@rescript/schema";
-import { NATIVE_FEATURES, NATIVE_ROUTES, SANDBOX_API, SANDBOX_EVENTS, SANDBOX_LIMITS, capabilityGuideText, nativeRouteFor, settableSettings, settingProblem, variantCatalogue, variantCatalogueText, validationKinds } from "./capabilityRegistry.js";
+import { COMPONENT_API, LOGIC_HELPER_DOCS, NATIVE_FEATURES, NATIVE_ROUTES, SANDBOX_API, SANDBOX_EVENTS, SANDBOX_LIMITS, capabilityGuideText, nativeRouteFor, settableSettings, settingProblem, variantCatalogue, variantCatalogueText, validationKinds } from "./capabilityRegistry.js";
 import { UX_SCRIPT_API, UX_SCRIPT_EVENTS, UX_SCRIPT_WRITES } from "./ux.js";
 import { SURVEY_ACTION_OPS } from "./surveyActions.js";
+import { LOGIC_HELPERS } from "./codeGate.js";
 import { scriptAuthoringProblems } from "./uxScriptGuard.js";
 import { SurveyDefinition } from "@rescript/schema";
 
@@ -13,6 +14,14 @@ test("every rs method is in the registry, and nothing else", () => {
   assert.deepEqual(Object.keys(SANDBOX_API).sort(), [...UX_SCRIPT_API].sort(), "a method added to UX_SCRIPT_API must be described in SANDBOX_API (and the other way round)");
   for (const w of UX_SCRIPT_WRITES) assert.equal(SANDBOX_API[w].write, true, `rs.${w} is a write request`);
   for (const [k, v] of Object.entries(SANDBOX_API)) assert.ok(v.effect.length > 8, `rs.${k} has an effect`);
+});
+
+test("S3a: every rs method has a signature; every logic helper and the component api are documented", () => {
+  for (const [k, v] of Object.entries(SANDBOX_API)) assert.ok(v.sig.startsWith(`rs.${k}`), `rs.${k} signature: ${v.sig}`);
+  assert.deepEqual(Object.keys(LOGIC_HELPER_DOCS).sort(), [...LOGIC_HELPERS].sort(), "a helper added to LOGIC_HELPERS must be documented");
+  for (const [k, v] of Object.entries(LOGIC_HELPER_DOCS)) { assert.ok(v.sig.startsWith(k), k); assert.ok(v.effect.length > 8, k); }
+  for (const w of ["set", "setCalc", "setEmbedded", "flag"] as const) assert.equal(LOGIC_HELPER_DOCS[w].write, true, w);
+  assert.deepEqual(Object.keys(COMPONENT_API).sort(), ["api", "api.getValue", "api.onChange", "api.question", "api.setValue", "el"]);
 });
 
 test("every script event is in the registry, validate and submit included", () => {
