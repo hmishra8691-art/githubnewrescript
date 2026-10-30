@@ -747,7 +747,7 @@ export function ScriptsPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
       <p className="muted" style={{ fontSize: 13 }}>
-        Scripts run in the runtime&apos;s controlled host with this API:{" "}
+        Scripts run in a sandboxed frame (never on the respondent&apos;s page) with this API:{" "}
         <code>get(ref) set(ref, v) getCalc/setCalc getEmbedded/setEmbedded expr(&quot;Q1+Q2&quot;) pipe(&quot;{"{{Q1}}"}&quot;)
         flag(name) log(...) error(msg, ref) loop</code>. Events: on_load, on_change, on_submit, on_validate, on_complete.
       </p>
@@ -755,6 +755,12 @@ export function ScriptsPanel() {
         Code is checked before it is saved and again before it runs: it reaches the survey through these helpers only —
         no <code>constructor</code>, <code>globalThis</code>, <code>window</code>, network, storage or <code>navigator</code>;
         loops are allowed and stopped after 100,000 rounds. A refused script does not run; the preview inspector says why.
+      </p>
+      <p className="muted" style={{ fontSize: 12.5 }} data-testid="script-sandbox-note">
+        Writes (<code>set</code>, <code>setCalc</code>, <code>setEmbedded</code>, <code>flag</code>) are requests: they are applied after the
+        script returns, checked like a respondent&apos;s answer (a question on screen belongs to the respondent; a refused write is
+        logged with the reason). A <code>get</code> later in the same run sees the run&apos;s own writes. on_change runs just after the
+        change; on_validate / on_submit may take at most 1.5 s on Next. <code>expr</code> / <code>pipe</code> take their text written out.
       </p>
       {s.def.scripts.map((sc, i) => (
         <div key={sc.id} className="card">

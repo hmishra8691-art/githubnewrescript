@@ -73,6 +73,17 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     // event, options, effects (a popup's placement), guard and once: what the model needs to UPDATE one rather than add a second
     for (const bh of ux.behaviors.slice(0, 40)) lines.push(`  behaviour ${bh.id} “${bh.label}” on ${describeUxTarget(def, bh.target)}: ${uxBehaviorWords(def, bh)}${bh.script ? `: ${bh.script.replace(/\s+/g, " ").slice(0, opts.ux ? 600 : 120)}` : ""}`);
   }
+  /*
+   * S1b (audit IM-D5): the Scripts panel's logic scripts were invisible here. Listed — name, event, scope, an
+   * excerpt — so a request about them is answered from what exists. Read only: there is no write action for them
+   * yet (S2); they run in the sandboxed logic frame, their writes checked by the engine.
+   */
+  const logic = def.scripts ?? [];
+  if (logic.length) {
+    lines.push(`Scripts panel (${logic.length} logic script${logic.length === 1 ? "" : "s"}; run in the sandbox, read only here — no action edits them yet):`);
+    const scopeOf = (sc: (typeof logic)[number]) => sc.scope === "survey" ? "survey" : `${sc.scope} ${sc.scope === "question" ? code(sc.ref ?? "") : (sc.ref ?? "?")}`;
+    for (const sc of logic.slice(0, 30)) lines.push(`  “${sc.name.replace(/\s+/g, " ").slice(0, 80)}” ${sc.event} on ${scopeOf(sc)}${sc.enabled === false ? " (off)" : ""}${sc.when ? ", guarded" : ""}: ${sc.code.replace(/\s+/g, " ").slice(0, opts.ux ? 160 : 80)}${sc.code.length > (opts.ux ? 160 : 80) ? "…" : ""}`);
+  }
   if (opts.ux) for (const id of focus) {
     const q = def.questions.find((x) => x.id === id);
     if (!q) continue;
