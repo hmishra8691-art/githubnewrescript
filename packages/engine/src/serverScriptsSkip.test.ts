@@ -99,5 +99,6 @@ test("D1: scripts:'skip' on validatePage records the rule without running it", (
   const errs = validatePage(def, def.questions, { def, state, scripts: "skip", skippedScripts });
   assert.equal(errs.length, 0);
   assert.equal(G.__S0A_SENTINEL__, undefined);
-  assert.deepEqual(skippedScripts, [{ questionId: "q1", script: "probe" }]);
+  // S1b: the entry also carries what the browser needs to run the rule in the sandboxed frame (value, severity, the rule's message)
+  assert.deepEqual(skippedScripts, [{ questionId: "q1", script: "probe", value: 7, severity: "error", failMessage: "This answer could not be checked." }]);
 });
