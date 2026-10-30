@@ -5,6 +5,7 @@ import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
 import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
+import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents } from "@/lib/notifyEmit";
@@ -38,6 +39,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid session" }, { status: 400 });
   const sbx = sandboxRow(sessionId);
   if (sbx) return sandboxSave(sbx, body);
+  /* D6 / 0078: the client's save sequence number — an intermediate save older than the row's is not written */
+  const seq = parseSaveSeq(body?.seq);
 
   const db = supabaseAdmin();
   const { data: existing } = await db
@@ -107,6 +110,8 @@ export async function POST(req: NextRequest) {
     last_saved_at: new Date().toISOString(),
   };
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
+  const isFinal = !!completed && newStatus !== "in_progress";
+  if (seq != null) update.save_seq = seq;
   /*
    * SECTION NAVIGATION (0077, responses.nav): the Back trail and the pages seen, checked against the definition
    * this session runs — shape, bounds, every id a page of it; unknown ids are dropped, never stored. It is never
@@ -134,9 +139,25 @@ export async function POST(req: NextRequest) {
    * winner. No new table, no idempotency key — the condition was always
    * there, it just was not being read.
    */
-  const applyUpdate = async () =>
-    db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress").select("id");
+  /*
+   * D6 (audit 2026-10-30, migration 0078) — AN OLDER SAVE NEVER OVERWRITES A NEWER ONE. An intermediate save with a
+   * seq is written only while the row's save_seq is lower (same compare-and-swap shape as the status condition
+   * above); a stale one changes no row and is answered 200 { stale: true } below. The final save is not seq-guarded
+   * (the status condition finalises it exactly once). Before 0078 the column is missing: retry without it, log once.
+   */
+  let seqGuard = seq != null && !isFinal;
+  const applyUpdate = async () => {
+    let q = db.from("responses").update(update).eq("session_id", sessionId).eq("status", "in_progress");
+    if (seqGuard) q = q.lt("save_seq", seq as number);
+    return q.select("id");
+  };
   let { data: changed, error } = await applyUpdate();
+  if (error && "save_seq" in update && /save_seq/.test(error.message)) {
+    if (!warnedSeqColumn) { warnedSeqColumn = true; console.warn("[rescript:save] responses.save_seq missing (migration 0078 not applied) — saving unordered", error.message); }
+    delete update.save_seq;
+    seqGuard = false;
+    ({ data: changed, error } = await applyUpdate());
+  }
   if (error && /last_saved_at/.test(error.message)) {
     // migration 0006 not applied yet — the column is a convenience, not the save
     delete update.last_saved_at;
@@ -151,6 +172,14 @@ export async function POST(req: NextRequest) {
   if (error) {
     console.error("[rescript:save] write failed", JSON.stringify({ sessionId: sessionId.slice(0, 8), error: error.message }));
     return NextResponse.json({ error: "save failed" }, { status: 500 });
+  }
+  if (!changed?.length && seqGuard) {
+    // no row changed: either a newer save already landed (stale) or the session was finalised meanwhile
+    const { data: now } = await db.from("responses").select("status, save_seq").eq("session_id", sessionId).maybeSingle();
+    if (now?.status === "in_progress") {
+      console.info("[rescript:save] stale save ignored", JSON.stringify({ sessionId: sessionId.slice(0, 8), seq, stored: now.save_seq ?? null }));
+      return NextResponse.json({ ok: true, stale: true, seq: now.save_seq ?? null, environment: existing.is_test ? "TEST" : "LIVE", respondentCode: existing.respondent_code ?? null });
+    }
   }
   if (!changed?.length) {
     /*
@@ -294,6 +323,7 @@ export async function POST(req: NextRequest) {
 }
 
 let warnedNavColumn = false;
+let warnedSeqColumn = false;
 
 /**
  * THE SANDBOX ROW (a runtime with no database, lib/sessionSandbox.ts): the same contract as the database path for
@@ -301,12 +331,25 @@ let warnedNavColumn = false;
  * kept in memory. Quality scoring, quotas, List Fill, metering and assessments are the database path's; a sandbox
  * session records none of them.
  */
-function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body: any) {
+async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body: any) {
+  /*
+   * FAKE-ONLY SEAM (D6 browser check): delay this save before it is applied, so a test can make an older save
+   * arrive after a newer one. Honoured only here — the sandbox path exists only without a database — and only with
+   * the fake AI provider; capped at 5 s.
+   */
+  const delay = Number(body?.sandboxDelayMs);
+  if ((process.env.AI_API_URL ?? "").startsWith("fake:") && Number.isFinite(delay) && delay > 0) await new Promise((r) => setTimeout(r, Math.min(delay, 5000)));
   if (row.status !== "in_progress") return NextResponse.json({ ok: true, note: "session already finalized", environment: "TEST", respondentCode: row.respondent_code });
   const survey = sandboxSurvey(row.survey);
   if (!survey) return NextResponse.json({ error: "unknown session" }, { status: 404 });
   const validStatus = ["in_progress", "complete", "screened", "quota_full", "terminated"];
   const newStatus = validStatus.includes(body?.status) ? body.status : "in_progress";
+  // D6: the same ordering rule as the database path (0078)
+  const seq = parseSaveSeq(body?.seq);
+  if (isStaleSave(row.save_seq, seq, !!body?.completed && newStatus !== "in_progress")) {
+    console.info("[rescript:save] sandbox stale save ignored", JSON.stringify({ sessionId: row.session_id.slice(0, 8), seq, stored: row.save_seq }));
+    return NextResponse.json({ ok: true, stale: true, seq: row.save_seq, environment: "TEST", respondentCode: row.respondent_code, sandbox: true });
+  }
   const posture = validationPosture();
   if (posture !== "off") {
     const check = checkSubmission({
@@ -323,6 +366,7 @@ function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body: any)
     answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: Array.isArray(body?.flags) ? body.flags : [],
     completed_at: body?.completed ? new Date().toISOString() : null, last_saved_at: new Date().toISOString(),
     ...(nav.trail ? { nav: nav.trail } : {}),
+    ...(seq != null ? { save_seq: seq } : {}),
   });
   return NextResponse.json({ ok: true, environment: "TEST", respondentCode: row.respondent_code, status: newStatus, sandbox: true });
 }

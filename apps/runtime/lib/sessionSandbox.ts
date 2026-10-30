@@ -16,6 +16,8 @@ export interface SandboxRow {
   session_id: string; survey: string; seed: number; status: string; is_test: true; respondent_code: string;
   answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[];
   step_index: number; nav: NavTrail | null; started_at: string; last_saved_at: string | null; completed_at: string | null;
+  /** D6 / 0078: the highest save seq applied */
+  save_seq: number;
 }
 
 const G = globalThis as unknown as { __rescriptSessionSandbox?: { surveys: Map<string, SandboxSurvey>; rows: Map<string, SandboxRow> } };
@@ -45,7 +47,7 @@ export function startSandboxSession(survey: SandboxSurvey): SandboxRow {
   const row: SandboxRow = {
     session_id: hex(16), survey: survey.token, seed: Math.floor(Math.random() * 2 ** 31), status: "in_progress", is_test: true,
     respondent_code: `T${String(n).padStart(4, "0")}`, answers: {}, calculated: {}, embedded: {}, flags: [], step_index: 0, nav: null,
-    started_at: new Date().toISOString(), last_saved_at: null, completed_at: null,
+    started_at: new Date().toISOString(), last_saved_at: null, completed_at: null, save_seq: 0,
   };
   s.rows.set(row.session_id, row);
   return row;

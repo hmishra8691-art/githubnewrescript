@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 const RESUME_COLUMNS = "session_id, seed, status, is_test, survey_id, respondent_code, answers, calculated, embedded, flags, step_index, deleted_at";
 let warnedNavRead = false;
+let warnedSeqRead = false;
 
 /**
  * A SANDBOX TEST LINK (/n/<token>, a runtime with no database — lib/sessionSandbox.ts): the same contract as below,
@@ -29,7 +30,7 @@ function sandboxStart(token: string, body: any) {
     return NextResponse.json({
       ok: true, resumed: true,
       session: { sessionId: resume.session_id, seed: resume.seed, surveyDbId: id, versionDbId: id, respondentCode: resume.respondent_code },
-      saved: { answers: resume.answers, calculated: resume.calculated, embedded: resume.embedded, flags: resume.flags, stepIndex: resume.step_index, nav: resume.nav, savedAt: resume.last_saved_at },
+      saved: { answers: resume.answers, calculated: resume.calculated, embedded: resume.embedded, flags: resume.flags, stepIndex: resume.step_index, nav: resume.nav, savedAt: resume.last_saved_at, saveSeq: resume.save_seq ?? 0 },
     });
   }
   const row = startSandboxSession(survey);
@@ -115,16 +116,21 @@ export async function POST(req: NextRequest) {
   // resume: same survey, same environment, still in progress, not deleted
   const resume = typeof body?.resume === "string" && body.resume.length >= 16 ? body.resume : null;
   if (resume) {
-    const { data: row, error: navReadError } = await db
+    let { data: row, error: navReadError } = await db
       .from("responses")
-      .select(`${RESUME_COLUMNS}, nav, last_saved_at`)
+      .select(`${RESUME_COLUMNS}, nav, last_saved_at, save_seq`)
       .eq("session_id", resume)
       .maybeSingle();
+    if (navReadError && !row) {
+      // 0078 (responses.save_seq) not applied: the client then continues from its own cache / 0 — the server still orders by what it stores
+      if (!warnedSeqRead) { warnedSeqRead = true; console.warn("[rescript:session] resume read without responses.save_seq (migration 0078 not applied?)", navReadError.message); }
+      ({ data: row, error: navReadError } = await db.from("responses").select(`${RESUME_COLUMNS}, nav, last_saved_at`).eq("session_id", resume).maybeSingle());
+    }
     /*
      * 0077 (responses.nav) may not be applied yet: then the select names a missing column and returns nothing.
      * Read again without it — the browser's own copy of the trail is the fallback (Runner) — and say so once.
      */
-    let resumed = row as (typeof row & { nav?: unknown; last_saved_at?: string | null }) | null;
+    let resumed = row as (typeof row & { nav?: unknown; last_saved_at?: string | null; save_seq?: number | string | null }) | null;
     if (navReadError && !resumed) {
       if (!warnedNavRead) { warnedNavRead = true; console.warn("[rescript:session] resume read without responses.nav (migration 0077 not applied?)", navReadError.message); }
       const again = await db.from("responses").select(RESUME_COLUMNS).eq("session_id", resume).maybeSingle();
@@ -154,7 +160,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true, resumed: true,
         session: { sessionId: resumed.session_id, seed: Number(resumed.seed), surveyDbId: d.surveyId, versionDbId: d.versionId, respondentCode: resumed.respondent_code ?? null },
-        saved: { answers: resumed.answers ?? {}, calculated: resumed.calculated ?? {}, embedded: resumed.embedded ?? {}, flags: resumed.flags ?? [], stepIndex: resumed.step_index ?? 0, nav: resumed.nav ?? null, savedAt: resumed.last_saved_at ?? null },
+        saved: { answers: resumed.answers ?? {}, calculated: resumed.calculated ?? {}, embedded: resumed.embedded ?? {}, flags: resumed.flags ?? [], stepIndex: resumed.step_index ?? 0, nav: resumed.nav ?? null, savedAt: resumed.last_saved_at ?? null, saveSeq: Number(resumed.save_seq ?? 0) || 0 },
       });
     }
   }
