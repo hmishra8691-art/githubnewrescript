@@ -28,11 +28,18 @@ import { assessmentSettings } from "./assessment.js";
  * here is a second validation engine; it is the first one, run again where
  * the client cannot edit it.
  *
- * What it deliberately does NOT do: run `def.scripts` (they are unsandboxed
- * — RUNTIME-04) or option popups, and it does not recompute quota outcomes
- * against live counts (a respondent who started before a cell filled is the
- * route's business). Problems are graded so the route can log before it
- * refuses:
+ * What it deliberately does NOT do: execute ANY author JavaScript. Until
+ * 2026-10-30 that claim was false — a `custom_script` validation rule reached
+ * `runScript` (a `new Function` in the server's own realm) through
+ * `validatePage`, so author code could read `process` and an endless loop
+ * hung the save route (audit 2026-10-30 D1). The replay now passes
+ * `scripts: "skip"`: such a rule is never executed here, it is recorded as a
+ * soft `client_only` problem (it ran in the browser, where it belongs) and
+ * cannot refuse a save on its own. Owner decision S0 #2: "skip on the
+ * server". It also does not run option popups, and it does not recompute
+ * quota outcomes against live counts (a respondent who started before a cell
+ * filled is the route's business), nor punches/calculations (D7, S0b).
+ * Problems are graded so the route can log before it refuses:
  *
  *   hard  — the payload cannot be an honest interview: an answer that fails
  *           its question's rules on a page already passed, an unknown
@@ -40,7 +47,8 @@ import { assessmentSettings } from "./assessment.js";
  *   soft  — worth a log line, not a refusal on its own: an answer for a
  *           question the replay never showed (display logic hid it; a loop
  *           iteration that did not exist), a status the replay ended
- *           differently from (quota timing).
+ *           differently from (quota timing), a `custom_script` rule the
+ *           server does not execute (`client_only`).
  */
 export type SubmissionProblem = {
   severity: "hard" | "soft";
@@ -52,7 +60,8 @@ export type SubmissionProblem = {
     | "incomplete"
     | "status_mismatch"
     | "step_unreachable"
-    | "skipped_required";
+    | "skipped_required"
+    | "client_only";
   questionId?: string;
   pageId?: string;
   message: string;
@@ -140,6 +149,7 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   const maxPages = input.maxPages ?? 2000;
 
   const askedBases = new Set<string>();
+  const clientOnlySeen = new Set<string>();
   let nav = start(def, state, counts);
   let pages = 0;
   const claimsFinal = FINAL.has(posted.status);
@@ -154,7 +164,14 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     for (const q of visible) askedBases.add(q.id);
     // the page the client is still on is being filled in — it is not validated until it is left
     if (!claimsFinal && nav.stepIndex >= target) break;
-    let errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts }));
+    const skippedScripts: { questionId?: string; script: string }[] = [];
+    let errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts, scripts: "skip", skippedScripts }));
+    for (const sk of skippedScripts) {
+      const key = `${step.pageId}|${sk.questionId ?? ""}|${sk.script}`;
+      if (clientOnlySeen.has(key)) continue;
+      clientOnlySeen.add(key);
+      soft.push({ severity: "soft", code: "client_only", questionId: sk.questionId, pageId: step.pageId, message: `custom_script rule "${sk.script}" is checked in the browser only; the server does not run author code` });
+    }
     /*
      * FREE SECTION NAVIGATION (sectionNav.ts): a page jumped over is not
      * validated at jump time, so an UNANSWERED question on it is not a lie —
