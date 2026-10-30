@@ -2754,12 +2754,16 @@ function CustomComponent(p: QRProps) {
   React.useEffect(() => {
     if (failed) console.warn(`[rescript:component] ${p.q.code}: refused, not run — ${failed}`);
   }, [failed, p.q.code]);
+  /*
+   * The SAME object while the HTML is the same: the React build Next ships compares this prop by identity, so a
+   * fresh `{ __html }` on every render re-set innerHTML on every answer anywhere on the page — the component's
+   * elements were replaced and every listener its code had attached was lost (it was so before S1b too).
+   */
+  const htmlText = resolveAuthorHtml(p.q.customHtml, ctxOf(p)); /* D5: sanitised like an option label */
+  const html = React.useMemo(() => ({ __html: htmlText }), [htmlText]);
   return (
     <>
-      <div
-        data-rs-component={p.q.id}
-        dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(p.q.customHtml, ctxOf(p)) /* D5: sanitised like an option label */ }}
-      />
+      <div data-rs-component={p.q.id} dangerouslySetInnerHTML={html} />
       {failed && p.programmerView && (
         <div className="rs-component-failed" role="note" data-testid="rs-component-failed" style={{ fontSize: 12.5, color: "#b42318", marginTop: 6 }}>
           This component could not run: {failed}

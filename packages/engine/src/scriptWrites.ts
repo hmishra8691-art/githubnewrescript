@@ -105,7 +105,12 @@ export const SCRIPT_WRITE_LIMITS = {
 } as const;
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
-const ENGINE_COMPUTED = /^(LOOP_|MASK_)/;
+/*
+ * The variables the ENGINE computes (loopVariableNames: LOOP_<VAR>_COUNT / _ITEM_<n>[_CODE|_<COLUMN>]; masking:
+ * MASK_<CODE>_COUNT / _LIST / _SOURCE / _OPERATION / _ITEM_<n>). S1b: only those shapes, not every LOOP_ / MASK_
+ * name — production Scripts-panel scripts write their own LOOP_PROGRESS and LOOP_001_VISITED_<code>.
+ */
+const ENGINE_COMPUTED = /^(LOOP_[A-Z0-9_]*_(COUNT|ITEM_\d+(_[A-Za-z0-9_]+)?)|MASK_[A-Za-z0-9_]*_(COUNT|LIST|SOURCE|OPERATION|ITEM_\d+))$/;
 /** answers only the respondent can give */
 const RESPONDENT_ONLY = new Set(["tasks", "coordinates", "geo", "media", "interview", "none"]);
 
@@ -172,6 +177,12 @@ function sizeProblem(v: unknown): string | null {
 export function scriptValueFor(def: SurveyDefinition, state: ResponseState, q: Question, value: unknown, loop: LoopContext | null): { value: unknown } | string {
   const model = effectiveResponseModel(q);
   const ctx: EvalContext = { def, state, loop };
+  /* S1b: a Custom Component's answer is whatever its own code stores (api.setValue) — any plain value within the size limits */
+  if (q.type === "custom_component") {
+    if (value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return { value: null };
+    const bad = sizeProblem(value);
+    return bad ?? { value: JSON.parse(JSON.stringify(value)) };
+  }
   if (RESPONDENT_ONLY.has(model)) return `${q.code} is a ${model === "none" ? "display-only item" : `${model} question`} — only the respondent can answer it`;
   if (value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) return { value: null }; // clearing an answer is a write too
   const size = sizeProblem(value);
@@ -407,7 +418,7 @@ function applyOne(def: SurveyDefinition, state: ResponseState, write: ScriptWrit
  */
 export function scriptMayWriteAnswer(def: SurveyDefinition, questionId: string): boolean {
   const q = getQuestion(def, questionId);
-  if (!q || RESPONDENT_ONLY.has(effectiveResponseModel(q))) return false;
+  if (!q || (q.type !== "custom_component" && RESPONDENT_ONLY.has(effectiveResponseModel(q)))) return false;
   if (q.type === "calculated" && q.settings?.expression) return false;
   return !(q.punches ?? []).some((p) => (p as { recompute?: string }).recompute === "always");
 }

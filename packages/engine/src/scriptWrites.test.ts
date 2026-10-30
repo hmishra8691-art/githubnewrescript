@@ -158,6 +158,11 @@ test("punches and calculations recompute after a script write, as after a respon
   assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "MY_LIST", value: [{ code: "1", label: "x" }] }, survey()).ok, true);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "MY_BIG", value: Array.from({ length: 501 }, (_, i) => i) }, survey()).reason!, /more than 500 items/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_BRAND_COUNT", value: 1 }, survey()).reason!, /computed by the engine/);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_BRAND_ITEM_2_CODE", value: 1 }, survey()).reason!, /computed by the engine/);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "MASK_Q1_LIST", value: 1 }, survey()).reason!, /computed by the engine/);
+  // S1b: a script's own LOOP_… names (the beverage demo's LOOP_PROGRESS, the master demo's LOOP_001_VISITED_<code>) are its own
+  assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_PROGRESS", value: "1 of 3" }, survey()).ok, true);
+  assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_001_VISITED_1", value: 1 }, survey()).ok, true);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "Q_NUM", value: 1 }, survey()).reason!, /is a question/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "bad name!", value: 1 }, survey()).reason!, /not a valid/);
   // flags: once each

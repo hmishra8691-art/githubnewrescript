@@ -199,3 +199,25 @@ test("S1b: the production scripts' writes pass the engine channel (hidden list s
   assert.equal(s.embedded.SOURCE, "panel");
   assert.ok(s.flags.includes("implausible_years_used"));
 });
+
+test("S1b components: one runtime-only behaviour per component with code; api.setValue is a write to its own question, allowed on screen", async () => {
+  const { withComponentBehaviors, isComponentBehavior } = await import("./legacyScripts.js");
+  const d = SurveyDefinition.parse({
+    meta: { id: "cc", code: "CC", title: "CC", version: "1" },
+    questions: [
+      { id: "c1", code: "C1", variableName: "C1", type: "custom_component", text: "Pick", customHtml: "<button class='b'>7</button>", customJs: "el.querySelector('.b').addEventListener('click', function () { api.setValue(7); });" },
+      { id: "c2", code: "C2", variableName: "C2", type: "custom_component", text: "No code", customHtml: "<i>x</i>" },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["c1", "c2"] }, { type: "end", id: "e", status: "complete" }],
+  });
+  const ux = withComponentBehaviors(d).ux!.behaviors;
+  assert.equal(ux.length, 1);
+  assert.ok(isComponentBehavior(ux[0]!));
+  assert.equal(ux[0]!.target.questionId, "c1");
+  assert.match(ux[0]!.script!, /rs\.setAnswer\("C1", local\)/);
+  assert.equal(d.ux, undefined, "the stored definition is untouched");
+  const s = createResponseState(d, { seed: 1 });
+  assert.deepEqual(applyScriptWrite(d, s, { kind: "answer", ref: "C1", value: 7 }, { scriptId: ux[0]!.id, scope: { kind: "question", questionId: "c1" }, shown: ["c1", "c2"] }).ok, true);
+  assert.equal(s.answers.c1, 7);
+  assert.match(applyScriptWrite(d, s, { kind: "answer", ref: "C2", value: 7 }, { scriptId: ux[0]!.id, scope: { kind: "question", questionId: "c1" }, shown: ["c1", "c2"] }).reason!, /on screen/);
+});
