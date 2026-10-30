@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { loadDashboardStats } from "@/lib/dashboard";
 import { SurveyDefinition } from "@rescript/schema";
+import { gateSurveyScripts } from "@rescript/engine";
 import { audit, isFailure, requireUser } from "@/lib/guard";
 
 export const dynamic = "force-dynamic";
@@ -204,7 +205,8 @@ export async function POST(req: NextRequest) {
       ...body.definition,
       meta: { ...body.definition.meta, id: survey.id, code, title, version: "1.0" },
     });
-    if (parsed.success) definition = parsed.data;
+    /* S0b D3: an imported or templated definition's scripts carry the code gate's verdict; one that fails arrives switched off */
+    if (parsed.success) definition = gateSurveyScripts(parsed.data).def;
   }
 
   // Derive a unique default URL slug from the survey code, so every new survey

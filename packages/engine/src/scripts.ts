@@ -7,6 +7,7 @@ import { resolvePiping } from "./piping.js";
 import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopDepth, loopValue } from "./state.js";
 import { loopContexts, loopNodes } from "./loops.js";
 import { elementIndex, type ElementRef } from "./elementIds.js";
+import { codeGate, gateReason, LOGIC_PARAMS, logicScriptBody, loopCounter } from "./codeGate.js";
 
 /**
  * Custom script host (requirement §13).
@@ -18,32 +19,25 @@ import { elementIndex, type ElementRef } from "./elementIds.js";
  * storage APIs are all bound to `undefined` inside the body, so reaching for
  * one gets nothing rather than the real thing.
  *
- * What this is NOT: it is not a security boundary against a hostile script,
- * and it is not time-boxed — an infinite loop in a survey script hangs the
- * page it runs on. (The header here used to claim `node:vm` with a frozen
- * sandbox and time-boxing; none of that existed, which is a worse position
- * than saying plainly what the limits are.) Scripts are written by the
- * survey's own programmers, who already have edit rights; the shadowing is
- * there to stop an accident, not an attacker.
+ * BEFORE IT RUNS, THE CODE GATE (S0b, audit D3). Shadowing alone was escaped
+ * in one line (`(()=>{}).constructor("return globalThis")()` reached the
+ * real `fetch` and, on the server, `process`). `runScript` now refuses code
+ * that fails `codeGate(code, "logic")` — no `constructor` / `__proto__` /
+ * `prototype`, no `globalThis` / `Function` / `eval` / network / storage /
+ * `navigator`, no computed access on a global — and runs the gate's
+ * loop-guarded form, so an endless loop throws after SCRIPT_LOOP_LIMIT
+ * iterations instead of hanging the page.
+ *
+ * What this still is NOT: a security boundary. It runs in the page's realm;
+ * the gate is static and a name assembled at run time on an object the
+ * script declared is not seen. The runtime CSP stops such code from sending
+ * anything off the page; S1 moves these scripts into the sandboxed frame.
  */
 
-/**
- * Globals a survey script must not reach. Shadowing beats deleting: the
- * identifiers still resolve, so a typo throws a clear TypeError instead of
- * silently hitting the real API.
- *
- * `eval` and `import` are absent on purpose — neither is a legal parameter
- * name in strict mode, so neither can be shadowed this way. Say so rather
- * than list them and imply a guarantee that is not there.
+/*
+ * The globals a script must not reach, the helpers it receives and the wrapper it is compiled in live in
+ * `codeGate.ts`, with the gate that reads the code before it runs (S0b D3).
  */
-const DENIED_GLOBALS = [
-  "window", "document", "globalThis", "self", "top", "parent", "frames",
-  "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "navigator",
-  "localStorage", "sessionStorage", "indexedDB", "caches",
-  "process", "require", "module", "exports",
-  "Function", "setTimeout", "setInterval", "queueMicrotask",
-  "postMessage", "open", "alert", "confirm", "prompt",
-];
 
 export interface ScriptCtx {
   /** read an answer by question id / code / variable name */
@@ -148,6 +142,10 @@ export interface ScriptRunResult {
   failed?: string;
   /** how many scripts ran — a caller that re-renders on state changes needs to know whether anything could have changed it */
   ran?: number;
+  /** the code gate refused the script (it did not run): why */
+  refused?: string;
+  /** the names of the scripts the gate refused in this run (runScripts) */
+  refusedScripts?: string[];
 }
 
 export function createScriptCtx(
@@ -287,17 +285,16 @@ export function createScriptCtx(
  */
 export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult): ScriptRunResult {
   const result: ScriptRunResult = into ?? { logs: [], errors: [] };
+  const gate = codeGate(code, "logic");
+  if (!gate.ok) {
+    result.refused = gateReason(gate);
+    result.failed = `refused: ${result.refused}`;
+    return result;
+  }
   try {
     // eslint-disable-next-line no-new-func
-    const fn = new Function(
-      "ctx",
-      ...DENIED_GLOBALS,
-      `"use strict";\nconst { get, set, getCalc, setCalc, getEmbedded, setEmbedded, expr, pipe, flag, loop, log, error, `
-        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer, `
-        + `getElement, getQuestion, getOption, getRow, getColumn, getGroup } = ctx;\n`
-        + `const value = ctx.value;\n${code}`,
-    );
-    fn(ctx);
+    const fn = new Function(...LOGIC_PARAMS, logicScriptBody(gate.guarded));
+    fn(ctx, loopCounter());
   } catch (e) {
     result.failed = e instanceof Error ? e.message : String(e);
   }
@@ -340,6 +337,12 @@ export function runScripts(
     const own: ScriptRunResult = { logs: [], errors: [] };
     const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
     const r = runScript(script.code, ctx, own);
+    if (r.refused) {
+      // not run: the inspector says so, and the caller warns in the console in live (S0b D3)
+      combined.logs.push(`[${script.name}] refused: ${r.refused}`);
+      (combined.refusedScripts ??= []).push(script.name);
+      continue;
+    }
     combined.ran = (combined.ran ?? 0) + 1;
     combined.logs.push(...own.logs.map((l) => `[${script.name}] ${l}`));
     combined.errors.push(...own.errors);

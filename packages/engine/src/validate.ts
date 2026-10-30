@@ -396,6 +396,8 @@ export function checkScalarRules(
         const run: ScriptRunResult = { logs: [], errors: [] };
         const sctx = createScriptCtx(ctx.def, ctx.state, ctx.loop ?? null, run);
         const outcome = runScript(script.code, { ...sctx, value } as never, run);
+        // refused by the code gate (S0b D3): it did not run, and a script nobody can run must not hold the respondent
+        if (outcome.refused) break;
         for (const e of run.errors) fail(e.message);
         if (outcome.failed) fail(ruleError(rule, "This answer could not be checked."));
         break;

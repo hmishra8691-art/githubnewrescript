@@ -109,7 +109,7 @@ export function tokenize(src: string): Tok[] {
 const GLOBALS = new Set(["rs", "document", "window", "globalThis", "self", "console", "Math", "JSON", "Object", "Array", "String", "Number", "Boolean", "Date", "RegExp", "Error", "Map", "Set", "WeakMap", "Promise", "parseInt", "parseFloat", "isNaN", "isFinite", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "requestAnimationFrame", "MutationObserver", "Event", "CustomEvent", "navigator", "location", "arguments"]);
 
 /** the names this script declares (var / let / const / function / parameters / catch), in order of first declaration */
-function declaredNames(t: Tok[]): string[] {
+export function declaredNames(t: Tok[]): string[] {
   const out: string[] = [];
   const add = (v: string) => { if (!GLOBALS.has(v) && !out.includes(v)) out.push(v); };
   for (let i = 0; i < t.length; i++) {

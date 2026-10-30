@@ -210,8 +210,11 @@ test("a script cannot reach the globals it has no business reaching", () => {
     }],
   });
   const ctx = ctxFor(def);
-  runScripts(def, ctx.state, "on_load");
-  assert.equal(ctx.state.calculated.REACHED, "undefined/undefined/undefined");
+  // S0b D3: the code gate refuses it before it runs (the names are still shadowed underneath, as a second line)
+  const r = runScripts(def, ctx.state, "on_load");
+  assert.equal(ctx.state.calculated.REACHED, undefined);
+  assert.deepEqual(r.refusedScripts, ["probe"]);
+  assert.ok(r.logs.some((l) => /^\[probe\] refused: fetch is not available/.test(l)), r.logs.join(" | "));
 });
 
 /* ------------------------------------------------------------ §12 media */

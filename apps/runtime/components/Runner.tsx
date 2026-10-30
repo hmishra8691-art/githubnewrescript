@@ -17,7 +17,7 @@ import {
   validatePage,
   resolvePiping,
   resolveAuthorHtml,
-  runScripts,
+  runScripts as runScriptsRaw,
   allEmbeddedFields,
   embeddedFieldName,
   blockingErrors,
@@ -98,6 +98,17 @@ import {
   type NavTrail,
   type SubmitGate,
 } from "@rescript/engine";
+
+/**
+ * Logic scripts through the code gate (S0b D3): a script the gate refuses does not run; `runScripts` logs
+ * `[name] refused: reason` for the preview inspector, and the console says so too — the only place it shows in
+ * a live interview, which has no inspector.
+ */
+const runScripts: typeof runScriptsRaw = (...args) => {
+  const r = runScriptsRaw(...args);
+  if (r.refusedScripts?.length) for (const l of r.logs) if (/^\[[^\]]*\] refused: /.test(l)) console.warn(`[rescript:script] ${l}`);
+  return r;
+};
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
@@ -1338,7 +1349,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     const st = steps[s.stepIndex];
     if (st?.kind !== "page") return;
     const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
-    if (!r.ran) return;
+    if (!r.ran && !r.logs.length) return;
     if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
     force();
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,5 +1,5 @@
 import { SurveyDefinition, Localization, LanguageConfig, resolveVariant, type Condition, type FlowNode, type Question, type ImportMapEntry, type Quota } from "@rescript/schema";
-import { runQualityCheck, listBlocks, constantCondition, recordTranslation } from "@rescript/engine";
+import { runQualityCheck, listBlocks, constantCondition, recordTranslation, codeGate, gateReason } from "@rescript/engine";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CExpr, CFlow, CSkipTarget, Issue, CanonicalKind, CanonicalEmbeddedField, InventoryItem,
 } from "./canonical.js";
@@ -177,13 +177,18 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
    * never run, because code written for another platform's runtime (or in
    * another language entirely) cannot be assumed to mean anything here.
    */
-  const scriptFor = (cu: CanonicalSurvey["custom"][number], questionId: string | null) => ({
-    id: uid("script"), name: `Imported ${cu.language} · ${cu.role}${questionId ? "" : ` · ${cu.location}`}`.slice(0, 120),
-    scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}),
-    event: /submit/i.test(cu.role + cu.code.slice(0, 200)) ? "on_submit" : "on_load",
-    code: cu.code, enabled: false,
-    notes: `Imported from ${c.source.platform} (${cu.location}); not executed. ${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
-  });
+  const scriptFor = (cu: CanonicalSurvey["custom"][number], questionId: string | null) => {
+    /* S0b D3: the code gate's verdict travels with it, so whoever reviews it sees it before switching it on (it cannot be switched on while it fails) */
+    const gate = codeGate(cu.code, "logic");
+    const verdict = gate.ok ? "Script check: passes. " : `Script check: refused — ${gateReason(gate)}. `;
+    return {
+      id: uid("script"), name: `Imported ${cu.language} · ${cu.role}${questionId ? "" : ` · ${cu.location}`}`.slice(0, 120),
+      scope: questionId ? "question" : "survey", ...(questionId ? { ref: questionId } : {}),
+      event: /submit/i.test(cu.role + cu.code.slice(0, 200)) ? "on_submit" : "on_load",
+      code: cu.code, enabled: false,
+      notes: `${verdict}Imported from ${c.source.platform} (${cu.location}); not executed. ${cu.refs.length ? `Reads ${cu.refs.join(", ")}. ` : ""}Analyse it in Intelligent mode, then rebuild it as Rescript logic.`.slice(0, 1000),
+    };
+  };
   const optionCode = (qs: string, choice: string): string | number | undefined => qBySource.get(qs)?.options.find((o) => o.sourceId === choice)?.code;
   const rowCode = (qs: string, row: string): string | undefined => qBySource.get(qs)?.rows.find((r) => r.sourceId === row)?.code;
   const confidence: QuestionConfidence[] = [];
