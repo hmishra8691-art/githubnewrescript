@@ -189,12 +189,65 @@ OOM deaths recorded (dmesg, memory cgroup 6.27 GB): Studio `next-server` killed 
 - **A countdown on a non-single-choice question** is only possible as a script written by a model (the tick is now allowed). There is no native page or question timer for other types.
 - **`while(true)` is still accepted** at authoring. It is loop-guarded at run time, as before.
 
-## What S2b and S2c do (not started)
-- **S2b:**
-  - a capability registry
-  - a variant catalogue with settings descriptions and question-media actions
-  - Intelligent Mode write actions for Scripts-panel scripts
-  - scripts in the dependency graph
+## What S2b and S2c do
+S2b is done (Part B below). S2c (the Execution and Verification layer) is not started.
+
 - **S2c:** the Execution and Verification layer.
   - Each proposed script runs on a mirrored page before the card says it is ready.
   - Failures and "no effect" are fed into the existing repair call.
+
+---
+
+# S2b — part B: a capability registry it consults, and the actions it was missing (2026-10-30)
+
+Commits on `feat/persistent-execution-engine` after `7ab9bdd`: item 1 `1d90ebe`, item 2 `fd7fafe`, item 3 `b80968b`, item 4 `b2a9e65`, item 5 `63dadf2`, item 6 (this doc, the browser check).
+
+## What changed
+
+### 1. The JavaScript capability registry — layer 2, as data (`packages/engine/src/capabilityRegistry.ts`)
+- **Native features** (`NATIVE_FEATURES`): validation (every kind any variant offers plus the universal four, `severity: "warning"`), punch, calculation, default value / prefill, display logic, skip / terminate, randomizer (shuffle / rotate / reverse_half, block randomizer with exact balance), section navigation, timers, assessments, question media, variants and their settings, embedded data, loops, popups, logic scripts. Each lists the actions that reach it.
+- **The sandbox** (`SANDBOX_API`, `SANDBOX_EVENTS`, `SANDBOX_LIMITS`): every `rs.*` method with its effect (keyed by `UX_SCRIPT_API` — a method added there and not here is a type error and a failed test), every `rs.listen` event including `validate` (rs.error stops Next) and `submit`, the four write requests, the S1 write-scope rule, and the limits (no network, no storage, no layout of its own, `rs.after` ≤ 60 s, a mirror page).
+- **What a script cannot do** (`NATIVE_ROUTES`, 13 entries): press Next, choose an answer, stop the respondent, inject CSS, show an image, know a clip was watched, network, storage, polling, timers > 60 s, layout, skip/terminate, the window — each with the native route and its actions.
+- **`nativeRouteFor(need)`**: deterministic; a "cannot" route wins over a feature. Used by:
+  - `uxScriptGuard.ts` — the press-Next, choose-an-answer, preventDefault, `<style>` and static-image refusals now end with `nativeRoute(id)` (byte-identical text for the first four; the static-image route now also names `set_question_media`).
+  - `scriptExplain.ts` — a refused script's explanation gains "Native route: …" when its refusal does not already name one.
+- **`variantCatalogue()`**: all **173** variants — id, family, base type, one-line purpose, settable settings with type and limits read from the question schema's own field (`questionSettingField`) and `SETTING_BOUNDS`.
+- **`settableSettings(variant)` / `settingProblem(variant, key, value)`**: the gate's rule for settings — the variant's declared keys (`defaults.settings`), the keys its capabilities imply (`layout_columns` → `columnsLayout`, `min_max_selections`, `numeric_bounds`, `sum`, `search`, `other_specify`, `speech_input`, `geo_settings`), its family's presentation keys, and `validationPosition`; keys another action owns (hidden, defaultValue, expression, the stimulus, a design) are excluded.
+- **Renderings**: `capabilityGuideText()` (7.8k chars) and `variantCatalogueText({families})`.
+
+### 2. Variant catalogue guide + settings
+- `apps/studio/lib/copilot/variantGuide.ts` (re-exported by `guideSelect.ts`): `variantFamiliesNamed(message, selectedVariant)` reads interaction words (hotspot / heatmap, swipe, quiz / timer / countdown, map / location, video / audio, card, slider / stars / NPS, annotate / draw, signature / upload, drag / sort / rank, carousel, date, matrix, constant sum, compare, chat, attention check, image / picture / pack shot, "interactive") and a selected question whose variant is interactive. `variantGuide(families)` sends those families in full and an id-only index of the rest — about 3–9k characters for one family, under 16k for six; the whole catalogue (34k) is never sent.
+- `copilotUserPrompt` adds it (not in plan-only prompts; `variants: false` turns it off); the route passes `selectedVariant`.
+- `update_question.settings` reaches every settable key with per-variant validation; **`create_question` accepts `settings`**, checked against the variant it makes; coercion keeps lists of plain values (tools, weekdays, time slots).
+
+### 3. `set_question_media` (D16 / AQ-05 / MM2-16) — `packages/engine/src/mediaActions.ts`
+- Sets or clears a question's stimulus: `items [{url, alt, title}]` (≤ 10) → `settings.mediaItems` with `mediaUrl` = the first; `layout`; `altText` / `decorative` → `settings.accessibility`; `requireComplete` (watch-to-continue) **only on the media variants**, where the renderer locks the rating and the engine refuses Next until the clip has finished — elsewhere refused with the route (`update_question type "media.video_rating"` first); option images `options [{option, imageUrl | null, imageAlt}]`; `clear`.
+- URLs: https without credentials or private hosts (`safeHttpsUrl`) that `resolveMediaUrl` can show (the editor's rule: known video providers, direct image / video; never `javascript:` or a non-image `data:`), or the survey's media library `/api/media/<id>…`. A piped address is refused (set it in the editor). An option picture must be an image.
+- Documented in the UX guide (`copilot.test` docs check), the variant guide header, `actions-reference.md` (new generator block) and the registry.
+
+### 4. Scripts-panel (logic) scripts (IM-17) — `packages/engine/src/logicScriptActions.ts`
+- `create_logic_script {name, scope, ref, event, code}`, `update_logic_script {script, code | edits [{find, replace}], event, scope/ref, name, notes}`, `remove_logic_script {script}`, `set_logic_script_enabled {script, enabled}`.
+- Every code change, and switching a script on, goes through `codeGate(code, "logic")`; a refused script is never stored. `script` resolves by name or id; question scope `ref` by code / variable; page scope by page id or a question on the page; the event is validated (aliases change / validate / submit …). A second script with the same name is refused with "update it instead".
+- The UX guide documents the four ops, **native first** (punch / calculation / validation), when a logic script is right (a computation across loop iterations or a list of answers, inspecting a loop), ctx only, and the S1 write-scope rule.
+- The outline lists Scripts-panel scripts as writable ("change them by name with update_logic_script") and shows a script **the request names** with its full code (≤ 20,000), so `edits` can quote it.
+
+### 5. Scripts in the dependency graph (D18 / MM-10) — `packages/engine/src/scriptRefs.ts`
+- `scriptLiteralRefs(code)`: `rs.getAnswer / setAnswer / getCalc / setCalc / getEmbedded / setEmbedded`, the logic ctx's `get / set / getCalc / setCalc / getEmbedded / setEmbedded`, and `[data-qid="…"]`. **Literal strings only**: `get("Q" + i)` and `m.get("Q1")` are not references.
+- `dependencyIndex.ts` gains object kind `script` and edge kind `script` (behaviour scripts and logic scripts), so `impactOf`, the inspector's "used by" and IM impact text say `script “Spend check” — reads Q3` (a delete is "breaks"). The nl dependency answer lists them under "Scripts".
+- `delete_question`'s destructive text names the scripts that read the question ("literal references; not changed").
+- Renaming a code or variable (`update_question code/variable`) **rewrites the literal references** in scripts' api calls (`rewriteScriptReferences`) and says so ("1 literal script reference to Q2 rewritten (“Age note”)"). Other strings are left alone.
+
+## Where to find it
+- Intelligent Mode: "Turn Q1 into a video rating of the ad, watched to the end" → `update_question` + `set_question_media`; "add a hotspot question on the pack shot" → the variant guide is in the prompt (look for `QUESTION VARIANTS (from the capability registry)`); "change the Spend total script to …" → `update_logic_script` with `edits`; "delete Q3" → the Changes card names the scripts that read Q3.
+- Engine exports: `NATIVE_FEATURES`, `NATIVE_ROUTES`, `nativeRoute`, `nativeRouteFor`, `SANDBOX_API`, `SANDBOX_EVENTS`, `SANDBOX_LIMITS`, `variantCatalogue`, `variantCatalogueText`, `capabilityGuideText`, `settableSettings`, `settingProblem`, `validationKinds`, `jsCapabilityRegistry`; `coerceMediaAction`, `applyMediaAction`, `mediaUrlProblem`; `LOGIC_SCRIPT_ACTION_OPS`, `coerceLogicScriptAction`, `applyLogicScriptAction`; `scriptLiteralRefs`, `surveyScripts`, `rewriteScriptReferences`; `settingsIn`.
+- Public docs: `apps/studio/content/docs/actions-reference.md` (Options and design now 19 ops; "Question media" and "Scripts-panel (logic) scripts" blocks).
+- No environment variables, no migrations, no new dependencies.
+
+## The three layers after S2b (audit §6)
+| Layer | Before S2b | After S2b |
+|---|---|---|
+| 1. Research capability registry (`capabilities.ts`) | in place (methodologies, types, analysis, exports) | unchanged |
+| 2. JavaScript capability registry | prose in the UX guide; `UX_SCRIPT_API` a bare list | **data** (`capabilityRegistry.ts`), test-synced with `UX_SCRIPT_API`, `UX_SCRIPT_EVENTS`, `variants.ts` and `SURVEY_ACTION_OPS`; gate refusals and explanations read routes from it; the variant guide is rendered from it |
+| 3. Execution / verification | "checked, not run yet" | unchanged — **S2c** |
+
+VERIFICATION_PLACEHOLDER
