@@ -9,6 +9,11 @@ import {
   shuffleAlternatives,
   resolvePiping,
   resolveAuthorHtml,
+  codeGate,
+  gateReason,
+  COMPONENT_PARAMS,
+  componentScriptBody,
+  loopCounter,
   evaluateExpression,
   flattenVariables,
   toggleMultiValue,
@@ -2742,26 +2747,49 @@ export function CompareImages(p: QRProps) {
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
   const ref = React.useRef<HTMLDivElement>(null);
+  /*
+   * THE CODE GATE (S0b D2). A component's JavaScript runs on the respondent's page itself, so it is read before
+   * it runs: `el` and `api` are its roots, no constructor / globals / network / storage, loops bounded. Code the
+   * gate refuses does not run — preview and test show the component's own notice with the reason, a live page
+   * says so in the console. S1 moves component code into the sandboxed frame; this is containment until then.
+   */
+  const gate = React.useMemo(() => (p.q.customJs ? codeGate(p.q.customJs, "component") : null), [p.q.customJs]);
+  const [failed, setFailed] = React.useState<string | null>(null);
   React.useEffect(() => {
-    if (!ref.current || !p.q.customJs) return;
+    if (!ref.current || !p.q.customJs || !gate) return;
+    if (!gate.ok) {
+      const why = gateReason(gate);
+      console.warn(`[rescript:component] ${p.q.code}: refused, not run — ${why}`);
+      setFailed(`refused by the script check — ${why}`);
+      return;
+    }
     try {
       // controlled execution: the component script gets a tiny api
       // eslint-disable-next-line no-new-func
-      const fn = new Function("el", "api", p.q.customJs);
+      const fn = new Function(...COMPONENT_PARAMS, componentScriptBody(gate.guarded));
       fn(ref.current, {
         getValue: () => p.value,
         setValue: (v: unknown) => p.onChange(v),
-      });
+      }, loopCounter());
+      setFailed(null);
     } catch (e) {
       console.error("custom component error", e);
+      setFailed(e instanceof Error ? e.message : String(e));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.q.id]);
   return (
-    <div
-      ref={ref}
-      dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(p.q.customHtml, ctxOf(p)) /* D5: sanitised like an option label */ }}
-    />
+    <>
+      <div
+        ref={ref}
+        dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(p.q.customHtml, ctxOf(p)) /* D5: sanitised like an option label */ }}
+      />
+      {failed && p.programmerView && (
+        <div className="rs-component-failed" role="note" data-testid="rs-component-failed" style={{ fontSize: 12.5, color: "#b42318", marginTop: 6 }}>
+          This component could not run: {failed}
+        </div>
+      )}
+    </>
   );
 }
 

@@ -1,6 +1,7 @@
 import type { HypothesisDetail, Condition, EmbeddedDataType, FlowNode, Option, OptionMask, Question, SetExpr, SurveyDefinition, UxBehavior, UxTarget } from "@rescript/schema";
 import { resolveUxTarget, validateUxItem, scopeCss } from "./ux.js";
-import { SCRIPT_CHECKED, exfiltrationProblems } from "./uxScriptGuard.js";
+import { SCRIPT_CHECKED } from "./uxScriptGuard.js";
+import { codeGate, gateReason } from "./codeGate.js";
 import { hypothesisLabel } from "@rescript/schema";
 import type { IdMinter } from "./questionOps.js";
 import { duplicateQuestion, moveQuestionTo } from "./questionOps.js";
@@ -813,9 +814,13 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
        * A Custom Component is the exception: its JavaScript is the component.
        */
       if (a.js !== undefined && q.type === "custom_component") {
-        /* a component's JavaScript runs on the respondent's page itself (not in the sandbox): nothing that sends data off it (prompt-injection audit, 2026-10-18) */
-        const exfil = a.js ? exfiltrationProblems(a.js) : [];
-        if (exfil.length) fail(`the component script for ${q.code} was refused — ${exfil.slice(0, 3).join("; ")}.`);
+        /*
+         * a component's JavaScript runs on the respondent's page itself (not in the sandbox). The DECISION is the
+         * code gate (S0b D2: roots el/api, no constructor / globals / network / storage, bounded loops); the
+         * regex exfiltration check (prompt-injection audit, 2026-10-18) is one of its signals, not the gate.
+         */
+        const gate = a.js ? codeGate(a.js, "component") : null;
+        if (gate && !gate.ok) fail(`the component script for ${q.code} was refused — ${gateReason(gate)}.`);
         const had = q.customJs;
         if (a.js === null) { if (had !== undefined) { delete q.customJs; changed.push("component JS removed"); lossy.push(`removes the component script of ${q.code} (${had.length} characters)`); } }
         else if (had !== a.js) { q.customJs = a.js; changed.push(`component JS (${a.js.length} characters)`); if (had !== undefined) lossy.push(`replaces the component script of ${q.code} (${had.length} characters)`); }

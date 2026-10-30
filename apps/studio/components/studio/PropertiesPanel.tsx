@@ -2,7 +2,7 @@
 import { CountInput } from "./CountInput";
 import React from "react";
 import type { Question, ValidationRule, SkipRule, ListOperation, ListSource } from "@rescript/schema";
-import { headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText } from "@rescript/engine";
+import { headerRepeatApplies, gridAxes, displayedListCanVary, carryForwardDestinations, normalizeCarryForwardInto, validateExpression, lintPipingTokens, lintQuestionLogic, listOperationSummary, hasOptionGroups, PROBE_TYPES, lintProbeQuestion, shapeHasAxis, staleFields, migrateQuestionType, escapeHtml, sanitizeHtml, PIPE_TOKEN_RE, parsePipeBody, describePipeToken, questionOffersSpeechInput, conditionSummary, stripHtmlText, codeGate } from "@rescript/engine";
 import { isEmptyConditionTree, resolveVariant, effectiveCapabilities, allowedValidationKinds, LIST_OP_LABELS, LIST_OPS_WITH_SOURCES, effectiveResponseModel } from "@rescript/schema";
 import { useStudio, selectedQuestion, uid } from "./store";
 import { DefaultValueBox } from "./DefaultValueBox";
@@ -1880,9 +1880,7 @@ function PropertiesPanelBody() {
         <label className="f"><span>Component HTML (the template your script drives)</span>
           <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""} data-testid="component-html"
             onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
-        <label className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v))</span>
-          <textarea className="ta code" style={{ minHeight: 90 }} value={q.customJs ?? ""} data-testid="component-js"
-            onChange={(e) => patch({ customJs: e.target.value || undefined })} /></label>
+        <ComponentJsField code={q.customJs ?? ""} onSave={(code) => patch({ customJs: code || undefined })} />
       </CollapsibleSection>
       )}
 
@@ -1895,5 +1893,40 @@ function PropertiesPanelBody() {
       )}
     </div>
     </LoopScopeProvider>
+  );
+}
+
+/**
+ * A Custom Component's JavaScript, saved only when the code gate passes (S0b D2) — the way UxItemsEditor saves a
+ * behaviour script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
+ * The same gate refuses it again before it runs and in Intelligent mode's set_custom_code.
+ */
+function ComponentJsField({ code, onSave }: { code: string; onSave(code: string): void }) {
+  const [draft, setDraft] = React.useState(code);
+  const [errors, setErrors] = React.useState<string[]>([]);
+  React.useEffect(() => { setDraft(code); setErrors([]); }, [code]);
+  const dirty = draft !== code;
+  const save = () => {
+    if (!dirty) { setErrors([]); return; }
+    const v = draft.trim() ? codeGate(draft, "component") : { ok: true, errors: [] as string[] };
+    setErrors(v.errors);
+    if (v.ok) onSave(draft);
+  };
+  return (
+    <div>
+      <label className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v)). Checked before it is saved and before it runs: it works on el and api — no window, constructor, network or storage; document only to create elements; loops stop after 100,000 rounds.</span>
+        <textarea className="ta code" style={{ minHeight: 90 }} value={draft} data-testid="component-js" spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)} onBlur={save} /></label>
+      {dirty && <div className="row" style={{ gap: 6, marginTop: 4 }}>
+        <button type="button" className="btn small primary" onClick={save} data-testid="component-js-save">Save code</button>
+        <button type="button" className="btn small ghost" onClick={() => { setDraft(code); setErrors([]); }}>Discard changes</button>
+      </div>}
+      {errors.length ? (
+        <div role="alert" data-testid="component-js-refused" style={{ color: "var(--danger, #b42318)", fontSize: 12.5, marginTop: 4 }}>
+          Not saved — the script check refused it:
+          <ul style={{ margin: "4px 0 0 18px" }}>{errors.map((e) => <li key={e}>{e}</li>)}</ul>
+        </div>
+      ) : null}
+    </div>
   );
 }

