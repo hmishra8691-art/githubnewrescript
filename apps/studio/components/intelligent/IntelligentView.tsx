@@ -5,7 +5,7 @@ import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
-  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, diffSurveys,
+  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, SCRIPT_QUESTION_REASON, explainScripts, diffSurveys,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -13,6 +13,7 @@ import { useStudio, uid } from "../studio/store";
 import { useSelection } from "../studio/SelectionContext";
 import { useCommands } from "../studio/CommandContext";
 import { createFromVariant } from "../studio/VariantPicker";
+import { loadScriptHealthSummary } from "../studio/ScriptHealth";
 import { Inspector } from "../architect/Inspector";
 import { Icon } from "../ui/Icon";
 import { parseIntent, EXAMPLES } from "../../lib/intelligent/grammar";
@@ -381,6 +382,22 @@ export function IntelligentView() {
       setBusy(false); inputRef.current?.focus(); return;
     }
     const deferred = interp.reason === DEFER_TO_GRAMMAR;
+    /*
+     * A QUESTION ABOUT A SCRIPT (S2a D10): "debug / why / explain the script on Q5". The copilot gets it, with the
+     * script in full and its check (the route builds that) and the field's script health (sent from here). With no
+     * model, the engine's own explanation is the answer — never the grammar's "I could not find …".
+     */
+    const scriptQ = interp.kind === "model" && interp.reason === SCRIPT_QUESTION_REASON;
+    if (scriptQ) {
+      const health = await loadScriptHealthSummary(s.surveyDbId).catch(() => null);
+      const fa = explainScripts(copilot.working, t, { selectedId, health });
+      const showLocal = () => copilot.local(t, { kind: "answer", category: "debugging", understood: fa.understood, answer: fa.answer, sections: fa.sections, detected: interp.detected }, heard);
+      const noModel = copilot.available === false || (copilot.executionMode === "internal" && !copilot.cloudOnce);
+      if (noModel) { showLocal(); setBusy(false); inputRef.current?.focus(); return; }
+      const outcome = await copilot.ask(t, heard, undefined, { category: interp.category, reason: interp.reason, detected: interp.detected }, health ? { scriptHealth: health } : undefined);
+      if (outcome !== "handled") showLocal();
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     let modelHadNothing = false;
     const pre = parseIntent(t);
     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);

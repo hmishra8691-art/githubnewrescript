@@ -45,6 +45,12 @@ function load(surveyDbId: string | null | undefined, env: Env, force = false): P
   return p;
 }
 
+/** S2a D10: the summary for one request (Intelligent Mode's "debug / explain the script"), from the same cache; null when there is none */
+export async function loadScriptHealthSummary(surveyDbId: string | null | undefined, timeoutMs = 2500): Promise<Health | null> {
+  const st = await Promise.race([load(surveyDbId, "live"), new Promise<State>((r) => setTimeout(() => r({ status: "off" }), timeoutMs))]);
+  return st.status === "ready" && st.data ? st.data : null;
+}
+
 export function useScriptHealth(): State & { env: Env; setEnv(e: Env): void; refresh(): void } {
   const s = useStudio();
   const [env, setEnvState] = React.useState<Env>(envChoice);

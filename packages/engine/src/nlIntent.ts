@@ -1,4 +1,5 @@
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
+import { scriptQuestion, explainScripts, findScripts, SCRIPT_QUESTION_REASON, type ScriptHealthLite } from "./scriptExplain.js";
 import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry } from "@rescript/schema";
 import { applySurveyActions, BRIEF_WORDS, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
 import { conditionFromText } from "./naturalCondition.js";
@@ -117,11 +118,15 @@ export type Interpretation =
   | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
-      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
+      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] };
+      /** S2a D10: a deterministic ANSWER for when no model answers (a question about a script: what it does, its check, its field report) */
+      fallbackAnswer?: { understood: string; answer: string; sections: AnswerSection[] } };
 
 export interface InterpretContext {
   /** the selected question: "this question", "it", "these options" */
   selectedId?: string | null;
+  /** S2a D10: the survey's script-health summary, when the page has one — used to explain a script with no model */
+  scriptHealth?: ScriptHealthLite | null;
   /** the selected option of that question: "this option" */
   selectedOption?: string | number | null;
   /** a multi-selection of questions: "these questions" (falls back to `selectedId`) */
@@ -502,6 +507,16 @@ function typeFromWords(words: string): string | null {
  */
 const deferred: Recogniser = (r) => {
   const t = r.text;
+  /*
+   * A QUESTION ABOUT A SCRIPT (S2a D10, 2026-10-30) — "debug / why / explain the script on Q5" — is the copilot's, not
+   * the grammar's: the grammar looked for a question called "the script on Q5" and said "I could not find …". The
+   * model gets the script in full with its check and health (scriptDossier); with no model, `fallbackAnswer` is the
+   * engine's own explanation of it.
+   */
+  if (scriptQuestion(r.def, t)) {
+    const fa = explainScripts(r.def, t, { selectedId: r.ctx.selectedId ?? null, health: r.ctx.scriptHealth ?? null });
+    return { kind: "model", category: "debugging", reason: SCRIPT_QUESTION_REASON, detected: findScripts(r.def, t, { selectedId: r.ctx.selectedId ?? null }).map((x) => ({ what: x.kind === "behavior" ? "behaviour script" : "Scripts-panel script", value: `${x.label} (${x.where})` })), fallbackAnswer: fa };
+  }
   const out = (category: IntentCategory): Interpretation => ({ kind: "model", category, reason: DEFER_TO_GRAMMAR, detected: namedObjects(r) });
   if (/^why\b/i.test(t) || /^(?:diagnose|debug|troubleshoot)\b/i.test(t)) return out("debugging");
   if (/^(?:is|can)\s+.+?\s+(?:reachable|(?:ever\s+)?be\s+reached|ever\s+shown|shown\s+to\s+anyone|ever\s+asked)$/i.test(t)) return out("debugging");

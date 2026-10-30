@@ -18,6 +18,7 @@ import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
+import { scriptQuestion, sanitizeScriptHealthLite } from "@rescript/engine";
 import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, isQualOp, type SurveyAction } from "@rescript/engine";
 import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
 import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
@@ -323,7 +324,9 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   /* §3 TASK-AWARE SELECTION: a theme turn gets no questionnaire; a logic edit on a large survey the named questions and their dependencies in full */
   const focusIds = referencedQuestions(def, message);
   const qScope = questionnaireScope({ message, mode, themeOnly: themeScope, uxOnly: cls.uxOnly, focusCount: focusIds.length, questionCount: def.questions.length });
-  const outline = copilotOutline(def, { selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope });
+  /* S2a D10: a debug / explain request about a script — the script in full, its check and the field health the page sent (sanitised) */
+  const scriptQ = scriptQuestion(def, message) ? { text: message, health: sanitizeScriptHealthLite((body as { scriptHealth?: unknown }).scriptHealth) } : undefined;
+  const outline = copilotOutline(def, { selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope, ...(scriptQ ? { scriptQuestion: scriptQ } : {}) });
   /*
    * §3 THE RESEARCH CONTEXT OF A LONG BRIEF (2026-10-18). Kept per survey AND owner (never another survey's,
    * never another organisation's). Checked against the survey's research design on every turn: the definition

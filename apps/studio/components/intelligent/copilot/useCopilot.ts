@@ -782,10 +782,11 @@ export function useCopilot(opts: {
     }
   }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst, executionMode]);
 
-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+  /* `extra` (S2a D10): more body for this one turn — the script-health summary for a question about a script */
+  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff, extra?: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
-    return run(id, text, mode, {}, handoff);
+    return run(id, text, mode, extra ?? {}, handoff);
   }, [opts, run]);
 
   /** the approved items of a change plan, built one call each into one proposal on the same card */

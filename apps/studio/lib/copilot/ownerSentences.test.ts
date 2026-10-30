@@ -69,7 +69,7 @@ const q = (r: { def: SurveyDefinition }, code: string) => r.def.questions.find((
  * TARGETS NOT MET YET (S2a item 1): a test labelled with an open defect is skipped with that id so the runner stays
  * green between commits. Each S2a item closes its id here; by the end of S2a this set is empty and removed.
  */
-const OPEN = new Set(["D10", "D16", "R6"]);
+const OPEN = new Set(["D16", "R6"]);
 const target = (id?: string) => (id && OPEN.has(id) ? { skip: `target, open defect ${id}` } : {});
 
 interface Owner { defect?: string; n: number; sentence: string; sel?: string; mode: string; ux: boolean; uxOnly: boolean; engine?: string; native: unknown[]; check?: (r: ReturnType<typeof assertApplied>) => void }
@@ -226,3 +226,14 @@ for (const s of ["Debug the script on Q5", "Why does the script on Q5 not work",
     assert.equal(c.uxOnly, false);
   });
 }
+
+test("D10: the copilot's outline for a script question carries that script in full with its check (and the health the page sent)", async () => {
+  const { copilotOutline } = await import("./outline.ts");
+  const bid = def.ux!.behaviors[0].id;
+  const o = copilotOutline(def, { ux: true, scriptQuestion: { text: "Debug the script on Q5", health: { sessions: 4, scripts: [{ script: bid, failures: 2, sessions: 1 }] } } });
+  assert.ok(o.includes(JSON.stringify(SCRIPT)), "the script in full");
+  assert.match(o, /SCRIPTS THIS REQUEST IS ABOUT \(1/);
+  assert.match(o, /check: passes the script check/);
+  assert.match(o, /failed in 1 of 4 sessions/);
+  assert.doesNotMatch(copilotOutline(def, { ux: true }), /SCRIPTS THIS REQUEST IS ABOUT/, "only on a script question");
+});

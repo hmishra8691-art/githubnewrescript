@@ -1,4 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
+import { scriptDossier, findScripts, type ScriptHealthLite } from "@rescript/engine";
 import { questionDependencies, describeDesignQuestion, listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice, legacyRefusalOutline } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
@@ -16,7 +17,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null; /** §3 task-aware selection (questionnaireScope): "none" — a theme turn, no questionnaire; "focused" — a logic edit, the named questions and their dependencies in full, the rest by code */ questionnaire?: "full" | "focused" | "none" } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null; /** §3 task-aware selection (questionnaireScope): "none" — a theme turn, no questionnaire; "focused" — a logic edit, the named questions and their dependencies in full, the rest by code */ questionnaire?: "full" | "focused" | "none"; /** S2a D10: a debug / explain request about scripts — those scripts IN FULL with their check, reads/writes and field health */ scriptQuestion?: { text: string; health?: ScriptHealthLite | null } } = {}): string {
   const n = def.questions.length;
   const scope = opts.questionnaire ?? "full";
   if (scope === "focused" && opts.focusIds?.length) opts = { ...opts, focusIds: withDependencies(def, opts.focusIds) };
@@ -89,6 +90,11 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
    * the model can say why something "does nothing" and propose a rewrite with the rs api when the researcher asks.
    */
   lines.push(...legacyRefusalOutline(def));
+  /* S2a D10: "debug / why / explain the script on Q5" — the scripts it names in full (not the excerpt above), their check verdict and warnings, reads/writes, and the field's script health */
+  if (opts.scriptQuestion) {
+    const dossier = scriptDossier(def, findScripts(def, opts.scriptQuestion.text, { selectedId: opts.selectedId ?? null }), opts.scriptQuestion.health ?? null);
+    if (dossier) lines.push(dossier);
+  }
   if (opts.ux) for (const id of focus) {
     const q = def.questions.find((x) => x.id === id);
     if (!q) continue;
