@@ -262,6 +262,7 @@ export function impactPhrase(item: ImpactItem): string {
     case "hypothesis": return `hypothesis ${o.code}`;
     case "kpi": return `KPI “${o.code}”`;
     case "translation": return `${o.label} translations`;
+    case "script": return o.label;
     case "option": return `${o.code} option`;
     case "block": return `block “${o.code}”`;
     case "page": return `page “${o.code}”`;

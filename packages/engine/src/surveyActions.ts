@@ -44,6 +44,7 @@ import { normalizeCalcExpression, calcNameHint } from "./calcRewrite.js";
 import { buildVariableDictionary } from "./variables.js";
 import { questionCodeAlias } from "./calcContext.js";
 import { settableSettings, settingProblem } from "./capabilityRegistry.js";
+import { rewriteScriptReferences, scriptLiteralRefs, surveyScripts } from "./scriptRefs.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -849,6 +850,9 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         const renamed = applyRename(def, r.from, r.to, { alsoCode: r.alsoCode });
         Object.assign(def, renamed);
         q = def.questions.find((x) => x.id === q.id)!;
+        /* S2b item 5 (D18): the scripts' LITERAL references follow the rename (rs.getAnswer("Q3"), get("Q3") …); a name built at run time cannot be seen */
+        const rw = rewriteScriptReferences(def, r.from, r.to);
+        if (rw.count) what.push(`${rw.count} literal script reference${rw.count === 1 ? "" : "s"} to ${r.from} rewritten (${rw.scripts.map((x) => `“${x}”`).join(", ")})`);
       }
       return { description: `Changed ${q.code}: ${what.join(", ")}`, touched: [q.id], ...(lossy.length ? { destructive: lossy.join("; ") } : {}) };
     }
@@ -856,10 +860,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const q = resolveQuestion(ctx, a.target);
       const analysisImpact = describeAnalysisImpact(def, q.id);
       const placedBefore = placedIds(def);
+      /* S2b item 5 (D18): scripts that name it by a literal — they are not changed, they would read nothing */
+      const scriptReaders = surveyScripts(def).filter((src) => scriptLiteralRefs(src.code).some((r) => r.name === q.id || r.name === String(q.code) || r.name === q.variableName)).map((src) => `“${src.name}”`);
       const refs = removeQuestion(def, q.id);
       // removing a question also removes logic that named it — a branch arm among them, and with it whatever it held
       const stranded = def.questions.filter((x) => placedBefore.has(x.id) && !placedIds(def).has(x.id)).map((x) => x.code);
-      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}${analysisImpact.length ? ` — in the analysis, ${analysisImpact.join("; ")}` : ""}`, touched: [q.id] };
+      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}${analysisImpact.length ? ` — in the analysis, ${analysisImpact.join("; ")}` : ""}${scriptReaders.length ? ` — script${scriptReaders.length === 1 ? "" : "s"} ${scriptReaders.join(", ")} read${scriptReaders.length === 1 ? "s" : ""} ${q.code} (literal references; not changed)` : ""}`, touched: [q.id] };
     }
     case "move_question": {
       const q = resolveQuestion(ctx, a.target);

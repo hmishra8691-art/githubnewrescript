@@ -629,20 +629,20 @@ const uxLook: Recogniser = (r) => {
 /* ---------------------------------------------------------- queries: dependencies */
 
 /** the Studio's sections, in the order an inspector lists them */
-const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Research design", "Translations"] as const;
+const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Research design", "Translations", "Scripts"] as const;
 const SECTION_OF: Record<EdgeKind, (typeof SECTION_ORDER)[number]> = {
   display: "Display logic", optionLogic: "Display logic", skip: "Skip logic", validation: "Validation",
   mask: "Masking & carry-forward", carryForward: "Masking & carry-forward", piping: "Piping",
   calculation: "Calculations", punch: "Calculations", namedExpression: "Calculations", quotaCell: "Quotas",
   randomization: "Randomization & list logic", listLogic: "Randomization & list logic", listOperation: "Randomization & list logic", listFillSource: "Randomization & list logic", listFillGate: "Randomization & list logic",
   flowCondition: "Flow (branches, loops, blocks)", loopSource: "Flow (branches, loops, blocks)", placement: "Flow (branches, loops, blocks)", target: "Flow (branches, loops, blocks)",
-  analysis: "Analysis plan", construct: "Constructs", hypothesis: "Research design", kpi: "Research design", translation: "Translations",
+  analysis: "Analysis plan", construct: "Constructs", hypothesis: "Research design", kpi: "Research design", translation: "Translations", script: "Scripts",
 };
 const NOUN: Record<(typeof SECTION_ORDER)[number], [string, string]> = {
   "Display logic": ["display condition", "display conditions"], "Skip logic": ["skip", "skips"], Validation: ["validation rule", "validation rules"],
   "Masking & carry-forward": ["mask or carry-forward", "masks and carry-forwards"], Piping: ["pipe", "pipes"], Calculations: ["calculation", "calculations"], Quotas: ["quota", "quotas"],
   "Randomization & list logic": ["list rule", "list rules"], "Flow (branches, loops, blocks)": ["flow element", "flow elements"],
-  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], "Research design": ["hypothesis or KPI", "hypotheses and KPIs"], Translations: ["translation", "translations"],
+  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], "Research design": ["hypothesis or KPI", "hypotheses and KPIs"], Translations: ["translation", "translations"], Scripts: ["script", "scripts"],
 };
 
 /** the value at a dotted path of the definition */
