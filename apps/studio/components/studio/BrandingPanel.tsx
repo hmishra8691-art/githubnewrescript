@@ -12,6 +12,7 @@ import { themePreviewStore } from "@/lib/themePreview";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
+import { ScriptHealthChip, ScriptHealthSummaryBar } from "./ScriptHealth";
 import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
@@ -746,6 +747,7 @@ export function ScriptsPanel() {
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
+      <ScriptHealthSummaryBar />
       <p className="muted" style={{ fontSize: 13 }}>
         Scripts run in a sandboxed frame (never on the respondent&apos;s page) with this API:{" "}
         <code>get(ref) set(ref, v) getCalc/setCalc getEmbedded/setEmbedded expr(&quot;Q1+Q2&quot;) pipe(&quot;{"{{Q1}}"}&quot;)
@@ -790,6 +792,7 @@ export function ScriptsPanel() {
                 }} /> enabled
             </label>
             <span className="grow" />
+            <ScriptHealthChip scriptId={sc.id} />
             <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
           </div>
           <ScriptCodeField code={sc.code} refusal={refusal[sc.id]}

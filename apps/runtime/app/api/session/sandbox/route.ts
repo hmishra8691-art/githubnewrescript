@@ -35,7 +35,8 @@ export async function POST(req: NextRequest) {
   if (body.action === "health") {
     const token = String(body.token ?? "");
     if (!/^[0-9a-f]{24}$/.test(token)) return NextResponse.json({ error: "send the test survey's token" }, { status: 400, ...noStore });
-    const rows = sandboxRowsOf(token);
+    // sessions that saved at least once (a session started and never saved ran no page — and React's dev double mount starts one)
+    const rows = sandboxRowsOf(token).filter((r) => r.last_saved_at);
     const summary = aggregateScriptHealth(rows.map((r) => ({ telemetry: { scriptHealth: r.script_health ?? [] }, last_saved_at: r.last_saved_at, started_at: r.started_at })));
     return NextResponse.json({ ok: true, sandbox: true, ...summary }, noStore);
   }

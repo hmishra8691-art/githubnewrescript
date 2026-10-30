@@ -5,6 +5,7 @@ import { UX_ANIMATION_TRIGGERS, UX_EVENTS, UX_MEDIA, UX_PRESETS, UX_STATES } fro
 import { compileAnimation, compileStyle, describeUxTarget, uxDeclarations, validateUxItem } from "@rescript/engine";
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
+import { ScriptHealthChip } from "./ScriptHealth";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -162,6 +163,7 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
         <button type="button" className="btn sm ghost" onClick={onRemove} disabled={readOnly} title={isNew ? "Discard" : "Remove"} data-testid="ux-item-remove">{isNew ? "Discard" : "Remove"}</button>
       </div>
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
+      {kind === "behavior" && (item as UxBehavior).script && !isNew ? <div style={{ margin: "2px 0 4px" }}><ScriptHealthChip scriptId={item.id} /></div> : null}
       {kind === "style" && <StyleFields style={cur as UxStyle} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
       {(kind === "style" || kind === "animation") && (

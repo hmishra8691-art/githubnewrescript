@@ -24,6 +24,7 @@ import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 import { AssessmentQuestionSection } from "./AssessmentQuestionSection";
+import { ScriptHealthChip } from "./ScriptHealth";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
  *  for the question type. */
@@ -1877,6 +1878,7 @@ function PropertiesPanelBody() {
         <p className="muted" style={{ fontSize: 12.5 }}>
           A Custom Component is the one question type whose JavaScript IS the question: it receives the component element and the answer, so it can read and write its own answer. Everything else uses scripts in Styles, animations &amp; scripts.
         </p>
+        {q.customJs ? <div style={{ marginBottom: 6 }}><ScriptHealthChip scriptId={`uxb_component_${q.id}`} /></div> : null}
         <label className="f"><span>Component HTML (the template your script drives)</span>
           <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""} data-testid="component-html"
             onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
