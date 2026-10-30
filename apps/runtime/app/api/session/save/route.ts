@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, balanceVariableForKey, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
@@ -99,11 +99,17 @@ export async function POST(req: NextRequest) {
     }, { status: 422 });
   }
 
+  /*
+   * D7 (S0b) — RUNTIME_SERVER_RECOMPUTE=store: the derived fields the replay recomputed (derived punches,
+   * calculations, exact-balance claims) are stored as the SERVER derived them, not as posted. `log` (default)
+   * only logs the `server_mismatch` lines with the submission check; `off` skips the comparison.
+   */
+  const stored = recomputePosture() === "store" ? withRecomputed({ answers, calculated }, check?.recomputed) : { answers, calculated };
   const update: Record<string, unknown> = {
     status: newStatus,
     step_index: Number(stepIndex) || 0,
-    answers: answers ?? {},
-    calculated: calculated ?? {},
+    answers: stored.answers ?? {},
+    calculated: stored.calculated ?? {},
     embedded: embedded ?? {},
     flags: flags ?? [],
     completed_at: completed ? new Date().toISOString() : null,
@@ -351,19 +357,22 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     return NextResponse.json({ ok: true, stale: true, seq: row.save_seq, environment: "TEST", respondentCode: row.respondent_code, sandbox: true });
   }
   const posture = validationPosture();
+  let sandboxStored: { answers: unknown; calculated: unknown } | null = null;
   if (posture !== "off") {
     const check = checkSubmission({
       def: survey.def,
       prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at },
       posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed },
+      recompute: recomputePosture() !== "off",
     });
+    if (recomputePosture() === "store") sandboxStored = withRecomputed({ answers: body?.answers, calculated: body?.calculated }, check.recomputed);
     if (check.hard.length || check.soft.length) console.info("[rescript:save] sandbox submission check", JSON.stringify({ sessionId: row.session_id.slice(0, 8), posture, hard: check.hard, soft: check.soft }));
     if (!check.ok && posture === "enforce") return NextResponse.json({ error: `This page could not be saved: ${check.hard[0].message}`, problems: check.hard }, { status: 422 });
   }
   const nav = sanitizeNavTrail(survey.def, body?.nav);
   Object.assign(row, {
     status: newStatus, step_index: Number(body?.stepIndex) || 0,
-    answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: Array.isArray(body?.flags) ? body.flags : [],
+    answers: sandboxStored?.answers ?? body?.answers ?? {}, calculated: sandboxStored?.calculated ?? body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: Array.isArray(body?.flags) ? body.flags : [],
     completed_at: body?.completed ? new Date().toISOString() : null, last_saved_at: new Date().toISOString(),
     ...(nav.trail ? { nav: nav.trail } : {}),
     ...(seq != null ? { save_seq: seq } : {}),
@@ -375,6 +384,32 @@ type Posture = "off" | "log" | "enforce";
 function validationPosture(): Posture {
   const v = (process.env.RUNTIME_SERVER_VALIDATION ?? "log").toLowerCase();
   return v === "off" || v === "enforce" ? v : "log";
+}
+
+/** D7 (S0b): what the save does with the derived fields the replay recomputes — RUNTIME_SERVER_RECOMPUTE, default log */
+function recomputePosture(): "off" | "log" | "store" {
+  const v = (process.env.RUNTIME_SERVER_RECOMPUTE ?? "log").toLowerCase();
+  return v === "off" || v === "store" ? v : "log";
+}
+/** the posted answers / calculated with the server's recomputed values laid over them */
+function withRecomputed<T extends { answers: unknown; calculated: unknown }>(posted: T, rec: SubmissionCheck["recomputed"] | undefined): T {
+  if (!rec || (!Object.keys(rec.answers).length && !Object.keys(rec.calculated).length)) return posted;
+  const obj = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
+  const answers: Record<string, unknown> = { ...obj(posted.answers) };
+  for (const [k, v] of Object.entries(rec.answers)) { if (v == null) delete answers[k]; else answers[k] = v; }
+  return { ...posted, answers, calculated: { ...obj(posted.calculated), ...rec.calculated } };
+}
+
+/** the exact-balance claims this session holds, as the variables they are written under (D7); {} when there are none or no 0073 */
+async function storedBalanceClaims(def: SurveyDefinition, surveyId: string, isTest: boolean, sessionId: string): Promise<Record<string, string>> {
+  if (!hasExactBalance(def)) return {};
+  try {
+    const { data, error } = await supabaseAdmin().from("balance_claims").select("balance_key, arms").eq("survey_id", surveyId).eq("is_test", isTest).eq("session_id", sessionId).in("status", ["active", "completed"]);
+    if (error || !Array.isArray(data)) return {};
+    const out: Record<string, string> = {};
+    for (const r of data as { balance_key: string; arms: string[] }[]) { const v = balanceVariableForKey(def, r.balance_key); if (v && Array.isArray(r.arms)) out[v] = r.arms.join(","); }
+    return out;
+  } catch { return {}; }
 }
 
 /**
@@ -392,11 +427,13 @@ async function serverCheck(
   if (posture === "off") return null;
   try {
     const quotaCounts = def.quotas?.length ? await loadQuotaCounts(existing.survey_id, !!existing.is_test) : {};
+    const recompute = recomputePosture() !== "off";
+    const balanceClaims = recompute ? await storedBalanceClaims(def, existing.survey_id, !!existing.is_test, sessionId) : {};
     const check = checkSubmission({
       def,
       prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null },
       posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed },
-      quotaCounts,
+      quotaCounts, recompute, balanceClaims,
     });
     if (check.hard.length || check.soft.length) {
       console[check.hard.length ? "warn" : "info"]("[rescript:save] submission check", JSON.stringify({

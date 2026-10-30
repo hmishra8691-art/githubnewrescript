@@ -8,6 +8,7 @@ import { isEmptyAnswer } from "./answers.js";
 import { lookupAnswer } from "./state.js";
 import { sectionNavMode } from "./sectionNav.js";
 import { assessmentSettings } from "./assessment.js";
+import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
  * THE SERVER CHECKS WHAT THE CLIENT SAYS HAPPENED.
@@ -61,9 +62,15 @@ export type SubmissionProblem = {
     | "status_mismatch"
     | "step_unreachable"
     | "skipped_required"
-    | "client_only";
+    | "client_only"
+    | "server_mismatch";
   questionId?: string;
   pageId?: string;
+  /** server_mismatch on a calculated variable: its name */
+  variable?: string;
+  /** server_mismatch: what was posted and what the server derived — summarised, never the raw text of an open end */
+  posted?: unknown;
+  server?: unknown;
   message: string;
 };
 
@@ -74,6 +81,12 @@ export interface SubmissionCheck {
   /** how far the replay got, for the log line */
   replayedPages: number;
   endStatus?: string;
+  /**
+   * D7 (S0b): the values the server derived for the fields it can recompute, where they differ from what was
+   * posted — answer keys of derived questions, calculated variables, exact-balance claims. The save route stores
+   * these instead of the posted ones under RUNTIME_SERVER_RECOMPUTE=store. Empty when everything agrees.
+   */
+  recomputed?: { answers: Record<string, unknown>; calculated: Record<string, unknown> };
 }
 
 export interface SubmissionInput {
@@ -93,6 +106,13 @@ export interface SubmissionInput {
   quotaCounts?: QuotaCounts;
   /** replay safety valve: stop after this many pages (a loop that never ends must not hang the save) */
   maxPages?: number;
+  /**
+   * D7 (S0b): compare the derived fields with what the replay recomputed (default true). `balanceClaims` are the
+   * exact-balance assignments as the SERVER stored them (`RANDOMIZER_<ID>` / `<VAR>_VERSION` → "arm,arm"); a
+   * posted value that differs is a mismatch and the server's is the one to store.
+   */
+  recompute?: boolean;
+  balanceClaims?: Record<string, string>;
 }
 
 const FINAL = new Set(["complete", "screened", "quota_full", "terminated"]);
@@ -115,7 +135,8 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   const { def, prior, posted } = input;
   const hard: SubmissionProblem[] = [];
   const soft: SubmissionProblem[] = [];
-  const out = (replayedPages = 0, endStatus?: string): SubmissionCheck => ({ ok: hard.length === 0, hard, soft, replayedPages, endStatus });
+  let recomputed: SubmissionCheck["recomputed"];
+  const out = (replayedPages = 0, endStatus?: string): SubmissionCheck => ({ ok: hard.length === 0, hard, soft, replayedPages, endStatus, ...(recomputed ? { recomputed } : {}) });
 
   if (!isPlainObject(posted.answers)) { hard.push({ severity: "hard", code: "bad_shape", message: "answers must be an object" }); return out(); }
   for (const k of ["calculated", "embedded"] as const) {
@@ -206,6 +227,8 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     soft.push({ severity: "soft", code: "step_unreachable", message: `stepIndex ${stepIndex} is past the end of the interview` });
   }
 
+  if (input.recompute !== false) recomputed = compareDerived(def, answers, posted.calculated, state, input.balanceClaims, soft);
+
   // answers for questions the replay never showed (hidden by display logic, in an iteration that did not exist)
   for (const key of Object.keys(answers)) {
     const base = answerKeyBase(key);
@@ -217,4 +240,78 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   }
 
   return out(pages, nav.endStatus);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * D7 (audit 2026-10-30, S0b) — WHAT THE SERVER CAN DERIVE ITSELF, COMPARED WITH WHAT WAS POSTED.
+ *
+ * The replay above already recomputes, from the posted answers and the row's seed, everything the engine derives
+ * deterministically: arriving at each page applies the punch rules of derived (hidden / calculated / settings.hidden)
+ * questions and the page's own punches, submitting it runs the calculations (and the loop / masking variables).
+ * Until now the result was thrown away and the posted values were stored. Here the two are compared for:
+ *
+ *   - answer keys of derived questions (hidden type, calculated type with an expression, settings.hidden with punch
+ *     rules) and of questions whose punch rules say recompute: "always" (the rule owns the answer);
+ *   - every calculated variable the replay wrote (calculations, loop and masking variables) — a value only a
+ *     script sets (setCalc) is not recomputed here (the server never runs author code) and stays as posted;
+ *   - the exact-balance assignments, against the claims the SERVER stored (the replay reads them, it cannot
+ *     recompute them).
+ *
+ * Every difference is a soft `server_mismatch` (question or variable, posted vs server, summarised so an open
+ * end's text never reaches a log). An AI-resolved calculated question is the server's own business and skipped.
+ * ------------------------------------------------------------------------------------------------ */
+const SAFE_SCALAR = /^[\w .,:;@#%+\-/]{0,40}$/;
+/** a value for a log line: numbers, booleans, codes and short code-like strings as they are; other text by length only */
+export function summariseValue(v: unknown): unknown {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v ?? null;
+  if (typeof v === "string") return SAFE_SCALAR.test(v) ? v : `<text, ${v.length} chars>`;
+  if (Array.isArray(v)) return v.length > 20 ? `<list of ${v.length}>` : v.map(summariseValue);
+  if (typeof v === "object") { const e = Object.entries(v as Record<string, unknown>); return e.length > 20 ? `<object with ${e.length} keys>` : Object.fromEntries(e.map(([k, x]) => [k, summariseValue(x)])); }
+  return `<${typeof v}>`;
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+function compareDerived(
+  def: SurveyDefinition,
+  postedAnswers: Record<string, AnswerValue>,
+  postedCalculated: unknown,
+  state: ResponseState,
+  claims: Record<string, string> | undefined,
+  soft: SubmissionProblem[],
+): NonNullable<SubmissionCheck["recomputed"]> {
+  const rec = { answers: {} as Record<string, unknown>, calculated: {} as Record<string, unknown> };
+  const derived = new Set<string>();
+  for (const q of def.questions) {
+    const always = (q.punches ?? []).some((p) => (p as { recompute?: string }).recompute === "always");
+    const hiddenLike = q.type === "hidden" || !!q.settings?.hidden;
+    if (q.type === "calculated") { if (q.settings?.expression && !isServerResolvedExpression(q.settings.expression)) derived.add(q.id); continue; }
+    if ((hiddenLike && q.punches?.length) || always) derived.add(q.id);
+  }
+  if (derived.size) {
+    const keys = new Set([...Object.keys(postedAnswers), ...Object.keys(state.answers)]);
+    for (const key of keys) {
+      if (COMPANION.test(key)) continue;
+      const base = answerKeyBase(key);
+      if (!derived.has(base)) continue;
+      const p = postedAnswers[key], sv = state.answers[key];
+      if (same(p, sv)) continue;
+      rec.answers[key] = sv ?? null;
+      soft.push({ severity: "soft", code: "server_mismatch", questionId: base, posted: summariseValue(p), server: summariseValue(sv), message: `${key}: the posted answer differs from the one the server derives from the other answers` });
+    }
+  }
+  const pc = isPlainObject(postedCalculated) ? postedCalculated as Record<string, unknown> : {};
+  for (const name of Object.keys(state.calculated)) {
+    if (claims && name in claims) continue; // judged against the stored claim below
+    const p = pc[name], sv = (state.calculated as Record<string, unknown>)[name];
+    if (same(p, sv)) continue;
+    rec.calculated[name] = sv ?? null;
+    soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: the posted value differs from the one the server calculates` });
+  }
+  for (const [name, stored] of Object.entries(claims ?? {})) {
+    const p = pc[name];
+    if (same(p == null ? null : String(p), stored)) continue;
+    rec.calculated[name] = stored;
+    soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(stored), message: `${name}: the posted assignment differs from the claim the server stored` });
+  }
+  return rec;
 }

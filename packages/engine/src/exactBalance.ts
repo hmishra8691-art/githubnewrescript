@@ -93,6 +93,27 @@ export function randomizerVariable(nodeId: string, loop: LoopContext | null | un
 }
 export { designVersionVariable };
 
+/**
+ * The variable a stored claim's balance key is written under (D7, S0b: the save route compares the posted
+ * assignment with the claim it stored). `randomizer:<nodeId>@loop@codes|cell:…` → `RANDOMIZER_<ID>_<CODES>`;
+ * `design:<questionId>|cell:…` → `<VAR>_VERSION`. Null for a key this survey does not have.
+ */
+export function balanceVariableForKey(def: SurveyDefinition, key: string): string | null {
+  const bare = String(key).split("|cell:")[0]!;
+  if (bare.startsWith("randomizer:")) {
+    const rest = bare.slice("randomizer:".length);
+    const at = rest.indexOf("@");
+    const nodeId = at >= 0 ? rest.slice(0, at) : rest;
+    const codes = at >= 0 ? rest.slice(at).split("@").filter(Boolean) : [];
+    return `RANDOMIZER_${ident(nodeId)}${codes.map((c) => `_${ident(c)}`).join("")}`;
+  }
+  if (bare.startsWith("design:")) {
+    const q = def.questions.find((x) => x.id === bare.slice("design:".length));
+    return q ? designVersionVariable(q) : null;
+  }
+  return null;
+}
+
 /** the respondent's cell of the balancing quota, or null (no quota set, no cell matched yet — the whole sample then) */
 export function balanceCell(def: SurveyDefinition, state: ResponseState, quotaId: string | null): string | null {
   if (!quotaId) return null;
