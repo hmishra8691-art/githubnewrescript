@@ -4,8 +4,30 @@
  * Survey scripts run here, in an iframe with `sandbox="allow-scripts"` (an
  * opaque origin: no cookies, no storage, no page, no session) and a CSP that
  * forbids every network request. This file is what runs INSIDE it, as a
- * string, because the frame is built from `srcdoc`. It is the only script
- * engine in the product; there is no second one to keep in step with it.
+ * string, because the frame is built from `srcdoc`.
+ *
+ * ## One engine, what runs where (after S1b/S1c, 2026-10-30)
+ *
+ * No author JavaScript runs on the respondent's page itself, and none runs on
+ * the server. Every kind of author code runs in a sandboxed frame:
+ *
+ *   · UX scripts (`def.ux.behaviors[].script`, incl. old Custom code moved
+ *     there on load) and Custom Component code (`customJs`, as a runtime-only
+ *     behaviour whose mirror is the component's element) — THIS program, one
+ *     frame per script per page, started by the UxLayer;
+ *   · Scripts-panel logic scripts (`def.scripts`) and `custom_script`
+ *     validation rules — the logic frame (`logicFrame.ts`, shim
+ *     `engine/logicSandbox.ts`), one per page, runs serialised.
+ *
+ * Both reach the survey only through REQUESTS the host decides with the
+ * engine (`applyScriptWrite`: scope rule, response model, size limits;
+ * `rs.goToPage` / `rs.goToSection` through the section-navigation rule).
+ * The code gates (`validateUxScript`, `codeGate` logic / component) refuse
+ * code before a frame gets it. The server's replay executes no author code.
+ * The old main-thread runner (`engine/scripts.ts`) is reachable only through
+ * the one-release rollback flag `RUNTIME_LEGACY_SCRIPTS=main` and unit tests.
+ * Failures are counted per script into the session's `scriptHealth`
+ * (Studio: script health chips); code changes are written to the audit log.
  *
  * ## What a script sees
  *
@@ -30,8 +52,10 @@
  *
  * ## What a script cannot do (and is told when it tries)
  *
- * It cannot change an answer (`value`, `checked`, `.click()` on an option have
- * no effect on the survey), cancel an event (`preventDefault` is a no-op —
+ * It cannot change an answer THROUGH THE PAGE (`value`, `checked`, `.click()`
+ * on an option have no effect on the survey) — it asks with `rs.setAnswer` /
+ * `rs.setEmbedded` / `rs.setCalc` / `rs.flag`, requests the engine checks and
+ * applies on the respondent's own path (S1a). It cannot cancel an event (`preventDefault` is a no-op —
  * the real event has already happened), replace the text of an element the
  * survey drew (React owns it; create an element of your own instead), or
  * reach the network, storage or the parent page.

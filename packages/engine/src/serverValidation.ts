@@ -38,9 +38,18 @@ import { isServerResolvedExpression } from "./aiFunctions.js";
  * `scripts: "skip"`: such a rule is never executed here, it is recorded as a
  * soft `client_only` problem (it ran in the browser, where it belongs) and
  * cannot refuse a save on its own. Owner decision S0 #2: "skip on the
- * server". It also does not run option popups, and it does not recompute
- * quota outcomes against live counts (a respondent who started before a cell
- * filled is the route's business), nor punches/calculations (D7, S0b).
+ * server". Since S1b no author code runs on the respondent's page either (it
+ * runs in sandboxed frames); a value a script wrote arrives as a posted answer
+ * through the engine-checked request channel and is validated like any answer
+ * — `posted.scriptWrites` names those targets, and a value the replay cannot
+ * derive is reported as soft `script_written` (S1a), believed only for targets
+ * the channel could ever write. It also does not run option popups, and it
+ * does not recompute quota outcomes against live counts (a respondent who
+ * started before a cell filled is the route's business). Punches and
+ * calculations ARE recomputed from the posted answers and compared (S0b,
+ * audit D7: a difference is `server_mismatch`; under
+ * `RUNTIME_SERVER_RECOMPUTE=store` the server's values are stored) — they are
+ * engine rules, not author code.
  * Problems are graded so the route can log before it refuses:
  *
  *   hard  — the payload cannot be an honest interview: an answer that fails

@@ -33,6 +33,11 @@ import { codeGate, gateReason, LOGIC_PARAMS, logicScriptBody, loopCounter } from
  * script declared is not seen. The runtime CSP stops such code from sending
  * anything off the page.
  *
+ * READ THIS FIRST — LEGACY FLAG AND TESTS ONLY. Nothing in the product calls
+ * this runner by default (S1b/S1c, 2026-10-30): a respondent's page runs logic
+ * scripts in the sandboxed logic frame, the Studio canvas runs none, and the
+ * server's replay runs none (`serverValidation.ts`, `scripts: "skip"`).
+ *
  * S1b (2026-10-30): THIS MAIN-THREAD RUNNER IS NO LONGER HOW A RESPONDENT'S
  * PAGE RUNS SCRIPTS. The runtime sends logic scripts to a sandboxed frame
  * (`logicSandbox.ts` — the same `ctx`, writes as requests through
