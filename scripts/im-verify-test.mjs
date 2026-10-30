@@ -17,6 +17,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
+import { watchServerDrops } from "./lib/serverDrops.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
@@ -64,6 +65,7 @@ show();`;
 
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 1600, height: 1000 } })).newPage();
+watchServerDrops(page);
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e)));
 const goTab = async (name) => { await openTab(page, name); await page.waitForTimeout(150); };

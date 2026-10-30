@@ -13,6 +13,7 @@
  */
 import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
+import { watchServerDrops } from "./lib/serverDrops.mjs";
 import { openTab, switchMode } from "./lib/nav.mjs";
 import { docxFixture, pdfFixture, TINY_JPEG } from "../packages/import/dist/fixtures.js";
 
@@ -24,6 +25,7 @@ const mod = process.platform === "darwin" ? "Meta" : "Control";
 const browser = await chromium.launch({ args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, permissions: ["microphone"] });
 const page = await context.newPage();
+watchServerDrops(page);
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e)));
 page.on("console", (m) => { if (m.type() === "error" && !/401|402|422|501|Failed to load resource|ERR_TUNNEL/.test(m.text())) pageErrors.push(m.text().slice(0, 300)); });
@@ -225,6 +227,10 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   await page.check('[data-testid="cp-confirm"]');
   await page.click('[data-testid="cp-panel-apply"]');
   await page.waitForFunction(() => document.querySelectorAll('[data-testid="cp-change"]').length === 2);
+  /* the entry joins History at Apply; its number is the server's answer to the status PATCH, which queues behind the
+     record's POST — on a busy dev server (2–3 s a request) the undo below used to land before it, and History still
+     read "AI Change (not numbered)" when it was asserted (2026-10-30). Wait for the number, as #001 waits for its save. */
+  await page.waitForFunction(() => document.querySelector('[data-testid="cp-change"]')?.dataset.n === "2", null, { timeout: 30000 });
   let def = await readDef();
   await switchMode(page, "intelligent");
   assert.deepEqual(def.questions[4].options.map((o) => o.code), [1, 2, 3, 4, 5]);
@@ -237,6 +243,7 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
   assert.equal(def.questions[4].options.length, 7, "undone");
   assert.equal(def.questions[3].displayLogic, undefined);
   await panel("history");
+  await page.waitForFunction(() => document.querySelector('[data-testid="cp-change"]')?.dataset.status === "reverted", null, { timeout: 30000 });
   assert.match((await texts('[data-testid="cp-change"]'))[0], /AI Change #002.*undone/);
   ok("editing: targeted changes, the replaced scale named destructive, field-by-field and before/after views, clickable Q-references; Undo AI change reverts #002 as one operation");
 }
