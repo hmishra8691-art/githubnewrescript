@@ -17,9 +17,11 @@
  *
  *   · hidden / calculated / embedded targets (a `hidden`, `embedded_data` or `experiment` question, one set
  *     `settings.hidden`, an embedded field, a calculated variable) — any script, whatever it is attached to;
- *   · a question-scoped script — its OWN question, even while it is on screen;
- *   · a page- or block-scoped script — the questions of its page / block that the respondent is NOT looking at;
- *   · a survey-scoped script — any question the respondent is NOT looking at;
+ *   · ANY script (question, page, block or survey scope) — any question the respondent is NOT looking at at the
+ *     moment of the write, wherever it is in the survey (S1b, 2026-10-30: the earlier "a page script writes only
+ *     its own page" rule refused a production survey's page script setting a segment question on a later page of
+ *     another block — a behaviour regression for code that has always done that);
+ *   · a question-scoped script — also its OWN question, even while it is on screen;
  *   · NEVER a question the respondent is looking at, unless it is the script's own question. The respondent is
  *     the author of what they see: a value changing under their eyes, put there by code they cannot see, is a
  *     silent overwrite of their answer. A script attached to that question is the explicit exception — its
@@ -333,11 +335,8 @@ function applyOne(def: SurveyDefinition, state: ResponseState, write: ScriptWrit
       const own = ownQuestions(def, ctx.scope);
       if (!own) return refuse(`the script's ${ctx.scope.kind} no longer exists`);
       const onScreen = ctx.shown.includes(q.id) && !derived;
-      if (!derived) {
-        if (onScreen && !(ctx.scope.kind === "question" && own.has(q.id))) return refuse(`${q.code} is on screen — a script may change a question the respondent is looking at only when it is attached to that question (no silent overwrites of what the respondent sees)`);
-        if ((ctx.scope.kind === "page" || ctx.scope.kind === "block") && !own.has(q.id)) return refuse(`${q.code} is not on this script's ${ctx.scope.kind} — a ${ctx.scope.kind} script writes its own questions and hidden variables`);
-        if (ctx.scope.kind === "question" && !own.has(q.id)) return refuse(`${q.code} is not this script's question — a question script writes its own question and hidden variables`);
-      }
+      // the one refusal of the scope rule: a question the respondent is looking at that is not the script's own
+      if (onScreen && !(ctx.scope.kind === "question" && own.has(q.id))) return refuse(`${q.code} is on screen — a script may change a question the respondent is looking at only when it is attached to that question (no silent overwrites of what the respondent sees)`);
       const loop = iterationFor(def, state, q, write.loopKey, pageLoop);
       if (typeof loop === "string") return refuse(loop);
       const v = scriptValueFor(def, state, q, write.value, loop);

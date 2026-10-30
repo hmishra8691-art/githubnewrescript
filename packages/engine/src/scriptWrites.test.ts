@@ -38,6 +38,7 @@ const def = SurveyDefinition.parse({
     Q("q_owned", "hidden", { options: [{ code: "Y", label: "Y" }], punches: [{ ...segRule, id: "p_own", recompute: "always" }] }),
     Q("q_loop", "numeric"),
     Q("q_later", "single_select", { options: opts }),
+    Q("q_seg", "single_select", { options: [{ code: "light", label: "Light" }, { code: "heavy", label: "Heavy" }] }),
   ],
   flow: [
     { type: "embedded_data", id: "ed", fields: [{ name: "SOURCE", source: "static", value: "web", dataType: "string" }, { name: "SCORE", source: "static", value: "0", dataType: "integer" }] },
@@ -47,6 +48,7 @@ const def = SurveyDefinition.parse({
     ] },
     { type: "loop", id: "lp", loopVar: "brand", source: { kind: "static", items: [{ code: "a", label: "Apple" }, { code: "g", label: "Google" }] },
       children: [{ type: "page", id: "pl", questionIds: ["q_loop"] }] },
+    { type: "block", id: "blk_derived", title: "Derived", children: [{ type: "page", id: "p_derived", questionIds: ["q_seg"] }] },
     { type: "end", id: "e", status: "complete" },
   ],
   calculations: [
@@ -111,14 +113,24 @@ test("scope: on-screen questions only for their own script; hidden targets for a
   assert.equal(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_SINGLE", value: "1" }, own("q_single", page)).ok, true);
   const r2 = applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_MULTI", value: ["1"] }, own("q_single", page));
   assert.equal(r2.ok, false);
-  // a page script: not the questions on screen, yes a question of its block that is not shown; not another block's
+  assert.match(r2.reason!, /on screen/);
+  // a question script may write another question that is NOT on screen (S1b: any scope, any question off screen)
+  assert.equal(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_LATER", value: "1" }, own("q_single", page)).ok, true);
+  // a page script: not the questions on screen; yes any question that is not shown — its block's, another block's
   const pageCtx: ScriptWriteContext = { scriptId: "b_page", scope: { kind: "page", pageId: "p1" }, shown: page };
-  assert.equal(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_SINGLE", value: "1" }, pageCtx).ok, false);
+  assert.match(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_SINGLE", value: "1" }, pageCtx).reason!, /on screen/);
   const blockCtx: ScriptWriteContext = { scriptId: "b_block", scope: { kind: "block", blockId: "b1" }, shown: page };
   assert.equal(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_LATER", value: "2" }, blockCtx).ok, true);
   const r3 = applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_LOOP", value: 1, loopKey: "a" }, blockCtx);
-  assert.equal(r3.ok, false);
-  assert.match(r3.reason!, /not on this script's block/);
+  assert.equal(r3.ok, true, r3.reason);
+  // THE PRODUCTION CASE (beverage/mask demo, 2026-10-30): a page script on block b1 (on_submit of p1) sets a
+  // single_select on a later page of ANOTHER block — set('q_seg', 'light') — and it is written
+  const seg = fresh();
+  const r4 = applyScriptWrite(def, seg, { kind: "answer", ref: "q_seg", value: "light" }, pageCtx);
+  assert.equal(r4.ok, true, r4.reason);
+  assert.equal(seg.answers.q_seg, "light");
+  // …but not once the respondent is looking at it
+  assert.match(applyScriptWrite(def, fresh(), { kind: "answer", ref: "q_seg", value: "light" }, { ...pageCtx, shown: ["q_seg"] }).reason!, /on screen/);
   // hidden targets: any scope
   for (const ctx of [pageCtx, blockCtx, own("q_single", page), survey(page)]) assert.equal(applyScriptWrite(def, fresh(), { kind: "answer", ref: "H_FREE", value: 1 }, ctx).ok, true);
   assert.match(applyScriptWrite(def, fresh(), { kind: "answer", ref: "Q_CALC", value: 5 }, survey()).reason!, /calculated by its expression/);

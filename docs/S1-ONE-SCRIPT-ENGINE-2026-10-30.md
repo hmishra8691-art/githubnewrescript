@@ -32,9 +32,12 @@ scope in S1b; `ctx.shown` is what the respondent is looking at):
 | Script attached to | May write |
 |---|---|
 | any scope | hidden targets: a `hidden` / `embedded_data` / `experiment` question or one set `settings.hidden`; a declared embedded field; a calculated variable of its own |
-| a question | **its own question, even on screen** |
-| a page / block | the questions of its page / block that are **not** on screen |
-| the survey | any question that is **not** on screen |
+| any scope (question, page, block, survey) | any question that is **not** on screen at the moment of the write, wherever it is in the survey |
+| a question | also **its own question, even on screen** |
+
+*(Relaxed in S1b, 2026-10-30: S1a also limited page / block scripts to their own page / block. That refused a
+production page script — beverage/mask demo, `p_brand_depth` in `blk_brand_funnel`, on_submit — setting the
+single_select `q_seg` on a later page of another block. The only refusal of the scope rule is now the one below.)*
 
 Never a question the respondent is looking at unless it is the script's own question. **Why:** the respondent is the
 author of what they see; a value changing under their eyes, put there by code they cannot see, is a silent overwrite
@@ -256,8 +259,9 @@ runner behind the flag.
    next script of the same event (one overlay per batch). Difference: a write the host then **refuses** was visible to
    the rest of the batch; the refusal is logged (`[name] set("Q2") refused: Q2 is on screen — …`).
 3. **The scope rule now applies to logic scripts** (it never did): a script may not overwrite a question the
-   respondent is looking at unless it is the script's own question; page scripts write their page's questions and any
-   hidden target; survey scripts any question not on screen. All 14 production scripts pass it (unit test).
+   respondent is looking at unless it is the script's own question; any other question (any page, any block) and any
+   hidden target it may write. All 14 production scripts pass it (unit test; `scriptWrites.test.ts` holds the
+   production case — a page script on one block setting a single_select on a later page of another block).
 4. **`when` is evaluated once per event** for the whole batch, against the state before the batch (before: per
    script, after the earlier scripts had mutated the state).
 5. **Timing.** survey `on_load` runs once the first position is known; the first page waits for it (boot card, ≤ 3 s)
@@ -357,18 +361,20 @@ parity test and the new suite; the beverage/mask demo is not in `packages/templa
 - **Async is a behaviour change.** A survey that relied on an on_change write being visible in the very same render, or
   on a logic script running longer than the bounds (1.5 s on Next, 3 s otherwise), behaves differently; a run that
   does not answer writes nothing and is logged. The first page waits up to 3 s for survey on_load.
-- **on_complete has no loop context** (as before): a script that walks a loop with `getLoopItems('brand')` must run on
-  a loop page (the new suite places the beverage demo's NPS script `k` on the loop page's on_submit; in production
-  check where it is attached — on on_complete it computed nothing before S1b either).
-- **The scope rule now refuses some writes the old runner made silently**: a page script writing a visible question
-  of another page, a question script writing another question. The beverage demo's `set('q_seg', 'light')` passes
-  only if `q_seg` is a hidden variable or on the script's page (it is hidden in the suite; unverified in production).
+- **on_complete has no loop context** (as before) — a **pre-existing authoring issue**, left as it is: the beverage/mask
+  demo's NPS script `k` is attached on_complete, survey scope (confirmed in the production database), so
+  `getLoopItems('brand')` is empty there and it has never produced NPS_MEAN, before S1b or after. The new suite places
+  `k` on the loop page's on_submit to exercise the loop helpers.
+- **The scope rule refuses only a write to a question the respondent is looking at** that is not the script's own (the
+  old runner made such writes silently). Writes to questions on other pages and blocks are accepted (relaxed
+  2026-10-30 after the production check: the beverage demo's `set('q_seg', 'light')`, `q_seg` a visible single_select
+  on `p_derived` written from `p_brand_depth`'s on_submit, is written).
 - **`expr()` / `pipe()` only with literal text.** None of the 14 production scripts uses them.
 - **Components in the mirror:** no layout measurement, no canvas, no rewriting of the HTML's own text; listeners on
   `document` are refused by the component gate as before. A component must create its own elements for changing text.
-- **Dev-only noise:** under React StrictMode (dev) the first boot effect's logic frame is disposed by the immediate
-  remount and logs `[l] on_load: no answer within 3000 ms` once; the second mount runs it. Production builds do not
-  double-mount.
+- **Dev-only:** under React StrictMode (dev) the first boot effect's logic frame is disposed by the immediate remount;
+  that run is logged `[l] on_load: not run — the frame was closed (the page was left or re-mounted); nothing written`,
+  not as a timeout, and the second mount runs the scripts. Production builds do not double-mount.
 - **The legacy flag is build-time** (inlined by Next): changing it needs a rebuild/restart of the runtime.
 - Paradata storage on the database path still rides in `telemetry` (S1a limit, unchanged).
 
