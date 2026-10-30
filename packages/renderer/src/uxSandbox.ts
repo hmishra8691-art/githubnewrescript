@@ -420,6 +420,23 @@ __MICRO__
     }
     else if (m.type === "sync") { if (ready) applyTree(m.tree); }
     else if (m.type === "answers") { answers = m.answers || {}; byKey = m.byKey || byKey; vars = m.vars || vars; }
+    else if (m.type === "lifecycle") {
+      /*
+       * S1a: "validate" / "submit" on Next. Every handler for the event runs; a validate handler raises errors with
+       * rs.error (synchronously, or later in a promise it returns). The answer goes back once all returned promises
+       * settle — the HOST bounds the wait (1.5 s) and treats a frame that does not answer as "no error".
+       */
+      var errs = [], waits = [], lid = m.id;
+      if (m.ev === "validate") validating = errs;
+      handlers.forEach(function (h) {
+        if (h.ev !== m.ev) return;
+        slice();
+        try { var r = h.fn({ event: m.ev }); if (r && typeof r.then === "function") waits.push(r); } catch (err) { fail(err); }
+      });
+      var finish = function () { if (validating === errs) validating = null; send("lifecycleDone", [lid, errs.slice(0, 20)]); };
+      if (!waits.length) finish();
+      else Promise.all(waits.map(function (w) { return Promise.resolve(w).then(null, function (e) { fail(e); }); })).then(finish, finish);
+    }
     else if (m.type === "reply") { var f = pending[m.id]; if (f) { delete pending[m.id]; f(m.result || { ok: false }); } }
     else if (m.type === "ping") { send("pong", [m.n]); }   /* D8: the host's heartbeat — a frame that cannot answer is stopped */
     else if (m.type === "dom") { if (ready) deliver(m); }

@@ -615,7 +615,7 @@
    "code": "rs.listen(\"page_show\", \"self\", () => rs.addClass(\"self\", \"x\"));",
    "verdict": {
     "runtime": [
-     "rs.listen(\"page_show\") — the events are answer, change, select, deselect, click, hover, page, complete (“page” fires when the page opens)"
+     "rs.listen(\"page_show\") — the events are answer, change, select, deselect, click, hover, page, complete, validate, submit (“page” fires when the page opens)"
     ],
     "authoring": []
    }
@@ -4891,7 +4891,7 @@
      "postMessage is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)",
      "rs.getAnswer(\"Q77\"): there is no question “Q77”",
-     "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete"
+     "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete, validate, submit"
     ],
     "authoring": []
    }
@@ -5615,7 +5615,7 @@
      "postMessage is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)",
      "rs.getAnswer(\"Q77\"): there is no question “Q77”",
-     "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete"
+     "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete, validate, submit"
     ],
     "authoring": []
    }

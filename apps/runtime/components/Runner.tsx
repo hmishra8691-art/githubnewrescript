@@ -127,6 +127,7 @@ import {
 import { resumeSeq } from "@/lib/saveSeq";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
+import { runScriptLifecycle, type AskFrames } from "@/lib/scriptLifecycle";
 import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
 import type { ResponseTelemetry } from "@rescript/quality";
 
@@ -680,6 +681,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const gateConfirmedRef = React.useRef(false);
   /** the latest Next handler — "Submit anyway" presses it once the previous Next's latch has opened */
   const nextRef = React.useRef<(() => Promise<void>) | null>(null);
+  /** S1a: the UxLayer's way to run the sandboxed scripts' validate / submit handlers on Next */
+  const lifecycleRef = React.useRef<AskFrames | null>(null);
   /** the latest jumpTo (a jump clicked while Next is still settling is replayed, not dropped) */
   const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
@@ -1556,6 +1559,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     setLogs((l) => [...l, ...validateRes.logs, ...scriptRes.logs]);
     const fromScripts = [...validateRes.errors, ...scriptRes.errors]
       .map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));
+    /*
+     * S1a — THE SANDBOXED SCRIPTS' "validate": only once the page passed its built-in validation and the logic
+     * scripts' on_validate, every frame that registered rs.listen("validate") is asked, bounded (1.5 s; a frame that
+     * does not answer is "no error" and logged). Its rs.error messages stop Next like built-in validation errors.
+     */
+    if (!blockedEarly && lifecycleRef.current) {
+      const life = await runScriptLifecycle(lifecycleRef.current, "validate", { questions });
+      if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+      fromScripts.push(...life.errors);
+    }
     const allErrs = [...errs, ...fromScripts];
     const blocking = blockingErrors(allErrs);
     if (blocking.length > 0) {
@@ -1594,6 +1607,15 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       }
       gateConfirmedRef.current = false;
       setGate(null);
+    }
+    /*
+     * S1a — "submit": the page is valid and about to be left; the sandboxed scripts' submit handlers run (their
+     * writes go through the engine-checked channel, onScriptWrite) before the answers are carried forward. Bounded
+     * like validate; rs.error here does not stop the page.
+     */
+    if (lifecycleRef.current) {
+      const life = await runScriptLifecycle(lifecycleRef.current, "submit", { questions });
+      if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
     }
     /*
      * "SHOW A MESSAGE WHEN NEXT IS PRESSED" — options whose popup is set to
@@ -2121,6 +2143,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {errors.length > 0 && (
         <div className="rs-error-banner" role="status" aria-live="polite">
           {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
+          {/* a script's page-level message (rs.error without a question on this page, a logic script's error() without one) */}
+          {errors.filter((e) => !e.questionId || !shownQuestions.some((q) => q.id === e.questionId)).map((e, i) => (
+            <div key={i} className="rs-error-page" data-testid="rs-page-error">{e.message}</div>
+          ))}
         </div>
       )}
       {startNote && (
@@ -2338,7 +2364,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
           onNavigate={(target, as) => jumpTo(target, as, "script")}
-          onScriptWrite={onScriptWrite} />
+          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} />
       )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">

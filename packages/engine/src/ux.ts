@@ -691,7 +691,8 @@ const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
 /** names that are only a problem on their own (`top` is a global; `el.style.top` is a style property) */
 const FORBIDDEN_WHEN_BARE = ["parent", "top", "frames", "self"];
-export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete"] as const;
+/** "validate" / "submit" (S1a): run on Next — validate after built-in validation passed (rs.error stops Next), submit before the page is left */
+export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete", "validate", "submit"] as const;
 /** the behaviour-event spellings a script may use for the same thing (the effects form says page_enter, select_option…) */
 export const UX_SCRIPT_EVENT_ALIASES: Record<string, (typeof UX_SCRIPT_EVENTS)[number]> = { page_enter: "page", page_load: "page", load: "page", appear: "page", enter: "page", page_complete: "complete", select_option: "select", deselect_option: "deselect" };
 

@@ -71,7 +71,17 @@ export interface UxLayerProps {
    * Absent (the Studio canvas), every write is refused as unavailable — never silently dropped.
    */
   onScriptWrite?: (write: ScriptWrite, script: { id: string; label: string; target: UxTarget }) => { ok: boolean; reason?: string };
+  /**
+   * S1a — THE PAGE LIFECYCLE: the layer puts here a function the Runner calls on Next to run the scripts'
+   * `rs.listen("validate")` / `rs.listen("submit")` handlers. It asks every frame of the page that listens for the
+   * event and resolves with what each answered — or `timedOut` for a frame that did not answer within `timeoutMs`.
+   */
+  lifecycleRef?: React.MutableRefObject<UxAskFrames | null>;
 }
+
+/** S1a: one frame's answer to a lifecycle event (see `lifecycleRef`) */
+export interface UxFrameAnswer { script: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
+export type UxAskFrames = (ev: "validate" | "submit", timeoutMs: number) => Promise<UxFrameAnswer[]>;
 
 /** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
 const popupLabels = new WeakMap<HTMLElement, { close: string; message: string; dir: "ltr" | "rtl" }>();
@@ -180,7 +190,8 @@ const HEARTBEAT_MISSES = 3;
  */
 const closing = new Set<() => void>();
 
-interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dom: DomBridge; started: boolean; dispose(): void; close(): void }
+interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dom: DomBridge; started: boolean; dispose(): void; close(): void; /** S1a: lifecycle requests waiting for the frame's answer */ waiting: Map<number, (errors: UxFrameAnswer["errors"]) => void> }
+let lifecycleN = 0;
 
 function plainText(s: string) { return s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); }
 
@@ -396,7 +407,7 @@ export function UxLayer(p: UxLayerProps) {
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
       const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
       let beat: ReturnType<typeof setInterval> | null = null;
-      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
+      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, waiting: new Map(), dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
       let awaiting = 0, missed = 0, beatN = 0;
       const resolve = (spec: unknown): UxTarget | null => {
@@ -531,6 +542,14 @@ export function UxLayer(p: UxLayerProps) {
             if (id) post({ type: "reply", id, result: { ok: !!result.ok, ...(result.reason ? { reason: result.reason } : {}) } });
             break;
           }
+          case "lifecycleDone": {
+            const f = host.waiting.get(Number(a[0]));
+            if (!f) break;
+            host.waiting.delete(Number(a[0]));
+            const list = Array.isArray(a[1]) ? (a[1] as unknown[]).slice(0, 20) : [];
+            f(list.map((e) => { const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>; return { message: str(o.message).slice(0, 500), ref: o.ref == null ? null : str(o.ref).slice(0, 200) }; }));
+            break;
+          }
           case "log": report(`${a.map(str).join(" ")}`); break;
           case "ops": dom.apply(a[0]); break;
           case "want": dom.want(str(a[0])); break;
@@ -561,6 +580,21 @@ export function UxLayer(p: UxLayerProps) {
     // leaving the page: what was already handed to a script is handled, then everything it changed is put back
     return () => { for (const h of hosts) h.close(); scripts.current = []; };
   }, [p.pageKey, uxSig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* S1a: the lifecycle on Next — ask the frames of this page that listen for validate / submit, each bounded */
+  React.useEffect(() => {
+    const ref = p.lifecycleRef;
+    if (!ref) return;
+    ref.current = (ev, timeoutMs) => Promise.all(scripts.current
+      .filter((s) => s.started && s.listens.some((l) => l.ev === ev))
+      .map((s) => new Promise<UxFrameAnswer>((resolve) => {
+        const id = ++lifecycleN;
+        const timer = setTimeout(() => { s.waiting.delete(id); resolve({ script: s.behavior.label, timedOut: true }); }, timeoutMs);
+        s.waiting.set(id, (errors) => { clearTimeout(timer); resolve({ script: s.behavior.label, errors: errors ?? [] }); });
+        s.frame.contentWindow?.postMessage({ __rsux: 1, type: "lifecycle", ev, id }, "*");
+      })));
+    return () => { if (ref.current) ref.current = null; };
+  });
 
   /* the page-complete event for scripts */
   const complete = p.shown.length > 0 && p.shown.every((id) => { const q = def.questions.find((x) => x.id === id); return !q || q.type === "html" || q.type === "calculated" || q.settings?.hidden || uxAnswered(p.values[id]); });
