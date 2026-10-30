@@ -133,7 +133,8 @@ await page.waitForTimeout(300);
 assert.equal((await readDef()).questions[1].customCss, "/* marker-xyz */", "typed value saved");
 await toggle("ux"); // collapse
 await toggle("ux"); // reopen
-const restored = await page.inputValue('[data-testid="psec-body-ux"] [data-testid="custom-css"]');
+// S3a: the field is the code editor (its content element reads like the textarea: .value)
+const restored = await page.$eval('[data-testid="psec-body-ux"] [data-testid="custom-css"]', (e) => e.value);
 assert.equal(restored, "/* marker-xyz */", "the typed value is still there after a round trip through collapsed");
 console.log("✔ a value typed into a section survives that section being collapsed and reopened");
 

@@ -7,6 +7,8 @@ import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { ScriptHealthChip } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
+import { CodeEditor } from "./code/CodeEditor";
+import { scopedCssGate } from "@/lib/code/diagnostics.ts";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -165,15 +167,17 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
         <button type="button" className="btn sm ghost" onClick={onRemove} disabled={readOnly} title={isNew ? "Discard" : "Remove"} data-testid="ux-item-remove">{isNew ? "Discard" : "Remove"}</button>
       </div>
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
-      {kind === "behavior" && (item as UxBehavior).script && !isNew ? <div style={{ margin: "2px 0 4px" }}><ScriptHealthChip scriptId={item.id} /></div> : null}
-      {kind === "style" && <StyleFields style={cur as UxStyle} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+      {kind === "style" && <StyleFields style={cur as UxStyle} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
       {(kind === "style" || kind === "animation") && (
         /* a style or animation can be conditional too — it applies only while the condition holds */
         <BehaviorGuard b={cur as unknown as UxBehavior} readOnly={readOnly}
           onChange={(n) => commit(n as never, true)} />
       )}
-      {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+      {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)}
+        /* the gate the save uses (validateUxItem), run while typing: its findings are the editor's markers */
+        gate={(code) => validateUxItem(def, "behavior", { ...(cur as UxBehavior), script: code })}
+        header={(item as UxBehavior).script && !isNew ? <ScriptHealthChip scriptId={item.id} /> : null} />}
       {errors.length > 0 && <ul className="ux-errors" role="alert" data-testid="ux-item-errors">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       {warnings.length > 0 && <ul className="ux-warnings" data-testid="ux-item-warnings">{warnings.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       <div className="ux-item-foot">
@@ -185,7 +189,7 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
   );
 }
 
-function StyleFields({ style, readOnly, onChange, onBlur }: { style: UxStyle; readOnly: boolean; onChange(n: UxStyle, now?: boolean): void; onBlur(): void }) {
+function StyleFields({ style, def, readOnly, onChange, onBlur }: { style: UxStyle; def: SurveyDefinition; readOnly: boolean; onChange(n: UxStyle, now?: boolean): void; onBlur(): void }) {
   const setRule = (i: number, r: UxRule, now = false) => onChange({ ...style, rules: style.rules.map((x, k) => (k === i ? r : x)) }, now);
   return (
     <div className="ux-fields">
@@ -206,9 +210,10 @@ function StyleFields({ style, readOnly, onChange, onBlur }: { style: UxStyle; re
         </div>
       ))}
       {!readOnly && <button type="button" className="btn sm ghost" onClick={() => onChange({ ...style, rules: [...style.rules, { declarations: {} }] })} data-testid="ux-add-rule">+ Rule</button>}
-      <label className="f"><span>Scoped CSS (selectors relative to the target; &amp; is the target)</span>
-        <textarea className="ta code" style={{ minHeight: 50 }} value={style.css ?? ""} disabled={readOnly} placeholder="& { … }"
-          onChange={(e) => onChange({ ...style, css: e.target.value || undefined })} onBlur={onBlur} data-testid="ux-style-css" /></label>
+      <div className="f"><span>Scoped CSS (selectors relative to the target; &amp; is the target)</span>
+        <CodeEditor language="css" kind="css" value={style.css ?? ""} readOnly={readOnly} placeholder="& { … }" minHeight={50}
+          label="Scoped CSS" testId="ux-style-css" gate={scopedCssGate(def, style)}
+          onChange={(v) => onChange({ ...style, css: v || undefined })} onCommit={onBlur} /></div>
     </div>
   );
 }
@@ -239,7 +244,10 @@ function AnimationFields({ a, readOnly, onChange }: { a: UxAnimation; readOnly: 
     </div>
   );
 }
-function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void; onBlur(): void }) {
+function BehaviorFields({ b, def, readOnly, onChange, onBlur, gate, header }: {
+  b: UxBehavior; def: SurveyDefinition; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void; onBlur(): void;
+  gate(code: string): { errors: string[]; warnings: string[] }; header?: React.ReactNode;
+}) {
   const [effects, setEffects] = React.useState(JSON.stringify(b.effects, null, 1));
   const [err, setErr] = React.useState<string | undefined>();
   React.useEffect(() => { setEffects(JSON.stringify(b.effects, null, 1)); }, [b.effects]);
@@ -249,9 +257,10 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
         {b.source && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 4px" }} data-testid="ux-script-moved">
           Moved here from {b.source === "branding_custom_js" ? "Branding → custom JavaScript" : b.source === "question_custom_js" ? "this question’s Custom code" : "Intelligent mode’s custom code"} — your code is inside, unchanged. It now runs in the same sandbox as every other script.
         </p>}
-        <label className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
-          <textarea className="ta code" style={{ minHeight: 110 }} value={b.script} disabled={readOnly} spellCheck={false}
-            onChange={(e) => onChange({ ...b, script: e.target.value })} onBlur={onBlur} data-testid="ux-script" /></label>
+        <div className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
+          <CodeEditor language="js" kind="ux" def={def} value={b.script} readOnly={readOnly} minHeight={110} label={`Script “${b.label}”`}
+            testId="ux-script" gate={gate} header={header} showRefs
+            onChange={(v) => onChange({ ...b, script: v })} onCommit={onBlur} /></div>
         <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />
       </div>
     );

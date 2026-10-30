@@ -113,7 +113,10 @@ export function CodeEditor(p: CodeEditorProps) {
 
   return (
     <div ref={wrap} className={`code-editor${full ? " full" : ""}`} data-code-editor={p.testId ?? ""} data-editor={state} data-kind={kind}
-      onBlur={onBlur} role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? p.label : undefined}>
+      onBlur={onBlur}
+      /* Esc anywhere in a full-screen editor (its toolbar too) leaves full screen; inside the editor CodeMirror handles it first */
+      onKeyDown={(e) => { if (e.key === "Escape" && full && !e.defaultPrevented) { e.preventDefault(); setFull(false); } }}
+      role={full ? "dialog" : undefined} aria-modal={full || undefined} aria-label={full ? p.label : undefined}>
       {(refs || p.header) && (
         <div className="code-editor-head">
           {p.header}
