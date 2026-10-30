@@ -66,9 +66,11 @@ position: "top" | "side" (default top) }`. Optional and additive: absent = off, 
   is replayed when it opens, never dropped.
 - Free mode: Next on the last page runs `submitGate`: the panel (`role="alertdialog"`, focused) lists the missing
   questions per section, each a button that goes there; an assessment gets "Review answers" / "Submit anyway".
-- Save / resume: the Back trail and the seen pages live in `state.meta` (never posted, never exported). They are kept
-  in this browser beside the resume pointer (`writeNavTrail` / `readNavTrail`: localStorage per session id for live /
-  test, sessionStorage per preview) and restored after `resumeAt`; cleared on completion.
+- Save / resume: the Back trail and the seen pages live in `state.meta` (never an answer, never exported). Since the
+  follow-up of 2026-10-30 (below) they are stored in the response row, `responses.nav` (migration 0077), with every
+  save of a survey that has a navigator; a copy is also kept in this browser (`writeNavTrail` / `readNavTrail`:
+  localStorage per session id for live / test, sessionStorage per preview). Both are restored after `resumeAt`;
+  the browser copy is cleared on completion.
 - Preview, test and live run the same Runner.
 
 **Scripts** (`packages/renderer/src/uxSandbox.ts`, `UxLayer.tsx`) — `rs.goToPage(pageIdOrCode)` and
@@ -90,6 +92,41 @@ prompt (at its cap) is untouched.
 **Docs** — `content/docs/logic.md` (§ Section navigation), `custom-code.md` (navigation from a script, with an
 example), `survey-definition.md` (`navigation`), regenerated `actions-reference.md` / `capabilities.md`.
 
+### Follow-up (2026-10-30): the trail in the response row — migration 0077
+
+The owner's decision: the Back trail and the visited list live in the database, so a respondent who resumes on
+another device keeps them.
+
+- **Migration** `supabase/migrations/0077_response_navigation.sql`: nullable `responses.nav jsonb` —
+  `{ v: 1, stack: [page ids, the Back trail, oldest first], visited: [pages seen], at?: current page id }`. A shape
+  check (`responses_nav_shape`, CASE-guarded): an object, `v = 1`, each list ≤ 2,000 ids, `at` ≤ 128 characters,
+  and a 1 MB byte backstop (a realistic 1,000-page trail with loop-iteration ids is ~7 KB stored). No index (nothing
+  queries by it). RLS unchanged: `responses` policies are row-level (0001 `responses_tenant_read`; no write policies,
+  only the service role writes), so the column is read by exactly whoever reads the row. Re-runnable; undo in the file.
+- **Engine** (`sectionNav.ts`): `navTrailOf` (what the save posts), `sanitizeNavTrail` (shape, bounds, every id a page
+  of THIS definition — a loop iteration `p@x` by its page `p` — unknown ids dropped and counted, never refused),
+  `restoreNavTrail`, `chooseNavTrail` (the merge rule below).
+- **Write** (`/api/session/save`): the posted `nav` is sanitized against the definition the session runs and stored in
+  `update.nav`. It is never used to move the respondent — the replay (`checkSubmission`) still decides what is valid,
+  and resume positions by `step_index` as before. Before 0077 is applied, the update that names the missing column is
+  retried without `nav` (logged once): the answers are always saved.
+- **Read** (`/api/session/start` resume): returns `saved.nav` and `saved.savedAt` (`last_saved_at`). Before 0077 the
+  select is retried without `nav` (logged once). `mergeResumeSnapshot` carries both past a pending local snapshot.
+- **The merge rule** (Runner, `chooseNavTrail`): both copies are sanitized against the current definition (pages a
+  new version deleted are dropped). The row's trail wins when this browser has none (another device) or when the row
+  was saved at or after the browser copy; a browser copy written later (a save that never reached the server) wins;
+  a row without a save time loses to a browser copy. The chosen trail is restored, so Back, visited jumps and the
+  navigator behave on a second device as on the first. Test / preview log which copy was used.
+- **Sandbox** (a runtime with no database): `lib/sessionSandbox.ts` keeps test surveys and response rows (with `nav`)
+  in memory; `/api/session/sandbox` (`launch` → `/n/<token>`, `row` → the stored position and trail) and the
+  `/n/<token>` test link run the real start / save / resume path, so the browser suite can resume on another device.
+  403 / 404 wherever a database is configured.
+- **Exports**: unchanged. There is no paradata section in the response export, and every read of `responses` names
+  its columns, so `nav` reaches no export.
+- **Deploy order**: `0074_intelligent_tasks.sql` → `0076_assessments.sql` → `0077_response_navigation.sql` (0075 is
+  already applied in production). The code works before 0077 (the browser copy is the fallback); apply it before
+  relying on cross-device resume.
+
 ## Where to find it
 
 - Studio: open a survey → **Branding & Theme** → **Navigation**. Give each section its own block (the navigator lists
@@ -99,22 +136,32 @@ example), `survey-definition.md` (`navigation`), regenerated `actions-reference.
 - Intelligent Mode: "add a section navigator", "let respondents jump between sections" → `set_navigation`.
 - Scripts: `rs.goToSection("Geography")` / `rs.goToPage("Q12")`.
 - Server: `/api/session/save` with `RUNTIME_SERVER_VALIDATION` = `log` (default) / `enforce` / `off` — unchanged
-  semantics; free-mode skips are logged as soft `skipped_required`.
+  semantics; free-mode skips are logged as soft `skipped_required`. The trail: `responses.nav` (0077); a malformed or
+  stale trail is logged as `[rescript:save] navigation trail` with the number of ids dropped.
+- Sandbox test link (no database): `POST /api/session/sandbox {action:"launch", definition}` → `/n/<token>`; a resume
+  link is `/n/<token>?r=<session id>`.
 
 ## Verification
 
 Units
-- engine: `cd packages/engine && pnpm -s build && node --test dist/*.test.js` → 2409 / 2409 pass (14 new in
+- engine: `cd packages/engine && pnpm -s build && node --test dist/*.test.js` → 2414 / 2414 after the 0077 follow-up
+  (5 new in `navTrail.test.ts`: the posted trail, sanitize — foreign / stale / oversized ids, restore on another
+  device with the same navigator and Back, the merge rule server vs browser, a version change); before it 2409 (14 new in
   `sectionNav.test.ts`: off / back-disabled, visited backward + Back, visited forward refused / walked, visited forward
   over an incomplete page, free jump + Submit gate per section, outline states, hidden / not found / question-code
   target, never past end / quota / firing skip, loop iterations, assessment confirm, server replay accept / refuse,
   the script gate, `set_navigation`; 1 new in `capabilities.test.ts`; the script-corpus fixture follows the longer
   rs api list)
 - schema: `cd packages/schema && pnpm -s build && node --test dist/*.test.js` → 18 / 18 (4 new, `navigation.test.ts`)
-- runtime lib: `cd apps/runtime && node --experimental-strip-types --no-warnings --test 'lib/*.test.ts'` → 37 / 37
-  (1 new: the nav trail)
+- runtime lib: `cd apps/runtime && node --experimental-strip-types --no-warnings --test 'lib/*.test.ts'` → 38 / 38
+  (the browser trail; `mergeResumeSnapshot` keeps the row's `nav`)
 - studio lib: `cd apps/studio && node --experimental-strip-types --no-warnings --test 'lib/**/*.test.ts'` →
   1046 / 1046 (1 new: `sectionNavGuide.test.ts`; `copilot.test.ts` confirms `set_navigation` is documented)
+
+SQL (0077): `scripts/response-navigation-sql-test.sql` on a scratch Postgres 16 (a fresh copy of the 0070 cluster,
+own port, `-k /tmp`): 0071 → 0077 applied, then 0077 again, then the test twice → 4 / 4 ok both times (the column and
+the check exist once; old rows stay null; a trail round-trips, a 1,000-page trail fits; 2,001-id lists, non-objects,
+wrong / missing version, non-array lists and a numeric `at` are refused). The server was stopped afterwards.
 
 Checks: `tsc --noEmit` studio / runtime / renderer → 0 errors; `node scripts/gen-public-docs.mjs --check` → current;
 `node scripts/dependency-boundaries.mjs` → 0 violations; `node scripts/auth-guard-audit.mjs` → 0 problems.
@@ -127,6 +174,12 @@ Browser (`flock -o /tmp/p0/heavy.lock /tmp/p0/fresh.sh <suite>`, fake provider)
   `rs.goToSection` refused with the reason in the console then accepted, F Arabic RTL.
   The suite found two bugs, fixed in the same commit: a section click or "Submit anyway" inside Next's minimum latch
   was dropped silently; the side rail sat under the preview toolbar.
+- After the 0077 follow-up: `section-nav-test.mjs` → 19 / 19 ok (102 s), §G new: on a sandbox test link, Next then a
+  free jump to section 3; the row holds `{v:1, stack:[ph1,ph2], visited:[ph1,ph2], at:pp1}`; the resume link in a
+  fresh browser context (empty storage) lands on p1, the navigator states equal device A's, Back goes to h2 (the
+  respondent's path), not g1 (the flow). Regressions: `engine-15-19-test.mjs` run 1 died when the Studio dev server
+  was OOM-killed (26 ok, #18 document request — an OOM death), run 2 ok (35 checks, 426 s); `qa-fixes-test.mjs` runs 1
+  and 2 died to Studio OOM kills (after 12 and 15 ok), run 3 ok (18 checks, 77 s).
 - Regressions (same harness, after the navigator was in): `master-demo-test.mjs` ok (15 checks, 60 s);
   `qa-fixes-test.mjs` run 1 died when the Studio dev server was OOM-killed by the memory cgroup after 12 ok
   (`ERR_CONNECTION_RESET` on /sandbox — an OOM death, not a pass), run 2 ok (18 checks, 56 s); `assessment-test.mjs` ok
@@ -134,9 +187,14 @@ Browser (`flock -o /tmp/p0/heavy.lock /tmp/p0/fresh.sh <suite>`, fake provider)
 
 ## Honest limits
 
-- The Back trail and the visited list are kept in the respondent's browser, not in the response row (no migration).
-  Resuming on another device: "visited" is derived from the answers and the position (pages before the current one,
-  pages with an answer), and Back falls back to compiled order.
+- The trail is stored only for surveys with a navigator (`sectionNav` ≠ off); other surveys keep Back's old resume
+  behaviour (compiled order after a resume on another device).
+- Until 0077 is applied, the row has no trail: another device derives "visited" from the answers and the position, and
+  Back falls back to compiled order. `at` (the current page) is stored but not used to position a resume.
+- "Visited" also counts every page before the current one in the flow (the engine's rule), so a section the respondent
+  jumped over and that lies BEHIND them shows as visited on both devices.
+- The cross-device path was tested in the browser against the runtime's in-memory sandbox store and in SQL against
+  Postgres 16 — not end to end against a Supabase deployment.
 - A free jump does not run the skipped pages' arrival work (prefill, default values) until they are shown; the Submit
   gate validates them with whatever they hold then.
 - Free mode refuses to pass a quota check at all (even one that would not fire) — use Next through a quota.
