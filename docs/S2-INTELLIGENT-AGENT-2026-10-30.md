@@ -288,7 +288,7 @@ OOM deaths recorded (dmesg, memory cgroup): Studio `next-server` killed at uptim
 
 # S2c — part C: the Execution and Verification layer (2026-10-30)
 
-Commits on `feat/persistent-execution-engine` after `1c9c1fa`: item 1 `2909ef1`, item 2, item 3, item 4, item 5, item 6 (this doc) — see `git log`.
+Commits on `feat/persistent-execution-engine` after `1c9c1fa`: item 1 `2909ef1` (harness; it also landed the engine module the items 2–3 tests cover), item 2 `ccfa14b` (scenario tests), item 3 `d1f95ee` (verdict / payload tests), item 4 `1e91548` (the turn), item 5 `e38373c` + `e965f6c` (browser suite, DOM-event driver), item 6 (this doc, the seam fix for `stageCap.test`).
 
 The owner's requirement: "Execution and Verification Engine: writes code, executes it safely, checks actual survey behaviour, and verifies that responses are saved correctly." A proposal that contains code is no longer presented as ready until it has run.
 
@@ -339,7 +339,28 @@ The owner's requirement: "Execution and Verification Engine: writes code, execut
 - **One automatic repair** per proposal (the hook counts); a model's own repair quality was not measured (fake provider only).
 
 ## Verification (S2c)
-VERIFICATION_TABLE
+| What | Command | Result |
+|---|---|---|
+| Engine units | `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | **2520/2520** (new: `scriptVerify.test` 6 — scenario builder; `scriptVerdict.test` 5 — verdicts, expect, save payload) |
+| Studio lib | `cd apps/studio && node --experimental-strip-types --no-warnings --test 'lib/**/*.test.ts'` | **1083/1083** (new: `verifyRepair.test` 2). First run 1082/1083: `stageCap.test` checks the route's source order and my fake-provider seam had put a `describeFailure("unusable")` before the checkpoint path — the seam no longer builds the failure itself |
+| Runtime lib | `cd apps/runtime && node --experimental-strip-types --no-warnings --test 'lib/*.test.ts'` | **57/57** |
+| Renderer units | `cd packages/renderer && node --experimental-strip-types --test test/*.test.ts` | **8/8** (the microtask guard the endless-promise case relies on) |
+| Schema units | `cd packages/schema && node --test dist/*.test.js` | 18/18 (schema unchanged) |
+| Typecheck | `npx tsc --noEmit -p .` in apps/studio, apps/runtime, packages/renderer | **0 / 0 / 0** errors |
+| Public docs | `node scripts/gen-public-docs.mjs --check` | current (intelligent-mode.md: the test session; actions-reference regenerated) |
+| Boundaries | `node scripts/dependency-boundaries.mjs` | 0 violations (the save-payload builder is in the engine: the Studio never imports the runtime app) |
+| Auth guard | `node scripts/auth-guard-audit.mjs` | 259 handlers, 0 problems |
+| Browser `im-verify-test.mjs` (new) | `fresh.sh --no-runtime im-verify-test.mjs` | runs 1–3 FAIL (the card's “Apply anyway” was disabled; #7's live total ran out of the 5 s budget and was reported as `timeout` — now unplayed scenarios are said, not blamed; a test bug reading the JSON tab) → run 4 **8/8**, run 5 (after the DOM-event driver) **8/8** |
+| Browser `age-script-p0-test.mjs` | `fresh.sh` | **10/10** twice (assertion updated: the verdict `ran-ok` and “checked and run in a test session” instead of “not run yet”) |
+| Browser `style-script-p0-test.mjs` | `fresh.sh` | run 1 FAIL: the `rs.popup` correction listens to the box's DOM `input` event and the harness set answers through React only → `ran-no-effect` → an unscripted repair → Apply waited. Fixed in the harness (answers are clicked / typed); run 2 **11/11** |
+| Browser `logic-scripts-sandbox-test.mjs` | `fresh.sh` | **10/10** |
+| Browser `im-media-test.mjs` | `fresh.sh` | **4/4** |
+| Browser `ux-copilot-test.mjs` | `UX_COPILOT_HALF=runtime fresh.sh …`, then `UX_COPILOT_HALF=studio fresh.sh --no-runtime …` | runtime half **7/7**, studio half **6/6** |
+| Browser `copilot-test.mjs` | `fresh.sh --no-runtime` | **FAIL** twice after 4 ok, at “AI Change #002 … undone” (the History shows “AI Change (not numbered)”). **The same failure on the base commit `1c9c1fa`** (checked out, engine rebuilt, same command): pre-existing in this environment, not caused by S2c (that part of the suite proposes no code, so the test session never runs). S2b recorded 11/11 there. Not investigated further |
+
+OOM deaths (dmesg, memory cgroup): the Studio `next-server` was killed twice during this work — at uptime 9,217 s (during the `im-verify-test` development runs; each failed run had the test or harness cause listed above) and at 9,680 s (during the `age-script-p0-test` run, which passed). The Studio's `--max-old-space-size` (3500) was not changed.
+
+**Not run:** `production-intents-test.mjs`, `methods-intelligent-test.mjs`, `variants-g5-test.mjs` and the other browser suites outside this item's list; Safari / Firefox / real phones; a real model (fake provider only); the database save paths (in-memory sandbox stores only).
 
 ## The owner's 10 steps and 3 layers after S2
 | Step | Audit (before S2) | After S2 (a + b + c) |
