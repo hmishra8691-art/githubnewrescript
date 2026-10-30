@@ -11,9 +11,6 @@ import {
   resolveAuthorHtml,
   codeGate,
   gateReason,
-  COMPONENT_PARAMS,
-  componentScriptBody,
-  loopCounter,
   evaluateExpression,
   flattenVariables,
   toggleMultiValue,
@@ -2746,42 +2743,21 @@ export function CompareImages(p: QRProps) {
 
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
-  const ref = React.useRef<HTMLDivElement>(null);
   /*
-   * THE CODE GATE (S0b D2). A component's JavaScript runs on the respondent's page itself, so it is read before
-   * it runs: `el` and `api` are its roots, no constructor / globals / network / storage, loops bounded. Code the
-   * gate refuses does not run — preview and test show the component's own notice with the reason, a live page
-   * says so in the console. S1 moves component code into the sandboxed frame; this is containment until then.
+   * S1b: THE COMPONENT'S CODE NO LONGER RUNS HERE. The host renders the sanitised `customHtml` (D5) into the real
+   * page, marked `data-rs-component`; the runtime's UX layer runs `customJs` in a sandboxed frame whose mirror is this
+   * element (`el`), with `api.setValue` a request through the engine's write channel (engine withComponentBehaviors).
+   * The code gate's component flavour is read here only for the programmer's notice: code it refuses does not run.
    */
   const gate = React.useMemo(() => (p.q.customJs ? codeGate(p.q.customJs, "component") : null), [p.q.customJs]);
-  const [failed, setFailed] = React.useState<string | null>(null);
+  const failed = gate && !gate.ok ? `refused by the script check — ${gateReason(gate)}` : null;
   React.useEffect(() => {
-    if (!ref.current || !p.q.customJs || !gate) return;
-    if (!gate.ok) {
-      const why = gateReason(gate);
-      console.warn(`[rescript:component] ${p.q.code}: refused, not run — ${why}`);
-      setFailed(`refused by the script check — ${why}`);
-      return;
-    }
-    try {
-      // controlled execution: the component script gets a tiny api
-      // eslint-disable-next-line no-new-func
-      const fn = new Function(...COMPONENT_PARAMS, componentScriptBody(gate.guarded));
-      fn(ref.current, {
-        getValue: () => p.value,
-        setValue: (v: unknown) => p.onChange(v),
-      }, loopCounter());
-      setFailed(null);
-    } catch (e) {
-      console.error("custom component error", e);
-      setFailed(e instanceof Error ? e.message : String(e));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.q.id]);
+    if (failed) console.warn(`[rescript:component] ${p.q.code}: refused, not run — ${failed}`);
+  }, [failed, p.q.code]);
   return (
     <>
       <div
-        ref={ref}
+        data-rs-component={p.q.id}
         dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(p.q.customHtml, ctxOf(p)) /* D5: sanitised like an option label */ }}
       />
       {failed && p.programmerView && (

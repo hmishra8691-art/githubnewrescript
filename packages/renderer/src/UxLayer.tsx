@@ -5,6 +5,7 @@ import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
   uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState, type ScriptWrite,
+  codeGate, gateReason, isComponentBehavior,
 } from "@rescript/engine";
 import { DomBridge, answerLockReason, HIDING_STYLE } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
@@ -394,9 +395,21 @@ export function UxLayer(p: UxLayerProps) {
        * frame — and a sandboxed frame may share the page's thread — so a
        * script that does not pass the gate never runs.
        */
-      const check = validateUxScript(b.script!, def);
-      if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn"); continue; }
-      for (const w of check.warnings) report(`note: ${w}`, "warn");
+      /*
+       * S1b: a CUSTOM COMPONENT's code (a runtime-only behaviour, engine withComponentBehaviors) is checked by the code
+       * gate's component flavour on the author's own code, and its mirror is the component's element only.
+       */
+      const component = isComponentBehavior(b) ? def.questions.find((q) => q.id === b.target.questionId) ?? null : null;
+      if (component) {
+        const g = codeGate(component.customJs ?? "", "component");
+        if (!g.ok) { report(`not run: ${gateReason(g)}`, "warn"); continue; }
+      } else {
+        const check = validateUxScript(b.script!, def);
+        if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn"); continue; }
+        for (const w of check.warnings) report(`note: ${w}`, "warn");
+      }
+      const mirrorRoot: HTMLElement | null = component ? root.querySelector<HTMLElement>(`[data-rs-component="${CSS.escape(component.id)}"]`) : root;
+      if (!mirrorRoot) { report("not run: the component is not on this page", "warn"); continue; }
       const frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts");
       frame.setAttribute("aria-hidden", "true");
@@ -405,7 +418,7 @@ export function UxLayer(p: UxLayerProps) {
       frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
       frame.srcdoc = SANDBOX_DOC;
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
-      const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
+      const dom = new DomBridge({ root: mirrorRoot, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
       let beat: ReturnType<typeof setInterval> | null = null;
       const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, waiting: new Map(), dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
