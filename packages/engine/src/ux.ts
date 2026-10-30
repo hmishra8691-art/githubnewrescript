@@ -681,7 +681,11 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /* ------------------------------------------------------------ scripts */
 
 /** what a sandboxed script can call — and nothing else */
-export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection"] as const;
+export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection",
+  /* S1a: the engine-checked write channel (requests the host decides — scriptWrites.ts) and the reads beside it; rs.error inside a "validate" handler */
+  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error"] as const;
+/** S1a: the rs calls that ask the host to write (each returns a promise of { ok, reason }) */
+export const UX_SCRIPT_WRITES = ["setAnswer", "setEmbedded", "setCalc", "flag"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
 /** names that are refused wherever they appear */
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
@@ -735,7 +739,13 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
   warnings.push(...selectorGuesses(code));
   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
   // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting
-  const FILLS = new Set(["setAnswer", "setValue", "setDefault", "fill", "prefill", "answer"]);
+  /*
+   * S1a: rs.setAnswer is now the SANCTIONED write — a request the host decides with the engine (scope, response
+   * model, size), applied on the respondent's own path. Writing the mirror (`.value =`, `.checked =`, a dispatched
+   * event) stays refused: it would change nothing, and it would look as if it did.
+   */
+  const FILLS = new Set(["setValue", "setDefault", "fill", "prefill", "answer"]);
+  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*(value|checked|selectedIndex|selected)\s*=(?!=)|\bdispatchEvent\b/.test(bare)) warnings.push("to write an answer from a script use rs.setAnswer(code, value) — the survey checks it like the respondent's own input; prefer a default value, a punch rule or a calculation when they can say it");
   if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*(value|checked|selectedIndex|selected)\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
   for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name) && !FILLS.has(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
   if (!usedApi.length && !/(^|[^\w$.])document(?![\w$])/.test(bare)) warnings.push("the script uses neither the rs api nor the document, so it cannot change anything");
@@ -757,7 +767,7 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
       const t = firstString(u.at);
       if (t != null && t !== "self") { const r = resolveUxTarget(def, t); if (typeof r === "string") errors.push(`rs.${u.name}("${t}"): ${r}`); }
     }
-    if (u.name === "getAnswer" || u.name === "getQuestion") {
+    if (u.name === "getAnswer" || u.name === "getQuestion" || u.name === "setAnswer") {
       const t = firstString(u.at);
       if (t != null && !defaultUxLookups(def).question(t)) errors.push(`rs.${u.name}("${t}"): there is no question “${t}”`);
     }

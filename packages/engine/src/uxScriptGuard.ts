@@ -225,6 +225,16 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
     const self = new RegExp(`(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*(?:${name}\\b|function\\s*\\([^)]*\\)\\s*\\{\\s*${name}\\s*\\(|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()|(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*\\d+\\s*,\\s*(?:${name}\\b|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()`);
     if (self.test(body)) errors.push(`${name}() waits for an element by calling itself on a timer — on a survey page the elements a script names already exist when it starts (one that is never found means its selector is wrong, and the timer would run for ever); for something that appears later use rs.listen or a MutationObserver`);
   }
+  // 4. (S1a) rs.setAnswer with a FIXED value: that is a default value (or a punch rule), which the survey applies itself —
+  //    rs.setAnswer is for a value the script computes (a timer, a count, something only code can know)
+  for (const m of bare.matchAll(/\brs\s*\.\s*setAnswer\s*\(/g)) {
+    const at = m.index! + m[0].length;
+    const ref = strings.find((x) => x.start >= at && /^\s*$/.test(bare.slice(at, x.start)));
+    if (!ref) continue;
+    const rest = bare.slice(ref.end);
+    const lit = /^\s*,\s*(-?\d+(?:\.\d+)?|true|false|null|(["'`])\s*\2|\[[\s\d,."'`-]*\])\s*(?:,[^)]*)?\)/.exec(rest);
+    if (lit) { errors.push(`scripts cannot fill in a fixed answer — rs.setAnswer("${ref.value}", …) with a constant is a starting answer: set its default value (set_default_value, or Properties → Default value), or a punch rule when it follows another answer. rs.setAnswer is for a value only the script can work out (a timer, a count, something it measured)`); break; }
+  }
   errors.push(...popupProblems(code));
   return [...new Set(errors)];
 }

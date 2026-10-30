@@ -782,10 +782,10 @@
    ],
    "code": "rs.listen(\"page\", \"self\", () => rs.setAnswer(\"Q2\", 19));",
    "verdict": {
-    "runtime": [
-     "scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)"
-    ],
-    "authoring": []
+    "runtime": [],
+    "authoring": [
+     "scripts cannot fill in a fixed answer — rs.setAnswer(\"Q2\", …) with a constant is a starting answer: set its default value (set_default_value, or Properties → Default value), or a punch rule when it follows another answer. rs.setAnswer is for a value only the script can work out (a timer, a count, something it measured)"
+    ]
    }
   },
   {
@@ -1017,7 +1017,7 @@
    "verdict": {
     "runtime": [
      "code built from strings (eval / Function / dynamic import) — survey code may not send anything off the page (respondent data stays in the survey)",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -1468,8 +1468,8 @@
    "verdict": {
     "runtime": [
      "code built from strings (eval / Function / dynamic import) — survey code may not send anything off the page (respondent data stays in the survey)",
-     "rs.length is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.length is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)",
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -1912,10 +1912,10 @@
    ],
    "code": "rs.listen(\"page_enter\", \"self\", () => { if (rs.getAnswer(\"Q2\") == null) rs.setAnswer(\"Q2\", 19); });",
    "verdict": {
-    "runtime": [
-     "scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)"
-    ],
-    "authoring": []
+    "runtime": [],
+    "authoring": [
+     "scripts cannot fill in a fixed answer — rs.setAnswer(\"Q2\", …) with a constant is a starting answer: set its default value (set_default_value, or Properties → Default value), or a punch rule when it follows another answer. rs.setAnswer is for a value only the script can work out (a timer, a count, something it measured)"
+    ]
    }
   },
   {
@@ -2142,7 +2142,7 @@
     "runtime": [
      "fetch is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "cookie is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -2789,7 +2789,7 @@
     "runtime": [
      "a for loop needs braces around its body — write for (…) { … }",
      "code built from strings (eval / Function / dynamic import) — survey code may not send anything off the page (respondent data stays in the survey)",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -2868,7 +2868,7 @@
      "scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)",
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "prototype is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -2995,7 +2995,7 @@
    "verdict": {
     "runtime": [
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -3287,7 +3287,7 @@
      "scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)",
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "prototype is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -3513,7 +3513,7 @@
     "runtime": [
      "a for loop needs braces around its body — write for (…) { … }",
      "code built from strings (eval / Function / dynamic import) — survey code may not send anything off the page (respondent data stays in the survey)",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -3951,7 +3951,7 @@
    "verdict": {
     "runtime": [
      "fetch is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.length is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.length is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -4191,7 +4191,7 @@
    "verdict": {
     "runtime": [
      "code built from strings (eval / Function / dynamic import) — survey code may not send anything off the page (respondent data stays in the survey)",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -4889,7 +4889,7 @@
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "cookie is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "postMessage is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)",
+     "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)",
      "rs.getAnswer(\"Q77\"): there is no question “Q77”",
      "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete"
     ],
@@ -5145,7 +5145,7 @@
    "verdict": {
     "runtime": [
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)"
+     "rs.map is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)"
     ],
     "authoring": []
    }
@@ -5613,7 +5613,7 @@
      "window is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "cookie is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
      "postMessage is not available to survey scripts — they run in a sandbox and can use the rs api and the survey's document",
-     "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection)",
+     "rs.explode is not part of the survey api (listen, getAnswer, getQuestion, getBlock, getPage, addClass, removeClass, toggleClass, animate, setStyle, clearStyle, show, hide, showMessage, hideMessage, scrollTo, focus, after, log, popup, closePopup, goToPage, goToSection, getEmbedded, getCalc, setAnswer, setEmbedded, setCalc, flag, error)",
      "rs.getAnswer(\"Q77\"): there is no question “Q77”",
      "rs.listen(\"tap\") — the events are answer, change, select, deselect, click, hover, page, complete"
     ],

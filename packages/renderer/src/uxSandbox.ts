@@ -98,13 +98,31 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
 (function () {
   var CFG = __CFG__;
   var host = window.parent;
-  var handlers = [], answers = {}, meta = { questions: {} };
+  var handlers = [], answers = {}, byKey = {}, vars = { embedded: {}, calculated: {} }, meta = { questions: {} };
+  /* S1a: requests the host answers (writes, validate/submit replies) — id -> resolve */
+  var pending = {}, reqN = 0;
+  var validating = null; /* the errors a "validate" handler raises with rs.error, while it runs */
   var loops = 0;
   var ready = false;
 __MICRO__
   function slice() { loops = 0; microReset(); }
   window.__g = function () { if (++loops > CFG.loopLimit) throw new Error("a loop ran more than " + CFG.loopLimit + " times in one go, so the script was stopped (is it endless?)"); };
-  function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
+  function send(cmd, args, id) { host.postMessage(id ? { __rsux: 1, cmd: cmd, args: args, id: id } : { __rsux: 1, cmd: cmd, args: args }, "*"); }
+  /*
+   * S1a — A WRITE IS A REQUEST. The frame never changes the response: it asks, and the host decides with the
+   * engine (applyScriptWrite) exactly as it does for rs.goToPage. The promise resolves to { ok, reason } — it never
+   * rejects, and a host that does not answer within 5 s resolves it as refused.
+   */
+  function ask(cmd, args) {
+    var id = ++reqN;
+    return new Promise(function (resolve) {
+      pending[id] = resolve;
+      send(cmd, args, id);
+      nativeTimeoutEarly(function () { if (pending[id]) { delete pending[id]; resolve({ ok: false, reason: "the survey did not answer" }); } }, 5000);
+    });
+  }
+  var nativeTimeoutEarly = window.setTimeout.bind(window);
+  function plain(v) { try { return v === undefined ? null : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } }
   function fail(e) { send("error", [String(e && e.message || e)]); }
   var told = {};
   function note(key, text) { if (told[key]) return; told[key] = 1; send("log", [text]); }
@@ -113,7 +131,17 @@ __MICRO__
   /* ---------------------------------------------------------------- rs api */
   var rs = {
     listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } ev = CFG.aliases[ev] || ev; handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
-    getAnswer: function (code) { return answers[code]; },
+    /* loop-aware: the answer as seen from the page's iteration; loopKey ("apple", "apple@pro") reads another one */
+    getAnswer: function (code, loopKey) { if (loopKey != null && loopKey !== "") return byKey[String(code) + "@" + String(loopKey).replace(/^@/, "")]; return answers[code]; },
+    getEmbedded: function (name) { var v = vars.embedded[name]; return v === undefined ? null : v; },
+    getCalc: function (name) { var v = vars.calculated[name]; return v === undefined ? null : v; },
+    /* S1a: writes are requests — see ask() */
+    setAnswer: function (ref, value, loopKey) { return ask("setAnswer", [ref == null ? "" : String(ref), plain(value), loopKey == null ? null : String(loopKey)]); },
+    setEmbedded: function (name, value) { return ask("setEmbedded", [name == null ? "" : String(name), plain(value)]); },
+    setCalc: function (name, value) { return ask("setCalc", [name == null ? "" : String(name), plain(value)]); },
+    flag: function (name) { return ask("flag", [name == null ? "" : String(name)]); },
+    /* inside a "validate" handler: stop Next with this message (on the question named, else as a page message) */
+    error: function (message, ref) { if (!validating) { note("error-outside", "rs.error only counts inside a rs.listen(\"validate\", …) handler"); return; } validating.push({ message: String(message == null ? "" : message).slice(0, 500), ref: ref == null ? null : String(ref) }); },
     getQuestion: function (code) { return meta.questions[code] || null; },
     getBlock: function () { return meta.block || null; },
     getPage: function () { return meta.page || null; },
@@ -382,7 +410,7 @@ __MICRO__
     if (e.source !== host) return;
     var m = e.data; if (!m || m.__rsux !== 1) return;
     if (m.type === "init") {
-      answers = m.answers || {}; meta = m.meta || meta;
+      answers = m.answers || {}; byKey = m.byKey || {}; vars = m.vars || vars; meta = m.meta || meta;
       applyTree(m.tree);
       observer = new MutationObserver(onMutations);
       observer.observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
@@ -391,7 +419,8 @@ __MICRO__
       try { (new Function("rs", m.code))(Object.freeze(rs)); } catch (err) { fail(err); }
     }
     else if (m.type === "sync") { if (ready) applyTree(m.tree); }
-    else if (m.type === "answers") { answers = m.answers || {}; }
+    else if (m.type === "answers") { answers = m.answers || {}; byKey = m.byKey || byKey; vars = m.vars || vars; }
+    else if (m.type === "reply") { var f = pending[m.id]; if (f) { delete pending[m.id]; f(m.result || { ok: false }); } }
     else if (m.type === "ping") { send("pong", [m.n]); }   /* D8: the host's heartbeat — a frame that cannot answer is stopped */
     else if (m.type === "dom") { if (ready) deliver(m); }
     else if (m.type === "event") { handlers.forEach(function (h) { if (h.ev === m.ev && (h.target === m.target || (h.target === "self" && m.self))) { slice(); try { h.fn(m.payload); } catch (err) { fail(err); } } }); }

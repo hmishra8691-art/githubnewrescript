@@ -4,7 +4,7 @@ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
-  uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState,
+  uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState, type ScriptWrite,
 } from "@rescript/engine";
 import { DomBridge, answerLockReason, HIDING_STYLE } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
@@ -64,6 +64,13 @@ export interface UxLayerProps {
    * script's navigation is reported as unavailable, never silently dropped.
    */
   onNavigate?: (target: string, as: "page" | "section") => { ok: boolean; reason?: string };
+  /**
+   * S1a — THE WRITE CHANNEL: `rs.setAnswer` / `rs.setEmbedded` / `rs.setCalc` / `rs.flag` arrive here as
+   * REQUESTS and the host decides with the engine (`applyScriptWrite`), like `onNavigate`. The answer goes back to
+   * the frame as the promise's `{ ok, reason }`; a refusal is logged to the script's console with the reason.
+   * Absent (the Studio canvas), every write is refused as unavailable — never silently dropped.
+   */
+  onScriptWrite?: (write: ScriptWrite, script: { id: string; label: string; target: UxTarget }) => { ok: boolean; reason?: string };
 }
 
 /** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
@@ -194,6 +201,8 @@ export function UxLayer(p: UxLayerProps) {
   log.current = p.onLog;
   const navigate = React.useRef(p.onNavigate);
   navigate.current = p.onNavigate;
+  const writeRef = React.useRef(p.onScriptWrite);
+  writeRef.current = p.onScriptWrite;
   const behaviors = def.ux?.behaviors ?? [];
   const animations = def.ux?.animations ?? [];
 
@@ -230,6 +239,23 @@ export function UxLayer(p: UxLayerProps) {
     for (const [id, v] of Object.entries(all)) { const c = byCode.get(id); if (c) out[c] = v; }
     return out;
   }, [p.allValues, p.values, byCode]);
+  /*
+   * S1a: what a script reads besides the page's answers — every LOOP iteration's answer by `CODE@item` (for
+   * `rs.getAnswer(code, loopKey)`), and the embedded data and calculated variables (`rs.getEmbedded`, `rs.getCalc`).
+   */
+  const readsFor = (): { byKey: Record<string, unknown>; vars: { embedded: Record<string, unknown>; calculated: Record<string, unknown> } } => {
+    const st = p.state;
+    const byKey: Record<string, unknown> = {};
+    if (st) for (const [k, v] of Object.entries(st.answers)) {
+      const at = k.indexOf("@");
+      if (at < 0 || k.includes("__")) continue;
+      const c = byCode.get(k.slice(0, at));
+      if (c) byKey[`${c}${k.slice(at)}`] = v;
+    }
+    return { byKey, vars: { embedded: { ...(st?.embedded ?? {}) }, calculated: { ...(st?.calculated ?? {}) } } };
+  };
+  const readsRef = React.useRef(readsFor);
+  readsRef.current = readsFor;
 
   /* every render: answered marks, triggers */
   React.useEffect(() => {
@@ -274,7 +300,7 @@ export function UxLayer(p: UxLayerProps) {
     // scripts hear about answers
     const prev = prevValues.current;
     for (const s of scripts.current) {
-      s.frame.contentWindow?.postMessage({ __rsux: 1, type: "answers", answers: answersByCode() }, "*");
+      s.frame.contentWindow?.postMessage({ __rsux: 1, type: "answers", answers: answersByCode(), ...readsFor() }, "*");
       if (!prev) continue;
       // a script behaviour hears events only while its `when` holds
       if (!uxGuardHolds(def, s.behavior, p.state ?? stateFromValues(), p.values)) continue;
@@ -382,7 +408,7 @@ export function UxLayer(p: UxLayerProps) {
       const effect = (e: UxEffect, t: UxTarget | null) => { if (t) host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id)); };
       function onMessage(ev: MessageEvent) {
         if (ev.source !== frame.contentWindow) return;
-        const m = ev.data as { __rsux?: number; cmd?: string; args?: unknown[] };
+        const m = ev.data as { __rsux?: number; cmd?: string; args?: unknown[]; id?: number };
         if (!m || m.__rsux !== 1 || typeof m.cmd !== "string") return;
         const now = Date.now();
         if (now - windowStart > 1000) { windowStart = now; count = 0; }
@@ -419,7 +445,7 @@ export function UxLayer(p: UxLayerProps) {
             const tree = dom.tree();
             dom.primed(tree);
             // loops are bounded, not banned: every loop body counts its iterations (see guardScriptLoops)
-            post({ type: "init", code: guardScriptLoops(b.script!).code, tree, answers: answersByCode(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } });
+            post({ type: "init", code: guardScriptLoops(b.script!).code, tree, answers: answersByCode(), ...readsRef.current(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } });
             dom.watch((t) => post({ type: "sync", tree: t }));
             frame.contentWindow?.postMessage({ __rsux: 1, type: "event", ev: "page", target: "self", self: true, payload: {} }, "*");
             break;
@@ -482,6 +508,27 @@ export function UxLayer(p: UxLayerProps) {
               if (r.ok) report(`${fn}("${target}") — navigated`);
               else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn");
             }, 0);
+            break;
+          }
+          case "setAnswer":
+          case "setEmbedded":
+          case "setCalc":
+          case "flag": {
+            /* S1a: a write is a REQUEST — the host decides with the engine; the frame's promise gets { ok, reason } */
+            const id = typeof m.id === "number" ? m.id : 0;
+            const name = str(a[0]).trim().slice(0, 200);
+            const write: ScriptWrite = m.cmd === "setAnswer" ? { kind: "answer", ref: name, value: a[1] ?? null, loopKey: a[2] == null ? null : str(a[2]) }
+              : m.cmd === "setEmbedded" ? { kind: "embedded", name, value: a[1] ?? null }
+              : m.cmd === "setCalc" ? { kind: "calculated", name, value: a[1] ?? null }
+              : { kind: "flag", name };
+            const call = `rs.${m.cmd}("${name}")`;
+            const fn = writeRef.current;
+            let result: { ok: boolean; reason?: string };
+            try { result = fn ? fn(write, { id: b.id, label: b.label, target: b.target }) : { ok: false, reason: "writes are not available here" }; }
+            catch (e) { result = { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
+            if (result.ok) report(`${call} — written`);
+            else report(`${call} refused: ${result.reason ?? "not allowed"}`, "warn");
+            if (id) post({ type: "reply", id, result: { ok: !!result.ok, ...(result.reason ? { reason: result.reason } : {}) } });
             break;
           }
           case "log": report(`${a.map(str).join(" ")}`); break;

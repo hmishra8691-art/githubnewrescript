@@ -115,8 +115,14 @@ test("a proposal that only sets custom HTML is a change (Apply has something to 
 
 test("a script cannot fill in answers — the refusal says what to use; page_enter is the page event", () => {
   const d = survey();
+  /*
+   * S1a: rs.setAnswer is now the sanctioned, engine-checked write (the HOST decides each request), so the runtime
+   * gate lets it through; writing the mirror stays refused, and Intelligent Mode's authoring check still refuses a
+   * FIXED starting answer with the default-value advice (asserted at the end of this test).
+   */
   const fill = validateUxScript(`rs.listen("page_enter", "self", () => { if (rs.getAnswer("Q2") == null) rs.setAnswer("Q2", 19); });`, d);
-  assert.ok(fill.errors.some((e) => /scripts cannot fill in or change answers — to start a question with an answer, set its default value/.test(e)), fill.errors.join("\n"));
+  assert.deepEqual(fill.errors, [], fill.errors.join("\n"));
+  assert.ok(validateUxScript(`rs.setAnswer("NOPE", 1);`, d).errors.some((e) => /there is no question “NOPE”/.test(e)));
   assert.ok(!fill.errors.some((e) => /rs\.listen\("page_enter"\)/.test(e)), "page_enter is accepted as the page event");
   const dom = validateUxScript(`rs.listen("page", "self", (e) => { e.value = 19; });`, d);
   assert.ok(dom.errors.some((e) => /cannot fill in or change answers/.test(e)));
@@ -128,5 +134,8 @@ test("a script cannot fill in answers — the refusal says what to use; page_ent
   assert.match(wrong.errors.join(" "), /the events are .* \(“page” fires when the page opens\)/);
   // the refusal as the copilot's proposal reports it: the label once
   const r = applySurveyActions(d, coerceSurveyActions([{ op: "create_behavior", label: "Default 19", target: "Q2", script: `rs.listen("page", "self", () => rs.setAnswer("Q2", 19));` }]).actions, { uxOnly: true });
-  assert.match(r.errors[0], /^Behaviour “Default 19”: scripts cannot fill in/);
+  assert.match(r.errors[0], /^Behaviour “Default 19”: scripts cannot fill in a fixed answer — .*default value/);
+  // a value the script works out is not a default: accepted by the authoring check
+  const timed = applySurveyActions(d, coerceSurveyActions([{ op: "create_behavior", label: "Time on page", target: "Q2", script: `var t0 = Date.now();\nrs.listen("change", "self", function () { rs.setAnswer("Q2", Math.round((Date.now() - t0) / 1000)); });` }]).actions, { uxOnly: true });
+  assert.ok(!timed.errors.some((e) => /fixed answer/.test(e)), timed.errors.join("\n"));
 });

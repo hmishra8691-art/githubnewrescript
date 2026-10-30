@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { SurveyDefinition, Branding, Question, ProbeConfig } from "@rescript/schema";
+import type { SurveyDefinition, Branding, Question, ProbeConfig, UxTarget } from "@rescript/schema";
 import {
   createResponseState,
   runtimePipeMeta,
@@ -25,6 +25,10 @@ import {
   inspect,
   recomputePunchesAfterChange,
   answerKey,
+  applyScriptWrite,
+  getQuestionByCodeOrVar,
+  type ScriptWrite,
+  lookupAnswer,
   listBlocks,
   pendingListFills,
   serverResolvedQuestions,
@@ -2300,7 +2304,28 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const uxBlockId = hasUx && pageStep ? (listBlocks(def.flow as unknown[]).find((bl) => bl.pages.some((pg) => pg.node.id === pageStep.pageId))?.id ?? pageStep.pageId) : undefined;
   const uxValues: Record<string, unknown> = {};
   if (hasUx && pageStep) for (const q of shownQuestions) uxValues[q.id] = state.answers[answerKey(q.id, pageStep.loop ?? null)];
-  const uxAll: Record<string, unknown> | undefined = hasUx && def.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, state.answers[answerKey(q.id, null)]])) : undefined;
+  /* SE-03 (S1a): loop-aware — every answer as seen from the page's iteration (loop-local first, then the enclosing ones, then the survey-level key), not the bare key */
+  const uxAll: Record<string, unknown> | undefined = hasUx && def.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, lookupAnswer(state.answers, q.id, pageStep?.loop ?? null)])) : undefined;
+  /*
+   * S1a — THE SCRIPT WRITE CHANNEL. `rs.setAnswer` / `setEmbedded` / `setCalc` / `flag` from a sandboxed script are
+   * requests; the engine decides (scope, response model, size) and an accepted write takes the respondent's own
+   * path: setAnswer → punch cascade (inside applyScriptWrite), then what onChange does next — prune selections the
+   * change took off the screen, the page's on_change logic scripts, a re-render. Recorded in state.scriptWrites.
+   */
+  const onScriptWrite = (write: ScriptWrite, script: { id: string; target: UxTarget }): { ok: boolean; reason?: string } => {
+    if (!pageStep || ended) return { ok: false, reason: "the survey is not on a page" };
+    const t = script.target;
+    const scope = t.questionId ? { kind: "question" as const, questionId: t.questionId } : t.pageId ? { kind: "page" as const, pageId: t.pageId } : t.blockId ? { kind: "block" as const, blockId: t.blockId } : { kind: "survey" as const };
+    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope, shown: shownQuestions.map((q) => q.id), loop: pageStep.loop ?? null, pageQuestions: questions, quotaCounts: counts });
+    if (!r.ok) return r;
+    if (write.kind === "answer") {
+      pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
+      const q = getQuestionByCodeOrVar(def, write.ref);
+      if (q) { const rr = runScripts(def, state, "on_change", { scopeRef: [q.id, pageStep.pageId.split("@")[0]], loop: pageStep.loop }); if (rr.logs.length) setLogs((l) => [...l, ...rr.logs]); }
+    }
+    force();
+    return r;
+  };
   const shell = (
     <div ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b, { pageBackground: true })}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}
       {...(hasUx ? { "data-rs-ux": def.meta.id, "data-rs-block": uxBlockId, "data-rs-page": pageStep?.pageId } : {})}
@@ -2312,7 +2337,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
-          onNavigate={(target, as) => jumpTo(target, as, "script")} />
+          onNavigate={(target, as) => jumpTo(target, as, "script")}
+          onScriptWrite={onScriptWrite} />
       )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
