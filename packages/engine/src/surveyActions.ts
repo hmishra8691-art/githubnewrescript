@@ -102,7 +102,7 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
@@ -161,6 +161,18 @@ export const SURVEY_ACTION_OPS = [
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
   ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
 ] as const;
+
+/**
+ * A VARIANT'S SETTINGS FROM THE WIRE (S2a D16; S2b item 2: arrays of plain values too, for tools / weekdays / time
+ * slots): at most 12 keys, plain values only. Which keys and values are allowed is decided when applied, against the
+ * variant (capabilityRegistry.settingProblem).
+ */
+export function settingsIn(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const plain = (v: unknown) => typeof v === "number" ? Number.isFinite(v) : typeof v === "boolean" || (typeof v === "string" && v.length <= 200);
+  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (Array.isArray(v) && v.length <= 20 && v.every(plain)))).slice(0, 12));
+  return Object.keys(st).length ? st : undefined;
+}
 
 /** Friendly question types → the Studio variant that makes them. */
 export const ACTION_TYPES: Record<string, string> = {
@@ -318,6 +330,7 @@ function coerceOne(item: unknown): SurveyAction | string {
         ...(str(o.instruction) ? { instruction: str(o.instruction)!.slice(0, 600) } : {}), ...(validations(o.validation)?.length ? { validation: validations(o.validation) } : {}),
         ...(semanticIn(o.semantic) ? { semantic: semanticIn(o.semantic) } : {}),
         ...(((f) => (f && f !== "none" ? { otherFormat: f } : {}))(otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat))),
+        ...(settingsIn(o.settings) ? { settings: settingsIn(o.settings) } : {}),
       };
     }
     case "update_question": {
@@ -347,10 +360,7 @@ function coerceOne(item: unknown): SurveyAction | string {
        */
       if (bool(o.hidden) !== undefined) a.hidden = bool(o.hidden);
       /* S2a D16: a variant's settings — plain values only, at most 12 keys; which keys and values are allowed is checked when applied, against the variant */
-      if (o.settings && typeof o.settings === "object" && !Array.isArray(o.settings)) {
-        const st = Object.fromEntries(Object.entries(o.settings as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (typeof v === "number" || typeof v === "boolean" || (typeof v === "string" && v.length <= 200))).slice(0, 12));
-        if (Object.keys(st).length) a.settings = st;
-      }
+      { const st = settingsIn(o.settings); if (st) a.settings = st; }
       const readOnlyAsked = o.readOnly !== undefined || o.read_only !== undefined || o.readonly !== undefined;
       if (readOnlyAsked) a.readOnlyIgnored = true;
       if (Object.keys(a).length === 3 && a.readOnlyIgnored) return "update_question changes nothing: Read Only is no longer a question state — a question respondents must not answer is set hidden (hidden: true); it still runs its logic and auto-punch rules";
@@ -705,6 +715,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (a.required !== undefined) q.required = a.required;
       checkRuleValues(def, a.validation);
       shapeQuestion(def, q, a);
+      if (a.settings) applyVariantSettings(q, a.settings);
       const otherNote = a.otherFormat ? setOtherFormat(q, a.otherFormat) : "";
       /*
        * WHAT THE ANSWER IS (QT-02). The action may say it ("semantic":"age"),

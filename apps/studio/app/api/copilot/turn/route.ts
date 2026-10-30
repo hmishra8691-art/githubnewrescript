@@ -417,6 +417,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     memory: compact ? undefined : sanitizeMemory(body.memory), research: compact ? undefined : research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
+    /* S2b: the selected question's variant — an interactive one sends the variant catalogue guide */
+    selectedVariant: selectedId ? def.questions.find((q) => q.id === selectedId)?.variant ?? null : null,
     ux: uxTurn, uxOnly: cls.uxOnly, ...(uxBehaviour ? { uxBehaviour } : {}),
     analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, methods: methodsTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),

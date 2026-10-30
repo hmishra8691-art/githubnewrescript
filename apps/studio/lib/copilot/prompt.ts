@@ -1,4 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
+import { variantGuideFor } from "./variantGuide.ts";
 import { coerceSurveyActions, isLongBrief, listBlocks, type SurveyAction } from "@rescript/engine";
 import { COPILOT_LIST_FILL_GUIDE } from "./listFillGuide.ts";
 import { COPILOT_METHODS_GUIDE } from "./methodsGuide.ts";
@@ -228,6 +229,7 @@ Worked example — "When Q3 has option 1 selected, display a popup" (Q3's option
   // (the question id in [data-qid="…"] is the one in the outline, not its code)
   //     Write it for the page it belongs to: put it on the question it concerns ("target":"Q5"), or "survey" for the whole survey.
   // NATIVE SETTINGS BEFORE A SCRIPT: a soft check the respondent may continue past ("show a warning when the total is over 100") is a set_validation rule with "severity":"warning" (absent = it blocks Next); a balanced order ("equally", "evenly") is set_option_randomization with "method":"rotate"; a VISIBLE COUNTDOWN on a single-choice question is {"op":"update_question","target":"Q5","type":"gamified.timed","settings":{"timeLimitSeconds":30,"onTimeout":"lock"}} ("advance" moves on when time is up) — any other question type needs a countdown script (one rs.after(1000, tick) that re-schedules itself and updates a created element, then rs.goToPage on time-out — a .click() on Next does nothing in the sandbox). A prefill from the URL is create_embedded (source "url") + set_default_value "{{name}}".
+  // MEDIA IS NATIVE, NEVER A SCRIPT (a script cannot create <img>/<video> or set a src): a question's stimulus (image, video, audio, several items) and option pictures are {"op":"set_question_media","target":"Q3","items":[{"url":"https://…/ad.mp4","alt":"the 30-second ad"}],"layout":"vertical","requireComplete":true} — "requireComplete" (watch to the end before answering) only on a media variant (update_question type "media.video_rating" first); option images: "options":[{"option":1,"imageUrl":"https://…/a.png","imageAlt":"…"}] (null removes); "clear":true removes the stimulus. URLs: https or the survey's media library (/api/media/…), with alt text for anything that carries meaning.
   // A script never fills in a STARTING answer (rs.setAnswer with a fixed value is refused). A starting answer is set_default_value:
 {"op":"set_default_value","target":"Q2","value":19}   // the question's default value (Properties → Default value): filled in when the question is first shown, only if it has no answer yet, never over the respondent's own answer; a number for numeric, text for text, an option CODE (or list of codes for a multi-select) for a choice question; null removes it
 {"op":"set_default_value","target":"Q8","field":"r1","value":"{{Q1}}"}   // ONE open field's default (static or piped): "field" is a list field / text or numeric matrix row code, a constant-sum row (code or label), "row/column" for a composite cell, "column:<id>" for every cell of a column, "<code>.other" for an Other — specify box; empty fields only, the respondent can overwrite; null removes it
@@ -486,7 +488,7 @@ export function mergeRepair<T>(accepted: T[], corrected: T[]): T[] {
   return [...accepted, ...corrected.filter((a) => !seen.has(JSON.stringify(a)))];
 }
 
-export const UX_ACTION_OP = /^(?:create|update|remove)_(?:style|animation|behavior)$|^attach_behavior_to_|^create_responsive_rule$|^set_custom_(?:code|html)$|^set_theme$|^set_navigation$/;
+export const UX_ACTION_OP = /^(?:create|update|remove)_(?:style|animation|behavior)$|^attach_behavior_to_|^create_responsive_rule$|^set_custom_(?:code|html)$|^set_theme$|^set_navigation$|^set_question_media$/;
 export function repairPrompt(input: { prompt: string; raw: unknown; refused: string[]; total: number; uxGuideSent: boolean; ops: string[]; methodsGuideSent?: boolean; /** #11 (2026-10-22): guides a staged item was not sent but its refused actions needed — added when the prompt lacks them */ extraGuides?: string[] }): { text: string; addedUxGuide: boolean; addedMethodsGuide?: boolean } {
   const addedUxGuide = !input.uxGuideSent && !input.prompt.includes(COPILOT_UX_GUIDE) && input.ops.some((op) => UX_ACTION_OP.test(op));
   // a MaxDiff / conjoint written as create_question (refused, naming create_maxdiff / create_conjoint) or a method action without its guide: the guide goes with the repair
@@ -521,6 +523,10 @@ export function copilotUserPrompt(input: {
   research?: string;
   deterministicFindings?: string[];
   selected?: string | null;
+  /** S2b: the selected question's variant id — an interactive variant sends the variant catalogue guide */
+  selectedVariant?: string | null;
+  /** S2b: the variant catalogue guide — absent = read from the message and the selected variant (variantGuideFor); false = never */
+  variants?: boolean;
   /** the request is about the look and behaviour: the UX guide goes with it */
   ux?: boolean;
   uxOnly?: boolean;
@@ -580,6 +586,8 @@ export function copilotUserPrompt(input: {
   /* the plan stage writes no actions: the action guides (up to ~40k characters for a brief that names everything) are for the items, not the plan */
   if (!input.planOnly) {
     if (input.ux) parts.push(COPILOT_UX_GUIDE);
+    /* S2b: the variant catalogue — only when the sentence or the selected question names an interaction (never the whole catalogue) */
+    if (input.variants !== false) { const vg = variantGuideFor(input.briefRef?.request ?? input.message, input.selectedVariant); if (vg) parts.push(vg); }
     if (input.analysis) parts.push(COPILOT_ANALYSIS_GUIDE);
     if (input.translation) parts.push(COPILOT_TRANSLATION_GUIDE);
     if (input.quota) parts.push(COPILOT_QUOTA_GUIDE);
