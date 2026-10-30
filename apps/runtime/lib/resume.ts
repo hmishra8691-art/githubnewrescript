@@ -187,9 +187,9 @@ export function clearPending(sessionId: string, at?: number): void {
  * they had gone back to.
  */
 export function mergeResumeSnapshot(
-  saved: { answers?: Record<string, unknown>; calculated?: Record<string, unknown>; embedded?: Record<string, unknown>; flags?: unknown[]; stepIndex?: number } | null | undefined,
+  saved: { answers?: Record<string, unknown>; calculated?: Record<string, unknown>; embedded?: Record<string, unknown>; flags?: unknown[]; stepIndex?: number; nav?: unknown; savedAt?: string | null } | null | undefined,
   pending: PendingAnswers,
-): { answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } {
+): { answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number; nav?: unknown; savedAt?: string | null } {
   const step = Number.isInteger(pending.stepIndex) && pending.stepIndex >= 0 ? pending.stepIndex : (saved?.stepIndex ?? 0);
   return {
     answers: { ...(saved?.answers ?? {}), ...pending.answers },
@@ -197,6 +197,8 @@ export function mergeResumeSnapshot(
     embedded: { ...(saved?.embedded ?? {}), ...pending.embedded },
     flags: pending.flags ?? saved?.flags ?? [],
     stepIndex: step,
+    /* the row's navigation trail (0077) travels with it — the Runner weighs it against this browser's copy (engine chooseNavTrail) */
+    ...(saved?.nav !== undefined ? { nav: saved.nav, savedAt: saved.savedAt ?? null } : {}),
   };
 }
 

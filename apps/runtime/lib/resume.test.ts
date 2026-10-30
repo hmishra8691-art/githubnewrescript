@@ -90,3 +90,12 @@ test("the section-navigation trail round-trips, is cleaned, and clears", async (
   clearNavTrail("sess1");
   assert.equal(readNavTrail("sess1"), null);
 });
+
+/* 0077: the row's navigation trail survives the merge with a pending snapshot, so the Runner can weigh it */
+test("mergeResumeSnapshot keeps the row's nav and its save time", () => {
+  const saved = { answers: { Q1: 1 }, stepIndex: 3, nav: { v: 1, stack: ["p1"], visited: ["p1", "p2"] }, savedAt: "2026-10-30T10:00:00.000Z" };
+  const r = mergeResumeSnapshot(saved, pending(4));
+  assert.deepEqual(r.nav, saved.nav);
+  assert.equal(r.savedAt, saved.savedAt);
+  assert.equal("nav" in mergeResumeSnapshot({ answers: {}, stepIndex: 1 }, pending(2)), false, "no row trail → nothing invented");
+});

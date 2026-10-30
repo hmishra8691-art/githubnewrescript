@@ -7,8 +7,34 @@ import { resolveSampleSource } from "@rescript/engine";
 import type { PanelConfig } from "@rescript/schema";
 import { panelParams, runtimePanels } from "@/lib/panels";
 import { sessionAllowed } from "@/lib/metering";
+import { sandboxAvailable, sandboxRow, sandboxSurvey, sandboxSurveyId, startSandboxSession } from "@/lib/sessionSandbox";
 
 export const dynamic = "force-dynamic";
+
+const RESUME_COLUMNS = "session_id, seed, status, is_test, survey_id, respondent_code, answers, calculated, embedded, flags, step_index, deleted_at";
+let warnedNavRead = false;
+
+/**
+ * A SANDBOX TEST LINK (/n/<token>, a runtime with no database — lib/sessionSandbox.ts): the same contract as below,
+ * against the in-memory rows. Resume returns the row's navigation trail (`nav`, what 0077 stores) like the
+ * database path does.
+ */
+function sandboxStart(token: string, body: any) {
+  if (!sandboxAvailable()) return NextResponse.json({ error: "Survey not found" }, { status: 404 });
+  const survey = sandboxSurvey(token);
+  if (!survey) return NextResponse.json({ error: "This sandbox survey is no longer active" }, { status: 404 });
+  const id = sandboxSurveyId(survey.token);
+  const resume = typeof body?.resume === "string" ? sandboxRow(body.resume) : null;
+  if (resume && resume.survey === survey.token && resume.status === "in_progress") {
+    return NextResponse.json({
+      ok: true, resumed: true,
+      session: { sessionId: resume.session_id, seed: resume.seed, surveyDbId: id, versionDbId: id, respondentCode: resume.respondent_code },
+      saved: { answers: resume.answers, calculated: resume.calculated, embedded: resume.embedded, flags: resume.flags, stepIndex: resume.step_index, nav: resume.nav, savedAt: resume.last_saved_at },
+    });
+  }
+  const row = startSandboxSession(survey);
+  return NextResponse.json({ ok: true, resumed: false, session: { sessionId: row.session_id, seed: row.seed, surveyDbId: id, versionDbId: id, respondentCode: row.respondent_code } });
+}
 
 /**
  * Mint — or resume — the response row for a survey session.
@@ -41,6 +67,7 @@ export async function POST(req: NextRequest) {
   const study = String(body?.study ?? "");
   const mode = body?.mode === "test" ? "test" : body?.mode === "live" ? "live" : null;
   if (!client || !study || !mode) return NextResponse.json({ error: "client, study and mode are required" }, { status: 400 });
+  if (client === "sandbox") return sandboxStart(study, body);
 
   let d: LoadedDeployment | null = null;
   if (mode === "live") d = await loadDeployment(client, study, "live");
@@ -88,12 +115,22 @@ export async function POST(req: NextRequest) {
   // resume: same survey, same environment, still in progress, not deleted
   const resume = typeof body?.resume === "string" && body.resume.length >= 16 ? body.resume : null;
   if (resume) {
-    const { data: row } = await db
+    const { data: row, error: navReadError } = await db
       .from("responses")
-      .select("session_id, seed, status, is_test, survey_id, respondent_code, answers, calculated, embedded, flags, step_index, deleted_at")
+      .select(`${RESUME_COLUMNS}, nav, last_saved_at`)
       .eq("session_id", resume)
       .maybeSingle();
-    if (row && row.survey_id === d.surveyId && !!row.is_test === isTest && row.status === "in_progress" && !row.deleted_at) {
+    /*
+     * 0077 (responses.nav) may not be applied yet: then the select names a missing column and returns nothing.
+     * Read again without it — the browser's own copy of the trail is the fallback (Runner) — and say so once.
+     */
+    let resumed = row as (typeof row & { nav?: unknown; last_saved_at?: string | null }) | null;
+    if (navReadError && !resumed) {
+      if (!warnedNavRead) { warnedNavRead = true; console.warn("[rescript:session] resume read without responses.nav (migration 0077 not applied?)", navReadError.message); }
+      const again = await db.from("responses").select(RESUME_COLUMNS).eq("session_id", resume).maybeSingle();
+      resumed = again.data as typeof resumed;
+    }
+    if (resumed && resumed.survey_id === d.surveyId && !!resumed.is_test === isTest && resumed.status === "in_progress" && !resumed.deleted_at) {
       /*
        * A respondent can reach page one before their source is known: the
        * first link they followed carried no parameter, or the row was minted
@@ -113,11 +150,11 @@ export async function POST(req: NextRequest) {
         // a pre-0012 database has no column to fill; the interview continues
         if (fillErr) console.warn("[rescript:session] sample source not recorded on resume", fillErr.message);
       }
-      console.info("[rescript:session] resumed", JSON.stringify({ surveyId: d.surveyId, environment: isTest ? "TEST" : "LIVE", session: resume.slice(0, 8), stepIndex: row.step_index, answers: Object.keys(row.answers ?? {}).length }));
+      console.info("[rescript:session] resumed", JSON.stringify({ surveyId: d.surveyId, environment: isTest ? "TEST" : "LIVE", session: resume.slice(0, 8), stepIndex: resumed.step_index, answers: Object.keys(resumed.answers ?? {}).length }));
       return NextResponse.json({
         ok: true, resumed: true,
-        session: { sessionId: row.session_id, seed: Number(row.seed), surveyDbId: d.surveyId, versionDbId: d.versionId, respondentCode: row.respondent_code ?? null },
-        saved: { answers: row.answers ?? {}, calculated: row.calculated ?? {}, embedded: row.embedded ?? {}, flags: row.flags ?? [], stepIndex: row.step_index ?? 0 },
+        session: { sessionId: resumed.session_id, seed: Number(resumed.seed), surveyDbId: d.surveyId, versionDbId: d.versionId, respondentCode: resumed.respondent_code ?? null },
+        saved: { answers: resumed.answers ?? {}, calculated: resumed.calculated ?? {}, embedded: resumed.embedded ?? {}, flags: resumed.flags ?? [], stepIndex: resumed.step_index ?? 0, nav: resumed.nav ?? null, savedAt: resumed.last_saved_at ?? null },
       });
     }
   }
