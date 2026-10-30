@@ -2974,6 +2974,7 @@ export function QuestionRenderer(props: QRProps) {
         <div
       className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
+      data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
@@ -3013,6 +3014,7 @@ export function QuestionRenderer(props: QRProps) {
     <div
       className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
+      data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}

@@ -1,5 +1,6 @@
 import { checkDeclarations } from "@rescript/engine";
 import type { UxTarget } from "@rescript/schema";
+import { answerLockReason, HIDING_STYLE } from "./answerLock";
 
 /**
  * THE HOST HALF OF THE SURVEY DOCUMENT A SCRIPT SEES.
@@ -62,6 +63,8 @@ const TOKEN = /^[A-Za-z_][\w:-]{0,63}$/;
 export const isNavTarget = (el: Element): boolean =>
   !!el.closest('[data-testid="rs-next"], .rs-nav')
   || !!el.querySelector('[data-testid="rs-next"], .rs-nav');
+
+export { answerLockReason, HIDING_STYLE } from "./answerLock";
 
 export const attrAllowed = (name: string, el?: Element | null): boolean =>
   ((name !== "hidden" && name !== "disabled") || !el || !isNavTarget(el)) && (
@@ -217,7 +220,9 @@ export class DomBridge {
     // D4: a style set from a script loads nothing (url / image-set / @import / expression refused, with the reason)
     const c = checkDeclarations(op.set ?? {}, { target: this.o.owner, origin: "script" });
     if (c.errors.length) this.say(c.errors.join("; "));
+    const lock = this.isMine(el) ? null : answerLockReason(el);
     for (const [k, v] of Object.entries(c.ok)) {
+      if (lock && HIDING_STYLE(k, v)) { this.say(`a script cannot set ${k}: ${v} on ${lock} (it may still change its classes and other styles)`); continue; }
       remember(k);
       const important = /!important\s*$/i.test(v);
       el.style.setProperty(k, v.replace(/!important\s*$/i, "").trim(), important ? "important" : "");
@@ -228,6 +233,10 @@ export class DomBridge {
     const el = this.element(op.n); if (!el) return;
     const name = String(op.name).toLowerCase();
     if ((name === "hidden" || name === "disabled") && isNavTarget(el)) { this.say(`a script cannot ${name === "hidden" ? "hide" : "disable"} the Next / Back buttons or the navigation bar — the respondent needs them (it may still change their classes and styles)`); return; }
+    if ((name === "hidden" || name === "disabled") && op.value != null && !this.isMine(el)) {
+      const lock = answerLockReason(el);
+      if (lock) { this.say(`a script cannot ${name === "hidden" ? "hide" : "disable"} ${lock} (it may still change its classes and styles)`); return; }
+    }
     if (!attrAllowed(name, el)) { this.say(`a script cannot change “${name}” — it may set hidden, disabled, title, role, tabindex, aria-* and data-* (the answer, links and the survey's own hooks are not its to change)`); return; }
     const r = this.rec(el);
     if (!r.attrPrev.has(name)) r.attrPrev.set(name, el.getAttribute(name));

@@ -6,7 +6,7 @@ import {
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
   uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState,
 } from "@rescript/engine";
-import { DomBridge } from "./uxDom";
+import { DomBridge, answerLockReason, HIDING_STYLE } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
 import { closeUxPopups, openUxPopup, placeUxPopups } from "./uxPopup";
 
@@ -403,10 +403,29 @@ export function UxLayer(p: UxLayerProps) {
           case "removeClass": effect({ do: "remove_class", className: str(a[1]) }, resolve(a[0])); break;
           case "toggleClass": effect({ do: "toggle_class", className: str(a[1]) }, resolve(a[0])); break;
           case "animate": { const preset = str(a[1]); const opts = (a[2] && typeof a[2] === "object" ? a[2] : {}) as { duration?: number }; if (UX_PRESET_FRAMES[preset as keyof typeof UX_PRESET_FRAMES]) effect({ do: "animate", preset: preset as never, durationMs: Math.max(50, Math.min(10000, Number(opts.duration) || 450)) }, resolve(a[0])); else report(`“${preset}” is not a preset`); break; }
-          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style, { origin: "script" }); if (c.errors.length) report(`${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
+          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style, { origin: "script" }); if (c.errors.length) report(`${c.errors.join("; ")}`);
+            const st = resolve(a[0]);
+            // D12: no hiding / disabling style on an answer input or a required question
+            const lock = st ? uxElements(root, st).map((el) => answerLockReason(el)).find(Boolean) : null;
+            if (lock) for (const [k, v] of Object.entries(c.ok)) if (HIDING_STYLE(k, v)) { report(`rs.setStyle: ${k}: ${v} refused on ${lock}`, "warn"); delete c.ok[k]; }
+            effect({ do: "set_style", style: c.ok }, st); break; }
           case "clearStyle": { const t = resolve(a[0]); if (t) for (const el of uxElements(root, t)) { for (const k of setByUx.get(el) ?? []) el.style.removeProperty(k); setByUx.delete(el); } break; }
           case "show": effect({ do: "show" }, resolve(a[0])); break;
-          case "hide": effect({ do: "hide" }, resolve(a[0])); break;
+          case "hide": {
+            /*
+             * D12: rs.hide() cannot take an answer input or a required question away from the respondent (refused,
+             * with the reason); hiding an ANSWERED question is allowed but said — the answer stays stored and is
+             * still validated, which is rarely what the author meant.
+             */
+            const ht = resolve(a[0]);
+            const els = ht ? uxElements(root, ht) : [];
+            const lock = els.map((el) => answerLockReason(el)).find(Boolean);
+            if (lock) { report(`rs.hide refused: the target is ${lock}`, "warn"); break; }
+            const values = { ...(p.allValues ?? {}), ...p.values } as Record<string, unknown>;
+            const answered = els.flatMap((el) => [el, ...el.querySelectorAll("[data-qid]")]).map((el) => el.getAttribute("data-qid")).filter((id): id is string => !!id && values[id] != null && values[id] !== "" && !(Array.isArray(values[id]) && (values[id] as unknown[]).length === 0));
+            if (answered.length) report(`rs.hide: ${[...new Set(answered)].map((id) => byCode.get(id) ?? id).join(", ")} already has an answer — hiding it keeps the answer stored and validated`, "warn");
+            effect({ do: "hide" }, ht); break;
+          }
           case "showMessage": effect({ do: "show_message", text: str(a[1]) }, resolve(a[0])); break;
           case "popup": {
             // the survey's own popup — rs.popup(text, { title, placement, target, dismiss, autoMs }); one per script, replaced by the next
