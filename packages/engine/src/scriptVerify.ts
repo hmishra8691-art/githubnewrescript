@@ -413,7 +413,7 @@ export function expectHolds(rec: ItemRecord, expect: ScriptExpect): { met: boole
     if (/^(?:next|submit|validate)$/i.test(on)) return s.id.startsWith("next-");
     if (m) {
       const [, verb, q, v] = m;
-      return s.id.toLowerCase().startsWith(`${verb!.toLowerCase() === "answer" ? "" : verb!.toLowerCase() === "clear" ? "clear" : "select"}`) && s.id.toLowerCase().includes(q!.toLowerCase()) && (v == null || s.id.toLowerCase().endsWith(`-${v.trim().toLowerCase()}`) || s.label.toLowerCase().includes(v.trim().toLowerCase()));
+      return s.id.toLowerCase().startsWith(`${verb!.toLowerCase() === "answer" ? "" : verb!.toLowerCase() === "clear" ? "clear" : "select"}`) && s.id.toLowerCase().includes(q!.toLowerCase()) && (v == null || s.id.toLowerCase().endsWith(`-${v.trim().toLowerCase()}`) || s.label.toLowerCase().includes(`= ${v.trim().toLowerCase()} `) || s.label.toLowerCase().includes(`“${v.trim().toLowerCase()}”`));
     }
     return s.label.toLowerCase().includes(on.toLowerCase());
   });
