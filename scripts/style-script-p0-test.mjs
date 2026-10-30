@@ -110,12 +110,14 @@ await page.waitForSelector('[data-testid="intelligent-view"]');
     kind: "proposal", reply: "Q3: the popup through the survey's own popup.", memory: "Q3 validation: integer, min_value:18. Q3 behaviour: rs.popup on 18+.",
     actions: [{ op: "create_behavior", label: "Q3 age popup", target: "Q3", script: AGE_POPUP_FIXED }],
   }]);
-  assert.equal(body.context.uxOnly, true, "look-only was inferred from the words");
+  /* S2a D9 (2026-10-30): "javascript" is behaviour, never look-only — the UX guide goes with it and the validation is not even subject to the look-only rule */
+  assert.equal(body.context.uxOnly, false, "“javascript” is behaviour, not look-only (S2a D9)");
+  assert.equal(body.context.ux, true, "the UX guide still goes with it");
   assert.match((body.context.repair?.refused ?? []).join(" "), /builds its own popup .*covers the whole screen.*show_popup/, "P3: the hand-built overlay is refused with the survey's popup as the fix");
   assert.equal(body.context.repair.fixed, true);
   assert.deepEqual(body.validation.results.map((r) => r.ok), [true, true], JSON.stringify(body.validation.errors));
   await apply();
-  ok("21:23: the min-18 validation is no longer refused when look-only is only inferred; the hand-built overlay is refused (P3) and its rs.popup correction applied");
+  ok("21:23: the min-18 validation is accepted (a “javascript” request is behaviour, not look-only — S2a D9); the hand-built overlay is refused (P3) and its rs.popup correction applied");
 }
 { // 21:25 — scripts written with on/options
   const body = await say("मुझे अभी क्यूँ एन को पे लगाना है पॉप अप खुड़ा आए की वैलकुम अमेरीकनस और क्यूँ टू पे या सलेक करूगी तो फिर लिख कर आए you are eligible to proceed जावसक्रिप्ट", {
