@@ -219,6 +219,8 @@ function saveBody(session: NonNullable<RunnerProps["session"]>, state: ResponseS
     calculated: state.calculated,
     embedded: state.embedded,
     flags: state.flags,
+    // S1a: which values sandboxed scripts wrote (script, target, time — never a value); the replay reads it
+    scriptWrites: state.scriptWrites?.length ? state.scriptWrites : undefined,
     completed: done,
     surveyDbId: session.surveyDbId,
     // behavioural metadata for the quality engine — derived counts and

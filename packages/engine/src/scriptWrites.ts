@@ -360,13 +360,12 @@ function applyOne(def: SurveyDefinition, state: ResponseState, write: ScriptWrit
       if (getQuestionByCodeOrVar(def, write.name)) return refuse(`${write.name} is a question — use rs.setAnswer`);
       if (allEmbeddedFields(def).some((f) => f.name === write.name)) return refuse(`${write.name} is an embedded field — use rs.setEmbedded`);
       const calc = def.calculations.find((c) => c.targetVariable === write.name);
-      if (calc && calc.trigger === "on_change") return refuse(`${write.name} is recomputed on every change by calculation ${calc.id} — a script value would be overwritten at once`);
+      // a declared calculation recomputes its variable whenever its trigger runs (on_change, on_page_submit, on_complete)
+      if (calc) return refuse(`${write.name} is computed by calculation ${calc.id} (${calc.trigger}) — a script value would be overwritten when it runs; change the calculation, or write a variable of the script's own`);
       if (!isScalar(write.value)) return refuse(`variable ${write.name} holds text, a number or true/false`);
       if (typeof write.value === "string" && write.value.length > SCRIPT_WRITE_LIMITS.text) return refuse(`the text is longer than ${SCRIPT_WRITE_LIMITS.text.toLocaleString("en")} characters`);
-      let value = write.value as string | number | boolean | null;
-      if (calc?.dataType === "numeric" && value !== null) { const n = finite(value); if (n == null) return refuse(`${write.name} is numeric — ${JSON.stringify(value)} is not a number`); value = n; }
-      if (calc?.dataType === "boolean" && value !== null && typeof value !== "boolean") return refuse(`${write.name} is true/false`);
-      const isNew = !calc && !Object.prototype.hasOwnProperty.call(state.calculated, write.name);
+      const value = write.value as string | number | boolean | null;
+      const isNew = !Object.prototype.hasOwnProperty.call(state.calculated, write.name);
       if (isNew) {
         const created = new Set((state.scriptWrites ?? []).filter((r) => r.kind === "calculated").map((r) => r.target));
         if (created.size >= SCRIPT_WRITE_LIMITS.newVariables) return refuse(`a script may create at most ${SCRIPT_WRITE_LIMITS.newVariables} variables`);
@@ -388,6 +387,22 @@ function applyOne(def: SurveyDefinition, state: ResponseState, write: ScriptWrit
     default:
       return refuse(`unknown write kind ${JSON.stringify((write as { kind?: unknown }).kind)}`);
   }
+}
+
+/**
+ * Could a script EVER have written this answer / variable through this channel? The server replay honours a posted
+ * `scriptWrites` claim only for such targets — a claim on a value the channel always refuses (a calculated
+ * question's expression, a punch rule that owns its question, a declared calculation, an engine variable) is not
+ * believed, so forged paradata cannot shield a tampered derived value.
+ */
+export function scriptMayWriteAnswer(def: SurveyDefinition, questionId: string): boolean {
+  const q = getQuestion(def, questionId);
+  if (!q || RESPONDENT_ONLY.has(effectiveResponseModel(q))) return false;
+  if (q.type === "calculated" && q.settings?.expression) return false;
+  return !(q.punches ?? []).some((p) => (p as { recompute?: string }).recompute === "always");
+}
+export function scriptMayWriteVariable(def: SurveyDefinition, name: string): boolean {
+  return !checkName(name, "variable") && !ENGINE_COMPUTED.test(name) && !def.calculations.some((c) => c.targetVariable === name) && !getQuestionByCodeOrVar(def, name);
 }
 
 /** a posted `scriptWrites` list, checked: shape, size, names — what the save route may store and the replay read */

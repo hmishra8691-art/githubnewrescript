@@ -24,7 +24,10 @@ export async function POST(req: NextRequest) {
   if (body.action === "row") {
     const row = sandboxRow(String(body.sessionId ?? ""));
     if (!row) return NextResponse.json({ error: "unknown session" }, { status: 404, ...noStore });
-    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length, saveSeq: row.save_seq }, noStore);
+    // S1a: the script-write paradata, and what the row holds for those targets (sandbox only: the browser suite checks a script-made value was saved)
+    const sw = row.script_writes ?? [];
+    const scriptValues = Object.fromEntries(sw.map((w) => [w.target, w.kind === "answer" ? row.answers[w.target] ?? null : w.kind === "embedded" ? row.embedded[w.target] ?? null : w.kind === "calculated" ? row.calculated[w.target] ?? null : row.flags.includes(w.target)]));
+    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length, saveSeq: row.save_seq, scriptWrites: sw, scriptValues }, noStore);
   }
   return NextResponse.json({ error: "unknown action" }, { status: 400, ...noStore });
 }

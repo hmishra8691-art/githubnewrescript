@@ -18,6 +18,8 @@ export interface SandboxRow {
   step_index: number; nav: NavTrail | null; started_at: string; last_saved_at: string | null; completed_at: string | null;
   /** D6 / 0078: the highest save seq applied */
   save_seq: number;
+  /** S1a: the script-write paradata of the last save (`state.scriptWrites`, sanitised) */
+  script_writes?: { script: string; kind: string; target: string; at: string }[];
 }
 
 const G = globalThis as unknown as { __rescriptSessionSandbox?: { surveys: Map<string, SandboxSurvey>; rows: Map<string, SandboxRow> } };

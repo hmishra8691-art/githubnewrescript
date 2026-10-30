@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, balanceVariableForKey, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, balanceVariableForKey, sanitizeScriptWrites, type ResponseState, type SubmissionCheck } from "@rescript/engine";
 import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
@@ -90,7 +90,9 @@ export async function POST(req: NextRequest) {
    * sessions are never refused: a programmer's test link may start mid-survey
    * (`startAt`), which the replay cannot know about.
    */
-  const check = def ? await serverCheck(def, existing, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed }, sessionId) : null;
+  /* S1a: which values sandboxed scripts wrote — checked, and read by the replay (script_written, not a mismatch) */
+  const scriptWrites = sanitizeScriptWrites(body?.scriptWrites);
+  const check = def ? await serverCheck(def, existing, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
   if (check && !check.ok && validationPosture() === "enforce" && !existing.is_test) {
     const first = check.hard[0];
     return NextResponse.json({
@@ -115,6 +117,11 @@ export async function POST(req: NextRequest) {
     completed_at: completed ? new Date().toISOString() : null,
     last_saved_at: new Date().toISOString(),
   };
+  /*
+   * S1a: the script-write paradata travels with the telemetry jsonb (no new column in S1a) — so it is kept when the
+   * survey keeps telemetry; a dedicated column is S1b/S1c's (see docs/S1-ONE-SCRIPT-ENGINE-2026-10-30.md).
+   */
+  if (keepTelemetry && scriptWrites.length) keepTelemetry.scriptWrites = scriptWrites;
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
   const isFinal = !!completed && newStatus !== "in_progress";
   if (seq != null) update.save_seq = seq;
@@ -362,7 +369,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     const check = checkSubmission({
       def: survey.def,
       prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at },
-      posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed },
+      posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed, scriptWrites: sanitizeScriptWrites(body?.scriptWrites) },
       recompute: recomputePosture() !== "off",
     });
     if (recomputePosture() === "store") sandboxStored = withRecomputed({ answers: body?.answers, calculated: body?.calculated }, check.recomputed);
@@ -376,6 +383,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     completed_at: body?.completed ? new Date().toISOString() : null, last_saved_at: new Date().toISOString(),
     ...(nav.trail ? { nav: nav.trail } : {}),
     ...(seq != null ? { save_seq: seq } : {}),
+    script_writes: sanitizeScriptWrites(body?.scriptWrites),
   });
   return NextResponse.json({ ok: true, environment: "TEST", respondentCode: row.respondent_code, status: newStatus, sandbox: true });
 }
@@ -420,7 +428,7 @@ async function storedBalanceClaims(def: SurveyDefinition, surveyId: string, isTe
 async function serverCheck(
   def: SurveyDefinition,
   existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null },
-  posted: { status: string; stepIndex: unknown; answers: unknown; calculated: unknown; embedded: unknown; flags: unknown; completed: unknown },
+  posted: { status: string; stepIndex: unknown; answers: unknown; calculated: unknown; embedded: unknown; flags: unknown; completed: unknown; scriptWrites?: unknown },
   sessionId: string,
 ): Promise<SubmissionCheck | null> {
   const posture = validationPosture();
@@ -432,7 +440,7 @@ async function serverCheck(
     const check = checkSubmission({
       def,
       prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null },
-      posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed },
+      posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed, scriptWrites: posted.scriptWrites },
       quotaCounts, recompute, balanceClaims,
     });
     if (check.hard.length || check.soft.length) {

@@ -152,10 +152,9 @@ test("punches and calculations recompute after a script write, as after a respon
   // calculated: a script variable, a typed declared one; refused when a calculation recomputes it on every change
   assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "MY_VAR", value: "hi" }, survey()).ok, true);
   assert.equal(s.calculated.MY_VAR, "hi");
-  assert.equal(applyScriptWrite(def, s, { kind: "calculated", name: "PAGE_SCORE", value: "3" }, survey()).ok, true);
-  assert.equal(s.calculated.PAGE_SCORE, 3);
-  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "PAGE_SCORE", value: "x" }, survey()).reason!, /numeric/);
-  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "SRC_TWICE", value: 1 }, survey()).reason!, /recomputed on every change/);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "PAGE_SCORE", value: 3 }, survey()).reason!, /computed by calculation c_submit \(on_page_submit\)/);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "SRC_TWICE", value: 1 }, survey()).reason!, /computed by calculation c_twice/);
+  assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "MY_VAR", value: { a: 1 } }, survey()).reason!, /holds text, a number/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "LOOP_BRAND_COUNT", value: 1 }, survey()).reason!, /computed by the engine/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "Q_NUM", value: 1 }, survey()).reason!, /is a question/);
   assert.match(applyScriptWrite(def, s, { kind: "calculated", name: "bad name!", value: 1 }, survey()).reason!, /not a valid/);
@@ -179,4 +178,46 @@ test("paradata: each accepted write recorded with script, kind, target and time 
   assert.ok(!JSON.stringify(s.scriptWrites).includes("secret"), "the open end's text is not in the paradata");
   // the save route's sanitiser keeps only well-formed records
   assert.deepEqual(sanitizeScriptWrites([...s.scriptWrites!, { kind: "nope", target: "x" }, "junk", { kind: "answer", target: "" }]), s.scriptWrites);
+});
+
+/* ---------------------------------------------------------------- item 4: the server replay */
+import { checkSubmission } from "./serverValidation.js";
+import { advance, setAnswer } from "./flow.js";
+
+test("server replay: a value a script wrote that the server cannot derive is script_written (soft); a forged claim is not believed", () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "sw4", code: "SW4", title: "Replay", version: "1" },
+    questions: [
+      Q("q_age", "numeric"),
+      Q("q_dl", "open_text", { displayLogic: { type: "rule", source: { kind: "question", ref: "q_age" }, operator: "lt", value: -1 } }),
+      Q("h_seg", "hidden", { options: [{ code: "Y", label: "Young" }, { code: "O", label: "Old" }],
+        punches: [{ id: "p1", source: { kind: "codes", codes: ["Y"] }, action: "select", mapping: [], ignoreUnmatched: true, recompute: "always", when: { type: "rule", source: { kind: "question", ref: "q_age" }, operator: "lt", value: 40 } }] }),
+      Q("q_end", "open_text"),
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["q_age", "q_dl"] }, { type: "page", id: "p2", questionIds: ["q_end"] }, { type: "end", id: "e", status: "complete" }],
+    calculations: [{ id: "c1", targetVariable: "AGE_X2", expression: "Q_AGE * 2", trigger: "on_page_submit" }],
+  });
+  const s = createResponseState(d, { seed: 9, sessionId: "s-sw4" });
+  start(d, s);
+  setAnswer(d, s, "q_age", 30);
+  advance(d, s);
+  const ctx: ScriptWriteContext = { scriptId: "b_p2", scope: { kind: "survey" }, shown: ["q_end"] };
+  assert.equal(applyScriptWrite(d, s, { kind: "answer", ref: "Q_DL", value: "set by code" }, ctx).ok, true);
+  assert.equal(applyScriptWrite(d, s, { kind: "calculated", name: "CLICKS", value: 4 }, ctx).ok, true);
+  setAnswer(d, s, "q_end", "done");
+  advance(d, s);
+  const posted = { answers: { ...s.answers }, calculated: { ...s.calculated }, embedded: s.embedded, flags: s.flags, stepIndex: s.stepIndex, status: "complete", completed: true };
+  const run = (extra: Record<string, unknown>) => checkSubmission({ def: d, prior: { seed: 9, sessionId: "s-sw4" }, posted: { ...posted, ...extra } as never });
+  // without the paradata: the question the replay never showed is "not_asked"
+  assert.ok(run({}).soft.some((p) => p.code === "not_asked" && p.questionId === "q_dl"));
+  // with it: script_written, nothing else; the script's own variable is kept as posted (the server derives no CLICKS)
+  const withW = run({ scriptWrites: s.scriptWrites });
+  assert.equal(withW.ok, true);
+  assert.deepEqual(withW.soft.map((p) => [p.code, p.questionId ?? p.variable]), [["script_written", "q_dl"]], JSON.stringify(withW.soft));
+  assert.ok(!JSON.stringify(withW.soft).includes("set by code"), "an open end's text never reaches the problem list");
+  // a FORGED claim on what the channel always refuses (a punch rule that owns h_seg, a declared calculation) is not believed
+  const forged = run({ answers: { ...posted.answers, h_seg: "O" }, calculated: { ...posted.calculated, AGE_X2: 1 }, scriptWrites: [...s.scriptWrites!, { script: "x", kind: "answer", target: "h_seg", at: "" }, { script: "x", kind: "calculated", target: "AGE_X2", at: "" }] });
+  const mm = forged.soft.filter((p) => p.code === "server_mismatch").map((p) => p.questionId ?? p.variable).sort();
+  assert.deepEqual(mm, ["AGE_X2", "h_seg"], JSON.stringify(forged.soft));
+  assert.equal(forged.recomputed?.answers.h_seg, "Y", "under store the server's value still wins");
 });

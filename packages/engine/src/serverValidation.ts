@@ -8,6 +8,7 @@ import { isEmptyAnswer } from "./answers.js";
 import { lookupAnswer } from "./state.js";
 import { sectionNavMode } from "./sectionNav.js";
 import { assessmentSettings } from "./assessment.js";
+import { scriptMayWriteAnswer, scriptMayWriteVariable } from "./scriptWrites.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
@@ -63,7 +64,10 @@ export type SubmissionProblem = {
     | "step_unreachable"
     | "skipped_required"
     | "client_only"
-    | "server_mismatch";
+    | "server_mismatch"
+    /* S1a: a value the replay cannot derive (or did not show) that a sandboxed script wrote through the engine-checked
+       channel (`state.scriptWrites`) — informational: the server runs no author code, so it cannot recompute it */
+    | "script_written";
   questionId?: string;
   pageId?: string;
   /** server_mismatch on a calculated variable: its name */
@@ -102,6 +106,8 @@ export interface SubmissionInput {
     stepIndex: unknown;
     status: string;
     completed?: boolean;
+    /** S1a: the paradata of script writes (`state.scriptWrites`) — which answer keys / variables a script wrote */
+    scriptWrites?: unknown;
   };
   quotaCounts?: QuotaCounts;
   /** replay safety valve: stop after this many pages (a loop that never ends must not hang the save) */
@@ -227,7 +233,13 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     soft.push({ severity: "soft", code: "step_unreachable", message: `stepIndex ${stepIndex} is past the end of the interview` });
   }
 
-  if (input.recompute !== false) recomputed = compareDerived(def, answers, posted.calculated, state, input.balanceClaims, soft);
+  /*
+   * S1a: what a script wrote (the posted paradata). A derived value that differs from the server's recompute, or an
+   * answer to a question the replay never showed, is the script's — `script_written` (soft, informational), and
+   * under RUNTIME_SERVER_RECOMPUTE=store the posted value is kept (the server cannot run the script to know better).
+   */
+  const written = scriptWrittenTargets(def, posted.scriptWrites);
+  if (input.recompute !== false) recomputed = compareDerived(def, answers, posted.calculated, state, input.balanceClaims, soft, written);
 
   // answers for questions the replay never showed (hidden by display logic, in an iteration that did not exist)
   for (const key of Object.keys(answers)) {
@@ -235,6 +247,7 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     if (!answered(answers[key]) || askedBases.has(base)) continue;
     const q = getQuestion(def, base);
     if (!q || q.type === "hidden" || q.type === "calculated" || q.type === "embedded_data") continue;
+    if (written.answers.has(key)) { soft.push({ severity: "soft", code: "script_written", questionId: base, message: `${key} was written by a survey script (never shown on the pages passed)` }); continue; }
     // beyond the claimed step the respondent has not been shown anything yet: only count what the replay covered
     soft.push({ severity: "soft", code: "not_asked", questionId: base, message: `${base} was answered but never shown on the pages passed` });
   }
@@ -271,6 +284,19 @@ export function summariseValue(v: unknown): unknown {
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+/** S1a: the answer keys and variable names the posted `scriptWrites` paradata says a script wrote */
+function scriptWrittenTargets(def: SurveyDefinition, raw: unknown): { answers: Set<string>; calculated: Set<string> } {
+  const out = { answers: new Set<string>(), calculated: new Set<string>() };
+  if (!Array.isArray(raw)) return out;
+  for (const r of raw.slice(-1000)) {
+    if (!isPlainObject(r) || typeof r.target !== "string") continue;
+    // only targets the channel could have written (scriptMayWrite…) — forged paradata cannot shield a tampered derived value
+    if (r.kind === "answer" && scriptMayWriteAnswer(def, answerKeyBase(r.target))) out.answers.add(r.target);
+    else if (r.kind === "calculated" && scriptMayWriteVariable(def, r.target)) out.calculated.add(r.target);
+  }
+  return out;
+}
+
 function compareDerived(
   def: SurveyDefinition,
   postedAnswers: Record<string, AnswerValue>,
@@ -278,6 +304,7 @@ function compareDerived(
   state: ResponseState,
   claims: Record<string, string> | undefined,
   soft: SubmissionProblem[],
+  written: { answers: Set<string>; calculated: Set<string> } = { answers: new Set(), calculated: new Set() },
 ): NonNullable<SubmissionCheck["recomputed"]> {
   const rec = { answers: {} as Record<string, unknown>, calculated: {} as Record<string, unknown> };
   const derived = new Set<string>();
@@ -295,6 +322,7 @@ function compareDerived(
       if (!derived.has(base)) continue;
       const p = postedAnswers[key], sv = state.answers[key];
       if (same(p, sv)) continue;
+      if (written.answers.has(key)) { soft.push({ severity: "soft", code: "script_written", questionId: base, posted: summariseValue(p), server: summariseValue(sv), message: `${key}: written by a survey script — the server does not run scripts, so it cannot derive this value` }); continue; }
       rec.answers[key] = sv ?? null;
       soft.push({ severity: "soft", code: "server_mismatch", questionId: base, posted: summariseValue(p), server: summariseValue(sv), message: `${key}: the posted answer differs from the one the server derives from the other answers` });
     }
@@ -304,6 +332,7 @@ function compareDerived(
     if (claims && name in claims) continue; // judged against the stored claim below
     const p = pc[name], sv = (state.calculated as Record<string, unknown>)[name];
     if (same(p, sv)) continue;
+    if (written.calculated.has(name)) { soft.push({ severity: "soft", code: "script_written", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: written by a survey script — the server does not run scripts, so it cannot derive this value` }); continue; }
     rec.calculated[name] = sv ?? null;
     soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: the posted value differs from the one the server calculates` });
   }
