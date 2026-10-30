@@ -56,7 +56,7 @@ export type EmbeddedSource = "url" | "static" | "panel" | "expression";
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -154,7 +154,10 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const scope = str(o.scope ?? o.axis)?.toLowerCase();
       if (scope && !DIMENSIONS.has(scope)) return "scope is options, rows or columns";
       const anchors = refs(o.anchors ?? o.anchor ?? o.pin), keepLast = refs(o.keepLast ?? o.anchorBottom ?? o.last), keepFirst = refs(o.keepFirst ?? o.anchorTop ?? o.first);
-      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}) };
+      const methodRaw = str(o.method ?? o.order ?? o.mode)?.toLowerCase().replace(/[\s-]+/g, "_");
+      const method = methodRaw === undefined ? undefined : methodRaw === "rotate" || methodRaw === "rotation" || methodRaw === "balanced" || methodRaw === "latin_square" ? "rotate" : methodRaw === "reverse_half" || methodRaw === "reverse" ? "reverse_half" : methodRaw === "shuffle" || methodRaw === "random" ? "shuffle" : null;
+      if (method === null) return "method is shuffle, rotate or reverse_half";
+      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}) };
     }
     case "set_mask": {
       const target = str(o.target ?? o.question, 120), expression = str(o.expression ?? o.mask ?? o.set ?? o.source, 2000);
@@ -612,9 +615,9 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const allBottom = [...list.filter((o) => hasFlag(o, "anchor_bottom") && !hasFlag(o, "anchor_top") && !bottoms.includes(o)), ...bottoms];
       const next = [...allTop, ...list.filter((o) => !allTop.includes(o) && !allBottom.includes(o)), ...allBottom];
       (q as unknown as Record<string, unknown>)[axis] = next;
-      q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
+      q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: a.method ?? "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
       const pins = [...tops.map((o) => `“${plain(o.label, 30)}” stays first`), ...bottoms.map((o) => `“${plain(o.label, 30)}” stays last`)];
-      return { description: `${q.code} ${axis} ${a.enabled ? "randomized" : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
+      return { description: `${q.code} ${axis} ${a.enabled ? (a.method === "rotate" ? "rotated (each in each position equally often across respondents)" : a.method === "reverse_half" ? "shown in order for half the respondents, reversed for the other half" : "randomized") : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
     }
     case "set_mask": {
       const q = questionOrFail(env, a.target);

@@ -38,7 +38,9 @@ export type SurveyAction =
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
-      readOnlyIgnored?: boolean }
+      readOnlyIgnored?: boolean;
+      /** S2a D16: a variant's own settings (e.g. gamified.timed timeLimitSeconds / onTimeout) — only the keys the variant declares, each checked against the question schema */
+      settings?: Record<string, unknown> }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -85,6 +87,8 @@ export interface ValidationSpec {
   /** kind "condition": what a valid answer must satisfy (stored negated: the engine's `check` is the invalid case) */
   check?: CondInput;
   message?: string;
+  /** S2a D16: "warning" shows the message and lets the respondent continue (schema ValidationRule.severity); absent = a blocking error */
+  severity?: "warning";
 }
 ```
 
@@ -96,7 +100,7 @@ From `packages/engine/src/optionActions.ts`:
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }

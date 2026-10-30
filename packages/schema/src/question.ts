@@ -1547,3 +1547,18 @@ const QuestionObject = z.object({
 /* every parse — Studio, preview, runtime, import, clone, restore — normalises legacy content first */
 export const Question = z.preprocess(normalizeQuestion, QuestionObject);
 export type Question = z.infer<typeof QuestionObject>;
+
+/**
+ * ONE SETTING'S OWN FIELD (S2a D16, 2026-10-30): the engine checks a variant setting an action writes
+ * (`update_question … settings`) against the question schema's field for it — an enum, a number — rather than a
+ * second copy of the rules.
+ */
+export function questionSettingField(key: string): z.ZodTypeAny | undefined {
+  let t: z.ZodTypeAny = QuestionObject.shape.settings;
+  for (let i = 0; i < 6; i++) {
+    if (t instanceof z.ZodDefault || t instanceof z.ZodOptional || t instanceof z.ZodNullable) t = t._def.innerType;
+    else if (t instanceof z.ZodEffects) t = t.innerType();
+    else break;
+  }
+  return t instanceof z.ZodObject ? (t.shape as Record<string, z.ZodTypeAny>)[key] : undefined;
+}

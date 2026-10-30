@@ -65,18 +65,11 @@ function assertApplied(sentence: string, raw: unknown[]) {
 }
 const q = (r: { def: SurveyDefinition }, code: string) => r.def.questions.find((x) => x.code === code)! as unknown as Record<string, unknown> & { settings?: Record<string, unknown>; validation?: unknown; randomization?: Record<string, unknown>; variant?: string; type: string; punches?: unknown[] };
 
-/*
- * TARGETS NOT MET YET (S2a item 1): a test labelled with an open defect is skipped with that id so the runner stays
- * green between commits. Each S2a item closes its id here; by the end of S2a this set is empty and removed.
- */
-const OPEN = new Set(["D16", "R6"]);
-const target = (id?: string) => (id && OPEN.has(id) ? { skip: `target, open defect ${id}` } : {});
-
-interface Owner { defect?: string; n: number; sentence: string; sel?: string; mode: string; ux: boolean; uxOnly: boolean; engine?: string; native: unknown[]; check?: (r: ReturnType<typeof assertApplied>) => void }
+interface Owner { n: number; sentence: string; sel?: string; mode: string; ux: boolean; uxOnly: boolean; engine?: string; native: unknown[]; check?: (r: ReturnType<typeof assertApplied>) => void }
 const OWNER: Owner[] = [
   { n: 1, sentence: "Make all answer options appear as interactive cards.", mode: "ux", ux: true, uxOnly: true, engine: "model",
     native: [{ op: "set_theme", appearance: { optionStyle: "cards" } }, { op: "create_style", label: "Interactive cards", target: "options", rules: [{ declarations: { "border-radius": "12px" } }, { state: "hover", declarations: { transform: "translateY(-2px)" } }] }] },
-  { defect: "R6", n: 2, sentence: "Automatically punch Option 5 when Option 2 is selected.", sel: "Q7", mode: "edit", ux: false, uxOnly: false, engine: "actions",
+  { n: 2, sentence: "Automatically punch Option 5 when Option 2 is selected.", sel: "Q7", mode: "edit", ux: false, uxOnly: false, engine: "actions",
     native: [{ op: "add_punch", target: "Q7", when: "Q7 = 2", codes: [5] }], check: (r) => assert.equal(q(r, "Q7").punches?.length, 1) },
   { n: 3, sentence: "Show Q5 only when Q2 is Option 1 and Q3 is greater than 5.", mode: "edit", ux: false, uxOnly: false, engine: "actions",
     native: [{ op: "set_display_logic", target: "Q5", expression: "Q2 = 1 AND Q3 > 5" }] },
@@ -86,31 +79,31 @@ const OWNER: Owner[] = [
     native: [{ op: "create_question", ref: "RANK", type: "ranking", text: "Rank these", options: ["A", "B", "C"] }] },
   { n: 6, sentence: "Automatically rank selected answers.", sel: "Q7", mode: "question", ux: false, uxOnly: false, engine: "model",
     native: [{ op: "create_question", ref: "RANKSEL", type: "ranking", text: "Rank what you used", options: ["Opt 1", "Opt 2", "Opt 3", "Opt 4", "Opt 5", "Opt 6"] }, { op: "set_mask", target: "RANKSEL", expression: "Q7.Selected", action: "display" }] },
-  { defect: "D16", n: 7, sentence: "Display a warning when the total exceeds 100%.", sel: "Q6", mode: "ux", ux: true, uxOnly: false, engine: "model",
+  { n: 7, sentence: "Display a warning when the total exceeds 100%.", sel: "Q6", mode: "ux", ux: true, uxOnly: false, engine: "model",
     native: [{ op: "set_validation", target: "Q6", rules: [{ kind: "condition", check: "Q6.O1 + Q6.O2 + Q6.O3 + Q6.O4 <= 100", message: "The total is above 100%", severity: "warning" }] }],
     check: (r) => assert.match(JSON.stringify(q(r, "Q6").validation), /"severity":"warning"/, "the soft warning is kept (D16)") },
-  { defect: "D16", n: 8, sentence: "Randomize these four concepts equally across respondents.", sel: "Q8", mode: "edit", ux: false, uxOnly: false, engine: "actions",
+  { n: 8, sentence: "Randomize these four concepts equally across respondents.", sel: "Q8", mode: "edit", ux: false, uxOnly: false, engine: "actions",
     native: [{ op: "set_option_randomization", target: "Q8", enabled: true, method: "rotate" }],
     check: (r) => assert.equal(q(r, "Q8").randomization?.method, "rotate", "rotation is kept (D16)") },
-  { defect: "D16", n: 9, sentence: "Add a countdown timer to this question.", sel: "Q5", mode: "ux", ux: true, uxOnly: false, engine: "model",
+  { n: 9, sentence: "Add a countdown timer to this question.", sel: "Q5", mode: "ux", ux: true, uxOnly: false, engine: "model",
     native: [{ op: "update_question", target: "Q5", type: "gamified.timed", settings: { timeLimitSeconds: 30, onTimeout: "lock" } }],
     check: (r) => { assert.equal(q(r, "Q5").settings?.timeLimitSeconds, 30, "the timer length is kept (D16)"); assert.equal(q(r, "Q5").settings?.onTimeout, "lock"); } },
   { n: 10, sentence: "Display an image when a respondent selects a particular brand.", sel: "Q1", mode: "question", ux: false, uxOnly: false, engine: "model",
     native: [{ op: "create_question", ref: "IMG", type: "descriptive", block: "Screener", after: "Q1", text: "<img src=\"https://example.com/beta.png\" alt=\"Beta\">" }, { op: "set_display_logic", target: "IMG", expression: "Q1 = 2" }] },
-  { defect: "D9", n: 11, sentence: "Make the survey look like a premium modern web application.", mode: "ux", ux: true, uxOnly: true, engine: "model",
+  { n: 11, sentence: "Make the survey look like a premium modern web application.", mode: "ux", ux: true, uxOnly: true, engine: "model",
     native: [{ op: "set_theme", appearance: { optionStyle: "cards" } }] },
-  { defect: "D9", n: 12, sentence: "Create an interactive conjoint exercise.", mode: "ux", ux: true, uxOnly: false, engine: "model",
+  { n: 12, sentence: "Create an interactive conjoint exercise.", mode: "ux", ux: true, uxOnly: false, engine: "model",
     native: [{ op: "create_conjoint", ref: "CJ", text: "Choose", attributes: [{ name: "Price", levels: ["$1", "$2", "$3"] }, { name: "Brand", levels: ["A", "B", "C"] }] }] },
   { n: 13, sentence: "Highlight unanswered questions before submission.", mode: "ux", ux: true, uxOnly: true, engine: "model",
     native: [{ op: "set_navigation", sectionNav: "free", position: "top" }] },
   { n: 14, sentence: "Add a custom validation rule.", sel: "Q5", mode: "edit", ux: false, uxOnly: false, engine: "model",
     native: [{ op: "set_validation", target: "Q3", rules: [{ kind: "condition", check: "Q3 <= 10", message: "At most 10" }] }] },
-  { defect: "D9", n: 15, sentence: "Create an interactive video-testing experience.", mode: "ux", ux: true, uxOnly: false, engine: "model",
+  { n: 15, sentence: "Create an interactive video-testing experience.", mode: "ux", ux: true, uxOnly: false, engine: "model",
     native: [{ op: "create_question", ref: "VID", type: "video_timeline", text: "React while watching" }] },
 ];
 
 for (const o of OWNER) {
-  test(`owner #${o.n}: “${o.sentence}” — class, engine, and a native answer the gate accepts`, target(o.defect), () => {
+  test(`owner #${o.n}: “${o.sentence}” — class, engine, and a native answer the gate accepts`, () => {
     const g = gateFor(o.sentence);
     assert.deepEqual({ mode: g.cls.mode, ux: g.cls.ux, uxOnly: g.cls.uxOnly }, { mode: o.mode, ux: o.ux, uxOnly: o.uxOnly }, "server class");
     if (o.engine) assert.equal(interpretRequest(def, o.sentence, o.sel ? { selectedId: qid(o.sel) } : {}).kind, o.engine, "engine reading");
@@ -121,7 +114,7 @@ for (const o of OWNER) {
 
 /* ---------------------------------------------------------------- the engine's deterministic readings (no model) */
 
-test("owner #2: the engine reads “punch option N when option M is selected” into add_punch (selected question, or “of Qx”)", target("R6"), () => {
+test("owner #2: the engine reads “punch option N when option M is selected” into add_punch (selected question, or “of Qx”)", () => {
   const i = interpretRequest(def, "Automatically punch Option 5 when Option 2 is selected.", { selectedId: qid("Q7") });
   assert.equal(i.kind, "actions");
   if (i.kind !== "actions") return;
@@ -134,7 +127,7 @@ test("owner #2: the engine reads “punch option N when option M is selected” 
   assert.ok(r.results.every((x) => x.ok), r.errors.join("; "));
 });
 
-test("owner #8: “equally” is not dropped — options rotate (an exact, balanced presentation)", target("D16"), () => {
+test("owner #8: “equally” is not dropped — options rotate (an exact, balanced presentation)", () => {
   const i = interpretRequest(def, "Randomize these four concepts equally across respondents.", { selectedId: qid("Q8") });
   assert.equal(i.kind, "actions");
   if (i.kind !== "actions") return;
@@ -143,13 +136,13 @@ test("owner #8: “equally” is not dropped — options rotate (an exact, balan
   assert.equal(q(r, "Q8").randomization?.method, "rotate");
 });
 
-test("owner #9: “add a 30-second countdown to Q5” → the timed variant with 30 s; without a length → a choice of lengths", target("D16"), () => {
+test("owner #9: “add a 30-second countdown to Q5” → the timed variant with 30 s; without a length → a choice of lengths", () => {
   const i = interpretRequest(def, "Add a 30-second countdown to Q5");
   assert.equal(i.kind, "actions");
   if (i.kind !== "actions") return;
   const r = applySurveyActions(def, i.actions);
   assert.ok(r.results.every((x) => x.ok), r.errors.join("; "));
-  assert.equal(q(r, "Q5").type, "gamified.timed");
+  assert.equal(q(r, "Q5").variant, "gamified.timed");
   assert.equal(q(r, "Q5").settings?.timeLimitSeconds, 30);
   const owner = interpretRequest(def, "Add a countdown timer to this question.", { selectedId: qid("Q5") });
   assert.equal(owner.kind, "model");
@@ -159,7 +152,7 @@ test("owner #9: “add a 30-second countdown to Q5” → the timed variant with
   for (const c of owner.fallback!.choices) assert.equal(interpretRequest(def, c.text).kind, "actions", `choice “${c.text}” is a sentence the engine reads`);
 });
 
-test("owner #5 / #15: a ranking / video-testing question without a model is a clarify that names the variant and asks only for the wording", target("R6"), () => {
+test("owner #5 / #15: a ranking / video-testing question without a model is a clarify that names the variant and asks only for the wording", () => {
   for (const [s, variant] of [["Create a drag-and-drop ranking question.", /drag/i], ["Create an interactive video-testing experience.", /video/i]] as const) {
     const i = interpretRequest(def, s);
     assert.equal(i.kind, "model", s);
@@ -172,7 +165,7 @@ test("owner #5 / #15: a ranking / video-testing question without a model is a cl
 
 /* ---------------------------------------------------------------- S3's stand-ins (§4.3) */
 
-test("stand-in (D9): “Write a JavaScript that hides option 3 of Q5 when Q2 is 1” — UX guide, not look-only; the native option logic is accepted", target("D9"), () => {
+test("stand-in (D9): “Write a JavaScript that hides option 3 of Q5 when Q2 is 1” — UX guide, not look-only; the native option logic is accepted", () => {
   const s = "Write a JavaScript that hides option 3 of Q5 when Q2 is 1";
   const g = gateFor(s);
   assert.equal(g.cls.ux, true);
@@ -180,13 +173,13 @@ test("stand-in (D9): “Write a JavaScript that hides option 3 of Q5 when Q2 is 
   assertApplied(s, [{ op: "update_option", target: "Q5", option: "3", visibleIf: "NOT (Q2 = 1)" }]);
 });
 
-test("stand-in (D9): “terminate respondents under 18” — the native terminate skip is accepted", target("D9"), () => {
+test("stand-in (D9): “terminate respondents under 18” — the native terminate skip is accepted", () => {
   const s = "Write a script to terminate respondents under 18 at Q9";
   assert.equal(gateFor(s).cls.uxOnly, false);
   assertApplied(s, [{ op: "add_skip", from: "Q9", when: "Q9 < 18", to: "terminate" }]);
 });
 
-test("stand-in (D9): “Prefill Q9 with the URL parameter age” — embedded data from the URL + a piped default are accepted", target("D9"), () => {
+test("stand-in (D9): “Prefill Q9 with the URL parameter age” — embedded data from the URL + a piped default are accepted", () => {
   const s = "Prefill Q9 with the URL parameter age";
   const g = gateFor(s);
   assert.equal(g.cls.ux, true, "the UX guide (it teaches set_default_value) goes with it");
@@ -195,7 +188,7 @@ test("stand-in (D9): “Prefill Q9 with the URL parameter age” — embedded da
   assert.equal(q(r, "Q9").settings?.defaultValue, "{{age}}");
 });
 
-test("D9: pure look words stay look-only — and even then a behavioural native op is let through when the sentence asks for behaviour", target("D9"), () => {
+test("D9: pure look words stay look-only — and even then a behavioural native op is let through when the sentence asks for behaviour", () => {
   for (const s of ["Change the colours to navy", "Make Q5 look modern", "Use a bigger font", "Make it look like a premium app"]) assert.equal(classifyRequest(s, 9, 0).uxOnly, true, s);
   // a look sentence that also asks for behaviour: the behavioural native op passes under inferred look-only
   const s = "Style Q5 so option 3 is hidden when Q2 is 1";
@@ -210,7 +203,7 @@ test("D9: pure look words stay look-only — and even then a behavioural native 
 });
 
 for (const s of ["Debug the script on Q5", "Why does the script on Q5 not work", "Explain what the script on Q5 does"]) {
-  test(`stand-in (D10): “${s}” reaches the copilot (not the grammar), and without a model is answered from the script itself`, target("D10"), () => {
+  test(`stand-in (D10): “${s}” reaches the copilot (not the grammar), and without a model is answered from the script itself`, () => {
     const i = interpretRequest(def, s);
     assert.equal(i.kind, "model");
     if (i.kind !== "model") return;

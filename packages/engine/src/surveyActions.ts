@@ -1,5 +1,5 @@
 import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
 import { createQuestionFromVariant } from "./questionCreate.js";
@@ -85,6 +85,8 @@ export interface ValidationSpec {
   /** kind "condition": what a valid answer must satisfy (stored negated: the engine's `check` is the invalid case) */
   check?: CondInput;
   message?: string;
+  /** S2a D16: "warning" shows the message and lets the respondent continue (schema ValidationRule.severity); absent = a blocking error */
+  severity?: "warning";
 }
 
 /**
@@ -104,7 +106,9 @@ export type SurveyAction =
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
-      readOnlyIgnored?: boolean }
+      readOnlyIgnored?: boolean;
+      /** S2a D16: a variant's own settings (e.g. gamified.timed timeLimitSeconds / onTimeout) — only the keys the variant declares, each checked against the question schema */
+      settings?: Record<string, unknown> }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -267,7 +271,9 @@ const validations = (v: unknown): ValidationSpec[] | undefined => {
     const when = condIn(o.when);
     const check = condIn(o.check ?? o.condition);
     if (kind === "condition" && !check) return [];
-    const rest = { ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}) };
+    /* S2a D16 (owner #7 "display a warning when the total exceeds 100%"): a soft rule is carried, not dropped */
+    const soft = /^(?:warning|warn|soft)$/i.test(String(o.severity ?? o.level ?? ""));
+    const rest = { ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}), ...(soft ? { severity: "warning" as const } : {}) };
     if (kind === EXACT_SELECTIONS) return value === undefined ? [] : [{ kind: "min_selections", value, ...rest }, { kind: "max_selections", value, ...rest }];
     return [{ kind, ...(value !== undefined ? { value } : {}), ...rest }];
   });
@@ -339,6 +345,11 @@ function coerceOne(item: unknown): SurveyAction | string {
        * honest "changes nothing" with the reason.
        */
       if (bool(o.hidden) !== undefined) a.hidden = bool(o.hidden);
+      /* S2a D16: a variant's settings — plain values only, at most 12 keys; which keys and values are allowed is checked when applied, against the variant */
+      if (o.settings && typeof o.settings === "object" && !Array.isArray(o.settings)) {
+        const st = Object.fromEntries(Object.entries(o.settings as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (typeof v === "number" || typeof v === "boolean" || (typeof v === "string" && v.length <= 200))).slice(0, 12));
+        if (Object.keys(st).length) a.settings = st;
+      }
       const readOnlyAsked = o.readOnly !== undefined || o.read_only !== undefined || o.readonly !== undefined;
       if (readOnlyAsked) a.readOnlyIgnored = true;
       if (Object.keys(a).length === 3 && a.readOnlyIgnored) return "update_question changes nothing: Read Only is no longer a question state — a question respondents must not answer is set hidden (hidden: true); it still runs its logic and auto-punch rules";
@@ -752,6 +763,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
           else lossy.push(`changes ${q.code} from ${from} to ${typeLabel(q)}`);
         }
       }
+      if (a.settings) what.push(...applyVariantSettings(q, a.settings));
       if (a.text !== undefined && a.text !== q.text) { q.text = pipeRefs(ctx, a.text); what.push("text"); }
       if (a.instruction !== undefined) { q.instruction = a.instruction || undefined; what.push("instruction"); }
       if (a.required !== undefined && a.required !== q.required) { q.required = a.required; what.push(a.required ? "required" : "optional"); }
@@ -1418,6 +1430,33 @@ function mirrorBounds(q: Question): void {
   if (max !== undefined) q.settings.maxValue = max;
 }
 
+/**
+ * A VARIANT'S OWN SETTINGS (S2a D16, 2026-10-30). The settings a variant declares in the registry (its
+ * `defaults.settings`: gamified.timed → timeLimitSeconds, onTimeout) are the ones an action may set — each value
+ * checked against the question schema's own field (an enum, a number), numbers bounded. Anything else is refused
+ * with the keys that are allowed: the model cannot reach a setting the variant does not describe.
+ */
+const SETTING_BOUNDS: Record<string, [number, number]> = { timeLimitSeconds: [1, 3600] };
+function applyVariantSettings(q: Question, patch: Record<string, unknown>): string[] {
+  const v = q.variant ? variantRegistry.get(q.variant) : undefined;
+  const declared = (v?.defaults as { settings?: Record<string, unknown> } | undefined)?.settings ?? {};
+  const allowed = Object.keys(declared);
+  const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
+  if (bad.length) fail(allowed.length ? `${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${allowed.join(", ")}` : `${q.code} (${v?.name ?? q.type}) has no settings an action can set`);
+  const done: string[] = [];
+  const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;
+  for (const [k, val] of Object.entries(patch)) {
+    if (typeof declared[k] === "number" && typeof val !== "number") fail(`${q.code}: ${k} must be a number`);
+    if (typeof declared[k] === "boolean" && typeof val !== "boolean") fail(`${q.code}: ${k} must be true or false`);
+    const b = SETTING_BOUNDS[k];
+    if (b && typeof val === "number" && (val < b[0] || val > b[1])) fail(`${q.code}: ${k} must be between ${b[0]} and ${b[1]}`);
+    const field = questionSettingField(k);
+    if (field && !field.safeParse(val).success) fail(`${q.code}: ${JSON.stringify(val)} is not a valid ${k}`);
+    settings[k] = val;
+    done.push(`${k} ${val}`);
+  }
+  return done;
+}
 function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: number) => string): ValidationRule[] {
   const def = ctx.def;
   return specs.map((r, i) => ({
@@ -1433,6 +1472,7 @@ function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: numbe
      */
     ...(r.check ? { check: { type: "group", op: "not", children: [parseCondition(def, withRefs(ctx, r.check))] } } : {}),
     ...(r.message ? { message: r.message } : {}),
+    ...(r.severity === "warning" ? { severity: "warning" } : {}),
   })) as ValidationRule[];
 }
 
