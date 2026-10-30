@@ -4,7 +4,7 @@ import { findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopValue } from "
 import { flattenVariables } from "./flatten.js";
 import { evaluateExpression } from "./calc.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
-import { escapeHtml } from "./html.js";
+import { escapeHtml, sanitizeHtml } from "./html.js";
 import { isGeoAnswer, geoText, round6, formatMetres } from "./geo.js";
 import { interviewText, isInterviewAnswer } from "./interview.js";
 import { isOtherOption, otherOptions, otherRows, otherTextFor, rowOtherCode } from "./otherSpecify.js";
@@ -571,4 +571,14 @@ export function lintPipingTokens(def: SurveyDefinition, text: string, q?: Questi
     }
   }
   return problems;
+}
+
+/**
+ * AUTHOR HTML DRAWN AS HTML (audit 2026-10-30 D5): a survey's branding header / footer and a custom component's
+ * HTML were piped and handed to `dangerouslySetInnerHTML` as written, so `<img src=x onerror=…>` ran on every
+ * respondent's page. Piped values were already escaped; the template now goes through the same `sanitizeHtml` an
+ * option label does — scripts, event handlers and javascript: URLs removed, inline styles and classes kept.
+ */
+export function resolveAuthorHtml(template: string | null | undefined, ctx: EvalContext): string {
+  return sanitizeHtml(resolvePiping(template ?? "", ctx));
 }

@@ -16,6 +16,7 @@ import {
   visibleQuestions,
   validatePage,
   resolvePiping,
+  resolveAuthorHtml,
   runScripts,
   allEmbeddedFields,
   embeddedFieldName,
@@ -2322,7 +2323,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {(b.logoUrl || b.headerHtml) && (
         <div className={`rs-header ${b.logoPosition}`}>
           {b.headerHtml ? (
-            <div dangerouslySetInnerHTML={{ __html: resolvePiping(b.headerHtml, ctx) }} />
+            <div dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.headerHtml, ctx) }} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             b.logoUrl && <SafeImage src={b.logoUrl} alt="logo" imageOnly display={b.logoDisplay} />
@@ -2341,7 +2342,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       {content}
       {b.footerHtml && (
-        <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolvePiping(b.footerHtml, ctx) }} />
+        <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.footerHtml, ctx) }} />
       )}
       {def.quality?.enabled && def.quality.telemetry?.disclosure && (
         <div className="rs-footer rs-disclosure" data-testid="rs-quality-disclosure">{def.quality.telemetry.disclosure}</div>

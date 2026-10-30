@@ -8,6 +8,7 @@ import {
   designRowsFor,
   shuffleAlternatives,
   resolvePiping,
+  resolveAuthorHtml,
   evaluateExpression,
   flattenVariables,
   toggleMultiValue,
@@ -2759,7 +2760,7 @@ function CustomComponent(p: QRProps) {
   return (
     <div
       ref={ref}
-      dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? "", ctxOf(p)) }}
+      dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(p.q.customHtml, ctxOf(p)) /* D5: sanitised like an option label */ }}
     />
   );
 }
