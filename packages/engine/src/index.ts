@@ -172,6 +172,7 @@ __registerSurveyLint((def) => __lintEmbeddedPiping(def).map((i) => ({
 })));
 export * from "./capabilities.js";
 export * from "./capabilityRegistry.js";
+export * from "./mediaActions.js";
 export * from "./researchActions.js";
 export * from "./qualActions.js";
 /* F2 2026-10-22: qualitative synthesis requests in words (summaries, insights, comparisons, reels, double-coding, ask, auto-coding, group sessions) */

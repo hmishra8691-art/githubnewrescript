@@ -17,6 +17,7 @@ import { constructFor } from "./hypotheses.js";
 import { usedNames } from "./variableUsage.js";
 import { stripHtmlText } from "./html.js";
 import { K, moveTranslationKey } from "./localization.js";
+import { applyMediaAction, coerceMediaAction, describeMediaAction, MEDIA_ACTION_OPS, type MediaAction } from "./mediaActions.js";
 
 /**
  * THE OPTION, ORDER AND HOUSEKEEPING ACTIONS (Intelligent Mode Phase 2) —
@@ -67,11 +68,14 @@ export type OptionAction =
   | { op: "remove_hypothesis"; hypothesis: string | number }
   /** the structured reading of a hypothesis (Phase 3): only the fields given change; a construct name must exist in the design */
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
-  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null };
+  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
+  /* S2b: a question's stimulus and option images — see mediaActions.ts */
+  | MediaAction;
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
+  ...MEDIA_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -105,6 +109,7 @@ const first = (o: Record<string, unknown>, ...keys: string[]): unknown => keys.m
 /** the gate: a well-formed action, a reason it is refused, or null when `op` is not an option action */
 export function coerceOptionAction(op: string, o: Record<string, unknown>): OptionAction | string | null {
   if (!isOptionOp(op)) return null;
+  if ((MEDIA_ACTION_OPS as readonly string[]).includes(op)) return coerceMediaAction(o);
   switch (op) {
     case "update_option": {
       const target = str(o.target ?? o.question, 120), option = ref(o.option);
@@ -502,6 +507,7 @@ const MASK_WORD: Record<MaskDimension, string> = { options: "mask", rows: "row m
 export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: OptionEnv): OptionApplied {
   const warnings: string[] = [];
   switch (a.op) {
+    case "set_question_media": return applyMediaAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
       const q = questionOrFail(env, a.target);
       const options = (q.options ?? []) as Option[];
@@ -868,6 +874,7 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
 
 export function describeOptionAction(a: OptionAction): string {
   switch (a.op) {
+    case "set_question_media": return describeMediaAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;
     case "reorder_options": return `Reorder the options of ${a.target}`;
     case "set_option_randomization": return `${a.enabled ? "Randomize" : "Stop randomizing"} the ${a.scope ?? "options"} of ${a.target}`;

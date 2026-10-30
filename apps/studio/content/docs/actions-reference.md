@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
+**Options and design** (14): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -33,7 +33,7 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
@@ -111,7 +111,21 @@ export type OptionAction =
   | { op: "remove_hypothesis"; hypothesis: string | number }
   /** the structured reading of a hypothesis (Phase 3): only the fields given change; a construct name must exist in the design */
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
-  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null };
+  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
+  /* S2b: a question's stimulus and option images — see mediaActions.ts */
+  | MediaAction;
+```
+
+## Question media (set_question_media)
+
+From `packages/engine/src/mediaActions.ts`:
+
+```ts
+export type MediaAction = {
+  op: "set_question_media"; target: string;
+  items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
+  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
+};
 ```
 
 ## UX actions

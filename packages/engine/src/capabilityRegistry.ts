@@ -70,8 +70,14 @@ export const NATIVE_ROUTES: readonly NativeRoute[] = [
   {
     id: "show_image", need: /\b(?:show|display|add|insert)\w*\b[^.]{0,40}\b(?:image|picture|photo|logo|video|audio|clip)\b|\bcannot show an image\b|<img\b/i,
     cannot: "create an <img> / <video> or set a src (any address set from code is dropped on the page)",
-    route: `Show it natively: a content question holding the image with display logic (create_question type "descriptive" with <img src="…"> after the question, then set_display_logic, e.g. "Q1 = 2"), or the option's own image`,
-    actions: ["create_question", "set_display_logic"],
+    route: `Show it natively: a content question holding the image with display logic (create_question type "descriptive", then set_question_media with the image and set_display_logic, e.g. "Q1 = 2"), the question's own stimulus (set_question_media items [{url, alt}]), or the option's own image (set_question_media options [{option, imageUrl}])`,
+    actions: ["set_question_media", "create_question", "set_display_logic"],
+  },
+  {
+    id: "watch_media", need: /\b(?:watch|play|listen)\w*\b[^.]{0,30}\b(?:to the end|fully|completely|before)\b|\bwatch[- ]to[- ]continue\b|\bforced exposure\b|\bmust (?:watch|see)\b/i,
+    cannot: "know whether a video or audio stimulus was watched to the end",
+    route: `set_question_media with "requireComplete": true on a stimulus question (the media variants also have "requireWatch" and "allowSeek": false)`,
+    actions: ["set_question_media"],
   },
   {
     id: "network", need: /\b(?:fetch|xmlhttprequest|ajax|websocket|api call|call (?:an?|our|the) (?:api|endpoint|server|webhook)|webhook|send (?:the )?(?:data|answers?) to)\b/i,
@@ -166,6 +172,8 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
     summary: "update_question type \"gamified.timed\" settings {timeLimitSeconds 1–3600, onTimeout lock|advance} (single choice); a visible countdown on another type is a behaviour script ticking with rs.after (≤ 60 s per step)" },
   { id: "assessments", name: "Assessments", need: /\bquiz\w*|\bexam\w*|\btest scor\w*|\banswer key\b|\bcorrect answer\b|\bmarks?\b|\bgrad(?:e|ing)\b|\bpass mark\b/i, actions: ["set_answer_key", "set_assessment"],
     summary: "set_answer_key {target, correct, points} and set_assessment {passMark, feedback …}: scored tests computed by the engine, never written by a script" },
+  { id: "media", name: "Question media (stimulus, option images)", need: /\b(?:image|picture|photo|logo|video|audio|clip|stimulus|media)\b/i, actions: ["set_question_media"],
+    summary: "set_question_media {target, items [{url, alt}], layout horizontal|vertical, requireComplete, options [{code, imageUrl, imageAlt}], clear}: https or the survey's media library (/api/media/…)" },
   { id: "variants", name: "Question variants and their settings", need: /\bvariant\b|\bslider\b|\bnps\b|\bhotspot\b|\bheat ?map\b|\bswipe\b|\bcard sort\w*|\bdrag\w*|\branking\b|\bmap\b|\bsignature\b|\bannotat\w*|\bstar rating\b|\bmatrix\b/i, actions: ["create_question", "update_question"],
     summary: "create_question / update_question with type = a variant id and settings = the keys that variant declares (see the variant catalogue)" },
   { id: "embedded", name: "Embedded data / hidden variables", need: /\bembedded\b|\bhidden (?:variable|question|field)\b|\burl param\w*|\bpanel id\b/i, actions: ["create_embedded", "update_embedded", "remove_embedded"],
