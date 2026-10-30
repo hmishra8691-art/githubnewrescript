@@ -13,6 +13,7 @@ import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
 import { ScriptHealthChip, ScriptHealthSummaryBar } from "./ScriptHealth";
+import { LegacyScriptsBanner } from "./LegacyScripts";
 import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
@@ -748,6 +749,7 @@ export function ScriptsPanel() {
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
       <ScriptHealthSummaryBar />
+      <LegacyScriptsBanner />
       <p className="muted" style={{ fontSize: 13 }}>
         Scripts run in a sandboxed frame (never on the respondent&apos;s page) with this API:{" "}
         <code>get(ref) set(ref, v) getCalc/setCalc getEmbedded/setEmbedded expr(&quot;Q1+Q2&quot;) pipe(&quot;{"{{Q1}}"}&quot;)

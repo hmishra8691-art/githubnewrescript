@@ -6,6 +6,7 @@ import { compileAnimation, compileStyle, describeUxTarget, uxDeclarations, valid
 import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { ScriptHealthChip } from "./ScriptHealth";
+import { LegacyScriptsBanner } from "./LegacyScripts";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -107,6 +108,7 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
   return (
     <div className="ux-items" data-testid="ux-items" data-scope={scope.kind}>
       {intro && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 6px" }}>{intro}</p>}
+      {scope.kind === "survey" ? <LegacyScriptsBanner /> : scope.kind === "question" ? <LegacyScriptsBanner questionId={scope.questionId} /> : null}
       {items.length === 0 && !draft && <p className="muted" style={{ fontSize: 11.5 }} data-testid="ux-items-empty">None yet. Add one here, or ask Intelligent mode (“make these options look like cards”) — either way it is the same setting, editable here.</p>}
       {items.map((x) => (
         <UxItemCard key={x.item.id} kind={x.kind} item={x.item} def={s.def} readOnly={s.readOnly}

@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { diffUx, validateUxScript } from "./ux.js";
+import { diffUx, lexJs, validateUxScript } from "./ux.js";
 import { codeGate, gateReason } from "./codeGate.js";
 import { sanitizeHtml, sanitizeStylesheet } from "./html.js";
 
@@ -194,4 +194,80 @@ export function scriptAuditSentence(action: string, detail: Record<string, unkno
     : v === "legacy" ? " — old Custom code field, moved on load"
     : "";
   return `${kind} ‘${name}’ ${verb}${d.codeChanged ? " and edited" : ""} by ${who}${check}`;
+}
+
+/* ------------------------------------------------------------ legacy code that will not run (S1c item 4, D17) */
+
+export interface LegacyRefusal {
+  kind: "ux_script" | "logic_script" | "component_js";
+  id: string;
+  name: string;
+  /** where it came from: "question Q3's Custom code", "Branding custom JavaScript", "an import", "a Custom Component" */
+  origin: string;
+  /** the check's reasons (at most 3, each ≤160 chars) */
+  reasons: string[];
+  /** the gate's short reason words, for a chip: window, $, setInterval … */
+  names: string[];
+  /** the code as stored — for "Show the code" in the editor and the model's rewrite; not logged anywhere */
+  code: string;
+}
+
+const NAME_IN_REASON = /^"?([\w$.]+)"? is not available|^computed access on ([\w$]+)\[/;
+
+/**
+ * jQuery: the sandbox has none, so `$(…)` / `jQuery(…)` in moved legacy code throws on its first line. The UX check
+ * does not refuse it (a script may declare its own `$`), so the legacy list says it — unless the code declares `$`.
+ */
+export function jqueryProblems(code: string): string[] {
+  const { bare } = lexJs(code);
+  const declares = /\b(var|let|const|function)\s+\$(?![\w$])|\(\s*\$\s*[,)]/.test(bare);
+  const out: string[] = [];
+  if (!declares && /(^|[^\w$.])\$\s*[(.]/.test(bare)) out.push("$ is not available — jQuery is not loaded in the sandbox, so the first $(…) call throws; use document / rs");
+  if (/(^|[^\w$.])jQuery\s*[(.]/.test(bare)) out.push("jQuery is not available — it is not loaded in the sandbox; use document / rs");
+  return out;
+}
+
+/**
+ * D17 — CODE THE SURVEY CARRIES THAT WILL NOT RUN, with the reason, so it is never silently dead:
+ *
+ *   · Styles, animations & scripts behaviours MOVED from the old Custom code fields (`source` question_custom_js /
+ *     branding_custom_js) whose script the UX check refuses (`window`, `$`, `setInterval`, `fetch`, …);
+ *   · Scripts-panel logic scripts the code gate refuses (imports and pasted legacy code; the gate switches them off);
+ *   · Custom Component code the component gate refuses (the respondent sees "This component could not run").
+ *
+ * A UX script the author wrote in the editor and that the check refuses is not listed here — the editor already
+ * refuses to store it with the reason; this list is for code that arrived by migration or import.
+ */
+export function legacyScriptRefusals(def: SurveyDefinition): LegacyRefusal[] {
+  const out: LegacyRefusal[] = [];
+  const names = (errors: string[]) => [...new Set(errors.map((e) => { const m = NAME_IN_REASON.exec(e); return m ? (m[1] ?? m[2] ?? "") : ""; }).filter(Boolean))].slice(0, 6);
+  for (const b of def.ux?.behaviors ?? []) {
+    if (!b.script || (b.source !== "question_custom_js" && b.source !== "branding_custom_js")) continue;
+    const errors = [...jqueryProblems(b.script), ...validateUxScript(b.script, def).errors];
+    if (!errors.length) continue;
+    const qid = b.target?.questionId;
+    const q = qid ? def.questions.find((x) => x.id === qid) : undefined;
+    out.push({ kind: "ux_script", id: b.id, name: b.label || b.id, origin: b.source === "branding_custom_js" ? "Branding custom JavaScript" : `question ${q?.code ?? qid ?? "?"}'s Custom code`, reasons: errors.slice(0, 3).map(cut), names: names(errors), code: b.script });
+  }
+  for (const s of def.scripts ?? []) {
+    const v = codeGate(s.code ?? "", "logic");
+    if (v.ok) continue;
+    out.push({ kind: "logic_script", id: s.id, name: s.name || s.id, origin: "the Scripts panel (an import or pasted code)", reasons: v.errors.slice(0, 3).map(cut), names: names(v.errors), code: s.code ?? "" });
+  }
+  for (const q of def.questions ?? []) {
+    if (q.type !== "custom_component" || !q.customJs?.trim()) continue;
+    const v = codeGate(q.customJs, "component");
+    if (v.ok) continue;
+    out.push({ kind: "component_js", id: q.id, name: `${q.code} component script`, origin: "a Custom Component", reasons: v.errors.slice(0, 3).map(cut), names: names(v.errors), code: q.customJs });
+  }
+  return out;
+}
+
+/** the outline's lines for the model: what will not run and why, so a rewrite can be proposed when asked */
+export function legacyRefusalOutline(def: SurveyDefinition, max = 12): string[] {
+  const list = legacyScriptRefusals(def);
+  if (!list.length) return [];
+  const lines = [`Code that will NOT run (${list.length}; migrated or imported, refused by the script check — propose a rewrite with the rs api only when the researcher asks):`];
+  for (const r of list.slice(0, max)) lines.push(`  ${r.kind === "ux_script" ? `behaviour ${r.id}` : r.kind === "logic_script" ? `logic script` : `component ${r.id}`} “${r.name.replace(/\s+/g, " ").slice(0, 80)}” from ${r.origin}: ${r.reasons.join("; ")}`);
+  return lines;
 }
