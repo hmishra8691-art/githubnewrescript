@@ -24,7 +24,8 @@ export const LOGIC_RUN_TIMEOUT_MS = 3000;
 /** an on_change is run this long after the last change of the same question */
 export const ON_CHANGE_DEBOUNCE_MS = 120;
 
-export interface LogicRunner { run(req: { scripts: PreparedLogicScript[]; snap: LogicSnapshot }, timeoutMs: number): Promise<LogicScriptOutcome[] | null> }
+/** `null`: no answer in time; `"closed"`: the frame was disposed while the run waited (page left, or a dev double mount) */
+export interface LogicRunner { run(req: { scripts: PreparedLogicScript[]; snap: LogicSnapshot }, timeoutMs: number): Promise<LogicScriptOutcome[] | null | "closed"> }
 
 export interface LogicEventOutcome {
   logs: string[];
@@ -38,6 +39,8 @@ export interface LogicEventOutcome {
   refusedWrites: number;
   /** the frame did not answer in time: nothing of this run was applied */
   timedOut: boolean;
+  /** the frame was closed under the run (the page was left, or React mounted twice in dev): nothing applied, not a timeout */
+  closed?: boolean;
 }
 
 const callOf = (w: ScriptWrite) => w.kind === "answer" ? `set("${w.ref}")` : w.kind === "calculated" ? `setCalc("${w.name}")` : w.kind === "embedded" ? `setEmbedded("${w.name}")` : `flag("${w.name}")`;
@@ -65,16 +68,22 @@ export async function runLogicEvent(
   if (!opts.runner) { out.logs.push(`[${names}] not run: the script frame is not available here`); return out; }
   const timeoutMs = opts.timeoutMs ?? LOGIC_RUN_TIMEOUT_MS;
   const snap = logicSnapshot(def, state, opts.loop ?? null, prep.scripts.map((s) => s.body), opts.value);
-  let results: LogicScriptOutcome[] | null;
+  let results: LogicScriptOutcome[] | null | "closed";
   try { results = await opts.runner.run({ scripts: prep.scripts, snap }, timeoutMs); }
   catch { results = null; }
+  if (results === "closed") {
+    out.closed = true;
+    out.logs.push(`[${names}] ${event}: not run — the frame was closed (the page was left or re-mounted); nothing written`);
+    return out;
+  }
   if (!results) {
     out.timedOut = true;
     out.logs.push(`[${names}] ${event}: no answer within ${timeoutMs} ms — not run, nothing written`);
     return out;
   }
+  const answered = results;
   prep.scripts.forEach((script, i) => {
-    const r = results![i];
+    const r = answered[i];
     if (!r) { out.logs.push(`[${script.name}] ERROR: no result`); return; }
     out.ran++;
     out.logs.push(...(r.logs ?? []).map((l) => `[${script.name}] ${l}`));

@@ -39,8 +39,12 @@ export function logicFrameDoc(): string {
 }
 
 export interface LogicRunRequest { scripts: PreparedLogicScript[]; snap: LogicSnapshot }
-/** `null`: the frame did not answer in time (it was disposed) or could not be created */
-export type LogicRunAnswer = LogicScriptOutcome[] | null;
+/**
+ * `null`: the frame did not answer in time (it was then removed) or could not be created. `"closed"`: the frame was
+ * disposed while the run waited — the page was left, or React mounted the Runner twice (StrictMode, dev) — which is
+ * not a timeout and is logged as such.
+ */
+export type LogicRunAnswer = LogicScriptOutcome[] | null | "closed";
 
 let doc: string | null = null;
 let runN = 0;
@@ -101,9 +105,11 @@ export class LogicFrameHost {
   }
 
   private async runNow(req: LogicRunRequest, timeoutMs: number): Promise<LogicRunAnswer> {
-    if (this.disposed || !req.scripts.length) return req.scripts.length ? null : [];
+    if (!req.scripts.length) return [];
+    if (this.disposed) return "closed";
     const began = Date.now();
     const ok = await this.start();
+    if (this.disposed) return "closed";
     if (!ok || !this.frame?.contentWindow) { this.reset(); return null; }
     const id = ++runN;
     return new Promise<LogicRunAnswer>((resolve) => {
@@ -117,12 +123,12 @@ export class LogicFrameHost {
   }
 
   /** a frame that did not answer is removed; the next run starts a fresh one */
-  private reset() {
+  private reset(answer: null | "closed" = null) {
     window.removeEventListener("message", this.onMessage);
     this.frame?.remove();
     this.frame = null;
     this.ready = null;
-    for (const f of this.waiting.values()) f(null);
+    for (const f of this.waiting.values()) f(answer);
     this.waiting.clear();
   }
 
@@ -134,7 +140,7 @@ export class LogicFrameHost {
 
   dispose() {
     if (this.disposed) return;
-    this.reset();
     this.disposed = true;
+    this.reset("closed");
   }
 }

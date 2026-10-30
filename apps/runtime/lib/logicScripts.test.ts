@@ -109,3 +109,13 @@ test("on_change: debounced per question; flush runs what is pending and waits fo
   await sch.flush();
   assert.ok(!ran.includes("q3"));
 });
+
+test("a frame closed under the run (page left, dev double mount) is logged as closed, not as a timeout", async () => {
+  const state = createResponseState(def, { seed: 1 });
+  const o = await runLogicEvent(def, state, "on_submit", { scopeRef: ["p1"], runner: { run: async () => "closed" as const }, apply: apply(state, []) });
+  assert.equal(o.closed, true);
+  assert.equal(o.timedOut, false);
+  assert.equal(state.answers.h1, undefined, "nothing written");
+  assert.ok(o.logs.some((l) => /on_submit: not run — the frame was closed \(the page was left or re-mounted\); nothing written/.test(l)), o.logs.join("\n"));
+  assert.ok(!o.logs.some((l) => /no answer within/.test(l)));
+});

@@ -1236,6 +1236,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           timeoutMs: LOGIC_RUN_TIMEOUT_MS,
         });
         noteLogic(o);
+        // the frame was closed under this run (React's dev double mount disposes it): the remount's own run owns the boot card
+        if (o.closed) return;
         if (o.written && stateRef.current === state) {
           try { setSteps(resumeAt(def, state, counts, state.stepIndex, view).steps); }
           catch (e) { console.error("[rescript:runtime] could not settle after the on_load scripts", e); }
