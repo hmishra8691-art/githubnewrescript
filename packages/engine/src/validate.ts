@@ -390,7 +390,7 @@ export function checkScalarRules(
          * reached `process`, and an endless loop hung the save route.
          */
         if (ctx.scripts === "skip") {
-          ctx.skippedScripts?.push({ questionId: ctx.question?.id, script: ref });
+          ctx.skippedScripts?.push({ questionId: ctx.question?.id, script: ref, value, severity: sev, failMessage: ruleError(rule, "This answer could not be checked.") });
           break;
         }
         const run: ScriptRunResult = { logs: [], errors: [] };

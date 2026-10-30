@@ -67,7 +67,11 @@ export interface EvalContext {
    */
   scripts?: "run" | "skip";
   /** filled when `scripts` is "skip": one entry per custom_script rule not executed */
-  skippedScripts?: { questionId?: string; script: string }[];
+  skippedScripts?: {
+    questionId?: string; script: string;
+    /** S1b: what the browser needs to run the rule in the sandboxed frame instead — the value under test, the rule's severity and its message for "could not be checked" */
+    value?: unknown; severity?: "error" | "warning"; failMessage?: string | { text: string; html: true };
+  }[];
 }
 
 export interface EvalTrace {

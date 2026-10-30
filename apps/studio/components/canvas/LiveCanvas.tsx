@@ -156,7 +156,7 @@ export function LiveCanvas(p: LiveCanvasProps) {
   const errors = React.useMemo(() => {
     if (!simulating) return [];
     try {
-      return validatePage(p.def, [p.q], { def: p.def, state, loop: p.loop })
+      return validatePage(p.def, [p.q], { def: p.def, state, loop: p.loop, scripts: "skip" /* S1b: author code never runs on the Studio page */ })
         .filter((e) => e.questionId === p.q.id);
     } catch {
       return [];
