@@ -324,6 +324,7 @@ test("custom code is preserved as DISABLED scripts; the project carries its revi
   assert.equal(js[0].enabled, false, "…and never run");
   assert.match(js[0].code, /Qualtrics\.SurveyEngine/);
   assert.match(js[0].notes ?? "", /not executed/);
+  assert.match(js[0].notes ?? "", /^Script check: (passes|refused — .+)\. Imported from/, "the code gate's verdict travels with it (S0b D3)");
   assert.ok(!def.scripts.some((x) => x.ref === "QID5"), "the empty template is not custom code");
   assert.match(find(def, "QID8").notes ?? "", /kept, disabled, in Scripts/);
   const dx = (await analyzeImport(enc(DECIPHER_FIXTURE), "b.xml", { surveyId: "s2", uid })).result!.def!;

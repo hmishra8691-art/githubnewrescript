@@ -397,6 +397,15 @@ export function StudioProvider({
     return () => { delete w.__rescriptSaveFault; };
   }, [sandbox]);
 
+  // S1c (SE-29): the sandbox's script audit log compares later saves with the fixture as this editor opened it
+  React.useEffect(() => {
+    if (!sandbox) return;
+    void fetch(`/api/surveys/sandbox/script-audit`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ definition: latest.current, baseline: true }), cache: "no-store",
+    }).catch(() => undefined);
+  }, [sandbox]);
+
   const persistDraft = React.useCallback((): Promise<boolean> => saveQueue(async (): Promise<boolean> => {
     if (sandbox) {
       // the /sandbox fixture has no database row — except for the fault a suite asked for (see the seam above)
@@ -408,6 +417,11 @@ export function StudioProvider({
       if (fault) { faultShown.current = true; return false; }
       // the save after a simulated refusal clears it, as the real one would
       if (faultShown.current) { faultShown.current = false; setSaveState({ kind: "dirty" }); }
+      // S1c (SE-29): the sandbox writes no draft, so its script audit log is kept in the Studio's memory from here
+      void fetch(`/api/surveys/sandbox/script-audit`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ definition: latest.current }), cache: "no-store",
+      }).catch(() => undefined);
       return true;
     }
     // never overlap two writes to the same row: `saveQueue` runs this after the previous write has settled

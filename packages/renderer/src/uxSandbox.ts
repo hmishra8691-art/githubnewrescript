@@ -4,8 +4,30 @@
  * Survey scripts run here, in an iframe with `sandbox="allow-scripts"` (an
  * opaque origin: no cookies, no storage, no page, no session) and a CSP that
  * forbids every network request. This file is what runs INSIDE it, as a
- * string, because the frame is built from `srcdoc`. It is the only script
- * engine in the product; there is no second one to keep in step with it.
+ * string, because the frame is built from `srcdoc`.
+ *
+ * ## One engine, what runs where (after S1b/S1c, 2026-10-30)
+ *
+ * No author JavaScript runs on the respondent's page itself, and none runs on
+ * the server. Every kind of author code runs in a sandboxed frame:
+ *
+ *   · UX scripts (`def.ux.behaviors[].script`, incl. old Custom code moved
+ *     there on load) and Custom Component code (`customJs`, as a runtime-only
+ *     behaviour whose mirror is the component's element) — THIS program, one
+ *     frame per script per page, started by the UxLayer;
+ *   · Scripts-panel logic scripts (`def.scripts`) and `custom_script`
+ *     validation rules — the logic frame (`logicFrame.ts`, shim
+ *     `engine/logicSandbox.ts`), one per page, runs serialised.
+ *
+ * Both reach the survey only through REQUESTS the host decides with the
+ * engine (`applyScriptWrite`: scope rule, response model, size limits;
+ * `rs.goToPage` / `rs.goToSection` through the section-navigation rule).
+ * The code gates (`validateUxScript`, `codeGate` logic / component) refuse
+ * code before a frame gets it. The server's replay executes no author code.
+ * The old main-thread runner (`engine/scripts.ts`) is reachable only through
+ * the one-release rollback flag `RUNTIME_LEGACY_SCRIPTS=main` and unit tests.
+ * Failures are counted per script into the session's `scriptHealth`
+ * (Studio: script health chips); code changes are written to the audit log.
  *
  * ## What a script sees
  *
@@ -30,8 +52,10 @@
  *
  * ## What a script cannot do (and is told when it tries)
  *
- * It cannot change an answer (`value`, `checked`, `.click()` on an option have
- * no effect on the survey), cancel an event (`preventDefault` is a no-op —
+ * It cannot change an answer THROUGH THE PAGE (`value`, `checked`, `.click()`
+ * on an option have no effect on the survey) — it asks with `rs.setAnswer` /
+ * `rs.setEmbedded` / `rs.setCalc` / `rs.flag`, requests the engine checks and
+ * applies on the respondent's own path (S1a). It cannot cancel an event (`preventDefault` is a no-op —
  * the real event has already happened), replace the text of an element the
  * survey drew (React owns it; create an element of your own instead), or
  * reach the network, storage or the parent page.
@@ -52,21 +76,77 @@ export const UX_FORWARDED_EVENTS = ["click", "input", "change", "focusin", "focu
 /** how many iterations one entry (the script, an event, a timer) may run before it is stopped */
 export const UX_LOOP_LIMIT = 100_000;
 
+/** how many promise reactions / queued microtasks one entry may run before it is stopped (D8) */
+export const UX_MICROTASK_LIMIT = 10_000;
+
+/**
+ * BOUNDED MICROTASK CHAINS (S0b, audit D8). The loop guard counts loop iterations, but
+ * `function f() { Promise.resolve().then(f); } f();` never loops and never yields to a task, so it froze the
+ * frame (and, when the browser runs the sandboxed frame on the page's thread, the page). Inside the frame only,
+ * `Promise.prototype.then` (which `catch` and `finally` go through) and `queueMicrotask` wrap their callbacks in a
+ * counter that the same `slice()` that resets the loop counter resets; past UX_MICROTASK_LIMIT the callbacks are
+ * dropped until the next entry (so the chain ends — a throw would only re-enter the chain through promise
+ * adoption) and the error, worded like the loop guard's, is reported once through `fail` to the inspector. `await` on a native promise does not go
+ * through `then` and is not counted (an `await` inside a loop is still bounded by the loop guard).
+ *
+ * Kept as source text so the unit test can run exactly what the frame runs, in a vm context of its own.
+ * Expects `window`, `CFG.microLimit` and (optionally) `fail(err)`; declares `microReset()`.
+ */
+export const UX_MICROTASK_GUARD = String.raw`
+  var micro = 0, microOver = false;
+  function microReset() { micro = 0; microOver = false; }
+  /* false once over the limit: the callback is dropped (the chain ends), the error is reported once per entry */
+  function microTick() {
+    if (microOver) return false;
+    if (++micro <= CFG.microLimit) return true;
+    microOver = true;
+    var err = new Error("a promise chain ran more than " + CFG.microLimit + " steps in one go, so the script was stopped (is it endless?)");
+    if (typeof fail === "function") fail(err);
+    return false;
+  }
+  (function () {
+    var P = window.Promise, nativeThen = P.prototype.then;
+    var wrap = function (fn) { return typeof fn === "function" ? function (v) { if (!microTick()) return undefined; return fn(v); } : fn; };
+    Object.defineProperty(P.prototype, "then", { configurable: false, writable: false, value: function then(a, b) { return nativeThen.call(this, wrap(a), wrap(b)); } });
+    var nativeQM = window.queueMicrotask;
+    if (typeof nativeQM === "function") window.queueMicrotask = function (fn) { return nativeQM.call(window, function () { if (microTick()) fn(); }); };
+  })();
+`;
+
 export function uxSandboxDoc(config: { aliases: Record<string, string> }): string {
-  const cfg = JSON.stringify({ aliases: config.aliases, loopLimit: UX_LOOP_LIMIT, forwarded: UX_FORWARDED_EVENTS });
-  return SANDBOX_HTML.replace("__CFG__", () => cfg.replace(/</g, "\\u003c"));
+  const cfg = JSON.stringify({ aliases: config.aliases, loopLimit: UX_LOOP_LIMIT, microLimit: UX_MICROTASK_LIMIT, forwarded: UX_FORWARDED_EVENTS });
+  return SANDBOX_HTML.replace("__MICRO__", () => UX_MICROTASK_GUARD).replace("__CFG__", () => cfg.replace(/</g, "\\u003c"));
 }
 
 const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'"></head><body><script>
 (function () {
   var CFG = __CFG__;
   var host = window.parent;
-  var handlers = [], answers = {}, meta = { questions: {} };
+  var handlers = [], answers = {}, byKey = {}, vars = { embedded: {}, calculated: {} }, meta = { questions: {} };
+  /* S1a: requests the host answers (writes, validate/submit replies) — id -> resolve */
+  var pending = {}, reqN = 0;
+  var validating = null; /* the errors a "validate" handler raises with rs.error, while it runs */
   var loops = 0;
   var ready = false;
-  function slice() { loops = 0; }
+__MICRO__
+  function slice() { loops = 0; microReset(); }
   window.__g = function () { if (++loops > CFG.loopLimit) throw new Error("a loop ran more than " + CFG.loopLimit + " times in one go, so the script was stopped (is it endless?)"); };
-  function send(cmd, args) { host.postMessage({ __rsux: 1, cmd: cmd, args: args }, "*"); }
+  function send(cmd, args, id) { host.postMessage(id ? { __rsux: 1, cmd: cmd, args: args, id: id } : { __rsux: 1, cmd: cmd, args: args }, "*"); }
+  /*
+   * S1a — A WRITE IS A REQUEST. The frame never changes the response: it asks, and the host decides with the
+   * engine (applyScriptWrite) exactly as it does for rs.goToPage. The promise resolves to { ok, reason } — it never
+   * rejects, and a host that does not answer within 5 s resolves it as refused.
+   */
+  function ask(cmd, args) {
+    var id = ++reqN;
+    return new Promise(function (resolve) {
+      pending[id] = resolve;
+      send(cmd, args, id);
+      nativeTimeoutEarly(function () { if (pending[id]) { delete pending[id]; resolve({ ok: false, reason: "the survey did not answer" }); } }, 5000);
+    });
+  }
+  var nativeTimeoutEarly = window.setTimeout.bind(window);
+  function plain(v) { try { return v === undefined ? null : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } }
   function fail(e) { send("error", [String(e && e.message || e)]); }
   var told = {};
   function note(key, text) { if (told[key]) return; told[key] = 1; send("log", [text]); }
@@ -75,7 +155,17 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
   /* ---------------------------------------------------------------- rs api */
   var rs = {
     listen: function (ev, target, fn) { if (typeof target === "function") { fn = target; target = "self"; } ev = CFG.aliases[ev] || ev; handlers.push({ ev: ev, target: target, fn: fn }); send("listen", [ev, target]); },
-    getAnswer: function (code) { return answers[code]; },
+    /* loop-aware: the answer as seen from the page's iteration; loopKey ("apple", "apple@pro") reads another one */
+    getAnswer: function (code, loopKey) { if (loopKey != null && loopKey !== "") return byKey[String(code) + "@" + String(loopKey).replace(/^@/, "")]; return answers[code]; },
+    getEmbedded: function (name) { var v = vars.embedded[name]; return v === undefined ? null : v; },
+    getCalc: function (name) { var v = vars.calculated[name]; return v === undefined ? null : v; },
+    /* S1a: writes are requests — see ask() */
+    setAnswer: function (ref, value, loopKey) { return ask("setAnswer", [ref == null ? "" : String(ref), plain(value), loopKey == null ? null : String(loopKey)]); },
+    setEmbedded: function (name, value) { return ask("setEmbedded", [name == null ? "" : String(name), plain(value)]); },
+    setCalc: function (name, value) { return ask("setCalc", [name == null ? "" : String(name), plain(value)]); },
+    flag: function (name) { return ask("flag", [name == null ? "" : String(name)]); },
+    /* inside a "validate" handler: stop Next with this message (on the question named, else as a page message) */
+    error: function (message, ref) { if (!validating) { note("error-outside", "rs.error only counts inside a rs.listen(\"validate\", …) handler"); return; } validating.push({ message: String(message == null ? "" : message).slice(0, 500), ref: ref == null ? null : String(ref) }); },
     getQuestion: function (code) { return meta.questions[code] || null; },
     getBlock: function () { return meta.block || null; },
     getPage: function () { return meta.page || null; },
@@ -344,7 +434,7 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
     if (e.source !== host) return;
     var m = e.data; if (!m || m.__rsux !== 1) return;
     if (m.type === "init") {
-      answers = m.answers || {}; meta = m.meta || meta;
+      answers = m.answers || {}; byKey = m.byKey || {}; vars = m.vars || vars; meta = m.meta || meta;
       applyTree(m.tree);
       observer = new MutationObserver(onMutations);
       observer.observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
@@ -353,7 +443,26 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
       try { (new Function("rs", m.code))(Object.freeze(rs)); } catch (err) { fail(err); }
     }
     else if (m.type === "sync") { if (ready) applyTree(m.tree); }
-    else if (m.type === "answers") { answers = m.answers || {}; }
+    else if (m.type === "answers") { answers = m.answers || {}; byKey = m.byKey || byKey; vars = m.vars || vars; }
+    else if (m.type === "lifecycle") {
+      /*
+       * S1a: "validate" / "submit" on Next. Every handler for the event runs; a validate handler raises errors with
+       * rs.error (synchronously, or later in a promise it returns). The answer goes back once all returned promises
+       * settle — the HOST bounds the wait (1.5 s) and treats a frame that does not answer as "no error".
+       */
+      var errs = [], waits = [], lid = m.id;
+      if (m.ev === "validate") validating = errs;
+      handlers.forEach(function (h) {
+        if (h.ev !== m.ev) return;
+        slice();
+        try { var r = h.fn({ event: m.ev }); if (r && typeof r.then === "function") waits.push(r); } catch (err) { fail(err); }
+      });
+      var finish = function () { if (validating === errs) validating = null; send("lifecycleDone", [lid, errs.slice(0, 20)]); };
+      if (!waits.length) finish();
+      else Promise.all(waits.map(function (w) { return Promise.resolve(w).then(null, function (e) { fail(e); }); })).then(finish, finish);
+    }
+    else if (m.type === "reply") { var f = pending[m.id]; if (f) { delete pending[m.id]; f(m.result || { ok: false }); } }
+    else if (m.type === "ping") { send("pong", [m.n]); }   /* D8: the host's heartbeat — a frame that cannot answer is stopped */
     else if (m.type === "dom") { if (ready) deliver(m); }
     else if (m.type === "event") { handlers.forEach(function (h) { if (h.ev === m.ev && (h.target === m.target || (h.target === "self" && m.self))) { slice(); try { h.fn(m.payload); } catch (err) { fail(err); } } }); }
   });

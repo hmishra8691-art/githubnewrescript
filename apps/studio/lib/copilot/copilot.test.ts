@@ -290,7 +290,9 @@ test("a default value request reaches the UX guide, which offers set_default_val
     const c = classifyRequest(t, 20, 0); assert.equal(c.ux, true, t);
   }
   assert.match(COPILOT_UX_GUIDE, /\{"op":"set_default_value","target":"Q2","value":19\}/);
-  assert.match(COPILOT_UX_GUIDE, /A script CANNOT fill in or change an answer/);
+  assert.match(COPILOT_UX_GUIDE, /A script never fills in a STARTING answer/);
+  // S1a: the sanctioned write is a request, and the guide still puts default / punch / calculation first
+  assert.match(COPILOT_UX_GUIDE, /NATIVE FIRST: a starting answer is set_default_value, an answer that follows other answers is a punch rule, a computed value is a calculation — rs\.setAnswer only for what only code can know/);
 });
 
 test("punching and variables are structure: a request that mixes them with the look is not look-only", () => {

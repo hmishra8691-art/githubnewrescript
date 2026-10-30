@@ -3,7 +3,7 @@ import React from "react";
 import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding, SurveyDefinition } from "@rescript/schema";
-import { createResponseState, start, setAnswer } from "@rescript/engine";
+import { createResponseState, start, setAnswer, codeGate } from "@rescript/engine";
 import { QuestionRenderer, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
 import { TypographyMore, BackgroundSection, AppearanceSection, ResponsiveSection, ThemeAssistant } from "./BrandingAdvanced";
 import { UxItemsEditor } from "./UxItemsEditor";
@@ -12,6 +12,8 @@ import { themePreviewStore } from "@/lib/themePreview";
 import { AiConversationSection } from "./AiConversationPanel";
 import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
+import { ScriptHealthChip, ScriptHealthSummaryBar } from "./ScriptHealth";
+import { LegacyScriptsBanner } from "./LegacyScripts";
 import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
@@ -704,17 +706,65 @@ export function BrandingPanel() {
   );
 }
 
+/**
+ * A logic script's code, saved only when the code gate passes (S0b D3) — the way UxItemsEditor saves a behaviour
+ * script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
+ */
+function ScriptCodeField({ code, refusal, onRefusal, onSave }: { code: string; refusal?: string[]; onRefusal(errors: string[] | undefined): void; onSave(code: string): void }) {
+  const [draft, setDraft] = React.useState(code);
+  React.useEffect(() => { setDraft(code); }, [code]);
+  const dirty = draft !== code;
+  const save = () => {
+    if (!dirty) { onRefusal(undefined); return; }
+    const v = draft.trim() ? codeGate(draft, "logic") : { ok: true, errors: [] as string[] };
+    if (!v.ok) { onRefusal(v.errors); return; }
+    onRefusal(undefined);
+    onSave(draft);
+  };
+  return (
+    <div>
+      <textarea className="ta code" value={draft} data-testid="script-code" spellCheck={false}
+        placeholder={`// e.g. total of three questions\nconst total = expr('Q1 + Q2 + Q3');\nsetCalc('TOTAL', total);\nif (total > 100) flag('over_100');`}
+        onChange={(e) => setDraft(e.target.value)} onBlur={save} />
+      {dirty && <div className="row" style={{ gap: 6, marginTop: 4 }}>
+        <button type="button" className="btn small primary" onClick={save} data-testid="script-save">Save code</button>
+        <button type="button" className="btn small ghost" onClick={() => { setDraft(code); onRefusal(undefined); }}>Discard changes</button>
+      </div>}
+      {refusal?.length ? (
+        <div className="ux-errors" role="alert" data-testid="script-refused" style={{ color: "var(--danger, #b42318)", fontSize: 12.5, marginTop: 4 }}>
+          Not saved — the script check refused it:
+          <ul style={{ margin: "4px 0 0 18px" }}>{refusal.map((e) => <li key={e}>{e}</li>)}</ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function ScriptsPanel() {
   const s = useStudio();
+  const [refusal, setRefusal] = React.useState<Record<string, string[] | undefined>>({});
   return (
     <div>
       <div className="row" style={{ marginBottom: 14 }}>
         <h2 style={{ margin: 0, fontSize: 17 }}>Custom Scripts</h2>
       </div>
+      <ScriptHealthSummaryBar />
+      <LegacyScriptsBanner />
       <p className="muted" style={{ fontSize: 13 }}>
-        Scripts run in the runtime&apos;s controlled host with this API:{" "}
+        Scripts run in a sandboxed frame (never on the respondent&apos;s page) with this API:{" "}
         <code>get(ref) set(ref, v) getCalc/setCalc getEmbedded/setEmbedded expr(&quot;Q1+Q2&quot;) pipe(&quot;{"{{Q1}}"}&quot;)
         flag(name) log(...) error(msg, ref) loop</code>. Events: on_load, on_change, on_submit, on_validate, on_complete.
+      </p>
+      <p className="muted" style={{ fontSize: 12.5 }} data-testid="script-gate-note">
+        Code is checked before it is saved and again before it runs: it reaches the survey through these helpers only —
+        no <code>constructor</code>, <code>globalThis</code>, <code>window</code>, network, storage or <code>navigator</code>;
+        loops are allowed and stopped after 100,000 rounds. A refused script does not run; the preview inspector says why.
+      </p>
+      <p className="muted" style={{ fontSize: 12.5 }} data-testid="script-sandbox-note">
+        Writes (<code>set</code>, <code>setCalc</code>, <code>setEmbedded</code>, <code>flag</code>) are requests: they are applied after the
+        script returns, checked like a respondent&apos;s answer (a question on screen belongs to the respondent; a refused write is
+        logged with the reason). A <code>get</code> later in the same run sees the run&apos;s own writes. on_change runs just after the
+        change; on_validate / on_submit may take at most 1.5 s on Next. <code>expr</code> / <code>pipe</code> take their text written out.
       </p>
       {s.def.scripts.map((sc, i) => (
         <div key={sc.id} className="card">
@@ -736,15 +786,20 @@ export function ScriptsPanel() {
               <option value="on_complete">on_complete</option>
             </select>
             <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={sc.enabled}
-                onChange={(e) => s.update((d) => { d.scripts[i].enabled = e.target.checked; })} /> enabled
+              <input type="checkbox" checked={sc.enabled} data-testid="script-enabled"
+                onChange={(e) => {
+                  /* S0b D3: a script the code gate refuses cannot be switched on (an import arrives off, "pending review") */
+                  if (e.target.checked && !codeGate(sc.code, "logic").ok) { setRefusal((r) => ({ ...r, [sc.id]: codeGate(sc.code, "logic").errors })); return; }
+                  s.update((d) => { d.scripts[i].enabled = e.target.checked; });
+                }} /> enabled
             </label>
             <span className="grow" />
+            <ScriptHealthChip scriptId={sc.id} />
             <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
           </div>
-          <textarea className="ta code" value={sc.code}
-            placeholder={`// e.g. total of three questions\nconst total = expr('Q1 + Q2 + Q3');\nsetCalc('TOTAL', total);\nif (total > 100) flag('over_100');`}
-            onChange={(e) => s.update((d) => { d.scripts[i].code = e.target.value; })} />
+          <ScriptCodeField code={sc.code} refusal={refusal[sc.id]}
+            onRefusal={(errs) => setRefusal((r) => ({ ...r, [sc.id]: errs }))}
+            onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
           <div style={{ marginTop: 6 }} data-testid="script-when">
             <OptionalCondition label="Run only when" value={sc.when}
               hint="Otherwise the script runs for every respondent at its event."

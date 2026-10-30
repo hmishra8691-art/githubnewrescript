@@ -18,7 +18,8 @@ export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilte
 export type { QRProps } from "./QuestionRenderer";
 export { programmerCardClass, autoPunchCss, HiddenQuestionHead, ProgrammerFoot, HIDDEN_BANNER_TEXT, HIDDEN_FOOTER_TEXT, type ProgrammerView } from "./programmerView";
 export { UxLayer, uxElements } from "./UxLayer";
-export type { UxLayerProps } from "./UxLayer";
+export type { UxLayerProps, UxAskFrames, UxFrameAnswer, UxScriptIssue } from "./UxLayer";
+export { LogicFrameHost, logicFrameDoc, type LogicRunRequest, type LogicRunAnswer } from "./logicFrame";
 /*
  * Re-exported from the engine, where the table now lives: the lint needs the
  * same facts and the engine is the layer both the renderer and the Studio sit

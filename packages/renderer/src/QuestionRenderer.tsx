@@ -8,6 +8,9 @@ import {
   designRowsFor,
   shuffleAlternatives,
   resolvePiping,
+  resolveAuthorHtml,
+  codeGate,
+  gateReason,
   evaluateExpression,
   flattenVariables,
   toggleMultiValue,
@@ -2740,27 +2743,33 @@ export function CompareImages(p: QRProps) {
 
 /* ------------------------------------------------------- custom component */
 function CustomComponent(p: QRProps) {
-  const ref = React.useRef<HTMLDivElement>(null);
+  /*
+   * S1b: THE COMPONENT'S CODE NO LONGER RUNS HERE. The host renders the sanitised `customHtml` (D5) into the real
+   * page, marked `data-rs-component`; the runtime's UX layer runs `customJs` in a sandboxed frame whose mirror is this
+   * element (`el`), with `api.setValue` a request through the engine's write channel (engine withComponentBehaviors).
+   * The code gate's component flavour is read here only for the programmer's notice: code it refuses does not run.
+   */
+  const gate = React.useMemo(() => (p.q.customJs ? codeGate(p.q.customJs, "component") : null), [p.q.customJs]);
+  const failed = gate && !gate.ok ? `refused by the script check — ${gateReason(gate)}` : null;
   React.useEffect(() => {
-    if (!ref.current || !p.q.customJs) return;
-    try {
-      // controlled execution: the component script gets a tiny api
-      // eslint-disable-next-line no-new-func
-      const fn = new Function("el", "api", p.q.customJs);
-      fn(ref.current, {
-        getValue: () => p.value,
-        setValue: (v: unknown) => p.onChange(v),
-      });
-    } catch (e) {
-      console.error("custom component error", e);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.q.id]);
+    if (failed) console.warn(`[rescript:component] ${p.q.code}: refused, not run — ${failed}`);
+  }, [failed, p.q.code]);
+  /*
+   * The SAME object while the HTML is the same: the React build Next ships compares this prop by identity, so a
+   * fresh `{ __html }` on every render re-set innerHTML on every answer anywhere on the page — the component's
+   * elements were replaced and every listener its code had attached was lost (it was so before S1b too).
+   */
+  const htmlText = resolveAuthorHtml(p.q.customHtml, ctxOf(p)); /* D5: sanitised like an option label */
+  const html = React.useMemo(() => ({ __html: htmlText }), [htmlText]);
   return (
-    <div
-      ref={ref}
-      dangerouslySetInnerHTML={{ __html: resolvePiping(p.q.customHtml ?? "", ctxOf(p)) }}
-    />
+    <>
+      <div data-rs-component={p.q.id} dangerouslySetInnerHTML={html} />
+      {failed && p.programmerView && (
+        <div className="rs-component-failed" role="note" data-testid="rs-component-failed" style={{ fontSize: 12.5, color: "#b42318", marginTop: 6 }}>
+          This component could not run: {failed}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -2973,6 +2982,7 @@ export function QuestionRenderer(props: QRProps) {
         <div
       className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
+      data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
@@ -3012,6 +3022,7 @@ export function QuestionRenderer(props: QRProps) {
     <div
       className={`rs-card${pvClass ? ` ${pvClass}` : ""}`}
       data-qid={p.q.id}
+      data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
       aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}

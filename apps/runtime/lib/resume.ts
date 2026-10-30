@@ -131,6 +131,8 @@ export interface PendingAnswers {
    * keeps everything else. Absent on a snapshot written before this existed.
    */
   fingerprints?: Record<string, string>;
+  /** D6 / 0078: the save seq that carried this snapshot, so a reload continues the session's sequence past it */
+  seq?: number;
 }
 
 /**

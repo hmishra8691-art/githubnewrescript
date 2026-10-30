@@ -4,9 +4,10 @@ import type { SurveyDefinition, UxBehavior, UxEffect, UxTarget } from "@rescript
 import {
   UX_PRESET_FRAMES, checkDeclarations, compileUxCss, evaluateUxTriggers, resolveUxTarget, uxAnimationNeedsRuntime,
   uxPlayToken, uxSelector, uxToken, uxAnswered, uxSelectedCodes, defaultUxLookups, validateUxScript, UX_SCRIPT_EVENT_ALIASES,
-  uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState,
+  uxGuardHolds, createResponseState, guardScriptLoops, popupUiFor, type ResponseState, type ScriptWrite,
+  codeGate, gateReason, isComponentBehavior,
 } from "@rescript/engine";
-import { DomBridge } from "./uxDom";
+import { DomBridge, answerLockReason, HIDING_STYLE } from "./uxDom";
 import { uxSandboxDoc } from "./uxSandbox";
 import { closeUxPopups, openUxPopup, placeUxPopups } from "./uxPopup";
 
@@ -64,7 +65,33 @@ export interface UxLayerProps {
    * script's navigation is reported as unavailable, never silently dropped.
    */
   onNavigate?: (target: string, as: "page" | "section") => { ok: boolean; reason?: string };
+  /**
+   * S1a — THE WRITE CHANNEL: `rs.setAnswer` / `rs.setEmbedded` / `rs.setCalc` / `rs.flag` arrive here as
+   * REQUESTS and the host decides with the engine (`applyScriptWrite`), like `onNavigate`. The answer goes back to
+   * the frame as the promise's `{ ok, reason }`; a refusal is logged to the script's console with the reason.
+   * Absent (the Studio canvas), every write is refused as unavailable — never silently dropped.
+   */
+  onScriptWrite?: (write: ScriptWrite, script: { id: string; label: string; target: UxTarget }) => { ok: boolean; reason?: string };
+  /**
+   * S1a — THE PAGE LIFECYCLE: the layer puts here a function the Runner calls on Next to run the scripts'
+   * `rs.listen("validate")` / `rs.listen("submit")` handlers. It asks every frame of the page that listens for the
+   * event and resolves with what each answered — or `timedOut` for a frame that did not answer within `timeoutMs`.
+   */
+  lifecycleRef?: React.MutableRefObject<UxAskFrames | null>;
+  /**
+   * S1c (D11 / SE-30) — LIVE SCRIPT HEALTH: every failure of a script on this page (its error, a gate refusal, a
+   * component that could not run, a refused write or navigation, a watchdog stop), structured, for the Runner's
+   * session collector. Called in every mode, unlike `onLog`.
+   */
+  onScriptIssue?: (issue: UxScriptIssue) => void;
 }
+
+/** S1c: one script failure as the layer reports it (kind: engine SCRIPT_HEALTH_KINDS) */
+export interface UxScriptIssue { script: string; name: string; kind: "ux_error" | "component_not_run" | "gate_refused" | "write_refused" | "navigation_refused" | "watchdog"; message: string }
+
+/** S1a: one frame's answer to a lifecycle event (see `lifecycleRef`) */
+export interface UxFrameAnswer { script: string; /** S1c: the behaviour's id */ id?: string; errors?: { message: string; ref?: string | null }[]; timedOut?: boolean }
+export type UxAskFrames = (ev: "validate" | "submit", timeoutMs: number) => Promise<UxFrameAnswer[]>;
 
 /** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
 const popupLabels = new WeakMap<HTMLElement, { close: string; message: string; dir: "ltr" | "rtl" }>();
@@ -162,6 +189,9 @@ const SANDBOX_DOC = uxSandboxDoc({ aliases: UX_SCRIPT_EVENT_ALIASES });
 const COMMANDS_PER_SECOND = 200;
 /** how long a frame outlives its page, so a click on Next that was already sent to it is handled once */
 const SCRIPT_GRACE_MS = 150;
+/** D8: the host pings each frame this often; a frame that misses HEARTBEAT_MISSES in a row while the page is shown is stopped */
+const HEARTBEAT_MS = 2000;
+const HEARTBEAT_MISSES = 3;
 /**
  * pages that are closing but not yet undone. A new page's script must start from
  * the survey as it is, not from the previous page's script's changes (two pages'
@@ -170,7 +200,8 @@ const SCRIPT_GRACE_MS = 150;
  */
 const closing = new Set<() => void>();
 
-interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dom: DomBridge; started: boolean; dispose(): void; close(): void }
+interface ScriptHost { frame: HTMLIFrameElement; behavior: UxBehavior; listens: { ev: string; target: string }[]; undo: Undo[]; dom: DomBridge; started: boolean; dispose(): void; close(): void; /** S1a: lifecycle requests waiting for the frame's answer */ waiting: Map<number, (errors: UxFrameAnswer["errors"]) => void> }
+let lifecycleN = 0;
 
 function plainText(s: string) { return s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(); }
 
@@ -189,8 +220,12 @@ export function UxLayer(p: UxLayerProps) {
   const scripts = React.useRef<ScriptHost[]>([]);
   const log = React.useRef(p.onLog);
   log.current = p.onLog;
+  const issueRef = React.useRef(p.onScriptIssue);
+  issueRef.current = p.onScriptIssue;
   const navigate = React.useRef(p.onNavigate);
   navigate.current = p.onNavigate;
+  const writeRef = React.useRef(p.onScriptWrite);
+  writeRef.current = p.onScriptWrite;
   const behaviors = def.ux?.behaviors ?? [];
   const animations = def.ux?.animations ?? [];
 
@@ -227,6 +262,23 @@ export function UxLayer(p: UxLayerProps) {
     for (const [id, v] of Object.entries(all)) { const c = byCode.get(id); if (c) out[c] = v; }
     return out;
   }, [p.allValues, p.values, byCode]);
+  /*
+   * S1a: what a script reads besides the page's answers — every LOOP iteration's answer by `CODE@item` (for
+   * `rs.getAnswer(code, loopKey)`), and the embedded data and calculated variables (`rs.getEmbedded`, `rs.getCalc`).
+   */
+  const readsFor = (): { byKey: Record<string, unknown>; vars: { embedded: Record<string, unknown>; calculated: Record<string, unknown> } } => {
+    const st = p.state;
+    const byKey: Record<string, unknown> = {};
+    if (st) for (const [k, v] of Object.entries(st.answers)) {
+      const at = k.indexOf("@");
+      if (at < 0 || k.includes("__")) continue;
+      const c = byCode.get(k.slice(0, at));
+      if (c) byKey[`${c}${k.slice(at)}`] = v;
+    }
+    return { byKey, vars: { embedded: { ...(st?.embedded ?? {}) }, calculated: { ...(st?.calculated ?? {}) } } };
+  };
+  const readsRef = React.useRef(readsFor);
+  readsRef.current = readsFor;
 
   /* every render: answered marks, triggers */
   React.useEffect(() => {
@@ -271,7 +323,7 @@ export function UxLayer(p: UxLayerProps) {
     // scripts hear about answers
     const prev = prevValues.current;
     for (const s of scripts.current) {
-      s.frame.contentWindow?.postMessage({ __rsux: 1, type: "answers", answers: answersByCode() }, "*");
+      s.frame.contentWindow?.postMessage({ __rsux: 1, type: "answers", answers: answersByCode(), ...readsFor() }, "*");
       if (!prev) continue;
       // a script behaviour hears events only while its `when` holds
       if (!uxGuardHolds(def, s.behavior, p.state ?? stateFromValues(), p.values)) continue;
@@ -343,10 +395,12 @@ export function UxLayer(p: UxLayerProps) {
        * nothing to open.
        */
       const where = `${b.label}${b.target.questionId ? ` (${byCode.get(b.target.questionId) ?? ""})` : ""}`;
-      const report = (text: string, level: "log" | "warn" | "error" = "log") => {
+      const report = (text: string, level: "log" | "warn" | "error" = "log", kind?: UxScriptIssue["kind"]) => {
         log.current?.(`[ux script “${b.label}”] ${level === "error" ? "ERROR: " : ""}${text}`);
         if (level === "error") console.error(`[rescript:script] ${where}: ${text}`);
         else if (level === "warn") console.warn(`[rescript:script] ${where}: ${text}`);
+        /* S1c: a failure is also counted for the survey's script health (the Runner's collector) */
+        if (kind) { try { issueRef.current?.({ script: b.id, name: b.label, kind, message: text }); } catch { /* never break the page */ } }
       };
       /*
        * Validated again here, not only when it was proposed: a definition can
@@ -354,9 +408,21 @@ export function UxLayer(p: UxLayerProps) {
        * frame — and a sandboxed frame may share the page's thread — so a
        * script that does not pass the gate never runs.
        */
-      const check = validateUxScript(b.script!, def);
-      if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn"); continue; }
-      for (const w of check.warnings) report(`note: ${w}`, "warn");
+      /*
+       * S1b: a CUSTOM COMPONENT's code (a runtime-only behaviour, engine withComponentBehaviors) is checked by the code
+       * gate's component flavour on the author's own code, and its mirror is the component's element only.
+       */
+      const component = isComponentBehavior(b) ? def.questions.find((q) => q.id === b.target.questionId) ?? null : null;
+      if (component) {
+        const g = codeGate(component.customJs ?? "", "component");
+        if (!g.ok) { report(`not run: ${gateReason(g)}`, "warn", "component_not_run"); continue; }
+      } else {
+        const check = validateUxScript(b.script!, def);
+        if (check.errors.length) { report(`not run: ${check.errors.join("; ")}`, "warn", "gate_refused"); continue; }
+        for (const w of check.warnings) report(`note: ${w}`, "warn");
+      }
+      const mirrorRoot: HTMLElement | null = component ? root.querySelector<HTMLElement>(`[data-rs-component="${CSS.escape(component.id)}"]`) : root;
+      if (!mirrorRoot) { report("not run: the component is not on this page", "warn", "component_not_run"); continue; }
       const frame = document.createElement("iframe");
       frame.setAttribute("sandbox", "allow-scripts");
       frame.setAttribute("aria-hidden", "true");
@@ -365,9 +431,11 @@ export function UxLayer(p: UxLayerProps) {
       frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
       frame.srcdoc = SANDBOX_DOC;
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
-      const dom = new DomBridge({ root, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
-      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, dispose: () => { dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
+      const dom = new DomBridge({ root: mirrorRoot, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
+      let beat: ReturnType<typeof setInterval> | null = null;
+      const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, waiting: new Map(), dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
+      let awaiting = 0, missed = 0, beatN = 0;
       const resolve = (spec: unknown): UxTarget | null => {
         if (spec === "self" || spec == null) return b.target;
         const t = resolveUxTarget(def, spec, look);
@@ -377,23 +445,44 @@ export function UxLayer(p: UxLayerProps) {
       const effect = (e: UxEffect, t: UxTarget | null) => { if (t) host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id)); };
       function onMessage(ev: MessageEvent) {
         if (ev.source !== frame.contentWindow) return;
-        const m = ev.data as { __rsux?: number; cmd?: string; args?: unknown[] };
+        const m = ev.data as { __rsux?: number; cmd?: string; args?: unknown[]; id?: number };
         if (!m || m.__rsux !== 1 || typeof m.cmd !== "string") return;
         const now = Date.now();
         if (now - windowStart > 1000) { windowStart = now; count = 0; }
-        if (++count > COMMANDS_PER_SECOND) { report(`stopped: more than ${COMMANDS_PER_SECOND} commands a second`, "warn"); host.dispose(); return; }
+        if (++count > COMMANDS_PER_SECOND) { report(`stopped: more than ${COMMANDS_PER_SECOND} commands a second`, "warn", "watchdog"); host.dispose(); return; }
         const a = Array.isArray(m.args) ? m.args : [];
         const str = (x: unknown) => (typeof x === "string" ? x : x == null ? "" : String(x)).slice(0, 600);
         switch (m.cmd) {
+          case "pong": awaiting = 0; missed = 0; break;
           case "ready": {
             host.started = true;
+            /*
+             * THE HEARTBEAT (S0b D8). Every HEARTBEAT_MS the host pings the frame; a frame that misses
+             * HEARTBEAT_MISSES pings in a row while the page is shown is stuck (an endless promise chain, a
+             * catastrophic regex, an allocation storm), so it is disposed, everything it changed is put back and
+             * the script is logged "stopped: not responding". This only helps when the browser runs the
+             * sandboxed frame OUT of process: a frame that shares the page's thread freezes this timer too.
+             */
+            if (!beat) beat = setInterval(() => {
+              if (typeof document !== "undefined" && document.visibilityState === "hidden") { awaiting = 0; missed = 0; return; }
+              if (awaiting) missed++;
+              if (missed >= HEARTBEAT_MISSES) {
+                report(`stopped: not responding (no answer to ${HEARTBEAT_MISSES} heartbeats in ${(HEARTBEAT_MS * HEARTBEAT_MISSES) / 1000} s) — its changes were undone`, "warn", "watchdog");
+                host.dispose();
+                for (const u of host.undo) u.run();
+                host.undo.length = 0;
+                return;
+              }
+              awaiting = ++beatN;
+              frame.contentWindow?.postMessage({ __rsux: 1, type: "ping", n: beatN }, "*");
+            }, HEARTBEAT_MS);
             for (const f of Array.from(closing)) f();
             const questions: Record<string, unknown> = {};
             for (const q of def.questions) questions[String(q.code)] = { code: String(q.code), type: q.type, text: plainText(q.text ?? ""), options: (q.options ?? []).map((o) => ({ code: String(o.code), label: plainText(o.label) })) };
             const tree = dom.tree();
             dom.primed(tree);
             // loops are bounded, not banned: every loop body counts its iterations (see guardScriptLoops)
-            post({ type: "init", code: guardScriptLoops(b.script!).code, tree, answers: answersByCode(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } });
+            post({ type: "init", code: guardScriptLoops(b.script!).code, tree, answers: answersByCode(), ...readsRef.current(), meta: { questions, block: p.blockId ? { id: p.blockId } : null, page: p.pageId ? { id: p.pageId, index: p.pageIndex ?? null } : null } });
             dom.watch((t) => post({ type: "sync", tree: t }));
             frame.contentWindow?.postMessage({ __rsux: 1, type: "event", ev: "page", target: "self", self: true, payload: {} }, "*");
             break;
@@ -403,10 +492,29 @@ export function UxLayer(p: UxLayerProps) {
           case "removeClass": effect({ do: "remove_class", className: str(a[1]) }, resolve(a[0])); break;
           case "toggleClass": effect({ do: "toggle_class", className: str(a[1]) }, resolve(a[0])); break;
           case "animate": { const preset = str(a[1]); const opts = (a[2] && typeof a[2] === "object" ? a[2] : {}) as { duration?: number }; if (UX_PRESET_FRAMES[preset as keyof typeof UX_PRESET_FRAMES]) effect({ do: "animate", preset: preset as never, durationMs: Math.max(50, Math.min(10000, Number(opts.duration) || 450)) }, resolve(a[0])); else report(`“${preset}” is not a preset`); break; }
-          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style); if (c.errors.length) report(`${c.errors.join("; ")}`); effect({ do: "set_style", style: c.ok }, resolve(a[0])); break; }
+          case "setStyle": { const style = a[1] && typeof a[1] === "object" ? Object.fromEntries(Object.entries(a[1] as Record<string, unknown>).map(([k, v]) => [k, str(v)])) : {}; const c = checkDeclarations(style, { origin: "script" }); if (c.errors.length) report(`${c.errors.join("; ")}`);
+            const st = resolve(a[0]);
+            // D12: no hiding / disabling style on an answer input or a required question
+            const lock = st ? uxElements(root, st).map((el) => answerLockReason(el)).find(Boolean) : null;
+            if (lock) for (const [k, v] of Object.entries(c.ok)) if (HIDING_STYLE(k, v)) { report(`rs.setStyle: ${k}: ${v} refused on ${lock}`, "warn"); delete c.ok[k]; }
+            effect({ do: "set_style", style: c.ok }, st); break; }
           case "clearStyle": { const t = resolve(a[0]); if (t) for (const el of uxElements(root, t)) { for (const k of setByUx.get(el) ?? []) el.style.removeProperty(k); setByUx.delete(el); } break; }
           case "show": effect({ do: "show" }, resolve(a[0])); break;
-          case "hide": effect({ do: "hide" }, resolve(a[0])); break;
+          case "hide": {
+            /*
+             * D12: rs.hide() cannot take an answer input or a required question away from the respondent (refused,
+             * with the reason); hiding an ANSWERED question is allowed but said — the answer stays stored and is
+             * still validated, which is rarely what the author meant.
+             */
+            const ht = resolve(a[0]);
+            const els = ht ? uxElements(root, ht) : [];
+            const lock = els.map((el) => answerLockReason(el)).find(Boolean);
+            if (lock) { report(`rs.hide refused: the target is ${lock}`, "warn"); break; }
+            const values = { ...(p.allValues ?? {}), ...p.values } as Record<string, unknown>;
+            const answered = els.flatMap((el) => [el, ...el.querySelectorAll("[data-qid]")]).map((el) => el.getAttribute("data-qid")).filter((id): id is string => !!id && values[id] != null && values[id] !== "" && !(Array.isArray(values[id]) && (values[id] as unknown[]).length === 0));
+            if (answered.length) report(`rs.hide: ${[...new Set(answered)].map((id) => byCode.get(id) ?? id).join(", ")} already has an answer — hiding it keeps the answer stored and validated`, "warn");
+            effect({ do: "hide" }, ht); break;
+          }
           case "showMessage": effect({ do: "show_message", text: str(a[1]) }, resolve(a[0])); break;
           case "popup": {
             // the survey's own popup — rs.popup(text, { title, placement, target, dismiss, autoMs }); one per script, replaced by the next
@@ -430,20 +538,49 @@ export function UxLayer(p: UxLayerProps) {
             const fn = m.cmd === "goToPage" ? "rs.goToPage" : "rs.goToSection";
             if (!target) { report(`${fn} needs a ${m.cmd === "goToPage" ? "page id or question code" : "section id or title"}`, "warn"); break; }
             const nav = navigate.current;
-            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn"); break; }
+            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn", "navigation_refused"); break; }
             // after the current event finishes, so a click handler's own effects land on the page it was written for
             setTimeout(() => {
               const r = nav(target, m.cmd === "goToPage" ? "page" : "section");
               if (r.ok) report(`${fn}("${target}") — navigated`);
-              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn");
+              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn", "navigation_refused");
             }, 0);
+            break;
+          }
+          case "setAnswer":
+          case "setEmbedded":
+          case "setCalc":
+          case "flag": {
+            /* S1a: a write is a REQUEST — the host decides with the engine; the frame's promise gets { ok, reason } */
+            const id = typeof m.id === "number" ? m.id : 0;
+            const name = str(a[0]).trim().slice(0, 200);
+            const write: ScriptWrite = m.cmd === "setAnswer" ? { kind: "answer", ref: name, value: a[1] ?? null, loopKey: a[2] == null ? null : str(a[2]) }
+              : m.cmd === "setEmbedded" ? { kind: "embedded", name, value: a[1] ?? null }
+              : m.cmd === "setCalc" ? { kind: "calculated", name, value: a[1] ?? null }
+              : { kind: "flag", name };
+            const call = `rs.${m.cmd}("${name}")`;
+            const fn = writeRef.current;
+            let result: { ok: boolean; reason?: string };
+            try { result = fn ? fn(write, { id: b.id, label: b.label, target: b.target }) : { ok: false, reason: "writes are not available here" }; }
+            catch (e) { result = { ok: false, reason: e instanceof Error ? e.message : String(e) }; }
+            if (result.ok) report(`${call} — written`);
+            else report(`${call} refused: ${result.reason ?? "not allowed"}`, "warn", "write_refused");
+            if (id) post({ type: "reply", id, result: { ok: !!result.ok, ...(result.reason ? { reason: result.reason } : {}) } });
+            break;
+          }
+          case "lifecycleDone": {
+            const f = host.waiting.get(Number(a[0]));
+            if (!f) break;
+            host.waiting.delete(Number(a[0]));
+            const list = Array.isArray(a[1]) ? (a[1] as unknown[]).slice(0, 20) : [];
+            f(list.map((e) => { const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>; return { message: str(o.message).slice(0, 500), ref: o.ref == null ? null : str(o.ref).slice(0, 200) }; }));
             break;
           }
           case "log": report(`${a.map(str).join(" ")}`); break;
           case "ops": dom.apply(a[0]); break;
           case "want": dom.want(str(a[0])); break;
           case "resync": dom.resync((t) => post({ type: "sync", tree: t }), true); break;
-          case "error": report(str(a[0]), "error"); break;
+          case "error": report(str(a[0]), "error", "ux_error"); break;
           default: break;
         }
       }
@@ -469,6 +606,21 @@ export function UxLayer(p: UxLayerProps) {
     // leaving the page: what was already handed to a script is handled, then everything it changed is put back
     return () => { for (const h of hosts) h.close(); scripts.current = []; };
   }, [p.pageKey, uxSig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* S1a: the lifecycle on Next — ask the frames of this page that listen for validate / submit, each bounded */
+  React.useEffect(() => {
+    const ref = p.lifecycleRef;
+    if (!ref) return;
+    ref.current = (ev, timeoutMs) => Promise.all(scripts.current
+      .filter((s) => s.started && s.listens.some((l) => l.ev === ev))
+      .map((s) => new Promise<UxFrameAnswer>((resolve) => {
+        const id = ++lifecycleN;
+        const timer = setTimeout(() => { s.waiting.delete(id); resolve({ script: s.behavior.label, id: s.behavior.id, timedOut: true }); }, timeoutMs);
+        s.waiting.set(id, (errors) => { clearTimeout(timer); resolve({ script: s.behavior.label, errors: errors ?? [] }); });
+        s.frame.contentWindow?.postMessage({ __rsux: 1, type: "lifecycle", ev, id }, "*");
+      })));
+    return () => { if (ref.current) ref.current = null; };
+  });
 
   /* the page-complete event for scripts */
   const complete = p.shown.length > 0 && p.shown.every((id) => { const q = def.questions.find((x) => x.id === id); return !q || q.type === "html" || q.type === "calculated" || q.settings?.hidden || uxAnswered(p.values[id]); });

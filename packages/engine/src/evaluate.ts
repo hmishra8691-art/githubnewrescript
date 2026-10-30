@@ -59,6 +59,19 @@ export interface EvalContext {
    */
   ui?: Record<string, string>;
   locale?: string;
+  /**
+   * Author JavaScript (`custom_script` validation rules). "run" (the default,
+   * the browser) executes the named script; "skip" (the server's save replay,
+   * `serverValidation.ts`) never executes author code — the rule is recorded
+   * in `skippedScripts` instead and graded client-only (audit 2026-10-30 D1).
+   */
+  scripts?: "run" | "skip";
+  /** filled when `scripts` is "skip": one entry per custom_script rule not executed */
+  skippedScripts?: {
+    questionId?: string; script: string;
+    /** S1b: what the browser needs to run the rule in the sandboxed frame instead — the value under test, the rule's severity and its message for "could not be checked" */
+    value?: unknown; severity?: "error" | "warning"; failMessage?: string | { text: string; html: true };
+  }[];
 }
 
 export interface EvalTrace {

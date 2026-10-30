@@ -20,7 +20,9 @@
  *                     in-memory response store): Next then a free jump to section 3; the row holds the trail
  *                     (responses.nav, migration 0077); the resume link opened in a FRESH browser context (empty
  *                     storage) lands on the same page, the navigator shows the same visited sections, and Back
- *                     goes to the page before on the respondent's own path
+ *                     goes to the page before on the respondent's own path; then (D6, 0078) two OVERLAPPING
+ *                     saves of the same session — the older one delayed in the sandbox store (fake-only seam
+ *                     `sandboxDelayMs`) so it arrives last — and the newer one wins, the older is answered stale
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/section-nav-test.mjs
  *   SECTIONS=A,B,C,D,E,F,G (default all)
@@ -264,7 +266,30 @@ if (SECTIONS.has("G")) {
   await b.click('[data-testid="rs-back"]');
   await onPage(b, "h2");
   ok("device B: Back goes to h2 — the page before on the respondent's path, not the page before in the flow (g1)");
+
+  // D6 (audit 2026-10-30, migration 0078): an older save that arrives after a newer one is not written
+  const rowNow = async () => (await fetch(`${RUNTIME}/api/session/sandbox`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "row", sessionId }) })).json();
+  // device B stays open until its Back save has landed (closing the context first can cancel the request)
+  let before = await rowNow();
+  for (let i = 0; i < 80 && before.stepIndex !== 1; i++) { await sleep(250); before = await rowNow(); }
   await devB.close();
+  assert.equal(before.stepIndex, 1, `device B's Back save reached the row: ${JSON.stringify(before)}`);
+  assert.ok(Number.isInteger(before.saveSeq) && before.saveSeq >= 3, `the Runner numbered its saves and device B continued the sequence (${JSON.stringify(before)})`);
+  const save = (seq, stepIndex, at, extra = {}) => fetch(`${RUNTIME}/api/session/save`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+    sessionId, status: "in_progress", stepIndex, answers: { h1: "1" }, calculated: {}, embedded: {}, flags: [], completed: false,
+    nav: { v: 1, stack: ["ph1"], visited: ["ph1", "ph2", "pp1"], at }, seq, ...extra,
+  }) }).then((r) => r.json());
+  const older = save(before.saveSeq + 1, 0, "ph1", { sandboxDelayMs: 1500 }); // made first, arrives last
+  await sleep(150);
+  const newer = await save(before.saveSeq + 2, 1, "ph2");
+  const olderOut = await older;
+  const after = await rowNow();
+  assert.equal(newer.stale, undefined, JSON.stringify(newer));
+  assert.equal(olderOut.stale, true, `the older save is answered stale: ${JSON.stringify(olderOut)}`);
+  assert.equal(after.saveSeq, before.saveSeq + 2);
+  assert.equal(after.stepIndex, 1);
+  assert.equal(after.nav?.at, "ph2", JSON.stringify(after.nav));
+  ok(`overlapping saves: seq ${before.saveSeq + 1} delayed past seq ${before.saveSeq + 2} → the newer one stays (step 1, at ph2), the older is answered { stale: true }`);
 }
 
 await browser.close();

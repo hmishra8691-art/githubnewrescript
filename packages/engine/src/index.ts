@@ -201,6 +201,12 @@ export * from "./calcRewrite.js";
 export * from "./planItemGate.js";
 export * from "./methodRepair.js";
 export * from "./scriptAst.js";
+export * from "./codeGate.js";
+export * from "./scriptWrites.js";
+export * from "./logicSandbox.js";
+/* S1c: live script-error telemetry — the shared collector shape, the save route's sanitiser and the Studio aggregate */
+export * from "./scriptHealth.js";
+export * from "./scriptAudit.js";
 export * from "./uxDuplicates.js";
 /* panel recruitment and alerts (2026-10-22, G3): presets, signed redirects, alert routing / redaction / rendering, the connect_panel / configure_alerts actions */
 export * from "./panels.js";

@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { SurveyDefinition } from "@rescript/schema";
+import { gateSurveyScripts } from "@rescript/engine";
 import { useStudio } from "./store";
 
 /** First-class JSON view (requirements §11 / §26): inspect, edit, import, export. */
@@ -22,10 +23,14 @@ export function JsonPanel() {
         setError(parsed.error.issues.slice(0, 8).map((i) => `${i.path.join(".")}: ${i.message}`).join("\n"));
         return;
       }
-      s.replace(parsed.data);
+      /* S0b D3: a pasted script that fails the code gate arrives switched off, with the reason in its notes */
+      const gated = gateSurveyScripts(parsed.data);
+      s.replace(gated.def);
       setError(null);
       setEditing(false);
-      s.toast("Definition applied from JSON");
+      s.toast(gated.refused.length
+        ? `Definition applied from JSON — ${gated.refused.length} script${gated.refused.length === 1 ? "" : "s"} refused by the script check and left off: ${gated.refused.map((r) => `“${r.name}” (${r.reason})`).join("; ").slice(0, 400)}`
+        : "Definition applied from JSON");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

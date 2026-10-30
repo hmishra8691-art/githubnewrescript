@@ -7,6 +7,7 @@ import { resolvePiping } from "./piping.js";
 import { answerKey, findLoopScope, getQuestionByCodeOrVar, lookupAnswer, loopDepth, loopValue } from "./state.js";
 import { loopContexts, loopNodes } from "./loops.js";
 import { elementIndex, type ElementRef } from "./elementIds.js";
+import { codeGate, gateReason, LOGIC_PARAMS, logicScriptBody, loopCounter } from "./codeGate.js";
 
 /**
  * Custom script host (requirement §13).
@@ -18,32 +19,38 @@ import { elementIndex, type ElementRef } from "./elementIds.js";
  * storage APIs are all bound to `undefined` inside the body, so reaching for
  * one gets nothing rather than the real thing.
  *
- * What this is NOT: it is not a security boundary against a hostile script,
- * and it is not time-boxed — an infinite loop in a survey script hangs the
- * page it runs on. (The header here used to claim `node:vm` with a frozen
- * sandbox and time-boxing; none of that existed, which is a worse position
- * than saying plainly what the limits are.) Scripts are written by the
- * survey's own programmers, who already have edit rights; the shadowing is
- * there to stop an accident, not an attacker.
+ * BEFORE IT RUNS, THE CODE GATE (S0b, audit D3). Shadowing alone was escaped
+ * in one line (`(()=>{}).constructor("return globalThis")()` reached the
+ * real `fetch` and, on the server, `process`). `runScript` now refuses code
+ * that fails `codeGate(code, "logic")` — no `constructor` / `__proto__` /
+ * `prototype`, no `globalThis` / `Function` / `eval` / network / storage /
+ * `navigator`, no computed access on a global — and runs the gate's
+ * loop-guarded form, so an endless loop throws after SCRIPT_LOOP_LIMIT
+ * iterations instead of hanging the page.
+ *
+ * What this still is NOT: a security boundary. It runs in the page's realm;
+ * the gate is static and a name assembled at run time on an object the
+ * script declared is not seen. The runtime CSP stops such code from sending
+ * anything off the page.
+ *
+ * READ THIS FIRST — LEGACY FLAG AND TESTS ONLY. Nothing in the product calls
+ * this runner by default (S1b/S1c, 2026-10-30): a respondent's page runs logic
+ * scripts in the sandboxed logic frame, the Studio canvas runs none, and the
+ * server's replay runs none (`serverValidation.ts`, `scripts: "skip"`).
+ *
+ * S1b (2026-10-30): THIS MAIN-THREAD RUNNER IS NO LONGER HOW A RESPONDENT'S
+ * PAGE RUNS SCRIPTS. The runtime sends logic scripts to a sandboxed frame
+ * (`logicSandbox.ts` — the same `ctx`, writes as requests through
+ * `applyScriptWrite`). `runScript` / `runScripts` remain for exactly two
+ * callers: the runtime's temporary escape hatch `RUNTIME_LEGACY_SCRIPTS=main`
+ * (one release) and unit tests. `createScriptCtx` is also what the host uses to
+ * evaluate a script's literal `expr()` / `pipe()` arguments for the frame.
  */
 
-/**
- * Globals a survey script must not reach. Shadowing beats deleting: the
- * identifiers still resolve, so a typo throws a clear TypeError instead of
- * silently hitting the real API.
- *
- * `eval` and `import` are absent on purpose — neither is a legal parameter
- * name in strict mode, so neither can be shadowed this way. Say so rather
- * than list them and imply a guarantee that is not there.
+/*
+ * The globals a script must not reach, the helpers it receives and the wrapper it is compiled in live in
+ * `codeGate.ts`, with the gate that reads the code before it runs (S0b D3).
  */
-const DENIED_GLOBALS = [
-  "window", "document", "globalThis", "self", "top", "parent", "frames",
-  "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "navigator",
-  "localStorage", "sessionStorage", "indexedDB", "caches",
-  "process", "require", "module", "exports",
-  "Function", "setTimeout", "setInterval", "queueMicrotask",
-  "postMessage", "open", "alert", "confirm", "prompt",
-];
 
 export interface ScriptCtx {
   /** read an answer by question id / code / variable name */
@@ -148,6 +155,19 @@ export interface ScriptRunResult {
   failed?: string;
   /** how many scripts ran — a caller that re-renders on state changes needs to know whether anything could have changed it */
   ran?: number;
+  /** the code gate refused the script (it did not run): why */
+  refused?: string;
+  /** the names of the scripts the gate refused in this run (runScripts) */
+  refusedScripts?: string[];
+}
+
+/** what a script sees of one iteration (shared with the sandbox snapshot, logicSandbox.ts) */
+export function loopItemView(l: LoopContext): LoopItemView {
+  return {
+    code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
+    first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
+    references: { ...(l.references ?? {}) },
+  };
 }
 
 export function createScriptCtx(
@@ -157,11 +177,7 @@ export function createScriptCtx(
   result: ScriptRunResult,
 ): ScriptCtx {
   const refToId = (ref: string) => getQuestionByCodeOrVar(def, ref)?.id ?? ref;
-  const viewOf = (l: LoopContext): LoopItemView => ({
-    code: l.code, label: l.label, item: l.label, index: l.index, count: l.count ?? 0,
-    first: loopValue(l, "first") === true, last: loopValue(l, "last") as boolean | null, depth: loopDepth(l),
-    references: { ...(l.references ?? {}) },
-  });
+  const viewOf = loopItemView;
   /*
    * Built once per script run and cached, because a script in a loop calls
    * these per iteration and walking the whole definition each time would turn
@@ -287,17 +303,16 @@ export function createScriptCtx(
  */
 export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult): ScriptRunResult {
   const result: ScriptRunResult = into ?? { logs: [], errors: [] };
+  const gate = codeGate(code, "logic");
+  if (!gate.ok) {
+    result.refused = gateReason(gate);
+    result.failed = `refused: ${result.refused}`;
+    return result;
+  }
   try {
     // eslint-disable-next-line no-new-func
-    const fn = new Function(
-      "ctx",
-      ...DENIED_GLOBALS,
-      `"use strict";\nconst { get, set, getCalc, setCalc, getEmbedded, setEmbedded, expr, pipe, flag, loop, log, error, `
-        + `getCurrentLoopItem, getCurrentLoopIndex, getLoopCount, getCurrentLoopReference, getLoopItems, getLoopAnswer, `
-        + `getElement, getQuestion, getOption, getRow, getColumn, getGroup } = ctx;\n`
-        + `const value = ctx.value;\n${code}`,
-    );
-    fn(ctx);
+    const fn = new Function(...LOGIC_PARAMS, logicScriptBody(gate.guarded));
+    fn(ctx, loopCounter());
   } catch (e) {
     result.failed = e instanceof Error ? e.message : String(e);
   }
@@ -324,6 +339,26 @@ export function runScript(code: string, ctx: ScriptCtx, into?: ScriptRunResult):
  * was matched and those scripts — written, enabled, and listed in the editor
  * — silently never ran.
  */
+/**
+ * The scripts an event runs, in definition order: enabled, this event, in scope (see `runScripts`), and whose
+ * `when` guard holds against the answers as they are now. Shared by the main-thread runner and the sandbox
+ * (`prepareLogicScripts`), so both select exactly the same scripts.
+ */
+export function selectScripts(
+  def: SurveyDefinition,
+  state: ResponseState,
+  event: CustomScript["event"],
+  opts?: { scopeRef?: string | string[]; loop?: LoopContext | null; only?: "scoped" },
+): CustomScript[] {
+  const refs = opts?.scopeRef === undefined ? [] : Array.isArray(opts.scopeRef) ? opts.scopeRef : [opts.scopeRef];
+  return def.scripts.filter((script) => {
+    if (!script.enabled || script.event !== event) return false;
+    if (script.scope === "survey" ? opts?.only === "scoped" : !(script.ref && refs.includes(script.ref))) return false;
+    // the script's guard: an ordinary condition, any nesting, against the answers as they are now
+    return !(script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null }));
+  });
+}
+
 export function runScripts(
   def: SurveyDefinition,
   state: ResponseState,
@@ -335,11 +370,17 @@ export function runScripts(
   for (const script of def.scripts) {
     if (!script.enabled || script.event !== event) continue;
     if (script.scope === "survey" ? opts?.only === "scoped" : !(script.ref && refs.includes(script.ref))) continue;
-    // the script's guard: an ordinary condition, any nesting, against the answers as they are now
+    // the script's guard: an ordinary condition, any nesting, against the answers as they are now (re-read per script: earlier scripts mutate the state here)
     if (script.when && !evaluateCondition(script.when, { def, state, loop: opts?.loop ?? null })) continue;
     const own: ScriptRunResult = { logs: [], errors: [] };
     const ctx = createScriptCtx(def, state, opts?.loop ?? null, own);
     const r = runScript(script.code, ctx, own);
+    if (r.refused) {
+      // not run: the inspector says so, and the caller warns in the console in live (S0b D3)
+      combined.logs.push(`[${script.name}] refused: ${r.refused}`);
+      (combined.refusedScripts ??= []).push(script.name);
+      continue;
+    }
     combined.ran = (combined.ran ?? 0) + 1;
     combined.logs.push(...own.logs.map((l) => `[${script.name}] ${l}`));
     combined.errors.push(...own.errors);

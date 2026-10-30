@@ -8,6 +8,8 @@ import { isEmptyAnswer } from "./answers.js";
 import { lookupAnswer } from "./state.js";
 import { sectionNavMode } from "./sectionNav.js";
 import { assessmentSettings } from "./assessment.js";
+import { scriptMayWriteAnswer, scriptMayWriteVariable } from "./scriptWrites.js";
+import { isServerResolvedExpression } from "./aiFunctions.js";
 
 /**
  * THE SERVER CHECKS WHAT THE CLIENT SAYS HAPPENED.
@@ -28,11 +30,27 @@ import { assessmentSettings } from "./assessment.js";
  * here is a second validation engine; it is the first one, run again where
  * the client cannot edit it.
  *
- * What it deliberately does NOT do: run `def.scripts` (they are unsandboxed
- * — RUNTIME-04) or option popups, and it does not recompute quota outcomes
- * against live counts (a respondent who started before a cell filled is the
- * route's business). Problems are graded so the route can log before it
- * refuses:
+ * What it deliberately does NOT do: execute ANY author JavaScript. Until
+ * 2026-10-30 that claim was false — a `custom_script` validation rule reached
+ * `runScript` (a `new Function` in the server's own realm) through
+ * `validatePage`, so author code could read `process` and an endless loop
+ * hung the save route (audit 2026-10-30 D1). The replay now passes
+ * `scripts: "skip"`: such a rule is never executed here, it is recorded as a
+ * soft `client_only` problem (it ran in the browser, where it belongs) and
+ * cannot refuse a save on its own. Owner decision S0 #2: "skip on the
+ * server". Since S1b no author code runs on the respondent's page either (it
+ * runs in sandboxed frames); a value a script wrote arrives as a posted answer
+ * through the engine-checked request channel and is validated like any answer
+ * — `posted.scriptWrites` names those targets, and a value the replay cannot
+ * derive is reported as soft `script_written` (S1a), believed only for targets
+ * the channel could ever write. It also does not run option popups, and it
+ * does not recompute quota outcomes against live counts (a respondent who
+ * started before a cell filled is the route's business). Punches and
+ * calculations ARE recomputed from the posted answers and compared (S0b,
+ * audit D7: a difference is `server_mismatch`; under
+ * `RUNTIME_SERVER_RECOMPUTE=store` the server's values are stored) — they are
+ * engine rules, not author code.
+ * Problems are graded so the route can log before it refuses:
  *
  *   hard  — the payload cannot be an honest interview: an answer that fails
  *           its question's rules on a page already passed, an unknown
@@ -40,7 +58,8 @@ import { assessmentSettings } from "./assessment.js";
  *   soft  — worth a log line, not a refusal on its own: an answer for a
  *           question the replay never showed (display logic hid it; a loop
  *           iteration that did not exist), a status the replay ended
- *           differently from (quota timing).
+ *           differently from (quota timing), a `custom_script` rule the
+ *           server does not execute (`client_only`).
  */
 export type SubmissionProblem = {
   severity: "hard" | "soft";
@@ -52,9 +71,19 @@ export type SubmissionProblem = {
     | "incomplete"
     | "status_mismatch"
     | "step_unreachable"
-    | "skipped_required";
+    | "skipped_required"
+    | "client_only"
+    | "server_mismatch"
+    /* S1a: a value the replay cannot derive (or did not show) that a sandboxed script wrote through the engine-checked
+       channel (`state.scriptWrites`) — informational: the server runs no author code, so it cannot recompute it */
+    | "script_written";
   questionId?: string;
   pageId?: string;
+  /** server_mismatch on a calculated variable: its name */
+  variable?: string;
+  /** server_mismatch: what was posted and what the server derived — summarised, never the raw text of an open end */
+  posted?: unknown;
+  server?: unknown;
   message: string;
 };
 
@@ -65,6 +94,12 @@ export interface SubmissionCheck {
   /** how far the replay got, for the log line */
   replayedPages: number;
   endStatus?: string;
+  /**
+   * D7 (S0b): the values the server derived for the fields it can recompute, where they differ from what was
+   * posted — answer keys of derived questions, calculated variables, exact-balance claims. The save route stores
+   * these instead of the posted ones under RUNTIME_SERVER_RECOMPUTE=store. Empty when everything agrees.
+   */
+  recomputed?: { answers: Record<string, unknown>; calculated: Record<string, unknown> };
 }
 
 export interface SubmissionInput {
@@ -80,10 +115,19 @@ export interface SubmissionInput {
     stepIndex: unknown;
     status: string;
     completed?: boolean;
+    /** S1a: the paradata of script writes (`state.scriptWrites`) — which answer keys / variables a script wrote */
+    scriptWrites?: unknown;
   };
   quotaCounts?: QuotaCounts;
   /** replay safety valve: stop after this many pages (a loop that never ends must not hang the save) */
   maxPages?: number;
+  /**
+   * D7 (S0b): compare the derived fields with what the replay recomputed (default true). `balanceClaims` are the
+   * exact-balance assignments as the SERVER stored them (`RANDOMIZER_<ID>` / `<VAR>_VERSION` → "arm,arm"); a
+   * posted value that differs is a mismatch and the server's is the one to store.
+   */
+  recompute?: boolean;
+  balanceClaims?: Record<string, string>;
 }
 
 const FINAL = new Set(["complete", "screened", "quota_full", "terminated"]);
@@ -106,7 +150,8 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   const { def, prior, posted } = input;
   const hard: SubmissionProblem[] = [];
   const soft: SubmissionProblem[] = [];
-  const out = (replayedPages = 0, endStatus?: string): SubmissionCheck => ({ ok: hard.length === 0, hard, soft, replayedPages, endStatus });
+  let recomputed: SubmissionCheck["recomputed"];
+  const out = (replayedPages = 0, endStatus?: string): SubmissionCheck => ({ ok: hard.length === 0, hard, soft, replayedPages, endStatus, ...(recomputed ? { recomputed } : {}) });
 
   if (!isPlainObject(posted.answers)) { hard.push({ severity: "hard", code: "bad_shape", message: "answers must be an object" }); return out(); }
   for (const k of ["calculated", "embedded"] as const) {
@@ -140,6 +185,7 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   const maxPages = input.maxPages ?? 2000;
 
   const askedBases = new Set<string>();
+  const clientOnlySeen = new Set<string>();
   let nav = start(def, state, counts);
   let pages = 0;
   const claimsFinal = FINAL.has(posted.status);
@@ -154,7 +200,14 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     for (const q of visible) askedBases.add(q.id);
     // the page the client is still on is being filled in — it is not validated until it is left
     if (!claimsFinal && nav.stepIndex >= target) break;
-    let errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts }));
+    const skippedScripts: { questionId?: string; script: string }[] = [];
+    let errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts, scripts: "skip", skippedScripts }));
+    for (const sk of skippedScripts) {
+      const key = `${step.pageId}|${sk.questionId ?? ""}|${sk.script}`;
+      if (clientOnlySeen.has(key)) continue;
+      clientOnlySeen.add(key);
+      soft.push({ severity: "soft", code: "client_only", questionId: sk.questionId, pageId: step.pageId, message: `custom_script rule "${sk.script}" is checked in the browser only; the server does not run author code` });
+    }
     /*
      * FREE SECTION NAVIGATION (sectionNav.ts): a page jumped over is not
      * validated at jump time, so an UNANSWERED question on it is not a lie —
@@ -189,15 +242,114 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     soft.push({ severity: "soft", code: "step_unreachable", message: `stepIndex ${stepIndex} is past the end of the interview` });
   }
 
+  /*
+   * S1a: what a script wrote (the posted paradata). A derived value that differs from the server's recompute, or an
+   * answer to a question the replay never showed, is the script's — `script_written` (soft, informational), and
+   * under RUNTIME_SERVER_RECOMPUTE=store the posted value is kept (the server cannot run the script to know better).
+   */
+  const written = scriptWrittenTargets(def, posted.scriptWrites);
+  if (input.recompute !== false) recomputed = compareDerived(def, answers, posted.calculated, state, input.balanceClaims, soft, written);
+
   // answers for questions the replay never showed (hidden by display logic, in an iteration that did not exist)
   for (const key of Object.keys(answers)) {
     const base = answerKeyBase(key);
     if (!answered(answers[key]) || askedBases.has(base)) continue;
     const q = getQuestion(def, base);
     if (!q || q.type === "hidden" || q.type === "calculated" || q.type === "embedded_data") continue;
+    if (written.answers.has(key)) { soft.push({ severity: "soft", code: "script_written", questionId: base, message: `${key} was written by a survey script (never shown on the pages passed)` }); continue; }
     // beyond the claimed step the respondent has not been shown anything yet: only count what the replay covered
     soft.push({ severity: "soft", code: "not_asked", questionId: base, message: `${base} was answered but never shown on the pages passed` });
   }
 
   return out(pages, nav.endStatus);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * D7 (audit 2026-10-30, S0b) — WHAT THE SERVER CAN DERIVE ITSELF, COMPARED WITH WHAT WAS POSTED.
+ *
+ * The replay above already recomputes, from the posted answers and the row's seed, everything the engine derives
+ * deterministically: arriving at each page applies the punch rules of derived (hidden / calculated / settings.hidden)
+ * questions and the page's own punches, submitting it runs the calculations (and the loop / masking variables).
+ * Until now the result was thrown away and the posted values were stored. Here the two are compared for:
+ *
+ *   - answer keys of derived questions (hidden type, calculated type with an expression, settings.hidden with punch
+ *     rules) and of questions whose punch rules say recompute: "always" (the rule owns the answer);
+ *   - every calculated variable the replay wrote (calculations, loop and masking variables) — a value only a
+ *     script sets (setCalc) is not recomputed here (the server never runs author code) and stays as posted;
+ *   - the exact-balance assignments, against the claims the SERVER stored (the replay reads them, it cannot
+ *     recompute them).
+ *
+ * Every difference is a soft `server_mismatch` (question or variable, posted vs server, summarised so an open
+ * end's text never reaches a log). An AI-resolved calculated question is the server's own business and skipped.
+ * ------------------------------------------------------------------------------------------------ */
+const SAFE_SCALAR = /^[\w .,:;@#%+\-/]{0,40}$/;
+/** a value for a log line: numbers, booleans, codes and short code-like strings as they are; other text by length only */
+export function summariseValue(v: unknown): unknown {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v ?? null;
+  if (typeof v === "string") return SAFE_SCALAR.test(v) ? v : `<text, ${v.length} chars>`;
+  if (Array.isArray(v)) return v.length > 20 ? `<list of ${v.length}>` : v.map(summariseValue);
+  if (typeof v === "object") { const e = Object.entries(v as Record<string, unknown>); return e.length > 20 ? `<object with ${e.length} keys>` : Object.fromEntries(e.map(([k, x]) => [k, summariseValue(x)])); }
+  return `<${typeof v}>`;
+}
+const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/** S1a: the answer keys and variable names the posted `scriptWrites` paradata says a script wrote */
+function scriptWrittenTargets(def: SurveyDefinition, raw: unknown): { answers: Set<string>; calculated: Set<string> } {
+  const out = { answers: new Set<string>(), calculated: new Set<string>() };
+  if (!Array.isArray(raw)) return out;
+  for (const r of raw.slice(-1000)) {
+    if (!isPlainObject(r) || typeof r.target !== "string") continue;
+    // only targets the channel could have written (scriptMayWrite…) — forged paradata cannot shield a tampered derived value
+    if (r.kind === "answer" && scriptMayWriteAnswer(def, answerKeyBase(r.target))) out.answers.add(r.target);
+    else if (r.kind === "calculated" && scriptMayWriteVariable(def, r.target)) out.calculated.add(r.target);
+  }
+  return out;
+}
+
+function compareDerived(
+  def: SurveyDefinition,
+  postedAnswers: Record<string, AnswerValue>,
+  postedCalculated: unknown,
+  state: ResponseState,
+  claims: Record<string, string> | undefined,
+  soft: SubmissionProblem[],
+  written: { answers: Set<string>; calculated: Set<string> } = { answers: new Set(), calculated: new Set() },
+): NonNullable<SubmissionCheck["recomputed"]> {
+  const rec = { answers: {} as Record<string, unknown>, calculated: {} as Record<string, unknown> };
+  const derived = new Set<string>();
+  for (const q of def.questions) {
+    const always = (q.punches ?? []).some((p) => (p as { recompute?: string }).recompute === "always");
+    const hiddenLike = q.type === "hidden" || !!q.settings?.hidden;
+    if (q.type === "calculated") { if (q.settings?.expression && !isServerResolvedExpression(q.settings.expression)) derived.add(q.id); continue; }
+    if ((hiddenLike && q.punches?.length) || always) derived.add(q.id);
+  }
+  if (derived.size) {
+    const keys = new Set([...Object.keys(postedAnswers), ...Object.keys(state.answers)]);
+    for (const key of keys) {
+      if (COMPANION.test(key)) continue;
+      const base = answerKeyBase(key);
+      if (!derived.has(base)) continue;
+      const p = postedAnswers[key], sv = state.answers[key];
+      if (same(p, sv)) continue;
+      if (written.answers.has(key)) { soft.push({ severity: "soft", code: "script_written", questionId: base, posted: summariseValue(p), server: summariseValue(sv), message: `${key}: written by a survey script — the server does not run scripts, so it cannot derive this value` }); continue; }
+      rec.answers[key] = sv ?? null;
+      soft.push({ severity: "soft", code: "server_mismatch", questionId: base, posted: summariseValue(p), server: summariseValue(sv), message: `${key}: the posted answer differs from the one the server derives from the other answers` });
+    }
+  }
+  const pc = isPlainObject(postedCalculated) ? postedCalculated as Record<string, unknown> : {};
+  for (const name of Object.keys(state.calculated)) {
+    if (claims && name in claims) continue; // judged against the stored claim below
+    const p = pc[name], sv = (state.calculated as Record<string, unknown>)[name];
+    if (same(p, sv)) continue;
+    if (written.calculated.has(name)) { soft.push({ severity: "soft", code: "script_written", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: written by a survey script — the server does not run scripts, so it cannot derive this value` }); continue; }
+    rec.calculated[name] = sv ?? null;
+    soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(sv), message: `${name}: the posted value differs from the one the server calculates` });
+  }
+  for (const [name, stored] of Object.entries(claims ?? {})) {
+    const p = pc[name];
+    if (same(p == null ? null : String(p), stored)) continue;
+    rec.calculated[name] = stored;
+    soft.push({ severity: "soft", code: "server_mismatch", variable: name, posted: summariseValue(p), server: summariseValue(stored), message: `${name}: the posted assignment differs from the claim the server stored` });
+  }
+  return rec;
 }

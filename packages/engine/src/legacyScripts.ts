@@ -103,3 +103,57 @@ export function migrateLegacyCustomCode(input: SurveyDefinition): LegacyScriptMi
   if (changes.length || ux.behaviors.length) def.ux = ux;
   return { def, changes, blocked };
 }
+
+/*
+ * S1b — CUSTOM COMPONENTS RUN IN THE SANDBOXED FRAME.
+ *
+ * A `custom_component` question's `customJs` used to run on the respondent's page with `new Function("el", "api", …)`.
+ * Now the runtime gives each component on the page a RUNTIME-ONLY script behaviour (never saved, never shown in the
+ * editor): the UX layer runs it in a sandboxed frame whose DOM mirror is the component's own element (the host
+ * renders the sanitised `customHtml` into the real page as before, marked `data-rs-component`). The code is wrapped
+ * so `el` and `api` keep their meaning:
+ *
+ *   el                the mirror of the component's element (class / style / attribute changes and elements the code
+ *                     creates are applied to the real one by the host's allow-list; text the HTML drew is the survey's)
+ *   api.getValue()    the component's answer (its own last setValue until the host confirms it)
+ *   api.setValue(v)   rs.setAnswer(<own question>, v) — a REQUEST the engine checks (allowed while on screen: it is
+ *                     the script's own question); resolves { ok, reason }
+ *   api.onChange(fn)  fn(value) whenever the answer changes
+ *
+ * The code gate's COMPONENT flavour still decides before anything runs (`codeGate(customJs, "component")`).
+ */
+export const COMPONENT_BEHAVIOR_PREFIX = "uxb_component_";
+export const isComponentBehavior = (b: { id: string }) => b.id.startsWith(COMPONENT_BEHAVIOR_PREFIX);
+
+export function wrapComponentScript(q: { id: string; code: string | number }, code: string): string {
+  const qs = JSON.stringify(String(q.code)), qid = JSON.stringify(q.id);
+  return [
+    `// ${q.code}'s component code, run in the sandbox: \`el\` is the component's element, \`api\` its answer.`,
+    `(function (el, api) {`,
+    code,
+    `})(document.querySelector('[data-rs-component=' + JSON.stringify(${qid}) + ']'), (function () {`,
+    `  var local, has = false;`,
+    `  rs.listen("change", "self", function () { has = false; });`,
+    `  return {`,
+    `    getValue: function () { return has ? local : rs.getAnswer(${qs}); },`,
+    `    setValue: function (v) { local = v === undefined ? null : v; has = true; return rs.setAnswer(${qs}, local).then(function (r) { if (!r || !r.ok) has = false; return r; }); },`,
+    `    onChange: function (fn) { if (typeof fn === "function") rs.listen("change", "self", function (e) { fn(e && e.value); }); },`,
+    `    question: { id: ${qid}, code: ${qs} }`,
+    `  };`,
+    `})());`,
+  ].join("\n");
+}
+
+/** the definition as the runtime's UX layer sees it: plus one runtime-only behaviour per custom component with code */
+export function withComponentBehaviors(def: SurveyDefinition): SurveyDefinition {
+  const comps = def.questions.filter((q) => q.type === "custom_component" && q.customJs && q.customJs.trim());
+  if (!comps.length) return def;
+  const ux = def.ux ?? { styles: [], animations: [], behaviors: [] };
+  const behaviors = [...ux.behaviors];
+  for (const q of comps) {
+    const target = resolveUxTarget(def, String(q.code));
+    if (typeof target === "string") continue;
+    behaviors.push({ id: `${COMPONENT_BEHAVIOR_PREFIX}${q.id.replace(/[^\w-]/g, "_")}`, label: `${q.code} component`, target, effects: [], script: wrapComponentScript(q, q.customJs!) } as UxBehavior);
+  }
+  return { ...def, ux: { ...ux, behaviors } };
+}

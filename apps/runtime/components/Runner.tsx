@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import type { SurveyDefinition, Branding, Question, ProbeConfig } from "@rescript/schema";
+import type { SurveyDefinition, Branding, Question, ProbeConfig, UxTarget } from "@rescript/schema";
 import {
   createResponseState,
   runtimePipeMeta,
@@ -16,7 +16,8 @@ import {
   visibleQuestions,
   validatePage,
   resolvePiping,
-  runScripts,
+  resolveAuthorHtml,
+  runScripts as runScriptsRaw,
   allEmbeddedFields,
   embeddedFieldName,
   blockingErrors,
@@ -24,6 +25,10 @@ import {
   inspect,
   recomputePunchesAfterChange,
   answerKey,
+  applyScriptWrite,
+  getQuestionByCodeOrVar,
+  type ScriptWrite,
+  lookupAnswer,
   listBlocks,
   pendingListFills,
   serverResolvedQuestions,
@@ -96,8 +101,34 @@ import {
   restoreNavTrail,
   type NavTrail,
   type SubmitGate,
+  logicStatics,
+  logicScriptScope,
+  withComponentBehaviors,
+  redactionSet,
+  type LogicStatics,
+  type PreparedLogicScript,
+  type ScriptWriteResult,
 } from "@rescript/engine";
-import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
+
+/**
+ * S1b — WHERE LOGIC SCRIPTS RUN. By default every Scripts-panel script (and every `custom_script` validation rule)
+ * runs in the page's sandboxed logic frame, its writes applied through the engine (`lib/logicScripts.ts`).
+ * `RUNTIME_LEGACY_SCRIPTS=main` (read when the runtime is built / started; see next.config.mjs) brings back the old
+ * main-thread runner — a TEMPORARY ESCAPE HATCH for one release, so a regression can be rolled back by environment.
+ */
+const LEGACY_SCRIPTS = process.env.RUNTIME_LEGACY_SCRIPTS === "main";
+
+/**
+ * Logic scripts through the code gate (S0b D3): a script the gate refuses does not run; `runScripts` logs
+ * `[name] refused: reason` for the preview inspector, and the console says so too — the only place it shows in
+ * a live interview, which has no inspector.
+ */
+const runScripts: typeof runScriptsRaw = (...args) => {
+  const r = runScriptsRaw(...args);
+  if (r.refusedScripts?.length) for (const l of r.logs) if (/^\[[^\]]*\] refused: /.test(l)) console.warn(`[rescript:script] ${l}`);
+  return r;
+};
+import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, LogicFrameHost, type SpeechService } from "@rescript/renderer";
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
@@ -108,8 +139,12 @@ import {
   cachePreviewState, readPreviewState, clearPreviewState, mergeResumeSnapshot,
   readNavTrail, writeNavTrail, clearNavTrail,
 } from "@/lib/resume";
+import { resumeSeq } from "@/lib/saveSeq";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
-import { createTelemetryCollector, type TelemetryCollector } from "@/lib/telemetry";
+import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
+import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
+import { runScriptLifecycle, LIFECYCLE_TIMEOUT_MS, type AskFrames } from "@/lib/scriptLifecycle";
+import { runLogicEvent, runCustomScriptRules, logicAsk, onChangeScheduler, LOGIC_RUN_TIMEOUT_MS, type LogicEventOutcome, type SkippedRule } from "@/lib/logicScripts";
 import { claimBalance, endPreviewBalance } from "@/lib/balanceClient";
 import type { ResponseTelemetry } from "@rescript/quality";
 
@@ -185,33 +220,53 @@ type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; st
  */
 const MIN_ADVANCE_MS = 350;
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
+/**
+ * SAVE ORDERING (audit 2026-10-30 D6, migration 0078). Every save carries `seq`, a per-session number that only
+ * grows (continued from the row's `save_seq` on resume and from the pending cache after a reload); the server writes
+ * an intermediate save only when its seq is newer than the row's and answers `{ stale: true }` otherwise. The body
+ * is built when the save is ASKED for (`saveBody`), not when it leaves, so a save queued behind another carries the
+ * snapshot and the seq of the same moment.
+ */
+function saveBody(session: NonNullable<RunnerProps["session"]>, state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null, seq?: number): string {
+  return JSON.stringify({
+    sessionId: session.sessionId,
+    status: state.status,
+    stepIndex: state.stepIndex,
+    answers: state.answers,
+    calculated: state.calculated,
+    embedded: state.embedded,
+    flags: state.flags,
+    // S1a: which values sandboxed scripts wrote (script, target, time — never a value); the replay reads it
+    scriptWrites: state.scriptWrites?.length ? state.scriptWrites : undefined,
+    // S1c (D11): this session's script failures (script, kind, page, first message without answer text, count) —
+    // stored by the server whatever the survey's telemetry switches say: it is about the survey's code
+    scriptHealth: scriptHealthPayload(session.sessionId),
+    completed: done,
+    surveyDbId: session.surveyDbId,
+    // behavioural metadata for the quality engine — derived counts and
+    // durations only (see lib/telemetry.ts); the server runs the engine on
+    // the final save
+    telemetry: telemetry ?? undefined,
+    // which build this test session is running (draft / requested version /
+    // current version), so the server assesses it with the settings the
+    // respondent actually ran — a draft-run session is recorded against the
+    // draft's base version, whose settings may be older
+    build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+    // section navigation (0077, responses.nav): the Back trail and the pages seen — validated by the server, never trusted to move anyone
+    nav: nav ?? undefined,
+    // D6 / 0078: this save's place in the session's sequence
+    seq: seq ?? undefined,
+  });
+}
+
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null, seq?: number, prebuilt?: string): Promise<SaveOutcome> {
   if (!session || mode === "preview") return { ok: true, skipped: true };
   try {
-    const body = JSON.stringify({
-      sessionId: session.sessionId,
-      status: state.status,
-      stepIndex: state.stepIndex,
-      answers: state.answers,
-      calculated: state.calculated,
-      embedded: state.embedded,
-      flags: state.flags,
-      completed: done,
-      surveyDbId: session.surveyDbId,
-      // behavioural metadata for the quality engine — derived counts and
-      // durations only (see lib/telemetry.ts); the server runs the engine on
-      // the final save
-      telemetry: telemetry ?? undefined,
-      // which build this test session is running (draft / requested version /
-      // current version), so the server assesses it with the settings the
-      // respondent actually ran — a draft-run session is recorded against the
-      // draft's base version, whose settings may be older
-      build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
-      // section navigation (0077, responses.nav): the Back trail and the pages seen — validated by the server, never trusted to move anyone
-      nav: nav ?? undefined,
-    });
+    const body = prebuilt ?? saveBody(session, state, done, telemetry, build, nav, seq);
     // keepalive lets the completion save outlive a redirect that follows it
-    const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store" });
+    // D6: intermediate saves leave one after another, so one that stalls must not hold the queue for ever (the pending cache keeps its work)
+    const signal = !done && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(20_000) : undefined;
+    const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store", signal });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) return { ok: false, error: j.error ?? `save failed (${r.status})`, status: r.status };
     return { ok: true, response: j };
@@ -222,10 +277,11 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
 }
 
 /** The final save, retried with backoff: three attempts before the respondent is told. */
-async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
+async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"], nav?: NavTrail | null, seq?: number): Promise<SaveOutcome> {
   let last: SaveOutcome = { ok: false, error: "not attempted" };
   for (let attempt = 0; attempt < 3; attempt++) {
-    last = await persist(mode, session, state, true, telemetry, build, nav);
+    // a retry carries the same seq: the final save is guarded by status on the server, so it finalises once
+    last = await persist(mode, session, state, true, telemetry, build, nav, seq);
     if (last.ok) return last;
     // a 4xx will not change on retry (unknown/finalised session); a network error or 5xx might
     if (last.status && last.status < 500) return last;
@@ -515,6 +571,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * the same definition will never fix.
    */
   const [fatal, setFatal] = React.useState<FatalDetail | null>(null);
+  /** D6: the last save seq used by this session (see saveBody) and the chain that sends intermediate saves in order */
+  const saveSeqRef = React.useRef(0);
+  const saveChainRef = React.useRef<Promise<unknown>>(Promise.resolve());
   const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number; nav?: unknown; savedAt?: string | null } | null>(null);
   /** §24: embedded data from this respondent's row on the invitation list. */
   const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
@@ -574,6 +633,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         if (!r.ok || !j.session) { setBootError(j.error ?? `The survey could not be started (${r.status}).`); return; }
         writeResume(sessionBoot.mode, sessionBoot.surveyDbId, j.session.sessionId);
         if (j.resumed && j.saved) { savedRef.current = j.saved; setResumed(true); }
+        // D6: continue the save sequence from the larger of the row's and this browser's unacknowledged one
+        saveSeqRef.current = resumeSeq(j.saved?.saveSeq, readPending(j.session.sessionId)?.seq);
         /*
          * A page whose save never reached the server. It is newer than
          * anything the server has for this session by definition — the cache
@@ -642,6 +703,57 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const gateConfirmedRef = React.useRef(false);
   /** the latest Next handler — "Submit anyway" presses it once the previous Next's latch has opened */
   const nextRef = React.useRef<(() => Promise<void>) | null>(null);
+  /** S1a: the UxLayer's way to run the sandboxed scripts' validate / submit handlers on Next */
+  const lifecycleRef = React.useRef<AskFrames | null>(null);
+  /** S1b: the page's sandboxed logic frame — made on demand when the page has logic scripts to run, retired when it is left */
+  const logicHostRef = React.useRef<{ key: string; host: LogicFrameHost } | null>(null);
+  const logicStaticsRef = React.useRef<{ def: SurveyDefinition; s: LogicStatics } | null>(null);
+  /** S1b: on_change runs debounced per question (lib/logicScripts onChangeScheduler); Next flushes it first */
+  const onChangeRunRef = React.useRef<(questionId: string) => Promise<unknown>>(async () => undefined);
+  const onChangeRef = React.useRef<ReturnType<typeof onChangeScheduler> | null>(null);
+  onChangeRef.current ??= onChangeScheduler((qid) => onChangeRunRef.current(qid));
+  /** S1b: how the current render applies a logic script's write (scope, shown questions, loop) and its page key */
+  const logicWriteRef = React.useRef<(w: ScriptWrite, script: PreparedLogicScript) => ScriptWriteResult>(() => ({ ok: false, reason: "the survey is not on a page" }));
+  const logicKeyRef = React.useRef("none");
+  /** S1b: survey on_load scripts are running in the frame — the first page waits for their writes (bounded) */
+  const [scriptsLoading, setScriptsLoading] = React.useState(false);
+  /** S1b: custom components' code runs as runtime-only sandboxed behaviours (engine withComponentBehaviors) */
+  const uxDef = React.useMemo(() => withComponentBehaviors(def), [def]);
+  React.useEffect(() => () => { logicHostRef.current?.host.dispose(); logicHostRef.current = null; onChangeRef.current?.cancel(); }, []);
+  /** the logic frame for this page (one per page, not per script); a new page retires the previous page's frame */
+  const logicFrame = (key: string): LogicFrameHost | null => {
+    if (typeof document === "undefined") return null;
+    const cur = logicHostRef.current;
+    if (cur && cur.key === key) return cur.host;
+    if (!logicStaticsRef.current || logicStaticsRef.current.def !== def) logicStaticsRef.current = { def, s: logicStatics(def) };
+    cur?.host.retire();
+    const host = new LogicFrameHost(document.body, logicStaticsRef.current.s);
+    logicHostRef.current = { key, host };
+    return host;
+  };
+  /**
+   * S1c (D11 / SE-30): this session's script-health collector (lib/scriptHealth.ts) — every script failure, counted
+   * per script / kind / page, travels with the saves. Messages are redacted against the response's own values.
+   */
+  const scriptHealth = () => sessionScriptHealth(session?.sessionId ?? "preview", () => createScriptHealthCollector({
+    browser: browserClass(detectDevice()),
+    redact: () => redactionSet(stateRef.current?.answers, stateRef.current?.embedded),
+    initial: readStoredScriptHealth(session?.sessionId),
+    onChange: (list) => writeStoredScriptHealth(session?.sessionId, list),
+  }));
+  const noteIssue = (i: ScriptIssue) => { try { scriptHealth().note(i); } catch { /* never break the page */ } };
+  /** a validate / submit round's lines, and the UX frames that did not answer in time */
+  const noteLife = (life: { logs: string[]; stalled?: { id: string; name: string }[] }, ev: string) => {
+    if (life.logs.length) { setLogs((l) => [...l, ...life.logs]); for (const line of life.logs) console.warn(`[rescript:script] ${line}`); }
+    for (const x of life.stalled ?? []) noteIssue({ script: x.id, name: x.name, kind: "lifecycle_timeout", message: `${ev}: no answer within ${LIFECYCLE_TIMEOUT_MS} ms — treated as no error` });
+  };
+  /** a logic run's lines: the inspector, and the console for what an author must see in a live interview (refusals, timeouts) */
+  const noteLogic = (o: Pick<LogicEventOutcome, "logs"> & { issues?: ScriptIssue[] }) => {
+    for (const i of o.issues ?? []) noteIssue(i);
+    if (!o.logs.length) return;
+    setLogs((l) => [...l, ...o.logs]);
+    for (const line of o.logs) if (/^\[[^\]]*\] (refused: |.*\) refused: |.*: no answer within |not run: )/.test(line)) console.warn(`[rescript:script] ${line}`);
+  };
   /** the latest jumpTo (a jump clicked while Next is still settling is replayed, not dropped) */
   const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
@@ -731,6 +843,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
     const st = allSteps[index];
     if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
+    if (st?.kind === "page") scriptHealth().setPage(st.pageId);
   };
   const canDebug = mode === "test" || mode === "preview";
   const [debug, setDebug] = React.useState(false);
@@ -970,7 +1083,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     // collects too (so testers can see it in the inspector) but never posts
     telemetryRef.current?.dispose();
     telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
-    if (mode !== "live" && typeof window !== "undefined") (window as any).__rescriptTelemetry = telemetryRef.current.data;
+    if (mode !== "live" && typeof window !== "undefined") { (window as any).__rescriptTelemetry = telemetryRef.current.data; (window as any).__rescriptScriptHealth = scriptHealth(); }
     /*
      * The resume machinery, for the test suites — the same seam
      * `__rescriptState` and `__rescriptTelemetry` already use, and for the
@@ -984,8 +1097,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
       };
     }
-    const r = runScripts(def, state, "on_load");
-    setLogs(r.logs);
+    /*
+     * The survey's on_load scripts. S1b: they run in the sandboxed logic frame once the first position is known
+     * (below, `bootOnLoad`) and the first page waits for their writes, bounded; the legacy flag runs them here.
+     */
+    let bootOnLoad = false;
+    if (LEGACY_SCRIPTS) { const r = runScripts(def, state, "on_load"); setLogs(r.logs); }
+    else { setLogs([]); bootOnLoad = def.scripts.some((x) => x.enabled && x.event === "on_load" && x.scope === "survey"); }
     /*
      * A PREVIEW RESUMES TOO — "when the page is refreshed, the survey should
      * resume from the user's last position instead of restarting from the
@@ -1125,11 +1243,31 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
       if (session && mode !== "preview") {
         setFinalSave({ kind: "saving" });
-        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave()).then((out) => {
+        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current).then((out) => {
           setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
           force();
         });
       }
+    }
+    if (bootOnLoad && !nav.done) {
+      setScriptsLoading(true);
+      void (async () => {
+        const o = await runLogicEvent(def, state, "on_load", {
+          runner: logicFrame(`boot|${epoch}`),
+          // nothing is on screen yet: a survey script may write any question its scope allows
+          apply: (w, sc) => applyScriptWrite(def, state, w, { scriptId: sc.id, scope: logicScriptScope(sc), shown: [], loop: null, quotaCounts: counts }),
+          timeoutMs: LOGIC_RUN_TIMEOUT_MS,
+        });
+        noteLogic(o);
+        // the frame was closed under this run (React's dev double mount disposes it): the remount's own run owns the boot card
+        if (o.closed) return;
+        if (o.written && stateRef.current === state) {
+          try { setSteps(resumeAt(def, state, counts, state.stepIndex, view).steps); }
+          catch (e) { console.error("[rescript:runtime] could not settle after the on_load scripts", e); }
+        }
+        setScriptsLoading(false);
+        force();
+      })();
     }
     force();
     }
@@ -1306,7 +1444,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
 
   const shownPageId = (() => {
     const s = stateRef.current;
-    const st = s && !booting && !fatal ? steps[s.stepIndex] : undefined;
+    const st = s && !booting && !fatal && !scriptsLoading ? steps[s.stepIndex] : undefined;
     return st?.kind === "page" && !balanceKey ? st.pageId : null;
   })();
   React.useEffect(() => {
@@ -1314,10 +1452,21 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!shownPageId || !s) return;
     const st = steps[s.stepIndex];
     if (st?.kind !== "page") return;
-    const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
-    if (!r.ran) return;
-    if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
-    force();
+    if (LEGACY_SCRIPTS) {
+      const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
+      if (!r.ran && !r.logs.length) return;
+      if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+      force();
+      return;
+    }
+    /* S1b: in the page's logic frame; the writes go through the engine with the page's shown questions (logicWriteRef) */
+    const scopeRef = st.pageId.split("@")[0]!;
+    if (!def.scripts.some((x) => x.enabled && x.event === "on_load" && x.scope !== "survey" && x.ref === scopeRef)) return;
+    void (async () => {
+      const o = await runLogicEvent(def, s, "on_load", { scopeRef, loop: st.loop ?? null, only: "scoped", runner: logicFrame(logicKeyRef.current), apply: (w, sc) => logicWriteRef.current(w, sc), timeoutMs: LOGIC_RUN_TIMEOUT_MS });
+      noteLogic(o);
+      if (o.ran || o.logs.length) force();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownPageId]);
 
@@ -1339,7 +1488,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       />
     );
   }
-  if (booting || !state) {
+  if (booting || !state || scriptsLoading) {
     return <div className="rs-shell"><div className="rs-card rs-end" data-testid="rs-booting"><h2>Loading survey…</h2></div></div>;
   }
   if (balanceKey) {
@@ -1360,6 +1509,30 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
   const pageQuestions = pageStep && reveal ? visibleQuestions(def, pageStep, state, counts, view) : questions;
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts, ui, locale };
+  /** S1b: the page's logic frame is keyed by the page shown (and its iteration) */
+  const logicKey = pageStep ? `${state.stepIndex}|${answerKey(pageStep.pageId, pageStep.loop ?? null)}` : "end";
+  logicKeyRef.current = logicKey;
+  /*
+   * S1b — VALIDATION WITH custom_script RULES. The engine never runs author code here: validatePage is asked with
+   * `scripts: "skip"` and lists the custom_script rules it met; they run in the page's logic frame (value = the
+   * answer under test), bounded, their error(...) messages on their question like any rule's.
+   */
+  const validateWithScripts = async (qs: Question[]): Promise<ReturnType<typeof validatePage>> => {
+    if (LEGACY_SCRIPTS) return validatePage(def, qs, ctx);
+    const skipped: SkippedRule[] = [];
+    const errs = validatePage(def, qs, { ...ctx, scripts: "skip", skippedScripts: skipped });
+    if (!skipped.length) return errs;
+    const r = await runCustomScriptRules(def, state, skipped, { loop: pageStep?.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: LIFECYCLE_TIMEOUT_MS });
+    noteLogic(r);
+    return [...errs, ...r.errors];
+  };
+  /** S1a lifecycle for ONE question (conversational mode, a probe): the sandboxed "validate" handlers' errors on it */
+  const frameValidateFor = async (q: Question): Promise<ReturnType<typeof validatePage>> => {
+    if (!lifecycleRef.current) return [];
+    const life = await runScriptLifecycle(lifecycleRef.current, "validate", { questions: [q] });
+    noteLife(life, "validate");
+    return life.errors.filter((e) => e.questionId === q.id);
+  };
 
   /*
    * THE AI CONVERSATIONAL SURVEY — how the same survey is presented and
@@ -1494,7 +1667,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const handleNextInner = async () => {
     if (!pageStep) return;
     if (mediaGate.held) return;
-    const errs = validatePage(def, questions, ctx);
+    // S1b: a change made just before the click has its on_change scripts run (and their writes applied) first
+    await onChangeRef.current?.flush();
+    const errs = await validateWithScripts(questions);
     /*
      * on_validate runs FIRST and on its own: it is the event whose whole
      * purpose is to add errors, and it was the one event `runScripts` was
@@ -1502,8 +1677,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * platform did nothing. on_submit still runs after it, for the work a
      * page does on the way out.
      */
-    const submitScope = [pageStep.pageId.split("@")[0], ...pageStep.questionIds]; // the page and every question on it
-    const validateRes = runScripts(def, state, "on_validate", { scopeRef: submitScope, loop: pageStep.loop });
+    const submitScope = [pageStep.pageId.split("@")[0]!, ...pageStep.questionIds]; // the page and every question on it
+    /*
+     * S1b: on_validate and on_submit run in the page's logic frame through the S1a lifecycle helper — bounded
+     * (LIFECYCLE_TIMEOUT_MS; a frame that does not answer is "no error" and logged), error(message, ref) mapped to
+     * the page's question by id, code or variable (else the page banner), the writes applied before it returns.
+     */
+    const logicStep = async (event: "on_validate" | "on_submit") => {
+      if (LEGACY_SCRIPTS) {
+        const r = runScripts(def, state, event, { scopeRef: submitScope, loop: pageStep.loop });
+        if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+        return r.errors.map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));
+      }
+      const ask = logicAsk(`logic ${event}`, (t) => runLogicEvent(def, state, event, { scopeRef: submitScope, loop: pageStep.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: t }), noteLogic);
+      const life = await runScriptLifecycle(ask, "validate", { questions: pageQuestions }, LIFECYCLE_TIMEOUT_MS);
+      noteLife(life, "validate");
+      return life.errors;
+    };
+    const validateErrs = await logicStep("on_validate");
     /*
      * LOGIC-11: on_submit is the work a page does on the way OUT, so it runs
      * only once the page is valid as far as built-in validation and on_validate
@@ -1511,13 +1702,19 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * flags) and fired them again on the retry. Errors an on_submit script
      * itself raises still block, below.
      */
-    const blockedEarly = blockingErrors([...errs, ...validateRes.errors.map((e) => ({ questionId: e.questionRef ?? "", message: e.message }))]).length > 0;
-    const scriptRes = blockedEarly
-      ? { logs: [] as string[], errors: [] as typeof validateRes.errors }
-      : runScripts(def, state, "on_submit", { scopeRef: submitScope, loop: pageStep.loop });
-    setLogs((l) => [...l, ...validateRes.logs, ...scriptRes.logs]);
-    const fromScripts = [...validateRes.errors, ...scriptRes.errors]
-      .map((e) => ({ questionId: e.questionRef ?? "", message: e.message }));
+    const blockedEarly = blockingErrors([...errs, ...validateErrs]).length > 0;
+    const submitErrs = blockedEarly ? [] : await logicStep("on_submit");
+    const fromScripts = [...validateErrs, ...submitErrs];
+    /*
+     * S1a — THE SANDBOXED SCRIPTS' "validate": only once the page passed its built-in validation and the logic
+     * scripts' on_validate, every frame that registered rs.listen("validate") is asked, bounded (1.5 s; a frame that
+     * does not answer is "no error" and logged). Its rs.error messages stop Next like built-in validation errors.
+     */
+    if (!blockedEarly && lifecycleRef.current) {
+      const life = await runScriptLifecycle(lifecycleRef.current, "validate", { questions });
+      noteLife(life, "validate");
+      fromScripts.push(...life.errors);
+    }
     const allErrs = [...errs, ...fromScripts];
     const blocking = blockingErrors(allErrs);
     if (blocking.length > 0) {
@@ -1556,6 +1753,15 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       }
       gateConfirmedRef.current = false;
       setGate(null);
+    }
+    /*
+     * S1a — "submit": the page is valid and about to be left; the sandboxed scripts' submit handlers run (their
+     * writes go through the engine-checked channel, onScriptWrite) before the answers are carried forward. Bounded
+     * like validate; rs.error here does not stop the page.
+     */
+    if (lifecycleRef.current) {
+      const life = await runScriptLifecycle(lifecycleRef.current, "submit", { questions });
+      noteLife(life, "submit");
     }
     /*
      * "SHOW A MESSAGE WHEN NEXT IS PRESSED" — options whose popup is set to
@@ -1638,7 +1844,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   /** Next on a probe screen: validate it, then either the next probe or the page's exit. */
   const handleProbeNext = once(async () => {
     if (!probe) return;
-    const errs = validatePage(def, [probe.pq], ctx);
+    const errs = [...await validateWithScripts([probe.pq]), ...await frameValidateFor(probe.pq)];
     if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
     setErrors([]);
     setProbe(null);
@@ -1687,8 +1893,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (sectionNavMode(def) !== "off" && (session || mode === "preview")) {
       writeNavTrail(session?.sessionId ?? previewStateId, { visited: visitedPages(state), seen: seenPages(state) }, mode === "preview");
     }
+    const seq = session && mode !== "preview" ? ++saveSeqRef.current : undefined;
     if (session && mode !== "preview") {
-      stamp = cachePending(session.sessionId, snapshot);
+      stamp = cachePending(session.sessionId, { ...snapshot, seq });
     } else if (mode === "preview") {
       /* the preview's own position, so a refresh comes back here rather
          than to page one — see cachePreviewState */
@@ -1698,10 +1905,16 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       // …and the configuration fingerprints (A66), so the next resume can tell a changed question from an unchanged one
       cachePreviewState(previewStateId, { ...snapshot, seed: state.seed, fingerprints: configFingerprints(def) });
     }
-    void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build, navForSave()).then((o) => {
+    /*
+     * D6: built now, sent after the previous intermediate save has settled — saves leave in the order they were
+     * made, and the server refuses any that still arrives older than what it has (seq).
+     */
+    const body = session && mode !== "preview" ? saveBody(session, state, false, telemetryRef.current?.data ?? null, build, navForSave(), seq) : undefined;
+    const send = () => persist(mode, session, state, false, null, build, null, seq, body).then((o) => {
       if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }
       console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
     });
+    saveChainRef.current = saveChainRef.current.then(send, send);
   };
 
   /** Leave the current page: telemetry, advance, and everything that follows. */
@@ -1733,8 +1946,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
        * writes — a computed variable, a flag, a status field — is part of the
        * response that is persisted rather than a change nobody records.
        */
-      const completeRes = runScripts(def, state, "on_complete");
-      if (completeRes.logs.length) setLogs((l) => [...l, ...completeRes.logs]);
+      if (LEGACY_SCRIPTS) {
+        const completeRes = runScripts(def, state, "on_complete");
+        if (completeRes.logs.length) setLogs((l) => [...l, ...completeRes.logs]);
+      } else if (def.scripts.some((x) => x.enabled && x.event === "on_complete")) {
+        // S1b: in the (last) page's logic frame, bounded; its writes are applied before the final save below
+        noteLogic(await runLogicEvent(def, state, "on_complete", { runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: LOGIC_RUN_TIMEOUT_MS }));
+      }
       const endStep = nav.steps[nav.stepIndex];
       setEnded({
         status: nav.endStatus ?? "complete",
@@ -1744,7 +1962,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       telemetryRef.current?.submitted();
       setFinalSave({ kind: "saving" });
       force();
-      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
+      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current);
       if (!out.ok) {
         console.warn("[rescript:save] completion NOT saved", { session: session?.sessionId.slice(0, 8), error: out.error });
         setFinalSave({ kind: "failed", error: out.error });
@@ -1781,7 +1999,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!state) return;
     setFinalSave({ kind: "saving" });
     force();
-    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
+    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave(), ++saveSeqRef.current);
     setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
     if (out.ok) void assessmentResults.obtain("response" in out ? out.response : null, ended?.status ?? "complete", state.answers as Record<string, unknown>);
     if (out.ok && sessionBoot) {
@@ -1882,7 +2100,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     const q = pageQuestions[convoIndex];
     // a hidden question is on screen for the programmer only: never validated, never acknowledged
     if (q && !q.settings.hidden) {
-      const errs = validatePage(def, [q], ctx);
+      await onChangeRef.current?.flush();
+      // S1b: custom_script rules in the frame; S1a's sandboxed "validate" handlers asked for THIS question (the page's last question goes through handleNextInner, which asks for the whole page)
+      const errs = [...await validateWithScripts([q]), ...(convoIndex < pageQuestions.length - 1 ? await frameValidateFor(q) : [])];
       if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
     }
     if (q && q.type !== "html" && !q.settings.hidden) { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
@@ -2076,6 +2296,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {errors.length > 0 && (
         <div className="rs-error-banner" role="status" aria-live="polite">
           {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
+          {/* a script's page-level message (rs.error without a question on this page, a logic script's error() without one) */}
+          {errors.filter((e) => !e.questionId || !shownQuestions.some((q) => q.id === e.questionId)).map((e, i) => (
+            <div key={i} className="rs-error-page" data-testid="rs-page-error">{e.message}</div>
+          ))}
         </div>
       )}
       {startNote && (
@@ -2093,8 +2317,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
             setAnswer(def, state, q.id, v, pageStep.loop);
             telemetryRef.current?.answerChanged(q.id);
             recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
-            const r = runScripts(def, state, "on_change", { scopeRef: [q.id, pageStep.pageId.split("@")[0]], loop: pageStep.loop });
-            if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+            scheduleOnChange(q.id);
             force();
           }}
           onOtherChange={(q, t, code) => {
@@ -2179,8 +2402,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
                * counted but undrawn.
                */
               pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
-              const r = runScripts(def, state, "on_change", { scopeRef: [q.id, pageStep.pageId.split("@")[0]], loop: pageStep.loop });
-              if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+              scheduleOnChange(q.id);
               force();
             }}
             onOtherChange={(t, code) => {
@@ -2255,23 +2477,77 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * and a style for "Block 3" or "page 2" applies exactly there. A survey
    * with no UX configuration renders no layer at all.
    */
-  const hasUx = !!def.ux && (def.ux.styles.length + def.ux.animations.length + def.ux.behaviors.length) > 0;
+  const hasUx = !!uxDef.ux && (uxDef.ux.styles.length + uxDef.ux.animations.length + uxDef.ux.behaviors.length) > 0;
   const uxBlockId = hasUx && pageStep ? (listBlocks(def.flow as unknown[]).find((bl) => bl.pages.some((pg) => pg.node.id === pageStep.pageId))?.id ?? pageStep.pageId) : undefined;
   const uxValues: Record<string, unknown> = {};
   if (hasUx && pageStep) for (const q of shownQuestions) uxValues[q.id] = state.answers[answerKey(q.id, pageStep.loop ?? null)];
-  const uxAll: Record<string, unknown> | undefined = hasUx && def.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, state.answers[answerKey(q.id, null)]])) : undefined;
+  /* SE-03 (S1a): loop-aware — every answer as seen from the page's iteration (loop-local first, then the enclosing ones, then the survey-level key), not the bare key */
+  const uxAll: Record<string, unknown> | undefined = hasUx && uxDef.ux!.behaviors.some((bh) => bh.script) ? Object.fromEntries(def.questions.map((q) => [q.id, lookupAnswer(state.answers, q.id, pageStep?.loop ?? null)])) : undefined;
+  /*
+   * S1a — THE SCRIPT WRITE CHANNEL. `rs.setAnswer` / `setEmbedded` / `setCalc` / `flag` from a sandboxed script are
+   * requests; the engine decides (scope, response model, size) and an accepted write takes the respondent's own
+   * path: setAnswer → punch cascade (inside applyScriptWrite), then what onChange does next — prune selections the
+   * change took off the screen, the page's on_change logic scripts, a re-render. Recorded in state.scriptWrites.
+   */
+  const onScriptWrite = (write: ScriptWrite, script: { id: string; target: UxTarget }): { ok: boolean; reason?: string } => {
+    if (!pageStep || ended) return { ok: false, reason: "the survey is not on a page" };
+    const t = script.target;
+    const scope = t.questionId ? { kind: "question" as const, questionId: t.questionId } : t.pageId ? { kind: "page" as const, pageId: t.pageId } : t.blockId ? { kind: "block" as const, blockId: t.blockId } : { kind: "survey" as const };
+    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope, shown: shownQuestions.map((q) => q.id), loop: pageStep.loop ?? null, pageQuestions: questions, quotaCounts: counts });
+    if (!r.ok) return r;
+    if (write.kind === "answer") {
+      pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
+      const q = getQuestionByCodeOrVar(def, write.ref);
+      if (q) scheduleOnChange(q.id);
+    }
+    force();
+    return r;
+  };
+  /*
+   * S1b — A LOGIC SCRIPT'S WRITE, through the same engine channel as a sandboxed UX script's, with the script's
+   * DECLARED scope (`logicScriptScope`: survey / page / question). An answer write then prunes what it took off the
+   * screen; it does not run on_change scripts (a logic script's set never did). The caller re-renders.
+   */
+  const applyLogicWrite = (write: ScriptWrite, script: PreparedLogicScript): ScriptWriteResult => {
+    const r = applyScriptWrite(def, state, write, { scriptId: script.id, scope: logicScriptScope(script), shown: pageStep ? shownQuestions.map((q) => q.id) : [], loop: pageStep?.loop ?? null, pageQuestions: questions, quotaCounts: counts });
+    if (r.ok && write.kind === "answer" && pageStep) pruneHiddenSelections(def, questions, ctx, pageStep.loop ?? null);
+    return r;
+  };
+  logicWriteRef.current = applyLogicWrite;
+  /** the page's on_change scripts for one question — legacy: at once on the page; S1b: debounced, in the frame */
+  const runOnChange = async (qid: string) => {
+    if (!pageStep) return;
+    const scopeRef = [qid, pageStep.pageId.split("@")[0]!];
+    if (LEGACY_SCRIPTS) {
+      const r = runScripts(def, state, "on_change", { scopeRef, loop: pageStep.loop });
+      if (r.logs.length) setLogs((l) => [...l, ...r.logs]);
+      return;
+    }
+    const o = await runLogicEvent(def, state, "on_change", { scopeRef, loop: pageStep.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: LOGIC_RUN_TIMEOUT_MS });
+    noteLogic(o);
+    if (o.ran || o.logs.length) force();
+  };
+  onChangeRunRef.current = runOnChange;
+  function scheduleOnChange(qid: string) {
+    if (LEGACY_SCRIPTS) { void runOnChange(qid); return; }
+    // only when the page has an on_change script that could hear it: no frame for a page without logic scripts
+    const pid = pageStep?.pageId.split("@")[0];
+    if (!def.scripts.some((x) => x.enabled && x.event === "on_change" && (x.scope === "survey" || x.ref === qid || x.ref === pid))) return;
+    onChangeRef.current?.schedule(qid);
+  }
   const shell = (
     <div ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b, { pageBackground: true })}`} style={brandingVars(b) as React.CSSProperties} dir={dir} lang={locale} data-language={lang}
       {...(hasUx ? { "data-rs-ux": def.meta.id, "data-rs-block": uxBlockId, "data-rs-page": pageStep?.pageId } : {})}
       {...(b.responsive ? { "data-rs-theme": def.meta.id } : {})}>
       {b.responsive && <style data-rs-theme-css="" dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, `.rs-shell[data-rs-theme="${def.meta.id.replace(/["\\]/g, "")}"]`) }} />}
       {hasUx && !ended && (
-        <UxLayer def={def} rootRef={shellRef} values={uxValues} allValues={uxAll} state={state} language={lang}
+        <UxLayer def={uxDef} rootRef={shellRef} values={uxValues} allValues={uxAll} state={state} language={lang}
           shown={pageStep ? shownQuestions.map((q) => q.id) : []}
           pageKey={`${state.stepIndex}|${pageStep ? answerKey(pageStep.pageId, pageStep.loop ?? null) : "end"}|${conversational ? convoIndex : ""}`}
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
-          onNavigate={(target, as) => jumpTo(target, as, "script")} />
+          onNavigate={(target, as) => jumpTo(target, as, "script")}
+          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue} />
       )}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
@@ -2293,7 +2569,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {(b.logoUrl || b.headerHtml) && (
         <div className={`rs-header ${b.logoPosition}`}>
           {b.headerHtml ? (
-            <div dangerouslySetInnerHTML={{ __html: resolvePiping(b.headerHtml, ctx) }} />
+            <div dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.headerHtml, ctx) }} />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
             b.logoUrl && <SafeImage src={b.logoUrl} alt="logo" imageOnly display={b.logoDisplay} />
@@ -2312,7 +2588,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       {content}
       {b.footerHtml && (
-        <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolvePiping(b.footerHtml, ctx) }} />
+        <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.footerHtml, ctx) }} />
       )}
       {def.quality?.enabled && def.quality.telemetry?.disclosure && (
         <div className="rs-footer rs-disclosure" data-testid="rs-quality-disclosure">{def.quality.telemetry.disclosure}</div>

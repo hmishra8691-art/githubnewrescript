@@ -380,10 +380,24 @@ export function checkScalarRules(
          */
         const ref = String(rule.value ?? "");
         const script = ctx.def.scripts.find((s) => s.id === ref || s.name === ref);
-        if (!script) break;
+        // a disabled script is off everywhere — the browser too (D1)
+        if (!script || script.enabled === false) break;
+        /*
+         * THE SERVER NEVER RUNS AUTHOR CODE (audit 2026-10-30 D1). The save
+         * replay passes `scripts: "skip"`: the rule is recorded and graded
+         * client-only there; it ran in the browser before the page was left.
+         * `runScript` is `new Function` in the host realm — on the server it
+         * reached `process`, and an endless loop hung the save route.
+         */
+        if (ctx.scripts === "skip") {
+          ctx.skippedScripts?.push({ questionId: ctx.question?.id, script: ref, value, severity: sev, failMessage: ruleError(rule, "This answer could not be checked.") });
+          break;
+        }
         const run: ScriptRunResult = { logs: [], errors: [] };
         const sctx = createScriptCtx(ctx.def, ctx.state, ctx.loop ?? null, run);
         const outcome = runScript(script.code, { ...sctx, value } as never, run);
+        // refused by the code gate (S0b D3): it did not run, and a script nobody can run must not hold the respondent
+        if (outcome.refused) break;
         for (const e of run.errors) fail(e.message);
         if (outcome.failed) fail(ruleError(rule, "This answer could not be checked."));
         break;

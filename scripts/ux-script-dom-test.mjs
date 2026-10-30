@@ -19,7 +19,8 @@
  *            handlers survive React re-renders and do not accumulate across
  *            Next/Back · a migrated legacy customJs / branding.customJs still runs ·
  *            errors, warnings and a runaway loop are reported and contained ·
- *            a script cannot write an answer, an rs- class, a tag or an on* attribute
+ *            a script cannot write an answer, an rs- class, a tag or an on* attribute ·
+ *            nor hide / disable an answer input or a required question (D12)
  *   STUDIO   a legacy survey opens with its Custom code moved into the script list
  *            (and no Custom code section) · Intelligent mode writes a script that
  *            passes the same gate, applies, and runs · one the gate refuses is
@@ -254,6 +255,45 @@ console.log("\nRUNTIME — one pipeline");
   await page.waitForSelector('[data-qid="q2"]');
   await page.close();
   ok("RUNTIME-08: hidden/disabled on Next or .rs-nav is refused and logged; classes still apply; the respondent can always move on");
+}
+
+{ // 7b. D12 (audit 2026-10-30): a script cannot lock the respondent out of an answer
+  const def = withScripts(
+    beh("lockout", `
+      var opt = document.querySelector('[data-qid="q1"] [data-rs-el="option"]');
+      opt.setAttribute("hidden", "true"); opt.style.display = "none"; opt.style.pointerEvents = "none";
+      opt.classList.add("zz-opt-styled");
+      var inp = document.querySelector('[data-qid="q1"] input');
+      if (inp) inp.setAttribute("disabled", "true");
+      document.querySelector('[data-qid="q1"]').setAttribute("hidden", "true");
+      rs.hide("Q1");
+      document.body.setAttribute("data-lock-done", "1");`),
+  );
+  def.questions[0].required = true;
+  const { page, logs } = await open(def);
+  await waitAttr(page, "data-lock-done", "1");
+  await page.waitForTimeout(600);
+  const st = await page.evaluate(() => {
+    const card = document.querySelector('[data-qid="q1"]');
+    const opt = card.querySelector('[data-rs-el="option"]');
+    const inp = card.querySelector("input");
+    return { cardHidden: card.hasAttribute("hidden") || card.hasAttribute("data-rs-ux-hidden") || getComputedStyle(card).display === "none", required: card.getAttribute("data-rs-required"),
+      optHidden: opt.hasAttribute("hidden") || getComputedStyle(opt).display === "none", optPe: getComputedStyle(opt).pointerEvents, optStyled: opt.classList.contains("zz-opt-styled"), inpDisabled: !!inp?.disabled };
+  });
+  assert.equal(st.required, "1", "the required card is marked for the host");
+  assert.equal(st.cardHidden, false, "a required question card is not hidden by a script (attribute or rs.hide)");
+  assert.equal(st.optHidden, false, "an option is not hidden by a script");
+  assert.notEqual(st.optPe, "none", "an option keeps pointer events");
+  assert.equal(st.inpDisabled, false, "an answer input is not disabled by a script");
+  assert.equal(st.optStyled, true, "…but a class on the option is still applied");
+  const said = logs.join("\n");
+  assert.match(said, /cannot (hide|disable|set display: none on|set pointer-events: none on) an answer input/i, "the input refusal is said in the console");
+  assert.match(said, /required question/i, "the required-card refusal is said in the console");
+  await page.click('[data-qid="q1"] label:has-text("Alpha")');
+  await page.click('[data-testid="rs-next"]');
+  await page.waitForSelector('[data-qid="q2"]');
+  await page.close();
+  ok("D12: hidden/disabled/display:none/pointer-events:none on an option or input, and hiding a required card (attribute or rs.hide), are refused and logged; classes still apply; the respondent answers and moves on");
 }
 
 { // 8. OR-01: an unknown question type is a visible notice, not a text box
