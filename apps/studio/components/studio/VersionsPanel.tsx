@@ -5,6 +5,7 @@ import { useStudio } from "./store";
 import { runtimeBaseUrl, surveyBaseUrl } from "@/lib/runtime-url";
 
 interface VersionRow { id: string; version: string; label: string | null; notes: string | null; created_at: string }
+interface ScriptAuditEntry { id: string; action: string; at: string; who: string; text: string; detail: Record<string, unknown> }
 interface DeploymentRow { id: string; client_slug: string; study_slug: string; mode: string; version_id: string; active: boolean }
 
 /** Version control (requirement §12) + deployment pinning (§21). */
@@ -30,7 +31,13 @@ export function VersionsPanel() {
    */
   const [confirmRestore, setConfirmRestore] = React.useState<VersionRow | null>(null);
 
+  /* S1c (SE-29): one line per changed piece of code, from the audit log (the sandbox keeps it in memory) */
+  const [scriptLog, setScriptLog] = React.useState<ScriptAuditEntry[] | null>(null);
+  const [scriptLogAll, setScriptLogAll] = React.useState(false);
+
   const load = React.useCallback(() => {
+    fetch(`/api/surveys/${s.surveyDbId}/script-audit`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null))
+      .then((d) => setScriptLog(Array.isArray(d?.entries) ? d.entries : null)).catch(() => setScriptLog(null));
     fetch(`/api/surveys/${s.surveyDbId}/versions`).then((r) => r.json())
       .then((d) => setVersions(d.versions ?? []));
     fetch(`/api/surveys/${s.surveyDbId}`).then((r) => r.json())
@@ -193,6 +200,38 @@ export function VersionsPanel() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <h3 className="sec">Script history</h3>
+      <div data-testid="script-audit-log">
+        {scriptLog === null && <p className="muted" style={{ fontSize: 13 }}>The script history could not be read.</p>}
+        {scriptLog?.length === 0 && (
+          <p className="muted" style={{ fontSize: 13 }} data-testid="script-audit-empty">
+            No code changes recorded yet. Every save that adds, edits, removes or switches a script, component code,
+            custom CSS or header/footer HTML is logged here with who did it and what the check said — never the code itself.
+          </p>
+        )}
+        {!!scriptLog?.length && (
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 13 }}>
+            {(scriptLogAll ? scriptLog : scriptLog.slice(0, 12)).map((e) => (
+              <li key={e.id} data-testid="script-audit-line" data-action={e.action} style={{ padding: "4px 0", borderBottom: "1px solid var(--line, #e5e7eb)" }}>
+                <span className={`chip ${e.detail.verdict === "refused" ? "warn" : ""}`} style={{ marginRight: 6 }}>{e.action.replace("script.", "")}</span>
+                {e.text}
+                <span className="muted"> · {new Date(e.at).toLocaleString()}</span>
+                {e.detail.afterHash || e.detail.beforeHash ? (
+                  <span className="muted mono" style={{ fontSize: 11.5 }} title="sha-256 of the code before → after (the code itself is not stored in the log)">
+                    {" "}· {String(e.detail.beforeHash ?? "—").slice(0, 8)} → {String(e.detail.afterHash ?? "—").slice(0, 8)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {(scriptLog?.length ?? 0) > 12 && (
+          <button className="btn small" style={{ marginTop: 6 }} onClick={() => setScriptLogAll((v) => !v)}>
+            {scriptLogAll ? "Show fewer" : `Show all ${scriptLog!.length}`}
+          </button>
+        )}
       </div>
 
       <h3 className="sec">Compare versions</h3>

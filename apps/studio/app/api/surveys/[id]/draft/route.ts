@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
 import { droppedFieldPaths, ensureElementIds } from "@rescript/engine";
 import { audit, isFailure, requireEditRight, requireProject } from "@/lib/guard";
+import { scriptAuditRows } from "@/lib/scriptAuditLog";
 
 export const dynamic = "force-dynamic";
 
@@ -101,6 +102,27 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   const baseRevision = Number.isFinite(body?.baseRevision) ? Number(body.baseRevision) : null;
 
   if (baseRevision !== null) {
+    /*
+     * S1c (SE-29) — THE PRE-IMAGE for the script audit log: what the row holds before this write (the draft, or the
+     * current version when there is no draft). Read only at the revision this save is based on — if the row moved
+     * on, the RPC refuses the save anyway. Best effort: a failed read means no script rows for this save, never a
+     * failed save.
+     */
+    const preImage = await (async (): Promise<SurveyDefinition | null | undefined> => {
+      try {
+        const { data: cur } = await db.from("surveys").select("draft_definition, current_version_id, revision").eq("id", params.id).single();
+        if (!cur || (typeof cur.revision === "number" && cur.revision !== baseRevision)) return undefined;
+        let raw: unknown = cur.draft_definition;
+        if (!raw && cur.current_version_id) {
+          const { data: v } = await db.from("survey_versions").select("definition").eq("id", cur.current_version_id).single();
+          raw = v?.definition ?? null;
+        }
+        if (!raw) return null;
+        const p = SurveyDefinition.safeParse(raw);
+        return p.success ? p.data : undefined;
+      } catch { return undefined; }
+    })();
+
     const { data, error } = await db.rpc("rescript_save_draft", {
       p_survey_id: params.id,
       p_definition: definition,
@@ -171,6 +193,24 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           });
         }
       })();
+
+      /*
+       * S1c (SE-29) — ONE ROW PER CHANGED PIECE OF CODE (UX scripts, logic scripts and their on/off switch, Custom
+       * Component JS/HTML, custom CSS, header/footer HTML): kind, item, author, sha-256 of the code before/after
+       * (never the code) and the check's verdict. Unlike `survey.modified` above this is per change, but only a
+       * save that changes code writes anything. No pre-image (the read failed or raced) → nothing is written.
+       */
+      if (preImage !== undefined) {
+        const rows = scriptAuditRows(preImage, definition);
+        if (rows.length) {
+          void Promise.all(rows.map((r) => audit({
+            action: r.action, userId: gate.user.userId, sessionId: gate.user.sessionId,
+            surveyId: params.id, customerId: gate.user.customerId,
+            entity: "script", entityId: r.entityId,
+            detail: { ...r.detail, revision: row.revision },
+          })));
+        }
+      }
 
       return NextResponse.json({
         ok: true,

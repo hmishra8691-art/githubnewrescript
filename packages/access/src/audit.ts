@@ -95,6 +95,13 @@ export const AUDIT_EVENTS = [
 
   /* the survey itself */
   "survey.modified",
+  /* S1c (SE-29): one row per changed piece of the survey's code on a draft save — kind, item, hashes of the code
+     before/after (never the code) and the check's verdict (engine scriptAudit.ts) */
+  "script.added",
+  "script.changed",
+  "script.removed",
+  "script.enabled",
+  "script.disabled",
   /* Super Intelligent import: a questionnaire read from another platform or a document,
      as a new project or merged into this one — the file, what was read, what needs review */
   "survey.imported",
@@ -284,6 +291,11 @@ export function describeEvent(r: AuditRow): string {
 
     case "survey.ai_changed": return `${who} ${d.reverted ? "reverted" : "applied"} AI change${d.n ? ` #${String(d.n).padStart(3, "0")}` : ""}${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.imported": return `${who} imported ${str(d.fileName) || "a file"}${d.label ? ` (${str(d.label)})` : ""}${d.mode === "merge" ? " into this survey" : ""}${d.questions != null ? ` — ${str(d.questions)} questions${Number(d.review) ? `, ${str(d.review)} to review` : ""}` : ""}`;
+    case "script.added": case "script.changed": case "script.removed": case "script.enabled": case "script.disabled": {
+      const verb = ({ "script.added": "added", "script.changed": "changed", "script.removed": "removed", "script.enabled": "switched on", "script.disabled": "switched off" } as Record<string, string>)[r.action];
+      const check = d.verdict === "passed" ? " — passed the check" : d.verdict === "refused" ? " — refused by the check" : d.verdict === "sanitised" ? " — kept; the check removes parts when it is shown" : "";
+      return `${who} ${verb} the code “${str(d.name) || str(d.itemId) || "a script"}”${check}`;
+    }
     case "survey.modified": return `${who} modified the survey${d.summary ? ` — ${str(d.summary)}` : ""}`;
     case "survey.saved": return `${who} saved the survey`;
     case "survey.status_changed": return `${who} changed the status${d.from ? ` from ${str(d.from)}` : ""} to ${str(d.to) || "?"}`;
@@ -343,7 +355,7 @@ export function auditCategory(action: string): AuditCategory {
   if (action.startsWith("lock.")) return "editing";
   if (action.startsWith("comment.")) return "collaboration";
   if (action.startsWith("responses.") || action.startsWith("analytics.")) return "data";
-  if (action.startsWith("survey.") || action.startsWith("version.") || action.startsWith("deployment.") || action.startsWith("quota.")) return "survey";
+  if (action.startsWith("survey.") || action.startsWith("script.") || action.startsWith("version.") || action.startsWith("deployment.") || action.startsWith("quota.")) return "survey";
   return "access";
 }
 
