@@ -16,16 +16,21 @@
  *   E  script         rs.goToSection from a survey script: refused with the reason in the console
  *                     when the rule says no, navigates when it says yes
  *   F  RTL            an Arabic survey: the navigator runs right to left
+ *   G  another device a sandbox TEST LINK (/n/<token>: real sessions, saves and resume against the runtime's
+ *                     in-memory response store): Next then a free jump to section 3; the row holds the trail
+ *                     (responses.nav, migration 0077); the resume link opened in a FRESH browser context (empty
+ *                     storage) lands on the same page, the navigator shows the same visited sections, and Back
+ *                     goes to the page before on the respondent's own path
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/section-nav-test.mjs
- *   SECTIONS=A,B,C,D,E,F (default all)
+ *   SECTIONS=A,B,C,D,E,F,G (default all)
  */
 import assert from "node:assert/strict";
 import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
-const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C,D,E,F").split(",").map((s) => s.trim()));
+const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C,D,E,F,G").split(",").map((s) => s.trim()));
 let passed = 0;
 const ok = (m) => { passed++; console.log(`  ok   ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -219,6 +224,47 @@ if (SECTIONS.has("F")) {
   await jump(pv, "b_geo"); await onPage(pv, "g1");
   ok("an Arabic survey: dir=rtl, the navigator runs right to left, a jump works");
   await pv.close();
+}
+
+/* ================================================================================================ G */
+if (SECTIONS.has("G")) {
+  console.log("\nG resume on another device (the trail in the response row)");
+  const launch = await fetch(`${RUNTIME}/api/session/sandbox`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "launch", definition: paper("navd", { sectionNav: "free", position: "top" }) }) });
+  const { url } = await launch.json();
+  assert.ok(url, "the sandbox test link was launched");
+  const devA = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+  const a = await devA.newPage();
+  a.on("pageerror", (e) => allErrors.push(`device A: ${e.message}`));
+  await goto(a, `${RUNTIME}${url}`);
+  await onPage(a, "h1");
+  await answer(a, "h1"); await next(a); await onPage(a, "h2");
+  await jump(a, "b_pol"); await onPage(a, "p1");
+  const sessionId = await a.evaluate(() => window.__rescriptState.sessionId);
+  const statesA = await a.$$eval('[data-testid="rs-section-nav-item"]', (els) => els.map((e) => `${e.getAttribute("data-section")}:${e.getAttribute("data-state")}`));
+  let row = null;
+  for (let i = 0; i < 40; i++) {
+    const r = await fetch(`${RUNTIME}/api/session/sandbox`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "row", sessionId }) });
+    row = await r.json();
+    if (row?.nav?.at === "pp1") break;
+    await sleep(250);
+  }
+  assert.deepEqual(row.nav, { v: 1, stack: ["ph1", "ph2"], visited: ["ph1", "ph2"], at: "pp1" }, JSON.stringify(row));
+  ok(`device A: Next, then a free jump to Polity; the row holds the trail ${JSON.stringify(row.nav)}`);
+  await devA.close();
+
+  const devB = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+  const b = await devB.newPage();
+  b.on("pageerror", (e) => allErrors.push(`device B: ${e.message}`));
+  await goto(b, `${RUNTIME}${url}?r=${sessionId}`);
+  await onPage(b, "p1");
+  assert.equal(await b.evaluate(() => localStorage.getItem("rescript:nav:" + window.__rescriptState.sessionId)), null, "device B had no browser copy of the trail before it saved");
+  const statesB = await b.$$eval('[data-testid="rs-section-nav-item"]', (els) => els.map((e) => `${e.getAttribute("data-section")}:${e.getAttribute("data-state")}`));
+  assert.deepEqual(statesB, statesA);
+  ok(`device B (empty storage, the resume link): lands on p1; the navigator matches device A (${statesB.join(" · ")})`);
+  await b.click('[data-testid="rs-back"]');
+  await onPage(b, "h2");
+  ok("device B: Back goes to h2 — the page before on the respondent's path, not the page before in the flow (g1)");
+  await devB.close();
 }
 
 await browser.close();
