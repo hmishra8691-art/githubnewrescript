@@ -4,6 +4,7 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { scriptLiteralRefs } from "@rescript/engine";
 import type { CodeLanguage } from "@/lib/code/format.ts";
 import type { CodeKind, GateVerdict } from "@/lib/code/types.ts";
+import { codeCompletions } from "@/lib/code/completions.ts";
 import type { EditorHandle } from "./codeEditorSetup";
 
 /**
@@ -77,6 +78,8 @@ export function CodeEditor(p: CodeEditorProps) {
         onChange: (v) => latest.current.onChange(v),
         onCommit: () => latest.current.onCommit?.(),
         onEscape: () => { if (fullRef.current) { setFull(false); return; } toolbar.current?.focus(); },
+        /* completion of the platform's names (rs api, ctx helpers, el/api, hooks) and the survey's (codes, options) */
+        complete: p.language === "js" ? (doc, pos, explicit) => codeCompletions(kind, latest.current.def, doc, pos, explicit) : undefined,
       });
       setState("ready");
     }).catch(() => { if (!cancelled) setState("fallback"); });
