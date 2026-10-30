@@ -97,7 +97,11 @@ console.log("\nIM sets a video stimulus with watch-to-continue");
 
 console.log("\nan http address is refused by the gate");
 {
-  await page.evaluate(() => window.__rescriptCopilotFakeReset?.());
+  /* readDef left the JSON tab open: back to Intelligent Mode (the hook lives in its view) */
+  await h.goTab("Questions");
+  await switchMode(page, "intelligent");
+  await page.waitForSelector('[data-testid="intelligent-view"]');
+  await page.waitForFunction(() => typeof window.__rescriptCopilotFake === "function", null, { timeout: 30000 });
   const body = await modelTurn("Show the pack shot on Q2", {
     kind: "proposal", reply: "Adding the pack shot to Q2.",
     actions: [{ op: "set_question_media", target: "Q2", items: [{ url: "http://cdn.example.com/pack.jpg", alt: "Pack" }] }],

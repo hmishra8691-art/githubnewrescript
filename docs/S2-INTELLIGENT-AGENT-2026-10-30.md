@@ -250,4 +250,36 @@ Commits on `feat/persistent-execution-engine` after `7ab9bdd`: item 1 `1d90ebe`,
 | 2. JavaScript capability registry | prose in the UX guide; `UX_SCRIPT_API` a bare list | **data** (`capabilityRegistry.ts`), test-synced with `UX_SCRIPT_API`, `UX_SCRIPT_EVENTS`, `variants.ts` and `SURVEY_ACTION_OPS`; gate refusals and explanations read routes from it; the variant guide is rendered from it |
 | 3. Execution / verification | "checked, not run yet" | unchanged — **S2c** |
 
-VERIFICATION_PLACEHOLDER
+## Verification (S2b, 2026-10-30)
+
+| What | Command | Result |
+|---|---|---|
+| Engine units | `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | **2509/2509** (new: capabilityRegistry 11, variantSettings 3, mediaActions 6, logicScriptActions 5, scriptRefs 4; nativeSettings expectation updated — the settings list grew) |
+| Studio lib | `cd apps/studio && node --experimental-strip-types --no-warnings --test 'lib/**/*.test.ts'` | **1081/1081** (new: variantGuide.test.ts 5) |
+| Runtime lib | `cd apps/runtime && node --experimental-strip-types --no-warnings --test 'lib/*.test.ts'` | **57/57** |
+| Schema units | `cd packages/schema && node --test dist/*.test.js` | 18/18 (schema unchanged) |
+| Templates units | `cd packages/templates && node --test dist/*.test.js` | 111/111 |
+| Typecheck | `npx tsc --noEmit -p .` in apps/studio, apps/runtime, packages/renderer | **0 / 0 / 0** errors |
+| Public docs | `node scripts/gen-public-docs.mjs --check` | current (actions-reference regenerated; two new blocks) |
+| Boundaries | `node scripts/dependency-boundaries.mjs` | 0 violations |
+| Auth guard | `node scripts/auth-guard-audit.mjs` | 259 handlers, 0 problems |
+| Browser `im-media-test.mjs` (new) | `fresh.sh im-media-test.mjs` | 1st run: 3 ok then FAIL in the test's own second section (it read the JSON tab and did not return to Intelligent Mode — a test bug, fixed); re-run **4/4** |
+| Browser `copilot-test.mjs` | `fresh.sh --no-runtime` | **11/11** |
+| Browser `production-intents-test.mjs` | `fresh.sh --no-runtime` | **7/7** |
+| Browser `methods-intelligent-test.mjs` | `fresh.sh` | run 1 FAIL after 5 ok (menu-panel timeout) and run 2 FAIL after 8 ok (menubar hover timeout) — both coincide with **OOM kills of the Studio next-server** (dmesg, memory cgroup); run 3 (my runtime supervisor stopped, fresh.sh's own runtime only) **14/14** |
+| Browser `logic-scripts-sandbox-test.mjs` | `fresh.sh` | **10/10** |
+| Browser `variants-g5-test.mjs` (media) | `fresh.sh` | **ALL PASSED** (22 ✔ lines) |
+| Browser `ux-copilot-test.mjs` | `UX_COPILOT_HALF=runtime fresh.sh …`, then `UX_COPILOT_HALF=studio fresh.sh --no-runtime …` | runtime half exit 0 (its log was overwritten by the studio half, so its count was not kept); studio half **6/6** |
+
+OOM deaths recorded (dmesg, memory cgroup): Studio `next-server` killed at uptime 5,999 s, 6,256 s and 6,787 s (anon-rss 4.2–4.3 GB each); the second and third coincide with the two failed `methods-intelligent` runs. No unit test or other suite was affected.
+
+## Honest limits (S2b)
+- **Literal references only.** The dependency graph and the rename rewrite see `get("Q3")`, `rs.getAnswer("Q3")`, `[data-qid="…"]`; a name built at run time (`get("Q" + i)`) or an aliased api (`var g = rs.getAnswer`) is not seen. A rename rewrites only the recognised api calls' first argument, never other strings.
+- **Custom components are not indexed**: their code is not in the survey definition.
+- **The Studio's rename dialog does not yet offer the script rewrite**; the rewrite happens on Intelligent Mode's `update_question code/variable` (and is listed on the card for approval). The Studio's inspector / impact text shows script readers because they come from the same index.
+- **Piped media addresses** (`{{ImageURL}}`) are refused by `set_question_media`; set them in the editor.
+- **Watch-to-continue** is only where the runtime enforces it (the media variants). With a clip that cannot load (no network here, or a broken address) the runtime deliberately does not lock the answer; the browser check proves the lock with the runtime's own local clip and proves the stored https address is the `<video>` drawn.
+- **Settings coverage is a registry decision**: declared keys, capability keys, family presentation keys and `validationPosition`. A schema setting no variant is mapped to stays unreachable by actions (e.g. `scalePointLabels`, `swipeDirections` objects). `matrix.constant_sum` declares `sumTotalPosition`, which the question schema does not have — it is not settable (the schema would strip it).
+- **The variant guide is chosen by words**: a sentence that names an interaction in other words gets no catalogue (the gate still refuses an undeclared setting with the declared list, and the repair call carries the reason).
+- **Nothing is executed before it is proposed** — logic scripts included ("checked by the logic-script gate, not run yet"). That is S2c.
+- **A model's own output was not measured**: fake provider only; the deterministic paths and the gate's handling of model-shaped replies are what is verified.
