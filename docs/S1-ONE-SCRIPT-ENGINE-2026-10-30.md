@@ -1,3 +1,24 @@
+# S1 complete — one script engine (2026-10-30)
+
+**What is true after S1a + S1b + S1c** (branch `feat/persistent-execution-engine`, `a4deb64` → S1c's last commit):
+
+- **One engine.** No author JavaScript runs on the respondent's page itself or on the server. UX scripts and Custom
+  Component code run in sandboxed frames (`renderer/uxSandbox.ts`), Scripts-panel logic scripts and `custom_script`
+  rules in the sandboxed logic frame (`renderer/logicFrame.ts`, shim `engine/logicSandbox.ts`). The old main-thread
+  runner is reachable only through `RUNTIME_LEGACY_SCRIPTS=main` (one release) and unit tests.
+- **Writes are requests** (`rs.setAnswer` / `set()` / `api.setValue` → `applyScriptWrite`: scope rule, response model,
+  limits), applied on the respondent's own path; the server's replay runs no author code and labels script-made values
+  (`script_written`).
+- **Researchers can see what scripts do in the field (S1c):** live failures are counted per script and shown as chips
+  where scripts are managed; every code change is in the audit log (hashes and the check's verdict, never the code);
+  migrated / imported code that will not run is listed with its reasons in the Studio and in Intelligent Mode's
+  outline; the public docs and file headers say what the code does.
+- **Still open:** an Intelligent-Mode write action for Scripts-panel scripts (S2); removing `RUNTIME_LEGACY_SCRIPTS`
+  after one release; the database save paths of S1a/S1c exercised against a real Supabase (only the in-memory sandbox
+  stores were browser-tested here).
+
+---
+
 # S1a — One script engine, part A: an engine-checked write channel and lifecycle events in the sandbox (2026-10-30)
 
 Branch `feat/persistent-execution-engine`, from `a4deb64` (S0b). Audit: `SCRIPT-STUDIO-AUDIT-2026-10-30.md` §2.1, §4
@@ -378,9 +399,150 @@ parity test and the new suite; the beverage/mask demo is not in `packages/templa
 - **The legacy flag is build-time** (inlined by Next): changing it needs a rebuild/restart of the runtime.
 - Paradata storage on the database path still rides in `telemetry` (S1a limit, unchanged).
 
-## What S1c does next
+## What S1c does next (done — see part C below)
 
 Live script-error telemetry and a script health view (refusals, timeouts and failures of logic scripts are now
 structured lines in the inspector/console), a script-level audit log, legacy migration visibility (D17), the remaining
 docs corrections (D23), and removing `RUNTIME_LEGACY_SCRIPTS` after one release. S2: an Intelligent-Mode write action
 for Scripts-panel scripts.
+
+
+# S1c — One script engine, part C: researchers can see what scripts do in the field (2026-10-30)
+
+Branch `feat/persistent-execution-engine`, from `d4322ac` (S1b). Commits `bf402b0` (item 1), `cea03d7` (2), `b34ae48` (3),
+`dc6c19b` (4), `78f9bc3` (5), `8c87fdd` (suite for 3–4) and the item 6 commit that adds this part. Audit: §4 D11, D17,
+D23, SE-29, SE-30. **No migration**, no new dependency.
+
+## What changed
+
+### 1. Live script-error telemetry (D11 / SE-30)
+
+- Engine `packages/engine/src/scriptHealth.ts`: kinds `ux_error`, `logic_error`, `logic_timeout`, `lifecycle_timeout`,
+  `component_not_run`, `gate_refused`, `write_refused`, `navigation_refused`, `watchdog`; redaction (the session's
+  answers and embedded values, e-mail addresses, long digit runs; 200 chars); `sanitizeScriptHealth` (known kinds,
+  bounded fields, counts clamped, duplicates merged, **50 entries**); `mergeScriptHealth`; `aggregateScriptHealth`.
+- Runtime collector `apps/runtime/lib/scriptHealth.ts`: one entry per (script, kind, page) with the first message,
+  a count and a browser class ("Chrome desktop"); kept in `sessionStorage` across a reload; fed by the logic runs
+  (`logicScripts.ts`), the lifecycle helper and the UX layer (`UxLayer.tsx` reports structured issues).
+- Sent with the normal saves as `scriptHealth`. `/api/session/save` sanitises it (redacting again against the posted
+  answers) and stores it in **`responses.telemetry.scriptHealth` whatever the survey's telemetry switches say** — it
+  describes the survey's code, not the respondent (no answer, no timing, no device beyond the browser class). Sandbox
+  store: `script_health` on the row. The quality engine ignores a `telemetry` without `v: 1` (a row holding only
+  `scriptHealth` is not behavioural telemetry).
+
+### 2. Script health view
+
+- `GET /api/surveys/[id]/script-health?env=live|test` (`apps/studio/app/api/surveys/[id]/script-health/route.ts`):
+  `requireUser` → `requireProjectFor(…, "project.read")` → `responses.read` (as the assessment route); reads only
+  `telemetry->scriptHealth` of the environment's not-deleted, saved responses (latest 5,000); per script: failures,
+  sessions affected, last seen, top messages, pages, browsers. Sandbox: `GET /api/surveys/sandbox/script-health?token=`
+  (the runtime's test-survey token; 403 when a database is configured).
+- Studio `components/studio/ScriptHealth.tsx`: **Survey Settings → Scripts** — a summary bar ("K of N sessions had a
+  script failure", live/test switch, Refresh, the list) and a chip per logic script; **Styles, animations & scripts**
+  (every scope) — a chip per UX script; **Properties → Component code** — a chip per component. Chip text: "no errors in
+  N sessions" / "failed in K of N sessions", with a details popover. In the sandbox: `/sandbox?tab=scripts&health=<token>`.
+
+### 3. Script audit log (SE-29)
+
+- Engine `packages/engine/src/scriptAudit.ts` `diffScriptItems(before, after, hash)`: the code-bearing items — UX
+  scripts (`diffUx` finds the behaviours that changed; only a changed *script* counts), logic scripts (code and
+  `enabled`), Custom Component `customJs` / `customHtml`, any question's `customCss`, branding header / footer HTML and
+  custom CSS, and the legacy `customJs` fields. One change per item: `script.added | changed | removed | enabled |
+  disabled` (an item switched and edited in one save is one entry with `codeChanged`). Each carries kind, item id,
+  name, sha-256 (16 hex) of the code before / after, length, and the check's verdict on the new code: `passed`,
+  `refused` (≤ 3 reasons, 160 chars each — `validateUxScript`, `codeGate` logic / component), `sanitised` (HTML with
+  scripts / handlers / unsafe URLs, CSS with imports / expressions — kept, trimmed when shown), `legacy`. **Never the code.**
+- `packages/access/src/audit.ts`: the five `script.*` events (category "survey"), worded in the activity log.
+- Draft save (`apps/studio/app/api/surveys/[id]/draft/route.ts`): before the guarded RPC it reads the pre-image (the
+  draft, else the current version) **at the base revision**; after a successful save it writes one `audit_logs` row
+  per change (entity `script`, entity id = item id, detail as above + the new revision), at most 40 per save (the last
+  says how many more). `survey.modified` once per editing session is kept. A failed or raced pre-image read writes no
+  script rows (never fails the save).
+- `GET /api/surveys/[id]/script-audit` (`requireUser` → `requireProjectFor(…, "project.read_activity")`): the latest
+  200 `script.*` rows with a readable line. Sandbox (no database): the editor POSTs its definition after each autosave
+  tick (and a baseline when it opens); `apps/studio/lib/scriptAuditLog.ts` keeps the log in memory (200 entries).
+- **Versions → Script history** (`VersionsPanel.tsx`): "Logic script ‘Spend band’ changed by Ana — passed the check ·
+  date · 35c5359c → bcb22e56", 12 shown, "Show all".
+
+### 4. Legacy visibility (D17)
+
+- Engine `legacyScriptRefusals(def)`: behaviours moved from old Custom code (`source` question_custom_js /
+  branding_custom_js) whose script the UX check refuses — plus `jqueryProblems` (the check does not refuse `$(…)` /
+  `jQuery(…)`, which throw in the sandbox unless the code declares its own `$`); Scripts-panel scripts the logic gate
+  refuses; components whose code the component gate refuses. Each: origin, reasons, the names used (`window`, `$`,
+  `setInterval`, `fetch` …), the code.
+- Studio `components/studio/LegacyScripts.tsx` `LegacyScriptsBanner` ("N scripts will not run", per item: name,
+  origin, "uses $, window", reasons, **Show the code**): Survey Settings → Scripts (all), the survey-wide Styles,
+  animations & scripts editor (all), a question's Styles, animations & scripts editor (that question's items).
+- Intelligent Mode: `copilotOutline` adds "Code that will NOT run (N; …)" with origins and reasons (never the code)
+  via `legacyRefusalOutline`; the UX guide says to rewrite a listed behaviour with `update_behavior` when asked.
+
+### 5. Docs (D23)
+
+`uxSandbox.ts` header (what runs where; answers only through requests), `scripts.ts` (legacy flag + tests only),
+`serverValidation.ts` (no author code; `scriptWrites` / `script_written`; punches and calculations recomputed and
+compared), `apps/studio/content/docs/custom-code.md` (four surfaces → one engine table; requests; script health; the
+audit log; code that will not run; console-only claims corrected), the generated `logic-reference.md` (its generator
+`scripts/lib/publicDocs.mjs` said `document`, loops and any answer write are rejected — false since S0/S1a), the UX
+guide in `lib/copilot/prompt.ts` (health chips; the "will NOT run" list). Public docs regenerated.
+
+## Where to find it
+
+| What | Where |
+|---|---|
+| Health chips + summary | Survey Settings → **Scripts**; any **Styles, animations & scripts** editor; Properties → **Component code** |
+| Health data | `responses.telemetry.scriptHealth` (jsonb, no migration); sandbox row `script_health` |
+| Health API | `GET /api/surveys/<id>/script-health?env=live|test` (project.read + responses.read) |
+| Audit rows | `audit_logs` actions `script.added|changed|removed|enabled|disabled`, entity `script`, detail kind / itemId / name / beforeHash / afterHash / length / verdict / reasons / revision |
+| Audit API / UI | `GET /api/surveys/<id>/script-audit` (project.read_activity); **Versions → Script history**; also the project activity log |
+| Legacy list | banner `data-testid="legacy-scripts-banner"` in the places above; IM outline "Code that will NOT run" |
+| Sandbox | `/sandbox?tab=scripts&health=<token>`, `/sandbox?tab=versions`; `GET/POST /api/surveys/sandbox/script-audit` |
+
+## Verification (S1c)
+
+| Check | Result |
+|---|---|
+| Engine units `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | **2464/2464** (new: `scriptHealth.test` 4, `scriptAudit.test` 7) |
+| Schema units | 18/18 |
+| Renderer units `node --experimental-strip-types --no-warnings --test packages/renderer/test/*.test.ts` | 8/8 |
+| Access units `cd packages/access && node --test dist/*.test.js` | 123/123 |
+| Runtime lib `'lib/*.test.ts'` | **57/57** (new: `scriptHealth.test` 3) |
+| Studio lib `'lib/**/*.test.ts'` | **1049/1049** (new: `scriptAuditLog.test` 2, `copilot/legacyOutline.test` 1) |
+| Templates (full) `cd packages/templates && node --test dist/*.test.js` | 111/111 |
+| `tsc --noEmit` studio / runtime / renderer | 0 / 0 / 0 errors |
+| `node scripts/gen-public-docs.mjs --check` | current (after regenerating `logic-reference.md`) |
+| `node scripts/dependency-boundaries.mjs` | 0 violations (1999 files) |
+| `node scripts/auth-guard-audit.mjs` | 0 problems (259 handlers and server pages) |
+| Browser `script-audit-test.mjs` (new, items 3–4, Studio only) | **5/5** — banner lists 2 scripts that will not run (moved Q1 Custom code "uses $, window", the refused import), Show the code; editing "Spend band" → `script.changed` "passed the check" with two different hashes; switching it off → `script.disabled`; the log holds no code; Versions → Script history shows both lines |
+| Browser `script-health-test.mjs` (item 2) | **6/6** (first run in the batch failed in its Studio half: the kernel OOM-killed three `next-server` processes at 18:27 during it — an OOM death; passed on a re-run) |
+| Browser `logic-scripts-sandbox-test.mjs` | 10/10 |
+| Browser `script-writes-test.mjs` | 10/10 |
+| Browser `ux-script-dom-test.mjs` | **16/16** on a re-run. First run: its Studio half timed out waiting 40 s for the first Intelligent-Mode turn (no OOM in that window — the same cold-Studio failure S1b recorded) |
+| Browser `master-demo-test.mjs` | 15/15 |
+| Browser `quality-test.mjs` (telemetry path) | all checks passed on a re-run. First run: failed at the custom dataset count ("3 of 6" read where "4 of 6" is expected; no OOM in that window) — the suite waits for "of 6", which the previous "clean" count already satisfies, so it can read the count before the custom filter lands |
+| Browser `assessment-test.mjs` (S1 regression, first run since S1) | 7/7 |
+
+**Not run:** the database paths (no Supabase here): `telemetry.scriptHealth` writes and the `script-health` read on
+`responses`, the draft route's pre-image read and `audit_logs` inserts, `GET script-audit` on the database — all
+type-checked, exercised only through the in-memory sandbox stores; SQL (no migration); the browser suites not listed
+above (`ux-copilot`, `runtime-csp`, `wave1`, `validation-kinds`, `style-script-p0`, `age-script-p0`, `section-nav`,
+`hidden-autopunch` and the rest); the import package suite; Safari / Firefox; a browser check of the Intelligent-Mode
+rewrite of legacy code (only the outline text is unit-tested).
+
+## Honest limits (S1c)
+
+- **Health is what the browser reports.** A respondent who closes the tab before the next save loses that page's
+  entries; an entry is counted once per session per (script, kind, page) with a count, so "K of N sessions" is sessions
+  affected, not events. Telemetry entries are capped at 50 a session; the Studio reads the latest 5,000 responses.
+- **Redaction is best effort**: answer values, embedded values, e-mails and long digit runs are removed from messages;
+  a script that builds a message from an answer transformed (e.g. upper-cased) can still leak that transformed text.
+- **The audit pre-image costs one read per autosave** (the draft definition, or the current version when there is no
+  draft) and is only trusted at the save's base revision; a read that fails or races writes no script rows for that
+  save (the next save compares against the new state, so a change can be missed, never double-counted). Writes that
+  do not go through the draft route (restoring a version, anything that writes `survey_versions` directly) are not
+  diffed — the next draft save after them compares against whatever the row then holds.
+- **The sandbox log is in memory** (one Studio process, 200 entries, lost on restart, shared by every sandbox tab).
+- **Legacy list scope**: a UX script an author wrote in the editor and that the check refuses is not listed (the editor
+  refuses to store it); `$` detection is lexical (a script that aliases jQuery under another name is not seen).
+- **Intelligent Mode** sees reasons, not code, for legacy items; to rewrite one it must be asked, and Scripts-panel
+  scripts still have no IM write action (S2).
