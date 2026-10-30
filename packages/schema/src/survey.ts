@@ -738,6 +738,24 @@ export type DeploymentConfig = z.infer<typeof DeploymentConfig>;
  * THE survey definition — the single JSON document that fully describes a
  * survey (requirement §11 / §31). The runtime interprets exactly this.
  */
+/**
+ * SECTION NAVIGATION (2026-10-30). Beside `branding.buttons.showBack` in
+ * spirit — how a respondent moves — but a survey-level BEHAVIOUR the engine
+ * and the save route's replay read, so it is not part of the brand.
+ *
+ *   sectionNav  "off"      no navigator; Next / Back only (the default — every existing survey)
+ *               "visited"  jump back to any earlier section, forward only to sections already visited
+ *               "free"     jump anywhere reachable with the current answers; skipped required
+ *                          questions are checked at Submit (an assessment only asks to confirm)
+ *   position    where the navigator sits: a bar above the page, or a side rail on wide screens
+ */
+export const SectionNavSetting = z.enum(["off", "visited", "free"]);
+export const SurveyNavigation = z.object({
+  sectionNav: SectionNavSetting.default("off"),
+  position: z.enum(["top", "side"]).default("top"),
+});
+export type SurveyNavigation = z.infer<typeof SurveyNavigation>;
+
 export const SurveyDefinition = z.object({
   meta: z.object({
     id: z.string(),
@@ -868,6 +886,12 @@ export const SurveyDefinition = z.object({
   alerts: AlertSettings.optional(),
   /** ASSESSMENT (2026-10-25, ported 2026-10-29, see assessment.ts): scoring, pass mark and the results report. Absent on every survey that is not a test. */
   assessment: AssessmentSettings.optional(),
+  /**
+   * SECTION NAVIGATION (2026-10-30, engine sectionNav.ts): a built-in
+   * navigator that jumps between sections (the flow's blocks). Absent = "off",
+   * exactly the survey as before — Next / Back only. See `SurveyNavigation`.
+   */
+  navigation: SurveyNavigation.optional(),
 });
 export type SurveyDefinition = z.infer<typeof SurveyDefinition>;
 

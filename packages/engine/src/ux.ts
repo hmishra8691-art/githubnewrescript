@@ -667,7 +667,7 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /* ------------------------------------------------------------ scripts */
 
 /** what a sandboxed script can call — and nothing else */
-export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup"] as const;
+export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);
 /** names that are refused wherever they appear */
 const FORBIDDEN_IDENTIFIERS = ["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "import", "require", "localStorage", "sessionStorage", "indexedDB", "caches", "window", "opener", "globalThis", "navigator", "location", "cookie", "postMessage", "Worker", "SharedWorker", "ServiceWorker", "constructor", "__proto__", "prototype", "Reflect", "Proxy", "setInterval"];

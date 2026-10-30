@@ -70,3 +70,11 @@ test("asked by the copilot's refusal / clarify logic: what a request names, with
   assert.deepEqual(methodologiesNamed("Online survey with a MaxDiff of features").map((m) => m.id), ["maxdiff"]);
   assert.deepEqual(methodologiesNamed("online survey").map((m) => m.id), ["survey"]);
 });
+
+test("section navigation (2026-10-30): 'add a section navigator' is a supported platform capability with an action", () => {
+  for (const t of ["add a section navigator to the paper", "let respondents jump between sections", "a nav bar to move between sections"]) {
+    const hit = capabilitiesMentioned(t).find((c) => c.id === "platform:section_navigation");
+    assert.ok(hit, t);
+    assert.equal(hit!.status, "supported");
+  }
+});

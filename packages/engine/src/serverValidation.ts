@@ -4,6 +4,10 @@ import { createResponseState, getQuestion } from "./state.js";
 import { advance, start, visibleQuestions, type RuntimeStep } from "./flow.js";
 import type { QuotaCounts } from "./quotas.js";
 import { blockingErrors, validatePage } from "./validate.js";
+import { isEmptyAnswer } from "./answers.js";
+import { lookupAnswer } from "./state.js";
+import { sectionNavMode } from "./sectionNav.js";
+import { assessmentSettings } from "./assessment.js";
 
 /**
  * THE SERVER CHECKS WHAT THE CLIENT SAYS HAPPENED.
@@ -47,7 +51,8 @@ export type SubmissionProblem = {
     | "not_asked"
     | "incomplete"
     | "status_mismatch"
-    | "step_unreachable";
+    | "step_unreachable"
+    | "skipped_required";
   questionId?: string;
   pageId?: string;
   message: string;
@@ -139,6 +144,8 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   let pages = 0;
   const claimsFinal = FINAL.has(posted.status);
   const target = claimsFinal ? Number.POSITIVE_INFINITY : stepIndex;
+  const freeNav = sectionNavMode(def) === "free";
+  const isAssessment = !!assessmentSettings(def);
 
   while (!nav.done && pages < maxPages) {
     const step = nav.steps[nav.stepIndex] as RuntimeStep | undefined;
@@ -147,7 +154,21 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
     for (const q of visible) askedBases.add(q.id);
     // the page the client is still on is being filled in — it is not validated until it is left
     if (!claimsFinal && nav.stepIndex >= target) break;
-    const errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts }));
+    let errs = blockingErrors(validatePage(def, visible, { def, state, loop: step.loop ?? null, quotaCounts: counts }));
+    /*
+     * FREE SECTION NAVIGATION (sectionNav.ts): a page jumped over is not
+     * validated at jump time, so an UNANSWERED question on it is not a lie —
+     * it is a skip the engine allowed. Answers given still have to pass their
+     * rules. At completion the Submit gate refused unanswered required
+     * questions — except in an assessment, where unanswered = unattempted.
+     */
+    if (freeNav) {
+      const unanswered = errs.filter((e) => isEmptyAnswer(lookupAnswer(state.answers, e.questionId, step.loop ?? null)));
+      if (unanswered.length && (!claimsFinal || isAssessment)) {
+        for (const e of unanswered) soft.push({ severity: "soft", code: "skipped_required", questionId: e.questionId, pageId: step.pageId, message: `${e.questionId} skipped by section navigation` });
+        errs = errs.filter((e) => !unanswered.includes(e));
+      }
+    }
     for (const e of errs) hard.push({ severity: "hard", code: "invalid_answer", questionId: e.questionId, pageId: step.pageId, message: e.message });
     if (errs.length) return out(pages); // the browser would not have let the respondent past this page
     pages++;

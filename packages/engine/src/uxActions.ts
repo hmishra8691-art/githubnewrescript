@@ -39,6 +39,8 @@ export const UX_ACTION_OPS = [
   "set_theme", "set_custom_html",
   /* a question's starting answer (settings.defaultValue — the Properties "Default value" field) */
   "set_default_value",
+  /* the built-in section navigator (def.navigation — Survey Settings → Navigation; engine sectionNav.ts) */
+  "set_navigation",
 ] as const;
 /** accepted from the model and turned into the ops above */
 export const UX_ACTION_ALIASES = ["attach_behavior_to_question", "attach_behavior_to_option", "attach_behavior_to_block", "attach_behavior_to_page", "create_responsive_rule", "create_behaviour", "update_behaviour", "remove_behaviour"] as const;
@@ -61,6 +63,8 @@ export type UxAction =
   | { op: "remove_behavior"; id: string }
   | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
   | { op: "set_custom_html"; target: string; html: string | null }
+  /** SECTION NAVIGATION (2026-10-30): the survey's navigator — never a hand-built script nav bar */
+  | { op: "set_navigation"; sectionNav?: "off" | "visited" | "free"; position?: "top" | "side" }
   | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null;
       /**
        * ONE OPEN FIELD of the question instead of the whole answer (2026-10-24,
@@ -202,6 +206,15 @@ export function coerceUxAction(op: string, o: Record<string, unknown>): UxAction
       if (o.theme && typeof o.theme === "object") Object.assign(patch, o.theme as object);
       if (!Object.keys(patch).length) return "set_theme needs theme settings (colors, typography, layout, buttons, background, appearance, responsive, logoUrl, headerHtml, footerHtml)";
       return { op: "set_theme", patch, ...(label ? { label: label.slice(0, 120) } : {}) };
+    }
+    case "set_navigation": case "set_section_navigation": case "add_section_navigator": {
+      const raw = str(o.sectionNav) ?? str(o.mode);
+      const mode = raw === "on" || raw === "true" ? "visited" : raw;
+      if (mode !== undefined && !["off", "visited", "free"].includes(mode)) return "set_navigation: sectionNav is off, visited (back anywhere, forward only to visited sections) or free (jump anywhere reachable; skipped required questions are checked at Submit)";
+      const position = str(o.position);
+      if (position !== undefined && position !== "top" && position !== "side") return "set_navigation: position is top or side";
+      if (mode === undefined && position === undefined) return "set_navigation needs sectionNav (off | visited | free) and/or position (top | side)";
+      return { op: "set_navigation", ...(mode ? { sectionNav: mode as "off" | "visited" | "free" } : {}), ...(position ? { position: position as "top" | "side" } : {}) };
     }
     case "set_custom_html": case "set_question_html": {
       const target = str(o.target) ?? str(o.question);
@@ -423,6 +436,18 @@ const clampAnim = (a: UxAnimation): UxAnimation => ({
 });
 
 export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): UxApplied {
+  if (a.op === "set_navigation") {
+    const was = { sectionNav: def.navigation?.sectionNav ?? "off", position: def.navigation?.position ?? "top" } as const;
+    const next = { sectionNav: a.sectionNav ?? was.sectionNav, position: a.position ?? was.position };
+    if (next.sectionNav === was.sectionNav && next.position === was.position) fail(`section navigation is already ${was.sectionNav}${was.sectionNav === "off" ? "" : ` (${was.position})`}`);
+    const blocks = def.flow.filter((n) => n.type === "block" || n.type === "section").length;
+    const warnings: string[] = [];
+    if (next.sectionNav !== "off" && blocks < 2) warnings.push("The navigator lists the survey's blocks — with fewer than two blocks it is not shown. Put each section's pages in its own block.");
+    if (next.sectionNav === "free") warnings.push("Free navigation: pages a respondent jumps over are not validated until Submit, which lists any unanswered required questions per section (an assessment only asks to confirm).");
+    def.navigation = next;
+    const words = next.sectionNav === "off" ? "off — Next / Back only" : next.sectionNav === "visited" ? "back to any section, forward to visited sections" : "jump to any reachable section";
+    return { description: `Section navigation: ${words}${next.sectionNav === "off" ? "" : ` (${next.position === "side" ? "side rail" : "bar above the page"})`}`, ...(next.sectionNav === "off" && was.sectionNav !== "off" ? { destructive: "Removes the section navigator" } : {}), warnings, touched: [] };
+  }
   if (a.op === "set_theme") {
     const r = applyThemePatch(def.branding, a.patch);
     if (!r.changes.length) fail(r.errors.length ? r.errors.join("; ") : "the theme is already like that");

@@ -10,7 +10,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
 
-**Look and behaviour (UX)** (12): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`
+**Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
 **Analysis** (12): `set_question_analysis`, `propose_analysis_plan`, `set_analysis_plan`, `add_crosstab`, `remove_crosstab`, `add_analysis_test`, `remove_analysis_test`, `add_derived_variable`, `remove_derived_variable`, `update_crosstab`, `update_analysis_test`, `reorder_analysis_plan`
 
@@ -127,6 +127,8 @@ export type UxAction =
   | { op: "remove_behavior"; id: string }
   | { op: "set_theme"; patch: Record<string, unknown>; label?: string }
   | { op: "set_custom_html"; target: string; html: string | null }
+  /** SECTION NAVIGATION (2026-10-30): the survey's navigator — never a hand-built script nav bar */
+  | { op: "set_navigation"; sectionNav?: "off" | "visited" | "free"; position?: "top" | "side" }
   | { op: "set_default_value"; target: string; value: string | number | (string | number)[] | null;
 ```
 

@@ -57,6 +57,13 @@ export interface UxLayerProps {
   contained?: boolean;
   /** #14c (2026-10-22): the respondent's language — the popup's close label and direction follow it (absent: the shell's data-language, else the survey's source language) */
   language?: string | null;
+  /**
+   * SECTION NAVIGATION (2026-10-30): `rs.goToPage` / `rs.goToSection` arrive
+   * here as commands and the HOST decides — the Runner runs the engine's
+   * `goToPage` with the survey's own rule. Absent (the Studio canvas), a
+   * script's navigation is reported as unavailable, never silently dropped.
+   */
+  onNavigate?: (target: string, as: "page" | "section") => { ok: boolean; reason?: string };
 }
 
 /** the popup words of each mounted shell (set by its UxLayer) — read when a popup opens in it */
@@ -182,6 +189,8 @@ export function UxLayer(p: UxLayerProps) {
   const scripts = React.useRef<ScriptHost[]>([]);
   const log = React.useRef(p.onLog);
   log.current = p.onLog;
+  const navigate = React.useRef(p.onNavigate);
+  navigate.current = p.onNavigate;
   const behaviors = def.ux?.behaviors ?? [];
   const animations = def.ux?.animations ?? [];
 
@@ -415,6 +424,21 @@ export function UxLayer(p: UxLayerProps) {
           case "hideMessage": effect({ do: "hide_message" }, resolve(a[0])); break;
           case "scrollTo": effect({ do: "scroll_into_view" }, resolve(a[0])); break;
           case "focus": effect({ do: "focus" }, resolve(a[0])); break;
+          case "goToPage":
+          case "goToSection": {
+            const target = str(a[0]).trim();
+            const fn = m.cmd === "goToPage" ? "rs.goToPage" : "rs.goToSection";
+            if (!target) { report(`${fn} needs a ${m.cmd === "goToPage" ? "page id or question code" : "section id or title"}`, "warn"); break; }
+            const nav = navigate.current;
+            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn"); break; }
+            // after the current event finishes, so a click handler's own effects land on the page it was written for
+            setTimeout(() => {
+              const r = nav(target, m.cmd === "goToPage" ? "page" : "section");
+              if (r.ok) report(`${fn}("${target}") — navigated`);
+              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn");
+            }, 0);
+            break;
+          }
           case "log": report(`${a.map(str).join(" ")}`); break;
           case "ops": dom.apply(a[0]); break;
           case "want": dom.want(str(a[0])); break;

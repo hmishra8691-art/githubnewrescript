@@ -76,3 +76,26 @@ test("a preview snapshot carries the response seed back after a reload", () => {
   cachePreviewState("old:full", { answers: {}, calculated: {}, embedded: {}, flags: [], stepIndex: 0 });
   assert.equal(readPreviewState("old:full")?.seed, undefined, "a snapshot without one (written before) reads as before");
 });
+
+/* SECTION NAVIGATION (2026-10-30): the Back trail and the seen pages survive a reload in this browser */
+test("the section-navigation trail round-trips, is cleaned, and clears", async () => {
+  const m = installStorage();
+  const { writeNavTrail, readNavTrail, clearNavTrail } = await import("./resume.ts");
+  writeNavTrail("sess1", { visited: ["p1", "p2"], seen: ["p1", "p2", "p4", 7 as unknown as string] });
+  const t = readNavTrail("sess1");
+  assert.deepEqual(t?.visited, ["p1", "p2"]);
+  assert.deepEqual(t?.seen, ["p1", "p2", "p4"], "non-string ids are dropped");
+  m.set("rescript:nav:bad", "{not json");
+  assert.equal(readNavTrail("bad"), null);
+  clearNavTrail("sess1");
+  assert.equal(readNavTrail("sess1"), null);
+});
+
+/* 0077: the row's navigation trail survives the merge with a pending snapshot, so the Runner can weigh it */
+test("mergeResumeSnapshot keeps the row's nav and its save time", () => {
+  const saved = { answers: { Q1: 1 }, stepIndex: 3, nav: { v: 1, stack: ["p1"], visited: ["p1", "p2"] }, savedAt: "2026-10-30T10:00:00.000Z" };
+  const r = mergeResumeSnapshot(saved, pending(4));
+  assert.deepEqual(r.nav, saved.nav);
+  assert.equal(r.savedAt, saved.savedAt);
+  assert.equal("nav" in mergeResumeSnapshot({ answers: {}, stepIndex: 1 }, pending(2)), false, "no row trail → nothing invented");
+});

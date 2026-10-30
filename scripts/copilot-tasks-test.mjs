@@ -73,7 +73,8 @@ console.log("— H: a trivial request is a single turn; a large one answers stag
   const ms = Date.now() - t0;
   assert.equal(big.status, 200, JSON.stringify(big.d).slice(0, 300));
   assert.equal(big.d.stage, "task", `expected a task, got ${big.d.stage} ${JSON.stringify(big.d.context).slice(0, 200)}`);
-  assert.equal(big.d.task.planner, "generation");
+  /* since step 4B (2026-10-29) an exam paper with an answer key is planned by the assessment planner (content batches from the generation planner + keys + validation) */
+  assert.equal(big.d.task.planner, "assessment");
   assert.equal(big.d.context.task.reason, "requested_count");
   assert.ok(big.d.task.steps.length >= 8, `steps ${big.d.task.steps.length}`);
   assert.ok(/चरण/.test(big.d.reply.reply), "the Studio's sentence follows the researcher's language (Hindi)");

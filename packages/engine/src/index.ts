@@ -85,6 +85,7 @@ export * from "./surveyReview.js";
 export * from "./ux.js";
 export * from "./uxScriptGuard.js";
 export * from "./serverValidation.js";
+export * from "./sectionNav.js";
 export * from "./semanticValidation.js";
 export * from "./legacyScripts.js";
 export * from "./uxActions.js";

@@ -22,6 +22,7 @@ import { backgroundBuilderFor, loadDefinition } from "../copilot/backgroundBuild
 import { makeTaskAi, type TaskAiScope } from "./aiServer.ts";
 import { createPlannedTask, handlerBuildStep, taskCheck, taskResult, type PlanOutcome, type TaskEngineDeps, type TaskResult } from "./engine.ts";
 import { registerAllTaskHandlers } from "./handlers/index.ts";
+import { driveOf } from "../copilot/taskDrive.ts";
 
 registerAllTaskHandlers();
 
@@ -131,8 +132,8 @@ export interface TaskClientView extends ClientTask {
 
 export function viewOf(task: ExecTask): TaskClientView {
   const c = redactForClient(task);
-  const drive: TaskClientView["drive"] = task.status === "pending" || task.status === "running" ? "advance" : "stop";
-  return { ...c, resultReady: task.status === "completed", drive };
+  /* "advance" only while a step can still be claimed — see driveOf (lib/copilot/taskDrive.ts) */
+  return { ...c, resultReady: task.status === "completed", drive: driveOf(task) };
 }
 
 /** the proposal a completed task hands to the ordinary review: every completed step's actions in plan order */

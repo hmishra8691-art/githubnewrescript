@@ -33,6 +33,7 @@ import { themeTurn, themeWithModel, applyThemeTurn, saveThemeTurn, type ThemeCar
 import { qualTurn, runQualCard, type QualCard } from "./qualTurn";
 import type { QualRequest } from "@rescript/engine";
 import type { TaskClientView } from "../../../lib/tasks/service";
+import { completedOf, driveWait } from "../../../lib/copilot/taskDrive";
 
 /**
  * THE COPILOT'S STATE AND ITS REQUESTS, for IntelligentView.
@@ -887,6 +888,9 @@ export function useCopilot(opts: {
     const h = { stop: false };
     taskDrivers.current.set(taskId, h);
     let fails = 0;
+    /* slices in a row that completed nothing: the wait grows (2 s → 15 s) instead of asking four times a second (driveWait) */
+    let idle = 0;
+    let lastCompleted = -1;
     try {
       while (!h.stop) {
         const drive = taskDriveRef.current;
@@ -896,9 +900,15 @@ export function useCopilot(opts: {
         if (v) { opts.patch(entryId, { task: v, usage: { charge: Number(v.spend?.charge) || 0 } }); fails = 0; } else fails++;
         if (r.status === 404 || r.status === 401 || r.status === 403 || fails > 6) break;
         if (v && v.drive !== "advance") break;
-        const slice = r.d?.slice as { stoppedBy?: string; retryAfterMs?: number } | null | undefined;
+        const slice = r.d?.slice as { stoppedBy?: string; retryAfterMs?: number; built?: unknown[] } | null | undefined;
+        if (v) {
+          const done = completedOf(v);
+          const builtNow = Array.isArray(slice?.built) ? slice!.built.length : 0;
+          idle = done > lastCompleted || builtNow > 0 ? 0 : idle + 1;
+          lastCompleted = Math.max(lastCompleted, done);
+        }
         /* a dropped connection or a server restart: wait and carry on (the server kept everything) */
-        const wait = !v ? Math.min(30_000, 1000 * 2 ** Math.min(fails, 5)) : !drive ? 2500 : slice?.retryAfterMs ? Math.min(60_000, slice.retryAfterMs) : slice?.stoppedBy === "backoff" ? 3000 : 250;
+        const wait = driveWait({ viewed: !!v, fails, drive, idle, ...(slice?.retryAfterMs ? { retryAfterMs: slice.retryAfterMs } : {}), ...(slice?.stoppedBy ? { stoppedBy: slice.stoppedBy } : {}) });
         await new Promise((res) => setTimeout(res, wait));
       }
     } finally { if (taskDrivers.current.get(taskId) === h) taskDrivers.current.delete(taskId); }
