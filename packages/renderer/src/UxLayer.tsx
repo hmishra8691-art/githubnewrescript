@@ -460,8 +460,10 @@ export function UxLayer(p: UxLayerProps) {
       };
       const effect = (e: UxEffect, t: UxTarget | null) => {
         if (!t) return;
-        host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id));
-        if (traceRef.current) trace({ kind: "effect", op: e.do, target: t, detail: e.className ?? e.text ?? e.preset ?? (e.style ? Object.keys(e.style).join(",") : undefined), count: e.do === "show_popup" ? 1 : uxElements(root, t).length });
+        const undo = applyEffect(root, def, t, { ...e, target: t }, b.id);
+        host.undo.push(...undo);
+        /* S2c: what changed — a class op counts only the elements it actually changed (removing an absent class is nothing) */
+        if (traceRef.current) trace({ kind: "effect", op: e.do, target: t, detail: e.className ?? e.text ?? e.preset ?? (e.style ? Object.keys(e.style).join(",") : undefined), count: e.do === "show_popup" ? 1 : /class$/.test(e.do) ? undo.length : uxElements(root, t).length });
       };
       function onMessage(ev: MessageEvent) {
         if (ev.source !== frame.contentWindow) return;

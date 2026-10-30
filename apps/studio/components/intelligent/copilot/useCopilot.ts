@@ -841,7 +841,9 @@ export function useCopilot(opts: {
         setVerify({ signature: sig, status: "repairing", report, repaired: repairsRef.current, ok: false, summary: sum.text });
         const names = failing.map((v) => `“${v.label}”`).join(", ");
         await askRef.current(`Repair the script${failing.length === 1 ? "" : "s"} that did not pass the test session: ${names}`, undefined, undefined, undefined, { verifyRepair: { report: executionReportText(report), items: failing.map((v) => ({ key: v.key, label: v.label, verdict: v.verdict })) } }).catch(() => "handled");
-        /* the repair changed nothing that runs (it failed, or answered in words): this report stands */
+        /* the repair changed nothing that runs (it failed, or answered in words): this report stands — after React has
+           committed the turn's revision, if there was one (its new signature then owns the card) */
+        await new Promise((r) => setTimeout(r, 250));
         if (verifySigRef.current === sig) setVerify({ signature: sig, status: "done", report, repaired: repairsRef.current, ok: false, summary: sum.text });
         return;
       }

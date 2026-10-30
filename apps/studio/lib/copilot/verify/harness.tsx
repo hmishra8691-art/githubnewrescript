@@ -31,7 +31,7 @@ export const ITEM_LIMIT_MS = 5000;
 export const PROPOSAL_LIMIT_MS = 20000;
 /** how long a frame gets to start, and to react to one step */
 const READY_MS = 1500;
-const SETTLE_MS = 220;
+const SETTLE_MS = 160;
 const LIFECYCLE_MS = 1500;
 const LOGIC_MS = 1500;
 
@@ -168,9 +168,12 @@ async function runItem(def0: SurveyDefinition, item: VerifyItem, box: HTMLElemen
   const scenarios: Scenario[] = buildScenarios(def0, item, { seed });
   const scriptId = item.kind === "component" ? `uxb_component_${item.id.replace(/[^\w-]/g, "_")}` : item.id;
   const over = () => Date.now() - t0 > limitMs;
+  /* a pause that took far longer than asked: the page's thread was blocked (a frame sharing it, looping) — the script did not finish */
+  const settle = async (ms = SETTLE_MS) => { const t = Date.now(); await sleep(ms); if (Date.now() - t > ms + 2000) ir.timedOut = true; };
   const allWrites: { state: ResponseState; writes: CheckedWrite[] }[] = [];
-  for (const sc of scenarios) {
-    if (over()) { ir.timedOut = true; break; }
+  for (const [si, sc] of scenarios.entries()) {
+    /* the item's budget ran out between scenarios: what was played stands; the rest is said, not blamed on the script */
+    if (over()) { ir.unplayed = scenarios.length - si; break; }
     const rec: ScenarioRecord = { id: sc.id, label: sc.label, errors: [], effects: [], writes: [], logs: [] };
     ir.scenarios.push(rec);
     const state = createResponseState(def, { seed: 1, sessionId: "verify" });
@@ -207,24 +210,24 @@ async function runItem(def0: SurveyDefinition, item: VerifyItem, box: HTMLElemen
     try {
       root.render(<Stage def={def} page={page} state={state} pageKey={`verify-${item.key}-${sc.id}`} apiRef={apiRef} onTrace={onTrace} onIssue={onIssue} onWrite={onWrite} onLog={() => {}} />);
       // the frame starts (or is refused by the gate)
-      for (let w = 0; !ready && !ir.gateRefusal && w < READY_MS && !over(); w += 50) await sleep(50);
+      for (let w = 0; !ready && !ir.gateRefusal && w < READY_MS && !over(); w += 25) await sleep(25);
       if (ir.gateRefusal) break;
       if (!ready && item.kind !== "logic") { ir.notRun = "its script frame did not start in this browser"; break; }
       if (logicHost && (item.event === "on_load" || !item.event)) await runLogicOnce(def, state, item, logicHost, page, rec, writes, ir);
-      await sleep(SETTLE_MS);
+      await settle();
       for (const st of sc.steps) {
-        if (over()) { ir.timedOut = true; break; }
+        if (over()) break;
         if (st.do === "answer" || st.do === "clear") {
           const v = st.do === "clear" ? undefined : st.value;
           setAnswer(def, state, st.questionId, v);
           apiRef.current?.set({ [st.questionId]: v });
-          await sleep(SETTLE_MS);
+          await settle();
           if (logicHost && item.event === "on_change" && (item.scope !== "question" || item.questionId === st.questionId)) await runLogicOnce(def, state, item, logicHost, page, rec, writes, ir);
         } else if (st.do === "fill") {
           const v = fillAnswers(def, page.questionIds, st.valid, seed);
           for (const [id, x] of Object.entries(v)) setAnswer(def, state, id, x ?? undefined);
           apiRef.current?.set(v);
-          await sleep(SETTLE_MS);
+          await settle();
         } else if (st.do === "next") {
           const questions = page.questionIds.map((id) => def.questions.find((q) => q.id === id)).filter((q): q is Question => !!q);
           let builtIn: string[] = [];

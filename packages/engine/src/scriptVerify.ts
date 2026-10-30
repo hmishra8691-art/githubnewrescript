@@ -366,8 +366,10 @@ export interface ItemRecord {
   hostRefusals: string[];
   /** watchdog / rate-limit stops */
   watchdog: string[];
-  /** the per-item time limit was reached */
+  /** the script itself did not finish (a logic frame that never answered); the harness's own budget running out is `unplayed` */
   timedOut: boolean;
+  /** scenarios not played because the item's time budget (5 s) ran out — a harness limit, not the script's fault */
+  unplayed?: number;
   scenarios: ScenarioRecord[];
   durationMs: number;
   /** the save payload check: problems in words (empty: every accepted write is in the state and the payload) */
@@ -463,9 +465,9 @@ export function itemVerdict(rec: ItemRecord, expect?: ScriptExpect): ItemVerdict
   const effects = rec.scenarios.flatMap((s) => s.effects.map((e) => ({ e, s: s.label })));
   const ex = expect ? expectHolds(rec, expect) : null;
   const noneExpected = !!expect?.effect && /^(?:none|nothing|no effect)$/i.test(expect.effect.trim());
-  const saved = rec.payload?.checked ? `; ${rec.payload.checked} written value${rec.payload.checked === 1 ? "" : "s"} in the save payload` : "";
+  const saved = `${rec.payload?.checked ? `; ${rec.payload.checked} written value${rec.payload.checked === 1 ? "" : "s"} in the save payload` : ""}${rec.unplayed ? ` (${rec.unplayed} more scenario${rec.unplayed === 1 ? "" : "s"} not played: the 5 s limit)` : ""}`;
   if (ex && !ex.met) return { ...base, verdict: "ran-no-effect", summary: `Ran in a test session (${n} scenario${n === 1 ? "" : "s"}), but not as expected: ${ex.why}`, detail: [ex.why], expectMet: false };
-  if (!effects.length && !noneExpected) return { ...base, verdict: "ran-no-effect", summary: `Ran in a test session (${n} scenario${n === 1 ? "" : "s"}), no errors — but it did nothing visible in any of them (a selector, event or condition that never matches?)`, detail: [`no observable effect in: ${rec.scenarios.map((s) => s.label).join("; ")}`] };
+  if (!effects.length && !noneExpected) return { ...base, verdict: "ran-no-effect", summary: `Ran in a test session (${n} scenario${n === 1 ? "" : "s"}), no errors — but it did nothing visible in any of them (a selector, event or condition that never matches?)${saved}`, detail: [`no observable effect in: ${rec.scenarios.map((s) => s.label).join("; ")}`] };
   const first = effects[0];
   const said = first ? `${effectWords(first.e)}${first.s !== "enter the page" ? ` on “${first.s.replace(/^select “(.+)” in .+$/, "$1")}”` : " when the page opened"}` : "no effect, as expected";
   return { ...base, verdict: "ran-ok", summary: `Ran in a test session: ${n} scenario${n === 1 ? "" : "s"}, ${said}, no errors${saved}`, detail: [], ...(ex ? { expectMet: true } : {}) };
