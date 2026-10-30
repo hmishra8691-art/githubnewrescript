@@ -97,6 +97,11 @@ export interface DomBridgeOptions {
    * cover or block the page around it. In the respondent's survey the body IS the survey page.
    */
   contain?: boolean;
+  /**
+   * S2c — the Studio's test session: told of every mirror op the host applied (its kind and the element it changed;
+   * for `create`, the parent) or refused (with the reason). Absent in the survey itself.
+   */
+  onOp?: (kind: string, el: Element | null, refused?: string) => void;
 }
 
 export class DomBridge {
@@ -163,7 +168,9 @@ export class DomBridge {
     return this.o.root.contains(el) || el === document.body || el === document.documentElement;
   }
   private isMine(el: Element): boolean { return !!el.closest(`[data-rs-ux-created="${CSS.escape(this.o.id)}"]`); }
-  private say(text: string) { this.o.log(text); }
+  private said = 0;
+  private lastSaid = "";
+  private say(text: string) { this.said++; this.lastSaid = text; this.o.log(text); }
 
   /* ------------------------------------------------------------------ apply */
   apply(ops: unknown): void {
@@ -171,6 +178,7 @@ export class DomBridge {
     if (ops.length > MAX_OPS) this.say(`a script changed the page more than ${MAX_OPS} times at once — the rest was ignored`);
     for (const raw of ops.slice(0, MAX_OPS)) {
       const op = raw as DomOp;
+      const said = this.said;
       try {
         switch (op?.o) {
           case "class": this.cls(op); break;
@@ -183,6 +191,11 @@ export class DomBridge {
         }
       } catch (e) {
         this.say(`a change a script asked for could not be applied: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (this.o.onOp) {
+        const o = op as { o?: string; n?: Id; p?: Id; c?: string };
+        const el = o.o === "create" ? this.node(o.p as Id) : o.o === "replace" || o.o === "remove" ? (o.c ? this.created.get(o.c) ?? null : o.n != null ? this.node(o.n) : null) : o.n != null ? this.node(o.n) : null;
+        try { this.o.onOp(String(o.o ?? "?"), el instanceof Element ? el : el?.parentElement ?? null, this.said !== said ? this.lastSaid : undefined); } catch { /* a test hook never breaks the page */ }
       }
     }
     this.mo?.takeRecords(); // what this changed is not news

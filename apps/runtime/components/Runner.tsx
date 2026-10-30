@@ -26,6 +26,7 @@ import {
   recomputePunchesAfterChange,
   answerKey,
   applyScriptWrite,
+  responseSavePayload,
   getQuestionByCodeOrVar,
   type ScriptWrite,
   lookupAnswer,
@@ -230,14 +231,9 @@ const MIN_ADVANCE_MS = 350;
 function saveBody(session: NonNullable<RunnerProps["session"]>, state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null, seq?: number): string {
   return JSON.stringify({
     sessionId: session.sessionId,
-    status: state.status,
-    stepIndex: state.stepIndex,
-    answers: state.answers,
-    calculated: state.calculated,
-    embedded: state.embedded,
-    flags: state.flags,
-    // S1a: which values sandboxed scripts wrote (script, target, time — never a value); the replay reads it
-    scriptWrites: state.scriptWrites?.length ? state.scriptWrites : undefined,
+    // status, stepIndex, answers, calculated, embedded, flags and (S1a) scriptWrites — the engine's builder, so the
+    // Studio's test session (S2c) checks a script's written values against exactly what is posted here
+    ...responseSavePayload(state),
     // S1c (D11): this session's script failures (script, kind, page, first message without answer text, count) —
     // stored by the server whatever the survey's telemetry switches say: it is about the survey's code
     scriptHealth: scriptHealthPayload(session.sessionId),

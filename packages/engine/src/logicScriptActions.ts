@@ -1,3 +1,4 @@
+import { coerceExpect, type ScriptExpect } from "./scriptVerify.js";
 import type { CustomScript, Question, SurveyDefinition } from "@rescript/schema";
 import { codeGate, gateReason } from "./codeGate.js";
 import { applyScriptEdits, type ScriptEdit } from "./uxActions.js";
@@ -29,8 +30,8 @@ export const LOGIC_SCRIPT_EVENTS: readonly LogicScriptEvent[] = ["on_load", "on_
 const EVENT_ALIASES: Record<string, LogicScriptEvent> = { load: "on_load", page: "on_load", page_load: "on_load", change: "on_change", answer: "on_change", submit: "on_submit", next: "on_submit", validate: "on_validate", validation: "on_validate", complete: "on_complete", end: "on_complete" };
 
 export type LogicScriptAction =
-  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string }
-  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string }
+  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string; /** S2c: checked in the test session, never stored */ expect?: ScriptExpect }
+  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string; expect?: ScriptExpect }
   | { op: "remove_logic_script"; script: string }
   | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
 export const LOGIC_SCRIPT_ACTION_OPS = ["create_logic_script", "update_logic_script", "remove_logic_script", "set_logic_script_enabled"] as const;
@@ -59,14 +60,14 @@ export function coerceLogicScriptAction(op: string, o: Record<string, unknown>):
     case "create_logic_script": {
       const name = str(o.name ?? o.label, 120);
       if (!name || !code?.trim()) return "create_logic_script needs a name and code";
-      return { op, name, code, ...(scope ? { scope } : ref ? { scope: "question" as const } : {}), ...(ref ? { ref } : {}), ...(ev ? { event: ev } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}), ...(str(o.notes, 600) ? { notes: str(o.notes, 600) } : {}) };
+      return { op, name, code, ...(scope ? { scope } : ref ? { scope: "question" as const } : {}), ...(ref ? { ref } : {}), ...(ev ? { event: ev } : {}), ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : {}), ...(str(o.notes, 600) ? { notes: str(o.notes, 600) } : {}), ...(coerceExpect(o.expect) ? { expect: coerceExpect(o.expect) } : {}) };
     }
     case "update_logic_script": {
       const script = str(o.script ?? o.id ?? o.name, 120);
       if (!script) return "update_logic_script needs the script (its name or id)";
       const e = editsIn(o.edits);
       if (Array.isArray(o.edits) && !e?.length) return "update_logic_script edits are [{\"find\":\"text in the script\",\"replace\":\"its replacement\"}]";
-      const a: LogicScriptAction = { op, script, ...(str(o.newName ?? (o.script || o.id ? o.name : undefined), 120) ? { name: str(o.newName ?? o.name, 120) } : {}), ...(typeof o.code === "string" ? { code: o.code.slice(0, 20001) } : {}), ...(e?.length ? { edits: e } : {}), ...(ev ? { event: ev } : {}), ...(scope ? { scope } : {}), ...(ref ? { ref } : {}), ...(typeof o.notes === "string" ? { notes: o.notes.slice(0, 600) } : {}) };
+      const a: LogicScriptAction = { op, script, ...(str(o.newName ?? (o.script || o.id ? o.name : undefined), 120) ? { name: str(o.newName ?? o.name, 120) } : {}), ...(typeof o.code === "string" ? { code: o.code.slice(0, 20001) } : {}), ...(e?.length ? { edits: e } : {}), ...(ev ? { event: ev } : {}), ...(scope ? { scope } : {}), ...(ref ? { ref } : {}), ...(typeof o.notes === "string" ? { notes: o.notes.slice(0, 600) } : {}), ...(coerceExpect(o.expect) ? { expect: coerceExpect(o.expect) } : {}) };
       if (a.name === script) delete a.name;
       return Object.keys(a).length > 2 ? a : "update_logic_script changes nothing — give code, edits, event, scope/ref, name or notes";
     }

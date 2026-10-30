@@ -84,7 +84,20 @@ export interface UxLayerProps {
    * session collector. Called in every mode, unlike `onLog`.
    */
   onScriptIssue?: (issue: UxScriptIssue) => void;
+  /**
+   * S2c — THE TEST SESSION'S TRACE (the Studio's verification harness; absent in the survey): every script frame's
+   * start, each effect the host applied (op, target, how many elements it reached), each mirror op, each refusal,
+   * error and rs.log line — so a proposal's script can be judged by what it actually did.
+   */
+  onTrace?: (t: UxTrace) => void;
 }
+
+/** S2c: one event of a script frame, as the test session records it */
+export type UxTrace =
+  | { script: string; name: string; kind: "ready" }
+  | { script: string; name: string; kind: "effect"; op: string; target: UxTarget; detail?: string; count: number }
+  | { script: string; name: string; kind: "dom"; op: string; el: Element | null }
+  | { script: string; name: string; kind: "refused" | "error" | "log"; text: string; line?: number };
 
 /** S1c: one script failure as the layer reports it (kind: engine SCRIPT_HEALTH_KINDS) */
 export interface UxScriptIssue { script: string; name: string; kind: "ux_error" | "component_not_run" | "gate_refused" | "write_refused" | "navigation_refused" | "watchdog"; message: string }
@@ -222,6 +235,8 @@ export function UxLayer(p: UxLayerProps) {
   log.current = p.onLog;
   const issueRef = React.useRef(p.onScriptIssue);
   issueRef.current = p.onScriptIssue;
+  const traceRef = React.useRef(p.onTrace);
+  traceRef.current = p.onTrace;
   const navigate = React.useRef(p.onNavigate);
   navigate.current = p.onNavigate;
   const writeRef = React.useRef(p.onScriptWrite);
@@ -395,6 +410,7 @@ export function UxLayer(p: UxLayerProps) {
        * nothing to open.
        */
       const where = `${b.label}${b.target.questionId ? ` (${byCode.get(b.target.questionId) ?? ""})` : ""}`;
+      const trace = (t: Record<string, unknown>) => { try { traceRef.current?.({ script: b.id, name: b.label, ...t } as UxTrace); } catch { /* a test hook never breaks the page */ } };
       const report = (text: string, level: "log" | "warn" | "error" = "log", kind?: UxScriptIssue["kind"]) => {
         log.current?.(`[ux script “${b.label}”] ${level === "error" ? "ERROR: " : ""}${text}`);
         if (level === "error") console.error(`[rescript:script] ${where}: ${text}`);
@@ -431,7 +447,7 @@ export function UxLayer(p: UxLayerProps) {
       frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
       frame.srcdoc = SANDBOX_DOC;
       const post = (m: Record<string, unknown>) => frame.contentWindow?.postMessage({ __rsux: 1, ...m }, "*");
-      const dom = new DomBridge({ root: mirrorRoot, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained });
+      const dom = new DomBridge({ root: mirrorRoot, id: b.id, owner: b.target, log: (t) => report(t, "warn"), post, contain: !!p.contained, ...(traceRef.current ? { onOp: (op: string, el: Element | null, refused?: string) => trace(refused ? { kind: "refused", text: refused } : { kind: "dom", op, el }) } : {}) });
       let beat: ReturnType<typeof setInterval> | null = null;
       const host: ScriptHost = { frame, behavior: b, listens: [], undo: [], dom, started: false, waiting: new Map(), dispose: () => { if (beat) { clearInterval(beat); beat = null; } dom.dispose(); window.removeEventListener("message", onMessage); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); frame.remove(); }, close: () => { if (!host.started) { host.dispose(); for (const u of host.undo) u.run(); return; } dom.freeze(); root.removeEventListener("click", onDom); root.removeEventListener("mouseover", onDom); const finish = () => { if (!closing.delete(finish)) return; host.dispose(); for (const u of host.undo) u.run(); }; closing.add(finish); setTimeout(finish, SCRIPT_GRACE_MS); } };
       let windowStart = Date.now(), count = 0;
@@ -439,10 +455,14 @@ export function UxLayer(p: UxLayerProps) {
       const resolve = (spec: unknown): UxTarget | null => {
         if (spec === "self" || spec == null) return b.target;
         const t = resolveUxTarget(def, spec, look);
-        if (typeof t === "string") { report(`${t}`); return null; }
+        if (typeof t === "string") { report(`${t}`); trace({ kind: "refused", text: t }); return null; }
         return t;
       };
-      const effect = (e: UxEffect, t: UxTarget | null) => { if (t) host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id)); };
+      const effect = (e: UxEffect, t: UxTarget | null) => {
+        if (!t) return;
+        host.undo.push(...applyEffect(root, def, t, { ...e, target: t }, b.id));
+        if (traceRef.current) trace({ kind: "effect", op: e.do, target: t, detail: e.className ?? e.text ?? e.preset ?? (e.style ? Object.keys(e.style).join(",") : undefined), count: e.do === "show_popup" ? 1 : uxElements(root, t).length });
+      };
       function onMessage(ev: MessageEvent) {
         if (ev.source !== frame.contentWindow) return;
         const m = ev.data as { __rsux?: number; cmd?: string; args?: unknown[]; id?: number };
@@ -456,6 +476,7 @@ export function UxLayer(p: UxLayerProps) {
           case "pong": awaiting = 0; missed = 0; break;
           case "ready": {
             host.started = true;
+            trace({ kind: "ready" });
             /*
              * THE HEARTBEAT (S0b D8). Every HEARTBEAT_MS the host pings the frame; a frame that misses
              * HEARTBEAT_MISSES pings in a row while the page is shown is stuck (an endless promise chain, a
@@ -496,7 +517,8 @@ export function UxLayer(p: UxLayerProps) {
             const st = resolve(a[0]);
             // D12: no hiding / disabling style on an answer input or a required question
             const lock = st ? uxElements(root, st).map((el) => answerLockReason(el)).find(Boolean) : null;
-            if (lock) for (const [k, v] of Object.entries(c.ok)) if (HIDING_STYLE(k, v)) { report(`rs.setStyle: ${k}: ${v} refused on ${lock}`, "warn"); delete c.ok[k]; }
+            if (c.errors.length) trace({ kind: "refused", text: `rs.setStyle: ${c.errors.join("; ")}` });
+            if (lock) for (const [k, v] of Object.entries(c.ok)) if (HIDING_STYLE(k, v)) { report(`rs.setStyle: ${k}: ${v} refused on ${lock}`, "warn"); trace({ kind: "refused", text: `rs.setStyle: ${k}: ${v} refused on ${lock}` }); delete c.ok[k]; }
             effect({ do: "set_style", style: c.ok }, st); break; }
           case "clearStyle": { const t = resolve(a[0]); if (t) for (const el of uxElements(root, t)) { for (const k of setByUx.get(el) ?? []) el.style.removeProperty(k); setByUx.delete(el); } break; }
           case "show": effect({ do: "show" }, resolve(a[0])); break;
@@ -509,7 +531,7 @@ export function UxLayer(p: UxLayerProps) {
             const ht = resolve(a[0]);
             const els = ht ? uxElements(root, ht) : [];
             const lock = els.map((el) => answerLockReason(el)).find(Boolean);
-            if (lock) { report(`rs.hide refused: the target is ${lock}`, "warn"); break; }
+            if (lock) { report(`rs.hide refused: the target is ${lock}`, "warn"); trace({ kind: "refused", text: `rs.hide refused: the target is ${lock}` }); break; }
             const values = { ...(p.allValues ?? {}), ...p.values } as Record<string, unknown>;
             const answered = els.flatMap((el) => [el, ...el.querySelectorAll("[data-qid]")]).map((el) => el.getAttribute("data-qid")).filter((id): id is string => !!id && values[id] != null && values[id] !== "" && !(Array.isArray(values[id]) && (values[id] as unknown[]).length === 0));
             if (answered.length) report(`rs.hide: ${[...new Set(answered)].map((id) => byCode.get(id) ?? id).join(", ")} already has an answer — hiding it keeps the answer stored and validated`, "warn");
@@ -538,12 +560,12 @@ export function UxLayer(p: UxLayerProps) {
             const fn = m.cmd === "goToPage" ? "rs.goToPage" : "rs.goToSection";
             if (!target) { report(`${fn} needs a ${m.cmd === "goToPage" ? "page id or question code" : "section id or title"}`, "warn"); break; }
             const nav = navigate.current;
-            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn", "navigation_refused"); break; }
+            if (!nav) { report(`${fn}("${target}") refused: navigation is not available here`, "warn", "navigation_refused"); trace({ kind: "refused", text: `${fn}("${target}") refused: navigation is not available here` }); break; }
             // after the current event finishes, so a click handler's own effects land on the page it was written for
             setTimeout(() => {
               const r = nav(target, m.cmd === "goToPage" ? "page" : "section");
-              if (r.ok) report(`${fn}("${target}") — navigated`);
-              else report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn", "navigation_refused");
+              if (r.ok) { report(`${fn}("${target}") — navigated`); trace({ kind: "effect", op: "navigate", target: { kind: "page", pageId: target } as UxTarget, count: 1 }); }
+              else { report(`${fn}("${target}") refused: ${r.reason ?? "not allowed"}`, "warn", "navigation_refused"); trace({ kind: "refused", text: `${fn}("${target}") refused: ${r.reason ?? "not allowed"}` }); }
             }, 0);
             break;
           }
@@ -576,11 +598,11 @@ export function UxLayer(p: UxLayerProps) {
             f(list.map((e) => { const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>; return { message: str(o.message).slice(0, 500), ref: o.ref == null ? null : str(o.ref).slice(0, 200) }; }));
             break;
           }
-          case "log": report(`${a.map(str).join(" ")}`); break;
+          case "log": report(`${a.map(str).join(" ")}`); trace({ kind: "log", text: a.map(str).join(" ") }); break;
           case "ops": dom.apply(a[0]); break;
           case "want": dom.want(str(a[0])); break;
           case "resync": dom.resync((t) => post({ type: "sync", tree: t }), true); break;
-          case "error": report(str(a[0]), "error", "ux_error"); break;
+          case "error": report(str(a[0]), "error", "ux_error"); trace({ kind: "error", text: str(a[0]), ...(typeof a[1] === "number" ? { line: a[1] } : {}) }); break;
           default: break;
         }
       }

@@ -1,3 +1,4 @@
+import { coerceExpect, type ScriptExpect } from "./scriptVerify.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { semanticTwin } from "./uxDuplicates.js";
 import { parseLogicExpression } from "./logicExpression.js";
@@ -50,7 +51,7 @@ export interface RawEffect { do: string; target?: unknown; className?: string; p
 /** update_behavior: a small change to a stored script without sending it again — each `find` must occur exactly once */
 export interface ScriptEdit { find: string; replace: string }
 type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string; when?: string | null };
-type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null; edits?: ScriptEdit[] };
+type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null; edits?: ScriptEdit[]; /** S2c: what the script should do, checked in the test session (never stored) */ expect?: ScriptExpect };
 export type UxAction =
   | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string; when?: string }
   | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null; when?: string | null }
@@ -141,6 +142,7 @@ const behFields = (o: Record<string, unknown>): BehFields => ({
   ...(typeof o.once === "boolean" ? { once: o.once } : {}),
   /* a guard — "only when Q3 = 2 AND Q1 >= 18" — as expression text; null removes it */
   ...(o.when === null || o.condition === null ? { when: null } : str(o.when) ?? str(o.condition) ? { when: str(o.when) ?? str(o.condition) } : {}),
+  ...(coerceExpect(o.expect) ? { expect: coerceExpect(o.expect) } : {}),
 });
 const itemId = (o: Record<string, unknown>) => str(o.id) ?? str(o.target_id) ?? str(o.ref) ?? str(o.label) ?? str(o.name);
 

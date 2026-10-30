@@ -208,6 +208,8 @@ export * from "./scriptAst.js";
 export * from "./codeGate.js";
 export * from "./scriptWrites.js";
 export * from "./logicSandbox.js";
+export * from "./scriptVerify.js";
+export * from "./savePayload.js";
 /* S1c: live script-error telemetry — the shared collector shape, the save route's sanitiser and the Studio aggregate */
 export * from "./scriptHealth.js";
 export * from "./scriptExplain.js";
