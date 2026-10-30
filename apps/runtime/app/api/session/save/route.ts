@@ -3,7 +3,8 @@ import { supabaseAdmin } from "@/lib/admin";
 import { loadQuotaCounts, qualitySalt } from "@/lib/session";
 import { recordSessionUsage } from "@/lib/metering";
 import { SurveyDefinition } from "@rescript/schema";
-import { checkSubmission, quotaIncrements, hasExactBalance, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { checkSubmission, quotaIncrements, hasExactBalance, sanitizeNavTrail, type ResponseState, type SubmissionCheck } from "@rescript/engine";
+import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
 import { surveyFieldworkEvents } from "@/lib/notifyEmit";
@@ -35,6 +36,8 @@ export async function POST(req: NextRequest) {
   const { sessionId, status, stepIndex, answers, calculated, embedded, flags, completed, telemetry } = body ?? {};
   if (typeof sessionId !== "string" || sessionId.length < 16)
     return NextResponse.json({ error: "invalid session" }, { status: 400 });
+  const sbx = sandboxRow(sessionId);
+  if (sbx) return sandboxSave(sbx, body);
 
   const db = supabaseAdmin();
   const { data: existing } = await db
@@ -105,6 +108,15 @@ export async function POST(req: NextRequest) {
   };
   if (keepTelemetry) { update.telemetry = keepTelemetry; if (deviceHash) update.device_hash = deviceHash; }
   /*
+   * SECTION NAVIGATION (0077, responses.nav): the Back trail and the pages seen, checked against the definition
+   * this session runs — shape, bounds, every id a page of it; unknown ids are dropped, never stored. It is never
+   * trusted to move the respondent: the replay above already decided what is valid, and resume positions by
+   * step_index. A malformed trail is ignored (logged), never a refused save.
+   */
+  const nav = def ? sanitizeNavTrail(def, body?.nav) : { trail: null, dropped: 0 };
+  if (nav.trail) update.nav = nav.trail;
+  if (nav.invalid || nav.dropped) console.info("[rescript:save] navigation trail", JSON.stringify({ sessionId: sessionId.slice(0, 8), invalid: nav.invalid ?? null, dropped: nav.dropped }));
+  /*
    * Y11 — THE UPDATE IS A COMPARE-AND-SWAP, SO READ WHAT IT SWAPPED.
    *
    * `.eq("status", "in_progress")` was already here and is exactly right: it
@@ -128,6 +140,12 @@ export async function POST(req: NextRequest) {
   if (error && /last_saved_at/.test(error.message)) {
     // migration 0006 not applied yet — the column is a convenience, not the save
     delete update.last_saved_at;
+    ({ data: changed, error } = await applyUpdate());
+  }
+  if (error && "nav" in update && /\bnav\b/.test(error.message)) {
+    // migration 0077 not applied yet — the trail is paradata, never the save: log once, keep the answers
+    if (!warnedNavColumn) { warnedNavColumn = true; console.warn("[rescript:save] responses.nav missing (migration 0077 not applied) — saving without the navigation trail", error.message); }
+    delete update.nav;
     ({ data: changed, error } = await applyUpdate());
   }
   if (error) {
@@ -273,6 +291,40 @@ export async function POST(req: NextRequest) {
     status: newStatus,
     definition: { source: run.source, versionId: run.versionId, configHash: def ? configFingerprint(resolveConfig(def)) : null },
   });
+}
+
+let warnedNavColumn = false;
+
+/**
+ * THE SANDBOX ROW (a runtime with no database, lib/sessionSandbox.ts): the same contract as the database path for
+ * what section navigation needs — the replay check with the same posture, the same `nav` validation — and the row
+ * kept in memory. Quality scoring, quotas, List Fill, metering and assessments are the database path's; a sandbox
+ * session records none of them.
+ */
+function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body: any) {
+  if (row.status !== "in_progress") return NextResponse.json({ ok: true, note: "session already finalized", environment: "TEST", respondentCode: row.respondent_code });
+  const survey = sandboxSurvey(row.survey);
+  if (!survey) return NextResponse.json({ error: "unknown session" }, { status: 404 });
+  const validStatus = ["in_progress", "complete", "screened", "quota_full", "terminated"];
+  const newStatus = validStatus.includes(body?.status) ? body.status : "in_progress";
+  const posture = validationPosture();
+  if (posture !== "off") {
+    const check = checkSubmission({
+      def: survey.def,
+      prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at },
+      posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed },
+    });
+    if (check.hard.length || check.soft.length) console.info("[rescript:save] sandbox submission check", JSON.stringify({ sessionId: row.session_id.slice(0, 8), posture, hard: check.hard, soft: check.soft }));
+    if (!check.ok && posture === "enforce") return NextResponse.json({ error: `This page could not be saved: ${check.hard[0].message}`, problems: check.hard }, { status: 422 });
+  }
+  const nav = sanitizeNavTrail(survey.def, body?.nav);
+  Object.assign(row, {
+    status: newStatus, step_index: Number(body?.stepIndex) || 0,
+    answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: Array.isArray(body?.flags) ? body.flags : [],
+    completed_at: body?.completed ? new Date().toISOString() : null, last_saved_at: new Date().toISOString(),
+    ...(nav.trail ? { nav: nav.trail } : {}),
+  });
+  return NextResponse.json({ ok: true, environment: "TEST", respondentCode: row.respondent_code, status: newStatus, sandbox: true });
 }
 
 type Posture = "off" | "log" | "enforce";

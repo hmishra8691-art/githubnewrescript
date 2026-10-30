@@ -508,3 +508,93 @@ export function submitGate(
   }
   return base;
 }
+
+/* ------------------------------------------------------------ the trail in the response row (0077) */
+
+/**
+ * THE TRAIL AS STORED (migration 0077, `responses.nav`): the Back trail
+ * (`stack`, oldest first), every page seen (`visited`) and the page the
+ * respondent is on (`at`). Paradata — never an answer, never exported, never
+ * trusted to MOVE anyone: resume still positions by the saved step and the
+ * save route's replay still decides what is valid. It only restores what Back
+ * and the navigator know, so a second device behaves like the first.
+ */
+export interface NavTrail { v: 1; stack: string[]; visited: string[]; at?: string }
+export const NAV_TRAIL_MAX_IDS = 2000;
+export const NAV_TRAIL_MAX_ID_LENGTH = 128;
+
+/** The trail as the save posts it, from the state (null when there is nothing to keep). */
+export function navTrailOf(state: ResponseState, currentPageId?: string | null): NavTrail | null {
+  const stack = visitedPages(state);
+  const visited = seenPages(state);
+  if (!stack.length && !visited.length && !currentPageId) return null;
+  return { v: 1, stack: stack.slice(-NAV_TRAIL_MAX_IDS), visited: visited.slice(-NAV_TRAIL_MAX_IDS), ...(currentPageId ? { at: currentPageId } : {}) };
+}
+
+/**
+ * A posted (or stored) trail, checked against THIS definition: the shape, the
+ * bounds, and every id a page of this survey (`p3`, or a loop iteration
+ * `p3@apple` whose page is `p3`). Unknown ids — a tampered payload, a page the
+ * new version deleted — are dropped and counted, never stored, never refused
+ * (a stale trail must not cost a respondent their save).
+ */
+export function sanitizeNavTrail(def: SurveyDefinition, raw: unknown): { trail: NavTrail | null; dropped: number; invalid?: string } {
+  if (raw === null || raw === undefined) return { trail: null, dropped: 0 };
+  if (typeof raw !== "object" || Array.isArray(raw)) return { trail: null, dropped: 0, invalid: "nav must be an object" };
+  const o = raw as Record<string, unknown>;
+  if (o.v !== undefined && o.v !== 1) return { trail: null, dropped: 0, invalid: `nav version ${String(o.v)} is not 1` };
+  const pages = new Set(pagesInDef(def).keys());
+  let dropped = 0;
+  const ok = (x: unknown): x is string =>
+    typeof x === "string" && x.length > 0 && x.length <= NAV_TRAIL_MAX_ID_LENGTH && pages.has(x.split("@")[0]);
+  const list = (v: unknown, dedupe: "all" | "consecutive"): string[] => {
+    if (v === undefined) return [];
+    if (!Array.isArray(v)) { dropped++; return []; }
+    const out: string[] = [];
+    for (const x of v.slice(-NAV_TRAIL_MAX_IDS * 2)) {
+      if (!ok(x)) { dropped++; continue; }
+      if (dedupe === "all" ? out.includes(x) : out[out.length - 1] === x) continue;
+      out.push(x);
+    }
+    return out.slice(-NAV_TRAIL_MAX_IDS);
+  };
+  const stack = list(o.stack, "consecutive");
+  const visited = list(o.visited, "all");
+  let at: string | undefined;
+  if (o.at !== undefined) { if (ok(o.at)) at = o.at; else dropped++; }
+  if (!stack.length && !visited.length && !at) return { trail: null, dropped };
+  return { trail: { v: 1, stack, visited, ...(at ? { at } : {}) }, dropped };
+}
+
+/** Put a trail back into the state (after `resumeAt`): Back and the navigator read it from there. */
+export function restoreNavTrail(state: ResponseState, trail: Pick<NavTrail, "stack" | "visited"> | null): void {
+  if (!trail) return;
+  setVisitedPages(state, trail.stack);
+  for (const p of trail.visited) markSeen(state, p);
+}
+
+/**
+ * WHICH TRAIL A RESUME USES — the server's (the response row, any device) or
+ * this browser's copy. Both are checked against the definition first (stale
+ * ids dropped). The server's wins when the browser has none (another device)
+ * or when it was saved at or after the browser copy; a browser copy written
+ * later — a save that never reached the server — wins, the same rule the
+ * pending answers follow. `savedAt` is the row's last save (ISO), `at` the
+ * browser copy's time (ms).
+ */
+export function chooseNavTrail(
+  def: SurveyDefinition,
+  server: { nav: unknown; savedAt?: string | null } | null | undefined,
+  browser: { visited: unknown; seen: unknown; at?: number } | null | undefined,
+): { source: "server" | "browser" | null; trail: NavTrail | null; dropped: number } {
+  const s = server ? sanitizeNavTrail(def, server.nav) : { trail: null, dropped: 0 };
+  const b = browser ? sanitizeNavTrail(def, { v: 1, stack: browser.visited, visited: browser.seen }) : { trail: null, dropped: 0 };
+  const dropped = s.dropped + b.dropped;
+  if (s.trail && !b.trail) return { source: "server", trail: s.trail, dropped };
+  if (!s.trail && b.trail) return { source: "browser", trail: b.trail, dropped };
+  if (!s.trail || !b.trail) return { source: null, trail: null, dropped };
+  const serverMs = server?.savedAt ? Date.parse(server.savedAt) : NaN;
+  const browserMs = typeof browser?.at === "number" ? browser.at : NaN;
+  const serverNewer = !Number.isFinite(browserMs) || (Number.isFinite(serverMs) && serverMs >= browserMs);
+  return serverNewer ? { source: "server", trail: s.trail, dropped } : { source: "browser", trail: b.trail, dropped };
+}

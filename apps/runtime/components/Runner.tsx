@@ -91,6 +91,10 @@ import {
   seenPages,
   setVisitedPages,
   markSeen,
+  navTrailOf,
+  chooseNavTrail,
+  restoreNavTrail,
+  type NavTrail,
   type SubmitGate,
 } from "@rescript/engine";
 import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaGateState, SpeechServiceContext, type SpeechService } from "@rescript/renderer";
@@ -181,7 +185,7 @@ type SaveOutcome = { ok: true; response?: any } | { ok: false; error: string; st
  */
 const MIN_ADVANCE_MS = 350;
 
-async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"]): Promise<SaveOutcome> {
+async function persist(mode: string, session: RunnerProps["session"], state: ResponseState, done: boolean, telemetry?: ResponseTelemetry | null, build?: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
   if (!session || mode === "preview") return { ok: true, skipped: true };
   try {
     const body = JSON.stringify({
@@ -203,6 +207,8 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
       // respondent actually ran — a draft-run session is recorded against the
       // draft's base version, whose settings may be older
       build: build ? { source: build.source, versionId: build.versionId, revision: build.revision } : undefined,
+      // section navigation (0077, responses.nav): the Back trail and the pages seen — validated by the server, never trusted to move anyone
+      nav: nav ?? undefined,
     });
     // keepalive lets the completion save outlive a redirect that follows it
     const r = await fetch("/api/session/save", { method: "POST", headers: { "content-type": "application/json" }, body, keepalive: done, cache: "no-store" });
@@ -216,10 +222,10 @@ async function persist(mode: string, session: RunnerProps["session"], state: Res
 }
 
 /** The final save, retried with backoff: three attempts before the respondent is told. */
-async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"]): Promise<SaveOutcome> {
+async function persistFinal(mode: string, session: RunnerProps["session"], state: ResponseState, telemetry: ResponseTelemetry | null, build: RunnerProps["build"], nav?: NavTrail | null): Promise<SaveOutcome> {
   let last: SaveOutcome = { ok: false, error: "not attempted" };
   for (let attempt = 0; attempt < 3; attempt++) {
-    last = await persist(mode, session, state, true, telemetry, build);
+    last = await persist(mode, session, state, true, telemetry, build, nav);
     if (last.ok) return last;
     // a 4xx will not change on retry (unknown/finalised session); a network error or 5xx might
     if (last.status && last.status < 500) return last;
@@ -509,7 +515,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * the same definition will never fix.
    */
   const [fatal, setFatal] = React.useState<FatalDetail | null>(null);
-  const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number } | null>(null);
+  const savedRef = React.useRef<{ answers: Record<string, unknown>; calculated: Record<string, unknown>; embedded: Record<string, unknown>; flags: unknown[]; stepIndex: number; nav?: unknown; savedAt?: string | null } | null>(null);
   /** §24: embedded data from this respondent's row on the invitation list. */
   const respondentEmbeddedRef = React.useRef<Record<string, unknown> | null>(null);
   const [resumed, setResumed] = React.useState(false);
@@ -665,6 +671,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    */
   const mediaGate = useMediaGateState();
   const [counts] = React.useState<QuotaCounts>(initialCounts ?? {});
+  /**
+   * SECTION NAVIGATION (0077): the trail every save carries — the Back trail, the pages seen and the page the
+   * respondent is on — for surveys with a navigator. A function declaration (hoisted) because the boot effect's
+   * completion save calls it too.
+   */
+  function navForSave(): NavTrail | null {
+    const st = stateRef.current;
+    if (!st || sectionNavMode(def) === "off") return null;
+    const here = compileFlow(def, st, counts)[st.stepIndex];
+    return navTrailOf(st, here?.kind === "page" ? here.pageId : null);
+  }
   /**
    * STALE PREVIEW (A66). The configuration fingerprints of the definition
    * this preview last ran: when the Studio pushes a changed definition, the
@@ -1045,10 +1062,20 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
        */
       nav = resumeAt(def, state, counts, saved.stepIndex, view);
       savedRef.current = null;
-      /* section navigation: the Back trail and the sections seen, kept in this browser (lib/resume.ts) */
+      /*
+       * Section navigation: the Back trail and the sections seen. The response row's copy (0077, `saved.nav`) wins
+       * when this browser has none — another device — or when it was saved at or after this browser's copy; a
+       * browser copy written later (a save that never arrived) wins. Ids the definition no longer has are dropped
+       * (engine `chooseNavTrail`).
+       */
       if (sectionNavMode(def) !== "off") {
-        const trail = readNavTrail(session?.sessionId ?? previewStateId, mode === "preview");
-        if (trail) { setVisitedPages(state, trail.visited); for (const p of trail.seen) markSeen(state, p); }
+        const browserTrail = readNavTrail(session?.sessionId ?? previewStateId, mode === "preview");
+        const serverNav = (saved as { nav?: unknown; savedAt?: string | null }).nav;
+        const pick = chooseNavTrail(def,
+          serverNav ? { nav: serverNav, savedAt: (saved as { savedAt?: string | null }).savedAt ?? null } : null,
+          browserTrail ? { visited: browserTrail.visited, seen: browserTrail.seen, at: browserTrail.at } : null);
+        restoreNavTrail(state, pick.trail);
+        if (mode !== "live" && pick.source) setLogs((l) => [...l, `[navigation] trail restored from the ${pick.source === "server" ? "response row" : "browser"}${pick.dropped ? ` (${pick.dropped} unknown page id${pick.dropped === 1 ? "" : "s"} dropped)` : ""}`]);
       }
       if (stale?.invalidated.length) {
         /*
@@ -1098,7 +1125,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       setEnded({ status: nav.endStatus ?? "complete", redirectUrl: nav.redirectUrl });
       if (session && mode !== "preview") {
         setFinalSave({ kind: "saving" });
-        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build).then((out) => {
+        void persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave()).then((out) => {
           setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
           force();
         });
@@ -1671,7 +1698,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       // …and the configuration fingerprints (A66), so the next resume can tell a changed question from an unchanged one
       cachePreviewState(previewStateId, { ...snapshot, seed: state.seed, fingerprints: configFingerprints(def) });
     }
-    void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build).then((o) => {
+    void persist(mode, session, state, false, telemetryRef.current?.data ?? null, build, navForSave()).then((o) => {
       if (o.ok) { if (session) clearPending(session.sessionId, stamp); return; }
       console.warn("[rescript:save] page save failed — kept locally and replayed on the next save", { session: session?.sessionId.slice(0, 8), error: o.error });
     });
@@ -1717,7 +1744,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       telemetryRef.current?.submitted();
       setFinalSave({ kind: "saving" });
       force();
-      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
+      const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
       if (!out.ok) {
         console.warn("[rescript:save] completion NOT saved", { session: session?.sessionId.slice(0, 8), error: out.error });
         setFinalSave({ kind: "failed", error: out.error });
@@ -1754,7 +1781,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!state) return;
     setFinalSave({ kind: "saving" });
     force();
-    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build);
+    const out = await persistFinal(mode, session, state, telemetryRef.current?.data ?? null, build, navForSave());
     setFinalSave(out.ok ? { kind: "saved" } : { kind: "failed", error: out.error });
     if (out.ok) void assessmentResults.obtain("response" in out ? out.response : null, ended?.status ?? "complete", state.answers as Record<string, unknown>);
     if (out.ok && sessionBoot) {
