@@ -42,7 +42,7 @@ test("update_question settings: only the keys the variant declares, each checked
   const badEnum = run([{ op: "update_question", target: "Q1", type: "gamified.timed", settings: { onTimeout: "explode" } }]);
   assert.match(badEnum.results[0].error ?? "", /not a valid onTimeout/);
   const badKey = run([{ op: "update_question", target: "Q1", type: "gamified.timed", settings: { pointsPerAnswer: 3 } }]);
-  assert.match(badKey.results[0].error ?? "", /has no setting pointsPerAnswer an action can set — its settings are timeLimitSeconds, onTimeout/);
+  assert.match(badKey.results[0].error ?? "", /has no setting pointsPerAnswer an action can set — its settings are timeLimitSeconds, onTimeout, /);
   const bounds = run([{ op: "update_question", target: "Q1", type: "gamified.timed", settings: { timeLimitSeconds: 0 } }]);
   assert.match(bounds.results[0].error ?? "", /between 1 and 3600/);
   const plain = run([{ op: "update_question", target: "Q3", settings: { timeLimitSeconds: 30 } }]);

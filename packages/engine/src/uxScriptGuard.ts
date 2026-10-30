@@ -1,5 +1,6 @@
 import { lexJs } from "./ux.js";
 import { readScript, tokenize, type StyleSet } from "./scriptAst.js";
+import { nativeRoute } from "./capabilityRegistry.js";
 
 /**
  * LOOPS IN SURVEY SCRIPTS, BOUNDED RATHER THAN BANNED.
@@ -220,15 +221,15 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
       if (/createElement\s*\(/.test(expr)) continue;
       if (NAV.test(expr)) nav = true; else if (OPT.test(expr)) opt = true;
     }
-    if (nav) errors.push(`a script cannot press Next or Back — .click() on the page's buttons does nothing (the script runs on a mirror of the page; events go from the page to the script, never back). To move on, call rs.goToPage("<page id>") or rs.goToSection("<block>"); for a question that moves on by itself when time runs out use the timed question (update_question type "gamified.timed", settings {"timeLimitSeconds": 30, "onTimeout": "advance"}); to stop the respondent use validation (set_validation)`);
-    if (opt) errors.push(`a script cannot choose an answer — .click() on an option or an input does nothing (the script runs on a mirror of the page). A starting answer is set_default_value; an answer that follows another answer is a punch rule (add_punch); a value only code can know is rs.setAnswer into a hidden variable`);
-    if (/\.\s*preventDefault\s*\(/.test(src) && (NAV.test(src) || /["'`](?:submit|keydown|keypress)["'`]/.test(src))) errors.push(`preventDefault cannot stop the respondent — the script sees the event after it has happened, so Next, Back and Submit still work. To stop a respondent continuing, give the question validation (set_validation) with its message: the survey refuses Next, shows it, and the server checks it again`);
+    if (nav) errors.push(`a script cannot press Next or Back — .click() on the page's buttons does nothing (the script runs on a mirror of the page; events go from the page to the script, never back). To move on, ${nativeRoute("press_next")}`);
+    if (opt) errors.push(`a script cannot choose an answer — .click() on an option or an input does nothing (the script runs on a mirror of the page). ${nativeRoute("choose_answer")}`);
+    if (/\.\s*preventDefault\s*\(/.test(src) && (NAV.test(src) || /["'`](?:submit|keydown|keypress)["'`]/.test(src))) errors.push(`preventDefault cannot stop the respondent — the script sees the event after it has happened, so Next, Back and Submit still work. To stop a respondent continuing, ${nativeRoute("stop_respondent")}`);
   }
   // 3b. CSS and code are not elements a script makes: <style>/<link>/<script> and document.head are dropped by the sandbox, so
   //     keyframes defined that way never exist and an animation that names them silently does nothing
   const makes = strings.filter((x) => /createElement\s*\(\s*$/.test(bare.slice(Math.max(0, x.start - 20), x.start)) && /^(style|link|script|iframe|object|embed|meta|base)$/i.test(x.value.trim()));
   if (makes.length || /\bdocument\s*\.\s*head\b/.test(bare)) {
-    errors.push(`a script cannot add ${makes.length ? `a <${makes[0].value.trim().toLowerCase()}> element` : "to document.head"} — the survey drops it, so CSS or keyframes added that way never apply. For CSS use create_style (scoped to the question; @keyframes allowed there); for motion use create_animation (presets: fade-in, fade-up, pop, pulse, shake, bounce, glow…) or rs.animate(target, preset); a script may still set inline styles and transitions on its own elements (el.style.transition / el.style.opacity)`);
+    errors.push(`a script cannot add ${makes.length ? `a <${makes[0].value.trim().toLowerCase()}> element` : "to document.head"} — the survey drops it, so CSS or keyframes added that way never apply. ${nativeRoute("inject_css")}`);
   }
   // 3c. an inline animation that names keyframes nobody defined
   for (const m of code.matchAll(/animation(?:-name)?\s*:\s*([A-Za-z_][\w-]*)/g)) {
@@ -353,7 +354,7 @@ export function exfiltrationProblems(code: string): string[] {
     const lits = [...src.matchAll(/(?:\.\s*src\s*=|setAttribute\s*\(\s*["'`]src["'`]\s*,)\s*(["'`])([^"'`]*)\1\s*(?=[;\n)}]|$)/g)].map((m) => m[2]);
     const assigns = [...src.matchAll(/\.\s*src\s*=|setAttribute\s*\(\s*["'`]src["'`]/g)].length;
     const staticImage = /createElement\s*\(\s*["'`]img["'`]\s*\)/i.test(src) && !/\[\s*["'`][^"'`]*["'`]\s*\+/.test(src) && lits.length > 0 && lits.length === assigns && lits.every((u) => /^https:\/\/[^\s"'`{}$]+$/.test(u)) && !/\bnew\s+Image\b|\bImage\s*\(|\bsrcset\b|\.\s*(?:href|action)\s*=|setAttribute\s*\(\s*["'`](?:srcset|href|action|formaction|ping|background|poster|data)["'`]/.test(src);
-    if (staticImage) out.push(`a script cannot show an image — the survey does not let a script create an <img> or set a src (any address set from code is dropped on the page), so this would show nothing. Show it natively: a content question holding the image with display logic (create_question type "descriptive" with <img src="…"> after the question, then set_display_logic, e.g. "Q1 = 2"), or the option's own image`);
+    if (staticImage) out.push(`a script cannot show an image — the survey does not let a script create an <img> or set a src (any address set from code is dropped on the page), so this would show nothing. ${nativeRoute("show_image")}`);
     else say("an address set from code (an image, link or form request)");
   }
   if (/document\s*\.\s*(?:cookie|domain)\b|\bcookieStore\b/.test(src)) say("cookie or document.domain access");

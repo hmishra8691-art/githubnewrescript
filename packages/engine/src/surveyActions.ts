@@ -43,6 +43,7 @@ import { relabelHypotheses } from "./hypotheses.js";
 import { normalizeCalcExpression, calcNameHint } from "./calcRewrite.js";
 import { buildVariableDictionary } from "./variables.js";
 import { questionCodeAlias } from "./calcContext.js";
+import { settableSettings, settingProblem } from "./capabilityRegistry.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -1436,24 +1437,18 @@ function mirrorBounds(q: Question): void {
  * checked against the question schema's own field (an enum, a number), numbers bounded. Anything else is refused
  * with the keys that are allowed: the model cannot reach a setting the variant does not describe.
  */
-const SETTING_BOUNDS: Record<string, [number, number]> = { timeLimitSeconds: [1, 3600] };
 function applyVariantSettings(q: Question, patch: Record<string, unknown>): string[] {
   const v = q.variant ? variantRegistry.get(q.variant) : undefined;
-  const declared = (v?.defaults as { settings?: Record<string, unknown> } | undefined)?.settings ?? {};
-  const allowed = Object.keys(declared);
-  const bad = Object.keys(patch).filter((k) => !allowed.includes(k));
-  if (bad.length) fail(allowed.length ? `${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${allowed.join(", ")}` : `${q.code} (${v?.name ?? q.type}) has no settings an action can set`);
+  /* S2b: the registry decides (capabilityRegistry.settingProblem) — declared, capability, family and universal keys, each value against the schema field and the bounds */
+  const bad = Object.keys(patch).filter((k) => !settableSettings(q.variant).includes(k));
+  if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant).join(", ")}`);
   const done: string[] = [];
   const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;
   for (const [k, val] of Object.entries(patch)) {
-    if (typeof declared[k] === "number" && typeof val !== "number") fail(`${q.code}: ${k} must be a number`);
-    if (typeof declared[k] === "boolean" && typeof val !== "boolean") fail(`${q.code}: ${k} must be true or false`);
-    const b = SETTING_BOUNDS[k];
-    if (b && typeof val === "number" && (val < b[0] || val > b[1])) fail(`${q.code}: ${k} must be between ${b[0]} and ${b[1]}`);
-    const field = questionSettingField(k);
-    if (field && !field.safeParse(val).success) fail(`${q.code}: ${JSON.stringify(val)} is not a valid ${k}`);
+    const why = settingProblem(q.variant, k, val);
+    if (why) fail(`${q.code}: ${why}`);
     settings[k] = val;
-    done.push(`${k} ${val}`);
+    done.push(`${k} ${typeof val === "object" ? JSON.stringify(val) : val}`);
   }
   return done;
 }

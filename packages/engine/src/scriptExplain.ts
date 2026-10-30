@@ -1,4 +1,5 @@
 import type { SurveyDefinition, UxBehavior } from "@rescript/schema";
+import { nativeRouteFor } from "./capabilityRegistry.js";
 import { uxBehaviorWords, validateUxItem, describeUxTarget } from "./ux.js";
 import { codeGate } from "./codeGate.js";
 
@@ -118,6 +119,15 @@ export function scriptDossier(def: SurveyDefinition, refs: ScriptRef[], health?:
 }
 
 /** the engine's own answer with no model: what each script does, its check, its field report */
+/** S2b: the registry's native route for a refusal whose own text does not already name one */
+function routeLine(errors: string[]): string {
+  for (const e of errors.slice(0, 3)) {
+    const r = nativeRouteFor(e);
+    if (r && !r.actions.some((x) => e.includes(x)) && !/rs\.\w+\(/.test(e)) return ` Native route: ${r.route}`;
+  }
+  return "";
+}
+
 export function explainScripts(def: SurveyDefinition, text: string, ctx: { selectedId?: string | null; health?: ScriptHealthLite | null } = {}): { understood: string; answer: string; sections: { title: string; items: { label: string }[] }[] } {
   const refs = findScripts(def, text, ctx);
   if (!refs.length) {
@@ -129,7 +139,7 @@ export function explainScripts(def: SurveyDefinition, text: string, ctx: { selec
     const v = scriptCheckOf(def, s);
     const lines = [
       `What it does: ${describe(def, s)}.`,
-      v.ok ? `Check: it passes the script check (it parses, uses the survey's real page hooks and the sandbox's rules)${v.warnings.length ? `, with warnings: ${v.warnings.slice(0, 3).join(" | ")}` : ""} — checked, not run here.` : `Check: refused by the script check — ${v.errors.slice(0, 3).join(" | ")}. This is why it does nothing on the page.`,
+      v.ok ? `Check: it passes the script check (it parses, uses the survey's real page hooks and the sandbox's rules)${v.warnings.length ? `, with warnings: ${v.warnings.slice(0, 3).join(" | ")}` : ""} — checked, not run here.` : `Check: refused by the script check — ${v.errors.slice(0, 3).join(" | ")}. This is why it does nothing on the page.${routeLine(v.errors)}`,
       `In the field: ${healthWords(ctx.health, s)}.`,
     ];
     return { title: `“${s.label}” (${s.kind === "behavior" ? "behaviour" : "Scripts panel"}, ${s.where})`, lines };

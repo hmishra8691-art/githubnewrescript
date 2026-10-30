@@ -171,6 +171,7 @@ __registerSurveyLint((def) => __lintEmbeddedPiping(def).map((i) => ({
   level: "warning" as const, questionCode: "Flow", path: `flow.${i.nodeId}.fields.${i.field}`, message: i.message, objectKey: `flowNode:${i.nodeId}` as __ObjectKey,
 })));
 export * from "./capabilities.js";
+export * from "./capabilityRegistry.js";
 export * from "./researchActions.js";
 export * from "./qualActions.js";
 /* F2 2026-10-22: qualitative synthesis requests in words (summaries, insights, comparisons, reels, double-coding, ask, auto-coding, group sessions) */
