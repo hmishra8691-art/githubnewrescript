@@ -20,7 +20,7 @@ const at = (kind: Parameters<typeof codeCompletions>[0], text: string, explicit 
   const pos = text.indexOf("|");
   const doc = text.replace("|", "");
   const r = codeCompletions(kind, def, doc, pos, explicit);
-  return r && { ...r, labels: r.options.map((o) => o.label), typed: doc.slice(r.from, pos) };
+  return r && { ...r, labels: r.options.filter((o) => o.type !== "snippet").map((o) => o.label), typed: doc.slice(r.from, pos) };
 };
 
 test("rs. offers every rs method of the registry, with its signature and effect", () => {

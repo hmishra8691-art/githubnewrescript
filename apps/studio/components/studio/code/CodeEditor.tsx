@@ -6,6 +6,7 @@ import type { CodeLanguage } from "@/lib/code/format.ts";
 import type { CodeDiagnostic, CodeKind, GateVerdict } from "@/lib/code/types.ts";
 import { codeCompletions } from "@/lib/code/completions.ts";
 import { fieldDiagnostics, gateFor } from "@/lib/code/diagnostics.ts";
+import { snippetsFor } from "@/lib/code/snippets.ts";
 import type { EditorHandle } from "./codeEditorSetup";
 
 /**
@@ -152,6 +153,14 @@ export function CodeEditor(p: CodeEditorProps) {
               onClick={() => { const before = ed.current?.view.state.doc.toString(); ed.current?.format(); setFormatted(before !== ed.current?.view.state.doc.toString() ? "re-indented" : "already indented"); ed.current?.focus(); }}>Format (re-indent)</button>
             <button ref={toolbar} type="button" className="btn sm ghost" data-testid="code-editor-full" aria-pressed={full}
               onClick={() => { setFull((v) => !v); setTimeout(() => ed.current?.focus(), 0); }}>{full ? "Exit full screen" : "Full screen"}</button>
+            {(kind === "ux" || kind === "logic" || kind === "component") && !p.readOnly && (
+              /* S3b (MM-12): the built-in snippets of this kind, inserted at the cursor */
+              <select className="select sm" value="" aria-label="Insert snippet" data-testid="code-snippet-menu"
+                onChange={(e) => { const sn = snippetsFor(kind).find((x) => x.id === e.target.value); if (sn) ed.current?.insert(sn.body); e.currentTarget.value = ""; }}>
+                <option value="">Insert snippet…</option>
+                {snippetsFor(kind).map((sn) => <option key={sn.id} value={sn.id} title={sn.info}>{sn.label}</option>)}
+              </select>
+            )}
             {formatted && <span className="muted" data-testid="code-editor-formatted">{formatted}</span>}
             <span className="grow" />
             <span className="muted code-editor-keys">⌘/Ctrl-S save · ⌘/Ctrl-F find · ⌘/Ctrl-H replace · Esc leaves</span>

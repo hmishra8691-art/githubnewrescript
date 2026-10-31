@@ -2,6 +2,7 @@ import type { SurveyDefinition } from "@rescript/schema";
 import { UX_PRESETS } from "@rescript/schema";
 import { COMPONENT_API, LOGIC_HELPER_DOCS, SANDBOX_API, SANDBOX_EVENTS, UX_DOM_HOOKS } from "@rescript/engine";
 import type { CodeCompletion, CodeKind, CompletionAt } from "./types.ts";
+import { snippetCompletions } from "./snippets.ts";
 
 export type { CodeKind, CompletionAt, CodeCompletion } from "./types.ts";
 
@@ -128,11 +129,13 @@ export function codeCompletions(kind: CodeKind, def: SurveyDefinition | undefine
   if (!word && !explicit) return null;
   const typed = word?.[1] ?? "";
   const from = pos - typed.length;
+  /* S3b (MM-12): the built-in snippets of this kind, as "snippet …" entries (type a word of the name) */
+  const snips = snippetCompletions(kind);
   if (kind === "logic") {
-    return { from, inString: false, options: Object.entries(LOGIC_HELPER_DOCS).map(([h, d]) => ({ label: h, type: (h === "loop" ? "variable" : "function") as CodeCompletion["type"], detail: d.sig, info: d.write ? `${d.effect}` : d.effect })) };
+    return { from, inString: false, options: [...Object.entries(LOGIC_HELPER_DOCS).map(([h, d]) => ({ label: h, type: (h === "loop" ? "variable" : "function") as CodeCompletion["type"], detail: d.sig, info: d.write ? `${d.effect}` : d.effect })), ...snips] };
   }
   if (kind === "component") {
-    return { from, inString: false, options: (["el", "api"] as const).map((k) => ({ label: k, type: "variable" as const, detail: COMPONENT_API[k]!.sig, info: COMPONENT_API[k]!.effect })) };
+    return { from, inString: false, options: [...(["el", "api"] as const).map((k) => ({ label: k, type: "variable" as const, detail: COMPONENT_API[k]!.sig, info: COMPONENT_API[k]!.effect })), ...snips] };
   }
-  return { from, inString: false, options: [{ label: "rs", type: "variable", detail: "the survey api", info: "rs.listen, rs.getAnswer, rs.addClass … (type rs. for the list)" }, { label: "document", type: "variable", detail: "the page (a sandboxed mirror)", info: "querySelector with the page hooks" }] };
+  return { from, inString: false, options: [{ label: "rs", type: "variable", detail: "the survey api", info: "rs.listen, rs.getAnswer, rs.addClass … (type rs. for the list)" }, { label: "document", type: "variable", detail: "the page (a sandboxed mirror)", info: "querySelector with the page hooks" }, ...snips] };
 }

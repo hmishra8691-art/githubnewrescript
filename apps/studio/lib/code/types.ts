@@ -5,7 +5,7 @@ export type CodeKind = "ux" | "logic" | "component" | "css" | "html";
 
 export interface CodeCompletion {
   label: string;
-  type: "function" | "method" | "variable" | "property" | "constant" | "keyword" | "text" | "enum" | "class";
+  type: "function" | "method" | "variable" | "property" | "constant" | "keyword" | "text" | "enum" | "class" | "snippet";
   /** the signature, or the question's code / type */
   detail?: string;
   /** one line: the registry's effect, or the question's text */
