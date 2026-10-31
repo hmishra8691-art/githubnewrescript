@@ -9,6 +9,7 @@ import { ScriptHealthChip } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
 import { CodeEditor } from "./code/CodeEditor";
 import { scopedCssGate } from "@/lib/code/diagnostics.ts";
+import { duplicateUxItem, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -98,6 +99,18 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
     s.labelNextEdit(`Remove ${kind === "behavior" ? "behaviour" : kind} “${label}”`);
     s.update((d) => { if (!d.ux) return; const list = d.ux[listOf(kind)] as { id: string }[]; const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1); });
   };
+  /* S3b (MM-06): a copy with a new id and "(copy)"; a behaviour's copy starts switched off */
+  const duplicate = (kind: Kind, item: UxStyle | UxAnimation | UxBehavior) => {
+    const copy = duplicateUxItem(kind, item, uid(kind === "style" ? "uxs" : kind === "animation" ? "uxa" : "uxb"));
+    s.labelNextEdit(`Duplicate ${kind === "behavior" ? "behaviour" : kind} “${item.label}”`);
+    s.update((d) => {
+      d.ux = d.ux ?? { styles: [], animations: [], behaviors: [] };
+      const list = d.ux[listOf(kind)] as (typeof copy)[];
+      const i = list.findIndex((x) => x.id === item.id);
+      list.splice(i >= 0 ? i + 1 : list.length, 0, copy);
+    });
+    s.toast(kind === "behavior" ? `Copied as “${copy.label}”. ${DUPLICATE_NOTE}` : `Copied as “${copy.label}”.`);
+  };
   const start = (kind: Kind, script = false) => {
     const target = defaultTarget(scope);
     const now = new Date().toISOString();
@@ -117,7 +130,7 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
       {items.length === 0 && !draft && <p className="muted" style={{ fontSize: 11.5 }} data-testid="ux-items-empty">None yet. Add one here, or ask Intelligent mode (“make these options look like cards”) — either way it is the same setting, editable here.</p>}
       {items.map((x) => (
         <UxItemCard key={x.item.id} kind={x.kind} item={x.item} def={s.def} readOnly={s.readOnly}
-          onSave={(next, label) => write(x.kind, next, label)} onRemove={() => remove(x.kind, x.item.id, x.item.label)} />
+          onSave={(next, label) => write(x.kind, next, label)} onRemove={() => remove(x.kind, x.item.id, x.item.label)} onDuplicate={() => duplicate(x.kind, x.item)} />
       ))}
       {draft && (
         <UxItemCard kind={draft.kind} item={draft.item} def={s.def} readOnly={s.readOnly} isNew
@@ -141,10 +154,11 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
  * written to the survey when it passes the gate (text on blur, choices at
  * once) — an invalid state is shown with its reasons and never saved.
  */
-function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
+export function UxItemCard({ kind, item, def, onSave, onRemove, onDuplicate, readOnly, isNew }: {
   kind: Kind; item: UxStyle | UxAnimation | UxBehavior; def: SurveyDefinition; readOnly: boolean; isNew?: boolean;
   onSave(next: UxStyle | UxAnimation | UxBehavior, label: string): string[];
   onRemove(): void;
+  onDuplicate?(): void;
 }) {
   const [cur, setCur] = React.useState(item);
   const [errors, setErrors] = React.useState<string[]>([]);
@@ -182,6 +196,8 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
         )}
         <input className="input sm" value={cur.label} disabled={readOnly} aria-label="Name"
           onChange={(e) => setCur({ ...cur, label: e.target.value })} onBlur={() => commit(cur)} data-testid="ux-item-label" />
+        {!isNew && onDuplicate && <button type="button" className="btn sm ghost" onClick={onDuplicate} disabled={readOnly}
+          title={kind === "behavior" ? `Make a copy with a new id. ${DUPLICATE_NOTE}` : "Make a copy with a new id"} data-testid="ux-item-duplicate">Duplicate</button>}
         <button type="button" className="btn sm ghost" onClick={onRemove} disabled={readOnly} title={isNew ? "Discard" : "Remove"} data-testid="ux-item-remove">{isNew ? "Discard" : "Remove"}</button>
       </div>
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>

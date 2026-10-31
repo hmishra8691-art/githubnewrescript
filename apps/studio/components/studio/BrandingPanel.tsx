@@ -15,6 +15,7 @@ import { MediaDisplayControls } from "./MediaDisplayControls";
 import { ScriptHealthChip, ScriptHealthSummaryBar } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
 import { CodeEditor } from "./code/CodeEditor";
+import { duplicateLogicScript, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
 import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
@@ -795,6 +796,9 @@ export function ScriptsPanel() {
                 }} /> enabled
             </label>
             <span className="grow" />
+            {/* S3b (MM-06): a copy, switched off so the two never both run */}
+            <button className="btn small ghost" disabled={s.readOnly} title={`Make a copy with a new id. ${DUPLICATE_NOTE}`} data-testid="script-duplicate"
+              onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
             <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
           </div>
           <ScriptCodeField code={sc.code} refusal={refusal[sc.id]} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />}
