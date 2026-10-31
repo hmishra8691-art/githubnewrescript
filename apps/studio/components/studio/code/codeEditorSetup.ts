@@ -25,7 +25,7 @@ import {
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore, redo, undo } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches, openSearchPanel, search } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { forceLinting, linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { linter, lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { localCompletionSource } from "@codemirror/lang-javascript";
 import { languageExtension, reindentChanges, type CodeLanguage } from "@/lib/code/format.ts";
 import type { CodeDiagnostic, CompletionAt } from "@/lib/code/types.ts";
@@ -144,13 +144,12 @@ export function createEditor(parent: HTMLElement, o: EditorOptions): EditorHandl
   } else {
     extensions.push(autocompletion());
   }
-  if (o.lint) {
-    const lint = o.lint;
-    extensions.push(lintGutter(), linter((view): Diagnostic[] => {
-      const doc = view.state.doc.toString();
-      return lint(doc, firstSyntaxError(view.state)).map((d) => ({ from: Math.min(d.from, doc.length), to: Math.min(Math.max(d.to, d.from), doc.length), severity: d.severity, message: d.message, source: d.located ? undefined : "no position" }));
-    }, { delay: 350 }));
-  }
+  const diagnosticsOf = (state: EditorState): Diagnostic[] => {
+    if (!o.lint) return [];
+    const doc = state.doc.toString();
+    return o.lint(doc, firstSyntaxError(state)).map((d) => ({ from: Math.min(d.from, doc.length), to: Math.min(Math.max(d.to, d.from), doc.length), severity: d.severity, message: d.message, source: d.located ? undefined : "no position" }));
+  };
+  if (o.lint) extensions.push(lintGutter(), linter((view): Diagnostic[] => diagnosticsOf(view.state), { delay: 350 }));
   const view = new EditorView({ parent, state: EditorState.create({ doc: o.value, extensions }) });
   /* test and automation compatibility: the content element reads like the textarea it replaced (`el.value`) */
   Object.defineProperty(view.contentDOM, "value", { configurable: true, get: () => view.state.doc.toString() });
@@ -170,7 +169,8 @@ export function createEditor(parent: HTMLElement, o: EditorOptions): EditorHandl
       if (c.trims.length) view.dispatch({ changes: c.trims, userEvent: "input.format" });
       return true;
     },
-    relint() { forceLinting(view); },
+    /* forceLinting only runs a lint that is already pending; new markers for an unchanged text are set directly */
+    relint() { if (o.lint) view.dispatch(setDiagnostics(view.state, diagnosticsOf(view.state))); },
     insert(text) {
       if (view.state.readOnly) return false;
       const r = view.state.selection.main;
