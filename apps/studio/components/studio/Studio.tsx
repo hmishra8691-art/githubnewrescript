@@ -22,6 +22,7 @@ import { DesignsPanel } from "./DesignsPanel";
 import { QualPanel } from "./qual/QualPanel";
 import { BrandingPanel, ScriptsPanel, ThemeLivePreview } from "./BrandingPanel";
 import { AllCodePanel } from "./AllCodePanel";
+import { ScriptBundleTools } from "./ScriptBundleTools";
 import { AssetsPanel } from "./AssetsPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
@@ -1097,7 +1098,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "assets" && <AssetsPanel />}
           {tab === "localization" && <LocalizationPanel />}
           {tab === "scripts" && <ScriptsPanel />}
-          {tab === "allcode" && <AllCodePanel />}
+          {tab === "allcode" && <AllCodePanel tools={(sel, all) => <ScriptBundleTools selected={sel} all={all} />} />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
           {tab === "project" && <ProjectPanel />}
