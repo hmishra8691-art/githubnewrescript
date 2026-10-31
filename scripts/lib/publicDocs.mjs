@@ -136,6 +136,8 @@ function actionsReference(engine) {
   block("Option and design actions", "packages/engine/src/optionActions.ts", /^export type OptionAction =/, /;\s*$/);
   block("Question media (set_question_media)", "packages/engine/src/mediaActions.ts", /^export type MediaAction =/, /^\};\s*$/);
   block("Scripts-panel (logic) scripts", "packages/engine/src/logicScriptActions.ts", /^export type LogicScriptAction =/, /;\s*$/);
+  block("Option groups (set_option_groups)", "packages/engine/src/optionGroupActions.ts", /^export type OptionGroupAction =/, /;\s*$/);
+  out.push("Supporting types:", "", "```ts", sourceBlock("packages/engine/src/optionGroupActions.ts", /^export interface GroupSpec/, /\}\s*$/), "```", "");
   block("UX actions", "packages/engine/src/uxActions.ts", /^export type UxAction =/, /;\s*$/);
   block("Analysis actions", "packages/engine/src/analysisActions.ts", /^export type AnalysisAction =/, /;\s*$/);
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);

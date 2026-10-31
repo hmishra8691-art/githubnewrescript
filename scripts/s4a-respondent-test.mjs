@@ -236,6 +236,84 @@ if (SECTIONS.has("B")) {
   await p4.context().close();
 }
 
+/* ============================================================== C. AQ-08 option groups + cascading dropdown */
+if (SECTIONS.has("C")) {
+  console.log("\nC  AQ-08 visible option groups and the cascading dropdown");
+  const opts = ["Apple", "Pear", "Plum", "Carrot", "Leek"].map((label, i) => ({ code: i + 1, label }));
+  const groups = (scope = "options") => [
+    { id: "g_fruit", name: "Fruit", label: "Fruit", display: "heading", scope, members: scope === "rows" ? ["r1", "r2"] : [1, 2, 3] },
+    { id: "g_veg", name: "Veg", label: "Vegetables", display: "collapsible", scope, members: scope === "rows" ? ["r3", "r4"] : [4, 5] },
+  ];
+  const def = {
+    meta: { id: "groups", code: "GROUPS", title: "Groups", version: "1" },
+    questions: [
+      { id: "qs", code: "QS", variableName: "QS", type: "single_select", text: "Pick one", options: opts, optionGroups: groups(), required: false, settings: {} },
+      { id: "qm", code: "QM", variableName: "QM", type: "multi_select", text: "Pick any", options: opts, optionGroups: groups(), required: false, settings: {} },
+      { id: "qd", code: "QD", variableName: "QD", type: "dropdown", text: "Pick from the list", options: opts, optionGroups: groups(), required: false, settings: {} },
+      { id: "qx", code: "QX", variableName: "QX", type: "matrix_single", text: "Rate each", options: [{ code: 1, label: "Bad" }, { code: 2, label: "Good" }],
+        rows: ["r1", "r2", "r3", "r4"].map((code, i) => ({ code, label: ["Apple", "Pear", "Carrot", "Leek"][i], flags: [], validation: [], required: false })), optionGroups: groups("rows"), required: false, settings: {} },
+      { id: "qc", code: "QC", variableName: "QC", type: "dropdown", variant: "single_select.cascading_dropdown", text: "Where do you live?", required: true,
+        settings: { cascadeParents: [{ code: "IN", label: "India" }, { code: "US", label: "United States" }], cascadeParentLabel: "Country", cascadeChildLabel: "State" },
+        options: [{ code: 1, label: "Maharashtra", meta: { parent: "IN" } }, { code: 2, label: "Kerala", meta: { parent: "IN" } }, { code: 3, label: "Texas", meta: { parent: "US" } }] },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["qs", "qm", "qd", "qx"] }, { type: "page", id: "p2", questionIds: ["qc"] }, { type: "end", id: "e", status: "complete" }],
+  };
+  const pv = await open(def, { height: 1400 });
+  const groupInfo = (qid) => pv.$$eval(`[data-qid="${qid}"] [data-testid="rs-optgroup"]`, (els) => els.map((e) => ({
+    group: e.getAttribute("data-group"), display: e.getAttribute("data-display"), open: e.getAttribute("data-open"),
+    heading: (e.querySelector(".rs-optgroup-heading, .rs-optgroup-toggle")?.textContent ?? e.getAttribute("label") ?? "").trim(),
+    labelledby: e.getAttribute("aria-labelledby"), role: e.getAttribute("role"),
+    values: [...e.querySelectorAll("input, option")].map((i) => i.value),
+  })));
+  let g = await groupInfo("qs");
+  assert.equal(g.length, 2);
+  assert.equal(g[0].heading, "Fruit"); assert.equal(g[0].role, "group"); assert.deepEqual(g[0].values, ["1", "2", "3"]);
+  assert.ok(await pv.$(`[id="${g[0].labelledby}"]`), "the group is named by its heading");
+  assert.equal(g[1].display, "collapsible"); assert.equal(g[1].open, "0"); assert.deepEqual(g[1].values, [], "collapsed: members not drawn");
+  const toggle = '[data-qid="qs"] [data-testid="rs-optgroup-toggle"]';
+  assert.equal(await pv.getAttribute(toggle, "aria-expanded"), "false");
+  // keyboard: focus the disclosure button and press Enter
+  await pv.focus(toggle); await pv.keyboard.press("Enter");
+  await pv.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-expanded") === "true", toggle);
+  g = await groupInfo("qs");
+  assert.deepEqual(g[1].values, ["4", "5"]);
+  await pv.keyboard.press("Tab"); await pv.keyboard.press("Space");
+  assert.equal(await pv.$eval('[data-qid="qs"] input[value="4"]', (e) => e.checked), true, "Tab into the opened group, Space selects Carrot");
+  await pv.focus(toggle); await pv.keyboard.press("Space");
+  await pv.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-expanded") === "false", toggle);
+  ok("single choice: “Fruit” heading (role=group named by it, members 1–3); “Vegetables” collapsible — closed, Enter opens (aria-expanded), Tab+Space selects inside, Space closes");
+  g = await groupInfo("qm");
+  assert.deepEqual(g.map((x) => [x.heading.replace(/\s*\(\d+\)$/, "").replace(/^[▸▾]\s*/, ""), x.display]), [["Fruit", "heading"], ["Vegetables", "collapsible"]]);
+  ok("multiple choice: the same groups");
+  const og = await pv.$$eval('[data-qid="qd"] select optgroup', (els) => els.map((e) => [e.getAttribute("label"), [...e.querySelectorAll("option")].map((o) => o.value)]));
+  assert.deepEqual(og, [["Fruit", ["1", "2", "3"]], ["Vegetables", ["4", "5"]]]);
+  ok("dropdown: <optgroup label=Fruit> 1–3, <optgroup label=Vegetables> 4–5 (a native select cannot collapse)");
+  const rows = () => pv.$$eval('[data-qid="qx"] tbody tr', (trs) => trs.map((t) => t.classList.contains("rs-matrix-group") ? `#${t.textContent.trim().replace(/^[▸▾]\s*/, "")}` : t.querySelector(".rowlabel")?.textContent.trim()));
+  assert.deepEqual(await rows(), ["#Fruit", "Apple", "Pear", "#Vegetables (2)"]);
+  await pv.click('[data-qid="qx"] [data-testid="rs-optgroup-toggle"]');
+  assert.deepEqual(await rows(), ["#Fruit", "Apple", "Pear", "#Vegetables (2)", "Carrot", "Leek"]);
+  ok("matrix rows: a “Fruit” header row (th scope=rowgroup) and a collapsible “Vegetables” row group — opened, its rows appear");
+  await pv.click('[data-testid="rs-next"]');
+  await pv.waitForSelector('[data-qid="qc"]');
+  const child = '[data-testid="rs-cascade-child"]', parent = '[data-testid="rs-cascade-parent"]';
+  assert.equal(await pv.$eval(child, (e) => e.disabled), true, "the second list waits for the first");
+  const labels = await pv.$$eval('[data-qid="qc"] .rs-cascade-label', (e) => e.map((x) => x.textContent));
+  assert.deepEqual(labels, ["Country", "State"]);
+  await pv.selectOption(parent, "IN");
+  assert.deepEqual(await pv.$$eval(`${child} option`, (os) => os.map((o) => o.textContent)).then((x) => x.slice(1)), ["Maharashtra", "Kerala"]);
+  await pv.selectOption(child, "2");
+  await pv.selectOption(parent, "US");
+  assert.equal(await pv.$eval(child, (e) => e.value), "", "changing the parent clears a child that no longer belongs");
+  assert.deepEqual(await pv.$$eval(`${child} option`, (os) => os.map((o) => o.textContent)).then((x) => x.slice(1)), ["Texas"]);
+  await pv.click('[data-testid="rs-next"]');
+  await pv.waitForSelector('[data-qid="qc"] [data-testid="rs-errors"]');
+  await pv.selectOption(child, "3");
+  await pv.click('[data-testid="rs-next"]');
+  await pv.waitForSelector('[data-testid="rs-ended"], .rs-end', { timeout: 30000 });
+  ok("cascading dropdown: Country → State (labels, second list disabled until a country), India → Maharashtra/Kerala, switching to the US clears Kerala and offers Texas; required refuses an empty child; Texas completes");
+  await pv.context().close();
+}
+
 console.log(`\n${passed} passed`);
 if (allErrors.length) { console.log("page errors:\n  " + allErrors.join("\n  ")); }
 await browser.close();

@@ -1,4 +1,5 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
+import { isCascading, cascadeParentOf, CASCADE_PARENT_SUFFIX } from "./cascade.js";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { otherBoxCodes, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
@@ -126,6 +127,13 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
       placed.add(otherKeyFor(q.id, code, null));
     }
     placed.add(legacyOtherKey(q.id, null));
+
+    // AQ-08 cascading dropdown: the parent of the stored child, derived from the DEFINITION (not the posted __parent)
+    if (isCascading(q)) {
+      const parent = cascadeParentOf(q, state.answers[q.id]);
+      if (parent !== null) out[`${q.variableName}_PARENT`] = parent;
+      placed.add(`${q.id}${CASCADE_PARENT_SUFFIX}`);
+    }
 
     // a rating's optional comment: `<id>__comment` → VAR_COMMENT (Video Rating, "Allow Additional Comment")
     const comment = state.answers[`${q.id}__comment`];

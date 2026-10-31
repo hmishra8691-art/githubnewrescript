@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-173 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+174 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -62,6 +62,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `single_select.radio` | Radio Button | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify | required, custom_expression | — |
 | `single_select.dropdown` | Dropdown | `dropdown` | options, sorting, randomization, carry_forward, list_logic | required, custom_expression | — |
 | `single_select.searchable_dropdown` | Searchable Dropdown | `dropdown` | options, search, sorting, randomization, carry_forward, list_logic | required, custom_expression | renderer searchable_single |
+| `single_select.cascading_dropdown` | Cascading Dropdown | `dropdown` | options, sorting, carry_forward, list_logic | required, custom_expression | renderer cascading_dropdown |
 | `single_select.buttons` | Button Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify | required, custom_expression | renderer buttons |
 | `single_select.cards` | Card Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | renderer cards |
 | `single_select.tiles` | Tile Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | retired → single_select.cards; renderer cards |

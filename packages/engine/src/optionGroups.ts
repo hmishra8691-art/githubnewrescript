@@ -376,3 +376,44 @@ export function groupConditions(q: Question): { groupId: string; when: Condition
     .filter((g) => !!g.visibleIf)
     .map((g) => ({ groupId: g.id, when: g.visibleIf! }));
 }
+
+/* ------------------------------------------------- AQ-08: what the respondent sees */
+
+export type GroupDisplay = "heading" | "collapsible" | "none";
+
+/** One run of consecutive shown items that belong to the same group (or to none). */
+export interface GroupSegment<T> {
+  /** the group's id, or null for items outside any group */
+  groupId: string | null;
+  /** how it is drawn: "none" for ungrouped items and for groups with no label */
+  display: GroupDisplay;
+  /** the respondent-facing heading (unpiped) */
+  label: string | null;
+  items: T[];
+}
+
+/**
+ * The shown items (already ordered and filtered by `effectiveQuestion`) cut into runs by group, for drawing
+ * headings / disclosure buttons. Grouped ordering keeps every group contiguous (the invariant above), so a group
+ * is one run unless something outside this file split it (an anchor) — then it is two runs with the same heading,
+ * which is still truthful. Returns ONE "none" segment when no group asks to be seen — the renderer's fast path, so
+ * every survey before this draws exactly as before.
+ */
+export function groupSegments<T extends { code: string | number }>(
+  q: Question,
+  scope: "options" | "rows" | "columns",
+  items: T[],
+): GroupSegment<T>[] {
+  const visible = groupsFor(q, scope).filter((g) => (g.display ?? "none") !== "none" && !!g.label?.trim());
+  if (!visible.length) return [{ groupId: null, display: "none", label: null, items }];
+  const out: GroupSegment<T>[] = [];
+  for (const it of items) {
+    const g = groupOf(q, scope, it.code);
+    const shown = g && visible.includes(g) ? g : null;
+    const id = shown?.id ?? null;
+    const last = out[out.length - 1];
+    if (last && last.groupId === id) { last.items.push(it); continue; }
+    out.push({ groupId: id, display: shown ? (shown.display as GroupDisplay) : "none", label: shown?.label ?? null, items: [it] });
+  }
+  return out;
+}

@@ -77,7 +77,7 @@ import { rewriteScriptReferences, scriptLiteralRefs, surveyScripts } from "./scr
 
 /* ------------------------------------------------------------ vocabulary */
 
-export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean };
+export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean; /** AQ-08: a cascading dropdown child names its parent (stored as meta.parent) */ parent?: string | number };
 export interface ScaleSpec { points: number; start?: number; low?: string; high?: string; mid?: string; labels?: string[] }
 export interface ValidationSpec {
   kind: string;
@@ -171,7 +171,9 @@ export const SURVEY_ACTION_OPS = [
 export function settingsIn(raw: unknown): Record<string, unknown> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const plain = (v: unknown) => typeof v === "number" ? Number.isFinite(v) : typeof v === "boolean" || (typeof v === "string" && v.length <= 200);
-  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (Array.isArray(v) && v.length <= 20 && v.every(plain)))).slice(0, 12));
+  /* S4a AQ-08: a list of shallow records (a cascading dropdown's parents [{code, label}]) — plain values only, bounded; the schema field decides the shape when applied */
+  const record = (v: unknown) => !!v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length <= 8 && Object.values(v as Record<string, unknown>).every(plain);
+  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (Array.isArray(v) && v.length <= 20 && v.every(plain)) || (Array.isArray(v) && v.length > 0 && v.length <= 200 && v.every(record)))).slice(0, 12));
   return Object.keys(st).length ? st : undefined;
 }
 
@@ -264,7 +266,7 @@ const optionSpec = (v: unknown): OptionSpec | null => {
   const o = v as Record<string, unknown>;
   const label = str(o.label) ?? str(o.text);
   if (!label) return null;
-  return { label: label.slice(0, 300), ...(strOrNum(o.code) !== undefined ? { code: strOrNum(o.code) } : {}), ...(bool(o.exclusive) ? { exclusive: true } : {}), ...(bool(o.other) || bool(o.otherSpecify) ? { other: true } : {}), ...(bool(o.anchor) ? { anchor: true } : {}) };
+  return { label: label.slice(0, 300), ...(strOrNum(o.code) !== undefined ? { code: strOrNum(o.code) } : {}), ...(bool(o.exclusive) ? { exclusive: true } : {}), ...(bool(o.other) || bool(o.otherSpecify) ? { other: true } : {}), ...(bool(o.anchor) ? { anchor: true } : {}), ...(strOrNum(o.parent) !== undefined ? { parent: strOrNum(o.parent) } : {}) };
 };
 const options = (v: unknown): OptionSpec[] | undefined => (Array.isArray(v) ? v.map(optionSpec).filter((x): x is OptionSpec => !!x).slice(0, 200) : undefined);
 const scale = (v: unknown): ScaleSpec | undefined => {
@@ -1528,7 +1530,7 @@ function buildOptions(specs: OptionSpec[], existing: { code: string | number; la
     if (exclusive) flags.push("exclusive");
     if (other) flags.push("other_specify");
     if (o.anchor || exclusive || other) flags.push("anchor_bottom");
-    out.push({ code, label: o.label, flags } as never);
+    out.push({ code, label: o.label, flags, ...(o.parent !== undefined ? { meta: { parent: o.parent } } : {}) } as never);
   }
   return out;
 }

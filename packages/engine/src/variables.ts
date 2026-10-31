@@ -648,6 +648,12 @@ export function questionVariables(
    * `Q5_PROBE_n_Q` the wording that was asked — which the analyst must see
    * when the wording was generated per respondent (probe.ts).
    */
+  /* AQ-08 cascading dropdown: the parent of the answered child, derived from the definition (cascade.ts) */
+  if (q.variant === "single_select.cascading_dropdown") {
+    const parents = ((q.settings as { cascadeParents?: { code: string | number; label: string }[] }).cascadeParents ?? []);
+    push({ name: `${q.variableName}_PARENT`, label: `${q.code} — ${(q.settings as { cascadeParentLabel?: string }).cascadeParentLabel ?? "parent"}`, dataType: typeof parents[0]?.code === "number" ? "numeric" : "text", derived: true,
+      notes: `The first list's choice the answer belongs to: ${parents.slice(0, 8).map((p) => `${p.code} = ${p.label}`).join(", ")}${parents.length > 8 ? ", …" : ""}` });
+  }
   /* a rating's optional comment ("Allow Additional Comment" — Video Rating, October 2026 review) */
   if (q.settings?.allowComment) {
     push({ name: `${q.variableName}_COMMENT`, label: `${q.code} — comment`, dataType: "text",

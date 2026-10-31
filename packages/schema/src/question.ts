@@ -449,6 +449,18 @@ export const OptionGroup = z.object({
   itemOrder: OptionOrder.optional(),
   /** Editor state only; the runtime ignores it. */
   collapsed: z.boolean().optional(),
+  /**
+   * AQ-08 (2026-10-31) — WHAT THE RESPONDENT SEES OF THE GROUP. `name` is the author's handle; `label` is the
+   * respondent-facing heading (piping allowed, like an option label). `display`:
+   *   none (default, = every survey before this)   the group decides order and visibility only;
+   *   heading                                     a heading above the group's members;
+   *   collapsible                                 a disclosure button (aria-expanded) that shows / hides the members —
+   *                                               starts closed unless a member is selected.
+   * Drawn by single / multi choice, the plain dropdown (as an <optgroup>; a native select cannot collapse, so
+   * collapsible reads as heading there) and matrix rows. A group without a label draws nothing.
+   */
+  label: z.string().optional(),
+  display: z.enum(["heading", "collapsible", "none"]).optional(),
 });
 export type OptionGroup = z.infer<typeof OptionGroup>;
 
@@ -1212,6 +1224,16 @@ const QuestionObject = z.object({
       /** Pen colour and width for drawing variants. */
       penColor: z.string().optional(),
       penWidth: z.number().optional(),
+      /**
+       * AQ-08 — CASCADING DROPDOWN (single_select.cascading_dropdown): the PARENT list. The child list is the
+       * question's own `options`, each naming its parent in `meta.parent` (a parent code). The stored answer is the
+       * child code; the parent is derived (`<id>__parent` beside the answer, re-derived from the definition on
+       * export as VAR_PARENT) and validated: the child must belong to the chosen parent.
+       */
+      cascadeParents: z.array(z.object({ code: z.union([z.string(), z.number()]), label: z.string() })).optional(),
+      /** The two prompts of a cascading dropdown ("Country", "State"); defaults are the localized "— Select —". */
+      cascadeParentLabel: z.string().optional(),
+      cascadeChildLabel: z.string().optional(),
       /** Timed question: seconds allowed; what happens when they run out. */
       timeLimitSeconds: z.number().optional(),
       onTimeout: z.enum(["lock", "advance"]).optional(),

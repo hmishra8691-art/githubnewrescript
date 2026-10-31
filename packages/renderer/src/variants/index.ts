@@ -3,6 +3,7 @@
  * renderer keys.
  */
 import "./singleSelect";
+import "./cascade";
 import "./text";
 import "./numeric";
 import "./list";

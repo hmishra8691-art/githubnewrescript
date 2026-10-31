@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (18): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`
+**Options and design** (19): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -77,7 +77,7 @@ export type SurveyAction =
 Supporting types:
 
 ```ts
-export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean };
+export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean; /** AQ-08: a cascading dropdown child names its parent (stored as meta.parent) */ parent?: string | number };
 export interface ScaleSpec { points: number; start?: number; low?: string; high?: string; mid?: string; labels?: string[] }
 export interface ValidationSpec {
   kind: string;
@@ -115,7 +115,9 @@ export type OptionAction =
   /* S2b: a question's stimulus and option images — see mediaActions.ts */
   | MediaAction
   /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
-  | LogicScriptAction;
+  | LogicScriptAction
+  /* S4a AQ-08: option groups and their headings — see optionGroupActions.ts */
+  | OptionGroupAction;
 ```
 
 ## Question media (set_question_media)
@@ -140,6 +142,20 @@ export type LogicScriptAction =
   | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string; expect?: ScriptExpect }
   | { op: "remove_logic_script"; script: string }
   | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
+```
+
+## Option groups (set_option_groups)
+
+From `packages/engine/src/optionGroupActions.ts`:
+
+```ts
+export type OptionGroupAction = { op: "set_option_groups"; target: string; scope?: "options" | "rows" | "columns"; groups?: GroupSpec[]; clear?: boolean };
+```
+
+Supporting types:
+
+```ts
+export interface GroupSpec { name: string; label?: string; display?: "heading" | "collapsible" | "none"; members: (string | number)[] }
 ```
 
 ## UX actions

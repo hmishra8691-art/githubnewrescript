@@ -1134,3 +1134,15 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-progress-dot.done { background: var(--rs-progress); opacity: .55; }
 .rs-progress-dot.current { background: var(--rs-progress); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-progress) 25%, transparent); }
 .rs-progress-steps-label { font-size: 12.5px; color: var(--rs-subtle); }
+
+/* AQ-08 — visible option groups: headings and collapsible groups (wrappers are display:contents so grids keep flowing) */
+.rs-optgroup, .rs-optgroup-body { display: contents; }
+.rs-optgroup-body[hidden] { display: none; }
+.rs-optgroup-heading, .rs-optgroup-toggle { grid-column: 1 / -1; font-weight: 600; font-size: .92em; color: var(--rs-heading, var(--rs-text)); margin: 10px 0 2px; }
+.rs-optgroup-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; border-bottom: 1px solid var(--rs-border); padding: 6px 2px; text-align: start; cursor: pointer; font: inherit; font-weight: 600; color: inherit; width: 100%; }
+.rs-optgroup-toggle:focus-visible { outline: 2px solid var(--rs-focus, var(--rs-accent)); outline-offset: 2px; }
+.rs-optgroup-count { color: var(--rs-subtle); font-weight: 400; }
+.rs-matrix tr.rs-matrix-group th { text-align: start; font-weight: 600; padding-top: 12px; }
+.rs-matrix-stack tr.rs-matrix-group { display: block; }
+.rs-cascade { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.rs-cascade label { display: flex; flex-direction: column; gap: 4px; font-size: .92em; }

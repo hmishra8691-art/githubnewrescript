@@ -104,5 +104,6 @@ import "./variantConfig/upload";
 import "./variantConfig/form";
 import "./variantConfig/dynamic";
 import "./variantConfig/gamified";
+import "./variantConfig/cascade";
 import "./variantConfig/experimental";
 import "./variantConfig/conversational";

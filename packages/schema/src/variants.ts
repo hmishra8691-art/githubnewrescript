@@ -564,6 +564,27 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "search", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: VAL_SINGLE,
   }),
+  /*
+   * AQ-08 (2026-10-31): parent list → child list filtered by the parent's code. Children are the question's options
+   * (`meta.parent` = a parent code); the parents are `settings.cascadeParents`. Answer = the child code.
+   */
+  stable(F.single, "cascading_dropdown", "Cascading Dropdown", "Two linked dropdowns: pick a parent (country), then a child filtered to it (state); stores the child code and derives the parent.", {
+    baseType: "dropdown", renderer: "cascading_dropdown", responseModel: "single_choice",
+    capabilities: ["options", "sorting", "carry_forward", "list_logic"],
+    validations: VAL_SINGLE,
+    defaults: {
+      settings: {
+        cascadeParents: [{ code: "A", label: "Group A" }, { code: "B", label: "Group B" }],
+        cascadeParentLabel: "Choose a group",
+        cascadeChildLabel: "Choose an item",
+      },
+      options: [
+        { code: 1, label: "A — first", meta: { parent: "A" } },
+        { code: 2, label: "A — second", meta: { parent: "A" } },
+        { code: 3, label: "B — first", meta: { parent: "B" } },
+      ],
+    },
+  }),
   stable(F.single, "buttons", "Button Select", "Large tap-friendly buttons — one per option.", {
     baseType: "single_select", renderer: "buttons", responseModel: "single_choice",
     capabilities: CAP_SINGLE, validations: VAL_SINGLE,
