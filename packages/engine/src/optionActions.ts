@@ -17,6 +17,8 @@ import { constructFor } from "./hypotheses.js";
 import { usedNames } from "./variableUsage.js";
 import { stripHtmlText } from "./html.js";
 import { K, moveTranslationKey } from "./localization.js";
+import { applyMediaAction, coerceMediaAction, describeMediaAction, MEDIA_ACTION_OPS, type MediaAction } from "./mediaActions.js";
+import { applyLogicScriptAction, coerceLogicScriptAction, describeLogicScriptAction, LOGIC_SCRIPT_ACTION_OPS, type LogicScriptAction } from "./logicScriptActions.js";
 
 /**
  * THE OPTION, ORDER AND HOUSEKEEPING ACTIONS (Intelligent Mode Phase 2) —
@@ -56,7 +58,7 @@ export type EmbeddedSource = "url" | "static" | "panel" | "expression";
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -67,11 +69,16 @@ export type OptionAction =
   | { op: "remove_hypothesis"; hypothesis: string | number }
   /** the structured reading of a hypothesis (Phase 3): only the fields given change; a construct name must exist in the design */
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
-  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null };
+  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
+  /* S2b: a question's stimulus and option images — see mediaActions.ts */
+  | MediaAction
+  /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
+  | LogicScriptAction;
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
+  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -105,6 +112,8 @@ const first = (o: Record<string, unknown>, ...keys: string[]): unknown => keys.m
 /** the gate: a well-formed action, a reason it is refused, or null when `op` is not an option action */
 export function coerceOptionAction(op: string, o: Record<string, unknown>): OptionAction | string | null {
   if (!isOptionOp(op)) return null;
+  if ((MEDIA_ACTION_OPS as readonly string[]).includes(op)) return coerceMediaAction(o);
+  if ((LOGIC_SCRIPT_ACTION_OPS as readonly string[]).includes(op)) return coerceLogicScriptAction(op, o);
   switch (op) {
     case "update_option": {
       const target = str(o.target ?? o.question, 120), option = ref(o.option);
@@ -154,7 +163,10 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const scope = str(o.scope ?? o.axis)?.toLowerCase();
       if (scope && !DIMENSIONS.has(scope)) return "scope is options, rows or columns";
       const anchors = refs(o.anchors ?? o.anchor ?? o.pin), keepLast = refs(o.keepLast ?? o.anchorBottom ?? o.last), keepFirst = refs(o.keepFirst ?? o.anchorTop ?? o.first);
-      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}) };
+      const methodRaw = str(o.method ?? o.order ?? o.mode)?.toLowerCase().replace(/[\s-]+/g, "_");
+      const method = methodRaw === undefined ? undefined : methodRaw === "rotate" || methodRaw === "rotation" || methodRaw === "balanced" || methodRaw === "latin_square" ? "rotate" : methodRaw === "reverse_half" || methodRaw === "reverse" ? "reverse_half" : methodRaw === "shuffle" || methodRaw === "random" ? "shuffle" : null;
+      if (method === null) return "method is shuffle, rotate or reverse_half";
+      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}) };
     }
     case "set_mask": {
       const target = str(o.target ?? o.question, 120), expression = str(o.expression ?? o.mask ?? o.set ?? o.source, 2000);
@@ -499,6 +511,8 @@ const MASK_WORD: Record<MaskDimension, string> = { options: "mask", rows: "row m
 export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: OptionEnv): OptionApplied {
   const warnings: string[] = [];
   switch (a.op) {
+    case "set_question_media": return applyMediaAction(def, a, { question: env.question, ids: env.ids });
+    case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
       const q = questionOrFail(env, a.target);
       const options = (q.options ?? []) as Option[];
@@ -612,9 +626,9 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const allBottom = [...list.filter((o) => hasFlag(o, "anchor_bottom") && !hasFlag(o, "anchor_top") && !bottoms.includes(o)), ...bottoms];
       const next = [...allTop, ...list.filter((o) => !allTop.includes(o) && !allBottom.includes(o)), ...allBottom];
       (q as unknown as Record<string, unknown>)[axis] = next;
-      q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
+      q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: a.method ?? "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
       const pins = [...tops.map((o) => `“${plain(o.label, 30)}” stays first`), ...bottoms.map((o) => `“${plain(o.label, 30)}” stays last`)];
-      return { description: `${q.code} ${axis} ${a.enabled ? "randomized" : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
+      return { description: `${q.code} ${axis} ${a.enabled ? (a.method === "rotate" ? "rotated (each in each position equally often across respondents)" : a.method === "reverse_half" ? "shown in order for half the respondents, reversed for the other half" : "randomized") : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
     }
     case "set_mask": {
       const q = questionOrFail(env, a.target);
@@ -865,6 +879,8 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
 
 export function describeOptionAction(a: OptionAction): string {
   switch (a.op) {
+    case "set_question_media": return describeMediaAction(a);
+    case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;
     case "reorder_options": return `Reorder the options of ${a.target}`;
     case "set_option_randomization": return `${a.enabled ? "Randomize" : "Stop randomizing"} the ${a.scope ?? "options"} of ${a.target}`;

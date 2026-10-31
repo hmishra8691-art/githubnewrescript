@@ -3,6 +3,9 @@ import React from "react";
 import type { AnalysisRun } from "@rescript/analytics";
 import type { SurveyDefinition } from "@rescript/schema";
 import { UNSUPPORTED_MESSAGE, reviewSurvey, describeAction, describeWorkflow, researchWorkflow, type ExecutionMode, type ResearchWorkflow, type SurveyAction, type SurveyReview, type Interpretation, type WorkflowStep } from "@rescript/engine";
+import { proposalCodeItems, expectsFromActions, codeItemsSignature, executionReportText, VERDICT_NEEDS_REPAIR, type VerificationReport } from "@rescript/engine";
+import { runVerification } from "../../../lib/copilot/verify/harness";
+import { verifyProposal } from "../../../lib/copilot/verify/orchestrate";
 import type { WorkflowResponse } from "../../../app/api/copilot/workflow/route";
 import { useStudio, uid } from "../../studio/store";
 import type { CopilotReply, CopilotFinding } from "../../../lib/copilot/prompt";
@@ -59,6 +62,11 @@ import { completedOf, driveWait } from "../../../lib/copilot/taskDrive";
  */
 
 export interface Passage { doc: string; page: number; heading?: string; excerpt: string }
+/**
+ * S2c — THE TEST SESSION of the open proposal's code (lib/copilot/verify/harness.tsx): running, its report, whether
+ * the one automatic repair was asked for, and whether the researcher chose "Apply anyway" after it still failed.
+ */
+export interface VerifyView { signature: string; status: "running" | "repairing" | "done"; report?: VerificationReport; repaired: number; anyway?: boolean; ok?: boolean; summary?: string }
 export interface CopilotEntry {
   id: string;
   kind: "copilot";
@@ -411,6 +419,8 @@ export function useCopilot(opts: {
    * are about). With nothing unticked they are the same object.
    */
   const excluded = React.useMemo(() => (session.proposal ? validExclusions(session.proposal, session.excluded ?? []) : []), [session.proposal, session.excluded]);
+  /** S2c: the test session's state, for apply (declared here: apply is defined before the test session's effect) */
+  const verifyRef = React.useRef<VerifyView | null>(null);
   const full: ProposalState | null = React.useMemo(() => (session.proposal ? evaluateProposal(session.proposal) : null), [session.proposal]);
   const state: ProposalState | null = React.useMemo(() => (session.proposal && excluded.length ? evaluateProposal(session.proposal, { excluded }) : full), [session.proposal, excluded, full]);
   const stale = !!session.proposal && !sameSurvey(session.proposal.base, s.def);
@@ -762,7 +772,8 @@ export function useCopilot(opts: {
           const base = x.proposal ? (stale ? rebaseProposal(x.proposal, s.def) : x.proposal) : { base: s.def, steps: [] };
           const uxOnly = !!(d.context as { uxOnly?: boolean } | undefined)?.uxOnly;
           const uxOnlyInferred = !!(d.context as { uxOnlyInferred?: boolean } | undefined)?.uxOnlyInferred;
-          return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}) }) }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
+          const uxBehaviour = !!(d.context as { uxBehaviour?: boolean } | undefined)?.uxBehaviour;
+          return { ...x, proposal: { base: base.base, steps: withStep(base.steps, { request: text, actions: reply.actions, ...(uxOnly ? { uxOnly } : {}), ...(uxOnly && uxOnlyInferred ? { uxOnlyInferred } : {}), ...(uxOnly && uxOnlyInferred && uxBehaviour ? { uxBehaviour } : {}) }) }, openOp: patch.opKey ?? x.openOp, confirmed: false, excluded: [], tab: "changes" };
         });
         patch.proposal = "open";
       }
@@ -781,11 +792,65 @@ export function useCopilot(opts: {
     }
   }, [session.proposal, session.openOp, stale, s.def, s.surveyDbId, opts, copilotTurns, setSession, themeImage, quotaCounts, runForTurn, recordOp, recordProposal, planFirst, executionMode]);
 
-  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff): Promise<"handled" | "unavailable" | "empty"> => {
+  /* `extra` (S2a D10): more body for this one turn — the script-health summary for a question about a script */
+  const ask = React.useCallback(async (text: string, heard?: HeardTranscript, mode?: "review" | "generate", handoff?: EngineHandoff, extra?: Record<string, unknown>): Promise<"handled" | "unavailable" | "empty"> => {
     const id = uid("copilot");
     opts.push({ id, kind: "copilot", text, ...(heard ? { heard } : {}), ...(handoff ? { handoff } : {}), status: "thinking" });
-    return run(id, text, mode, {}, handoff);
+    return run(id, text, mode, extra ?? {}, handoff);
   }, [opts, run]);
+
+  /*
+   * S2c — THE EXECUTION AND VERIFICATION LAYER. A proposal that contains code (a behaviour script, a Scripts-panel
+   * logic script, a custom component's code — from the model or from the engine alone) is RUN in a test session
+   * before it is offered as ready: the card says "Running in a test session…", then each item's verdict, and Apply
+   * waits. A failure (an error, no visible effect, a run-time refusal, a stop) goes back to the copilot ONCE with the
+   * execution report (the turn route's repair reason "execution"); the revision is run again. Still failing: the
+   * card says so plainly and Apply needs an explicit "Apply anyway". Each report is kept in the operation history.
+   */
+  const [verify, setVerify] = React.useState<VerifyView | null>(null);
+  verifyRef.current = verify;
+  const verifySigRef = React.useRef<string | null>(null);
+  const repairsRef = React.useRef(0);
+  const askRef = React.useRef(ask);
+  askRef.current = ask;
+  const openOpRef = React.useRef(session.openOp);
+  openOpRef.current = session.openOp;
+  const modeRef = React.useRef(executionMode);
+  modeRef.current = executionMode;
+  React.useEffect(() => {
+    const proposal = session.proposal;
+    if (!proposal || !full) { verifySigRef.current = null; repairsRef.current = 0; setVerify(null); return; }
+    const items = proposalCodeItems(proposal.base, full.after, expectsFromActions(proposal.steps.flatMap((x) => x.actions)));
+    if (!items.length) { verifySigRef.current = null; setVerify(null); return; }
+    const sig = codeItemsSignature(items);
+    if (verifySigRef.current === sig) return;
+    verifySigRef.current = sig;
+    /* the state machine (lib/copilot/verify/orchestrate.ts) guarantees an end: running ≤ 25 s, the one repair ≤ 90 s */
+    void verifyProposal({
+      signature: sig, items,
+      run: () => runVerification(full.after, items),
+      repair: (report) => {
+        const failing = report.verdicts.filter(VERDICT_NEEDS_REPAIR);
+        const names = failing.map((v) => `“${v.label}”`).join(", ");
+        return askRef.current(`Repair the script${failing.length === 1 ? "" : "s"} that did not pass the test session: ${names}`, undefined, undefined, undefined, { verifyRepair: { report: executionReportText(report), items: failing.map((v) => ({ key: v.key, label: v.label, verdict: v.verdict })) } }).catch(() => "handled");
+      },
+      canRepair: () => { if (repairsRef.current >= 1 || modeRef.current === "internal") return false; repairsRef.current++; return true; },
+      current: () => verifySigRef.current === sig,
+      repaired: () => repairsRef.current,
+      onState: (st) => {
+        setVerify((v) => (st.status === "done" && v?.signature === st.signature && v.anyway ? { ...st, anyway: true } : st));
+        if (st.status !== "running" && st.report && st.status !== "repairing") {
+          /* the report in the operation history (intelligent_operations): the verdicts in the intent, each item's line as a warning */
+          const report = st.report;
+          const k = openOpRef.current;
+          const cur = k ? recorder.list().find((o) => o.key === k) : undefined;
+          if (k && cur) void updateOp(k, { intent: { ...cur.intent, verify: (st.summary ?? "").slice(0, 300), verifyVerdicts: report.verdicts.map((v) => `${v.label}: ${v.verdict}`).join("; ").slice(0, 480), verifyMs: report.durationMs, verifyRepairs: repairsRef.current }, warnings: [...cur.warnings.filter((w) => !w.startsWith("Test session: ")), ...report.verdicts.map((v) => `Test session: ${v.label} — ${v.summary}`.slice(0, 480))] });
+        }
+      },
+    });
+  }, [session.proposal, full]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** Apply waits for the test session (bounded: ≤ 25 s), and after a failure — or while the one repair runs — needs "Apply anyway" */
+  const verifyBlocks = !!verify && (verify.status === "running" || (!verify.ok && !verify.anyway));
 
   /** the approved items of a change plan, built one call each into one proposal on the same card */
   const executePlan = React.useCallback(async (entryId: string, items: string[]): Promise<void> => {
@@ -1329,6 +1394,8 @@ export function useCopilot(opts: {
   const apply = React.useCallback(async (show?: (n: number | null) => void): Promise<{ ok: boolean; reason?: string; message?: string; n?: number | null; save?: SaveView }> => {
     if (!session.proposal || !state) return { ok: false, reason: "There is nothing to apply." };
     if (s.readOnly) return { ok: false, reason: "This project is read-only right now." };
+    /* S2c: never while its scripts are still running in the test session (after a failure, "Apply anyway" is the researcher's explicit choice) */
+    if (verifyRef.current && verifyRef.current.status === "running") return { ok: false, reason: "The proposal's scripts are still running in a test session — apply once it has finished." };
     if (stale) {
       // replay onto the survey as it is now, and ask again: the researcher approves what will actually happen
       setSession((x) => ({ ...x, proposal: x.proposal ? rebaseProposal(x.proposal, s.def) : null, confirmed: false }));
@@ -1524,6 +1591,7 @@ export function useCopilot(opts: {
     docs: session.docs ?? [], durable: session.durable, uploading, docError,
     confirmed: session.confirmed, setConfirmed: (v: boolean) => setSession((x) => ({ ...x, confirmed: v })),
     tab: session.tab, setTab: (t: PanelTab) => setSession((x) => ({ ...x, tab: t })),
+    verify, verifyBlocks, setVerifyAnyway: () => setVerify((v) => (v ? { ...v, anyway: true } : v)),
     ask, local, askData, makeOutput, working, runReview, showReview, previewFix, apply, cancel, undoLast, uploadDocs, deleteDoc, refreshDocs,
     downloadOutput, regenerateOutput, themeRequest, themeCardAction, qualRequest, qualCardAction,
     planFirst, setPlanFirst, executePlan, cancelPlan, resume, reviewReady, buildRemaining, resumeNow, discardWork,

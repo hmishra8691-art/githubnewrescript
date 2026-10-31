@@ -18,6 +18,7 @@ import { streamTurn, streamingAllowed, wantsStream, type TurnSink } from "@/lib/
 import { JsonTextExtractor, type FakeStreamScript } from "@rescript/ai";
 import { applySurveyActions, coverageReport, diffSurveys, reviewSurvey, requestScope, outsideNote, UNSUPPORTED_MESSAGE, isLongBrief, capabilityReadiness, capabilityRefusal, availabilityNote, type CoverageReport } from "@rescript/engine";
 /* engine items 11–14 (2026-10-22, docs/ENGINE-11-14-2026-10-22.md): per-item guides, the readiness rule at action time, refused designs corrected or explained */
+import { scriptQuestion, sanitizeScriptHealthLite } from "@rescript/engine";
 import { autoFixMethodAction, coerceSurveyActions, explainMethodRefusal, isAnalysisOp, isMethodOp, isQualOp, type SurveyAction } from "@rescript/engine";
 import { GUIDE_TEXT, flagsOf, guideMisses, guideTexts, guidesOf, itemGuideSelection, itemGuidesEnabled, type GuideFlags, type GuideId, type ItemGuideSelection } from "@/lib/copilot/guideSelect";
 import { aiInterviewIntent } from "@/lib/copilot/aiInterviewGuide";
@@ -39,10 +40,11 @@ import { supabaseAdmin } from "@/lib/admin";
 import { describeThemeImages, withThemeImage } from "@/lib/copilot/themeImageText";
 /* prompt-injection audit (2026-10-18): untrusted text fenced, scanned, and the provenance gate on high-risk actions */
 import { assessTurn, carryProvenance, fenceResearch, gateReply, provenanceRejections, turnNotice } from "@/lib/copilot/injection";
-import { fenceNonceFor, neutralizeUntrusted, UNTRUSTED_DATA_RULE } from "@rescript/ai";
+import { fenceNonceFor, neutralizeUntrusted, UNTRUSTED_DATA_RULE, fenceUntrusted } from "@rescript/ai";
 import type { AnalysisRun } from "@rescript/analytics";
 type RunBrief = Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries">;
 import { NOTICES, replyLanguage } from "@/lib/copilot/notices";
+import { sanitizeVerifyRepair, EXECUTION_REPAIR_REASON } from "@/lib/copilot/prompt";
 import { COPILOT_SYSTEM_PROMPT, classifyRequest, normalizeBrief, honestReply, MAX_MESSAGE_CHARS, repairPrompt, memoryWithRefusals, lookOnlySaid, policyRefusal, mergeRepair, coerceCopilotReply, copilotUserPrompt, type CopilotReply, analysisIntent, translationIntent, quotaIntent, findingsIntent, referencedQuestions, surveyLanguageOf, reportingIntent, type RequestMode, type TurnMemory } from "@/lib/copilot/prompt";
 import { researchCards, researchPassages } from "@/lib/copilot/research";
 import { researchStoreFor } from "@/lib/copilot/store";
@@ -282,6 +284,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   const uxTurn = cls.ux || mode === "ux";
   // look-only inferred from the words (not said, not the theme assistant): validation stays allowed — here and in the browser's replay
   const uxOnlyInferred = cls.uxOnly && !themeScope && !lookOnlySaid(message);
+  /* S2a D9: …and when such a request also asks for behaviour, the native behaviour ops pass too (never on the theme assistant) */
+  const uxBehaviour = uxOnlyInferred && !!classified.uxBehaviour;
   // the analysis framework: a request about it, or a generation (the design arrives with its analysis)
   const analysisTurn = analysisIntent(message) || mode === "generate";
   // languages: the translation guide, and the named questions' elements with their existing translations
@@ -321,7 +325,9 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   /* §3 TASK-AWARE SELECTION: a theme turn gets no questionnaire; a logic edit on a large survey the named questions and their dependencies in full */
   const focusIds = referencedQuestions(def, message);
   const qScope = questionnaireScope({ message, mode, themeOnly: themeScope, uxOnly: cls.uxOnly, focusCount: focusIds.length, questionCount: def.questions.length });
-  const outline = copilotOutline(def, { selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope });
+  /* S2a D10: a debug / explain request about a script — the script in full, its check and the field health the page sent (sanitised) */
+  const scriptQ = scriptQuestion(def, message) ? { text: message, health: sanitizeScriptHealthLite((body as { scriptHealth?: unknown }).scriptHealth) } : undefined;
+  const outline = copilotOutline(def, { message, selectedId, focusIds, ux: uxTurn, analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, quotaCounts, findings: findingsTurn, analysisRun, questionnaire: qScope, ...(scriptQ ? { scriptQuestion: scriptQ } : {}) });
   /*
    * §3 THE RESEARCH CONTEXT OF A LONG BRIEF (2026-10-18). Kept per survey AND owner (never another survey's,
    * never another organisation's). Checked against the survey's research design on every turn: the definition
@@ -404,6 +410,14 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
    */
   const provenance = assessTurn({ message, longBrief, research, docs, def, extra: tis.map((t) => ({ source: "theme image names", text: typeof t.name === "string" ? t.name : "" })) });
   if (research) { research = fenceResearch(research, fenceNonceFor(`${surveyId}\u0000${user?.userId ?? "sandbox"}\u0000${message}`)); stableExtra.push(UNTRUSTED_DATA_RULE); }
+  /*
+   * S2c — THE REPAIR REASON "execution": the browser ran the open proposal's scripts in a test session and some did
+   * not pass. Its report (the Studio's words plus lines the scripts printed — author text, so fenced) goes into the
+   * prompt; the reply is gated like any other and becomes a revision of the open proposal, which the browser runs again.
+   */
+  const verifyRepair = sanitizeVerifyRepair((body as { verifyRepair?: unknown }).verifyRepair);
+  const executionReport = verifyRepair ? fenceUntrusted(verifyRepair.report, { source: "the Studio's test-session report (it quotes what the scripts printed)", nonce: fenceNonceFor(`${surveyId}\u0000verify\u0000${message}`) }) : undefined;
+  if (executionReport && !research) stableExtra.push(UNTRUSTED_DATA_RULE);
   const guard = <R extends NonNullable<ReturnType<typeof coerceCopilotReply>>>(r: R | null): R | null => (r ? gateReply(r, def, provenance, { allowUrls: themeImageUrl ?? [] }).reply : r);
   const deterministic = mode === "review" ? reviewSurvey(def) : null;
   /* the prompt in full, and — for the rare provider that says it is too long for the model's context window — in compact form: no research passages, no memory of earlier turns. `planOnly`: the plan stage's, without the action guides */
@@ -412,7 +426,9 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     memory: compact ? undefined : sanitizeMemory(body.memory), research: compact ? undefined : research || undefined,
     deterministicFindings: deterministic?.findings.slice(0, 40).map((f) => `${f.severity}: ${f.message}`),
     selected: selectedId ? def.questions.find((q) => q.id === selectedId)?.code ?? null : null,
-    ux: uxTurn, uxOnly: cls.uxOnly,
+    /* S2b: the selected question's variant — an interactive one sends the variant catalogue guide */
+    selectedVariant: selectedId ? def.questions.find((q) => q.id === selectedId)?.variant ?? null : null,
+    ux: uxTurn, uxOnly: cls.uxOnly, ...(uxBehaviour ? { uxBehaviour } : {}),
     analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, listFill: listFillTurn, methods: methodsTurn, findings: findingsTurn,
     ...(themeImageText ? { themeImage: themeImageText } : {}),
     ...(themeScope ? { themeOnly: true } : {}),
@@ -422,6 +438,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     ...(useBriefLayers ? { briefRef: { chars: stored!.brief.length, ref: rc!.fingerprint.brief.slice(0, 12) }, researchPlan: researchPlanIntent(message, mode), qual: qualIntent(message), reporting: reportingIntent(message) } : {}),
     ...(turnPassages.length ? { briefPassages: renderBriefPassages(turnPassages) } : {}),
     ...(availability ? { availability } : {}),
+    ...(executionReport ? { executionReport } : {}),
     /* #11: a staged item's own guides — every switch set, so nothing is read from the message for it */
     ...(guides ?? {}),
   });
@@ -456,6 +473,8 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
   // the browser suites stand in for the model: one reply, or [reply, the reply to the repair request] — or, executing a plan, one reply per item
   const fakes = aiProviderName() === "fake" && body.fake && typeof body.fake === "object" ? (Array.isArray(body.fake) ? body.fake : [body.fake]) : [];
   const fake = fakes[0] ?? null;
+  /* S2c, TEST SEAM: under the fake provider an execution repair is answered only by a scripted reply — the deterministic stand-in would otherwise invent one */
+  if (verifyRepair && aiProviderName() === "fake" && !fake) return NextResponse.json({ error: "No scripted repair reply (fake provider).", code: "unusable" }, { status: 200 });
   let raw: unknown;
   let cached = false;
   /*
@@ -836,7 +855,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     return NextResponse.json({ ok: true, reply: null, message: failure.message, failure, context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, cached }, usage: { charge }, ...(deterministic ? { review: deterministic } : {}) });
   }
   // a look-only request cannot change the structure: the engine refuses structural actions and proves the rest left it alone
-  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
+  let applied = reply.actions.length ? applySurveyActions(def, reply.actions, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour }) : null;
   const okCount = (a: typeof applied) => (a ? a.results.filter((x) => x.ok).length - a.results.filter((x) => !x.ok).length : -Infinity);
   /*
    * #13 (2026-10-22): A REFUSED MAXDIFF / CONJOINT DESIGN WITH ONE OBVIOUS CORRECTION IS CORRECTED HERE — 5 items per
@@ -868,7 +887,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
       notes.push({ op: opOfRaw(tg.obj), note: f.note });
     }
     if (!notes.length) break;
-    const a2 = applySurveyActions(def, nextActions, { uxOnly: cls.uxOnly, uxOnlyInferred });
+    const a2 = applySurveyActions(def, nextActions, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour });
     if (okCount(a2) <= okCount(applied)) break;
     reply = { ...r0, kind: "proposal", actions: nextActions, rejected: nextRejected, assumptions: [...r0.assumptions, ...notes.map((n) => `Corrected by the Studio (${n.op}): ${n.note}.`)].slice(0, 30) };
     applied = a2;
@@ -929,7 +948,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
          */
         const kept = applied ? applied.results.filter((x) => x.ok).map((x) => reply!.actions[x.index]!).filter(Boolean) : [];
         const merged = r2 ? mergeRepair(kept, r2.actions) : [];
-        const a2 = r2 && merged.length ? applySurveyActions(def, merged, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
+        const a2 = r2 && merged.length ? applySurveyActions(def, merged, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour }) : null;
         const r2Gate = r2 ? r2.rejected.length : 0;
         if (r2 && (okCount(a2) > okCount(applied) || (!a2 && !applied?.results.some((x) => x.ok)))) {
           reply = carryProvenance(reply, { ...r2, actions: merged }); applied = a2; rejectedRaw = raw2;
@@ -978,7 +997,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
           const raw3 = nextFake ?? m.value;
           const c3 = coerceCopilotReply(raw3);
           const r3 = guard(c3 && themeImageUrl ? { ...c3, actions: withThemeImage(c3.actions, themeImageUrl) } : c3);
-          const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly, uxOnlyInferred }) : null;
+          const a3 = r3 && r3.actions.length ? applySurveyActions(def, r3.actions, { uxOnly: cls.uxOnly, uxOnlyInferred, uxBehaviour }) : null;
           if (r3 && a3?.valid) {
             const cov3 = coverageReport(a3.def);
             const better = cov3.ok || cov3.unmeasured.length + cov3.unconnected.length < coverage.unmeasured.length + coverage.unconnected.length;
@@ -1027,7 +1046,7 @@ async function turn(req: NextRequest, authed: Awaited<ReturnType<typeof requireU
     validation: applied ? { valid: applied.valid, results: applied.results, errors: applied.errors, destructive: applied.destructive, warnings: applied.warnings, summary: diff?.summary ?? [], diff, uxOnly: applied.uxOnly, structureUnchanged: applied.structureUnchanged } : null,
     ...(deterministic ? { review: deterministic } : {}),
     passages,
-    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(noticeOf() ? { notice: noticeOf() } : {}), ...(provenance.untrusted ? { injection: { untrusted: true, flagged: provenance.flagged, sources: provenance.sources, signals: provenance.signals.slice(0, 5).map((x) => ({ kind: x.kind, excerpt: x.excerpt })), excluded: provenanceRejections(reply).map((x) => x.reason) } } : {}), ...(repair ? { repair } : {}), ...(methodFixes.length ? { methodFixes } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
+    context: { mode, researchUsed: !!research, passages: passageIds, promptChars: prompt.length, outlineChars: outline.length, messageChars: message.length, ...(longBrief ? { longBrief: true } : {}), ...(outside.length ? { scope: "mixed", outside } : {}), cached, ux: uxTurn, uxOnly: cls.uxOnly, ...(uxOnlyInferred ? { uxOnlyInferred } : {}), ...(uxBehaviour ? { uxBehaviour } : {}), analysis: analysisTurn, translation: translationTurn, quota: quotaTurn, ...(methodsTurn ? { methods: true } : {}), findings: findingsTurn, hasRun: !!analysisRun, provider: providerNote(events), ...(noticeOf() ? { notice: noticeOf() } : {}), ...(provenance.untrusted ? { injection: { untrusted: true, flagged: provenance.flagged, sources: provenance.sources, signals: provenance.signals.slice(0, 5).map((x) => ({ kind: x.kind, excerpt: x.excerpt })), excluded: provenanceRejections(reply).map((x) => x.reason) } } : {}), ...(repair ? { repair } : {}), ...(verifyRepair ? { repairReason: EXECUTION_REPAIR_REASON, verifyRepair: { items: verifyRepair.items.length } } : {}), ...(methodFixes.length ? { methodFixes } : {}), ...contextMeta(), ...(executedPlan ? { workflow: await keepWorkflow(!planPending.length && !planFailures.length) } : {}) },
     usage: { charge },
   });
 }

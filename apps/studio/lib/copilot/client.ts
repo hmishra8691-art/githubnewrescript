@@ -29,7 +29,7 @@ registerPlanReadinessGate();
  */
 
 /** `uxOnly`: the request was about the look and behaviour only — replays refuse structure exactly as the first run did */
-export interface ProposalStep { request: string; actions: SurveyAction[]; uxOnly?: boolean; /** look-only was inferred, not said: validation stays allowed (as on the server) */ uxOnlyInferred?: boolean }
+export interface ProposalStep { request: string; actions: SurveyAction[]; uxOnly?: boolean; /** look-only was inferred, not said: validation stays allowed (as on the server) */ uxOnlyInferred?: boolean; /** S2a D9: …and the request asked for behaviour: the native behaviour ops stay allowed (as on the server) */ uxBehaviour?: boolean }
 export interface Proposal { base: SurveyDefinition; steps: ProposalStep[] }
 /**
  * Where a FLAT action index sits: step `step`, action `action` of that step.
@@ -93,7 +93,7 @@ export function evaluateProposal(p: Proposal, opts: { excluded?: Iterable<number
     for (const a of step.actions) { if (!excluded.has(flat)) { flats.push(flat); actions.push(a); } flat++; }
     if (!actions.length) continue;
     included.push(...actions);
-    const r = applySurveyActions(cur, actions, { uxOnly: step.uxOnly, uxOnlyInferred: step.uxOnlyInferred });
+    const r = applySurveyActions(cur, actions, { uxOnly: step.uxOnly, uxOnlyInferred: step.uxOnlyInferred, uxBehaviour: step.uxBehaviour });
     results.push(...r.results.map((x) => ({ ...x, index: flats[x.index] ?? x.index })));
     uxNotes.push(...r.results.filter((x) => x.ok && isUxOp(x.op)).map((x) => x.description));
     last = r;
@@ -105,7 +105,7 @@ export function evaluateProposal(p: Proposal, opts: { excluded?: Iterable<number
   }
   // warnings are about the END state: what the whole proposal newly breaks
   const uxOnly = p.steps.length > 0 && p.steps.every((s) => s.uxOnly);
-  const whole = applySurveyActions(p.base, included, { uxOnly, uxOnlyInferred: uxOnly && p.steps.every((s) => s.uxOnlyInferred) });
+  const whole = applySurveyActions(p.base, included, { uxOnly, uxOnlyInferred: uxOnly && p.steps.every((s) => s.uxOnlyInferred), uxBehaviour: uxOnly && p.steps.every((s) => s.uxOnlyInferred && s.uxBehaviour) });
   warnings.push(...whole.warnings);
   const outcome = last ?? whole;
   const parsedBase = SurveyDefinitionSchema.safeParse(p.base);

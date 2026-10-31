@@ -24,6 +24,8 @@ import { UxItemsEditor, uxItemsFor } from "./UxItemsEditor";
 import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 import { AssessmentQuestionSection } from "./AssessmentQuestionSection";
+import { CodeEditor } from "./code/CodeEditor";
+import { useScriptTools } from "./code/ScriptTools";
 import { ScriptHealthChip } from "./ScriptHealth";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
@@ -1867,9 +1869,9 @@ function PropertiesPanelBody() {
           * ("Custom JavaScript"), run by a second engine. It is a script in
           * the list above now; a survey that had one was moved there on load.
           */}
-        <label className="f" style={{ marginTop: 10 }}><span>Custom CSS (advanced — applies inside this question)</span>
-          <textarea className="ta code" style={{ minHeight: 60 }} value={q.customCss ?? ""} data-testid="custom-css"
-            onChange={(e) => patch({ customCss: e.target.value || undefined })} /></label>
+        <div className="f" style={{ marginTop: 10 }}><span>Custom CSS (advanced — applies inside this question)</span>
+          <CodeEditor language="css" value={q.customCss ?? ""} testId="custom-css" label={`${q.code} custom CSS`} minHeight={60} readOnly={s.readOnly}
+            onChange={(v) => patch({ customCss: v || undefined })} /></div>
       </CollapsibleSection>
       )}
 
@@ -1878,11 +1880,12 @@ function PropertiesPanelBody() {
         <p className="muted" style={{ fontSize: 12.5 }}>
           A Custom Component is the one question type whose JavaScript IS the question: it receives the component element and the answer, so it can read and write its own answer. Everything else uses scripts in Styles, animations &amp; scripts.
         </p>
-        {q.customJs ? <div style={{ marginBottom: 6 }}><ScriptHealthChip scriptId={`uxb_component_${q.id}`} /></div> : null}
-        <label className="f"><span>Component HTML (the template your script drives)</span>
-          <textarea className="ta code" style={{ minHeight: 60 }} value={q.customHtml ?? ""} data-testid="component-html"
-            onChange={(e) => patch({ customHtml: e.target.value || undefined })} /></label>
-        <ComponentJsField code={q.customJs ?? ""} onSave={(code) => patch({ customJs: code || undefined })} />
+        <div className="f"><span>Component HTML (the template your script drives)</span>
+          <CodeEditor language="html" value={q.customHtml ?? ""} testId="component-html" label={`${q.code} component HTML`} minHeight={60} readOnly={s.readOnly}
+            onChange={(v) => patch({ customHtml: v || undefined })} /></div>
+        <ComponentJsField code={q.customJs ?? ""} label={`${q.code} component JavaScript`} readOnly={s.readOnly} itemKey={`component_js:${q.id}:js`} questionId={q.id}
+          header={q.customJs ? <ScriptHealthChip scriptId={`uxb_component_${q.id}`} /> : null}
+          onSave={(code) => patch({ customJs: code || undefined })} />
       </CollapsibleSection>
       )}
 
@@ -1903,8 +1906,10 @@ function PropertiesPanelBody() {
  * behaviour script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
  * The same gate refuses it again before it runs and in Intelligent mode's set_custom_code.
  */
-function ComponentJsField({ code, onSave }: { code: string; onSave(code: string): void }) {
+export function ComponentJsField({ code, onSave, label, readOnly, header, itemKey, questionId }: { code: string; onSave(code: string): void; label: string; readOnly?: boolean; header?: React.ReactNode; itemKey?: string; questionId?: string }) {
   const [draft, setDraft] = React.useState(code);
+  const st = useStudio();
+  const tools = useScriptTools({ itemKey: itemKey ?? null, code: draft, def: st.def, run: questionId ? { kind: "component", questionId } : null });
   const [errors, setErrors] = React.useState<string[]>([]);
   React.useEffect(() => { setDraft(code); setErrors([]); }, [code]);
   const dirty = draft !== code;
@@ -1916,9 +1921,9 @@ function ComponentJsField({ code, onSave }: { code: string; onSave(code: string)
   };
   return (
     <div>
-      <label className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v)). Checked before it is saved and before it runs: it works on el and api — no window, constructor, network or storage; document only to create elements; loops stop after 100,000 rounds.</span>
-        <textarea className="ta code" style={{ minHeight: 90 }} value={draft} data-testid="component-js" spellCheck={false}
-          onChange={(e) => setDraft(e.target.value)} onBlur={save} /></label>
+      <div className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v)). Checked before it is saved and before it runs: it works on el and api — no window, constructor, network or storage; document only to create elements; loops stop after 100,000 rounds.</span>
+        <CodeEditor language="js" kind="component" value={draft} testId="component-js" label={label} header={<>{header}{tools.buttons}</>} minHeight={90} readOnly={readOnly} extraDiagnostics={tools.diagnostics}
+          onChange={setDraft} onCommit={save} />{tools.panels}</div>
       {dirty && <div className="row" style={{ gap: 6, marginTop: 4 }}>
         <button type="button" className="btn small primary" onClick={save} data-testid="component-js-save">Save code</button>
         <button type="button" className="btn small ghost" onClick={() => { setDraft(code); setErrors([]); }}>Discard changes</button>

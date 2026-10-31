@@ -18,6 +18,9 @@ export function UxPreview({ after, before, scope }: { after: SurveyDefinition; b
   const [device, setDevice] = React.useState<"desktop" | "tablet" | "mobile">("desktop");
   const [replay, setReplay] = React.useState(0);
   const [values, setValues] = React.useState<Record<string, unknown>>({});
+  /* S2c (audit SE-12 / IM-13): what the scripts say here — their rs.log lines, errors and refusals — shown under the preview, not only in the browser console */
+  const [logs, setLogs] = React.useState<string[]>([]);
+  const onLog = React.useCallback((line: string) => setLogs((l) => [...l.slice(-39), line]), []);
   const def = side === "after" ? after : before;
   const shellRef = React.useRef<HTMLDivElement | null>(null);
   const questions = scope.questionIds.map((id) => def.questions.find((q) => q.id === id)).filter((q): q is NonNullable<typeof q> => !!q);
@@ -35,13 +38,13 @@ export function UxPreview({ after, before, scope }: { after: SurveyDefinition; b
         <button type="button" className={`iq-btn${side === "after" ? " on" : ""}`} onClick={() => setSide("after")} data-testid="cp-ux-after">After</button>
         <button type="button" className={`iq-btn${side === "before" ? " on" : ""}`} onClick={() => setSide("before")} data-testid="cp-ux-before">Before</button>
         <button type="button" className={`iq-btn${device === "mobile" ? " on" : ""}`} onClick={() => setDevice((d) => (d === "desktop" ? "tablet" : d === "tablet" ? "mobile" : "desktop"))} data-testid="cp-ux-mobile" title="Desktop → tablet → phone">{device === "mobile" ? "Phone" : device === "tablet" ? "Tablet" : "Desktop"}</button>
-        <button type="button" className="iq-btn" onClick={() => { setValues({}); setReplay((n) => n + 1); }} data-testid="cp-ux-replay" title="Play the animations again and clear the preview's answers">Replay</button>
+        <button type="button" className="iq-btn" onClick={() => { setValues({}); setLogs([]); setReplay((n) => n + 1); }} data-testid="cp-ux-replay" title="Play the animations again and clear the preview's answers">Replay</button>
       </div>
       <div className={`cp-ux-stage${device !== "desktop" ? ` rs-viewport ${device}` : ""}`}>
         {b.responsive && <style dangerouslySetInnerHTML={{ __html: brandingResponsiveCss(b, '[data-testid="cp-ux-shell"]') }} />}
         <div key={`${side}-${replay}`} ref={shellRef} className={`rs-shell rs-${b.layout.cardStyle} ${widthModeClass(b)} ${brandingClasses(b)}`} style={{ ...(brandingVars(b) as React.CSSProperties), padding: "12px 14px 18px", transform: "translateZ(0)" /* a script's fixed popup is placed in this preview, not over the Studio */ }}
           data-rs-ux={def.meta.id} data-rs-block={scope.blockId} data-rs-page={scope.pageId} data-testid="cp-ux-shell">
-          <UxLayer contained def={def} rootRef={shellRef} values={values} allValues={values} shown={questions.map((q) => q.id)} pageKey={`${side}-${replay}`} blockId={scope.blockId} pageId={scope.pageId} pageIndex={1} />
+          <UxLayer contained def={def} rootRef={shellRef} values={values} allValues={values} shown={questions.map((q) => q.id)} pageKey={`${side}-${replay}`} blockId={scope.blockId} pageId={scope.pageId} pageIndex={1} onLog={onLog} />
           {scope.chrome && b.layout.progressBar !== "none" && <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${Object.keys(values).length ? 60 : 35}%` }} /></div>}
           <div id="rs-questions">
             {questions.map((q) => (
@@ -57,6 +60,7 @@ export function UxPreview({ after, before, scope }: { after: SurveyDefinition; b
           )}
         </div>
       </div>
+      {logs.length > 0 && <pre className="cp-ux-log mono" data-testid="cp-ux-log">{logs.join("\n")}</pre>}
       <p className="iqi-dim cp-ux-caption">The real question components with this survey's theme — answer them to see the selected and answered behaviour. Nothing here is saved.</p>
     </div>
   );

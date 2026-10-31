@@ -134,6 +134,8 @@ function actionsReference(engine) {
   block("Survey actions", "packages/engine/src/surveyActions.ts", /^export type SurveyAction =/, /^\s*\| OptionAction;?\s*$/);
   out.push("Supporting types:", "", "```ts", sourceBlock("packages/engine/src/surveyActions.ts", /^export type OptionSpec =/, /;\s*$/), sourceBlock("packages/engine/src/surveyActions.ts", /^export interface ScaleSpec/, /\}\s*$/), sourceBlock("packages/engine/src/surveyActions.ts", /^export interface ValidationSpec/, /\}\s*$/), "```", "");
   block("Option and design actions", "packages/engine/src/optionActions.ts", /^export type OptionAction =/, /;\s*$/);
+  block("Question media (set_question_media)", "packages/engine/src/mediaActions.ts", /^export type MediaAction =/, /^\};\s*$/);
+  block("Scripts-panel (logic) scripts", "packages/engine/src/logicScriptActions.ts", /^export type LogicScriptAction =/, /;\s*$/);
   block("UX actions", "packages/engine/src/uxActions.ts", /^export type UxAction =/, /;\s*$/);
   block("Analysis actions", "packages/engine/src/analysisActions.ts", /^export type AnalysisAction =/, /;\s*$/);
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);

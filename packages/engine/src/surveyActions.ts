@@ -1,5 +1,5 @@
 import type { AnalysisPlan, Condition, FlowNode, OptionMask, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema } from "@rescript/schema";
+import { SurveyDefinition as SurveyDefinitionSchema, variantRegistry, Condition as ConditionSchema, effectiveResponseModel, questionSettingField } from "@rescript/schema";
 import { forEachRule, isConditionNode } from "./conditionWalk.js";
 import { canonicalizeCondition } from "./optionCodes.js";
 import { createQuestionFromVariant } from "./questionCreate.js";
@@ -43,6 +43,8 @@ import { relabelHypotheses } from "./hypotheses.js";
 import { normalizeCalcExpression, calcNameHint } from "./calcRewrite.js";
 import { buildVariableDictionary } from "./variables.js";
 import { questionCodeAlias } from "./calcContext.js";
+import { settableSettings, settingProblem } from "./capabilityRegistry.js";
+import { rewriteScriptReferences, scriptLiteralRefs, surveyScripts } from "./scriptRefs.js";
 
 /**
  * THE COPILOT'S HANDS — a controlled action layer over the survey.
@@ -85,6 +87,8 @@ export interface ValidationSpec {
   /** kind "condition": what a valid answer must satisfy (stored negated: the engine's `check` is the invalid case) */
   check?: CondInput;
   message?: string;
+  /** S2a D16: "warning" shows the message and lets the respondent continue (schema ValidationRule.severity); absent = a blocking error */
+  severity?: "warning";
 }
 
 /**
@@ -99,12 +103,14 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
-      readOnlyIgnored?: boolean }
+      readOnlyIgnored?: boolean;
+      /** S2a D16: a variant's own settings (e.g. gamified.timed timeLimitSeconds / onTimeout) — only the keys the variant declares, each checked against the question schema */
+      settings?: Record<string, unknown> }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -156,6 +162,18 @@ export const SURVEY_ACTION_OPS = [
   ...LOCALIZATION_ACTION_OPS, ...QUOTA_ACTION_OPS, ...LIST_FILL_ACTION_OPS, ...METHOD_ACTION_OPS,
   ...OPTION_ACTION_OPS, ...RESEARCH_ACTION_OPS, ...QUAL_ACTION_OPS, ...AI_INTERVIEW_ACTION_OPS, ...INTEGRATION_ACTION_OPS, ...ASSESSMENT_ACTION_OPS,
 ] as const;
+
+/**
+ * A VARIANT'S SETTINGS FROM THE WIRE (S2a D16; S2b item 2: arrays of plain values too, for tools / weekdays / time
+ * slots): at most 12 keys, plain values only. Which keys and values are allowed is decided when applied, against the
+ * variant (capabilityRegistry.settingProblem).
+ */
+export function settingsIn(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const plain = (v: unknown) => typeof v === "number" ? Number.isFinite(v) : typeof v === "boolean" || (typeof v === "string" && v.length <= 200);
+  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (Array.isArray(v) && v.length <= 20 && v.every(plain)))).slice(0, 12));
+  return Object.keys(st).length ? st : undefined;
+}
 
 /** Friendly question types → the Studio variant that makes them. */
 export const ACTION_TYPES: Record<string, string> = {
@@ -267,7 +285,9 @@ const validations = (v: unknown): ValidationSpec[] | undefined => {
     const when = condIn(o.when);
     const check = condIn(o.check ?? o.condition);
     if (kind === "condition" && !check) return [];
-    const rest = { ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}) };
+    /* S2a D16 (owner #7 "display a warning when the total exceeds 100%"): a soft rule is carried, not dropped */
+    const soft = /^(?:warning|warn|soft)$/i.test(String(o.severity ?? o.level ?? ""));
+    const rest = { ...(when ? { when } : {}), ...(check ? { check } : {}), ...(str(o.message) ? { message: str(o.message)!.slice(0, 300) } : {}), ...(soft ? { severity: "warning" as const } : {}) };
     if (kind === EXACT_SELECTIONS) return value === undefined ? [] : [{ kind: "min_selections", value, ...rest }, { kind: "max_selections", value, ...rest }];
     return [{ kind, ...(value !== undefined ? { value } : {}), ...rest }];
   });
@@ -311,6 +331,7 @@ function coerceOne(item: unknown): SurveyAction | string {
         ...(str(o.instruction) ? { instruction: str(o.instruction)!.slice(0, 600) } : {}), ...(validations(o.validation)?.length ? { validation: validations(o.validation) } : {}),
         ...(semanticIn(o.semantic) ? { semantic: semanticIn(o.semantic) } : {}),
         ...(((f) => (f && f !== "none" ? { otherFormat: f } : {}))(otherFormatIn(o.otherFormat ?? o.otherSpecifyFormat))),
+        ...(settingsIn(o.settings) ? { settings: settingsIn(o.settings) } : {}),
       };
     }
     case "update_question": {
@@ -339,6 +360,8 @@ function coerceOne(item: unknown): SurveyAction | string {
        * honest "changes nothing" with the reason.
        */
       if (bool(o.hidden) !== undefined) a.hidden = bool(o.hidden);
+      /* S2a D16: a variant's settings — plain values only, at most 12 keys; which keys and values are allowed is checked when applied, against the variant */
+      { const st = settingsIn(o.settings); if (st) a.settings = st; }
       const readOnlyAsked = o.readOnly !== undefined || o.read_only !== undefined || o.readonly !== undefined;
       if (readOnlyAsked) a.readOnlyIgnored = true;
       if (Object.keys(a).length === 3 && a.readOnlyIgnored) return "update_question changes nothing: Read Only is no longer a question state — a question respondents must not answer is set hidden (hidden: true); it still runs its logic and auto-punch rules";
@@ -479,7 +502,29 @@ type PageNode = Extract<FlowNode, { type: "page" }>;
  * still allowed — stopping a respondent (an age limit, a format) is the question's validation, never
  * a script, and the UX guide tells the model so; refusing it left the request half done (2026-10-16
  * 21:23: "popup when the age is 18+" → the min-18 validation refused, the popup kept).
+ *
+ * `uxBehaviour` (S2a D9, 2026-10-30): the request, read as look-only, ALSO asks for behaviour ("…so option 3 is
+ * hidden when Q2 is 1"). With look-only inferred, the native ops that implement behaviour are then let through —
+ * option display logic, a skip, URL embedded data, a starting answer, a punch rule, validation, the section
+ * navigator, and a question switched to a variant of the same response model (a timed single choice) — because a
+ * script can do none of them (it cannot hide an option from the data, terminate, or write a starting answer).
+ * Questions, blocks, wording and codes stay refused. Said look-only ("don't change the logic") refuses them all.
  */
+const BEHAVIOUR_NATIVE_OPS = new Set(["update_option", "add_skip", "create_embedded", "set_default_value", "add_punch", "set_validation", "set_navigation", "update_question"]);
+const UPDATE_QUESTION_BEHAVIOUR_KEYS = new Set(["op", "target", "type", "settings"]);
+const UPDATE_OPTION_BEHAVIOUR_KEYS = new Set(["op", "target", "option", "visibleIf"]);
+/** a behavioural native op, admitted under inferred look-only: checked on its shape (and, for a type switch, after it is applied) */
+function behaviourNativeOp(a: SurveyAction): boolean {
+  if (!BEHAVIOUR_NATIVE_OPS.has(a.op)) return false;
+  const keys = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
+  if (a.op === "update_option") return keys.every((k) => UPDATE_OPTION_BEHAVIOUR_KEYS.has(k));
+  if (a.op === "update_question") return keys.every((k) => UPDATE_QUESTION_BEHAVIOUR_KEYS.has(k));
+  return true;
+}
+/** the look-only refusal: said (terminal — no answer can change it) or inferred from the words (repairable once, with this reason) */
+const lookOnlyRefusal = (inferred: boolean, op: string) => inferred
+  ? `this request reads as look-and-behaviour only (inferred from its words, not said), so ${op} is refused here — use a look or behaviour action, or one of the native behaviour actions (update_option visibleIf, add_skip, create_embedded, set_default_value, add_punch, set_validation, set_navigation, update_question to a variant of the same kind) if the request asks for behaviour; a new question or a wording change is its own request`
+  : "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them";
 const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypothesis"]);
 /*
  * `lite` (durable tasks, 2026-10-29, ported from K2): a REPLAY of actions that were already judged — the task
@@ -488,7 +533,7 @@ const HYPOTHESIS_OPS = new Set(["add_hypothesis", "set_hypothesis", "remove_hypo
  * before, and the result must still pass the schema; only `warnings` is reduced to the UX warnings and
  * `structureUnchanged` is not computed (false).
  */
-export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
+export function applySurveyActions(input: SurveyDefinition, actions: SurveyAction[], opts: { ids?: IdMinter; now?: string; uxOnly?: boolean; uxOnlyInferred?: boolean; uxBehaviour?: boolean; lite?: boolean } = {}): ApplyActionsOutcome {
   const before = input;
   let def = structuredClone(input) as SurveyDefinition;
   const ctx: Ctx = { def, ids: opts.ids ?? defaultIds, refs: new Map(), blockRefs: new Map(), uxRefs: new Map(), lastBlock: null, now: opts.now ?? new Date().toISOString(), uxWarnings: [] };
@@ -503,12 +548,23 @@ export function applySurveyActions(input: SurveyDefinition, actions: SurveyActio
   order.forEach(({ a, index }) => {
     const snapshot = structuredClone(def) as SurveyDefinition;
     ctx.def = def;
-    if (opts.uxOnly && !isUxOp(a.op) && !(opts.uxOnlyInferred && a.op === "set_validation")) {
-      results.push({ index, op: a.op, ok: false, description: describeAction(a), error: "this request is about the look and behaviour only, so structural changes are refused — ask for them separately if you want them", touched: [] });
+    const behaviourOk = !!(opts.uxOnly && opts.uxOnlyInferred && !isUxOp(a.op) && (a.op === "set_validation" || (opts.uxBehaviour && behaviourNativeOp(a))));
+    if (opts.uxOnly && !isUxOp(a.op) && !behaviourOk) {
+      results.push({ index, op: a.op, ok: false, description: describeAction(a), error: lookOnlyRefusal(!!opts.uxOnlyInferred, a.op), touched: [] });
       return;
     }
     try {
       const r = apply(ctx, a);
+      /* a type switch admitted as behaviour must keep the question's response model (single choice → a timed single choice) */
+      if (behaviourOk && a.op === "update_question" && a.type) {
+        const was = snapshot.questions.find((x) => x.id === (r.touched ?? [])[0]);
+        const now = ctx.def.questions.find((x) => x.id === (r.touched ?? [])[0]);
+        if (was && now && effectiveResponseModel(was) !== effectiveResponseModel(now)) {
+          def = snapshot; ctx.def = def;
+          results.push({ index, op: a.op, ok: false, description: describeAction(a), error: lookOnlyRefusal(true, `changing ${was.code} to another kind of question (${now.type})`), touched: [] });
+          return;
+        }
+      }
       /*
        * VALIDATED BEFORE IT IS ACCEPTED, not linted afterwards: a forward
        * reference, an operator the source cannot answer, a comparison with an
@@ -660,6 +716,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       if (a.required !== undefined) q.required = a.required;
       checkRuleValues(def, a.validation);
       shapeQuestion(def, q, a);
+      if (a.settings) applyVariantSettings(q, a.settings);
       const otherNote = a.otherFormat ? setOtherFormat(q, a.otherFormat) : "";
       /*
        * WHAT THE ANSWER IS (QT-02). The action may say it ("semantic":"age"),
@@ -719,6 +776,7 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
           else lossy.push(`changes ${q.code} from ${from} to ${typeLabel(q)}`);
         }
       }
+      if (a.settings) what.push(...applyVariantSettings(q, a.settings));
       if (a.text !== undefined && a.text !== q.text) { q.text = pipeRefs(ctx, a.text); what.push("text"); }
       if (a.instruction !== undefined) { q.instruction = a.instruction || undefined; what.push("instruction"); }
       if (a.required !== undefined && a.required !== q.required) { q.required = a.required; what.push(a.required ? "required" : "optional"); }
@@ -792,6 +850,9 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
         const renamed = applyRename(def, r.from, r.to, { alsoCode: r.alsoCode });
         Object.assign(def, renamed);
         q = def.questions.find((x) => x.id === q.id)!;
+        /* S2b item 5 (D18): the scripts' LITERAL references follow the rename (rs.getAnswer("Q3"), get("Q3") …); a name built at run time cannot be seen */
+        const rw = rewriteScriptReferences(def, r.from, r.to);
+        if (rw.count) what.push(`${rw.count} literal script reference${rw.count === 1 ? "" : "s"} to ${r.from} rewritten (${rw.scripts.map((x) => `“${x}”`).join(", ")})`);
       }
       return { description: `Changed ${q.code}: ${what.join(", ")}`, touched: [q.id], ...(lossy.length ? { destructive: lossy.join("; ") } : {}) };
     }
@@ -799,10 +860,12 @@ function apply(ctx: Ctx, a: SurveyAction): { description: string; destructive?: 
       const q = resolveQuestion(ctx, a.target);
       const analysisImpact = describeAnalysisImpact(def, q.id);
       const placedBefore = placedIds(def);
+      /* S2b item 5 (D18): scripts that name it by a literal — they are not changed, they would read nothing */
+      const scriptReaders = surveyScripts(def).filter((src) => scriptLiteralRefs(src.code).some((r) => r.name === q.id || r.name === String(q.code) || r.name === q.variableName)).map((src) => `“${src.name}”`);
       const refs = removeQuestion(def, q.id);
       // removing a question also removes logic that named it — a branch arm among them, and with it whatever it held
       const stranded = def.questions.filter((x) => placedBefore.has(x.id) && !placedIds(def).has(x.id)).map((x) => x.code);
-      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}${analysisImpact.length ? ` — in the analysis, ${analysisImpact.join("; ")}` : ""}`, touched: [q.id] };
+      return { description: `Deleted ${q.code}: ${plain(q.text, 60)}`, destructive: `Deletes ${q.code}${refs.length ? ` and ${refs.length} reference${refs.length === 1 ? "" : "s"} to it` : ""}${stranded.length ? ` — which leaves ${stranded.join(", ")} on no page` : ""}${analysisImpact.length ? ` — in the analysis, ${analysisImpact.join("; ")}` : ""}${scriptReaders.length ? ` — script${scriptReaders.length === 1 ? "" : "s"} ${scriptReaders.join(", ")} read${scriptReaders.length === 1 ? "s" : ""} ${q.code} (literal references; not changed)` : ""}`, touched: [q.id] };
     }
     case "move_question": {
       const q = resolveQuestion(ctx, a.target);
@@ -1385,6 +1448,27 @@ function mirrorBounds(q: Question): void {
   if (max !== undefined) q.settings.maxValue = max;
 }
 
+/**
+ * A VARIANT'S OWN SETTINGS (S2a D16, 2026-10-30). The settings a variant declares in the registry (its
+ * `defaults.settings`: gamified.timed → timeLimitSeconds, onTimeout) are the ones an action may set — each value
+ * checked against the question schema's own field (an enum, a number), numbers bounded. Anything else is refused
+ * with the keys that are allowed: the model cannot reach a setting the variant does not describe.
+ */
+function applyVariantSettings(q: Question, patch: Record<string, unknown>): string[] {
+  const v = q.variant ? variantRegistry.get(q.variant) : undefined;
+  /* S2b: the registry decides (capabilityRegistry.settingProblem) — declared, capability, family and universal keys, each value against the schema field and the bounds */
+  const bad = Object.keys(patch).filter((k) => !settableSettings(q.variant).includes(k));
+  if (bad.length) fail(`${q.code} (${v?.name ?? q.type}) has no setting ${bad.join(", ")} an action can set — its settings are ${settableSettings(q.variant).join(", ")}`);
+  const done: string[] = [];
+  const settings = (q.settings ??= {} as typeof q.settings) as Record<string, unknown>;
+  for (const [k, val] of Object.entries(patch)) {
+    const why = settingProblem(q.variant, k, val);
+    if (why) fail(`${q.code}: ${why}`);
+    settings[k] = val;
+    done.push(`${k} ${typeof val === "object" ? JSON.stringify(val) : val}`);
+  }
+  return done;
+}
 function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: number) => string): ValidationRule[] {
   const def = ctx.def;
   return specs.map((r, i) => ({
@@ -1400,6 +1484,7 @@ function validationFromSpecs(ctx: Ctx, specs: ValidationSpec[], idFor: (i: numbe
      */
     ...(r.check ? { check: { type: "group", op: "not", children: [parseCondition(def, withRefs(ctx, r.check))] } } : {}),
     ...(r.message ? { message: r.message } : {}),
+    ...(r.severity === "warning" ? { severity: "warning" } : {}),
   })) as ValidationRule[];
 }
 

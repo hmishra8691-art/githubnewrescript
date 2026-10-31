@@ -1,4 +1,6 @@
 "use client";
+import { VerifyCard } from "./VerifyCard";
+import type { VerifyView } from "./useCopilot";
 import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { Icon } from "../../ui/Icon";
@@ -22,7 +24,10 @@ import { appliedKicker, type ClientOp, type SaveView } from "../../../lib/copilo
  *
  * Every question code in the copilot's words is a link to the question.
  */
-export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents }: {
+export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges, onApply, onCancel, onAnswer, onAsk, onPreviewFix, onExecutePlan, onCancelPlan, onResume, onReviewReady, onBuildRest, onResumeNow, onDiscard, onReviewTask, onShowTask, counts, canApply, applyTitle, applyLabel = "Apply changes", refused = [], op, onRetrySave, documents, verify, onApplyAnyway }: {
+  /** S2c: the open proposal's test session (only for the open proposal's card) */
+  verify?: VerifyView | null;
+  onApplyAnyway?(): void;
   /** kept documents and report themes (2026-10-18): Download without regenerating, Regenerate, theme Apply / Save as */
   documents?: DocumentActions;
   entry: CopilotEntry;
@@ -273,6 +278,7 @@ export function CopilotCard({ entry, def, onSelect, onSelectKey, onReviewChanges
                 {counts.map((c) => <span key={c.label} className="cp-count"><b>{c.value}</b> {c.label}</span>)}
               </div>
             )}
+            {r.actions.length > 0 && state === "open" && verify && <VerifyCard compact verify={verify} onApplyAnyway={onApplyAnyway} />}
             {r.actions.length > 0 && state === "open" && (
               <div className="iq-actions">
                 <button type="button" className="iq-btn" onClick={onReviewChanges} data-testid="cp-review-changes">Review changes</button>

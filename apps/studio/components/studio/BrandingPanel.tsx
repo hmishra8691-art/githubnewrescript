@@ -14,6 +14,9 @@ import { MediaUrlInput } from "./MediaUrlInput";
 import { MediaDisplayControls } from "./MediaDisplayControls";
 import { ScriptHealthChip, ScriptHealthSummaryBar } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
+import { CodeEditor } from "./code/CodeEditor";
+import { useScriptTools } from "./code/ScriptTools";
+import { duplicateLogicScript, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
 import { dominantColorsFromImage, generatePalette, generatePaletteFromHex, hexToRgb, type GeneratedColors, type RGB } from "@/lib/paletteFromImage";
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange(v: string): void }) {
@@ -687,15 +690,15 @@ export function BrandingPanel() {
       <UxItemsEditor scope={{ kind: "survey" }} intro="For the whole survey, its buttons, progress bar and navigation — scoped to this survey. Created here or by Intelligent mode; the same settings." />
 
       <h3 className="sec">Header / footer / custom CSS</h3>
-      <label className="f"><span>Header HTML</span>
-        <textarea className="ta code" style={{ minHeight: 60 }} value={b.headerHtml ?? ""}
-          onChange={(e) => set((x) => { x.headerHtml = e.target.value || undefined; })} /></label>
-      <label className="f"><span>Footer HTML</span>
-        <textarea className="ta code" style={{ minHeight: 60 }} value={b.footerHtml ?? ""}
-          onChange={(e) => set((x) => { x.footerHtml = e.target.value || undefined; })} /></label>
-      <label className="f"><span>Custom CSS (survey-wide)</span>
-        <textarea className="ta code" value={b.customCss ?? ""}
-          onChange={(e) => set((x) => { x.customCss = e.target.value || undefined; })} /></label>
+      <div className="f"><span>Header HTML</span>
+        <CodeEditor language="html" value={b.headerHtml ?? ""} minHeight={60} label="Header HTML" testId="branding-header-html" readOnly={s.readOnly}
+          onChange={(v) => set((x) => { x.headerHtml = v || undefined; })} /></div>
+      <div className="f"><span>Footer HTML</span>
+        <CodeEditor language="html" value={b.footerHtml ?? ""} minHeight={60} label="Footer HTML" testId="branding-footer-html" readOnly={s.readOnly}
+          onChange={(v) => set((x) => { x.footerHtml = v || undefined; })} /></div>
+      <div className="f"><span>Custom CSS (survey-wide)</span>
+        <CodeEditor language="css" value={b.customCss ?? ""} minHeight={90} label="Custom CSS (survey-wide)" testId="branding-custom-css" readOnly={s.readOnly}
+          onChange={(v) => set((x) => { x.customCss = v || undefined; })} /></div>
       {/*
         * Survey-wide JavaScript is a script in the list above — the same
         * sandboxed pipeline as everything else. The old "Custom JS" box that
@@ -710,8 +713,9 @@ export function BrandingPanel() {
  * A logic script's code, saved only when the code gate passes (S0b D3) — the way UxItemsEditor saves a behaviour
  * script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
  */
-function ScriptCodeField({ code, refusal, onRefusal, onSave }: { code: string; refusal?: string[]; onRefusal(errors: string[] | undefined): void; onSave(code: string): void }) {
+function ScriptCodeField({ code, refusal, onRefusal, onSave, def, label, header, itemKey, scriptId }: { code: string; refusal?: string[]; onRefusal(errors: string[] | undefined): void; onSave(code: string): void; def: SurveyDefinition; label: string; header?: React.ReactNode; itemKey?: string; scriptId?: string }) {
   const [draft, setDraft] = React.useState(code);
+  const tools = useScriptTools({ itemKey: itemKey ?? null, code: draft, def, run: scriptId ? { kind: "logic", id: scriptId } : null });
   React.useEffect(() => { setDraft(code); }, [code]);
   const dirty = draft !== code;
   const save = () => {
@@ -723,9 +727,10 @@ function ScriptCodeField({ code, refusal, onRefusal, onSave }: { code: string; r
   };
   return (
     <div>
-      <textarea className="ta code" value={draft} data-testid="script-code" spellCheck={false}
+      <CodeEditor language="js" kind="logic" def={def} value={draft} testId="script-code" label={label} header={<>{header}{tools.buttons}</>} showRefs minHeight={120} extraDiagnostics={tools.diagnostics}
         placeholder={`// e.g. total of three questions\nconst total = expr('Q1 + Q2 + Q3');\nsetCalc('TOTAL', total);\nif (total > 100) flag('over_100');`}
-        onChange={(e) => setDraft(e.target.value)} onBlur={save} />
+        onChange={setDraft} onCommit={save} />
+      {tools.panels}
       {dirty && <div className="row" style={{ gap: 6, marginTop: 4 }}>
         <button type="button" className="btn small primary" onClick={save} data-testid="script-save">Save code</button>
         <button type="button" className="btn small ghost" onClick={() => { setDraft(code); onRefusal(undefined); }}>Discard changes</button>
@@ -737,6 +742,56 @@ function ScriptCodeField({ code, refusal, onRefusal, onSave }: { code: string; r
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** one Scripts-panel logic script, editable (the Scripts panel's list, and Research tools → All code in place) */
+export function LogicScriptCard({ index: i, refusal, setRefusal }: { index: number; refusal?: string[]; setRefusal(errs: string[] | undefined): void }) {
+  const s = useStudio();
+  const sc = s.def.scripts[i];
+  if (!sc) return null;
+  return (
+      <div className="card" data-testid="logic-script-card" data-id={sc.id}>
+        <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+          <input className="input" style={{ width: 180 }} value={sc.name}
+            onChange={(e) => s.update((d) => { d.scripts[i].name = e.target.value; })} />
+          <select className="select" value={sc.scope}
+            onChange={(e) => s.update((d) => { d.scripts[i].scope = e.target.value as any; })}>
+            <option value="survey">survey</option><option value="page">page</option><option value="question">question</option>
+          </select>
+          {sc.scope !== "survey" && (
+            <input className="input mono" style={{ width: 130 }} placeholder="page/question id" value={sc.ref ?? ""}
+              onChange={(e) => s.update((d) => { d.scripts[i].ref = e.target.value || undefined; })} />
+          )}
+          <select className="select" value={sc.event}
+            onChange={(e) => s.update((d) => { d.scripts[i].event = e.target.value as any; })}>
+            <option value="on_load">on_load</option><option value="on_change">on_change</option>
+            <option value="on_submit">on_submit</option><option value="on_validate">on_validate</option>
+            <option value="on_complete">on_complete</option>
+          </select>
+          <label className="row" style={{ gap: 4, fontSize: 13 }}>
+            <input type="checkbox" checked={sc.enabled} data-testid="script-enabled"
+              onChange={(e) => {
+                /* S0b D3: a script the code gate refuses cannot be switched on (an import arrives off, "pending review") */
+                if (e.target.checked && !codeGate(sc.code, "logic").ok) { setRefusal(codeGate(sc.code, "logic").errors); return; }
+                s.update((d) => { d.scripts[i].enabled = e.target.checked; });
+              }} /> enabled
+          </label>
+          <span className="grow" />
+          {/* S3b (MM-06): a copy, switched off so the two never both run */}
+          <button className="btn small ghost" disabled={s.readOnly} title={`Make a copy with a new id. ${DUPLICATE_NOTE}`} data-testid="script-duplicate"
+            onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
+          <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
+        </div>
+        <ScriptCodeField code={sc.code} refusal={refusal} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />} itemKey={`logic_script:${sc.id}`} scriptId={sc.id}
+          onRefusal={setRefusal}
+          onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
+        <div style={{ marginTop: 6 }} data-testid="script-when">
+          <OptionalCondition label="Run only when" value={sc.when}
+            hint="Otherwise the script runs for every respondent at its event."
+            onChange={(when) => s.update((d) => { d.scripts[i].when = when; })} />
+        </div>
+      </div>
   );
 }
 
@@ -766,47 +821,7 @@ export function ScriptsPanel() {
         logged with the reason). A <code>get</code> later in the same run sees the run&apos;s own writes. on_change runs just after the
         change; on_validate / on_submit may take at most 1.5 s on Next. <code>expr</code> / <code>pipe</code> take their text written out.
       </p>
-      {s.def.scripts.map((sc, i) => (
-        <div key={sc.id} className="card">
-          <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
-            <input className="input" style={{ width: 180 }} value={sc.name}
-              onChange={(e) => s.update((d) => { d.scripts[i].name = e.target.value; })} />
-            <select className="select" value={sc.scope}
-              onChange={(e) => s.update((d) => { d.scripts[i].scope = e.target.value as any; })}>
-              <option value="survey">survey</option><option value="page">page</option><option value="question">question</option>
-            </select>
-            {sc.scope !== "survey" && (
-              <input className="input mono" style={{ width: 130 }} placeholder="page/question id" value={sc.ref ?? ""}
-                onChange={(e) => s.update((d) => { d.scripts[i].ref = e.target.value || undefined; })} />
-            )}
-            <select className="select" value={sc.event}
-              onChange={(e) => s.update((d) => { d.scripts[i].event = e.target.value as any; })}>
-              <option value="on_load">on_load</option><option value="on_change">on_change</option>
-              <option value="on_submit">on_submit</option><option value="on_validate">on_validate</option>
-              <option value="on_complete">on_complete</option>
-            </select>
-            <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={sc.enabled} data-testid="script-enabled"
-                onChange={(e) => {
-                  /* S0b D3: a script the code gate refuses cannot be switched on (an import arrives off, "pending review") */
-                  if (e.target.checked && !codeGate(sc.code, "logic").ok) { setRefusal((r) => ({ ...r, [sc.id]: codeGate(sc.code, "logic").errors })); return; }
-                  s.update((d) => { d.scripts[i].enabled = e.target.checked; });
-                }} /> enabled
-            </label>
-            <span className="grow" />
-            <ScriptHealthChip scriptId={sc.id} />
-            <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
-          </div>
-          <ScriptCodeField code={sc.code} refusal={refusal[sc.id]}
-            onRefusal={(errs) => setRefusal((r) => ({ ...r, [sc.id]: errs }))}
-            onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
-          <div style={{ marginTop: 6 }} data-testid="script-when">
-            <OptionalCondition label="Run only when" value={sc.when}
-              hint="Otherwise the script runs for every respondent at its event."
-              onChange={(when) => s.update((d) => { d.scripts[i].when = when; })} />
-          </div>
-        </div>
-      ))}
+      {s.def.scripts.map((sc, i) => <LogicScriptCard key={sc.id} index={i} refusal={refusal[sc.id]} setRefusal={(errs) => setRefusal((r) => ({ ...r, [sc.id]: errs }))} />)}
       <button className="btn" onClick={() =>
         s.update((d) => {
           d.scripts.push({

@@ -1,5 +1,6 @@
 import { lexJs } from "./ux.js";
 import { readScript, tokenize, type StyleSet } from "./scriptAst.js";
+import { nativeRoute } from "./capabilityRegistry.js";
 
 /**
  * LOOPS IN SURVEY SCRIPTS, BOUNDED RATHER THAN BANNED.
@@ -201,11 +202,34 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
   if (disables.length || setAttrNav || directNav) {
     errors.push("a script cannot disable or hide the Next / Back button — if the script stopped half-way the respondent would be stranded, so the survey keeps the button working and it would only LOOK disabled. To stop a respondent continuing (an age limit, an eligibility rule, a required format), give the question validation with its message — set_validation, e.g. {\"kind\":\"min_value\",\"value\":18,\"message\":\"You must be 18 or above to participate.\"}: the survey then refuses Next, shows the message, and the server checks it again. A script may still show your own messages and change Next's classes and styles");
   }
+  /*
+   * 2b. (S2a D13 / IM-18) PRESSING THE PAGE FROM A SCRIPT. The script runs on a mirror of the page: events go from the
+   * page to the script, never back, so .click() on Next / Back / an option, and preventDefault meant to stop the
+   * respondent, do nothing — the card used to say "checked" for a script whose whole point was a no-op. Refused with
+   * the native route. A .click() on an element the script made itself (its own button) is fine.
+   */
+  {
+    const src = withoutComments(code);
+    const NAV = /rs-next|rs-back|rs-nav|rs-submit|\bnext\b|\bback\b|\bsubmit\b|\bcontinue\b|\bprev(?:ious)?\b/i;
+    const OPT = /data-rs-el\s*=\s*\\?["']?(?:option|row)|\boption\b|\binput\b|\[type=|radio|checkbox|\blabel\b/i;
+    let nav = false, opt = false;
+    for (const m of src.matchAll(/([A-Za-z_$][\w$]*|\)|\])\s*\.\s*click\s*\(\s*\)/g)) {
+      const at = m.index!;
+      const stmt = Math.max(src.lastIndexOf(";", at), src.lastIndexOf("{", at), src.lastIndexOf("}", at), src.lastIndexOf("\n", at)) + 1;
+      let expr = src.slice(stmt, at + m[0].length);
+      if (/^[A-Za-z_$]/.test(m[1])) { const assign = new RegExp(`\\b${m[1].replace(/\$/g, "\\$")}\\s*=\\s*([^;\\n]+)`).exec(src); if (assign) expr += ` ${assign[1]}`; }
+      if (/createElement\s*\(/.test(expr)) continue;
+      if (NAV.test(expr)) nav = true; else if (OPT.test(expr)) opt = true;
+    }
+    if (nav) errors.push(`a script cannot press Next or Back — .click() on the page's buttons does nothing (the script runs on a mirror of the page; events go from the page to the script, never back). To move on, ${nativeRoute("press_next")}`);
+    if (opt) errors.push(`a script cannot choose an answer — .click() on an option or an input does nothing (the script runs on a mirror of the page). ${nativeRoute("choose_answer")}`);
+    if (/\.\s*preventDefault\s*\(/.test(src) && (NAV.test(src) || /["'`](?:submit|keydown|keypress)["'`]/.test(src))) errors.push(`preventDefault cannot stop the respondent — the script sees the event after it has happened, so Next, Back and Submit still work. To stop a respondent continuing, ${nativeRoute("stop_respondent")}`);
+  }
   // 3b. CSS and code are not elements a script makes: <style>/<link>/<script> and document.head are dropped by the sandbox, so
   //     keyframes defined that way never exist and an animation that names them silently does nothing
   const makes = strings.filter((x) => /createElement\s*\(\s*$/.test(bare.slice(Math.max(0, x.start - 20), x.start)) && /^(style|link|script|iframe|object|embed|meta|base)$/i.test(x.value.trim()));
   if (makes.length || /\bdocument\s*\.\s*head\b/.test(bare)) {
-    errors.push(`a script cannot add ${makes.length ? `a <${makes[0].value.trim().toLowerCase()}> element` : "to document.head"} — the survey drops it, so CSS or keyframes added that way never apply. For CSS use create_style (scoped to the question; @keyframes allowed there); for motion use create_animation (presets: fade-in, fade-up, pop, pulse, shake, bounce, glow…) or rs.animate(target, preset); a script may still set inline styles and transitions on its own elements (el.style.transition / el.style.opacity)`);
+    errors.push(`a script cannot add ${makes.length ? `a <${makes[0].value.trim().toLowerCase()}> element` : "to document.head"} — the survey drops it, so CSS or keyframes added that way never apply. ${nativeRoute("inject_css")}`);
   }
   // 3c. an inline animation that names keyframes nobody defined
   for (const m of code.matchAll(/animation(?:-name)?\s*:\s*([A-Za-z_][\w-]*)/g)) {
@@ -223,7 +247,13 @@ export function scriptAuthoringProblems(code: string, def: AuthoringDef): string
     for (; i < bare.length; i++) { if (bare[i] === "{") depth++; else if (bare[i] === "}" && --depth === 0) { end = i; break; } }
     const body = bare.slice(fn.index!, end);
     const self = new RegExp(`(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*(?:${name}\\b|function\\s*\\([^)]*\\)\\s*\\{\\s*${name}\\s*\\(|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()|(?:setTimeout|rs\\s*\\.\\s*after)\\s*\\(\\s*\\d+\\s*,\\s*(?:${name}\\b|\\([^)]*\\)\\s*=>\\s*\\{?\\s*${name}\\s*\\()`);
-    if (self.test(body)) errors.push(`${name}() waits for an element by calling itself on a timer — on a survey page the elements a script names already exist when it starts (one that is never found means its selector is wrong, and the timer would run for ever); for something that appears later use rs.listen or a MutationObserver`);
+    /*
+     * S2a D13 (IM-24): a TICK is not polling. A function that re-schedules itself to update a display (a countdown:
+     * el.textContent = n; rs.after(1000, tick)) waits for nothing; one that looks an element up each time
+     * (querySelector / getElementById … inside the loop) is waiting for it to appear — that stays refused.
+     */
+    const looksUp = /\b(?:querySelector(?:All)?|getElementById|getElementsBy\w+|closest)\s*\(/.test(body);
+    if (self.test(body) && looksUp) errors.push(`${name}() waits for an element by calling itself on a timer — on a survey page the elements a script names already exist when it starts (one that is never found means its selector is wrong, and the timer would run for ever); for something that appears later use rs.listen or a MutationObserver`);
   }
   // 4. (S1a) rs.setAnswer with a FIXED value: that is a default value (or a punch rule), which the survey applies itself —
   //    rs.setAnswer is for a value the script computes (a timer, a count, something only code can know)
@@ -314,7 +344,19 @@ export function exfiltrationProblems(code: string): string[] {
   const out: string[] = [];
   const say = (what: string) => out.push(`${what} — survey code may not send anything off the page (respondent data stays in the survey)`);
   if (/\b(?:fetch|XMLHttpRequest|EventSource|importScripts)\s*\(|\bnew\s+(?:XMLHttpRequest|WebSocket|EventSource|Worker|SharedWorker)\b|\bsendBeacon\b|\bWebSocket\s*\(/.test(src)) say("a network request (fetch / XMLHttpRequest / WebSocket / sendBeacon)");
-  if (/\bnew\s+Image\b|\bImage\s*\(\s*\)|\.\s*src\s*=|\.\s*srcset\s*=|\bsetAttribute\s*\(\s*["'`](?:src|srcset|href|action|formaction|ping|background|poster|data)["'`]|\.\s*(?:href|action)\s*=\s*[^=]/.test(src)) say("an address set from code (an image, link or form request)");
+  if (/\bnew\s+Image\b|\bImage\s*\(\s*\)|\.\s*src\s*=|\.\s*srcset\s*=|\bsetAttribute\s*\(\s*["'`](?:src|srcset|href|action|formaction|ping|background|poster|data)["'`]|\.\s*(?:href|action)\s*=\s*[^=]/.test(src)) {
+    /*
+     * S2a D13 (IM-24): A STATIC IMAGE is not exfiltration, but the page cannot show it either — the host mirror creates
+     * no <img> and drops every src from script-made elements (renderer uxDom.ts CREATE_TAGS / DROP_ATTR), so allowing
+     * it would let the card say "checked" for an image that never appears. Kept refused, with the native route named
+     * instead of the exfiltration wording: only when every address is a literal https string and no answer reaches it.
+     */
+    const lits = [...src.matchAll(/(?:\.\s*src\s*=|setAttribute\s*\(\s*["'`]src["'`]\s*,)\s*(["'`])([^"'`]*)\1\s*(?=[;\n)}]|$)/g)].map((m) => m[2]);
+    const assigns = [...src.matchAll(/\.\s*src\s*=|setAttribute\s*\(\s*["'`]src["'`]/g)].length;
+    const staticImage = /createElement\s*\(\s*["'`]img["'`]\s*\)/i.test(src) && !/\[\s*["'`][^"'`]*["'`]\s*\+/.test(src) && lits.length > 0 && lits.length === assigns && lits.every((u) => /^https:\/\/[^\s"'`{}$]+$/.test(u)) && !/\bnew\s+Image\b|\bImage\s*\(|\bsrcset\b|\.\s*(?:href|action)\s*=|setAttribute\s*\(\s*["'`](?:srcset|href|action|formaction|ping|background|poster|data)["'`]/.test(src);
+    if (staticImage) out.push(`a script cannot show an image — the survey does not let a script create an <img> or set a src (any address set from code is dropped on the page), so this would show nothing. ${nativeRoute("show_image")}`);
+    else say("an address set from code (an image, link or form request)");
+  }
   if (/document\s*\.\s*(?:cookie|domain)\b|\bcookieStore\b/.test(src)) say("cookie or document.domain access");
   if (/\b(?:local|session)Storage\b|\bindexedDB\b|\bcaches\s*\./.test(src)) say("browser storage");
   if (/\b(?:document|window|globalThis|self|top|parent)\s*\[/.test(src)) say("computed access on the page's globals (document[…])");

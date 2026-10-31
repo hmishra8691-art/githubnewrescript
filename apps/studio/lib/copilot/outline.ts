@@ -1,4 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
+import { scriptDossier, findScripts, type ScriptHealthLite } from "@rescript/engine";
 import { questionDependencies, describeDesignQuestion, listBlocks, formatCondition, structuredHypotheses, describeHypothesis, describeUxTarget, uxContextFor, uxBehaviorWords, inferQuestionAnalysis, effectiveLocalization, lintLanguage, translatableElements, languageName, reviewQuotas, quotaAdvice, legacyRefusalOutline } from "@rescript/engine";
 import type { FlowNode } from "@rescript/schema";
 import { briefText, type AnalysisRun } from "@rescript/analytics";
@@ -16,7 +17,7 @@ import { surveyContext } from "../intelligent/context.ts";
  * questions in full and the rest by code, plus the named ones in full, so
  * the prompt stays bounded however large the survey is.
  */
-export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null; /** §3 task-aware selection (questionnaireScope): "none" — a theme turn, no questionnaire; "focused" — a logic edit, the named questions and their dependencies in full, the rest by code */ questionnaire?: "full" | "focused" | "none" } = {}): string {
+export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: string | null; focusIds?: string[]; ux?: boolean; analysis?: boolean; translation?: boolean; quota?: boolean; quotaCounts?: Record<string, Record<string, number>> | null; findings?: boolean; analysisRun?: Pick<AnalysisRun, "computedAt" | "n" | "findings" | "verdicts" | "warnings" | "environment" | "trigger" | "corrections" | "advice" | "discoveries"> | null; /** §3 task-aware selection (questionnaireScope): "none" — a theme turn, no questionnaire; "focused" — a logic edit, the named questions and their dependencies in full, the rest by code */ questionnaire?: "full" | "focused" | "none"; /** S2a D10: a debug / explain request about scripts — those scripts IN FULL with their check, reads/writes and field health */ scriptQuestion?: { text: string; health?: ScriptHealthLite | null }; /** S2b: the request — a logic script it names is shown with its full code, so update_logic_script "edits" can quote it */ message?: string } = {}): string {
   const n = def.questions.length;
   const scope = opts.questionnaire ?? "full";
   if (scope === "focused" && opts.focusIds?.length) opts = { ...opts, focusIds: withDependencies(def, opts.focusIds) };
@@ -28,7 +29,7 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     /* the look only: the theme and the UX items (so an existing style is changed, not duplicated) — no questions, logic, research or plan */
     const ux = def.ux; const b = def.branding;
     lines.push(`Theme: primary ${b.colors?.primary ?? "default"}, font ${b.typography?.fontFamily ?? "default"}, cards ${b.layout?.cardStyle ?? "card"}, buttons ${b.buttons?.style ?? "solid"}${b.customCss ? `, Branding custom CSS ${b.customCss.length} chars` : ""}`);
-    if (ux && ux.styles.length + ux.animations.length + ux.behaviors.length) lines.push(`UX configuration: ${[...ux.styles.map((s) => `style ${s.id} “${s.label}” on ${describeUxTarget(def, s.target)}`), ...ux.animations.map((a) => `animation ${a.id} “${a.label}”`), ...ux.behaviors.map((x) => `behaviour ${x.id} “${x.label}” on ${describeUxTarget(def, x.target)}`)].slice(0, 60).join("; ")}`);
+    if (ux && ux.styles.length + ux.animations.length + ux.behaviors.length) lines.push(`UX configuration: ${[...ux.styles.map((s) => `style ${s.id} “${s.label}” on ${describeUxTarget(def, s.target)}`), ...ux.animations.map((a) => `animation ${a.id} “${a.label}”`), ...ux.behaviors.map((x) => `behaviour ${x.id} “${x.label}” on ${describeUxTarget(def, x.target)}${x.enabled === false ? " (disabled)" : ""}`)].slice(0, 60).join("; ")}`);
     return lines.join("\n");
   }
   const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
@@ -80,15 +81,26 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
    */
   const logic = def.scripts ?? [];
   if (logic.length) {
-    lines.push(`Scripts panel (${logic.length} logic script${logic.length === 1 ? "" : "s"}; run in the sandbox, read only here — no action edits them yet):`);
+    /* S2b item 4: they are written by create_logic_script / update_logic_script / remove_logic_script / set_logic_script_enabled; a script the request NAMES is shown with its whole code */
+    lines.push(`Scripts panel (${logic.length} logic script${logic.length === 1 ? "" : "s"}; run in the sandbox; change them by name with update_logic_script rather than adding a second one):`);
     const scopeOf = (sc: (typeof logic)[number]) => sc.scope === "survey" ? "survey" : `${sc.scope} ${sc.scope === "question" ? code(sc.ref ?? "") : (sc.ref ?? "?")}`;
-    for (const sc of logic.slice(0, 30)) lines.push(`  “${sc.name.replace(/\s+/g, " ").slice(0, 80)}” ${sc.event} on ${scopeOf(sc)}${sc.enabled === false ? " (off)" : ""}${sc.when ? ", guarded" : ""}: ${sc.code.replace(/\s+/g, " ").slice(0, opts.ux ? 160 : 80)}${sc.code.length > (opts.ux ? 160 : 80) ? "…" : ""}`);
+    const said = (opts.message ?? "").toLowerCase();
+    const named = (sc: (typeof logic)[number]) => sc.name.trim().length >= 3 && said.includes(sc.name.trim().toLowerCase());
+    for (const sc of logic.slice(0, 30)) {
+      const full = named(sc);
+      lines.push(`  “${sc.name.replace(/\s+/g, " ").slice(0, 80)}” ${sc.event} on ${scopeOf(sc)}${sc.enabled === false ? " (off)" : ""}${sc.when ? ", guarded" : ""}: ${full ? `FULL CODE (${sc.code.length} chars):\n${sc.code.slice(0, 20000)}` : `${sc.code.replace(/\s+/g, " ").slice(0, opts.ux ? 160 : 80)}${sc.code.length > (opts.ux ? 160 : 80) ? "…" : ""}`}`);
+    }
   }
   /*
    * S1c (audit D17): migrated / imported code the script check refuses — listed with the reasons (never the code), so
    * the model can say why something "does nothing" and propose a rewrite with the rs api when the researcher asks.
    */
   lines.push(...legacyRefusalOutline(def));
+  /* S2a D10: "debug / why / explain the script on Q5" — the scripts it names in full (not the excerpt above), their check verdict and warnings, reads/writes, and the field's script health */
+  if (opts.scriptQuestion) {
+    const dossier = scriptDossier(def, findScripts(def, opts.scriptQuestion.text, { selectedId: opts.selectedId ?? null }), opts.scriptQuestion.health ?? null);
+    if (dossier) lines.push(dossier);
+  }
   if (opts.ux) for (const id of focus) {
     const q = def.questions.find((x) => x.id === id);
     if (!q) continue;

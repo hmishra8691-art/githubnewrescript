@@ -1,4 +1,5 @@
 import type { Condition, FlowNode, Question, ResearchConstruct, SurveyDefinition, ValidationRule, OptionLogic, ListOperation } from "@rescript/schema";
+import { scriptLiteralRefs, surveyScripts } from "./scriptRefs.js";
 import { structuredHypotheses } from "./hypotheses.js";
 import { isQuestionValueRef } from "@rescript/schema";
 import { getQuestionByCodeOrVar } from "./state.js";
@@ -67,7 +68,8 @@ export type ObjectKind =
   | "construct"         // a research construct, by name
   | "hypothesis"        // a hypothesis of the research design, by label (H1) — Phase 3
   | "kpi"               // a KPI of the research design, by name — Phase 3
-  | "translation";      // one language version
+  | "translation"       // one language version
+  | "script";          // S2b: a behaviour script or a Scripts-panel logic script (literal references only)
 
 /** `kind:id` — stable across renames because it is built on ids, not names. */
 export type ObjectKey = `${ObjectKind}:${string}`;
@@ -97,7 +99,8 @@ export type EdgeKind =
   | "construct"        // a construct is measured by a question
   | "hypothesis"       // a hypothesis reads the constructs on its sides and the questions tagged with it; a plan item tagged with it reads the hypothesis
   | "kpi"              // a KPI reads the question whose variable it is read from
-  | "translation";     // a language holds translations keyed to a question (or a quota)
+  | "translation"      // a language holds translations keyed to a question (or a quota)
+  | "script";          // S2b: a script reads / writes a question, calculation or embedded field by a literal name
 
 export interface DependencyEdge {
   /** the reader — the object whose behaviour changes when `to` changes */
@@ -407,6 +410,20 @@ class Builder {
         const k = this.questionKey(name);
         if (k) this.edge(me, k, "analysis", `${base}.analysis.${key}[${i}]`, label(`analysis (${what})`));
       });
+    }
+  }
+
+  /** S2b (D18 / MM-10): what each script reads and writes, by literal name (scriptRefs.ts) */
+  scripts(): void {
+    const embedded = new Set<string>();
+    const walk = (nodes: unknown[]) => { for (const n of nodes ?? []) { const x = n as { type?: string; fields?: { name: string }[]; children?: unknown[]; branches?: { children: unknown[] }[]; otherwise?: unknown[] }; if (x?.type === "embedded_data") for (const f of x.fields ?? []) embedded.add(f.name); if (x?.children) walk(x.children); for (const br of x?.branches ?? []) walk(br.children); if (x?.otherwise) walk(x.otherwise); } };
+    walk(this.def.flow as unknown[]);
+    for (const src of surveyScripts(this.def)) {
+      const me = this.node("script", src.id, src.name, `${src.kind === "behavior" ? "behaviour script" : "logic script"} “${src.name}”`);
+      for (const r of scriptLiteralRefs(src.code)) {
+        const to = r.via === "hook" ? (this.def.questions.some((q) => q.id === r.name) ? objectKey("question", r.name) : null) : this.resolveName(r.name) ?? (embedded.has(r.name) ? objectKey("embedded", r.name) : null);
+        if (to) this.edge(me, to, "script", src.path, `script “${src.name}” — ${r.write ? "writes" : r.via === "hook" ? "styles / reads the page of" : "reads"} ${r.name}`);
+      }
     }
   }
 
@@ -724,6 +741,7 @@ export function buildDependencyIndex(def: SurveyDefinition): DependencyIndex {
   b.constructs();
   b.hypotheses();
   b.translations();
+  b.scripts();
 
   // referenced-but-undeclared targets (a dangling flow id) still get a node so the edge is inspectable
   for (const e of b.edges) {

@@ -147,7 +147,8 @@ __MICRO__
   }
   var nativeTimeoutEarly = window.setTimeout.bind(window);
   function plain(v) { try { return v === undefined ? null : JSON.parse(JSON.stringify(v)); } catch (e) { return null; } }
-  function fail(e) { send("error", [String(e && e.message || e)]); }
+  /* S2c: the line in the author's code, when the stack names one (new Function adds two lines before it) */
+  function fail(e) { var line = null; try { var lm = /<anonymous>:(\d+):\d+/.exec(String(e && e.stack || "")); if (lm && Number(lm[1]) > 2) line = Number(lm[1]) - 2; } catch (x) {} send("error", [String(e && e.message || e), line]); }
   var told = {};
   function note(key, text) { if (told[key]) return; told[key] = 1; send("log", [text]); }
   function guard(fn) { return function () { slice(); try { return fn.apply(this, arguments); } catch (e) { fail(e); } }; }

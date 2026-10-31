@@ -25,7 +25,7 @@ const base = (): SurveyDefinition => {
   return r.def;
 };
 const q = (d: SurveyDefinition, code: string) => d.questions.find((x) => x.code === code)!;
-const ux = (d: SurveyDefinition, actions: unknown[], opts: { uxOnly?: boolean } = {}) => {
+const ux = (d: SurveyDefinition, actions: unknown[], opts: { uxOnly?: boolean; uxOnlyInferred?: boolean; uxBehaviour?: boolean } = {}) => {
   const c = coerceSurveyActions(actions);
   assert.deepEqual(c.rejected, [], JSON.stringify(c.rejected));
   return applySurveyActions(d, c.actions, { ids, now: "2026-09-28T00:00:00Z", ...opts });
@@ -274,4 +274,35 @@ test("runtime triggers: momentary events fire, conditions hold and release, once
   assert.deepEqual(run({}, { [fav]: 1 }, [], [], [fav], blocks[0].id), { fire: "A", hold: "P", release: "" }, "block_complete only in its own block");
   assert.deepEqual(run({}, { [why]: "x" }, [], [], [why]), { fire: "", hold: "B,P", release: "" }, "a behaviour on a question not on the page does nothing (A, S, D stay quiet); the page and its block's page are complete");
   assert.deepEqual([...uxSelectedCodes({ r1: 2, r2: [3, 4] })].sort(), ["2", "3", "4"], "a grid's codes");
+});
+
+/* S2a D9 (2026-10-30): look-only inferred + a request that asks for behaviour — the native behaviour ops pass; questions, wording and a change of kind do not */
+test("look-only inferred, behaviour asked: native behaviour ops pass, structure is refused with a repairable reason, said look-only refuses all", () => {
+  const d = base();
+  const opts = { uxOnly: true, uxOnlyInferred: true, uxBehaviour: true };
+  const ok = ux(d, [
+    { op: "update_option", target: "Q3", option: "2", visibleIf: "Q2 = 1" },
+    { op: "add_skip", from: "Q1", when: "Q1 < 18", to: "terminate" },
+    { op: "create_embedded", name: "age", source: "url", value: "age" },
+    { op: "set_default_value", target: "Q1", value: "{{age}}" },
+    { op: "update_question", target: "Q3", type: "gamified.timed" },
+  ], opts);
+  assert.deepEqual(ok.results.map((r) => [r.op, r.ok, r.error ?? ""]).filter((x) => !x[1]), []);
+  assert.equal((q(ok.def, "Q1").settings as { defaultValue?: unknown }).defaultValue, "{{age}}", "a piped default is stored as written");
+  const no = ux(d, [
+    { op: "update_question", target: "Q3", text: "Sneaky rewording" },
+    { op: "update_option", target: "Q3", option: "2", label: "Renamed" },
+    { op: "update_question", target: "Q3", type: "multi" },
+    { op: "create_question", ref: "X", type: "single", text: "New?", options: ["a", "b"] },
+  ], opts);
+  assert.ok(no.results.every((r) => !r.ok));
+  for (const r of no.results) assert.match(r.error ?? "", /reads as look-and-behaviour only \(inferred/, r.op);
+  assert.doesNotMatch(no.results.map((r) => r.error).join(" "), /this request is about the look and behaviour only/, "inferred: not the terminal (said) wording");
+  // without the behaviour flag, inferred look-only keeps only validation; said look-only refuses everything structural
+  assert.equal(ux(d, [{ op: "update_option", target: "Q3", option: "2", visibleIf: "Q2 = 1" }], { uxOnly: true, uxOnlyInferred: true } as never).results[0].ok, false);
+  const said = ux(d, [{ op: "update_option", target: "Q3", option: "2", visibleIf: "Q2 = 1" }], { uxOnly: true, uxBehaviour: true } as never);
+  assert.match(said.results[0].error ?? "", /this request is about the look and behaviour only/);
+  // a piped default must name something that exists
+  const bad = ux(d, [{ op: "set_default_value", target: "Q1", value: "{{nope}}" }]);
+  assert.match(bad.results[0].error ?? "", /neither a question nor embedded data/);
 });

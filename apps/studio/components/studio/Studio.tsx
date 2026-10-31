@@ -21,6 +21,8 @@ import { useSession } from "@/lib/useSession";
 import { DesignsPanel } from "./DesignsPanel";
 import { QualPanel } from "./qual/QualPanel";
 import { BrandingPanel, ScriptsPanel, ThemeLivePreview } from "./BrandingPanel";
+import { AllCodePanel } from "./AllCodePanel";
+import { ScriptBundleTools } from "./ScriptBundleTools";
 import { AssetsPanel } from "./AssetsPanel";
 import { VersionsPanel } from "./VersionsPanel";
 import { JsonPanel } from "./JsonPanel";
@@ -47,7 +49,7 @@ import { ModeChooser } from "./ModeChooser";
 
 type Tab =
   | "questions" | "flow" | "logic" | "variables" | "calculations"
-  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "tests" | "data" | "fieldwork"
+  | "quotas" | "listfill" | "designs" | "qualitative" | "branding" | "assets" | "localization" | "scripts" | "allcode" | "tests" | "data" | "fieldwork"
   | "distribution" | "project" | "usage" | "versions" | "json"
   | "collaborators" | "notes" | "activity"
   | "settings";
@@ -61,7 +63,7 @@ type Tab =
  */
 const EDITING_TABS = new Set<Tab>([
   "questions", "settings", "flow", "logic", "variables", "calculations",
-  "quotas", "listfill", "designs", "branding", "assets", "localization", "scripts", "json",
+  "quotas", "listfill", "designs", "branding", "assets", "localization", "scripts", "allcode", "json",
 ]);
 
 /*
@@ -96,6 +98,8 @@ const NAV: { key: Tab; label: string; icon: IconName; group: string }[] = [
    */
   { key: "localization", label: "Translation", icon: "layers", group: "Research tools" },
   { key: "scripts", label: "Scripts", icon: "scripts", group: "Research tools" },
+  /* S3b: every piece of code in the survey in one list, each editable in place (beside Scripts: Research tools is where survey code lives) */
+  { key: "allcode", label: "All code", icon: "scripts", group: "Research tools" },
   /*
    * §55/§56. In Research tools rather than Programming, and deliberately NOT
    * in EDITING_TABS: a reviewer checking whether a programmer's change broke
@@ -1094,6 +1098,7 @@ function StudioShell({ collaboration }: { collaboration: boolean }) {
           {tab === "assets" && <AssetsPanel />}
           {tab === "localization" && <LocalizationPanel />}
           {tab === "scripts" && <ScriptsPanel />}
+          {tab === "allcode" && <AllCodePanel tools={(sel, all) => <ScriptBundleTools selected={sel} all={all} />} />}
           {tab === "data" && <DataPanel />}
           {tab === "fieldwork" && <FieldworkPanel />}
           {tab === "project" && <ProjectPanel />}

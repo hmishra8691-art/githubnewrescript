@@ -124,6 +124,8 @@ export interface StudioState {
   redoLabel: string | null;
   /** how many edits undo can take back — a caller (and a browser suite) can tell an edit was NOT made */
   undoDepth: number;
+  /** S3b: this session's undo history (oldest first) — the definition before each labelled edit (per-script history) */
+  editHistory: { def: SurveyDefinition; label: string }[];
   /** Name the edit the next `update` performs, so undo can describe it. */
   labelNextEdit(label: string): void;
   /** switch the centre panel — lets one panel point at another */
@@ -752,6 +754,7 @@ export function StudioProvider({
     undoLabel: past.length ? past[past.length - 1].label : null,
     redoLabel: future.length ? future[future.length - 1].label : null,
     undoDepth: past.length,
+    editHistory: past,
     /** true when something was undone — a caller reverting a failed save needs to know */
     undo() {
       const stack = pastRef.current;

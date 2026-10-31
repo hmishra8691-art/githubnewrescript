@@ -1,3 +1,4 @@
+import { coerceExpect, type ScriptExpect } from "./scriptVerify.js";
 import type { Condition, Question, SurveyDefinition, UxAnimation, UxBehavior, UxEffect, UxRule, UxStyle, UxTarget } from "@rescript/schema";
 import { semanticTwin } from "./uxDuplicates.js";
 import { parseLogicExpression } from "./logicExpression.js";
@@ -50,7 +51,7 @@ export interface RawEffect { do: string; target?: unknown; className?: string; p
 /** update_behavior: a small change to a stored script without sending it again — each `find` must occur exactly once */
 export interface ScriptEdit { find: string; replace: string }
 type AnimFields = { preset?: string; trigger?: string; durationMs?: number; delayMs?: number; easing?: string; staggerMs?: number; iterations?: number | "infinite"; media?: string; when?: string | null };
-type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null; edits?: ScriptEdit[] };
+type BehFields = { on?: string; options?: string[]; effects?: RawEffect[]; script?: string; once?: boolean; when?: string | null; edits?: ScriptEdit[]; /** S3b (MM-07): switch it on / off (update_behavior) */ enabled?: boolean; /** S2c: what the script should do, checked in the test session (never stored) */ expect?: ScriptExpect };
 export type UxAction =
   | { op: "create_style"; ref?: string; label: string; target: unknown; rules: RawRule[]; css?: string; when?: string }
   | { op: "update_style"; id: string; label?: string; target?: unknown; rules?: RawRule[]; addRules?: RawRule[]; css?: string | null; when?: string | null }
@@ -139,8 +140,10 @@ const behFields = (o: Record<string, unknown>): BehFields => ({
   ...(Array.isArray(o.effects) ? { effects: o.effects.map(effect).filter((x): x is RawEffect => !!x).slice(0, 20) } : {}),
   ...(str(o.script) ?? str(o.js) ? { script: str(o.script) ?? str(o.js) } : {}),
   ...(typeof o.once === "boolean" ? { once: o.once } : {}),
+  ...(typeof o.enabled === "boolean" ? { enabled: o.enabled } : typeof o.disabled === "boolean" ? { enabled: !o.disabled } : {}),
   /* a guard — "only when Q3 = 2 AND Q1 >= 18" — as expression text; null removes it */
   ...(o.when === null || o.condition === null ? { when: null } : str(o.when) ?? str(o.condition) ? { when: str(o.when) ?? str(o.condition) } : {}),
+  ...(coerceExpect(o.expect) ? { expect: coerceExpect(o.expect) } : {}),
 });
 const itemId = (o: Record<string, unknown>) => str(o.id) ?? str(o.target_id) ?? str(o.ref) ?? str(o.label) ?? str(o.name);
 
@@ -468,6 +471,21 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       return { description: `Remove ${q.code}'s default value (${Array.isArray(was) ? was.join(", ") : String(was)})`, destructive: `Removes ${q.code}'s default value`, warnings: [], touched: [q.id] };
     }
     const probe = { ...q, settings: { ...q.settings, defaultValue: a.value } } as typeof q;
+    /*
+     * A PIPED DEFAULT ("{{age}}" from a URL parameter, "{{Q1}}") resolves only while a respondent answers, so it is
+     * checked on its names, not read on an empty response (S2a D9: "Prefill Q1 with the URL parameter age" —
+     * create_embedded + set_default_value "{{age}}" — was refused as "must be a number"). The runtime reads it as the
+     * field reads its answer, and writes nothing when it resolves to nothing.
+     */
+    const pipes = typeof a.value === "string" ? [...a.value.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)].map((m) => m[1]) : [];
+    if (pipes.length && typeof a.value === "string") {
+      const known = (n: string) => { const base = n.split(/[.:|]/)[0]; return !!env.lookups.question(base) || (def.embeddedData ?? []).some((e) => (e as { name?: string }).name?.toLowerCase() === base.toLowerCase()) || def.questions.some((x) => x.variableName?.toLowerCase() === base.toLowerCase()); };
+      const unknown = pipes.filter((n) => !known(n));
+      if (unknown.length) fail(`${q.code}'s default pipes ${unknown.map((n) => `{{${n}}}`).join(", ")}, which is neither a question nor embedded data — create the embedded data first (create_embedded with source "url" for a URL parameter)`);
+      const had = settings.defaultValue !== undefined;
+      settings.defaultValue = a.value;
+      return { description: `${had ? "Change" : "Set"} ${q.code}'s default value to ${a.value} (piped) — filled in when the question is first shown, only if it has no answer yet and the pipe has a value`, ...(had ? { destructive: `Replaces ${q.code}'s default value` } : {}), warnings: [], touched: [q.id] };
+    }
     const read = defaultAnswerFor(probe, { def, state: createResponseState(def) });
     if (read === null) {
       const model = effectiveResponseModel(q);
@@ -613,11 +631,15 @@ export function applyUxAction(def: SurveyDefinition, a: UxAction, env: UxEnv): U
       if (a.once !== undefined) next.once = a.once;
       if (a.when === null) delete next.when;
       else if (a.when) next.when = parseGuard(def, a.when);
+      /* S3b (MM-07): on = the key goes (absent is on); switching on passes the same gate as any change */
+      if (a.enabled === true) delete next.enabled;
+      else if (a.enabled === false) next.enabled = false;
       const warnings = gate(def, "behavior", next);
       refuseDuplicate(def, ux.behaviors, next);
       ux.behaviors[ux.behaviors.indexOf(b)] = next;
+      const switched = a.enabled === undefined || (a.enabled === (b.enabled !== false)) ? "" : a.enabled ? " — switched on" : " — switched off (it stays here, and does not run)";
       const edited = a.edits?.length ? `: ${a.edits.length} edit${a.edits.length === 1 ? "" : "s"} to its script (${a.edits.map((x) => `“${oneLine(x.find, 30)}” → “${oneLine(x.replace, 30)}”`).join("; ")})` : "";
-      return { description: `Change behaviour “${next.label}”${edited}${a.script || a.edits?.length ? ` — ${SCRIPT_CHECKED}` : ""}`, warnings, touched: [] };
+      return { description: `Change behaviour “${next.label}”${edited}${switched}${a.script || a.edits?.length ? ` — ${SCRIPT_CHECKED}` : ""}`, warnings, touched: [] };
     }
     case "remove_behavior": {
       const b = find(ux.behaviors, a.id, env, "behaviour");
@@ -660,7 +682,10 @@ export function applyScriptEdits(b: Pick<UxBehavior, "label" | "script">, list: 
  * run alongside the first — two popups, two messages, a script and an effect fighting over one element.
  * The model is told to change the one there is (the outline lists it with its id).
  */
-function refuseDuplicate(def: SurveyDefinition, list: UxBehavior[], b: UxBehavior) {
+function refuseDuplicate(def: SurveyDefinition, list0: UxBehavior[], b: UxBehavior) {
+  /* S3b (MM-06/07): a switched-off behaviour never runs, so it is nobody's twin (a duplicate starts switched off) */
+  if (b.enabled === false) return;
+  const list = list0.filter((x) => x.enabled !== false);
   const key = uxBehaviorKey(b);
   /* a script that decides its own event has no exact key — it is still compared by what it does (#14a, below) */
   const twin = key ? list.find((x) => x.id !== b.id && uxBehaviorKey(x) === key) : undefined;

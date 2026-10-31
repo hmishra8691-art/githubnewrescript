@@ -79,7 +79,7 @@ const cut = (s: string) => (s.length > REASON_MAX ? `${s.slice(0, REASON_MAX - 1
 export function scriptItems(def: SurveyDefinition | null | undefined): Item[] {
   if (!def) return [];
   const out: Item[] = [];
-  for (const b of def.ux?.behaviors ?? []) if (b.script?.trim()) out.push({ kind: "ux_script", id: b.id, name: b.label || b.id, code: b.script, enabled: true });
+  for (const b of def.ux?.behaviors ?? []) if (b.script?.trim()) out.push({ kind: "ux_script", id: b.id, name: b.label || b.id, code: b.script, enabled: b.enabled !== false });
   for (const s of def.scripts ?? []) out.push({ kind: "logic_script", id: s.id, name: s.name || s.id, code: s.code ?? "", enabled: s.enabled !== false });
   for (const q of def.questions ?? []) {
     const label = String(q.code ?? q.id);

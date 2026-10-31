@@ -7,6 +7,10 @@ import { useStudio, uid } from "./store";
 import { OptionalCondition } from "./ConditionBuilder";
 import { ScriptHealthChip } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
+import { CodeEditor, type CodeEditorProps } from "./code/CodeEditor";
+import { useScriptTools } from "./code/ScriptTools";
+import { scopedCssGate } from "@/lib/code/diagnostics.ts";
+import { duplicateUxItem, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
 
 /**
  * THE MANUAL CONTROL LAYER for the survey's styles, animations, behaviours
@@ -73,13 +77,15 @@ export function parseDecls(text: string): { decls: Record<string, string>; error
   return { decls: uxDeclarations(decls) };
 }
 
-export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string }) {
+/** the store writes every Styles/animations/scripts card uses: save through the gate, remove, duplicate (S3b: shared with All code) */
+export function useUxItemActions() {
   const s = useStudio();
-  const items = uxItemsFor(s.def, scope);
-  const [draft, setDraft] = React.useState<Item | null>(null);
   const write = (kind: Kind, next: UxStyle | UxAnimation | UxBehavior, label: string): string[] => {
     const v = validateUxItem(s.def, kind, next);
-    if (v.errors.length) return v.errors;
+    /* S3b (MM-07): switching a behaviour OFF is always allowed (a refused import can be parked); switching on, or any edit, passes the gate */
+    const stored = (s.def.ux?.[listOf(kind)] as { id: string }[] | undefined)?.find((x) => x.id === next.id);
+    const onlyOff = kind === "behavior" && (next as UxBehavior).enabled === false && !!stored && JSON.stringify({ ...stored, enabled: false }) === JSON.stringify(next);
+    if (v.errors.length && !onlyOff) return v.errors;
     s.labelNextEdit(label);
     s.update((d) => {
       d.ux = d.ux ?? { styles: [], animations: [], behaviors: [] };
@@ -93,6 +99,42 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
     s.labelNextEdit(`Remove ${kind === "behavior" ? "behaviour" : kind} “${label}”`);
     s.update((d) => { if (!d.ux) return; const list = d.ux[listOf(kind)] as { id: string }[]; const i = list.findIndex((x) => x.id === id); if (i >= 0) list.splice(i, 1); });
   };
+  /* S3b (MM-06): a copy with a new id and "(copy)"; a behaviour's copy starts switched off */
+  const duplicate = (kind: Kind, item: UxStyle | UxAnimation | UxBehavior) => {
+    const copy = duplicateUxItem(kind, item, uid(kind === "style" ? "uxs" : kind === "animation" ? "uxa" : "uxb"));
+    s.labelNextEdit(`Duplicate ${kind === "behavior" ? "behaviour" : kind} “${item.label}”`);
+    s.update((d) => {
+      d.ux = d.ux ?? { styles: [], animations: [], behaviors: [] };
+      const list = d.ux[listOf(kind)] as (typeof copy)[];
+      const i = list.findIndex((x) => x.id === item.id);
+      list.splice(i >= 0 ? i + 1 : list.length, 0, copy);
+    });
+    s.toast(kind === "behavior" ? `Copied as “${copy.label}”. ${DUPLICATE_NOTE}` : `Copied as “${copy.label}”.`);
+  };
+  return { write, remove, duplicate };
+}
+
+/** one existing behaviour / style / animation by id, editable in place (Research tools → All code) */
+export function UxItemEditorById({ id }: { id: string }) {
+  const s = useStudio();
+  const { write, remove, duplicate } = useUxItemActions();
+  const ux = s.def.ux ?? empty;
+  const found: Item | null = (() => {
+    const b = ux.behaviors.find((x) => x.id === id); if (b) return { kind: "behavior", item: b };
+    const st = ux.styles.find((x) => x.id === id); if (st) return { kind: "style", item: st };
+    const a = ux.animations.find((x) => x.id === id); if (a) return { kind: "animation", item: a };
+    return null;
+  })();
+  if (!found) return <p className="muted">It is no longer in the survey.</p>;
+  return <UxItemCard kind={found.kind} item={found.item} def={s.def} readOnly={s.readOnly}
+    onSave={(next, label) => write(found.kind, next, label)} onRemove={() => remove(found.kind, found.item.id, found.item.label)} onDuplicate={() => duplicate(found.kind, found.item)} />;
+}
+
+export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string }) {
+  const s = useStudio();
+  const items = uxItemsFor(s.def, scope);
+  const [draft, setDraft] = React.useState<Item | null>(null);
+  const { write, remove, duplicate } = useUxItemActions();
   const start = (kind: Kind, script = false) => {
     const target = defaultTarget(scope);
     const now = new Date().toISOString();
@@ -112,7 +154,7 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
       {items.length === 0 && !draft && <p className="muted" style={{ fontSize: 11.5 }} data-testid="ux-items-empty">None yet. Add one here, or ask Intelligent mode (“make these options look like cards”) — either way it is the same setting, editable here.</p>}
       {items.map((x) => (
         <UxItemCard key={x.item.id} kind={x.kind} item={x.item} def={s.def} readOnly={s.readOnly}
-          onSave={(next, label) => write(x.kind, next, label)} onRemove={() => remove(x.kind, x.item.id, x.item.label)} />
+          onSave={(next, label) => write(x.kind, next, label)} onRemove={() => remove(x.kind, x.item.id, x.item.label)} onDuplicate={() => duplicate(x.kind, x.item)} />
       ))}
       {draft && (
         <UxItemCard kind={draft.kind} item={draft.item} def={s.def} readOnly={s.readOnly} isNew
@@ -136,16 +178,26 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
  * written to the survey when it passes the gate (text on blur, choices at
  * once) — an invalid state is shown with its reasons and never saved.
  */
-function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
+export function UxItemCard({ kind, item, def, onSave, onRemove, onDuplicate, readOnly, isNew }: {
   kind: Kind; item: UxStyle | UxAnimation | UxBehavior; def: SurveyDefinition; readOnly: boolean; isNew?: boolean;
   onSave(next: UxStyle | UxAnimation | UxBehavior, label: string): string[];
   onRemove(): void;
+  onDuplicate?(): void;
 }) {
   const [cur, setCur] = React.useState(item);
   const [errors, setErrors] = React.useState<string[]>([]);
   const [showCode, setShowCode] = React.useState(false);
   React.useEffect(() => { setCur(item); setErrors([]); }, [item]);
   const noun = kind === "behavior" ? ((item as UxBehavior).script ? "script" : "behaviour") : kind;
+  const off = kind === "behavior" && (cur as UxBehavior).enabled === false;
+  /* S3b (MM-07): on = the key goes (absent is on) */
+  const setEnabled = (on: boolean) => {
+    const { enabled: _e, ...rest } = cur as UxBehavior;
+    const next = (on ? rest : { ...rest, enabled: false }) as UxBehavior;
+    if (isNew) { setCur(next); return; }
+    setCur(next);
+    setErrors(onSave(next, `${on ? "Switch on" : "Switch off"} ${noun} “${next.label}”`));
+  };
   const commit = (next: typeof cur, immediate = false) => {
     setCur(next);
     if (isNew && !immediate) return;
@@ -155,25 +207,40 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
   };
   const save = () => { const e = onSave(cur, `Edit ${noun} “${cur.label}”`); setErrors(e); };
   const warnings = React.useMemo(() => validateUxItem(def, kind, cur).warnings, [def, kind, cur]);
+  /* S3b: History (and the test run) for a stored behaviour script */
+  const stored = kind === "behavior" && (item as UxBehavior).script !== undefined && !isNew;
+  const tools = useScriptTools({ itemKey: stored ? `ux_script:${item.id}` : null, code: (cur as UxBehavior).script ?? "", def, run: stored ? { kind: "behaviour", id: item.id } : null });
   const code = kind === "style" ? compileStyle(def, cur as UxStyle).css : kind === "animation" ? compileAnimation(def, cur as UxAnimation) : (cur as UxBehavior).script ?? "";
   return (
-    <div className="ux-item" data-testid="ux-item" data-kind={noun} data-id={item.id}>
+    <div className={`ux-item${off ? " is-off" : ""}`} data-testid="ux-item" data-kind={noun} data-id={item.id} data-enabled={kind === "behavior" ? String(!off) : undefined}>
       <div className="ux-item-head">
         <span className="ux-kind">{noun}</span>
+        {kind === "behavior" && (
+          <label className="ux-enabled" title={off ? "Switched off: kept and checked, but it does not run" : "Switched on: it runs in the survey"}>
+            <input type="checkbox" checked={!off} disabled={readOnly} onChange={(e) => setEnabled(e.target.checked)} data-testid="ux-item-enabled" aria-label={`${noun} “${cur.label}” on`} />
+            {off ? "off" : "on"}
+          </label>
+        )}
         <input className="input sm" value={cur.label} disabled={readOnly} aria-label="Name"
           onChange={(e) => setCur({ ...cur, label: e.target.value })} onBlur={() => commit(cur)} data-testid="ux-item-label" />
+        {!isNew && onDuplicate && <button type="button" className="btn sm ghost" onClick={onDuplicate} disabled={readOnly}
+          title={kind === "behavior" ? `Make a copy with a new id. ${DUPLICATE_NOTE}` : "Make a copy with a new id"} data-testid="ux-item-duplicate">Duplicate</button>}
         <button type="button" className="btn sm ghost" onClick={onRemove} disabled={readOnly} title={isNew ? "Discard" : "Remove"} data-testid="ux-item-remove">{isNew ? "Discard" : "Remove"}</button>
       </div>
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
-      {kind === "behavior" && (item as UxBehavior).script && !isNew ? <div style={{ margin: "2px 0 4px" }}><ScriptHealthChip scriptId={item.id} /></div> : null}
-      {kind === "style" && <StyleFields style={cur as UxStyle} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+      {off && <p className="ux-off-note" data-testid="ux-item-off-note">Switched off — it stays here and is still checked, but it does not run for respondents. Tick “on” to run it (the check must pass).</p>}
+      {(cur as UxBehavior).notes && <p className="muted" style={{ fontSize: 11.5, margin: "2px 0" }} data-testid="ux-item-notes">{(cur as UxBehavior).notes}</p>}
+      {kind === "style" && <StyleFields style={cur as UxStyle} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
       {(kind === "style" || kind === "animation") && (
         /* a style or animation can be conditional too — it applies only while the condition holds */
         <BehaviorGuard b={cur as unknown as UxBehavior} readOnly={readOnly}
           onChange={(n) => commit(n as never, true)} />
       )}
-      {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
+      {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)}
+        /* the gate the save uses (validateUxItem), run while typing: its findings are the editor's markers */
+        gate={(code) => validateUxItem(def, "behavior", { ...(cur as UxBehavior), script: code })}
+        header={(item as UxBehavior).script && !isNew ? <><ScriptHealthChip scriptId={item.id} />{tools.buttons}</> : null} below={tools.panels} diagnostics={tools.diagnostics} />}
       {errors.length > 0 && <ul className="ux-errors" role="alert" data-testid="ux-item-errors">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       {warnings.length > 0 && <ul className="ux-warnings" data-testid="ux-item-warnings">{warnings.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       <div className="ux-item-foot">
@@ -185,7 +252,7 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
   );
 }
 
-function StyleFields({ style, readOnly, onChange, onBlur }: { style: UxStyle; readOnly: boolean; onChange(n: UxStyle, now?: boolean): void; onBlur(): void }) {
+function StyleFields({ style, def, readOnly, onChange, onBlur }: { style: UxStyle; def: SurveyDefinition; readOnly: boolean; onChange(n: UxStyle, now?: boolean): void; onBlur(): void }) {
   const setRule = (i: number, r: UxRule, now = false) => onChange({ ...style, rules: style.rules.map((x, k) => (k === i ? r : x)) }, now);
   return (
     <div className="ux-fields">
@@ -206,9 +273,10 @@ function StyleFields({ style, readOnly, onChange, onBlur }: { style: UxStyle; re
         </div>
       ))}
       {!readOnly && <button type="button" className="btn sm ghost" onClick={() => onChange({ ...style, rules: [...style.rules, { declarations: {} }] })} data-testid="ux-add-rule">+ Rule</button>}
-      <label className="f"><span>Scoped CSS (selectors relative to the target; &amp; is the target)</span>
-        <textarea className="ta code" style={{ minHeight: 50 }} value={style.css ?? ""} disabled={readOnly} placeholder="& { … }"
-          onChange={(e) => onChange({ ...style, css: e.target.value || undefined })} onBlur={onBlur} data-testid="ux-style-css" /></label>
+      <div className="f"><span>Scoped CSS (selectors relative to the target; &amp; is the target)</span>
+        <CodeEditor language="css" kind="css" value={style.css ?? ""} readOnly={readOnly} placeholder="& { … }" minHeight={50}
+          label="Scoped CSS" testId="ux-style-css" gate={scopedCssGate(def, style)}
+          onChange={(v) => onChange({ ...style, css: v || undefined })} onCommit={onBlur} /></div>
     </div>
   );
 }
@@ -239,7 +307,11 @@ function AnimationFields({ a, readOnly, onChange }: { a: UxAnimation; readOnly: 
     </div>
   );
 }
-function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void; onBlur(): void }) {
+function BehaviorFields({ b, def, readOnly, onChange, onBlur, gate, header, below, diagnostics }: {
+  b: UxBehavior; def: SurveyDefinition; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void; onBlur(): void;
+  gate(code: string): { errors: string[]; warnings: string[] }; header?: React.ReactNode; below?: React.ReactNode;
+  diagnostics?: CodeEditorProps["extraDiagnostics"];
+}) {
   const [effects, setEffects] = React.useState(JSON.stringify(b.effects, null, 1));
   const [err, setErr] = React.useState<string | undefined>();
   React.useEffect(() => { setEffects(JSON.stringify(b.effects, null, 1)); }, [b.effects]);
@@ -249,9 +321,10 @@ function BehaviorFields({ b, readOnly, onChange, onBlur }: { b: UxBehavior; read
         {b.source && <p className="muted" style={{ fontSize: 11.5, margin: "0 0 4px" }} data-testid="ux-script-moved">
           Moved here from {b.source === "branding_custom_js" ? "Branding → custom JavaScript" : b.source === "question_custom_js" ? "this question’s Custom code" : "Intelligent mode’s custom code"} — your code is inside, unchanged. It now runs in the same sandbox as every other script.
         </p>}
-        <label className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
-          <textarea className="ta code" style={{ minHeight: 110 }} value={b.script} disabled={readOnly} spellCheck={false}
-            onChange={(e) => onChange({ ...b, script: e.target.value })} onBlur={onBlur} data-testid="ux-script" /></label>
+        <div className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
+          <CodeEditor language="js" kind="ux" def={def} value={b.script} readOnly={readOnly} minHeight={110} label={`Script “${b.label}”`}
+            testId="ux-script" gate={gate} header={header} showRefs extraDiagnostics={diagnostics}
+            onChange={(v) => onChange({ ...b, script: v })} onCommit={onBlur} />{below}</div>
         <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />
       </div>
     );

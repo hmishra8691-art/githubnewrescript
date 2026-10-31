@@ -8,7 +8,7 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 **Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (13): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`
+**Options and design** (18): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -33,12 +33,14 @@ export type SurveyAction =
   | { op: "create_block"; ref?: string; title: string; after?: string }
   | { op: "rename_block"; target: string; title: string }
   | { op: "delete_block"; target: string }
-  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none" }
+  | { op: "create_question"; ref?: string; block?: string; after?: string; /** placed just before this question (durable tasks: a planned question restored to its slot) */ before?: string; newPage?: boolean; type: string; text: string; code?: string; variable?: string; options?: OptionSpec[]; rows?: string[]; scale?: ScaleSpec; required?: boolean; randomize?: boolean; instruction?: string; validation?: ValidationSpec[]; /** what an "Other (specify)" box accepts (QT-08) */ otherFormat?: OtherFormat; /** what the answer is — age, year, count, percent, currency, email, phone, postal, url — or "none" to keep the registry out */ semantic?: Semantic | "none"; /** S2b: the variant's own settings, as update_question */ settings?: Record<string, unknown> }
   | { op: "update_question"; target: string; text?: string; type?: string; code?: string; variable?: string; required?: boolean; instruction?: string; options?: OptionSpec[]; addOptions?: OptionSpec[]; removeOptions?: (string | number)[]; rows?: string[]; scale?: ScaleSpec; randomize?: boolean; otherFormat?: OtherFormat | "none";
       /** `settings.hidden` — hidden from respondents on the live link, shown (purple, with its auto-punch result) in preview and test (2026-10-24) */
       hidden?: boolean;
       /** the request also asked for Read Only, which is no longer a question state (2026-10-24): applied as nothing, and said so */
-      readOnlyIgnored?: boolean }
+      readOnlyIgnored?: boolean;
+      /** S2a D16: a variant's own settings (e.g. gamified.timed timeLimitSeconds / onTimeout) — only the keys the variant declares, each checked against the question schema */
+      settings?: Record<string, unknown> }
   | { op: "delete_question"; target: string }
   | { op: "move_question"; target: string; block?: string; after?: string; before?: string }
   | { op: "set_display_logic"; target: string; expression: CondInput | null }
@@ -85,6 +87,8 @@ export interface ValidationSpec {
   /** kind "condition": what a valid answer must satisfy (stored negated: the engine's `check` is the invalid case) */
   check?: CondInput;
   message?: string;
+  /** S2a D16: "warning" shows the message and lets the respondent continue (schema ValidationRule.severity); absent = a blocking error */
+  severity?: "warning";
 }
 ```
 
@@ -96,7 +100,7 @@ From `packages/engine/src/optionActions.ts`:
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -107,7 +111,35 @@ export type OptionAction =
   | { op: "remove_hypothesis"; hypothesis: string | number }
   /** the structured reading of a hypothesis (Phase 3): only the fields given change; a construct name must exist in the design */
   | { op: "set_hypothesis"; hypothesis: string | number; text?: string; detail: HypothesisDetail }
-  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null };
+  | { op: "set_custom_code"; target: string; js?: string | null; css?: string | null }
+  /* S2b: a question's stimulus and option images — see mediaActions.ts */
+  | MediaAction
+  /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
+  | LogicScriptAction;
+```
+
+## Question media (set_question_media)
+
+From `packages/engine/src/mediaActions.ts`:
+
+```ts
+export type MediaAction = {
+  op: "set_question_media"; target: string;
+  items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
+  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
+};
+```
+
+## Scripts-panel (logic) scripts
+
+From `packages/engine/src/logicScriptActions.ts`:
+
+```ts
+export type LogicScriptAction =
+  | { op: "create_logic_script"; name: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code: string; enabled?: boolean; notes?: string; /** S2c: checked in the test session, never stored */ expect?: ScriptExpect }
+  | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string; expect?: ScriptExpect }
+  | { op: "remove_logic_script"; script: string }
+  | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
 ```
 
 ## UX actions

@@ -50,10 +50,10 @@ test("the model's reply is gated: actions through the engine's gate, everything 
 });
 
 test("what a request needs: mode, and research only when it is about the research", () => {
-  assert.deepEqual(classifyRequest("My hypothesis is that younger consumers buy premium skincare because of social media. Create a survey to test it.", 0, 0), { mode: "generate", research: false, ux: false, uxOnly: false });
-  assert.deepEqual(classifyRequest("Change Q18 to a matrix question", 30, 3), { mode: "edit", research: false, ux: false, uxOnly: false }, "no papers for a type change");
-  assert.deepEqual(classifyRequest("Based on the literature review, add three questions measuring trust", 30, 3), { mode: "edit", research: true, ux: false, uxOnly: false });
-  assert.deepEqual(classifyRequest("Review my survey", 30, 0), { mode: "review", research: false, ux: false, uxOnly: false });
+  assert.deepEqual(classifyRequest("My hypothesis is that younger consumers buy premium skincare because of social media. Create a survey to test it.", 0, 0), { mode: "generate", research: false, ux: false, uxOnly: false, uxBehaviour: false });
+  assert.deepEqual(classifyRequest("Change Q18 to a matrix question", 30, 3), { mode: "edit", research: false, ux: false, uxOnly: false, uxBehaviour: false }, "no papers for a type change");
+  assert.deepEqual(classifyRequest("Based on the literature review, add three questions measuring trust", 30, 3), { mode: "edit", research: true, ux: false, uxOnly: false, uxBehaviour: false });
+  assert.deepEqual(classifyRequest("Review my survey", 30, 0), { mode: "review", research: false, ux: false, uxOnly: false, uxBehaviour: false });
   assert.equal(classifyRequest("Mujhe ek customer satisfaction survey banana hai. Pehle screening karo", 0, 0).mode, "generate", "Hinglish");
   assert.equal(classifyRequest("I've uploaded three papers and a brief — create a survey based on them", 0, 4).research, true);
   assert.equal(classifyRequest("What does Q3 measure?", 12, 0).mode, "question");
@@ -308,7 +308,9 @@ test("punching and variables are structure: a request that mixes them with the l
   }
   // look-only still means look-only
   assert.equal(classifyRequest("Make Q3's options rounded cards with a hover glow", 20, 0).uxOnly, true);
-  assert.equal(classifyRequest("Set the default value of Q2 to 19", 20, 0).uxOnly, true, "a default value is look-and-behaviour");
+  /* S2a D9: a starting answer is BEHAVIOUR (set_default_value), so it sends the UX guide but is never look-only */
+  assert.equal(classifyRequest("Set the default value of Q2 to 19", 20, 0).ux, true, "a default value gets the UX guide");
+  assert.equal(classifyRequest("Set the default value of Q2 to 19", 20, 0).uxOnly, false, "a default value is behaviour, not look-only");
   assert.equal(classifyRequest("Set the colour to navy and the font to Georgia", 20, 0).uxOnly, true, "“set … to” on the look is still look-only");
   // the look-only prompt tells the model where a structural change goes: this chat, as its own request
   const p = copilotUserPrompt({ message: "rounded cards", outline: "o", surveyLanguage: "en", mode: "ux", ux: true, uxOnly: true });

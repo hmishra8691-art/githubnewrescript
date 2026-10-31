@@ -5,7 +5,7 @@ import type { Condition, SurveyDefinition } from "@rescript/schema";
 import { variantRegistry } from "@rescript/schema";
 import {
   buildDependencyIndex, objectStatus, applyLogicProposal, proposalTargets, formatCondition, nextQuestionNaming,
-  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, diffSurveys,
+  interpretRequest, interpretQualRequest, DEFER_TO_GRAMMAR, SCRIPT_QUESTION_REASON, explainScripts, diffSurveys,
   type ObjectKey,
   type SurveyAction,
 } from "@rescript/engine";
@@ -13,6 +13,7 @@ import { useStudio, uid } from "../studio/store";
 import { useSelection } from "../studio/SelectionContext";
 import { useCommands } from "../studio/CommandContext";
 import { createFromVariant } from "../studio/VariantPicker";
+import { loadScriptHealthSummary } from "../studio/ScriptHealth";
 import { Inspector } from "../architect/Inspector";
 import { Icon } from "../ui/Icon";
 import { parseIntent, EXAMPLES } from "../../lib/intelligent/grammar";
@@ -381,6 +382,22 @@ export function IntelligentView() {
       setBusy(false); inputRef.current?.focus(); return;
     }
     const deferred = interp.reason === DEFER_TO_GRAMMAR;
+    /*
+     * A QUESTION ABOUT A SCRIPT (S2a D10): "debug / why / explain the script on Q5". The copilot gets it, with the
+     * script in full and its check (the route builds that) and the field's script health (sent from here). With no
+     * model, the engine's own explanation is the answer — never the grammar's "I could not find …".
+     */
+    const scriptQ = interp.kind === "model" && interp.reason === SCRIPT_QUESTION_REASON;
+    if (scriptQ) {
+      const health = await loadScriptHealthSummary(s.surveyDbId).catch(() => null);
+      const fa = explainScripts(copilot.working, t, { selectedId, health });
+      const showLocal = () => copilot.local(t, { kind: "answer", category: "debugging", understood: fa.understood, answer: fa.answer, sections: fa.sections, detected: interp.detected }, heard);
+      const noModel = copilot.available === false || (copilot.executionMode === "internal" && !copilot.cloudOnce);
+      if (noModel) { showLocal(); setBusy(false); inputRef.current?.focus(); return; }
+      const outcome = await copilot.ask(t, heard, undefined, { category: interp.category, reason: interp.reason, detected: interp.detected }, health ? { scriptHealth: health } : undefined);
+      if (outcome !== "handled") showLocal();
+      setBusy(false); inputRef.current?.focus(); return;
+    }
     let modelHadNothing = false;
     const pre = parseIntent(t);
     const readOnlyExact = deferred || (["find", "explain", "diagnose", "screening"].includes(pre.kind) && !planProposal(s.def, pre, "grammar", deps).errors.length);
@@ -885,10 +902,11 @@ export function IntelligentView() {
                     documents={documentActions}
                     onResume={(id) => void copilot.resume(id)} onReviewReady={(id) => void copilot.reviewReady(id)} onBuildRest={(id) => void copilot.buildRemaining(id)} onResumeNow={(id) => copilot.resumeNow(id)} onDiscard={(id) => copilot.discardWork(id)}
                     counts={open ? proposalCounts(copilot.state!.diff, copilot.state!.after) : null}
-                    canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed)}
+                    canApply={!!open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed) && !copilot.verifyBlocks}
+                    verify={open ? copilot.verify : null} onApplyAnyway={open && !s.readOnly && !copilot.state!.diff.empty && (!copilot.state!.destructive.length || copilot.confirmed) ? () => { copilot.setVerifyAnyway(); void applyCopilot(); } : undefined}
                     refused={open ? copilot.state!.errors : []}
                     applyLabel={open && copilot.excluded.length ? "Apply the ticked changes" : undefined}
-                    applyTitle={s.readOnly ? "Read-only" : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
+                    applyTitle={s.readOnly ? "Read-only" : open && copilot.verify && copilot.verifyBlocks ? (copilot.verify.status !== "running" ? "The scripts did not pass the test session (or their repair is still running) — use “Apply anyway” to apply them as they are" : "Running the scripts in a test session first (at most about 25 seconds)") : open && copilot.state!.diff.empty ? (copilot.state!.errors.length ? "Nothing to apply — the Studio refused every change (the reasons are listed above)" : "Nothing to apply — the proposal leaves the survey as it is") : copilot.state?.destructive.length && !copilot.confirmed ? "Some changes remove or rewrite existing content — confirm them in the Changes panel first" : "Apply as one undoable change"} />
                 );
               }
               return <ReviewCard key={turn.id} text={turn.text} entry={turn.entry} onSelect={(qid) => selectKey(`question:${qid}` as ObjectKey)} onAnalyze={(sid) => void analyzeScript(turn.id, sid)} />;

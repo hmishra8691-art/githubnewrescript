@@ -51,6 +51,7 @@ export const TAB_DESCRIPTIONS: Record<string, string> = {
   assets: "Images, video and audio the survey uses",
   localization: "Every language version of the survey",
   scripts: "Custom JavaScript at the moments you choose",
+  allcode: "Every piece of code in the survey, in one list",
   tests: "Recorded paths that must keep working",
   data: "Test and live responses, row by row",
   fieldwork: "Suppliers, quotas and completes in the field",

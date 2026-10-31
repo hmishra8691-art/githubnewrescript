@@ -8,6 +8,8 @@ import { REPORTING_GUIDE } from "./reportingGuide.ts";
 import { COPILOT_INTEGRATIONS_GUIDE, integrationsIntent } from "./integrationsGuide.ts";
 import { COPILOT_ASSESSMENT_GUIDE, assessmentIntent } from "./assessmentGuide.ts";
 import type { ChangePlanItem } from "./changePlan.ts";
+/* S2b: the variant catalogue guide is chosen per turn from the sentence and the selected question (not a fixed GUIDE_TEXT: it carries only the families named) */
+export { variantGuideFor, variantFamiliesNamed, variantGuide } from "./variantGuide.ts";
 
 /**
  * PER-ITEM GUIDE SELECTION (engine weakness #11, 2026-10-22).

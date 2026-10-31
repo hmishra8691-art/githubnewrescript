@@ -24,6 +24,8 @@ import { applySurveyActions, coerceSurveyActions } from "../packages/engine/dist
 
 const STUDIO = process.env.STUDIO_URL ?? "http://localhost:3000";
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
+/* UX_COPILOT_HALF=runtime | studio (S2a): run one half — on this box the dev Studio and runtime together can exceed the memory cgroup (see the warm-up below); the Studio half needs no runtime (fresh.sh --no-runtime) */
+const HALF = process.env.UX_COPILOT_HALF ?? "both";
 let passed = 0;
 const ok = (msg) => { passed++; console.log(`  ok   ${msg}`); };
 
@@ -63,7 +65,26 @@ const withUx = build([
 assert.equal(withUx.ux.styles.length, 2); assert.equal(withUx.ux.behaviors.length, 3);
 
 const browser = await chromium.launch();
+/*
+ * WARM THE STUDIO FIRST (S2a, 2026-10-30). The Studio half used to time out at its first Intelligent Mode turn (S3 and
+ * S1 runs, and 2026-10-24, all at the same line): the dev Studio compiled /sandbox and its routes only AFTER the
+ * runtime half held its pages, the box's memory cgroup killed the Studio's next-server mid-run (dmesg: "Memory
+ * cgroup out of memory: Killed process … next-server", anon-rss 2.8 GB), the supervisor restarted it cold, and the
+ * first turn then had to compile /api/copilot/turn and its companions inside say()'s 30 s. Environmental, not the
+ * copilot: compile the Studio's page and copilot routes before the runtime half, and give the first turn the
+ * compile time it may still need.
+ */
+{
+  const w = await browser.newPage();
+  for (let i = 0; ; i++) {
+    try { await w.goto(`${STUDIO}/sandbox?mode=studio`, { waitUntil: "networkidle", timeout: 180000 }); await w.waitForSelector(".block-badge", { timeout: 180000 }); break; }
+    catch (e) { if (i >= 3) throw e; await w.waitForTimeout(8000); }
+  }
+  for (const path of ["/api/copilot/task?surveyId=sandbox", "/api/copilot/turn"]) await fetch(`${STUDIO}${path}`).catch(() => null);
+  await w.close();
+}
 const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
+if (HALF !== "studio") {
 {
   const requests = [];
   const pv = await openPreview(browser, RUNTIME, { definition: withUx }, { viewport: { width: 1200, height: 1000 } });
@@ -179,6 +200,8 @@ const q1 = withUx.questions[0].id, q2 = withUx.questions[1].id;
   await plain.close();
   ok("the mobile rule stacks the options at phone width; a survey with no UX configuration renders exactly as before (no attribute, no stylesheet, no layer)");
 }
+}
+if (HALF === "runtime") { await browser.close(); console.log(`\n${passed} passed (runtime half only)`); process.exit(0); }
 
 /* ------------------------------------------------------------ the copilot */
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
@@ -206,12 +229,15 @@ const readDef = async () => {
   return JSON.parse(json);
 };
 const turns = () => page.$$('[data-testid="cp-turn"]');
+let firstTurn = true;
 const say = async (text, reply) => {
   if (reply) await page.evaluate((r) => window.__rescriptCopilotFake(r), reply);
   const k = (await turns()).length;
   await page.fill('[data-testid="iq-input"]', text);
   await page.keyboard.press("Enter");
-  await page.waitForFunction((c) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > c && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, k, { timeout: 30000 });
+  // the first turn may still compile the copilot's routes on a dev Studio (see the warm-up above)
+  await page.waitForFunction((c) => { const t = document.querySelectorAll('[data-testid="cp-turn"]'); return t.length > c && t[t.length - 1].getAttribute("data-status") !== "thinking"; }, k, { timeout: firstTurn ? 120000 : 30000 });
+  firstTurn = false;
   return (await turns()).at(-1);
 };
 const texts = (sel) => page.$$eval(sel, (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));

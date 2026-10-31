@@ -171,6 +171,10 @@ __registerSurveyLint((def) => __lintEmbeddedPiping(def).map((i) => ({
   level: "warning" as const, questionCode: "Flow", path: `flow.${i.nodeId}.fields.${i.field}`, message: i.message, objectKey: `flowNode:${i.nodeId}` as __ObjectKey,
 })));
 export * from "./capabilities.js";
+export * from "./capabilityRegistry.js";
+export * from "./mediaActions.js";
+export * from "./logicScriptActions.js";
+export * from "./scriptRefs.js";
 export * from "./researchActions.js";
 export * from "./qualActions.js";
 /* F2 2026-10-22: qualitative synthesis requests in words (summaries, insights, comparisons, reels, double-coding, ask, auto-coding, group sessions) */
@@ -204,8 +208,11 @@ export * from "./scriptAst.js";
 export * from "./codeGate.js";
 export * from "./scriptWrites.js";
 export * from "./logicSandbox.js";
+export * from "./scriptVerify.js";
+export * from "./savePayload.js";
 /* S1c: live script-error telemetry — the shared collector shape, the save route's sanitiser and the Studio aggregate */
 export * from "./scriptHealth.js";
+export * from "./scriptExplain.js";
 export * from "./scriptAudit.js";
 export * from "./uxDuplicates.js";
 /* panel recruitment and alerts (2026-10-22, G3): presets, signed redirects, alert routing / redaction / rendering, the connect_panel / configure_alerts actions */

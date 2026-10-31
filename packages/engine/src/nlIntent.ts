@@ -1,5 +1,6 @@
 import type { Condition, ConditionRule, Option, Question, SurveyDefinition, ValidationRule } from "@rescript/schema";
-import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry } from "@rescript/schema";
+import { scriptQuestion, explainScripts, findScripts, SCRIPT_QUESTION_REASON, type ScriptHealthLite } from "./scriptExplain.js";
+import { hypothesisLabel, LANGUAGE_LIBRARY, variantRegistry, effectiveResponseModel } from "@rescript/schema";
 import { applySurveyActions, BRIEF_WORDS, describeAction, diffSurveys, variantForActionType, type OptionSpec, type SurveyAction, type ValidationSpec } from "./surveyActions.js";
 import { conditionFromText } from "./naturalCondition.js";
 import { closestName } from "./logicExpression.js";
@@ -117,11 +118,15 @@ export type Interpretation =
   | { kind: "workflow"; category: IntentCategory; understood: string; objective?: string; detected: Detected[] }
   | { kind: "model"; category: IntentCategory | null; reason: string; detected: Detected[];
       /** what the engine can do by itself when no model answers: a question and executable choices (each a sentence this layer reads) — Phase 2 */
-      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] } };
+      fallback?: { understood: string; question: string; choices: { label: string; text: string }[] };
+      /** S2a D10: a deterministic ANSWER for when no model answers (a question about a script: what it does, its check, its field report) */
+      fallbackAnswer?: { understood: string; answer: string; sections: AnswerSection[] } };
 
 export interface InterpretContext {
   /** the selected question: "this question", "it", "these options" */
   selectedId?: string | null;
+  /** S2a D10: the survey's script-health summary, when the page has one — used to explain a script with no model */
+  scriptHealth?: ScriptHealthLite | null;
   /** the selected option of that question: "this option" */
   selectedOption?: string | number | null;
   /** a multi-selection of questions: "these questions" (falls back to `selectedId`) */
@@ -502,6 +507,16 @@ function typeFromWords(words: string): string | null {
  */
 const deferred: Recogniser = (r) => {
   const t = r.text;
+  /*
+   * A QUESTION ABOUT A SCRIPT (S2a D10, 2026-10-30) — "debug / why / explain the script on Q5" — is the copilot's, not
+   * the grammar's: the grammar looked for a question called "the script on Q5" and said "I could not find …". The
+   * model gets the script in full with its check and health (scriptDossier); with no model, `fallbackAnswer` is the
+   * engine's own explanation of it.
+   */
+  if (scriptQuestion(r.def, t)) {
+    const fa = explainScripts(r.def, t, { selectedId: r.ctx.selectedId ?? null, health: r.ctx.scriptHealth ?? null });
+    return { kind: "model", category: "debugging", reason: SCRIPT_QUESTION_REASON, detected: findScripts(r.def, t, { selectedId: r.ctx.selectedId ?? null }).map((x) => ({ what: x.kind === "behavior" ? "behaviour script" : "Scripts-panel script", value: `${x.label} (${x.where})` })), fallbackAnswer: fa };
+  }
   const out = (category: IntentCategory): Interpretation => ({ kind: "model", category, reason: DEFER_TO_GRAMMAR, detected: namedObjects(r) });
   if (/^why\b/i.test(t) || /^(?:diagnose|debug|troubleshoot)\b/i.test(t)) return out("debugging");
   if (/^(?:is|can)\s+.+?\s+(?:reachable|(?:ever\s+)?be\s+reached|ever\s+shown|shown\s+to\s+anyone|ever\s+asked)$/i.test(t)) return out("debugging");
@@ -515,6 +530,83 @@ const deferred: Recogniser = (r) => {
   if (/^(?:add|create|make|insert|new|define)\s+(?:an?\s+|the\s+)?(?:new\s+)?(?:calculated|computed|derived)\s+(?:variable|value|field|question)\b/i.test(t) && !/=|\s(?:as|equal\s+to|equals)\s/i.test(t)) return out("calculations");
   return null;
 };
+
+/* ---------------------------------------------------------- the owner's deterministic sentences (S2a item 6) */
+
+/*
+ * THE OWNER'S SENTENCES THE ENGINE CAN READ WITHOUT A MODEL (S2a, 2026-10-30, Phase 4.4). Narrow on purpose — each
+ * reads one shape, in English and in Devanagari Hindi, and anything else goes on to the model:
+ *  - #2 "automatically punch option N when option M is selected" (the selected question, or "of/in/at Qx") → add_punch;
+ *  - #9 "add a 30-second countdown (timer) to Q5" → the timed single-choice variant with that length; without a
+ *    length, a choice of lengths; on a question that is not single choice, the honest answer (a script countdown);
+ *  - #5 / #15 "create a drag-and-drop ranking / video-testing question" → a choice card that names the variant it
+ *    will use and asks only for the wording (with a model, the model writes it).
+ */
+const HI_OPTION = String.raw`(?:ऑप्शन|आप्शन|विकल्प|option)`;
+const HI_SELECTED = String.raw`(?:चुना|चुनी|चुने|चुनें|सिलेक्ट|सेलेक्ट|select(?:ed)?|टिक)`;
+function punchByOption(r: Run): Interpretation | null {
+  const t = r.text;
+  let n: string | undefined, m: string | undefined, qRef: string | undefined;
+  const en = /^(?:please\s+)?(?:(?:auto(?:matically)?|always)[\s-]*)?(?:punch|select|tick|check|code)\s+(?:option|code|answer|choice)\s+(\w+)(?:\s+(?:of|in|on|at)\s+(Q[\w.]+|this question))?\s+(?:(?:automatically|always)\s+)?(?:when(?:ever)?|if|once)\s+(?:the\s+respondent\s+(?:selects|chooses|picks)\s+)?(?:option|code|answer|choice)\s+(\w+)(?:\s+(?:of|in|on|at)\s+(Q[\w.]+|this question))?(?:\s+is\s+(?:selected|chosen|picked|ticked|checked))?(?:\s+(?:in|on|at|of)\s+(Q[\w.]+|this question))?$/i.exec(t);
+  const enRev = /^(?:when(?:ever)?|if|once)\s+(?:option|code|answer|choice)\s+(\w+)(?:\s+(?:of|in|on|at)\s+(Q[\w.]+|this question))?\s+is\s+(?:selected|chosen|picked|ticked|checked)(?:\s+(?:in|on|at)\s+(Q[\w.]+|this question))?\s*,?\s+(?:then\s+)?(?:(?:auto(?:matically)?|always)[\s-]*)?(?:punch|select|tick|check|code)\s+(?:option|code|answer|choice)\s+(\w+)(?:\s+(?:automatically|too|as\s+well))?$/i.exec(t);
+  if (en && /punch|auto|always/i.test(t)) { n = en[1]; m = en[3]; qRef = en[2] ?? en[4] ?? en[5]; }
+  else if (enRev && /punch|auto|always/i.test(t)) { m = enRev[1]; n = enRev[4]; qRef = enRev[2] ?? enRev[3]; }
+  else if (/पंच/.test(t)) {
+    const cond = new RegExp(String.raw`(?:जब|अगर|यदि)?\s*(?:(Q[\w.]+)\s+(?:में|मे)\s+)?${HI_OPTION}\s*(\d+)\s+(?:को\s+)?${HI_SELECTED}`, "iu").exec(t);
+    const target = new RegExp(String.raw`${HI_OPTION}\s*(\d+)\s+(?:को\s+)?(?:अपने\s*आप|ऑटोमैटिक(?:ली)?|automatic(?:ally)?)?\s*पंच`, "iu").exec(t);
+    if (!cond || !target || cond[2] === target[1]) return null;
+    m = cond[2]; n = target[1]; qRef = cond[1] ?? /\b(Q[\w.]+)\b/i.exec(t)?.[1];
+  } else return null;
+  if (!n || !m) return null;
+  const understood = `Automatically punch option ${n} when option ${m} is selected${qRef ? ` (${qRef})` : ""}.`;
+  const ref = qRef && !/^this question$/i.test(qRef) ? qRef : r.ctx.selectedId ? r.def.questions.find((x) => x.id === r.ctx.selectedId)?.code : undefined;
+  if (!ref) return { kind: "clarify", category: "logic", understood, question: `Which question holds options ${m} and ${n}? Select it, or name it (“… of Q7”).`, choices: [], detected: [] };
+  const q = questionOf(r, String(ref), "logic", understood);
+  if (!q.ok) return q.out;
+  const has = (c: string) => (q.v.options ?? []).some((o) => String(o.code) === c);
+  const missing = [m, n].filter((c) => !has(c));
+  if (missing.length) return refused("logic", understood, `${code(q.v)} has no option ${missing.join(" or ")} — its options are ${(q.v.options ?? []).slice(0, 12).map((o) => `${o.code} ${plain(o.label, 30)}`).join(", ")}.`, qDetected([q.v]));
+  if (effectiveResponseModel(q.v) !== "multiple_choice") return refused("logic", understood, `${code(q.v)} takes one answer, so punching option ${n} would replace the respondent's own choice of option ${m}. Punch a hidden variable or another question instead (“Code SEGMENT as ${n} when ${code(q.v)} = ${m}”).`, qDetected([q.v]));
+  return act(r, "logic", `When option ${m} of ${code(q.v)} is selected, option ${n} is selected automatically too (a punch rule — the respondent's own answers stay).`, [{ op: "add_punch", target: code(q.v), when: `${code(q.v)} = ${m}`, codes: [Number.isFinite(Number(n)) ? Number(n) : n] } as SurveyAction], [...qDetected([q.v]), det("option", m), det("option", n)]);
+}
+
+const COUNTDOWN = /\b(?:count[\s-]?down|timer|time[\s-]?limit|timed)\b|काउंटडाउन|टाइमर|समय\s*सीमा/i;
+function countdown(r: Run): Interpretation | null {
+  const t = r.text;
+  if (!COUNTDOWN.test(t) || !/\b(?:add|put|set|give|show|start|include|make|place)\b|जोड़|लगा|डाल|सेट|बना/i.test(t)) return null;
+  if (/\b(?:page|survey|section|block|interview)\b/i.test(t) && !/\bquestion\b|\bQ\d/i.test(t)) return null;
+  const secs = /(\d+(?:\.\d+)?)\s*[-\s]?\s*(seconds?|secs?|s\b|minutes?|mins?|सेकंड|सेकेंड|मिनट)/i.exec(t);
+  const seconds = secs ? Math.round(Number(secs[1]) * (/^(?:min|मिनट)/i.test(secs[2]) ? 60 : 1)) : null;
+  const qm = /\b(Q[\w.]*\d[\w.]*)\b/i.exec(t);
+  const ref = qm?.[1] ?? (r.ctx.selectedId ? r.def.questions.find((x) => x.id === r.ctx.selectedId)?.code : undefined);
+  if (!ref) return null;
+  const understood = `A ${seconds ? `${seconds}-second ` : ""}countdown on ${ref}.`;
+  const q = questionOf(r, String(ref), "survey_editing", understood);
+  if (!q.ok) return q.out;
+  const single = effectiveResponseModel(q.v) === "single_choice";
+  const advance = /\b(?:go(?:es)?\s+(?:on|to\s+the\s+next)|move(?:s)?\s+on|next\s+page|advance|auto[\s-]?advance|skip\s+ahead)\b|आगे/i.test(t);
+  if (!single) return { kind: "model", category: "survey_editing", reason: `${code(q.v)} is ${q.v.type.replace(/_/g, " ")}: the built-in visible countdown is the timed single-choice question, so a countdown here is a script (the language model writes it with rs.after)`, detected: qDetected([q.v]),
+    fallback: { understood, question: `The built-in countdown is a timed single-choice question; ${code(q.v)} is ${q.v.type.replace(/_/g, " ")}, so it needs a countdown script, which the language model writes. Without one, a timed question can be added instead.`, choices: [] } };
+  if (!seconds) return { kind: "model", category: "survey_editing", reason: "the countdown's length is not said — the language model asks or chooses it", detected: qDetected([q.v]),
+    fallback: { understood: `A countdown on ${code(q.v)} — the timed single-choice question (a visible countdown; the answer locks when time runs out).`, question: `How long should ${code(q.v)}'s countdown run?`, choices: [10, 30, 60].map((n) => ({ label: `${n} seconds`, text: `Add a ${n}-second countdown to ${code(q.v)}` })) } };
+  if (seconds < 1 || seconds > 3600) return refused("survey_editing", understood, `A countdown runs between 1 second and 1 hour — ${seconds} seconds is outside that.`, qDetected([q.v]));
+  return act(r, "survey_editing", `${code(q.v)} becomes a timed single-choice question with a ${seconds}-second visible countdown; when time runs out the answer ${advance ? "is kept and the survey moves on" : "locks"}.`, [{ op: "update_question", target: code(q.v), type: "gamified.timed", settings: { timeLimitSeconds: seconds, onTimeout: advance ? "advance" : "lock" } } as SurveyAction], qDetected([q.v]));
+}
+
+function variantClarify(r: Run): Interpretation | null {
+  const t = r.text;
+  const verb = /^(?:please\s+)?(?:create|add|make|build|insert|design|set\s+up)\s+(?:me\s+)?(?:a|an|one|the)?\s*(?:new\s+)?(?:interactive\s+)?/i;
+  const hiVerb = /(?:बनाओ|बना\s*दो|बनाइए|जोड़ो|जोड़\s*दो|ऐड\s*करो|create\s+karo)/i;
+  const drag = new RegExp(String.raw`${verb.source}drag[\s-]*(?:and|&|n|'n')[\s-]*drop\s+rank(?:ing)?\s*(?:question|exercise|task)?$`, "i").test(t) || (/ड्रैग|drag/i.test(t) && /रैंकिंग|ranking/i.test(t) && hiVerb.test(t));
+  const video = new RegExp(String.raw`${verb.source}video[\s-]*(?:testing|test|rating|reaction|ad[\s-]*test(?:ing)?)\s*(?:experience|question|exercise|task|module)?$`, "i").test(t) || (/वीडियो|video/i.test(t) && /टेस्टिंग|टेस्ट|testing|रेटिंग/i.test(t) && hiVerb.test(t));
+  if (!drag && !video) return null;
+  const fallback = drag
+    ? { understood: "A drag-and-drop ranking question — the ranking.drag variant (respondents drag the items into their order).", question: "What should it ask, and which items should be ranked? Say it in one sentence, e.g. Add a ranking question “Rank these brands” with options Acme, Beta, Gamma.", choices: [] }
+    : { understood: "A video-testing question — the media.video_rating variant (watch a clip, then rate it); video_timeline (react on the timeline) is the other choice.", question: "What should it ask, and which video should it show? Say it in one sentence, e.g. Add a video rating question “How much did you like this ad?”.", choices: [] };
+  return { kind: "model", category: "question_creation", reason: `the question's wording has to be written — the language model drafts it as ${drag ? "ranking.drag" : "media.video_rating"}, then it is applied as create_question through the same gate`, detected: [det("variant", drag ? "ranking.drag" : "media.video_rating")], fallback };
+}
+
+const ownerIntents: Recogniser = (r) => punchByOption(r) ?? countdown(r) ?? variantClarify(r);
 
 /* ---------------------------------------------------------- look and behaviour: popups, messages, tooltips */
 
@@ -537,20 +629,20 @@ const uxLook: Recogniser = (r) => {
 /* ---------------------------------------------------------- queries: dependencies */
 
 /** the Studio's sections, in the order an inspector lists them */
-const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Research design", "Translations"] as const;
+const SECTION_ORDER = ["Display logic", "Skip logic", "Validation", "Masking & carry-forward", "Piping", "Calculations", "Quotas", "Randomization & list logic", "Flow (branches, loops, blocks)", "Analysis plan", "Constructs", "Research design", "Translations", "Scripts"] as const;
 const SECTION_OF: Record<EdgeKind, (typeof SECTION_ORDER)[number]> = {
   display: "Display logic", optionLogic: "Display logic", skip: "Skip logic", validation: "Validation",
   mask: "Masking & carry-forward", carryForward: "Masking & carry-forward", piping: "Piping",
   calculation: "Calculations", punch: "Calculations", namedExpression: "Calculations", quotaCell: "Quotas",
   randomization: "Randomization & list logic", listLogic: "Randomization & list logic", listOperation: "Randomization & list logic", listFillSource: "Randomization & list logic", listFillGate: "Randomization & list logic",
   flowCondition: "Flow (branches, loops, blocks)", loopSource: "Flow (branches, loops, blocks)", placement: "Flow (branches, loops, blocks)", target: "Flow (branches, loops, blocks)",
-  analysis: "Analysis plan", construct: "Constructs", hypothesis: "Research design", kpi: "Research design", translation: "Translations",
+  analysis: "Analysis plan", construct: "Constructs", hypothesis: "Research design", kpi: "Research design", translation: "Translations", script: "Scripts",
 };
 const NOUN: Record<(typeof SECTION_ORDER)[number], [string, string]> = {
   "Display logic": ["display condition", "display conditions"], "Skip logic": ["skip", "skips"], Validation: ["validation rule", "validation rules"],
   "Masking & carry-forward": ["mask or carry-forward", "masks and carry-forwards"], Piping: ["pipe", "pipes"], Calculations: ["calculation", "calculations"], Quotas: ["quota", "quotas"],
   "Randomization & list logic": ["list rule", "list rules"], "Flow (branches, loops, blocks)": ["flow element", "flow elements"],
-  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], "Research design": ["hypothesis or KPI", "hypotheses and KPIs"], Translations: ["translation", "translations"],
+  "Analysis plan": ["planned analysis", "planned analyses"], Constructs: ["construct", "constructs"], "Research design": ["hypothesis or KPI", "hypotheses and KPIs"], Translations: ["translation", "translations"], Scripts: ["script", "scripts"],
 };
 
 /** the value at a dotted path of the definition */
@@ -1376,8 +1468,19 @@ function keepClause(r: Run, q: Question, text: string): { first: Option[]; last:
   return { first: where === "first" ? got : [], last: where === "last" ? got : [], anchors: where === "anchors" ? got : [] };
 }
 
+/*
+ * "EQUALLY" IS NOT DROPPED (S2a D16, owner #8 "Randomize these four concepts equally across respondents"): equally /
+ * evenly / balanced / rotate mean every item in every position equally often — the options' `rotate` method, not a
+ * plain shuffle (blocks are always balanced by the randomizer: evenPresentation). Devanagari: बराबर / समान रूप से.
+ */
+const EQUALLY = /\s*,?\s*\b(?:equally|evenly|(?:in\s+)?(?:a\s+)?balanced(?:\s+way)?|with\s+(?:equal|even)\s+(?:exposure|presentation)|an?\s+equal\s+number\s+of\s+times)\b|\s*(?:बराबर|समान\s*रूप\s*से|बराबर\s*बराबर)/giu;
+const ACROSS_RESPONDENTS = /\s+(?:across|among|between|over|for)\s+(?:all\s+)?(?:the\s+)?(?:respondents|participants|people|users)\b|\s*(?:सभी\s+)?(?:रेस्पोंडेंट्स?|उत्तरदाताओं)\s*(?:में|के\s+बीच)?/giu;
 const randomization: Recogniser = (r) => {
-  const t = r.text;
+  const balanced = /\b(?:equally|evenly|balanced|equal\s+(?:exposure|presentation|number\s+of\s+times))\b|बराबर|समान\s*रूप/iu.test(r.text) || /^rotate\b/i.test(r.text);
+  const t = r.text.replace(EQUALLY, " ").replace(ACROSS_RESPONDENTS, " ").replace(/\s+/g, " ").trim()
+    /* Devanagari: "इन चार कॉन्सेप्ट्स को … रैंडमाइज़ करो" → "randomize इन चार कॉन्सेप्ट्स" */
+    .replace(/^(.+?)\s+(?:को\s+)?(?:रैंडमाइज़|रैंडमाइज|रेंडमाइज|randomi[sz]e)\s*(?:करो|कर\s*दो|करें|कीजिए|करना\s+है)?$/iu, "randomize $1")
+    .replace(/^randomize\s+(?:इन|ये|इस)\s+.*$/iu, "randomize these");
   const stop = /^(?:stop|don['’]?t|do\s+not|no\s+longer|never)\s+(?:randomi[sz](?:e|ing)|shuffl(?:e|ing)|rotat(?:e|ing))\s+(.+)$/i.exec(t)
     ?? /^(?:turn\s+off|disable|remove|switch\s+off)\s+(?:the\s+)?(?:option\s+)?randomi[sz]ation\s+(?:on|of|for|from|in)\s+(.+)$/i.exec(t)
     ?? /^un-?randomi[sz]e\s+(.+)$/i.exec(t);
@@ -1398,8 +1501,8 @@ const randomization: Recogniser = (r) => {
   const k = /\s*,?\s*(?:but\s+|and\s+|while\s+|then\s+)?(?:keep(?:ing)?|leav(?:e|ing)|with|anchor(?:ing)?|pin(?:ning)?|hold(?:ing)?|lock(?:ing)?)\s+(.+)$/i.exec(rest);
   if (k && !stop) { keep = k[1]; rest = rest.slice(0, k.index); }
   const scope = /\b(?:rows|statements)\b/i.test(rest) ? "rows" as const : /\bcolumns\b/i.test(rest) ? "columns" as const : undefined;
-  let ref = rest.replace(/^(?:the\s+)?(?:order\s+of\s+(?:the\s+)?)?/i, "").replace(/\b(?:options?|answers?|choices?|answer\s+list|list|rows?|statements?|columns?|items?|brands?|order)\b/gi, " ").replace(/\b(?:of|in|for|on|at|the)\b/gi, " ").replace(/['’]s\b/g, " ").replace(/\s+/g, " ").trim();
-  if (!ref || /^(?:these|those|this|it|them)$/i.test(ref)) ref = "this question";
+  let ref = rest.replace(/^(?:the\s+)?(?:order\s+of\s+(?:the\s+)?)?/i, "").replace(/\b(?:options?|answers?|choices?|answer\s+list|list|rows?|statements?|columns?|items?|brands?|concepts?|order)\b/gi, " ").replace(/\b(?:of|in|for|on|at|the)\b/gi, " ").replace(/['’]s\b/g, " ").replace(/\s+/g, " ").trim();
+  if (!ref || /^(?:these|those|this|it|them)(?:\s+(?:two|three|four|five|six|seven|eight|nine|ten|\d+))?$/i.test(ref)) ref = "this question";
   const understood0 = stop ? `Stop randomizing ${ref}.` : `Randomize the options of ${ref}.`;
   const q = questionOf(r, ref, "randomization", understood0);
   if (!q.ok) return q.out;
@@ -1409,10 +1512,10 @@ const randomization: Recogniser = (r) => {
   if (keep) { const kc = keepClause(r, q.v, keep); if ("kind" in kc) return kc; kept = kc; }
   const words = [...kept.first.map((o) => `“${plain(o.label, 30)}” first`), ...kept.last.map((o) => `“${plain(o.label, 30)}” last`), ...kept.anchors.map((o) => `“${plain(o.label, 30)}” in place`)];
   const what = scope ?? "options";
-  return act(r, "randomization", `Randomize the ${what} of ${code(q.v)}${n ? `, showing ${n} at random to each respondent` : ""}${words.length ? `; keep ${words.join(", ")}` : ""}.`, [{
+  return act(r, "randomization", `${balanced ? `Rotate the ${what} of ${code(q.v)} — each in each position equally often across respondents (balanced, not a plain shuffle)` : `Randomize the ${what} of ${code(q.v)}`}${n ? `, showing ${n} at random to each respondent` : ""}${words.length ? `; keep ${words.join(", ")}` : ""}.`, [{
     op: "set_option_randomization", target: code(q.v), enabled: true,
     ...(kept.first.length ? { keepFirst: kept.first.map((o) => o.code) } : {}), ...(kept.last.length ? { keepLast: kept.last.map((o) => o.code) } : {}), ...(kept.anchors.length ? { anchors: kept.anchors.map((o) => o.code) } : {}),
-    ...(n ? { pick: n } : {}), ...(scope ? { scope } : {}),
+    ...(n ? { pick: n } : {}), ...(scope ? { scope } : {}), ...(balanced ? { method: "rotate" as const } : {}),
   }], [...qDetected([q.v]), ...[...kept.first, ...kept.last, ...kept.anchors].map((o) => det("option", `${o.code} (${plain(o.label, 40)})`))]);
 };
 
@@ -2916,7 +3019,7 @@ function designFallback(text: string): NonNullable<Extract<Interpretation, { kin
 
 /** the model's turn, with what the engine could do instead */
 function withFallback(r: Run, out: Interpretation): Interpretation {
-  if (out.kind !== "model") return out;
+  if (out.kind !== "model" || out.fallback || out.fallbackAnswer) return out;
   const fb = measureFallback(r.def, r.text) ?? designFallback(r.text);
   return fb ? { ...out, fallback: fb } : out;
 }
@@ -2998,14 +3101,14 @@ const ADVANCED_ANALYSIS = /\b(?:hb|hierarchical\s+bayes(?:ian)?|individual[\s-]l
 const RECOGNISERS: Recogniser[] = [
   advancedModels,
   analysisWhy, impact, dependents, dependencies, untranslated, hypothesesQuery, reviewRequest, unconnected, relevanceQuery, keyCrosstabs, analysisQuery, planQuery, measures, dataQuestion, outputRequest, workflowRequest, reportTheme,
-  deferred, uxLook, longBrief,
+  deferred, ownerIntents, uxLook, longBrief,
   surveySettings, languages, enforceDesign, objective, brief, audience, research, variables, pageBreaks,
   shorten, screenerEdit, scaleChange, removeAnalysis, analysisTests, crosstabs,
   masking, optionVisibility, randomization, options, required, skips, display, validation, questions,
 ];
 
 /** recognisers that read a sentence with an "and" clause as one request, tried before the sentence is split into commands */
-const WHOLE_FIRST: Recogniser[] = [audience, shorten, reportTheme];
+const WHOLE_FIRST: Recogniser[] = [audience, shorten, reportTheme, ownerIntents];
 
 function interpret(r: Run): Interpretation {
   if (!r.text) return { kind: "clarify", category: "survey_editing", understood: "Nothing was asked.", question: "What would you like to change, or to know about this survey?", choices: ["Make Q1 required", "What depends on Q1?", "Which questions are untranslated?"].map((text) => ({ label: text, text })), detected: [] };
@@ -3014,7 +3117,7 @@ function interpret(r: Run): Interpretation {
     if (!out) continue;
     r.ctx.debug?.(`[nl] ${rec.name} → ${out.kind}`);
     /* a recogniser that hands on to the model, or that could not find the object it was given, lets the semantic tier try first (Phase 7) */
-    if (r.depth === 0 && rec !== deferred && rec !== uxLook && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
+    if (r.depth === 0 && rec !== deferred && rec !== ownerIntents && rec !== uxLook && rec !== longBrief && ((out.kind === "model" && out.reason !== DEFER_TO_GRAMMAR) || (out.kind === "refused" && !out.noop && /^There is no (?:question|block|option)\b/.test(out.reason)))) {
       const sem = semantic(r);
       if (sem) return sem;
     }

@@ -125,7 +125,9 @@ test("create / compute / derive a calculation is an edit — English, Hindi, Hin
 
 test("#6 asking to block Next until a condition holds keeps validation allowed — even beside “only the UI”", () => {
   const inferred = "Q3 pe mujhe javascript lagana hai, agar age ki value 18 ke upar dalta hu to wahan pe automatic popup hokar aana chahiye ki you are eligible voter";
-  assert.equal(classifyRequest(inferred, 30, 0).uxOnly, true);
+  /* S2a D9: “javascript” is behaviour, never look-only — the validation (and any native behaviour op) is allowed outright */
+  assert.equal(classifyRequest(inferred, 30, 0).uxOnly, false);
+  assert.equal(classifyRequest(inferred, 30, 0).ux, true, "the UX guide still goes with it");
   assert.equal(lookOnlySaid(inferred), false, "inferred, not said: set_validation is allowed (route → applySurveyActions uxOnlyInferred)");
   const both = "Only change the UI: keep the Next button disabled until the age in Q3 is 18 or more";
   assert.equal(lookOnlySaid(both), false, "the stopping was asked for, so validation is allowed");
