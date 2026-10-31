@@ -167,6 +167,8 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
     summary: "add_skip {from, when, to} — to a question, a block or end/terminate; clear_skips" },
   { id: "randomizer", name: "Randomizer", need: /\brandomi[sz]\w*|\bshuffle\w*|\brotat\w*|\bequally\b|\bevenly\b|\bbalanc\w*|\blatin square\b|\bshow (?:only )?\d+ of\b/i, actions: ["create_randomizer", "set_option_randomization", "update_question"],
     summary: "set_option_randomization {target, method shuffle|rotate|reverse_half} (rotate = each option in each position equally often); create_randomizer {blocks, show} with even presentation (exact balance: least-filled claim)" },
+  { id: "progress_indicator", name: "Progress indicator", need: /\bprogress (?:bar|indicator|dots?)\b|\bpage \d+ of\b|\bpage n of n\b|\bstep dots?\b|\bprogress (?:at|on) the bottom\b/i, actions: ["set_theme"],
+    summary: "set_theme layout {progressBar top|bottom|none, progressStyle bar|percent|steps}: steps = \"Page n of N\" with step dots (up to 12 pages, then the text alone); bottom = after the page body and its buttons; n and N follow the logic-aware page path" },
   { id: "section_navigation", name: "Section navigation", need: /\bsection nav\w*|\bnavigat\w*|\btable of contents\b|\bjump between sections\b|\bunanswered\b|\bprogress\b/i, actions: ["set_navigation"],
     summary: "set_navigation {sectionNav off|visited|free, position top|side}: a built-in section navigator that highlights unanswered questions" },
   { id: "timers", name: "Timers", need: /\btimers?\b|\bcountdown\b|\btime limit\b|\btimed\b|\bseconds?\b/i, actions: ["update_question"],

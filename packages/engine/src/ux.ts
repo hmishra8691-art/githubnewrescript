@@ -118,7 +118,8 @@ export function uxSelector(t: UxTarget, opts: { state?: (typeof UX_STATES)[numbe
     case "column": inner = `${q} [data-rs-el="column"]${code}`; break;
     case "component": inner = q + (t.selector ? ` ${t.selector}` : ""); break;
     case "button": inner = t.button === "back" ? '[data-rs-button="back"]' : t.button === "submit" ? '[data-rs-button="submit"]' : t.button === "any" || !t.button ? ".rs-nav .rs-btn" : ':is([data-rs-button="next"],[data-rs-button="submit"])'; break;
-    case "progress": inner = t.part === "fill" ? ".rs-progress-fill" : t.part === "label" ? ".rs-progress-label" : ".rs-progress-track"; break;
+    /* D20: the "steps" style has dots and a "Page n of N" label instead of a track — the same target reaches both */
+    case "progress": inner = t.part === "fill" ? ":is(.rs-progress-fill,.rs-progress-dot.current)" : t.part === "label" ? ":is(.rs-progress-label,.rs-progress-steps-label)" : ":is(.rs-progress-track,.rs-progress-dots)"; break;
     case "navigation": inner = ".rs-nav"; break;
   }
   const state = (opts.state ? STATE_SELECTOR[opts.state] : "") + (opts.whenClass ? `[data-rs-ux-on~="${uxToken(opts.whenClass)}"]` : "");

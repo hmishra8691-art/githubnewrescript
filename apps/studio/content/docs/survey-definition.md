@@ -7,7 +7,7 @@ The definition is one JSON object validated by a schema (`@rescript/schema`, `Su
 | Field | What it holds |
 |---|---|
 | `meta` | `id`, `code` (e.g. `SURVEY_001`), `title`, `description?`, `version` (`"1.0"`), `status` (`draft` \| `testing` \| `live` \| `closed`), `createdAt?`, `updatedAt?`, `schemaVersion` (1) |
-| `branding` | theme and look: `themeId`, `logoUrl`, `colors{…}`, `typography{…}`, `layout{…}`, `buttons{style, nextLabel, backLabel, submitLabel, showBack}`, `voice{readAloud, dictation, lang}`, `responsive{tablet, mobile}`, `headerHtml`, `footerHtml`, `customCss`, `customJs` (legacy — moved into `ux` as a survey script on load) |
+| `branding` | theme and look: `themeId`, `logoUrl`, `colors{…}`, `typography{…}`, `layout{…}` (incl. `progressBar` top \| bottom \| none and `progressStyle` bar \| percent \| steps — "steps" shows "Page n of N" with one dot per page up to 12 pages, then the text alone; "bottom" draws it after the page body and its buttons; n and N follow the logic-aware page path), `buttons{style, nextLabel, backLabel, submitLabel, showBack}`, `voice{readAloud, dictation, lang}`, `responsive{tablet, mobile}`, `headerHtml`, `footerHtml`, `customCss`, `customJs` (legacy — moved into `ux` as a survey script on load) |
 | `questions` | the questions, in no particular order — the flow decides where they are asked |
 | `flow` | the order of the survey: blocks, pages, sections, branches, randomizers, loops, embedded-data nodes, quota checks, redirects and ends |
 | `displayRules` | named show/hide rules on any target (question, page, section, block, option, row, column) |

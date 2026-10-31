@@ -183,6 +183,59 @@ if (SECTIONS.has("A")) {
   await pg.context().close();
 }
 
+/* ============================================================== B. D20 progress bottom / steps */
+if (SECTIONS.has("B")) {
+  console.log("\nB  D20 progress indicator: bottom and steps");
+  const pages = (n) => Array.from({ length: n }, (_, i) => ({ type: "page", id: `pp${i + 1}`, questionIds: [`s${i + 1}`] }));
+  const paper = (id, n, layout) => ({
+    meta: { id, code: id.toUpperCase(), title: "Progress", version: "1" },
+    questions: Array.from({ length: n }, (_, i) => ({ ...sq(`s${i + 1}`, `Question ${i + 1}`), required: false })),
+    flow: [...pages(n), { type: "end", id: "e", status: "complete" }],
+    branding: { layout },
+  });
+  const prog = (pv) => pv.evaluate(() => {
+    const el = document.querySelector('[data-testid="rs-progress"]');
+    if (!el) return null;
+    const after = (sel) => { const o = document.querySelector(sel); return o ? !!(o.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) : null; };
+    return {
+      position: el.getAttribute("data-position"), style: el.getAttribute("data-style"), role: el.getAttribute("role"),
+      now: el.getAttribute("aria-valuenow"), max: el.getAttribute("aria-valuemax"), text: el.getAttribute("aria-valuetext"),
+      label: el.querySelector('[data-testid="rs-progress-label"]')?.textContent ?? null,
+      dots: el.querySelectorAll(".rs-progress-dot").length, current: el.querySelectorAll(".rs-progress-dot.current").length,
+      afterNav: after(".rs-nav"), afterQuestions: after("#rs-questions"),
+    };
+  });
+  const p1 = await open(paper("progb", 3, { progressBar: "bottom", progressStyle: "steps" }));
+  let g = await prog(p1);
+  assert.equal(g.position, "bottom"); assert.equal(g.style, "steps"); assert.equal(g.role, "progressbar");
+  assert.equal(g.label, "Page 1 of 3"); assert.equal(g.now, "1"); assert.equal(g.max, "3"); assert.equal(g.text, "Page 1 of 3");
+  assert.equal(g.dots, 3); assert.equal(g.current, 1);
+  assert.equal(g.afterNav, true, "drawn after the page body and its buttons"); assert.equal(g.afterQuestions, true);
+  await p1.click('[data-testid="rs-next"]'); await p1.waitForSelector('[data-qid="s2"]');
+  g = await prog(p1);
+  assert.equal(g.label, "Page 2 of 3"); assert.equal(g.now, "2");
+  ok("bottom + steps: after the questions and Next; role=progressbar 1..3, “Page 1 of 3” with 3 dots (1 current) → Next → “Page 2 of 3”");
+  await p1.context().close();
+
+  const p2 = await open(paper("progt", 14, { progressBar: "top", progressStyle: "steps" }));
+  g = await prog(p2);
+  assert.equal(g.position, "top"); assert.equal(g.afterQuestions, false, "top: before the questions");
+  assert.equal(g.label, "Page 1 of 14"); assert.equal(g.dots, 0, "past 12 pages: the text alone");
+  ok("top + steps on a 14-page paper: before the questions, “Page 1 of 14”, no dots (cap 12)");
+  await p2.context().close();
+
+  const p3 = await open(paper("progp", 3, { progressBar: "bottom", progressStyle: "percent" }));
+  g = await prog(p3);
+  assert.equal(g.position, "bottom"); assert.equal(g.style, "percent"); assert.equal(g.label, "25%"); assert.equal(g.now, "25"); assert.equal(g.afterNav, true);
+  ok("bottom + percent: “25%” (page 1 of 3, the end screen is the +1), aria-valuenow 25, after Next");
+  await p3.context().close();
+
+  const p4 = await open(paper("progn", 3, { progressBar: "none", progressStyle: "steps" }));
+  assert.equal(await prog(p4), null);
+  ok("none: no indicator");
+  await p4.context().close();
+}
+
 console.log(`\n${passed} passed`);
 if (allErrors.length) { console.log("page errors:\n  " + allErrors.join("\n  ")); }
 await browser.close();

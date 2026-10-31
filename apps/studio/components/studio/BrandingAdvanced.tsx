@@ -48,7 +48,7 @@ export function TypographyMore({ b, set }: { b: Branding; set: Set }) {
       <Field label="Line height" width={100}><Text value={t.lineHeight} placeholder="1.5" onChange={(v) => set((x) => { x.typography.lineHeight = v; })} /></Field>
       <Field label="Letter spacing" width={110}><Text value={t.letterSpacing} placeholder="normal" onChange={(v) => set((x) => { x.typography.letterSpacing = v; })} /></Field>
       <Field label="Progress" width={110}>
-        <select className="select" value={b.layout.progressStyle} onChange={(e) => set((x) => { x.layout.progressStyle = e.target.value as never; })}>
+        <select className="select" data-testid="branding-progress-style" value={b.layout.progressStyle} onChange={(e) => set((x) => { x.layout.progressStyle = e.target.value as never; })}>
           <option value="bar">bar</option><option value="percent">percent</option><option value="steps">steps</option>
         </select>
       </Field>

@@ -133,7 +133,7 @@ import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaG
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, ProgressIndicator, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -1635,7 +1635,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const b = def.branding;
   const pageIndexAmongPages = steps.filter((s, i) => s.kind === "page" && i <= state.stepIndex).length;
   const totalPages = Math.max(steps.filter((s) => s.kind === "page").length, 1);
-  const progress = ended ? 100 : Math.round((pageIndexAmongPages / (totalPages + 1)) * 100);
+  /* D20: one indicator, placed top or bottom; "steps" = Page n of N with dots (logic-aware: N is the compiled path) */
+  const progressEl = (
+    <ProgressIndicator position={b.layout.progressBar} style={b.layout.progressStyle} current={pageIndexAmongPages} total={totalPages} ended={!!ended} ui={ui} />
+  );
 
   /**
    * The latch, shared by every control that can reach `leavePage`.
@@ -2607,17 +2610,14 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           )}
         </div>
       )}
-      {b.layout.progressBar !== "none" && !ended && (
-        <>
-          <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${progress}%` }} /></div>
-          {b.layout.progressStyle === "percent" && <div className="rs-progress-label">{progress}%</div>}
-        </>
-      )}
+      {b.layout.progressBar === "top" && !ended && progressEl}
       {outline.length > 1 && (
         <SectionNav outline={outline} position={def.navigation?.position ?? "top"} note={navNote}
           onJump={(id) => { jumpTo(id, "section", "nav"); }} />
       )}
       {content}
+      {/* D20: "bottom" — after the page body (and its Next), before the footer; not sticky (see ProgressIndicator) */}
+      {b.layout.progressBar === "bottom" && !ended && progressEl}
       {b.footerHtml && (
         <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.footerHtml, ctx) }} />
       )}

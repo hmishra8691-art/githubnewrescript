@@ -46,3 +46,5 @@ export { MediaGateContext, useMediaHold, useMediaGateState, type MediaGate } fro
 export { showOptionPopup, announceSelection } from "./optionPopup";
 /* assessments (ported 2026-10-29): the respondent's results report, rendered from the server's score */
 export { AssessmentReport, type AssessmentReportProps } from "./AssessmentReport";
+export { ProgressIndicator } from "./ProgressIndicator";
+export { progressModel, STEP_DOTS_MAX, type ProgressModel, type ProgressPosition, type ProgressStyle } from "./progress";

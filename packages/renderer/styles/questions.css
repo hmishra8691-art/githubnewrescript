@@ -1123,3 +1123,14 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-submit-gate-list { margin: 0 0 10px; padding-inline-start: 1.2em; }
 .rs-submit-gate-go { background: none; border: 0; padding: 2px 0; font: inherit; color: var(--rs-primary, #2563eb); text-decoration: underline; cursor: pointer; text-align: start; }
 .rs-submit-gate-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* D20 — progress indicator: position (top / bottom) and the "steps" style (Page n of N + dots, capped at 12) */
+.rs-progress-bottom { margin-top: 20px; }
+.rs-progress-bottom .rs-progress-track { margin: 8px 0 12px; }
+.rs-progress-bottom .rs-progress-label { margin-top: -6px; }
+.rs-progress-style-steps { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 20px; }
+.rs-progress-dots { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; flex-wrap: wrap; }
+.rs-progress-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--rs-border); }
+.rs-progress-dot.done { background: var(--rs-progress); opacity: .55; }
+.rs-progress-dot.current { background: var(--rs-progress); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-progress) 25%, transparent); }
+.rs-progress-steps-label { font-size: 12.5px; color: var(--rs-subtle); }

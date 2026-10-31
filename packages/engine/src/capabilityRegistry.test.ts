@@ -109,3 +109,12 @@ test("the explain answer names the native route for a refused script", async () 
   assert.match(r.answer, /refused by the script check/);
   assert.match(r.answer, /Native route: A script cannot send anything off the page/);
 });
+
+test("D20: a progress-indicator request routes to set_theme (layout progressBar / progressStyle)", () => {
+  for (const need of ["show a progress bar at the bottom", "progress dots instead of a bar", "show page 3 of 10 at the top"]) {
+    const r = nativeRouteFor(need);
+    assert.equal(r?.id, "progress_indicator", need);
+    assert.deepEqual(r?.actions, ["set_theme"]);
+  }
+  assert.match(capabilityGuideText(), /progressStyle bar\|percent\|steps/);
+});
