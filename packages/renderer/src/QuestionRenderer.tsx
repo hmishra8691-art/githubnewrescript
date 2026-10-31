@@ -174,6 +174,15 @@ function ValidationBlock({ id, errors }: { id: string; errors: ValidationError[]
   );
 }
 
+/**
+ * D19: an author's own aria-describedby used to REPLACE the error id, so a question with an accessibility
+ * description was marked aria-invalid with nothing pointing at its message. Both now: the error first.
+ */
+export function describedByWithErrors(authored: string | undefined, errId: string | undefined): string | undefined {
+  const ids = [errId, ...(authored ?? "").split(/\s+/)].filter((x): x is string => !!x);
+  return ids.length ? [...new Set(ids)].join(" ") : undefined;
+}
+
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
 
 /**
@@ -2985,7 +2994,7 @@ export function QuestionRenderer(props: QRProps) {
       data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
-      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-describedby={describedByWithErrors(a11y?.describedBy, p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
       {...pvData}
       {...anchor("question", p.q.id)}
@@ -3025,7 +3034,7 @@ export function QuestionRenderer(props: QRProps) {
       data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
-      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-describedby={describedByWithErrors(a11y?.describedBy, p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
       {...pvData}
       {...anchor("question", p.q.id)}

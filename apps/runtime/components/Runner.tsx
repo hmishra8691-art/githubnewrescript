@@ -141,6 +141,7 @@ import {
   readNavTrail, writeNavTrail, clearNavTrail,
 } from "@/lib/resume";
 import { resumeSeq } from "@/lib/saveSeq";
+import { firstInvalidTarget, focusErrorTarget, prefersReducedMotion } from "@/lib/errorFocus";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
 import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
@@ -693,6 +694,30 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   };
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
+  /*
+   * D19 — A REFUSED Next/Submit moves focus to the first invalid question's first control (or the banner for a
+   * page-level message), after the errors have rendered. `refuse` is the one way a handler shows blocking or
+   * first-time warning errors; a plain setErrors([]) still clears them without moving anything.
+   */
+  const [errorFocusTick, setErrorFocusTick] = React.useState(0);
+  const errorFocusIdsRef = React.useRef<string[]>([]);
+  const gateLandRef = React.useRef<{ pageId: string; errors: { questionId: string; message: string }[] } | null>(null);
+  const refuse = (errs: ReturnType<typeof validatePage>, pageQuestionIds: string[]) => {
+    errorFocusIdsRef.current = pageQuestionIds;
+    setErrors(errs);
+    setErrorFocusTick((t) => t + 1);
+  };
+  React.useEffect(() => {
+    if (!errorFocusTick || typeof document === "undefined") return;
+    const raf = requestAnimationFrame(() => {
+      // page order as DRAWN (after a gate jump the handler could not know the landed page's questions yet)
+      const drawn = Array.from(document.querySelectorAll<HTMLElement>("#rs-questions [data-qid]")).map((el) => el.dataset.qid ?? "");
+      const ids = drawn.length ? [...new Set(drawn)] : errorFocusIdsRef.current;
+      focusErrorTarget(document, firstInvalidTarget(errors, ids), prefersReducedMotion(window));
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorFocusTick]);
   /* SECTION NAVIGATION (2026-10-30): the navigator's last refusal, the Submit gate on screen, and "submit anyway" once agreed */
   const [navNote, setNavNote] = React.useState<string | null>(null);
   const [gate, setGate] = React.useState<SubmitGate | null>(null);
@@ -1714,7 +1739,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     const allErrs = [...errs, ...fromScripts];
     const blocking = blockingErrors(allErrs);
     if (blocking.length > 0) {
-      setErrors(allErrs);
+      refuse(allErrs, shownQuestions.map((q) => q.id));
       return;
     }
     /*
@@ -1728,7 +1753,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     const softKey = soft.map((w) => `${w.questionId}:${w.message}`).join("|");
     if (soft.length > 0 && ackWarnRef.current !== softKey) {
       ackWarnRef.current = softKey;
-      setErrors(soft);
+      refuse(soft, shownQuestions.map((q) => q.id));
       return;
     }
     ackWarnRef.current = null;
@@ -1841,7 +1866,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const handleProbeNext = once(async () => {
     if (!probe) return;
     const errs = [...await validateWithScripts([probe.pq]), ...await frameValidateFor(probe.pq)];
-    if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+    if (blockingErrors(errs).length > 0) { refuse(errs, [probe.pq.id]); return; }
     setErrors([]);
     setProbe(null);
     if (await showNextProbe()) return;
@@ -2054,7 +2079,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     setSteps(r.steps);
     notePage(r.steps, r.stepIndex, "jump");
     checkpoint();
-    setErrors([]);
+    /* D19: a jump from the Submit gate's "go" lands with WHY the page was listed, and focus on the first of them */
+    const land = gateLandRef.current;
+    gateLandRef.current = null;
+    if (land && land.pageId === target && land.errors.length) refuse(land.errors, land.errors.map((e) => e.questionId));
+    else setErrors([]);
     setNavNote(null);
     setGate(null);
     gateConfirmedRef.current = false;
@@ -2099,7 +2128,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       await onChangeRef.current?.flush();
       // S1b: custom_script rules in the frame; S1a's sandboxed "validate" handlers asked for THIS question (the page's last question goes through handleNextInner, which asks for the whole page)
       const errs = [...await validateWithScripts([q]), ...(convoIndex < pageQuestions.length - 1 ? await frameValidateFor(q) : [])];
-      if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+      if (blockingErrors(errs).length > 0) { refuse(errs, [q.id]); return; }
     }
     if (q && q.type !== "html" && !q.settings.hidden) { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
     if (convoIndex < pageQuestions.length - 1) {
@@ -2225,7 +2254,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      */
     <>
       {errors.length > 0 && (
-        <div className="rs-error-banner" role="status" aria-live="polite">{uiText(ui, "review_one")}</div>
+        <div className="rs-error-banner" role="status" aria-live="polite" tabIndex={-1} data-testid="rs-error-banner">{uiText(ui, "review_one")}</div>
       )}
       <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
         {voice && (
@@ -2290,7 +2319,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         </div>
       )}
       {errors.length > 0 && (
-        <div className="rs-error-banner" role="status" aria-live="polite">
+        <div className="rs-error-banner" role="status" aria-live="polite" tabIndex={-1} data-testid="rs-error-banner">
           {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
           {/* a script's page-level message (rs.error without a question on this page, a logic script's error() without one) */}
           {errors.filter((e) => !e.questionId || !shownQuestions.some((q) => q.id === e.questionId)).map((e, i) => (
@@ -2433,7 +2462,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       {gate && (
         <SubmitGatePanel gate={gate}
-          onGo={(pageId) => { setGate(null); jumpTo(pageId, "page", "gate"); }}
+          onGo={(pageId) => {
+            const g = gate;
+            setGate(null);
+            /* D19: arriving from the gate, the landed page shows WHY it was listed (read by jumpTo once it has landed — it may be deferred behind the latch) */
+            gateLandRef.current = { pageId, errors: [...g.missing, ...g.invalid].filter((m) => m.pageId === pageId).map((m) => ({ questionId: m.questionId, message: m.message })) };
+            jumpTo(pageId, "page", "gate");
+          }}
           onCancel={() => { setGate(null); force(); }}
           onConfirm={() => {
       gateConfirmedRef.current = true;
