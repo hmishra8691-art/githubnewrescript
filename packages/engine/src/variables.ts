@@ -604,7 +604,7 @@ export function questionVariables(
   // Side data stored beside the answer under `<id>__<suffix>` (see
   // variants/shared.tsx setSide) needs a column of its own, or a quiz score
   // and a reaction time would be captured and then never exported.
-  if (q.options.some((o) => o.meta?.correct)) {
+  if (q.options.some((o) => o.meta?.correct) || (q.variant === "gamified.quiz" && ((q.assessment?.correct?.length ?? 0) > 0 || !!q.assessment?.withheld))) {
     push({
       name: `${q.variableName}_CORRECT`, label: `${q.code} — answered correctly`,
       dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "Incorrect", "1": "Correct" },

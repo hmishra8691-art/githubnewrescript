@@ -178,7 +178,7 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
   { id: "timers", name: "Timers", need: /\btimers?\b|\bcountdown\b|\btime limit\b|\btimed\b|\bseconds?\b/i, actions: ["update_question"],
     summary: "update_question type \"gamified.timed\" settings {timeLimitSeconds 1–3600, onTimeout lock|advance} (single choice); a visible countdown on another type is a behaviour script ticking with rs.after (≤ 60 s per step)" },
   { id: "assessments", name: "Assessments", need: /\bquiz\w*|\bexam\w*|\btest scor\w*|\banswer key\b|\bcorrect answer\b|\bmarks?\b|\bgrad(?:e|ing)\b|\bpass mark\b/i, actions: ["set_answer_key", "set_assessment"],
-    summary: "set_answer_key {target, correct, points} and set_assessment {passMark, feedback …}: scored tests computed by the engine, never written by a script" },
+    summary: "set_answer_key {target, correct, points} and set_assessment {passMark, feedback …}: scored tests computed by the engine, never written by a script; the instant-feedback quiz (type \"gamified.quiz\") reads the same key — no option meta" },
   { id: "media", name: "Question media (stimulus, option images)", need: /\b(?:image|picture|photo|logo|video|audio|clip|stimulus|media)\b/i, actions: ["set_question_media"],
     summary: "set_question_media {target, items [{url, alt}], layout horizontal|vertical, requireComplete, options [{code, imageUrl, imageAlt}], clear}: https or the survey's media library (/api/media/…)" },
   { id: "variants", name: "Question variants and their settings", need: /\bvariant\b|\bslider\b|\bnps\b|\bhotspot\b|\bheat ?map\b|\bswipe\b|\bcard sort\w*|\bdrag\w*|\branking\b|\bmap\b|\bsignature\b|\bannotat\w*|\bstar rating\b|\bmatrix\b/i, actions: ["create_question", "update_question"],

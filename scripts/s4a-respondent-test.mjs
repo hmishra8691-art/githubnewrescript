@@ -314,6 +314,74 @@ if (SECTIONS.has("C")) {
   await pv.context().close();
 }
 
+/* ============================================================== D. D14 / GA-03 one answer key */
+if (SECTIONS.has("D")) {
+  console.log("\nD  D14 / GA-03 the quiz reads question.assessment; a withheld key = a plain choice");
+  const quizDef = (id, extra = {}, q = {}) => ({
+    meta: { id, code: id.toUpperCase(), title: "Quiz", version: "1" },
+    questions: [
+      { id: "qz", code: "QZ", variableName: "QZ", type: "single_select", variant: "gamified.quiz", text: "Which article protects life and liberty?", required: true, settings: {},
+        options: [{ code: 1, label: "Article 14" }, { code: 2, label: "Article 19" }, { code: 3, label: "Article 21" }], assessment: { correct: [3] }, ...q },
+      { id: "q2", code: "Q2", variableName: "Q2", type: "open_text", variant: "text.single_line", text: "Any comment?", settings: {} },
+    ],
+    flow: [{ type: "page", id: "p1", questionIds: ["qz"] }, { type: "page", id: "p2", questionIds: ["q2"] }, { type: "end", id: "e", status: "complete" }],
+    ...extra,
+  });
+  const launch = async (def) => {
+    const r = await fetch(`${RUNTIME}/api/session/sandbox`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "launch", definition: def }) });
+    const j = await r.json(); assert.ok(j.url, JSON.stringify(j)); return j.url;
+  };
+  const openLink = async (url) => {
+    const ctx = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+    const pg = await ctx.newPage();
+    pg.on("pageerror", (e) => allErrors.push(`${url}: ${e.message}`));
+    await goto(pg, `${RUNTIME}${url}`);
+    await pg.waitForSelector('[data-qid="qz"]', { timeout: 120000 }); // a cold dev compile of /n/ can take a minute
+    return pg;
+  };
+
+  // 1. a scored paper (results after submit): the respondent's copy has no key — a plain single choice
+  const paper = await openLink(await launch(quizDef("quizp", { assessment: { enabled: true, showResults: "after_submit" } })));
+  assert.equal(await paper.$('[data-qid="qz"] [data-testid="quiz"]'), null, "not the quiz widget");
+  assert.equal(await paper.$$eval('[data-qid="qz"] input[type=radio]', (e) => e.length), 3, "an ordinary radio list");
+  assert.equal(await paper.$('[data-testid="quiz-nokey"]'), null, "never the author hint");
+  const src = await paper.content();
+  assert.ok(!/No correct answer is marked yet/.test(src));
+  await paper.click('[data-qid="qz"] label:has-text("Article 14")');
+  assert.equal(await paper.$('[data-testid="quiz-verdict"]'), null, "no instant feedback");
+  assert.equal(await paper.$eval('[data-qid="qz"] input[value="1"]', (e) => e.checked), true);
+  ok("scored paper, results after submit (test link /n/, the stripped respondent copy): plain radio list, no verdict, no author hint");
+  await paper.context().close();
+
+  // 2. per_question results: the key is sent by design — instant feedback from question.assessment
+  const pq = await openLink(await launch(quizDef("quizq", { assessment: { enabled: true, showResults: "per_question" } })));
+  await pq.waitForSelector('[data-qid="qz"] [data-testid="quiz"]');
+  await pq.click('[data-qid="qz"] .rs-quizopt[data-code="1"]');
+  await pq.waitForSelector('[data-qid="qz"] [data-testid="quiz-verdict"].wrong');
+  assert.ok(await pq.$('[data-qid="qz"] .rs-quizopt.right[data-code="3"]'), "the assessment key's answer is highlighted");
+  ok("per_question paper: the quiz widget, a wrong pick → “Not quite”, Article 21 (assessment.correct) highlighted");
+  await pq.context().close();
+
+  // 3. an ordinary survey, quiz keyed ONLY through question.assessment (no option meta): feedback works in preview
+  const pv = await open(quizDef("quizo"), { selector: '[data-qid="qz"]' });
+  await pv.click('[data-qid="qz"] .rs-quizopt[data-code="3"]');
+  await pv.waitForSelector('[data-qid="qz"] [data-testid="quiz-verdict"].right');
+  ok("ordinary survey, key only in question.assessment (set_answer_key / Properties): instant feedback “Correct”");
+  await pv.context().close();
+
+  // 4. an unkeyed quiz: the author hint in preview only, never as a respondent
+  const unkeyed = quizDef("quizn", {}, { assessment: undefined });
+  const pa = await open(unkeyed, { selector: '[data-qid="qz"]' });
+  await pa.waitForSelector('[data-testid="quiz-nokey"]');
+  await pa.click('[data-qid="qz"] .rs-quizopt[data-code="1"]');
+  assert.equal(await pa.$('[data-testid="quiz-verdict"]'), null, "no verdict against an empty key");
+  await pa.context().close();
+  const pr = await open(unkeyed, { selector: '[data-qid="qz"]', payload: { respondentView: true } });
+  assert.equal(await pr.$('[data-testid="quiz-nokey"]'), null);
+  ok("unkeyed quiz: the author hint in preview, absent “as a respondent”; no “Not quite” against an empty key");
+  await pr.context().close();
+}
+
 console.log(`\n${passed} passed`);
 if (allErrors.length) { console.log("page errors:\n  " + allErrors.join("\n  ")); }
 await browser.close();

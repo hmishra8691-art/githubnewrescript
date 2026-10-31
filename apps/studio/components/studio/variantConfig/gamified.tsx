@@ -2,6 +2,8 @@
 import React from "react";
 import { registerOptionMetaFields, registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
+import { quizKey } from "@rescript/engine";
+import type { Question } from "@rescript/schema";
 
 /**
  * Studio authoring for the gamified family.
@@ -14,15 +16,40 @@ import { CountInput } from "../CountInput";
  */
 
 registerOptionMetaFields("quiz", [
-  { key: "correct", label: "correct", kind: "check" },
   { key: "explanation", label: "explanation", placeholder: "why this is right/wrong", width: 190 },
 ]);
 
-registerVariantSettings("quiz", ({ q, patchSettings }) => {
-  const keyed = q.options.filter((o) => o.meta?.correct).length;
+/**
+ * D14: the quiz's "correct" tick writes THE answer key — question.assessment.correct, the same key Properties →
+ * Assessment and IM set_answer_key write — and drops a legacy option.meta.correct on the way (migrateQuizKeys does
+ * the same on load). Testids keep the old `option-meta-correct-<i>` names so existing suites still find the tick.
+ */
+function setQuizKey(q: Question, code: string | number, on: boolean, patch: (p: Partial<Question>) => void) {
+  const now = quizKey(q).codes;
+  const next = on ? [...new Set([...now, String(code)])] : now.filter((c) => c !== String(code));
+  const typed = next.map((c) => q.options.find((o) => String(o.code) === c)?.code ?? c);
+  const options = q.options.some((o) => o.meta && "correct" in o.meta)
+    ? q.options.map((o) => { if (!o.meta || !("correct" in o.meta)) return o; const { correct: _c, ...rest } = o.meta; return { ...o, meta: Object.keys(rest).length ? rest : undefined }; })
+    : undefined;
+  patch({ assessment: { ...(q.assessment ?? {}), correct: typed } as Question["assessment"], ...(options ? { options } : {}) });
+}
+
+registerVariantSettings("quiz", ({ q, patch, patchSettings }) => {
+  const key = quizKey(q).codes;
+  const keyed = key.length;
   return (
     <>
       <h3 className="sec">Quiz</h3>
+      <div className="f" data-testid="quiz-key">
+        <span>Answer key (the same key as Properties → Assessment)</span>
+        {q.options.map((o, i) => (
+          <label key={String(o.code)} className="row" style={{ gap: 6, fontSize: 13 }}>
+            <input type="checkbox" data-testid={`option-meta-correct-${i}`} checked={key.includes(String(o.code))}
+              onChange={(e) => setQuizKey(q, o.code, e.target.checked, patch)} />
+            <span className="mono">{String(o.code)}</span> <span>{o.label.replace(/<[^>]*>/g, "")}</span> <span className="muted">correct</span>
+          </label>
+        ))}
+      </div>
       <label className="row" style={{ gap: 6, marginBottom: 8 }}>
         <input type="checkbox" data-testid="quiz-feedback"
           checked={q.settings.showFeedback !== false}

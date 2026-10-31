@@ -1,5 +1,6 @@
 import type { SurveyDefinition, Question } from "@rescript/schema";
 import { isCascading, cascadeParentOf, CASCADE_PARENT_SUFFIX } from "./cascade.js";
+import { isQuiz, quizCorrectValue } from "./quizKey.js";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
 import { loopKeySuffix, type LoopContext, type ResponseState } from "./state.js";
 import { otherBoxCodes, otherTextFor, otherColumnFor, otherKeyFor, legacyOtherKey } from "./otherSpecify.js";
@@ -173,6 +174,12 @@ export function flattenVariables(def: SurveyDefinition, state: ResponseState, op
       } else {
         out[`${q.variableName}_${stem}`] = side;
       }
+    }
+    /* D14: a quiz's _CORRECT is graded HERE from the key the stored definition holds (assessment, else the legacy
+       meta.correct) — the browser's __correct is only a fallback for a definition without a key (quizKey.ts) */
+    if (isQuiz(q)) {
+      const graded = quizCorrectValue(q, state.answers[q.id]);
+      if (graded !== undefined) out[`${q.variableName}_CORRECT`] = graded;
     }
   }
 

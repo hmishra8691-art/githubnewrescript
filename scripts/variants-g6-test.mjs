@@ -136,12 +136,14 @@ await h.page.click('[data-testid="option-meta-correct-1"]'); // mark B correct t
 await h.page.waitForTimeout(300);
 let qq = await readQ(made.quiz.id);
 assert.equal(qq.options[0].meta.explanation, "Because it is.");
-assert.equal(qq.options[1].meta.correct, true, "a second option can be marked correct");
+/* S4a D14: the tick writes THE answer key (question.assessment.correct); the seeded legacy meta.correct moves there */
+assert.deepEqual((qq.assessment?.correct ?? []).map(String).sort(), ["1", "2"], "a second option can be marked correct — in question.assessment");
+assert.ok(!qq.options.some((o) => o.meta?.correct), "no second key left in option.meta");
 await h.page.click('[data-testid="option-meta-correct-1"]'); // back to one right answer
 await h.page.waitForTimeout(300);
 qq = await readQ(made.quiz.id);
-assert.ok(!qq.options[1].meta?.correct, "unticking removes the mark");
-console.log("✔ Studio: quiz answer key + explanation write to option.meta");
+assert.deepEqual((qq.assessment?.correct ?? []).map(String), ["1"], "unticking removes the mark");
+console.log("✔ Studio: quiz answer key → question.assessment, explanation → option.meta");
 
 /* timed: the clock */
 await openEditor(made.timed.id);
