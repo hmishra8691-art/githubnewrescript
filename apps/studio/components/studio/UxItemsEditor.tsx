@@ -81,7 +81,10 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
   const [draft, setDraft] = React.useState<Item | null>(null);
   const write = (kind: Kind, next: UxStyle | UxAnimation | UxBehavior, label: string): string[] => {
     const v = validateUxItem(s.def, kind, next);
-    if (v.errors.length) return v.errors;
+    /* S3b (MM-07): switching a behaviour OFF is always allowed (a refused import can be parked); switching on, or any edit, passes the gate */
+    const stored = (s.def.ux?.[listOf(kind)] as { id: string }[] | undefined)?.find((x) => x.id === next.id);
+    const onlyOff = kind === "behavior" && (next as UxBehavior).enabled === false && !!stored && JSON.stringify({ ...stored, enabled: false }) === JSON.stringify(next);
+    if (v.errors.length && !onlyOff) return v.errors;
     s.labelNextEdit(label);
     s.update((d) => {
       d.ux = d.ux ?? { styles: [], animations: [], behaviors: [] };
@@ -148,6 +151,15 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
   const [showCode, setShowCode] = React.useState(false);
   React.useEffect(() => { setCur(item); setErrors([]); }, [item]);
   const noun = kind === "behavior" ? ((item as UxBehavior).script ? "script" : "behaviour") : kind;
+  const off = kind === "behavior" && (cur as UxBehavior).enabled === false;
+  /* S3b (MM-07): on = the key goes (absent is on) */
+  const setEnabled = (on: boolean) => {
+    const { enabled: _e, ...rest } = cur as UxBehavior;
+    const next = (on ? rest : { ...rest, enabled: false }) as UxBehavior;
+    if (isNew) { setCur(next); return; }
+    setCur(next);
+    setErrors(onSave(next, `${on ? "Switch on" : "Switch off"} ${noun} “${next.label}”`));
+  };
   const commit = (next: typeof cur, immediate = false) => {
     setCur(next);
     if (isNew && !immediate) return;
@@ -159,14 +171,22 @@ function UxItemCard({ kind, item, def, onSave, onRemove, readOnly, isNew }: {
   const warnings = React.useMemo(() => validateUxItem(def, kind, cur).warnings, [def, kind, cur]);
   const code = kind === "style" ? compileStyle(def, cur as UxStyle).css : kind === "animation" ? compileAnimation(def, cur as UxAnimation) : (cur as UxBehavior).script ?? "";
   return (
-    <div className="ux-item" data-testid="ux-item" data-kind={noun} data-id={item.id}>
+    <div className={`ux-item${off ? " is-off" : ""}`} data-testid="ux-item" data-kind={noun} data-id={item.id} data-enabled={kind === "behavior" ? String(!off) : undefined}>
       <div className="ux-item-head">
         <span className="ux-kind">{noun}</span>
+        {kind === "behavior" && (
+          <label className="ux-enabled" title={off ? "Switched off: kept and checked, but it does not run" : "Switched on: it runs in the survey"}>
+            <input type="checkbox" checked={!off} disabled={readOnly} onChange={(e) => setEnabled(e.target.checked)} data-testid="ux-item-enabled" aria-label={`${noun} “${cur.label}” on`} />
+            {off ? "off" : "on"}
+          </label>
+        )}
         <input className="input sm" value={cur.label} disabled={readOnly} aria-label="Name"
           onChange={(e) => setCur({ ...cur, label: e.target.value })} onBlur={() => commit(cur)} data-testid="ux-item-label" />
         <button type="button" className="btn sm ghost" onClick={onRemove} disabled={readOnly} title={isNew ? "Discard" : "Remove"} data-testid="ux-item-remove">{isNew ? "Discard" : "Remove"}</button>
       </div>
       <div className="muted" style={{ fontSize: 11 }}>on {describeUxTarget(def, cur.target)}</div>
+      {off && <p className="ux-off-note" data-testid="ux-item-off-note">Switched off — it stays here and is still checked, but it does not run for respondents. Tick “on” to run it (the check must pass).</p>}
+      {(cur as UxBehavior).notes && <p className="muted" style={{ fontSize: 11.5, margin: "2px 0" }} data-testid="ux-item-notes">{(cur as UxBehavior).notes}</p>}
       {kind === "style" && <StyleFields style={cur as UxStyle} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)} />}
       {kind === "animation" && <AnimationFields a={cur as UxAnimation} readOnly={readOnly} onChange={(n) => commit(n, true)} />}
       {(kind === "style" || kind === "animation") && (

@@ -164,6 +164,13 @@ export const UxBehavior = z.object({
    * fires.
    */
   when: Condition.optional(),
+  /**
+   * S3b (MM-07): switched off — it stays in the survey, editable and checked, but the runtime does not start it
+   * (no events, no effects, no sandbox frame). Absent = on (every survey stored before this field).
+   */
+  enabled: z.boolean().optional(),
+  /** S3b: a note for the programmer (an import's "review before switching on"); never shown to respondents */
+  notes: z.string().max(600).optional(),
   createdAt: z.string().optional(),
 });
 export type UxBehavior = z.infer<typeof UxBehavior>;

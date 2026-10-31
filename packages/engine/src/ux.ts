@@ -911,7 +911,9 @@ export function reviewUx(def: SurveyDefinition): UxFinding[] {
     const tp = targetProblem(def, item.target);
     if (tp) { out.push({ level: "warning", message: `${kind === "behavior" ? "Behaviour" : kind === "style" ? "Style" : "Animation"} “${item.label}” does nothing: ${tp}.`, itemId: item.id, fix: { op: `remove_${kind}` as "remove_style", id: item.id } }); continue; }
     const v = validateUxItem(def, kind, item);
-    for (const e of v.errors) out.push({ level: "critical", message: e, itemId: item.id });
+    /* S3b: a switched-off behaviour does not run — its problems matter when it is switched on (which re-checks it) */
+    const off = kind === "behavior" && (item as UxBehavior).enabled === false;
+    for (const e of v.errors) out.push(off ? { level: "warning", message: `${e} (switched off — it cannot be switched on until this is fixed)`, itemId: item.id } : { level: "critical", message: e, itemId: item.id });
   }
   // conflicts: the same property on the same element in the same state, from two styles
   const seen = new Map<string, { style: UxStyle; value: string }>();
@@ -999,7 +1001,8 @@ export function uxBehaviorWords(def: SurveyDefinition, b: UxBehavior): string {
     : `on ${b.on}${b.options?.length ? ` ${b.options.join(",")}` : ""} → ${b.effects.map(eff).join(", ")}`;
   let when = "";
   if (b.when) { try { when = `, when ${formatCondition(def, b.when, { width: 160 }).replace(/\s+/g, " ")}`; } catch { when = ", with a condition"; } }
-  return `${what}${when}${b.once ? ", once" : ""}`;
+  /* S3b (MM-07): the model sees a switched-off item as such (update_behavior {"enabled": true} switches it on) */
+  return `${what}${when}${b.once ? ", once" : ""}${b.enabled === false ? " — DISABLED (switched off: it does not run)" : ""}`;
 }
 
 /* ------------------------------------------------------------ the diff */
@@ -1080,7 +1083,8 @@ export function evaluateUxTriggers(i: UxTriggerInput): UxTriggerOutcome {
   const answerable = i.shown.filter((id) => { const q = i.def.questions.find((x) => x.id === id); return q && !NOT_ANSWERABLE.has(q.type) && !q.settings?.hidden; });
   const complete = answerable.length > 0 && answerable.every((id) => uxAnswered(i.now[id]));
   for (const b of i.def.ux?.behaviors ?? []) {
-    if (b.script || !b.on) continue;
+    /* S3b (MM-07): a switched-off behaviour does nothing */
+    if (b.enabled === false || b.script || !b.on) continue;
     if (b.once && i.fired.has(b.id)) continue;
     const qid = b.target.questionId;
     const onPage = !qid || i.shown.includes(qid);

@@ -241,7 +241,8 @@ export function UxLayer(p: UxLayerProps) {
   navigate.current = p.onNavigate;
   const writeRef = React.useRef(p.onScriptWrite);
   writeRef.current = p.onScriptWrite;
-  const behaviors = def.ux?.behaviors ?? [];
+  /* S3b (MM-07): a switched-off behaviour is not started — no events, no effects, no sandbox frame */
+  const behaviors = (def.ux?.behaviors ?? []).filter((b) => b.enabled !== false);
   const animations = def.ux?.animations ?? [];
 
   const byCode = React.useMemo(() => new Map(def.questions.map((q) => [q.id, String(q.code)])), [def.questions]);

@@ -29,7 +29,7 @@ export function copilotOutline(def: SurveyDefinition, opts: { selectedId?: strin
     /* the look only: the theme and the UX items (so an existing style is changed, not duplicated) — no questions, logic, research or plan */
     const ux = def.ux; const b = def.branding;
     lines.push(`Theme: primary ${b.colors?.primary ?? "default"}, font ${b.typography?.fontFamily ?? "default"}, cards ${b.layout?.cardStyle ?? "card"}, buttons ${b.buttons?.style ?? "solid"}${b.customCss ? `, Branding custom CSS ${b.customCss.length} chars` : ""}`);
-    if (ux && ux.styles.length + ux.animations.length + ux.behaviors.length) lines.push(`UX configuration: ${[...ux.styles.map((s) => `style ${s.id} “${s.label}” on ${describeUxTarget(def, s.target)}`), ...ux.animations.map((a) => `animation ${a.id} “${a.label}”`), ...ux.behaviors.map((x) => `behaviour ${x.id} “${x.label}” on ${describeUxTarget(def, x.target)}`)].slice(0, 60).join("; ")}`);
+    if (ux && ux.styles.length + ux.animations.length + ux.behaviors.length) lines.push(`UX configuration: ${[...ux.styles.map((s) => `style ${s.id} “${s.label}” on ${describeUxTarget(def, s.target)}`), ...ux.animations.map((a) => `animation ${a.id} “${a.label}”`), ...ux.behaviors.map((x) => `behaviour ${x.id} “${x.label}” on ${describeUxTarget(def, x.target)}${x.enabled === false ? " (disabled)" : ""}`)].slice(0, 60).join("; ")}`);
     return lines.join("\n");
   }
   const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;

@@ -93,9 +93,10 @@ export function proposalCodeItems(before: SurveyDefinition, after: SurveyDefinit
   const items: VerifyItem[] = [];
   const prevB = new Map((before.ux?.behaviors ?? []).map((b) => [b.id, b]));
   for (const b of after.ux?.behaviors ?? []) {
-    if (!b.script || !b.script.trim()) continue;
+    /* S3b: a switched-off script does not run, so it is not run in the test session either */
+    if (!b.script || !b.script.trim() || b.enabled === false) continue;
     const p = prevB.get(b.id);
-    if (p && p.script === b.script && JSON.stringify(p.target) === JSON.stringify(b.target) && (p.when ?? null) === (b.when ?? null)) continue;
+    if (p && p.enabled !== false && p.script === b.script && JSON.stringify(p.target) === JSON.stringify(b.target) && (p.when ?? null) === (b.when ?? null)) continue;
     items.push({ key: `behaviour:${b.id}`, kind: "behaviour", id: b.id, label: b.label, code: b.script, ...(b.target.questionId ? { questionId: b.target.questionId } : {}), ...(b.target.pageId ? { pageId: b.target.pageId } : {}), ...(b.target.blockId ? { blockId: b.target.blockId } : {}) });
   }
   const prevS = new Map((before.scripts ?? []).map((s) => [s.id, s]));
