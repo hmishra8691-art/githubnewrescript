@@ -11,6 +11,8 @@
  *   B  D20 progress "bottom" and "steps" (Runner), with the step dots cap
  *   C  AQ-08 option-group headings / collapsible groups and the cascading dropdown
  *   D  D14 / GA-03 quiz ↔ assessment key (preview / live without key / per_question)
+ *   E  the Studio (needs :3000): Branding preview draws bottom / steps; Option groups "Respondents see"; the cascading
+ *      dropdown editor; the quiz tick writes question.assessment
  *
  *   RUNTIME_URL=http://localhost:3001 node scripts/s4a-respondent-test.mjs
  *   SECTIONS=A,B,C,D (default all)
@@ -20,7 +22,7 @@ import { chromium } from "./lib/playwright.mjs";
 import { sendPreview } from "./lib/preview.mjs";
 
 const RUNTIME = process.env.RUNTIME_URL ?? "http://localhost:3001";
-const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C,D").split(",").map((s) => s.trim()));
+const SECTIONS = new Set((process.env.SECTIONS ?? "A,B,C,D,E").split(",").map((s) => s.trim()));
 let passed = 0;
 const ok = (m) => { passed++; console.log(`  ok   ${m}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -308,6 +310,8 @@ if (SECTIONS.has("C")) {
   await pv.click('[data-testid="rs-next"]');
   await pv.waitForSelector('[data-qid="qc"] [data-testid="rs-errors"]');
   await pv.selectOption(child, "3");
+  const st = await pv.evaluate(() => { const a = (window.__rescriptState ?? {}).answers ?? {}; return { v: a.qc, parent: a.qc__parent }; });
+  assert.deepEqual(st, { v: 3, parent: "US" }, "the answer is the child code; the parent sits beside it (__parent)");
   await pv.click('[data-testid="rs-next"]');
   await pv.waitForSelector('[data-testid="rs-ended"], .rs-end', { timeout: 30000 });
   ok("cascading dropdown: Country → State (labels, second list disabled until a country), India → Maharashtra/Kerala, switching to the US clears Kerala and offers Texas; required refuses an empty child; Texas completes");
@@ -380,6 +384,90 @@ if (SECTIONS.has("D")) {
   assert.equal(await pr.$('[data-testid="quiz-nokey"]'), null);
   ok("unkeyed quiz: the author hint in preview, absent “as a respondent”; no “Not quite” against an empty key");
   await pr.context().close();
+}
+
+/* ============================================================== E. the Studio editors */
+if (SECTIONS.has("E")) {
+  console.log("\nE  Studio: Branding preview, Option groups, cascading editor, quiz key");
+  const { openHarness } = await import("./lib/variantHarness.mjs");
+  const h = await openHarness();
+  try {
+    const opts = ["Apple", "Pear", "Carrot"].map((label, i) => ({ code: i + 1, label, flags: [] }));
+    await h.loadDef({
+      meta: { id: "sandbox", code: "S4A", title: "S4a", version: "1.0" },
+      questions: [
+        { id: "qs", code: "QS", variableName: "QS", type: "single_select", variant: "single_select.radio", text: "Pick one", options: opts, settings: {},
+          optionGroups: [{ id: "g_fruit", name: "Fruit", scope: "options", members: [1, 2] }] },
+        { id: "qc", code: "QC", variableName: "QC", type: "dropdown", variant: "single_select.cascading_dropdown", text: "Where?", settings: { cascadeParents: [{ code: "IN", label: "India" }, { code: "US", label: "United States" }] },
+          options: [{ code: 1, label: "Kerala", flags: [], meta: { parent: "IN" } }, { code: 2, label: "Texas", flags: [], meta: { parent: "US" } }] },
+        { id: "qz", code: "QZ", variableName: "QZ", type: "single_select", variant: "gamified.quiz", text: "Which?", settings: {},
+          options: [{ code: 1, label: "A", flags: [], meta: { correct: true } }, { code: 2, label: "B", flags: [] }, { code: 3, label: "C", flags: [] }] },
+      ],
+      flow: [{ type: "page", id: "p1", questionIds: ["qs", "qc", "qz"] }, { type: "end", id: "e1", status: "complete" }],
+      branding: { layout: { progressBar: "bottom", progressStyle: "steps" } },
+    });
+    // Branding preview
+    await h.goTab("Branding");
+    await h.page.waitForSelector('[data-testid="theme-preview-progress"]');
+    let pr = await h.page.$eval('[data-testid="theme-preview-progress"]', (e) => ({ pos: e.getAttribute("data-position"), style: e.getAttribute("data-style"), label: e.querySelector('[data-testid="theme-preview-progress-label"]')?.textContent, dots: e.querySelectorAll(".rs-progress-dot").length, afterNext: !!(document.querySelector('[data-testid="theme-preview-next"]').compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING) }));
+    assert.deepEqual(pr, { pos: "bottom", style: "steps", label: "Page 3 of 7", dots: 7, afterNext: true });
+    await h.page.selectOption('[data-testid="branding-progress-bar"]', "top");
+    await h.page.waitForTimeout(250);
+    pr = await h.page.$eval('[data-testid="theme-preview-progress"]', (e) => ({ pos: e.getAttribute("data-position"), afterNext: !!(document.querySelector('[data-testid="theme-preview-next"]').compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING) }));
+    assert.deepEqual(pr, { pos: "top", afterNext: false });
+    ok("Branding preview: bottom + steps → “Page 3 of 7”, 7 dots, after the buttons; Progress bar → top moves it above");
+
+    // Option groups → Respondents see
+    const def0 = await h.readDef();
+    await h.goTab("Questions");
+    await (await h.page.$$('[data-testid="qcard"]'))[def0.questions.findIndex((q) => q.id === "qs")].click();
+    await h.page.waitForTimeout(250);
+    const head = '[data-testid="psec-head-option-groups"]';
+    await h.page.waitForSelector(head, { timeout: 15000 });
+    if ((await h.page.getAttribute(head, "aria-expanded")) !== "true") await h.page.click(head);
+    await h.page.waitForSelector('[data-testid="group-display-g_fruit"]');
+    await h.page.selectOption('[data-testid="group-display-g_fruit"]', "collapsible");
+    await h.page.waitForSelector('[data-testid="group-label-g_fruit"]');
+    await h.page.fill('[data-testid="group-label-g_fruit"]', "Fresh fruit");
+    await h.page.waitForTimeout(300);
+    let def = await h.readDef();
+    const g = def.questions.find((q) => q.id === "qs").optionGroups[0];
+    assert.deepEqual([g.display, g.label], ["collapsible", "Fresh fruit"]);
+    ok("Properties → Option groups: “Respondents see” = a collapsible group, heading “Fresh fruit” → optionGroups[0] {display, label}");
+
+    // the cascading editor and the quiz tick (question editor)
+    const openEditor = async (qid) => {
+      await h.goTab("Questions");
+      await h.page.click('[data-testid="close-question"]').catch(() => {});
+      const d = await h.readDef();
+      await h.goTab("Questions");
+      await (await h.page.$$('[data-testid="qcard"]'))[d.questions.findIndex((q) => q.id === qid)].click();
+      await h.page.waitForTimeout(250);
+    };
+    await openEditor("qc");
+    await h.page.waitForSelector('[data-testid="cascade-parents"]');
+    assert.equal(await h.page.$$eval('[data-testid="cascade-parent-row"]', (e) => e.length), 2);
+    assert.ok(await h.page.$('[data-testid="option-meta-parent-0"]'), "each option has a parent column");
+    await h.page.click('[data-testid="cascade-parent-add"]');
+    await h.page.fill('[data-testid="cascade-parent-label"]', "Country");
+    await h.page.waitForTimeout(300);
+    assert.ok(await h.page.$('[data-testid="cascade-problem"]'), "the new parent has no children — the lint says so");
+    def = await h.readDef();
+    const qc = def.questions.find((q) => q.id === "qc");
+    assert.equal(qc.settings.cascadeParents.length, 3); assert.equal(qc.settings.cascadeParentLabel, "Country");
+    ok("cascading dropdown editor: the first list (2 rows + 1 added), the prompt, a parent column per option, the lint chip");
+
+    await openEditor("qz");
+    await h.page.waitForSelector('[data-testid="option-meta-correct-2"]');
+    assert.equal(await h.page.$eval('[data-testid="option-meta-correct-0"]', (e) => e.checked), true, "the legacy meta.correct reads as ticked");
+    await h.page.click('[data-testid="option-meta-correct-2"]');
+    await h.page.waitForTimeout(300);
+    def = await h.readDef();
+    const qz = def.questions.find((q) => q.id === "qz");
+    assert.deepEqual(qz.assessment.correct.map(String).sort(), ["1", "3"]);
+    assert.ok(!qz.options.some((o) => o.meta?.correct), "the legacy key moved into question.assessment");
+    ok("quiz editor: ticking C writes question.assessment.correct [1, 3] and drops option.meta.correct");
+  } finally { await h.close(); }
 }
 
 console.log(`\n${passed} passed`);
