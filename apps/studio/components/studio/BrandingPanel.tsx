@@ -713,9 +713,9 @@ export function BrandingPanel() {
  * A logic script's code, saved only when the code gate passes (S0b D3) — the way UxItemsEditor saves a behaviour
  * script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
  */
-function ScriptCodeField({ code, refusal, onRefusal, onSave, def, label, header, itemKey }: { code: string; refusal?: string[]; onRefusal(errors: string[] | undefined): void; onSave(code: string): void; def: SurveyDefinition; label: string; header?: React.ReactNode; itemKey?: string }) {
+function ScriptCodeField({ code, refusal, onRefusal, onSave, def, label, header, itemKey, scriptId }: { code: string; refusal?: string[]; onRefusal(errors: string[] | undefined): void; onSave(code: string): void; def: SurveyDefinition; label: string; header?: React.ReactNode; itemKey?: string; scriptId?: string }) {
   const [draft, setDraft] = React.useState(code);
-  const tools = useScriptTools({ itemKey: itemKey ?? null, code: draft });
+  const tools = useScriptTools({ itemKey: itemKey ?? null, code: draft, def, run: scriptId ? { kind: "logic", id: scriptId } : null });
   React.useEffect(() => { setDraft(code); }, [code]);
   const dirty = draft !== code;
   const save = () => {
@@ -727,7 +727,7 @@ function ScriptCodeField({ code, refusal, onRefusal, onSave, def, label, header,
   };
   return (
     <div>
-      <CodeEditor language="js" kind="logic" def={def} value={draft} testId="script-code" label={label} header={<>{header}{tools.buttons}</>} showRefs minHeight={120}
+      <CodeEditor language="js" kind="logic" def={def} value={draft} testId="script-code" label={label} header={<>{header}{tools.buttons}</>} showRefs minHeight={120} extraDiagnostics={tools.diagnostics}
         placeholder={`// e.g. total of three questions\nconst total = expr('Q1 + Q2 + Q3');\nsetCalc('TOTAL', total);\nif (total > 100) flag('over_100');`}
         onChange={setDraft} onCommit={save} />
       {tools.panels}
@@ -783,7 +783,7 @@ export function LogicScriptCard({ index: i, refusal, setRefusal }: { index: numb
             onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
           <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
         </div>
-        <ScriptCodeField code={sc.code} refusal={refusal} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />} itemKey={`logic_script:${sc.id}`}
+        <ScriptCodeField code={sc.code} refusal={refusal} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />} itemKey={`logic_script:${sc.id}`} scriptId={sc.id}
           onRefusal={setRefusal}
           onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
         <div style={{ marginTop: 6 }} data-testid="script-when">

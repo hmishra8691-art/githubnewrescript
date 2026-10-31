@@ -3,7 +3,7 @@ import React from "react";
 import type { SurveyDefinition } from "@rescript/schema";
 import { scriptLiteralRefs } from "@rescript/engine";
 import type { CodeLanguage } from "@/lib/code/format.ts";
-import type { CodeKind, GateVerdict } from "@/lib/code/types.ts";
+import type { CodeDiagnostic, CodeKind, GateVerdict } from "@/lib/code/types.ts";
 import { codeCompletions } from "@/lib/code/completions.ts";
 import { fieldDiagnostics, gateFor } from "@/lib/code/diagnostics.ts";
 import type { EditorHandle } from "./codeEditorSetup";
@@ -43,6 +43,10 @@ export interface CodeEditorProps {
   header?: React.ReactNode;
   /** show what the script reads and writes (S2b scriptRefs) in the header */
   showRefs?: boolean;
+  /** S3b: extra markers (a test run's errors), shown while the text is still `forCode` */
+  extraDiagnostics?: { forCode: string; list: CodeDiagnostic[] } | null;
+  /** S3b: content under the toolbar (the test-run panel, history) */
+  below?: React.ReactNode;
 }
 
 type Load = "loading" | "ready" | "fallback";
@@ -82,7 +86,11 @@ export function CodeEditor(p: CodeEditorProps) {
         /* completion of the platform's names (rs api, ctx helpers, el/api, hooks) and the survey's (codes, options) */
         complete: p.language === "js" ? (doc, pos, explicit) => codeCompletions(kind, latest.current.def, doc, pos, explicit) : undefined,
         /* the field's real gate (or the kind's default), debounced by the linter, its sentences mapped to positions */
-        lint: (doc, syntaxAt) => fieldDiagnostics(doc, kind, latest.current.gate ?? gateFor(kind, latest.current.def), syntaxAt),
+        lint: (doc, syntaxAt) => {
+          const own = fieldDiagnostics(doc, kind, latest.current.gate ?? gateFor(kind, latest.current.def), syntaxAt);
+          const x = latest.current.extraDiagnostics;
+          return x && x.forCode === doc ? [...own, ...x.list] : own;
+        },
       });
       setState("ready");
     }).catch(() => { if (!cancelled) setState("fallback"); });
@@ -92,6 +100,7 @@ export function CodeEditor(p: CodeEditorProps) {
   }, []);
   React.useEffect(() => { ed.current?.setValue(p.value); }, [p.value, state]);
   React.useEffect(() => { ed.current?.setReadOnly(!!p.readOnly); }, [p.readOnly, state]);
+  React.useEffect(() => { ed.current?.relint(); }, [p.extraDiagnostics, state]);
   React.useEffect(() => {
     if (!full) return;
     const prev = document.body.style.overflow;
@@ -151,6 +160,7 @@ export function CodeEditor(p: CodeEditorProps) {
           <span className="muted" data-testid="code-editor-fallback">The code editor could not load — a plain text box is used; saving works the same.</span>
         ) : null}
       </div>
+      {p.below}
     </div>
   );
 }

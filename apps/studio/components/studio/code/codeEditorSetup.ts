@@ -25,7 +25,7 @@ import {
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore, redo, undo } from "@codemirror/commands";
 import { searchKeymap, highlightSelectionMatches, openSearchPanel, search } from "@codemirror/search";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { forceLinting, linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { localCompletionSource } from "@codemirror/lang-javascript";
 import { languageExtension, reindentChanges, type CodeLanguage } from "@/lib/code/format.ts";
 import type { CodeDiagnostic, CompletionAt } from "@/lib/code/types.ts";
@@ -35,6 +35,10 @@ export interface EditorHandle {
   setValue(v: string): void;
   setReadOnly(v: boolean): void;
   format(): boolean;
+  /** S3b: run the linter now (markers from a test run arrived) */
+  relint(): void;
+  /** S3b: insert text at the cursor (a snippet from the menu); false when read-only */
+  insert(text: string): boolean;
   focus(): void;
   destroy(): void;
 }
@@ -164,6 +168,19 @@ export function createEditor(parent: HTMLElement, o: EditorOptions): EditorHandl
       if (!c) return false;
       view.dispatch({ changes: c.indent, userEvent: "input.format" });
       if (c.trims.length) view.dispatch({ changes: c.trims, userEvent: "input.format" });
+      return true;
+    },
+    relint() { forceLinting(view); },
+    insert(text) {
+      if (view.state.readOnly) return false;
+      const r = view.state.selection.main;
+      /* a snippet starts on its own line, indented like the line it lands on */
+      const line = view.state.doc.lineAt(r.from);
+      const indent = /^\s*/.exec(line.text)![0];
+      const lead = line.text.slice(0, r.from - line.from).trim() ? `\n${indent}` : "";
+      const body = text.split("\n").map((l, i) => (i === 0 ? l : indent + l)).join("\n");
+      view.dispatch({ changes: { from: r.from, to: r.to, insert: lead + body }, selection: { anchor: r.from + lead.length + body.length }, userEvent: "input.snippet" });
+      view.focus();
       return true;
     },
     focus() { view.focus(); },

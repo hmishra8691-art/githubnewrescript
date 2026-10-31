@@ -109,7 +109,7 @@ function RowEditor({ row }: { row: CodeRow }) {
     const q = s.def.questions.find((x) => x.id === e.questionId);
     if (!q) return <p className="muted">The question is no longer in the survey.</p>;
     const patch = (v: string | undefined, label: string) => { s.labelNextEdit(label); s.update((d) => { const qq = d.questions.find((x) => x.id === q.id); if (qq) (qq as Record<string, unknown>)[e.field] = v; }); };
-    if (e.field === "customJs" && q.type === "custom_component") return <ComponentJsField code={q.customJs ?? ""} label={`${q.code} component JavaScript`} readOnly={s.readOnly} itemKey={row.key}
+    if (e.field === "customJs" && q.type === "custom_component") return <ComponentJsField code={q.customJs ?? ""} label={`${q.code} component JavaScript`} readOnly={s.readOnly} itemKey={row.key} questionId={q.id}
       header={q.customJs ? <ScriptHealthChip scriptId={`uxb_component_${q.id}`} /> : null}
       onSave={(code) => { const v = code.trim() ? codeGate(code, "component") : { ok: true }; if (v.ok) patch(code || undefined, `Edit ${q.code} component JavaScript`); }} />;
     return <InlineField value={String((q as Record<string, unknown>)[e.field] ?? "")} language={row.language} label={`${q.code} ${row.kindLabel}`} testId="allcode-field" readOnly={s.readOnly}
