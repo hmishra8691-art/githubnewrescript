@@ -25,6 +25,7 @@ import { InlineRichText, RichTextEditor } from "./RichTextEditor";
 import { AiQuestionSection } from "./AiQuestionSection";
 import { AssessmentQuestionSection } from "./AssessmentQuestionSection";
 import { CodeEditor } from "./code/CodeEditor";
+import { useScriptTools } from "./code/ScriptTools";
 import { ScriptHealthChip } from "./ScriptHealth";
 
 /** Context-aware validation (req §6/§19): only offer rules that make sense
@@ -1882,7 +1883,7 @@ function PropertiesPanelBody() {
         <div className="f"><span>Component HTML (the template your script drives)</span>
           <CodeEditor language="html" value={q.customHtml ?? ""} testId="component-html" label={`${q.code} component HTML`} minHeight={60} readOnly={s.readOnly}
             onChange={(v) => patch({ customHtml: v || undefined })} /></div>
-        <ComponentJsField code={q.customJs ?? ""} label={`${q.code} component JavaScript`} readOnly={s.readOnly}
+        <ComponentJsField code={q.customJs ?? ""} label={`${q.code} component JavaScript`} readOnly={s.readOnly} itemKey={`component_js:${q.id}:js`}
           header={q.customJs ? <ScriptHealthChip scriptId={`uxb_component_${q.id}`} /> : null}
           onSave={(code) => patch({ customJs: code || undefined })} />
       </CollapsibleSection>
@@ -1905,8 +1906,9 @@ function PropertiesPanelBody() {
  * behaviour script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
  * The same gate refuses it again before it runs and in Intelligent mode's set_custom_code.
  */
-export function ComponentJsField({ code, onSave, label, readOnly, header }: { code: string; onSave(code: string): void; label: string; readOnly?: boolean; header?: React.ReactNode }) {
+export function ComponentJsField({ code, onSave, label, readOnly, header, itemKey }: { code: string; onSave(code: string): void; label: string; readOnly?: boolean; header?: React.ReactNode; itemKey?: string }) {
   const [draft, setDraft] = React.useState(code);
+  const tools = useScriptTools({ itemKey: itemKey ?? null, code: draft });
   const [errors, setErrors] = React.useState<string[]>([]);
   React.useEffect(() => { setDraft(code); setErrors([]); }, [code]);
   const dirty = draft !== code;
@@ -1919,8 +1921,8 @@ export function ComponentJsField({ code, onSave, label, readOnly, header }: { co
   return (
     <div>
       <div className="f"><span>Component JavaScript (receives el and api: api.getValue(), api.setValue(v)). Checked before it is saved and before it runs: it works on el and api — no window, constructor, network or storage; document only to create elements; loops stop after 100,000 rounds.</span>
-        <CodeEditor language="js" kind="component" value={draft} testId="component-js" label={label} header={header} minHeight={90} readOnly={readOnly}
-          onChange={setDraft} onCommit={save} /></div>
+        <CodeEditor language="js" kind="component" value={draft} testId="component-js" label={label} header={<>{header}{tools.buttons}</>} minHeight={90} readOnly={readOnly}
+          onChange={setDraft} onCommit={save} />{tools.panels}</div>
       {dirty && <div className="row" style={{ gap: 6, marginTop: 4 }}>
         <button type="button" className="btn small primary" onClick={save} data-testid="component-js-save">Save code</button>
         <button type="button" className="btn small ghost" onClick={() => { setDraft(code); setErrors([]); }}>Discard changes</button>

@@ -8,6 +8,7 @@ import { OptionalCondition } from "./ConditionBuilder";
 import { ScriptHealthChip } from "./ScriptHealth";
 import { LegacyScriptsBanner } from "./LegacyScripts";
 import { CodeEditor } from "./code/CodeEditor";
+import { useScriptTools } from "./code/ScriptTools";
 import { scopedCssGate } from "@/lib/code/diagnostics.ts";
 import { duplicateUxItem, DUPLICATE_NOTE } from "@/lib/scripts/manage.ts";
 
@@ -206,6 +207,8 @@ export function UxItemCard({ kind, item, def, onSave, onRemove, onDuplicate, rea
   };
   const save = () => { const e = onSave(cur, `Edit ${noun} “${cur.label}”`); setErrors(e); };
   const warnings = React.useMemo(() => validateUxItem(def, kind, cur).warnings, [def, kind, cur]);
+  /* S3b: History (and the test run) for a stored behaviour script */
+  const tools = useScriptTools({ itemKey: kind === "behavior" && (item as UxBehavior).script !== undefined && !isNew ? `ux_script:${item.id}` : null, code: (cur as UxBehavior).script ?? "" });
   const code = kind === "style" ? compileStyle(def, cur as UxStyle).css : kind === "animation" ? compileAnimation(def, cur as UxAnimation) : (cur as UxBehavior).script ?? "";
   return (
     <div className={`ux-item${off ? " is-off" : ""}`} data-testid="ux-item" data-kind={noun} data-id={item.id} data-enabled={kind === "behavior" ? String(!off) : undefined}>
@@ -236,7 +239,7 @@ export function UxItemCard({ kind, item, def, onSave, onRemove, onDuplicate, rea
       {kind === "behavior" && <BehaviorFields b={cur as UxBehavior} def={def} readOnly={readOnly} onChange={(n, now) => (now ? commit(n, true) : setCur(n))} onBlur={() => commit(cur)}
         /* the gate the save uses (validateUxItem), run while typing: its findings are the editor's markers */
         gate={(code) => validateUxItem(def, "behavior", { ...(cur as UxBehavior), script: code })}
-        header={(item as UxBehavior).script && !isNew ? <ScriptHealthChip scriptId={item.id} /> : null} />}
+        header={(item as UxBehavior).script && !isNew ? <><ScriptHealthChip scriptId={item.id} />{tools.buttons}</> : null} below={tools.panels} />}
       {errors.length > 0 && <ul className="ux-errors" role="alert" data-testid="ux-item-errors">{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       {warnings.length > 0 && <ul className="ux-warnings" data-testid="ux-item-warnings">{warnings.map((e, i) => <li key={i}>{e}</li>)}</ul>}
       <div className="ux-item-foot">
@@ -303,9 +306,9 @@ function AnimationFields({ a, readOnly, onChange }: { a: UxAnimation; readOnly: 
     </div>
   );
 }
-function BehaviorFields({ b, def, readOnly, onChange, onBlur, gate, header }: {
+function BehaviorFields({ b, def, readOnly, onChange, onBlur, gate, header, below }: {
   b: UxBehavior; def: SurveyDefinition; readOnly: boolean; onChange(n: UxBehavior, now?: boolean): void; onBlur(): void;
-  gate(code: string): { errors: string[]; warnings: string[] }; header?: React.ReactNode;
+  gate(code: string): { errors: string[]; warnings: string[] }; header?: React.ReactNode; below?: React.ReactNode;
 }) {
   const [effects, setEffects] = React.useState(JSON.stringify(b.effects, null, 1));
   const [err, setErr] = React.useState<string | undefined>();
@@ -319,7 +322,7 @@ function BehaviorFields({ b, def, readOnly, onChange, onBlur, gate, header }: {
         <div className="f"><span>Script — runs in a sandbox. It can read the page (document.querySelector…), listen for events (addEventListener or rs.listen) and change classes, styles, and elements it creates, with the rs api for the rest. It cannot change answers or reach the network. Errors appear in the browser console and the preview inspector.</span>
           <CodeEditor language="js" kind="ux" def={def} value={b.script} readOnly={readOnly} minHeight={110} label={`Script “${b.label}”`}
             testId="ux-script" gate={gate} header={header} showRefs
-            onChange={(v) => onChange({ ...b, script: v })} onCommit={onBlur} /></div>
+            onChange={(v) => onChange({ ...b, script: v })} onCommit={onBlur} />{below}</div>
         <BehaviorGuard b={b} readOnly={readOnly} onChange={onChange} />
       </div>
     );
