@@ -742,6 +742,56 @@ function ScriptCodeField({ code, refusal, onRefusal, onSave, def, label, header 
   );
 }
 
+/** one Scripts-panel logic script, editable (the Scripts panel's list, and Research tools → All code in place) */
+export function LogicScriptCard({ index: i, refusal, setRefusal }: { index: number; refusal?: string[]; setRefusal(errs: string[] | undefined): void }) {
+  const s = useStudio();
+  const sc = s.def.scripts[i];
+  if (!sc) return null;
+  return (
+      <div className="card" data-testid="logic-script-card" data-id={sc.id}>
+        <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
+          <input className="input" style={{ width: 180 }} value={sc.name}
+            onChange={(e) => s.update((d) => { d.scripts[i].name = e.target.value; })} />
+          <select className="select" value={sc.scope}
+            onChange={(e) => s.update((d) => { d.scripts[i].scope = e.target.value as any; })}>
+            <option value="survey">survey</option><option value="page">page</option><option value="question">question</option>
+          </select>
+          {sc.scope !== "survey" && (
+            <input className="input mono" style={{ width: 130 }} placeholder="page/question id" value={sc.ref ?? ""}
+              onChange={(e) => s.update((d) => { d.scripts[i].ref = e.target.value || undefined; })} />
+          )}
+          <select className="select" value={sc.event}
+            onChange={(e) => s.update((d) => { d.scripts[i].event = e.target.value as any; })}>
+            <option value="on_load">on_load</option><option value="on_change">on_change</option>
+            <option value="on_submit">on_submit</option><option value="on_validate">on_validate</option>
+            <option value="on_complete">on_complete</option>
+          </select>
+          <label className="row" style={{ gap: 4, fontSize: 13 }}>
+            <input type="checkbox" checked={sc.enabled} data-testid="script-enabled"
+              onChange={(e) => {
+                /* S0b D3: a script the code gate refuses cannot be switched on (an import arrives off, "pending review") */
+                if (e.target.checked && !codeGate(sc.code, "logic").ok) { setRefusal(codeGate(sc.code, "logic").errors); return; }
+                s.update((d) => { d.scripts[i].enabled = e.target.checked; });
+              }} /> enabled
+          </label>
+          <span className="grow" />
+          {/* S3b (MM-06): a copy, switched off so the two never both run */}
+          <button className="btn small ghost" disabled={s.readOnly} title={`Make a copy with a new id. ${DUPLICATE_NOTE}`} data-testid="script-duplicate"
+            onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
+          <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
+        </div>
+        <ScriptCodeField code={sc.code} refusal={refusal} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />}
+          onRefusal={setRefusal}
+          onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
+        <div style={{ marginTop: 6 }} data-testid="script-when">
+          <OptionalCondition label="Run only when" value={sc.when}
+            hint="Otherwise the script runs for every respondent at its event."
+            onChange={(when) => s.update((d) => { d.scripts[i].when = when; })} />
+        </div>
+      </div>
+  );
+}
+
 export function ScriptsPanel() {
   const s = useStudio();
   const [refusal, setRefusal] = React.useState<Record<string, string[] | undefined>>({});
@@ -768,49 +818,7 @@ export function ScriptsPanel() {
         logged with the reason). A <code>get</code> later in the same run sees the run&apos;s own writes. on_change runs just after the
         change; on_validate / on_submit may take at most 1.5 s on Next. <code>expr</code> / <code>pipe</code> take their text written out.
       </p>
-      {s.def.scripts.map((sc, i) => (
-        <div key={sc.id} className="card">
-          <div className="row" style={{ marginBottom: 6, flexWrap: "wrap" }}>
-            <input className="input" style={{ width: 180 }} value={sc.name}
-              onChange={(e) => s.update((d) => { d.scripts[i].name = e.target.value; })} />
-            <select className="select" value={sc.scope}
-              onChange={(e) => s.update((d) => { d.scripts[i].scope = e.target.value as any; })}>
-              <option value="survey">survey</option><option value="page">page</option><option value="question">question</option>
-            </select>
-            {sc.scope !== "survey" && (
-              <input className="input mono" style={{ width: 130 }} placeholder="page/question id" value={sc.ref ?? ""}
-                onChange={(e) => s.update((d) => { d.scripts[i].ref = e.target.value || undefined; })} />
-            )}
-            <select className="select" value={sc.event}
-              onChange={(e) => s.update((d) => { d.scripts[i].event = e.target.value as any; })}>
-              <option value="on_load">on_load</option><option value="on_change">on_change</option>
-              <option value="on_submit">on_submit</option><option value="on_validate">on_validate</option>
-              <option value="on_complete">on_complete</option>
-            </select>
-            <label className="row" style={{ gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={sc.enabled} data-testid="script-enabled"
-                onChange={(e) => {
-                  /* S0b D3: a script the code gate refuses cannot be switched on (an import arrives off, "pending review") */
-                  if (e.target.checked && !codeGate(sc.code, "logic").ok) { setRefusal((r) => ({ ...r, [sc.id]: codeGate(sc.code, "logic").errors })); return; }
-                  s.update((d) => { d.scripts[i].enabled = e.target.checked; });
-                }} /> enabled
-            </label>
-            <span className="grow" />
-            {/* S3b (MM-06): a copy, switched off so the two never both run */}
-            <button className="btn small ghost" disabled={s.readOnly} title={`Make a copy with a new id. ${DUPLICATE_NOTE}`} data-testid="script-duplicate"
-              onClick={() => { const copy = duplicateLogicScript(sc, `script_${Date.now().toString(36)}`); s.labelNextEdit(`Duplicate script “${sc.name}”`); s.update((d) => { d.scripts.splice(i + 1, 0, copy); }); s.toast(`Copied as “${copy.name}”. ${DUPLICATE_NOTE}`); }}>Duplicate</button>
-            <button className="btn small danger" onClick={() => s.update((d) => { d.scripts.splice(i, 1); })}>×</button>
-          </div>
-          <ScriptCodeField code={sc.code} refusal={refusal[sc.id]} def={s.def} label={`Script “${sc.name}” code`} header={<ScriptHealthChip scriptId={sc.id} />}
-            onRefusal={(errs) => setRefusal((r) => ({ ...r, [sc.id]: errs }))}
-            onSave={(code) => { s.labelNextEdit(`Edit script “${sc.name}”`); s.update((d) => { d.scripts[i].code = code; }); }} />
-          <div style={{ marginTop: 6 }} data-testid="script-when">
-            <OptionalCondition label="Run only when" value={sc.when}
-              hint="Otherwise the script runs for every respondent at its event."
-              onChange={(when) => s.update((d) => { d.scripts[i].when = when; })} />
-          </div>
-        </div>
-      ))}
+      {s.def.scripts.map((sc, i) => <LogicScriptCard key={sc.id} index={i} refusal={refusal[sc.id]} setRefusal={(errs) => setRefusal((r) => ({ ...r, [sc.id]: errs }))} />)}
       <button className="btn" onClick={() =>
         s.update((d) => {
           d.scripts.push({

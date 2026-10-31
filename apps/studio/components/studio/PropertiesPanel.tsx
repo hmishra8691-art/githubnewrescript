@@ -1905,7 +1905,7 @@ function PropertiesPanelBody() {
  * behaviour script: typed into a draft, checked when the field is left (or "Save code"), refused with the reasons.
  * The same gate refuses it again before it runs and in Intelligent mode's set_custom_code.
  */
-function ComponentJsField({ code, onSave, label, readOnly, header }: { code: string; onSave(code: string): void; label: string; readOnly?: boolean; header?: React.ReactNode }) {
+export function ComponentJsField({ code, onSave, label, readOnly, header }: { code: string; onSave(code: string): void; label: string; readOnly?: boolean; header?: React.ReactNode }) {
   const [draft, setDraft] = React.useState(code);
   const [errors, setErrors] = React.useState<string[]>([]);
   React.useEffect(() => { setDraft(code); setErrors([]); }, [code]);

@@ -76,10 +76,9 @@ export function parseDecls(text: string): { decls: Record<string, string>; error
   return { decls: uxDeclarations(decls) };
 }
 
-export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string }) {
+/** the store writes every Styles/animations/scripts card uses: save through the gate, remove, duplicate (S3b: shared with All code) */
+export function useUxItemActions() {
   const s = useStudio();
-  const items = uxItemsFor(s.def, scope);
-  const [draft, setDraft] = React.useState<Item | null>(null);
   const write = (kind: Kind, next: UxStyle | UxAnimation | UxBehavior, label: string): string[] => {
     const v = validateUxItem(s.def, kind, next);
     /* S3b (MM-07): switching a behaviour OFF is always allowed (a refused import can be parked); switching on, or any edit, passes the gate */
@@ -111,6 +110,30 @@ export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string
     });
     s.toast(kind === "behavior" ? `Copied as “${copy.label}”. ${DUPLICATE_NOTE}` : `Copied as “${copy.label}”.`);
   };
+  return { write, remove, duplicate };
+}
+
+/** one existing behaviour / style / animation by id, editable in place (Research tools → All code) */
+export function UxItemEditorById({ id }: { id: string }) {
+  const s = useStudio();
+  const { write, remove, duplicate } = useUxItemActions();
+  const ux = s.def.ux ?? empty;
+  const found: Item | null = (() => {
+    const b = ux.behaviors.find((x) => x.id === id); if (b) return { kind: "behavior", item: b };
+    const st = ux.styles.find((x) => x.id === id); if (st) return { kind: "style", item: st };
+    const a = ux.animations.find((x) => x.id === id); if (a) return { kind: "animation", item: a };
+    return null;
+  })();
+  if (!found) return <p className="muted">It is no longer in the survey.</p>;
+  return <UxItemCard kind={found.kind} item={found.item} def={s.def} readOnly={s.readOnly}
+    onSave={(next, label) => write(found.kind, next, label)} onRemove={() => remove(found.kind, found.item.id, found.item.label)} onDuplicate={() => duplicate(found.kind, found.item)} />;
+}
+
+export function UxItemsEditor({ scope, intro }: { scope: UxScope; intro?: string }) {
+  const s = useStudio();
+  const items = uxItemsFor(s.def, scope);
+  const [draft, setDraft] = React.useState<Item | null>(null);
+  const { write, remove, duplicate } = useUxItemActions();
   const start = (kind: Kind, script = false) => {
     const target = defaultTarget(scope);
     const now = new Date().toISOString();
