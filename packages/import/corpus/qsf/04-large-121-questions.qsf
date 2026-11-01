@@ -1,0 +1,6408 @@
+{
+ "SurveyEntry": {
+  "SurveyID": "SV_large04",
+  "SurveyName": "Large Tracker 121 questions (I1)",
+  "SurveyDescription": null,
+  "SurveyOwnerID": "UR_sanitized",
+  "SurveyBrandID": "sanitized",
+  "DivisionID": null,
+  "SurveyLanguage": "EN",
+  "SurveyActiveResponseSet": "RS_demo",
+  "SurveyStatus": "Inactive",
+  "SurveyStartDate": "0000-00-00 00:00:00",
+  "SurveyExpirationDate": "0000-00-00 00:00:00",
+  "SurveyCreationDate": "2026-01-10 09:00:00",
+  "CreatorID": "UR_sanitized",
+  "LastModified": "2026-02-01 12:00:00",
+  "LastAccessed": "0000-00-00 00:00:00",
+  "LastActivated": "0000-00-00 00:00:00",
+  "Deleted": null
+ },
+ "SurveyElements": [
+  {
+   "SurveyID": "SV_large04",
+   "Element": "BL",
+   "PrimaryAttribute": "Survey Blocks",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": [
+    {
+     "Type": "Standard",
+     "Description": "Block 1",
+     "ID": "BL_1",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID1"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID2"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID3"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID4"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID5"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID6"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID7"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID8"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID9"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID10"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 2",
+     "ID": "BL_2",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID11"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID12"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID13"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID14"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID15"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID16"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID17"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID18"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID19"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID20"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 3",
+     "ID": "BL_3",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID21"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID22"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID23"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID24"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID25"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID26"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID27"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID28"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID29"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID30"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 4",
+     "ID": "BL_4",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID31"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID32"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID33"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID34"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID35"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID36"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID37"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID38"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID39"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID40"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 5",
+     "ID": "BL_5",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID41"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID42"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID43"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID44"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID45"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID46"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID47"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID48"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID49"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID50"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 6",
+     "ID": "BL_6",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID51"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID52"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID53"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID54"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID55"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID56"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID57"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID58"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID59"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID60"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 7",
+     "ID": "BL_7",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID61"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID62"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID63"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID64"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID65"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID66"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID67"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID68"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID69"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID70"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 8",
+     "ID": "BL_8",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID71"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID72"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID73"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID74"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID75"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID76"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID77"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID78"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID79"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID80"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 9",
+     "ID": "BL_9",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID81"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID82"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID83"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID84"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID85"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID86"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID87"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID88"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID89"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID90"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 10",
+     "ID": "BL_10",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID91"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID92"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID93"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID94"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID95"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID96"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID97"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID98"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID99"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID100"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 11",
+     "ID": "BL_11",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID101"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID102"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID103"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID104"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID105"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID106"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID107"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID108"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID109"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID110"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Block 12",
+     "ID": "BL_12",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID111"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID112"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID113"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID114"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID115"
+      },
+      {
+       "Type": "Page Break"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID116"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID117"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID118"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID119"
+      },
+      {
+       "Type": "Question",
+       "QuestionID": "QID120"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    },
+    {
+     "Type": "Standard",
+     "Description": "Extra",
+     "ID": "BL_extra",
+     "BlockElements": [
+      {
+       "Type": "Question",
+       "QuestionID": "QID121"
+      }
+     ],
+     "Options": {
+      "BlockLocking": "false",
+      "RandomizeQuestions": "false"
+     }
+    }
+   ]
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "FL",
+   "PrimaryAttribute": "Survey Flow",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "Type": "Root",
+    "FlowID": "FL_1",
+    "Flow": [
+     {
+      "Type": "EmbeddedData",
+      "FlowID": "FL_ed1",
+      "EmbeddedData": [
+       {
+        "Description": "PID",
+        "Type": "Recipient",
+        "Field": "PID",
+        "VariableType": "String",
+        "DataVisibility": [],
+        "AnalyzeText": false
+       },
+       {
+        "Description": "src",
+        "Type": "Custom",
+        "Field": "src",
+        "VariableType": "String",
+        "Value": "panel"
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_1",
+      "FlowID": "FL_b1"
+     },
+     {
+      "Type": "Branch",
+      "FlowID": "FL_br1",
+      "Description": "Screen out",
+      "BranchLogic": {
+       "0": {
+        "0": {
+         "LogicType": "Question",
+         "QuestionID": "QID1",
+         "QuestionIsInLoop": "no",
+         "ChoiceLocator": "q://QID1/SelectableChoice/3",
+         "Operator": "Selected",
+         "QuestionIDFromLocator": "QID1",
+         "LeftOperand": "q://QID1/SelectableChoice/3",
+         "Type": "Expression",
+         "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID1</span> <span class=\"LeftOpDesc\">3</span> <span class=\"OpDesc\">Is Selected</span>"
+        },
+        "Type": "If"
+       },
+       "Type": "BooleanExpression",
+       "inPage": false
+      },
+      "Flow": [
+       {
+        "Type": "EndSurvey",
+        "FlowID": "FL_so",
+        "Options": {
+         "Advanced": "true",
+         "ScreenOutResponse": "true",
+         "EndingType": "Advanced",
+         "EOSRedirectURL": "https://panel.example.com/so?pid=${e://Field/PID}&status=2"
+        }
+       }
+      ]
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_2",
+      "FlowID": "FL_b2"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_3",
+      "FlowID": "FL_b3"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_4",
+      "FlowID": "FL_b4"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_5",
+      "FlowID": "FL_b5"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_6",
+      "FlowID": "FL_b6"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_7",
+      "FlowID": "FL_b7"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_8",
+      "FlowID": "FL_b8"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_9",
+      "FlowID": "FL_b9"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_10",
+      "FlowID": "FL_b10"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_11",
+      "FlowID": "FL_b11"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_12",
+      "FlowID": "FL_b12"
+     },
+     {
+      "Type": "Block",
+      "ID": "BL_extra",
+      "FlowID": "FL_extra"
+     },
+     {
+      "Type": "EndSurvey",
+      "FlowID": "FL_end",
+      "Options": {
+       "Advanced": "true",
+       "EndingType": "Advanced",
+       "EOSRedirectURL": "https://panel.example.com/complete?pid=${e://Field/PID}&status=1"
+      }
+     }
+    ],
+    "Properties": {
+     "Count": 16
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID1",
+   "SecondaryAttribute": "Block 1 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID1",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — how satisfied are you with item 1?",
+    "QuestionText": "Block 1 — how satisfied are you with item 1?",
+    "DataExportTag": "B1_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID2",
+   "SecondaryAttribute": "Block 1 — how many (item 2)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID2",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — how many (item 2)?",
+    "QuestionText": "Block 1 — how many (item 2)?",
+    "DataExportTag": "B1_2",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID3",
+   "SecondaryAttribute": "Block 1 — tell us more (item 3) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID3",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — tell us more (item 3) for ${e://Field/src}",
+    "QuestionText": "Block 1 — tell us more (item 3) for ${e://Field/src}",
+    "DataExportTag": "B1_3",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID4",
+   "SecondaryAttribute": "Block 1 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID4",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — how satisfied are you with item 4?",
+    "QuestionText": "Block 1 — how satisfied are you with item 4?",
+    "DataExportTag": "B1_4",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID5",
+   "SecondaryAttribute": "Block 1 — which apply (item 5)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID5",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — which apply (item 5)?",
+    "QuestionText": "Block 1 — which apply (item 5)?",
+    "DataExportTag": "B1_5",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID6",
+   "SecondaryAttribute": "Block 1 — rate each (item 6)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID6",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — rate each (item 6)",
+    "QuestionText": "Block 1 — rate each (item 6)",
+    "DataExportTag": "B1_6",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID7",
+   "SecondaryAttribute": "Block 1 — how many (item 7)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID7",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — how many (item 7)?",
+    "QuestionText": "Block 1 — how many (item 7)?",
+    "DataExportTag": "B1_7",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID8",
+   "SecondaryAttribute": "Block 1 — tell us more (item 8) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID8",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — tell us more (item 8) for ${e://Field/src}",
+    "QuestionText": "Block 1 — tell us more (item 8) for ${e://Field/src}",
+    "DataExportTag": "B1_8",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID9",
+   "SecondaryAttribute": "Block 1 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID9",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 1 — how satisfied are you with item 9?",
+    "QuestionText": "Block 1 — how satisfied are you with item 9?",
+    "DataExportTag": "B1_9",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID10",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID10",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B1_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID11",
+   "SecondaryAttribute": "Block 2 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID11",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — how satisfied are you with item 1?",
+    "QuestionText": "Block 2 — how satisfied are you with item 1?",
+    "DataExportTag": "B2_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID1",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID1/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID1",
+       "LeftOperand": "q://QID1/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID1</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID12",
+   "SecondaryAttribute": "Block 2 — tell us more (item 2) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID12",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — tell us more (item 2) for ${e://Field/src}",
+    "QuestionText": "Block 2 — tell us more (item 2) for ${e://Field/src}",
+    "DataExportTag": "B2_2",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID13",
+   "SecondaryAttribute": "Block 2 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID13",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — how satisfied are you with item 3?",
+    "QuestionText": "Block 2 — how satisfied are you with item 3?",
+    "DataExportTag": "B2_3",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID14",
+   "SecondaryAttribute": "Block 2 — which apply (item 4)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID14",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — which apply (item 4)?",
+    "QuestionText": "Block 2 — which apply (item 4)?",
+    "DataExportTag": "B2_4",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID15",
+   "SecondaryAttribute": "Block 2 — rate each (item 5)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID15",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — rate each (item 5)",
+    "QuestionText": "Block 2 — rate each (item 5)",
+    "DataExportTag": "B2_5",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID16",
+   "SecondaryAttribute": "Block 2 — how many (item 6)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID16",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — how many (item 6)?",
+    "QuestionText": "Block 2 — how many (item 6)?",
+    "DataExportTag": "B2_6",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID17",
+   "SecondaryAttribute": "Block 2 — tell us more (item 7) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID17",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — tell us more (item 7) for ${e://Field/src}",
+    "QuestionText": "Block 2 — tell us more (item 7) for ${e://Field/src}",
+    "DataExportTag": "B2_7",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID18",
+   "SecondaryAttribute": "Block 2 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID18",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — how satisfied are you with item 8?",
+    "QuestionText": "Block 2 — how satisfied are you with item 8?",
+    "DataExportTag": "B2_8",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID19",
+   "SecondaryAttribute": "Block 2 — which apply (item 9)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID19",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 2 — which apply (item 9)?",
+    "QuestionText": "Block 2 — which apply (item 9)?",
+    "DataExportTag": "B2_9",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID20",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID20",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B2_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID21",
+   "SecondaryAttribute": "Block 3 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID21",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — how satisfied are you with item 1?",
+    "QuestionText": "Block 3 — how satisfied are you with item 1?",
+    "DataExportTag": "B3_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID11",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID11/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID11",
+       "LeftOperand": "q://QID11/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID11</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID22",
+   "SecondaryAttribute": "Block 3 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID22",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — how satisfied are you with item 2?",
+    "QuestionText": "Block 3 — how satisfied are you with item 2?",
+    "DataExportTag": "B3_2",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID23",
+   "SecondaryAttribute": "Block 3 — which apply (item 3)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID23",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — which apply (item 3)?",
+    "QuestionText": "Block 3 — which apply (item 3)?",
+    "DataExportTag": "B3_3",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID24",
+   "SecondaryAttribute": "Block 3 — rate each (item 4)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID24",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — rate each (item 4)",
+    "QuestionText": "Block 3 — rate each (item 4)",
+    "DataExportTag": "B3_4",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID25",
+   "SecondaryAttribute": "Block 3 — how many (item 5)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID25",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — how many (item 5)?",
+    "QuestionText": "Block 3 — how many (item 5)?",
+    "DataExportTag": "B3_5",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID26",
+   "SecondaryAttribute": "Block 3 — tell us more (item 6) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID26",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — tell us more (item 6) for ${e://Field/src}",
+    "QuestionText": "Block 3 — tell us more (item 6) for ${e://Field/src}",
+    "DataExportTag": "B3_6",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID27",
+   "SecondaryAttribute": "Block 3 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID27",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — how satisfied are you with item 7?",
+    "QuestionText": "Block 3 — how satisfied are you with item 7?",
+    "DataExportTag": "B3_7",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID28",
+   "SecondaryAttribute": "Block 3 — which apply (item 8)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID28",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — which apply (item 8)?",
+    "QuestionText": "Block 3 — which apply (item 8)?",
+    "DataExportTag": "B3_8",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID29",
+   "SecondaryAttribute": "Block 3 — rate each (item 9)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID29",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 3 — rate each (item 9)",
+    "QuestionText": "Block 3 — rate each (item 9)",
+    "DataExportTag": "B3_9",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID30",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID30",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "5",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B3_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID31",
+   "SecondaryAttribute": "Block 4 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID31",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — how satisfied are you with item 1?",
+    "QuestionText": "Block 4 — how satisfied are you with item 1?",
+    "DataExportTag": "B4_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID21",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID21/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID21",
+       "LeftOperand": "q://QID21/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID21</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID32",
+   "SecondaryAttribute": "Block 4 — which apply (item 2)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID32",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — which apply (item 2)?",
+    "QuestionText": "Block 4 — which apply (item 2)?",
+    "DataExportTag": "B4_2",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID33",
+   "SecondaryAttribute": "Block 4 — rate each (item 3)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID33",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — rate each (item 3)",
+    "QuestionText": "Block 4 — rate each (item 3)",
+    "DataExportTag": "B4_3",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID34",
+   "SecondaryAttribute": "Block 4 — how many (item 4)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID34",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — how many (item 4)?",
+    "QuestionText": "Block 4 — how many (item 4)?",
+    "DataExportTag": "B4_4",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID35",
+   "SecondaryAttribute": "Block 4 — tell us more (item 5) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID35",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — tell us more (item 5) for ${e://Field/src}",
+    "QuestionText": "Block 4 — tell us more (item 5) for ${e://Field/src}",
+    "DataExportTag": "B4_5",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID36",
+   "SecondaryAttribute": "Block 4 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID36",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — how satisfied are you with item 6?",
+    "QuestionText": "Block 4 — how satisfied are you with item 6?",
+    "DataExportTag": "B4_6",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID37",
+   "SecondaryAttribute": "Block 4 — which apply (item 7)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID37",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — which apply (item 7)?",
+    "QuestionText": "Block 4 — which apply (item 7)?",
+    "DataExportTag": "B4_7",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID38",
+   "SecondaryAttribute": "Block 4 — rate each (item 8)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID38",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — rate each (item 8)",
+    "QuestionText": "Block 4 — rate each (item 8)",
+    "DataExportTag": "B4_8",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID39",
+   "SecondaryAttribute": "Block 4 — how many (item 9)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID39",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 4 — how many (item 9)?",
+    "QuestionText": "Block 4 — how many (item 9)?",
+    "DataExportTag": "B4_9",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID40",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID40",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "60"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B4_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID41",
+   "SecondaryAttribute": "Block 5 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID41",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — how satisfied are you with item 1?",
+    "QuestionText": "Block 5 — how satisfied are you with item 1?",
+    "DataExportTag": "B5_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID31",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID31/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID31",
+       "LeftOperand": "q://QID31/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID31</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID42",
+   "SecondaryAttribute": "Block 5 — rate each (item 2)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID42",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — rate each (item 2)",
+    "QuestionText": "Block 5 — rate each (item 2)",
+    "DataExportTag": "B5_2",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID43",
+   "SecondaryAttribute": "Block 5 — how many (item 3)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID43",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — how many (item 3)?",
+    "QuestionText": "Block 5 — how many (item 3)?",
+    "DataExportTag": "B5_3",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID44",
+   "SecondaryAttribute": "Block 5 — tell us more (item 4) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID44",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — tell us more (item 4) for ${e://Field/src}",
+    "QuestionText": "Block 5 — tell us more (item 4) for ${e://Field/src}",
+    "DataExportTag": "B5_4",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID45",
+   "SecondaryAttribute": "Block 5 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID45",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — how satisfied are you with item 5?",
+    "QuestionText": "Block 5 — how satisfied are you with item 5?",
+    "DataExportTag": "B5_5",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID46",
+   "SecondaryAttribute": "Block 5 — which apply (item 6)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID46",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — which apply (item 6)?",
+    "QuestionText": "Block 5 — which apply (item 6)?",
+    "DataExportTag": "B5_6",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID47",
+   "SecondaryAttribute": "Block 5 — rate each (item 7)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID47",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — rate each (item 7)",
+    "QuestionText": "Block 5 — rate each (item 7)",
+    "DataExportTag": "B5_7",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID48",
+   "SecondaryAttribute": "Block 5 — how many (item 8)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID48",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — how many (item 8)?",
+    "QuestionText": "Block 5 — how many (item 8)?",
+    "DataExportTag": "B5_8",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID49",
+   "SecondaryAttribute": "Block 5 — tell us more (item 9) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID49",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 5 — tell us more (item 9) for ${e://Field/src}",
+    "QuestionText": "Block 5 — tell us more (item 9) for ${e://Field/src}",
+    "DataExportTag": "B5_9",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID50",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID50",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B5_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID51",
+   "SecondaryAttribute": "Block 6 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID51",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — how satisfied are you with item 1?",
+    "QuestionText": "Block 6 — how satisfied are you with item 1?",
+    "DataExportTag": "B6_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID41",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID41/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID41",
+       "LeftOperand": "q://QID41/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID41</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID52",
+   "SecondaryAttribute": "Block 6 — how many (item 2)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID52",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — how many (item 2)?",
+    "QuestionText": "Block 6 — how many (item 2)?",
+    "DataExportTag": "B6_2",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID53",
+   "SecondaryAttribute": "Block 6 — tell us more (item 3) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID53",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — tell us more (item 3) for ${e://Field/src}",
+    "QuestionText": "Block 6 — tell us more (item 3) for ${e://Field/src}",
+    "DataExportTag": "B6_3",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID54",
+   "SecondaryAttribute": "Block 6 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID54",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — how satisfied are you with item 4?",
+    "QuestionText": "Block 6 — how satisfied are you with item 4?",
+    "DataExportTag": "B6_4",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID55",
+   "SecondaryAttribute": "Block 6 — which apply (item 5)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID55",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — which apply (item 5)?",
+    "QuestionText": "Block 6 — which apply (item 5)?",
+    "DataExportTag": "B6_5",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID56",
+   "SecondaryAttribute": "Block 6 — rate each (item 6)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID56",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — rate each (item 6)",
+    "QuestionText": "Block 6 — rate each (item 6)",
+    "DataExportTag": "B6_6",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID57",
+   "SecondaryAttribute": "Block 6 — how many (item 7)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID57",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — how many (item 7)?",
+    "QuestionText": "Block 6 — how many (item 7)?",
+    "DataExportTag": "B6_7",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID58",
+   "SecondaryAttribute": "Block 6 — tell us more (item 8) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID58",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — tell us more (item 8) for ${e://Field/src}",
+    "QuestionText": "Block 6 — tell us more (item 8) for ${e://Field/src}",
+    "DataExportTag": "B6_8",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID59",
+   "SecondaryAttribute": "Block 6 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID59",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 6 — how satisfied are you with item 9?",
+    "QuestionText": "Block 6 — how satisfied are you with item 9?",
+    "DataExportTag": "B6_9",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID60",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID60",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "5",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B6_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID61",
+   "SecondaryAttribute": "Block 7 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID61",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — how satisfied are you with item 1?",
+    "QuestionText": "Block 7 — how satisfied are you with item 1?",
+    "DataExportTag": "B7_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID51",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID51/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID51",
+       "LeftOperand": "q://QID51/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID51</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID62",
+   "SecondaryAttribute": "Block 7 — tell us more (item 2) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID62",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — tell us more (item 2) for ${e://Field/src}",
+    "QuestionText": "Block 7 — tell us more (item 2) for ${e://Field/src}",
+    "DataExportTag": "B7_2",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    },
+    "QuestionJS": "Qualtrics.SurveyEngine.addOnload(function(){ Qualtrics.SurveyEngine.setEmbeddedData('seen6', '1'); this.hideNextButton(); var that = this; setTimeout(function(){ that.showNextButton(); }, 3000); });"
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID63",
+   "SecondaryAttribute": "Block 7 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID63",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — how satisfied are you with item 3?",
+    "QuestionText": "Block 7 — how satisfied are you with item 3?",
+    "DataExportTag": "B7_3",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID64",
+   "SecondaryAttribute": "Block 7 — which apply (item 4)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID64",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — which apply (item 4)?",
+    "QuestionText": "Block 7 — which apply (item 4)?",
+    "DataExportTag": "B7_4",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID65",
+   "SecondaryAttribute": "Block 7 — rate each (item 5)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID65",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — rate each (item 5)",
+    "QuestionText": "Block 7 — rate each (item 5)",
+    "DataExportTag": "B7_5",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID66",
+   "SecondaryAttribute": "Block 7 — how many (item 6)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID66",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — how many (item 6)?",
+    "QuestionText": "Block 7 — how many (item 6)?",
+    "DataExportTag": "B7_6",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID67",
+   "SecondaryAttribute": "Block 7 — tell us more (item 7) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID67",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — tell us more (item 7) for ${e://Field/src}",
+    "QuestionText": "Block 7 — tell us more (item 7) for ${e://Field/src}",
+    "DataExportTag": "B7_7",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID68",
+   "SecondaryAttribute": "Block 7 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID68",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — how satisfied are you with item 8?",
+    "QuestionText": "Block 7 — how satisfied are you with item 8?",
+    "DataExportTag": "B7_8",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID69",
+   "SecondaryAttribute": "Block 7 — which apply (item 9)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID69",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 7 — which apply (item 9)?",
+    "QuestionText": "Block 7 — which apply (item 9)?",
+    "DataExportTag": "B7_9",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID70",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID70",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B7_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID71",
+   "SecondaryAttribute": "Block 8 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID71",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — how satisfied are you with item 1?",
+    "QuestionText": "Block 8 — how satisfied are you with item 1?",
+    "DataExportTag": "B8_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID61",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID61/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID61",
+       "LeftOperand": "q://QID61/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID61</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID72",
+   "SecondaryAttribute": "Block 8 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID72",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — how satisfied are you with item 2?",
+    "QuestionText": "Block 8 — how satisfied are you with item 2?",
+    "DataExportTag": "B8_2",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID73",
+   "SecondaryAttribute": "Block 8 — which apply (item 3)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID73",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — which apply (item 3)?",
+    "QuestionText": "Block 8 — which apply (item 3)?",
+    "DataExportTag": "B8_3",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID74",
+   "SecondaryAttribute": "Block 8 — rate each (item 4)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID74",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — rate each (item 4)",
+    "QuestionText": "Block 8 — rate each (item 4)",
+    "DataExportTag": "B8_4",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID75",
+   "SecondaryAttribute": "Block 8 — how many (item 5)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID75",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — how many (item 5)?",
+    "QuestionText": "Block 8 — how many (item 5)?",
+    "DataExportTag": "B8_5",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID76",
+   "SecondaryAttribute": "Block 8 — tell us more (item 6) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID76",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — tell us more (item 6) for ${e://Field/src}",
+    "QuestionText": "Block 8 — tell us more (item 6) for ${e://Field/src}",
+    "DataExportTag": "B8_6",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID77",
+   "SecondaryAttribute": "Block 8 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID77",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — how satisfied are you with item 7?",
+    "QuestionText": "Block 8 — how satisfied are you with item 7?",
+    "DataExportTag": "B8_7",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID78",
+   "SecondaryAttribute": "Block 8 — which apply (item 8)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID78",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — which apply (item 8)?",
+    "QuestionText": "Block 8 — which apply (item 8)?",
+    "DataExportTag": "B8_8",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID79",
+   "SecondaryAttribute": "Block 8 — rate each (item 9)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID79",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 8 — rate each (item 9)",
+    "QuestionText": "Block 8 — rate each (item 9)",
+    "DataExportTag": "B8_9",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID80",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID80",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "60"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B8_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID81",
+   "SecondaryAttribute": "Block 9 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID81",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — how satisfied are you with item 1?",
+    "QuestionText": "Block 9 — how satisfied are you with item 1?",
+    "DataExportTag": "B9_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID71",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID71/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID71",
+       "LeftOperand": "q://QID71/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID71</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID82",
+   "SecondaryAttribute": "Block 9 — which apply (item 2)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID82",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — which apply (item 2)?",
+    "QuestionText": "Block 9 — which apply (item 2)?",
+    "DataExportTag": "B9_2",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID83",
+   "SecondaryAttribute": "Block 9 — rate each (item 3)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID83",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — rate each (item 3)",
+    "QuestionText": "Block 9 — rate each (item 3)",
+    "DataExportTag": "B9_3",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID84",
+   "SecondaryAttribute": "Block 9 — how many (item 4)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID84",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — how many (item 4)?",
+    "QuestionText": "Block 9 — how many (item 4)?",
+    "DataExportTag": "B9_4",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID85",
+   "SecondaryAttribute": "Block 9 — tell us more (item 5) for ${e:",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID85",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — tell us more (item 5) for ${e://Field/src}",
+    "QuestionText": "Block 9 — tell us more (item 5) for ${e://Field/src}",
+    "DataExportTag": "B9_5",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID86",
+   "SecondaryAttribute": "Block 9 — how satisfied are you with ite",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID86",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — how satisfied are you with item 6?",
+    "QuestionText": "Block 9 — how satisfied are you with item 6?",
+    "DataExportTag": "B9_6",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID87",
+   "SecondaryAttribute": "Block 9 — which apply (item 7)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID87",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — which apply (item 7)?",
+    "QuestionText": "Block 9 — which apply (item 7)?",
+    "DataExportTag": "B9_7",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID88",
+   "SecondaryAttribute": "Block 9 — rate each (item 8)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID88",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — rate each (item 8)",
+    "QuestionText": "Block 9 — rate each (item 8)",
+    "DataExportTag": "B9_8",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID89",
+   "SecondaryAttribute": "Block 9 — how many (item 9)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID89",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 9 — how many (item 9)?",
+    "QuestionText": "Block 9 — how many (item 9)?",
+    "DataExportTag": "B9_9",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID90",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID90",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "5",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B9_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID91",
+   "SecondaryAttribute": "Block 10 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID91",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — how satisfied are you with item 1?",
+    "QuestionText": "Block 10 — how satisfied are you with item 1?",
+    "DataExportTag": "B10_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID81",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID81/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID81",
+       "LeftOperand": "q://QID81/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID81</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID92",
+   "SecondaryAttribute": "Block 10 — rate each (item 2)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID92",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — rate each (item 2)",
+    "QuestionText": "Block 10 — rate each (item 2)",
+    "DataExportTag": "B10_2",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID93",
+   "SecondaryAttribute": "Block 10 — how many (item 3)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID93",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — how many (item 3)?",
+    "QuestionText": "Block 10 — how many (item 3)?",
+    "DataExportTag": "B10_3",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID94",
+   "SecondaryAttribute": "Block 10 — tell us more (item 4) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID94",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — tell us more (item 4) for ${e://Field/src}",
+    "QuestionText": "Block 10 — tell us more (item 4) for ${e://Field/src}",
+    "DataExportTag": "B10_4",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID95",
+   "SecondaryAttribute": "Block 10 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID95",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — how satisfied are you with item 5?",
+    "QuestionText": "Block 10 — how satisfied are you with item 5?",
+    "DataExportTag": "B10_5",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID96",
+   "SecondaryAttribute": "Block 10 — which apply (item 6)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID96",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — which apply (item 6)?",
+    "QuestionText": "Block 10 — which apply (item 6)?",
+    "DataExportTag": "B10_6",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID97",
+   "SecondaryAttribute": "Block 10 — rate each (item 7)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID97",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — rate each (item 7)",
+    "QuestionText": "Block 10 — rate each (item 7)",
+    "DataExportTag": "B10_7",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID98",
+   "SecondaryAttribute": "Block 10 — how many (item 8)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID98",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — how many (item 8)?",
+    "QuestionText": "Block 10 — how many (item 8)?",
+    "DataExportTag": "B10_8",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID99",
+   "SecondaryAttribute": "Block 10 — tell us more (item 9) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID99",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 10 — tell us more (item 9) for ${e://Field/src}",
+    "QuestionText": "Block 10 — tell us more (item 9) for ${e://Field/src}",
+    "DataExportTag": "B10_9",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID100",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID100",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B10_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID101",
+   "SecondaryAttribute": "Block 11 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID101",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — how satisfied are you with item 1?",
+    "QuestionText": "Block 11 — how satisfied are you with item 1?",
+    "DataExportTag": "B11_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID91",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID91/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID91",
+       "LeftOperand": "q://QID91/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID91</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID102",
+   "SecondaryAttribute": "Block 11 — how many (item 2)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID102",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — how many (item 2)?",
+    "QuestionText": "Block 11 — how many (item 2)?",
+    "DataExportTag": "B11_2",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID103",
+   "SecondaryAttribute": "Block 11 — tell us more (item 3) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID103",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — tell us more (item 3) for ${e://Field/src}",
+    "QuestionText": "Block 11 — tell us more (item 3) for ${e://Field/src}",
+    "DataExportTag": "B11_3",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID104",
+   "SecondaryAttribute": "Block 11 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID104",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — how satisfied are you with item 4?",
+    "QuestionText": "Block 11 — how satisfied are you with item 4?",
+    "DataExportTag": "B11_4",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID105",
+   "SecondaryAttribute": "Block 11 — which apply (item 5)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID105",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — which apply (item 5)?",
+    "QuestionText": "Block 11 — which apply (item 5)?",
+    "DataExportTag": "B11_5",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID106",
+   "SecondaryAttribute": "Block 11 — rate each (item 6)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID106",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — rate each (item 6)",
+    "QuestionText": "Block 11 — rate each (item 6)",
+    "DataExportTag": "B11_6",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID107",
+   "SecondaryAttribute": "Block 11 — how many (item 7)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID107",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — how many (item 7)?",
+    "QuestionText": "Block 11 — how many (item 7)?",
+    "DataExportTag": "B11_7",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID108",
+   "SecondaryAttribute": "Block 11 — tell us more (item 8) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID108",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — tell us more (item 8) for ${e://Field/src}",
+    "QuestionText": "Block 11 — tell us more (item 8) for ${e://Field/src}",
+    "DataExportTag": "B11_8",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID109",
+   "SecondaryAttribute": "Block 11 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID109",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 11 — how satisfied are you with item 9?",
+    "QuestionText": "Block 11 — how satisfied are you with item 9?",
+    "DataExportTag": "B11_9",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID110",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID110",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "0",
+     "MaxSeconds": "0"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B11_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID111",
+   "SecondaryAttribute": "Block 12 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID111",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — how satisfied are you with item 1?",
+    "QuestionText": "Block 12 — how satisfied are you with item 1?",
+    "DataExportTag": "B12_1",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    },
+    "DisplayLogic": {
+     "0": {
+      "0": {
+       "LogicType": "Question",
+       "QuestionID": "QID101",
+       "QuestionIsInLoop": "no",
+       "ChoiceLocator": "q://QID101/SelectableChoice/1",
+       "Operator": "Selected",
+       "QuestionIDFromLocator": "QID101",
+       "LeftOperand": "q://QID101/SelectableChoice/1",
+       "Type": "Expression",
+       "Description": "<span class=\"ConjDesc\">If</span> <span class=\"QuestionDesc\">QID101</span> <span class=\"LeftOpDesc\">1</span> <span class=\"OpDesc\">Is Selected</span>"
+      },
+      "Type": "If"
+     },
+     "Type": "BooleanExpression",
+     "inPage": false
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID112",
+   "SecondaryAttribute": "Block 12 — tell us more (item 2) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID112",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — tell us more (item 2) for ${e://Field/src}",
+    "QuestionText": "Block 12 — tell us more (item 2) for ${e://Field/src}",
+    "DataExportTag": "B12_2",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID113",
+   "SecondaryAttribute": "Block 12 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID113",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — how satisfied are you with item 3?",
+    "QuestionText": "Block 12 — how satisfied are you with item 3?",
+    "DataExportTag": "B12_3",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID114",
+   "SecondaryAttribute": "Block 12 — which apply (item 4)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID114",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — which apply (item 4)?",
+    "QuestionText": "Block 12 — which apply (item 4)?",
+    "DataExportTag": "B12_4",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID115",
+   "SecondaryAttribute": "Block 12 — rate each (item 5)",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID115",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — rate each (item 5)",
+    "QuestionText": "Block 12 — rate each (item 5)",
+    "DataExportTag": "B12_5",
+    "QuestionType": "Matrix",
+    "Selector": "Likert",
+    "SubSelector": "SingleAnswer",
+    "Choices": {
+     "1": {
+      "Display": "Row 1"
+     },
+     "2": {
+      "Display": "Row 2"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2
+    ],
+    "Answers": {
+     "1": {
+      "Display": "Low"
+     },
+     "2": {
+      "Display": "Mid"
+     },
+     "3": {
+      "Display": "High"
+     }
+    },
+    "AnswerOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID116",
+   "SecondaryAttribute": "Block 12 — how many (item 6)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID116",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — how many (item 6)?",
+    "QuestionText": "Block 12 — how many (item 6)?",
+    "DataExportTag": "B12_6",
+    "QuestionType": "TE",
+    "Selector": "SL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "ContentType",
+      "ContentType": "ValidNumber",
+      "ValidNumber": {
+       "Min": "0",
+       "Max": "99",
+       "NumDecimals": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID117",
+   "SecondaryAttribute": "Block 12 — tell us more (item 7) for ${e",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID117",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — tell us more (item 7) for ${e://Field/src}",
+    "QuestionText": "Block 12 — tell us more (item 7) for ${e://Field/src}",
+    "DataExportTag": "B12_7",
+    "QuestionType": "TE",
+    "Selector": "ML",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID118",
+   "SecondaryAttribute": "Block 12 — how satisfied are you with it",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID118",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — how satisfied are you with item 8?",
+    "QuestionText": "Block 12 — how satisfied are you with item 8?",
+    "DataExportTag": "B12_8",
+    "QuestionType": "MC",
+    "Selector": "SAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "Very"
+     },
+     "2": {
+      "Display": "Somewhat"
+     },
+     "3": {
+      "Display": "Not at all"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "ON",
+      "ForceResponseType": "ON",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID119",
+   "SecondaryAttribute": "Block 12 — which apply (item 9)?",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID119",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Block 12 — which apply (item 9)?",
+    "QuestionText": "Block 12 — which apply (item 9)?",
+    "DataExportTag": "B12_9",
+    "QuestionType": "MC",
+    "Selector": "MAVR",
+    "SubSelector": "TX",
+    "Choices": {
+     "1": {
+      "Display": "A"
+     },
+     "2": {
+      "Display": "B"
+     },
+     "3": {
+      "Display": "C"
+     },
+     "4": {
+      "Display": "None",
+      "ExclusiveAnswer": true
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ],
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID120",
+   "SecondaryAttribute": "Timing",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID120",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "MinSeconds": "5",
+     "MaxSeconds": "60"
+    },
+    "QuestionDescription": "Timing",
+    "QuestionText": "Timing",
+    "DataExportTag": "B12_10_t",
+    "QuestionType": "Timing",
+    "Selector": "PageTimer",
+    "Choices": {
+     "1": {
+      "Display": "First Click"
+     },
+     "2": {
+      "Display": "Last Click"
+     },
+     "3": {
+      "Display": "Page Submit"
+     },
+     "4": {
+      "Display": "Click Count"
+     }
+    },
+    "ChoiceOrder": [
+     1,
+     2,
+     3,
+     4
+    ]
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SQ",
+   "PrimaryAttribute": "QID121",
+   "SecondaryAttribute": "Choose your car",
+   "TertiaryAttribute": null,
+   "Payload": {
+    "QuestionID": "QID121",
+    "Language": [],
+    "DataVisibility": {
+     "Private": false,
+     "Hidden": false
+    },
+    "Configuration": {
+     "QuestionDescriptionOption": "UseText"
+    },
+    "QuestionDescription": "Choose your car",
+    "QuestionText": "Choose your car",
+    "DataExportTag": "car",
+    "QuestionType": "DD",
+    "Selector": "DL",
+    "Validation": {
+     "Settings": {
+      "ForceResponse": "OFF",
+      "Type": "None"
+     }
+    }
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "SO",
+   "PrimaryAttribute": "Survey Options",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "BackButton": "false",
+    "ProgressBarDisplay": "None"
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "PROJ",
+   "PrimaryAttribute": "CORE",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": "1.1.0",
+   "Payload": {
+    "ProjectCategory": "CORE",
+    "SchemaVersion": "1.1.0"
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "STAT",
+   "PrimaryAttribute": "Survey Statistics",
+   "SecondaryAttribute": null,
+   "TertiaryAttribute": null,
+   "Payload": {
+    "MobileCompatible": true,
+    "ID": "Survey Statistics"
+   }
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "RS",
+   "PrimaryAttribute": "RS_demo",
+   "SecondaryAttribute": "Default Response Set",
+   "TertiaryAttribute": null,
+   "Payload": null
+  },
+  {
+   "SurveyID": "SV_large04",
+   "Element": "QC",
+   "PrimaryAttribute": "Survey Question Count",
+   "SecondaryAttribute": "6",
+   "TertiaryAttribute": null,
+   "Payload": null
+  }
+ ]
+}

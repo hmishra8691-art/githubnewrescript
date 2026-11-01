@@ -569,8 +569,172 @@
       "6 custom logic items need review — none were guessed.",
       "The survey passes the quality check.",
       "Of 87 source elements checked, 66 came across as they were, 9 with a change, 12 could not be reproduced (75.9% as-is).",
+      "Question types: 20 native, 8 rebuilt from Studio components, 1 with no equivalent (placeholders).",
       "2 images are still hosted by Qualtrics or named only by a library id — re-upload them here.",
       "Translations in es, fr were imported for review."
+    ]
+  },
+  "04-large-121-questions.qsf": {
+    "file": "04-large-121-questions.qsf",
+    "ok": true,
+    "title": "Large Tracker 121 questions (I1)",
+    "detected": {
+      "questions": 121,
+      "blocks": 13,
+      "pages": 25,
+      "pageBreaks": 12,
+      "embeddedFields": 2,
+      "hiddenVariables": 12,
+      "displayLogic": 11,
+      "skipLogic": 0,
+      "branches": 1,
+      "randomizers": 0,
+      "loops": 0,
+      "quotas": 0,
+      "customLogic": 1,
+      "validations": 38
+    },
+    "created": {
+      "questions": 120,
+      "blocks": 13,
+      "pages": 25,
+      "pageBreaks": 12,
+      "embeddedFields": 2,
+      "hiddenVariables": 12,
+      "displayLogic": 11,
+      "skipLogic": 0,
+      "branches": 1,
+      "randomizers": 0,
+      "loops": 0,
+      "quotas": 0,
+      "customLogic": 0,
+      "validations": 38
+    },
+    "fidelity": {
+      "totals": {
+        "detected": 182,
+        "imported": 168,
+        "partial": 12,
+        "unsupported": 2
+      },
+      "importedPct": 92.3,
+      "features": {
+        "question": {
+          "detected": 121,
+          "imported": 108,
+          "partial": 12,
+          "unsupported": 1
+        },
+        "validation": {
+          "detected": 38,
+          "imported": 38,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "display_logic": {
+          "detected": 11,
+          "imported": 11,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "branch": {
+          "detected": 1,
+          "imported": 1,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "embedded": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "custom_js": {
+          "detected": 1,
+          "imported": 0,
+          "partial": 0,
+          "unsupported": 1
+        },
+        "survey_option": {
+          "detected": 2,
+          "imported": 2,
+          "partial": 0,
+          "unsupported": 0
+        },
+        "timer": {
+          "detected": 6,
+          "imported": 6,
+          "partial": 0,
+          "unsupported": 0
+        }
+      },
+      "unresolved": [],
+      "assets": [],
+      "languages": [],
+      "elements": [
+        "BL:1:read",
+        "FL:1:read",
+        "SQ:121:read",
+        "SO:1:read",
+        "PROJ:1:ignored",
+        "STAT:1:ignored",
+        "RS:1:ignored",
+        "QC:1:ignored"
+      ]
+    },
+    "quality": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "risks": {
+      "high": 2,
+      "medium": 0,
+      "low": 0
+    },
+    "verification": {
+      "ok": true,
+      "structure": {
+        "checked": 134,
+        "ok": 134,
+        "errors": [],
+        "warnings": 0
+      },
+      "runtime": {
+        "placed": 109,
+        "reached": 109,
+        "unreachable": [],
+        "unanswerable": [],
+        "errors": [],
+        "endStatuses": [
+          "complete",
+          "screened"
+        ],
+        "walks": [
+          "deepest:25p/109q→complete",
+          "first:25p/109q→complete",
+          "last:2p/9q→screened",
+          "random:25p/98q→complete",
+          "random:25p/99q→complete",
+          "random:25p/98q→complete",
+          "random:25p/99q→complete",
+          "random:25p/100q→complete"
+        ]
+      },
+      "analysis": {
+        "variablesKept": 121,
+        "variablesRenamed": [],
+        "codesKept": 226,
+        "codesChanged": [],
+        "rowsKept": 36
+      }
+    },
+    "summary": [
+      "I imported your Qualtrics survey (QSF) into Rescript — “Large Tracker 121 questions (I1)”.",
+      "Created 120 questions, 13 blocks, 12 page breaks, 2 embedded variables, 12 hidden variables, 11 display logic rules, 1 branch, 38 validation rules.",
+      "1 custom logic item needs review — none were guessed.",
+      "The survey passes the quality check.",
+      "Of 182 source elements checked, 168 came across as they were, 12 with a change, 2 could not be reproduced (92.3% as-is).",
+      "Question types: 107 native, 13 rebuilt from Studio components, 1 needing a feature Rescript does not have."
     ]
   }
 }
