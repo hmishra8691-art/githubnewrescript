@@ -277,3 +277,138 @@ The sandbox row route (`/api/session/sandbox` action `row`, sandbox-only) gained
   - There is no cross-respondent leaderboard.
   - In a scored paper, correct-answer points are not computed in the browser.
 - **Review.** Loop iterations are listed as their pages were visited.
+
+---
+
+# S5b — Extended features, part B: telemetry and integrations (2026-11-01)
+
+Branch `feat/persistent-execution-engine`, from `a8810ad` (S5a). Audit: `SCRIPT-STUDIO-AUDIT-2026-10-30.md` rows TE-02, TE-04, TE-06, TE-10, TE-12, TE-13, AP-09, AP-14.
+
+- No new npm dependencies. **No migration**: the new paradata lives in the existing `responses.telemetry` jsonb, the per-response settings in the survey definition's `alerts`, and the response events use the existing 0072 outbox (`notify_events.payload` is jsonb).
+- Schema changes are optional fields with defaults; an existing survey records what it did before plus the new categories (each with its own switch).
+- **Privacy rule kept throughout:** never typed text in paradata. Visibility is times and percentages, answer history is codes / numbers (typed text: its length only), idle periods are durations. Each new collector has a switch in `quality.telemetry`; a switched-off category is listed in the telemetry's `disabled`, and the collector lists what it actually measured in the new `measured` field, so telemetry recorded before S5b (or in a browser without the API) reads as "not measured", never as zero. Privacy notes: `docs/RESPONSE-QUALITY.md` (Telemetry section) and the Studio's Quality → Telemetry & privacy switches.
+
+## 1. TE-04 — Question visibility and scroll depth
+
+**Collector** (`apps/runtime/lib/telemetry.ts`, arithmetic in `lib/paradata.ts`):
+- One IntersectionObserver (thresholds 0 / .25 / .5 / .75 / 1) watches every question card (`[data-qid]`, review-page and assessment-report copies excluded). A card is **visible** when at least half of it is in the viewport, or — for a card taller than the viewport, which can never be half on screen — when it fills half the viewport.
+- Per question: `visibleMs` (all visits) and `firstSeenAt` (epoch ms, like `firstChangeAt`). A hidden tab closes the open intervals; leaving the page closes them too.
+- New cards (display logic on the same page) are picked up by a MutationObserver throttled to one rescan per 200 ms.
+- Per page visit: `scrollDepth` — the deepest viewport bottom reached, % of the page height (a page that fits = 100), sampled at most once per animation frame.
+- Switch: `quality.telemetry.visibility` (default on). No IntersectionObserver → "visibility" goes into `disabled`.
+
+**Server.** The sanitiser moved from the save route to `apps/runtime/lib/telemetrySanitize.ts` (unit-tested); it keeps the new fields only when their category is on, clamps them, and keeps nothing it does not know. The sandbox save path now stores the sanitised telemetry in the sandbox row (the browser suite reads it back with `row` + `pick: {telemetry: true}`).
+
+**Quality rule** `interaction.answered_unseen` (interaction, informational, medium, standard and up; `minQuestions` 3 / 2 / 1 / 1): questions the respondent changed by their own input whose card was never at least half visible — a person answers what they can see. Needs `visibility` and `timing`; skipped (not failed) when not measured.
+
+## 2. TE-02 — Answer-value history
+
+- Each change of a **closed** question appends `[ms since the survey started, value]` to the question's `history`, the latest 20 kept (`historyDropped` counts the rest). Closed = single / multi / dropdown / image select, NPS, slider, numeric, numeric list, ranking, allocation, single / multi / numeric / dropdown grids. Strings are cut to 40 characters, lists to 50 items, grids to 60 rows.
+- **Typed text** (`open_text`, `long_text`, `text_list`, `matrix_text`) appends `{ len }` only. **Every other type** (upload, geo, date, …) appends nothing.
+- The server **re-derives** the history from the definition's question types (`sanitizeTelemetry(t, cfg, types)`), so a tampered client cannot store text: text questions keep `{len}` only, unknown questions nothing.
+- Switch: `answerHistory` (default on; needs `timing`, where the per-question entries live).
+- **Quality rule** `interaction.flip_flop` (informational, low; `reversals` 4 / 3 / 3 / 2, `questions` 3 / 2 / 1 / 1): an answer went back to a value it had held before (not merely the one just left) — A→B→A is one reversal. Filling a grid row by row or ticking more boxes never counts; a ranking's order does. Open ends never count.
+
+## 3. TE-06 — Inactivity
+
+- An idle clock (`IdleClock`, `lib/paradata.ts`): any input, pointer down / move, key, wheel, touch or scroll is activity; a gap of `idleSeconds` (default 60, 10–3600) is an **idle period**, recorded when activity resumes or the page is left — so a throttled background timer never loses one. A 1-second timer only announces the start (for the prompt).
+- Recorded: `idle.periods` (page, start in ms since the survey started, duration, `prompted`; the latest 100), `totalMs`, `longestMs`, `prompts`, and `idleMs` per page visit.
+- **Prompt** (`idlePrompt`, **off by default**): when a period begins, the survey's **native popup** (`openUxPopup`, now exported by the renderer) opens centred with `idlePromptText` or the built-in UI string `idle_prompt` in the respondent's language ("Are you still there? Take your time — your answers so far are kept.", button label `idle_prompt_ok`). Any input closes it. Never shown in a hidden tab.
+- Switch: `idle`. Studio: Quality → Telemetry & privacy (idle seconds, prompt, prompt text).
+
+## 4. TE-10 — Timing in exports
+
+`packages/exporters/src/paradataExport.ts`, both shapes computed from `responses.telemetry` with the quality engine's own `pageSeconds` / `questionSeconds`, so the export and the quality review agree:
+- **Wide** (`timing=1` on the responses export; Data panel checkbox "Per-page / per-question timing columns"): `PAGE_<ID>_SEC` (every visit, out-of-focus time excluded) and `Q_<VAR>_SEC` (page entry → last change on the answering visit, else an equal share of the page), upper case, appended **last** (after `SYSTEM_*`) so no earlier column moves. CSV, SPSS / SAS / Stata (numeric, labelled "Seconds on page p1", "Seconds on AGE: How old are you?") and Excel (Main Data; the About sheet explains each column).
+- **Long** (`format=timing`, Data panel "Timing, long format (.csv)"): one row per respondent × page (LEVEL=page) and × question (LEVEL=question): SESSION_ID, RESPONDENT_ID, STATUS, LEVEL, PAGE_ID, QUESTION_ID, VARIABLE, VISITS, SECONDS, VISIBLE_SECONDS, CHANGES, IDLE_SECONDS, SCROLL_DEPTH_PCT. Formula-guarded cells, optional BOM.
+- A blank is "not measured" (no telemetry, timing off, never reached), never zero. The route selects `telemetry` only when one of these is asked for.
+
+## 5. TE-12 / TE-13 — Script timing and IM quality settings
+
+**`rs.getTiming()`** (behaviour scripts): `{ elapsedSeconds, pageSeconds, questionSeconds(code) }`, a frozen object.
+- The Runner passes a snapshot of its telemetry to the UxLayer (`timing` prop: survey start, the current visit's entry and out-of-focus time, seconds per question **code**); it is copied into the sandboxed frame with the answers. The frame adds "now" itself, so elapsed / page time are current when read.
+- **Read-only:** nothing goes back to the host — there is no write twin (a script cannot write paradata; `rs.setTiming` is refused by the gate as not part of the api).
+- Null when the survey records no timing (`timing: false`) and outside the survey (the Studio canvas).
+- Registered: `UX_SCRIPT_API`, `SANDBOX_API` (the capability registry), the public logic reference. The script corpus snapshot was updated for the longer api list in the gate's refusal text.
+
+**`set_quality_settings`** (engine `qualityActions.ts`, an option-and-design op):
+`{enabled, strictness, telemetry {timing, focus, clipboard, navigation, interaction, device, network, visibility, answerHistory, idle: bool; idleSeconds; idlePrompt; idlePromptText | null; disclosure | null}, rules {"<rule id>": {enabled, severity, params {<threshold>: value}}}}`.
+- Rule ids and threshold keys are checked against `QUALITY_RULE_PARAMS` (schema), which a quality-package test asserts equals the rule catalogue — so the engine needs no dependency on the quality package. An unknown id or threshold is refused with the alternatives.
+- Switching a category off is reported as destructive (its rules are skipped, its data not kept).
+- Registry: native feature `quality_settings`, capability `platform:paradata`. Guide: `apps/studio/lib/copilot/qualityGuide.ts` (sent for quality / paradata requests, cached, its examples applied as written by a test; registered in `guideSelect`). Public docs regenerated.
+
+## 6. AP-09 — Per-response webhook
+
+**Events.** `response.completed`, `response.screened_out` (screened or terminated), `response.quota_full` — category `response`, severity low.
+
+**Settings** (`alerts.responses`, **off by default**): `enabled`, `events` (completed / screened_out / quota_full), `includeAnswers` (default false), `allowFields` (variable names), `includeTest` (default false).
+
+**Emission.** The runtime save route, on a final status, calls `responseEvents` (`apps/runtime/lib/notifyEmit.ts`) — through the same outbox, routing, signed generic webhook, retries (30 s → 2 min → 8 min → 32 min) and delivery log as every alert; one event per session (idempotency key `response.completed:<session>`).
+
+**Payload** (`renderWebhook` → `response`): response id, status, `startedAt`, `completedAt`, `isTest`; with `includeAnswers`, `answers` by variable name (the engine's own flattening) and `withheld` — the names left out as likely PII: typed text of any kind, "other" / comment text, places, files and recordings, free-form tables, embedded / hidden fields, and anything validated or tagged as an e-mail, phone, postal code or URL. Listed `allowFields` are sent anyway.
+
+**Guards.**
+- Answers ride **only in the generic webhook** body. Slack, Teams, e-mail and the in-app bell get the one-line notice.
+- Response events match only rules that **name** them (`response.completed`, `response.*`, `response`) — never a `*` rule written for operational alerts, and never the default bell.
+- They are not batched by the hourly cap (one delivery per response by design); dedupe and quiet hours apply as before.
+
+**Studio.** Research Tools → Qualitative → Alerts & panels → "Per-response events (webhook)" (on, statuses, include answers, allowed fields, test responses), plus the existing rule builder, which now lists the three events. **IM:** `configure_alerts {events: ["response completed", "screened out"], webhook: "<channel>", responses: {includeAnswers, allowFields}}`; naming a response event turns the per-response events on; `responses: null` turns them off. The integrations guide has the line.
+
+**Not wired:** the sandbox save path (no database) does not emit response events; the browser suite does not cover delivery (the unit test uses a local stand-in HTTP server).
+
+## 7. Out of scope
+
+- **A public REST API with API keys** (AP-09's other half) needs an auth-model decision: key scopes, per-project versus per-organisation keys, rotation, rate limits. Webhooks push; nothing here pulls.
+- **CRM and payments** need a vendor choice.
+- **A script-callable network proxy (AP-14).** Scripts still reach nothing off the page; `rs.getTiming()` is read-only and the per-response webhook is configured by the researcher, never by a script.
+
+## 8. Verification (S5b)
+
+The final sweep ran at the item 6 commit plus the guide-selection fix in item 7.
+
+**Unit tests**
+
+| Package | Result |
+|---|---|
+| Engine | 2618/2618 (new: s5bQuality 4, s5bResponseEvents 5) |
+| Schema | 18/18 |
+| Media | 179/179 |
+| Designs | 124/124 |
+| Analytics | 396/396 |
+| Exporters | 146 pass, 2 skipped (as before; new: 5 timing tests in statisticalExport.test) |
+| Templates | 111/111 |
+| Quality | 67/67 (new: answered_unseen ×2, telemetryOff, valueReversals, flip_flop, QUALITY_RULE_PARAMS = catalogue) |
+| Renderer | 12/12 (new: rs.getTiming frame check) |
+| Runtime lib | 88/88 (new: paradata.test 8, telemetrySanitize.test 6) |
+| Studio lib | 1136/1136 (new: qualityGuide 3, notify service stand-in server 1) |
+
+**Checks.** `tsc --noEmit` on renderer, studio and runtime: 0 errors each. `gen-public-docs --check`: current (actions-reference, capabilities and logic-reference regenerated in item 5). Dependency boundaries: 0 violations. Auth guard: 0 problems across 259 handlers.
+
+**SQL.** No migration was needed (see the top of part B), so none was run.
+
+**Browser suites**
+
+| Suite | Result |
+|---|---|
+| `s5b-telemetry-test` (new) | 16 passed, one full run, 84 s — runtime only (the Studio stopped for memory) |
+| `quality-test` | first run: out-of-memory crash after 6 checks (not verified); rerun: all 10 passed |
+| `alerts-panels-test` | ok, 9 passed |
+| `script-health-test` | section A (3 checks: the save route keeps the script-health entries in telemetry) passed twice; section B (Studio) timed out both times while next-server processes were OOM-killed — **not verified** |
+| `analytics-test` | 50 checks passed, then a Studio timeout during an OOM kill — **not verified** |
+
+An earlier run of `s5b-telemetry-test` through `fresh.sh` (Studio and runtime both up) lost the runtime to an out-of-memory kill in section A; that run counts as not verified, and the runtime-only rerun above passed.
+
+**Browser: `scripts/s5b-telemetry-test.mjs`.** Sections A–D, all on the runtime (preview and sandbox test links):
+- **A — visibility.** First card seen on arrival, the last only after a scroll; scroll depth 16 % → 100 %; a DOM-click answer on an off-screen card counts a change with no first-seen time; visible time closed on leaving; the sandbox row keeps the sanitised fields; visibility off → nothing collected, listed as disabled.
+- **B — history.** 1→2→1→2→1 kept with rising relative times; a grid keeps its cells; typed text `{len}` only (the text appears nowhere, client or stored); off → counts only.
+- **C — idle.** `idleSeconds` 10 + prompt: the native popup opens centred with the survey's words, a mouse move closes it, one prompted period; prompt off (default) → no popup, period still recorded; idle off → no record.
+- **D — `rs.getTiming()`.** A behaviour script reads elapsed / page / question seconds (≥ the wait), unknown code null, frozen result; timing off → null.
+
+## 9. Known limitations (S5b)
+
+- **Visibility.** Needs IntersectionObserver (absent → not measured). A card counted as visible may still be covered by a popup. Loop iterations of one question share one entry.
+- **Answer history.** Kept per question id, not per loop iteration. Writes by punches, scripts or defaults are not respondent changes and are not recorded.
+- **Idle.** A respondent reading without touching anything for `idleSeconds` is idle by definition — the rule set does not yet read idle periods (the existing `timing.idle_then_rush` still uses dwell).
+- **Exports.** Telemetry must be kept: with `privacy.telemetryRetentionDays` expired, or timing switched off, the cells are blank. Question seconds follow the quality engine's definition (first answering visit), not total time on screen — `VISIBLE_SECONDS` in the long file is that.
+- **`rs.getTiming()`.** The page / question seconds are as of the host's last update plus wall-clock time in the frame; out-of-focus time after that update is not subtracted until the next one. The time is client-asserted, like every condition that reads `time_on_page`.
+- **Per-response webhook.** PII detection is heuristic (types, variants, semantics, validation kinds) — a closed question whose codes are themselves identifying is not caught; `allowFields` is the explicit override in the other direction. The sandbox save path does not emit response events. Delivery was tested with a local stand-in server, not end-to-end from a browser.
