@@ -19,6 +19,12 @@ import { stripHtmlText } from "./html.js";
 import { K, moveTranslationKey } from "./localization.js";
 import { applyMediaAction, coerceMediaAction, describeMediaAction, MEDIA_ACTION_OPS, type MediaAction } from "./mediaActions.js";
 import { applyLogicScriptAction, coerceLogicScriptAction, describeLogicScriptAction, LOGIC_SCRIPT_ACTION_OPS, type LogicScriptAction } from "./logicScriptActions.js";
+import { applyOptionGroupAction, coerceOptionGroupAction, describeOptionGroupAction, OPTION_GROUP_ACTION_OPS, type OptionGroupAction } from "./optionGroupActions.js";
+import { applyTimerAction, coerceTimerAction, describeTimerAction, TIMER_ACTION_OPS, type TimerAction } from "./timerActions.js";
+import { applyReviewAction, coerceReviewAction, describeReviewAction, REVIEW_ACTION_OPS, type ReviewAction } from "./reviewActions.js";
+import { applyGamificationAction, coerceGamificationAction, describeGamificationAction, GAMIFICATION_ACTION_OPS, type GamificationAction } from "./gamificationActions.js";
+import { applyQualityAction, coerceQualityAction, describeQualityAction, QUALITY_ACTION_OPS, type QualitySettingsAction } from "./qualityActions.js";
+import { applyMethodTemplateAction, coerceMethodTemplateAction, describeMethodTemplateAction, METHOD_TEMPLATE_ACTION_OPS, type MethodTemplateAction } from "./methodTemplates.js";
 
 /**
  * THE OPTION, ORDER AND HOUSEKEEPING ACTIONS (Intelligent Mode Phase 2) —
@@ -58,7 +64,7 @@ export type EmbeddedSource = "url" | "static" | "panel" | "expression";
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half"; /** S4c (RK-04): store the order shown in <VAR>_ORDER (_ROW_ORDER / _COL_ORDER) — opt-in */ recordOrder?: boolean }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -73,12 +79,25 @@ export type OptionAction =
   /* S2b: a question's stimulus and option images — see mediaActions.ts */
   | MediaAction
   /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
-  | LogicScriptAction;
+  | LogicScriptAction
+  /* S4a AQ-08: option groups and their headings — see optionGroupActions.ts */
+  | OptionGroupAction
+  /* S4b GA-05 / IM-19: a native timer on a question or a page — see timerActions.ts */
+  | TimerAction
+  /* S5a GA-06 / GA-07: points, badges, levels and the HUD — see gamificationActions.ts */
+  | GamificationAction
+  /* S5a AQ-12: a review-your-answers page — see reviewActions.ts */
+  | ReviewAction
+  /* S5b TE-13: response-quality settings (telemetry switches, strictness, rule thresholds) — see qualityActions.ts */
+  | QualitySettingsAction
+  /* S5c: a programmed research-method block (pricing, ladder, sequential monadic, shelf, funnel, ad test) — see methodTemplates.ts */
+  | MethodTemplateAction;
 
 export const OPTION_ACTION_OPS = [
   "update_option", "reorder_options", "set_option_randomization", "set_mask", "clear_mask", "duplicate_question",
   "set_survey_settings", "update_embedded", "remove_embedded", "add_hypothesis", "remove_hypothesis", "set_hypothesis", "set_custom_code",
-  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS,
+  ...MEDIA_ACTION_OPS, ...LOGIC_SCRIPT_ACTION_OPS, ...OPTION_GROUP_ACTION_OPS, ...TIMER_ACTION_OPS, ...GAMIFICATION_ACTION_OPS, ...REVIEW_ACTION_OPS,
+  ...QUALITY_ACTION_OPS, ...METHOD_TEMPLATE_ACTION_OPS,
 ] as const;
 const OPS = new Set<string>(OPTION_ACTION_OPS);
 export const isOptionOp = (op: string): boolean => OPS.has(op);
@@ -114,6 +133,12 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
   if (!isOptionOp(op)) return null;
   if ((MEDIA_ACTION_OPS as readonly string[]).includes(op)) return coerceMediaAction(o);
   if ((LOGIC_SCRIPT_ACTION_OPS as readonly string[]).includes(op)) return coerceLogicScriptAction(op, o);
+  if ((OPTION_GROUP_ACTION_OPS as readonly string[]).includes(op)) return coerceOptionGroupAction(o);
+  if ((TIMER_ACTION_OPS as readonly string[]).includes(op)) return coerceTimerAction(o);
+  if ((GAMIFICATION_ACTION_OPS as readonly string[]).includes(op)) return coerceGamificationAction(o);
+  if ((REVIEW_ACTION_OPS as readonly string[]).includes(op)) return coerceReviewAction(o);
+  if ((QUALITY_ACTION_OPS as readonly string[]).includes(op)) return coerceQualityAction(o);
+  if ((METHOD_TEMPLATE_ACTION_OPS as readonly string[]).includes(op)) return coerceMethodTemplateAction(o);
   switch (op) {
     case "update_option": {
       const target = str(o.target ?? o.question, 120), option = ref(o.option);
@@ -166,7 +191,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const methodRaw = str(o.method ?? o.order ?? o.mode)?.toLowerCase().replace(/[\s-]+/g, "_");
       const method = methodRaw === undefined ? undefined : methodRaw === "rotate" || methodRaw === "rotation" || methodRaw === "balanced" || methodRaw === "latin_square" ? "rotate" : methodRaw === "reverse_half" || methodRaw === "reverse" ? "reverse_half" : methodRaw === "shuffle" || methodRaw === "random" ? "shuffle" : null;
       if (method === null) return "method is shuffle, rotate or reverse_half";
-      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}) };
+      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}), ...(typeof o.recordOrder === "boolean" ? { recordOrder: o.recordOrder } : {}) };
     }
     case "set_mask": {
       const target = str(o.target ?? o.question, 120), expression = str(o.expression ?? o.mask ?? o.set ?? o.source, 2000);
@@ -512,6 +537,12 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
   const warnings: string[] = [];
   switch (a.op) {
     case "set_question_media": return applyMediaAction(def, a, { question: env.question, ids: env.ids });
+    case "set_option_groups": return applyOptionGroupAction(def, a, { question: env.question, ids: env.ids });
+    case "set_timer": return applyTimerAction(def, a, { question: env.question });
+    case "set_gamification": return applyGamificationAction(def, a);
+    case "set_review_page": return applyReviewAction(def, a, { question: env.question, ids: env.ids });
+    case "set_quality_settings": return applyQualityAction(def, a);
+    case "add_method_template": return applyMethodTemplateAction(def, a, { ids: env.ids });
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return applyLogicScriptAction(def, a, { question: env.question, ids: env.ids });
     case "update_option": {
       const q = questionOrFail(env, a.target);
@@ -627,7 +658,9 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const next = [...allTop, ...list.filter((o) => !allTop.includes(o) && !allBottom.includes(o)), ...allBottom];
       (q as unknown as Record<string, unknown>)[axis] = next;
       q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: a.method ?? "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
+      if (a.recordOrder !== undefined) { const st = (q.settings ?? {}) as Record<string, unknown>; if (a.recordOrder) st.recordOrder = true; else delete st.recordOrder; q.settings = st as never; }
       const pins = [...tops.map((o) => `“${plain(o.label, 30)}” stays first`), ...bottoms.map((o) => `“${plain(o.label, 30)}” stays last`)];
+      if (a.recordOrder) pins.push(`the order shown is stored in ${q.variableName || q.id}${axis === "options" ? "" : axis === "rows" ? "_ROW" : "_COL"}_ORDER`);
       return { description: `${q.code} ${axis} ${a.enabled ? (a.method === "rotate" ? "rotated (each in each position equally often across respondents)" : a.method === "reverse_half" ? "shown in order for half the respondents, reversed for the other half" : "randomized") : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
     }
     case "set_mask": {
@@ -880,6 +913,12 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
 export function describeOptionAction(a: OptionAction): string {
   switch (a.op) {
     case "set_question_media": return describeMediaAction(a);
+    case "set_option_groups": return describeOptionGroupAction(a);
+    case "set_timer": return describeTimerAction(a);
+    case "set_gamification": return describeGamificationAction(a);
+    case "set_review_page": return describeReviewAction(a);
+    case "set_quality_settings": return describeQualityAction(a);
+    case "add_method_template": return describeMethodTemplateAction(a);
     case "create_logic_script": case "update_logic_script": case "remove_logic_script": case "set_logic_script_enabled": return describeLogicScriptAction(a);
     case "update_option": return `Change option ${a.option} of ${a.target}`;
     case "reorder_options": return `Reorder the options of ${a.target}`;

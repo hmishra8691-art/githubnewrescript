@@ -4,7 +4,7 @@ import { useStudio } from "./store";
 import { THEME_PRESETS } from "@/lib/defaults";
 import { Branding, SurveyDefinition } from "@rescript/schema";
 import { createResponseState, start, setAnswer, codeGate } from "@rescript/engine";
-import { QuestionRenderer, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
+import { QuestionRenderer, ProgressIndicator, brandingVars, widthModeClass, brandingClasses, brandingResponsiveCss } from "@rescript/renderer";
 import { TypographyMore, BackgroundSection, AppearanceSection, ResponsiveSection, ThemeAssistant } from "./BrandingAdvanced";
 import { UxItemsEditor } from "./UxItemsEditor";
 import { OptionalCondition } from "./ConditionBuilder";
@@ -236,11 +236,9 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
               <img src={logoUrl} alt="" style={{ maxHeight: 36 }} />
             </div>
           )}
-          {branding.layout.progressBar !== "none" && (
-            <>
-              <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: "38%" }} /></div>
-              {branding.layout.progressStyle === "percent" && <div className="rs-progress-label">38%</div>}
-            </>
+          {/* D20: the runtime's own indicator — page 3 of 7 of the fixed preview; "bottom" is drawn after the buttons */}
+          {branding.layout.progressBar === "top" && (
+            <ProgressIndicator position="top" style={branding.layout.progressStyle} current={3} total={7} testid="theme-preview-progress" />
           )}
           <div className="rs-card" data-testid="theme-preview-q1">
             <QuestionRenderer def={PREVIEW_DEF} q={PREVIEW_DEF.questions[0]} state={state} loop={null}
@@ -265,6 +263,9 @@ export function ThemeLivePreview({ branding: saved, logoUrl }: { branding: Brand
               {branding.buttons.nextLabel}
             </button>
           </div>
+          {branding.layout.progressBar === "bottom" && (
+            <ProgressIndicator position="bottom" style={branding.layout.progressStyle} current={3} total={7} testid="theme-preview-progress" />
+          )}
         </div>
       </div>
       <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
@@ -589,7 +590,7 @@ export function BrandingPanel() {
             <option value="compact">compact</option><option value="regular">regular</option><option value="relaxed">relaxed</option>
           </select></label>
         <label className="f" style={{ width: 120 }}><span>Progress bar</span>
-          <select className="select" value={b.layout.progressBar}
+          <select className="select" data-testid="branding-progress-bar" value={b.layout.progressBar}
             onChange={(e) => set((x) => { x.layout.progressBar = e.target.value as any; })}>
             <option value="top">top</option><option value="bottom">bottom</option><option value="none">none</option>
           </select></label>

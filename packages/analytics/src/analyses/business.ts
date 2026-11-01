@@ -6,6 +6,7 @@ import { proportionCI, proportionTest, type TestResult } from "../stats/tests.js
 import { ols } from "../stats/regression.js";
 import { answeredN, fmtNum, fmtP, fmtPct, makeResult, opt, pct, refused, round } from "./common.js";
 import { expandBattery } from "./basics.js";
+import { ladderDemand, nmsAnalysis, nmsCalibrationFor, vanWestendorpCurves, vanWestendorpPoints, type NmsRow, type VwDefinition, type VwRow } from "./pricingModels.js";
 
 /* ============================================================ NPS */
 
@@ -362,6 +363,25 @@ export function pricing(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const method = opt(def, "method", "van_westendorp") as "van_westendorp" | "gabor_granger";
   const w = weights(ds);
   if (method === "gabor_granger") {
+    /* S5c: the adaptive ladder (numeric.price_ladder) — one numeric variable, the highest accepted price (0 = none) */
+    if (opt<boolean>(def, "ladder", false)) {
+      const v = def.variables[0];
+      const q = v ? ds.byName.get(v) : undefined;
+      const prices = (opt(def, "prices", []) as number[]).map(Number).filter((p) => p > 0);
+      if (!v || !q) return refused(def, ds, totalCases, "The price-ladder analysis needs the ladder question (its variable).", ["table"]);
+      if (prices.length < 2) return refused(def, ds, totalCases, `The price-ladder analysis needs the ladder's prices (prices) — “${labelOf(ds, v)}” stores only the highest price accepted.`, ["table"]);
+      const r = ladderDemand(numericColumn(ds, v), prices, w);
+      const best = [...r.rows].sort((a, b) => b.revenue - a.revenue)[0];
+      const insights = [`Revenue-maximising price on the ladder: ${fmtNum(best.price, 2)} (${fmtPct(best.demand, 0)} would buy at it or more, revenue index ${fmtNum(best.revenue, 2)}).`,
+        `Demand falls from ${fmtPct(r.rows[0].demand, 0)} at ${fmtNum(r.rows[0].price, 2)} to ${fmtPct(r.rows[r.rows.length - 1].demand, 0)} at ${fmtNum(r.rows[r.rows.length - 1].price, 2)} (n = ${r.n}).`];
+      return makeResult(def, ds, {
+        tables: [{ id: "gg", title: "Gabor–Granger demand (adaptive ladder)", columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "probability", label: "Would buy at this price %", type: "pct", decimals: 1 }, { key: "revenue", label: "Revenue index", type: "number", decimals: 2 }],
+          rows: r.rows.map((x) => ({ price: x.price, probability: pct(x.demand), revenue: round(x.revenue) })), base: { n: r.n },
+          notes: ["Each respondent's answer is the highest ladder price they accepted; demand at a price counts everyone whose highest accepted price is at or above it (the method's monotonicity assumption). 0 = accepted none."] }],
+        chart: { categories: r.rows.map((x) => String(x.price)), series: [{ name: "Purchase probability %", values: r.rows.map((x) => pct(x.demand)) }, { name: "Revenue index", values: r.rows.map((x) => round(x.revenue)), meta: { axis: "secondary" } }], points: r.rows.map((x) => ({ x: x.price, y: x.demand, label: String(x.price) })) },
+        insights, warnings: [], recommendedCharts: ["demand_curve", "revenue_curve", "purchase_probability", "line"], variablesUsed: [v], totalCases,
+      });
+    }
     // variables: purchase-intent items at ascending price points; options.prices: number[]; options.acceptCodes: codes counted as "would buy"
     const items = expandBattery(ds, def.variables);
     const prices = (opt(def, "prices", []) as number[]).length ? (opt(def, "prices", []) as number[]) : items.map((_, i) => i + 1);
@@ -402,26 +422,50 @@ export function pricing(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const cols = { tooCheap: numericColumn(ds, tooCheap), cheap: numericColumn(ds, cheap), expensive: numericColumn(ds, expensive), tooExpensive: numericColumn(ds, tooExpensive) };
   const keep = cols.tooCheap.map((_, i) => i).filter((i) => cols.tooCheap[i] != null && cols.cheap[i] != null && cols.expensive[i] != null && cols.tooExpensive[i] != null && cols.tooCheap[i]! <= cols.cheap[i]! && cols.expensive[i]! <= cols.tooExpensive[i]!);
   const dropped = cols.tooCheap.filter((x) => x != null).length - keep.length;
-  const all = keep.flatMap((i) => [cols.tooCheap[i]!, cols.cheap[i]!, cols.expensive[i]!, cols.tooExpensive[i]!]);
-  const grid = [...new Set(all)].sort((a, b) => a - b);
-  const W = keep.reduce((t, i) => t + (w?.[i] ?? 1), 0) || 1;
-  const cum = (vals: (number | null)[], p: number, dir: "le" | "ge") => keep.reduce((t, i) => t + ((dir === "le" ? vals[i]! <= p : vals[i]! >= p) ? (w?.[i] ?? 1) : 0), 0) / W * 100;
-  const curves = grid.map((p) => ({ price: p, tooCheap: cum(cols.tooCheap, p, "ge"), cheap: cum(cols.cheap, p, "ge"), expensive: cum(cols.expensive, p, "le"), tooExpensive: cum(cols.tooExpensive, p, "le") }));
-  // "not cheap" = 100 - cheap ; "not expensive" = 100 - expensive
-  const cross = (a: (c: typeof curves[number]) => number, b: (c: typeof curves[number]) => number) => {
-    for (let i = 1; i < curves.length; i++) { const d0 = a(curves[i - 1]) - b(curves[i - 1]), d1 = a(curves[i]) - b(curves[i]); if (d0 === 0) return curves[i - 1].price; if (d0 * d1 < 0) { const t = d0 / (d0 - d1); return curves[i - 1].price + t * (curves[i].price - curves[i - 1].price); } }
-    return null;
-  };
-  const pmc = cross((c) => c.tooCheap, (c) => c.expensive);           // point of marginal cheapness: too cheap ∩ not cheap(=expensive)
-  const pme = cross((c) => c.cheap, (c) => c.tooExpensive);           // point of marginal expensiveness: not expensive(=cheap) ∩ too expensive
-  const opp = cross((c) => c.tooCheap, (c) => c.tooExpensive);        // optimal price point
-  const ipp = cross((c) => c.cheap, (c) => c.expensive);              // indifference price point
-  const insights = [`Acceptable price range: ${fmtNum(pmc, 2)} (point of marginal cheapness) to ${fmtNum(pme, 2)} (point of marginal expensiveness).`, `Optimal price point ${fmtNum(opp, 2)}; indifference price point ${fmtNum(ipp, 2)} (n = ${keep.length}${dropped ? `, ${dropped} inconsistent responses excluded` : ""}).`];
+  const definition: VwDefinition = opt<string>(def, "vwCurves", "proxy") === "textbook" ? "textbook" : "proxy";
+  const vwRows: VwRow[] = keep.map((i) => ({ tooCheap: cols.tooCheap[i]!, cheap: cols.cheap[i]!, expensive: cols.expensive[i]!, tooExpensive: cols.tooExpensive[i]!, w: w?.[i] ?? 1 }));
+  const curves = vanWestendorpCurves(vwRows);
+  const { pmc, pme, opp, ipp } = vanWestendorpPoints(curves, definition);
+  const other = vanWestendorpPoints(curves, definition === "proxy" ? "textbook" : "proxy");
+  const defNote = definition === "proxy"
+    ? `Range end-points use the common PROXY definition: PMC = “too cheap” ∩ “expensive”, PME = “cheap” ∩ “too expensive”. With the textbook “not cheap” / “not expensive” curves (vwCurves: textbook) they are ${fmtNum(other.pmc, 2)} and ${fmtNum(other.pme, 2)}.`
+    : `Range end-points use the TEXTBOOK definition: PMC = “too cheap” ∩ “not cheap” (100 − cheap), PME = “too expensive” ∩ “not expensive” (100 − expensive). The common proxy (“too cheap” ∩ “expensive”, “cheap” ∩ “too expensive”) gives ${fmtNum(other.pmc, 2)} and ${fmtNum(other.pme, 2)}.`;
+  const insights = [`Acceptable price range: ${fmtNum(pmc, 2)} (point of marginal cheapness) to ${fmtNum(pme, 2)} (point of marginal expensiveness)${definition === "textbook" ? " — textbook definition" : ""}.`, `Optimal price point ${fmtNum(opp, 2)}; indifference price point ${fmtNum(ipp, 2)} (n = ${keep.length}${dropped ? `, ${dropped} inconsistent responses excluded` : ""}).`];
+  /* NMS extension: purchase likelihood at the respondent's own "cheap" and "expensive" prices */
+  const nmsCheapVar = opt(def, "nmsCheap", null) as string | null, nmsExpVar = opt(def, "nmsExpensive", null) as string | null;
+  const extraTables: ResultTable[] = [];
+  const nmsWarnings: string[] = [];
+  let nmsKpis: { label: string; value: number }[] = [];
+  let nmsVars: string[] = [];
+  if (nmsCheapVar || nmsExpVar) {
+    if (!nmsCheapVar || !nmsExpVar || !ds.byName.has(nmsCheapVar) || !ds.byName.has(nmsExpVar)) nmsWarnings.push("The Newton–Miller–Smith extension needs both likelihood questions (nmsCheap and nmsExpensive) — not run.");
+    else {
+      const codes = [...new Set([...scaleCodes(ds, nmsCheapVar), ...scaleCodes(ds, nmsExpVar)])];
+      const cal = nmsCalibrationFor(codes, opt(def, "calibration", null) as Record<string, number> | number[] | null);
+      if (typeof cal === "string") nmsWarnings.push(`Newton–Miller–Smith not run: ${cal}.`);
+      else {
+        const lc = numericColumn(ds, nmsCheapVar), le = numericColumn(ds, nmsExpVar);
+        const nmsRows: NmsRow[] = [];
+        keep.forEach((i, k) => { const a = lc[i], b = le[i]; if (a == null || b == null || !cal.has(a) || !cal.has(b)) return; nmsRows.push({ ...vwRows[k], pCheap: cal.get(a)!, pExpensive: cal.get(b)! }); });
+        const nms = nmsAnalysis(nmsRows);
+        nmsVars = [nmsCheapVar, nmsExpVar];
+        if (!nms.n) nmsWarnings.push("Newton–Miller–Smith: no respondent answered both likelihood questions with a valid price set.");
+        else {
+          extraTables.push({ id: "nms", title: "Newton–Miller–Smith trial and revenue", columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "trial", label: "Trial (purchase probability) %", type: "pct", decimals: 1 }, { key: "revenue", label: "Revenue index (price × trial)", type: "number", decimals: 3 }], rows: nms.curve.map((c) => ({ price: c.price, trial: pct(c.trial * 100), revenue: round(c.revenue, 3) })), base: { n: nms.n },
+            notes: [`Calibration (code → probability): ${[...cal.entries()].sort((a, b) => b[0] - a[0]).map(([c, p]) => `${c} → ${p}`).join(", ")}. Each respondent's probability runs linearly from 0 at “too cheap” to the calibrated “cheap” likelihood, to the calibrated “expensive” likelihood, to 0 at “too expensive”.`] });
+          extraTables.push({ id: "nms_optimum", title: "Newton–Miller–Smith optimal prices", columns: [{ key: "m", label: "Optimum" }, { key: "price", label: "Price", type: "number", decimals: 2 }, { key: "trial", label: "Trial %", type: "pct", decimals: 1 }, { key: "revenue", label: "Revenue index", type: "number", decimals: 3 }],
+            rows: [{ m: "Trial-maximising price", price: round(nms.trialOptimum!.price), trial: pct(nms.trialOptimum!.trial * 100), revenue: round(nms.trialOptimum!.revenue, 3) }, { m: "Revenue-maximising price", price: round(nms.revenueOptimum!.price), trial: pct(nms.revenueOptimum!.trial * 100), revenue: round(nms.revenueOptimum!.revenue, 3) }] });
+          nmsKpis = [{ label: "NMS trial optimum", value: round(nms.trialOptimum!.price) ?? 0 }, { label: "NMS revenue optimum", value: round(nms.revenueOptimum!.price) ?? 0 }];
+          insights.push(`Newton–Miller–Smith: trial peaks at ${fmtNum(nms.trialOptimum!.price, 2)} (${fmtPct(nms.trialOptimum!.trial * 100, 1)}), revenue at ${fmtNum(nms.revenueOptimum!.price, 2)} (n = ${nms.n}).`);
+        }
+      }
+    }
+  }
   return makeResult(def, ds, {
-    tables: [{ id: "vw", title: "Van Westendorp price points", columns: [{ key: "m", label: "Price point" }, { key: "v", label: "Value", type: "number", decimals: 2 }], rows: [{ m: "Point of marginal cheapness (PMC)", v: round(pmc) }, { m: "Optimal price point (OPP)", v: round(opp) }, { m: "Indifference price point (IPP)", v: round(ipp) }, { m: "Point of marginal expensiveness (PME)", v: round(pme) }, { m: "Valid respondents", v: keep.length }], base: { n: keep.length } },
-      { id: "curves", title: "Cumulative price curves (%)", columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "tooCheap", label: "Too cheap", type: "pct", decimals: 1 }, { key: "cheap", label: "Cheap / bargain", type: "pct", decimals: 1 }, { key: "expensive", label: "Expensive", type: "pct", decimals: 1 }, { key: "tooExpensive", label: "Too expensive", type: "pct", decimals: 1 }], rows: curves.map((c) => ({ price: c.price, tooCheap: pct(c.tooCheap), cheap: pct(c.cheap), expensive: pct(c.expensive), tooExpensive: pct(c.tooExpensive) })) }],
-    chart: { categories: curves.map((c) => String(c.price)), series: [{ name: "Too cheap", values: curves.map((c) => pct(c.tooCheap)) }, { name: "Cheap", values: curves.map((c) => pct(c.cheap)) }, { name: "Expensive", values: curves.map((c) => pct(c.expensive)) }, { name: "Too expensive", values: curves.map((c) => pct(c.tooExpensive)) }], kpis: [{ label: "PMC", value: round(pmc) ?? 0 }, { label: "OPP", value: round(opp) ?? 0 }, { label: "IPP", value: round(ipp) ?? 0 }, { label: "PME", value: round(pme) ?? 0 }], valueFormat: "pct" },
-    insights, warnings: dropped ? [`${dropped} respondents gave inconsistent price answers and were excluded.`] : [], recommendedCharts: ["price_sensitivity", "line_multi", "kpi_card"], variablesUsed: [tooCheap, cheap, expensive, tooExpensive], totalCases,
+    tables: [{ id: "vw", title: "Van Westendorp price points", columns: [{ key: "m", label: "Price point" }, { key: "v", label: "Value", type: "number", decimals: 2 }], rows: [{ m: "Point of marginal cheapness (PMC)", v: round(pmc) }, { m: "Optimal price point (OPP)", v: round(opp) }, { m: "Indifference price point (IPP)", v: round(ipp) }, { m: "Point of marginal expensiveness (PME)", v: round(pme) }, { m: "Valid respondents", v: keep.length }], base: { n: keep.length }, notes: [defNote] },
+      { id: "curves", title: "Cumulative price curves (%)", columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "tooCheap", label: "Too cheap", type: "pct", decimals: 1 }, { key: "cheap", label: "Cheap / bargain", type: "pct", decimals: 1 }, { key: "expensive", label: "Expensive", type: "pct", decimals: 1 }, { key: "tooExpensive", label: "Too expensive", type: "pct", decimals: 1 }, { key: "notCheap", label: "Not cheap", type: "pct", decimals: 1 }, { key: "notExpensive", label: "Not expensive", type: "pct", decimals: 1 }], rows: curves.map((c) => ({ price: c.price, tooCheap: pct(c.tooCheap), cheap: pct(c.cheap), expensive: pct(c.expensive), tooExpensive: pct(c.tooExpensive), notCheap: pct(c.notCheap), notExpensive: pct(c.notExpensive) })) }, ...extraTables],
+    chart: { categories: curves.map((c) => String(c.price)), series: [{ name: "Too cheap", values: curves.map((c) => pct(c.tooCheap)) }, { name: "Cheap", values: curves.map((c) => pct(c.cheap)) }, { name: "Expensive", values: curves.map((c) => pct(c.expensive)) }, { name: "Too expensive", values: curves.map((c) => pct(c.tooExpensive)) }], kpis: [{ label: "PMC", value: round(pmc) ?? 0 }, { label: "OPP", value: round(opp) ?? 0 }, { label: "IPP", value: round(ipp) ?? 0 }, { label: "PME", value: round(pme) ?? 0 }, ...nmsKpis], valueFormat: "pct" },
+    insights, warnings: [...(dropped ? [`${dropped} respondents gave inconsistent price answers and were excluded.`] : []), ...nmsWarnings], recommendedCharts: ["price_sensitivity", "line_multi", "kpi_card"], variablesUsed: [tooCheap, cheap, expensive, tooExpensive, ...nmsVars], totalCases,
   });
 }
 

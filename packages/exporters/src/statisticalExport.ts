@@ -1,5 +1,5 @@
 import type { SurveyDefinition, VariableDef } from "@rescript/schema";
-import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
+import { buildVariableDictionary, flattenVariables, displayOrderLabel } from "@rescript/engine";
 import { buildSav, savVariableFor, type SavVariable } from "./spss.js";
 import { buildXpt, buildSasSyntax, sasVariableFor, type SasVariable } from "./sas.js";
 import { buildDta, stataVariableFor, type StataVariable } from "./stata.js";
@@ -10,6 +10,7 @@ import { variableDictionaryToCSV } from "./csv.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { spssBasesSyntax } from "./spssBases.js";
 import { QUALITY_CSV_COLUMNS, SAMPLE_COLUMNS, ENVIRONMENT_COLUMNS, SYSTEM_EXPORT_COLUMNS, qualityCsvCells, sampleCells, environmentCells, systemCells, type DatasetFilter, type QualityExportRow } from "./responseQuality.js";
+import { timingCells, timingColumns, timingLabel } from "./paradataExport.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -82,7 +83,7 @@ export function buildResponseMatrix(
     if (opts.extra) {
       const cells = opts.extra.cells(i);
       /* a blank in a numeric extra (an unscored response) is a missing value, never an empty string */
-      extraColumns.forEach((c, j) => { row[c] = NUMERIC_EXTRA.has(c) && cells[j] === "" ? null : cells[j]; });
+      extraColumns.forEach((c, j) => { row[c] = (NUMERIC_EXTRA.has(c) || TIMING_COLUMN.test(c)) && cells[j] === "" ? null : cells[j]; });
     }
     return row;
   });
@@ -168,17 +169,26 @@ const EXTRA: { name: string; label: string; numeric: boolean }[] = [
   ...SYSTEM_EXPORT_COLUMNS,
 ];
 
-function systemVariable(name: string): { label: string; numeric: boolean } | undefined {
+function systemVariable(name: string, def?: SurveyDefinition): { label: string; numeric: boolean } | undefined {
   const s = SYSTEM.find((x) => x.name === name) ?? EXTRA.find((x) => x.name === name);
-  return s ? { label: s.label, numeric: s.numeric } : undefined;
+  if (s) return { label: s.label, numeric: s.numeric };
+  /* S5b (TE-10): PAGE_<id>_SEC / Q_<VAR>_SEC — seconds, numeric, labelled with the page / question */
+  const timing = timingLabel(def, name);
+  if (timing) return { label: timing, numeric: true };
+  /* S4c (RK-04): a stored display order (ORDER_<RANDOMIZER>, <VAR>_ORDER …) gets a label saying what it lists */
+  const order = def ? displayOrderLabel(def, name) : null;
+  return order ? { label: order, numeric: false } : undefined;
 }
 
 /** The extra columns the platform appends are the numeric ones where a blank must stay a missing value, not a string. */
 const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name));
+/** S5b: the wide timing columns are numeric too (a blank is a missing value) */
+const TIMING_COLUMN = /^(PAGE|Q)_.*_SEC$/;
 
 /**
  * The extra columns for one delivery, composed in the one order every format
- * uses (quality, sample, environment, then SYSTEM_* when `system` asks), so the CSV, the .sav, the SAS bundle
+ * uses (quality, sample, environment, then SYSTEM_* when `system` asks, then S5b's PAGE_/Q_…_SEC timing when
+ * `timing` names the definition), so the CSV, the .sav, the SAS bundle
  * and the .dta carry the same columns in the same positions.
  *
  * `rows` must be the rows being delivered, in delivery order. Quality /
@@ -189,7 +199,7 @@ const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name))
  */
 export function buildExportExtra(
   rows: QualityExportRow[],
-  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean; system?: boolean } = {},
+  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean; system?: boolean; timing?: SurveyDefinition } = {},
 ): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
   const marked = rows.some((r) => !!r.quality || !!r.review.status);
   const withQuality = !!opts.quality || (!!opts.statusWhenMarked && (marked || (opts.dataset?.kind ?? "all") !== "all"));
@@ -197,11 +207,14 @@ export function buildExportExtra(
   const withEnvironment = !!opts.environment;
   // DOC-09: the SYSTEM_* block goes LAST, so a file asked for without it keeps every column position it had
   const withSystem = !!opts.system;
+  const timingCols = opts.timing ? timingColumns(opts.timing) : [];
   const columns = [
     ...(withQuality ? QUALITY_CSV_COLUMNS : []),
     ...(withSample ? SAMPLE_COLUMNS : []),
     ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
     ...(withSystem ? SYSTEM_EXPORT_COLUMNS.map((c) => c.name) : []),
+    // S5b (TE-10): PAGE_<id>_SEC / Q_<VAR>_SEC after everything else, so no earlier column moves
+    ...timingCols.map((c) => c.name),
   ];
   if (!columns.length) return undefined;
   return {
@@ -211,6 +224,7 @@ export function buildExportExtra(
       ...(withSample ? sampleCells(rows[i]) : []),
       ...(withEnvironment ? environmentCells(rows[i]) : []),
       ...(withSystem ? systemCells(rows[i]) : []),
+      ...(timingCols.length ? timingCells(timingCols, rows[i].telemetry) : []),
     ],
   };
 }
@@ -234,7 +248,7 @@ export function responsesToSav(
 
   const variables: SavVariable[] = names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = savVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 32767);
@@ -254,10 +268,10 @@ export function responsesToSav(
 }
 
 /** The SAS variable list, shared by the transport file and the syntax. */
-function sasVariables(names: string[], defs: Map<string, VariableDef>, rows: Record<string, unknown>[]): SasVariable[] {
+function sasVariables(names: string[], defs: Map<string, VariableDef>, rows: Record<string, unknown>[], def?: SurveyDefinition): SasVariable[] {
   return names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = sasVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 200);
@@ -275,7 +289,7 @@ export function responsesToXpt(
   opts: MatrixOptions = {},
 ): Buffer {
   const { names, defs, rows } = buildResponseMatrix(def, states, opts);
-  const variables = sasVariables(names, defs, rows);
+  const variables = sasVariables(names, defs, rows, def);
   const scalarRows = rekey(names, defs, rows);
   return buildXpt({
     variables,
@@ -303,7 +317,7 @@ export function responsesToDta(
 
   const variables: StataVariable[] = names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = stataVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 2045);
@@ -340,7 +354,7 @@ export function responsesToSasSyntax(
   opts: MatrixOptions & { csvName?: string } = {},
 ): string {
   const { names, defs, rows } = buildResponseMatrix(def, states, opts);
-  return buildSasSyntax(sasVariables(names, defs, rows), {
+  return buildSasSyntax(sasVariables(names, defs, rows, def), {
     csvName: opts.csvName ?? `${def.meta.code}_responses.csv`,
     datasetName: (def.meta.code ?? "SURVEY").replace(/[^A-Za-z0-9_]/g, "").slice(0, 32) || "SURVEY",
   });

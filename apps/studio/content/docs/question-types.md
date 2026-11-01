@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-173 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+178 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -62,6 +62,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `single_select.radio` | Radio Button | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify | required, custom_expression | — |
 | `single_select.dropdown` | Dropdown | `dropdown` | options, sorting, randomization, carry_forward, list_logic | required, custom_expression | — |
 | `single_select.searchable_dropdown` | Searchable Dropdown | `dropdown` | options, search, sorting, randomization, carry_forward, list_logic | required, custom_expression | renderer searchable_single |
+| `single_select.cascading_dropdown` | Cascading Dropdown | `dropdown` | options, sorting, carry_forward, list_logic | required, custom_expression | renderer cascading_dropdown |
 | `single_select.buttons` | Button Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify | required, custom_expression | renderer buttons |
 | `single_select.cards` | Card Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | renderer cards |
 | `single_select.tiles` | Tile Select | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | retired → single_select.cards; renderer cards |
@@ -126,6 +127,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `numeric.duration` | Duration | `numeric` | numeric_bounds | required, min_value, max_value, integer, custom_expression | renderer duration |
 | `numeric.slider` | Number Slider | `slider` | numeric_bounds, scale_labels | required, min_value, max_value, integer, custom_expression | retired → slider.single |
 | `numeric.percentage_slider` | Percentage Slider | `slider` | numeric_bounds, scale_labels | required, min_value, max_value, integer, custom_expression | retired → slider.single |
+| `numeric.price_ladder` | Price Ladder (adaptive Gabor–Granger) | `numeric` | numeric_bounds | required, custom_expression | renderer priceladder |
 | `numeric.numeric_range` | Numeric Range | `numeric_list` | fields, numeric_bounds | required | renderer numrange |
 
 ### List / Form Fields (`list`)
@@ -211,6 +213,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 | `media.video_timeline` | Video Hotspot / Annotation | `media_timeline` | options, min_max_selections | required, min_selections, max_selections | renderer videotimeline |
 | `media.watch_time` | Video Watch-Time Tracking | `numeric_list` | fields | required | renderer watchtime |
 | `media.video_prompt_voice` | Video Prompt → Voice Reply | `video_interview` | video_interview | required | preset of qualitative.video_interview; renderer videointerview |
+| `media.video_recording` | Video Recording / Video Response | `upload` | — | required | renderer videorecording |
 | `media.audio_recording` | Audio Recording / Voice Response | `upload` | — | required | renderer audiorec |
 | `media.speech_to_text` | Speech-to-Text Response | `long_text` | speech_input | required, min_length, max_length | preset of text.multi_line |
 
@@ -260,6 +263,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 |---|---|---|---|---|---|
 | `comparison.side_by_side` | Side-by-Side Comparison | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | retired → single_select.product_choice; renderer compare |
 | `comparison.tournament` | Pairwise / Tournament Comparison | `ranking` | options, randomization, carry_forward, list_logic | required | retired → ranking.tournament; renderer tournament |
+| `comparison.before_after` | Before / After Slider | `numeric` | numeric_bounds | required, min_value, max_value, integer, custom_expression | renderer beforeafter |
 | `comparison.attributes` | Multi-Item / Attribute Comparison | `single_select` | options, rows, images, sorting, randomization, carry_forward, list_logic | required, custom_expression | renderer attrcompare |
 
 ### Conjoint / Choice Modeling (`conjoint`)
@@ -290,6 +294,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 |---|---|---|---|---|---|
 | `hotspot.click` | Image Hotspot / Click Heatmap | `hotspot` | min_max_selections | required, min_selections, max_selections | renderer hotspotclick |
 | `hotspot.regions` | Region / Area Selection | `image_select` | options, images, min_max_selections, randomization, list_logic | required, min_selections, max_selections, custom_expression | renderer regions |
+| `hotspot.shelf` | Shelf Test | `image_select` | options, images, randomization | required | renderer shelf |
 | `hotspot.draw` | Draw-on-Image | `annotation` | min_max_selections, images | required, min_selections, max_selections | renderer annotate |
 
 ### Location / Map (`location`)

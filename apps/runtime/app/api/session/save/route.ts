@@ -8,7 +8,11 @@ import { sandboxRow, sandboxSurvey } from "@/lib/sessionSandbox";
 import { isStaleSave, parseSaveSeq } from "@/lib/saveSeq";
 import { assessAndStore, deviceHashFrom, resolveRunDefinition, RESPONSE_COLUMNS } from "@rescript/quality/server";
 import { configFingerprint, enabledRuleIds, resolveConfig, summarizeConfig } from "@rescript/quality";
-import { surveyFieldworkEvents } from "@/lib/notifyEmit";
+import { surveyFieldworkEvents, responseEvents } from "@/lib/notifyEmit";
+import { sanitizeTelemetry } from "@/lib/telemetrySanitize";
+
+/** S5b: question id → type, for the server-side answer-history check */
+const questionTypes = (d: any): Record<string, string> => Object.fromEntries(((d?.questions ?? []) as { id: string; type: string }[]).map((q) => [q.id, q.type]));
 import { assessmentResultRow, scoreForSubmission } from "@/lib/assessmentPayload";
 import type { RespondentAssessmentReport } from "@rescript/engine";
 
@@ -70,7 +74,7 @@ export async function POST(req: NextRequest) {
   const run = await resolveRunDefinition(db, existing, body?.build);
   const def = run.def;
   const tcfg = def?.quality?.telemetry;
-  const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg) : undefined;
+  const keepTelemetry = telemetry && typeof telemetry === "object" && telemetry.v === 1 ? sanitizeTelemetry(telemetry, tcfg, questionTypes(def)) : undefined;
   const deviceHash = tcfg?.device === false ? null : deviceHashFrom(qualitySalt(existing.survey_id), keepTelemetry?.device ?? null);
 
   /*
@@ -92,7 +96,8 @@ export async function POST(req: NextRequest) {
    */
   /* S1a: which values sandboxed scripts wrote — checked, and read by the replay (script_written, not a mismatch) */
   const scriptWrites = sanitizeScriptWrites(body?.scriptWrites);
-  const check = def ? await serverCheck(def, existing, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
+  /* S4b (LO-07): the device class this save's telemetry carries (when the survey keeps it) replays `device` conditions */
+  const check = def ? await serverCheck(def, { ...existing, device: keepTelemetry?.device?.type ?? null }, { status: newStatus, stepIndex, answers, calculated, embedded, flags, completed, scriptWrites }, sessionId) : null;
   if (check && !check.ok && validationPosture() === "enforce" && !existing.is_test) {
     const first = check.hard[0];
     return NextResponse.json({
@@ -308,6 +313,8 @@ export async function POST(req: NextRequest) {
     }
     /* G3 2026-10-22: survey fieldwork alerts — a quota-full end, completes milestones (never blocks the save) */
     if (newStatus === "quota_full" || newStatus === "complete") await surveyFieldworkEvents(db, { surveyId: existing.survey_id, status: newStatus, isTest: !!existing.is_test, sampleSize: def?.research?.sampleSize ?? null, title: def?.meta.title ?? null });
+    /* S5b (AP-09): the per-response webhook events — off unless the study's alerts turn them on (never blocks the save) */
+    if (newStatus !== "in_progress") await responseEvents({ def, surveyId: existing.survey_id, sessionId, status: newStatus, startedAt: existing.started_at ?? null, completedAt: new Date().toISOString(), isTest: !!existing.is_test, state: { answers: (update.answers as Record<string, unknown>) ?? answers ?? {}, calculated: (update.calculated as Record<string, unknown>) ?? calculated ?? {}, embedded: (update.embedded as Record<string, unknown>) ?? embedded ?? {} } });
     // the quality engine, on the final state of the row
     const summary = def ? summarizeConfig(def) : null;
     // §3 — what the engine is about to receive, so the saved settings and the
@@ -376,7 +383,7 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
   if (posture !== "off") {
     const check = checkSubmission({
       def: survey.def,
-      prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at },
+      prior: { seed: row.seed, sessionId: row.session_id, startedAt: row.started_at, device: typeof body?.telemetry?.device?.type === "string" ? body.telemetry.device.type : null },
       posted: { answers: body?.answers ?? {}, calculated: body?.calculated ?? {}, embedded: body?.embedded ?? {}, flags: body?.flags ?? [], stepIndex: body?.stepIndex ?? 0, status: newStatus, completed: !!body?.completed, scriptWrites: sanitizeScriptWrites(body?.scriptWrites) },
       recompute: recomputePosture() !== "off",
     });
@@ -392,6 +399,8 @@ async function sandboxSave(row: NonNullable<ReturnType<typeof sandboxRow>>, body
     ...(nav.trail ? { nav: nav.trail } : {}),
     ...(seq != null ? { save_seq: seq } : {}),
     script_writes: sanitizeScriptWrites(body?.scriptWrites),
+    // S5b: the telemetry as the database path keeps it (sanitised per the survey's switches)
+    ...(body?.telemetry && typeof body.telemetry === "object" && body.telemetry.v === 1 ? { telemetry: sanitizeTelemetry(body.telemetry, survey.def?.quality?.telemetry, questionTypes(survey.def)) } : {}),
     // S1c: the session's script failures, as the database path keeps them in telemetry.scriptHealth
     script_health: sanitizeScriptHealth(body?.scriptHealth, redactionSet(body?.answers, body?.embedded)),
   });
@@ -437,7 +446,7 @@ async function storedBalanceClaims(def: SurveyDefinition, surveyId: string, isTe
  */
 async function serverCheck(
   def: SurveyDefinition,
-  existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null },
+  existing: { survey_id: string; is_test: boolean | null; seed?: number | null; started_at?: string | null; device?: string | null },
   posted: { status: string; stepIndex: unknown; answers: unknown; calculated: unknown; embedded: unknown; flags: unknown; completed: unknown; scriptWrites?: unknown },
   sessionId: string,
 ): Promise<SubmissionCheck | null> {
@@ -449,7 +458,7 @@ async function serverCheck(
     const balanceClaims = recompute ? await storedBalanceClaims(def, existing.survey_id, !!existing.is_test, sessionId) : {};
     const check = checkSubmission({
       def,
-      prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null },
+      prior: { seed: existing.seed == null ? null : Number(existing.seed), sessionId, startedAt: existing.started_at ?? null, device: existing.device ?? null },
       posted: { answers: posted.answers ?? {}, calculated: posted.calculated ?? {}, embedded: posted.embedded ?? {}, flags: posted.flags ?? [], stepIndex: posted.stepIndex ?? 0, status: posted.status, completed: !!posted.completed, scriptWrites: posted.scriptWrites },
       quotaCounts, recompute, balanceClaims,
     });
@@ -468,55 +477,3 @@ async function serverCheck(
   }
 }
 
-/**
- * Keep only the fields the collector defines, drop anything the survey has
- * switched off, and bound the size. Clipboard text never arrives (the
- * collector records lengths only) — this guards against a tampered client.
- */
-function sanitizeTelemetry(t: any, cfg: any): any {
-  const on = (k: string) => !cfg || cfg[k] !== false;
-  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
-  const pages = Array.isArray(t.pages) ? t.pages.slice(0, 2000).map((v: any) => ({
-    pageId: String(v.pageId ?? "").slice(0, 80), step: num(v.step), enteredAt: num(v.enteredAt),
-    leftAt: typeof v.leftAt === "number" ? v.leftAt : undefined,
-    via: ["start", "next", "back", "reload", "jump"].includes(v.via) ? v.via : "next",
-    questionIds: Array.isArray(v.questionIds) ? v.questionIds.slice(0, 200).map(String) : [],
-    outOfFocusMs: on("focus") ? num(v.outOfFocusMs) : 0, blurs: on("focus") ? num(v.blurs) : 0,
-    pointerEvents: on("interaction") ? num(v.pointerEvents) : 0, keyEvents: on("interaction") ? num(v.keyEvents) : 0, scrollEvents: on("interaction") ? num(v.scrollEvents) : 0,
-  })) : [];
-  const questions: Record<string, unknown> = {};
-  if (t.questions && typeof t.questions === "object") {
-    for (const [k, q] of Object.entries(t.questions as Record<string, any>).slice(0, 2000)) {
-      questions[String(k).slice(0, 80)] = {
-        firstChangeAt: typeof q?.firstChangeAt === "number" ? q.firstChangeAt : undefined,
-        lastChangeAt: typeof q?.lastChangeAt === "number" ? q.lastChangeAt : undefined,
-        changes: num(q?.changes), latencyMs: typeof q?.latencyMs === "number" ? q.latencyMs : undefined,
-        pastes: on("clipboard") ? num(q?.pastes) : 0, pasteChars: on("clipboard") ? num(q?.pasteChars) : 0,
-        typedChars: on("interaction") ? num(q?.typedChars) : 0, copies: on("clipboard") ? num(q?.copies) : 0,
-      };
-    }
-  }
-  const d = t.device && typeof t.device === "object" && on("device") ? {
-    type: ["desktop", "tablet", "mobile"].includes(t.device.type) ? t.device.type : "unknown",
-    browser: String(t.device.browser ?? "").slice(0, 40), os: String(t.device.os ?? "").slice(0, 40),
-    screen: String(t.device.screen ?? "").slice(0, 20), viewport: String(t.device.viewport ?? "").slice(0, 20),
-    dpr: num(t.device.dpr), locale: String(t.device.locale ?? "").slice(0, 20), language: String(t.device.language ?? "").slice(0, 10),
-    timezone: String(t.device.timezone ?? "").slice(0, 60), tzOffset: num(t.device.tzOffset),
-    touch: !!t.device.touch, webdriver: !!t.device.webdriver,
-    hardwareConcurrency: typeof t.device.hardwareConcurrency === "number" ? t.device.hardwareConcurrency : undefined,
-    platform: t.device.platform ? String(t.device.platform).slice(0, 40) : undefined,
-  } : undefined;
-  const disabled = new Set<string>(Array.isArray(t.disabled) ? t.disabled.map(String) : []);
-  for (const k of ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"]) if (!on(k)) disabled.add(k);
-  return {
-    v: 1, startedAt: num(t.startedAt), submittedAt: typeof t.submittedAt === "number" ? t.submittedAt : undefined,
-    pages: on("timing") || on("navigation") ? pages : [],
-    questions: on("timing") ? questions : {},
-    focus: on("focus") ? { blurs: num(t.focus?.blurs), totalOutOfFocusMs: num(t.focus?.totalOutOfFocusMs), longestOutOfFocusMs: num(t.focus?.longestOutOfFocusMs) } : { blurs: 0, totalOutOfFocusMs: 0, longestOutOfFocusMs: 0 },
-    clipboard: on("clipboard") ? { copies: num(t.clipboard?.copies), pastes: num(t.clipboard?.pastes), pasteChars: num(t.clipboard?.pasteChars), largePastes: num(t.clipboard?.largePastes), pasteQuestions: num(t.clipboard?.pasteQuestions) } : { copies: 0, pastes: 0, pasteChars: 0, largePastes: 0, pasteQuestions: 0 },
-    navigation: on("navigation") ? { back: num(t.navigation?.back), forward: num(t.navigation?.forward), reloads: num(t.navigation?.reloads), jumps: num(t.navigation?.jumps), sequence: Array.isArray(t.navigation?.sequence) ? t.navigation.sequence.slice(0, 500).map((x: unknown) => String(x).slice(0, 90)) : [] } : { back: 0, forward: 0, reloads: 0, jumps: 0, sequence: [] },
-    interaction: on("interaction") ? { pointerEvents: num(t.interaction?.pointerEvents), keyEvents: num(t.interaction?.keyEvents), scrollEvents: num(t.interaction?.scrollEvents) } : { pointerEvents: 0, keyEvents: 0, scrollEvents: 0 },
-    device: d,
-    disabled: [...disabled],
-  };
-}

@@ -66,6 +66,10 @@ Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BU
 | `ranking` | `rankedFirst`, `rankedLast`, `rankedTopN`, `rankEquals`, `rankGreaterThan`, `rankLessThan`, `notRanked`, `contains`, `notContains`, `containsAny`, `containsAll`, `containsNone`, `displayed`, `notDisplayed` |
 | `date` | `dateBefore`, `dateAfter`, `dateEquals`, `dateBetween`, `answered`, `unanswered`, `gt`, `gte`, `lt`, `lte`, `between`, `notBetween` |
 
+## Behaviour conditions
+
+What the runtime measures about the respondent, usable in every condition (display, skip, branch, validation `when`, punch `when`, UX `when`): `time_on_page`, `elapsed`, `device`, `timed_out`. `time_on_page` and `elapsed` are seconds (on the current page; since the start) and are re-evaluated as the page clock ticks; `device` is one of `mobile`, `tablet`, `desktop`; `timed_out` is true once a timer has run out (`timed_out.Q5` / `timed_out.<page id>` names one). Examples: `time_on_page > 20`, `device = mobile`, `timed_out.Q5`. A question with the same code keeps the bare word — write `behavior.device` then. The server replay treats time as client-asserted (a soft note, never a refusal) and replays `device` from the stored device class. The quality engine's `SYSTEM_*` metrics are computed after the interview for custom quality rules only; anywhere else the logic check warns.
+
 ## Calculation functions
 
 47 functions, usable in calculations, in `{{expr: …}}` piping and inside conditions (an expression in a condition compiles to an `expr` source). Names are case-insensitive.
@@ -154,7 +158,7 @@ Grammar: `IF <condition> THEN <VERB> Q2.B[, Q2.C] [AND <VERB> Q3.X]`, `ELSE IF <
 
 ## UX behaviour scripts
 
-A behaviour's `script` runs in a sandboxed iframe as `new Function("rs", code)` with a frozen `rs`. Functions: `listen`, `getAnswer`, `getQuestion`, `getBlock`, `getPage`, `addClass`, `removeClass`, `toggleClass`, `animate`, `setStyle`, `clearStyle`, `show`, `hide`, `showMessage`, `hideMessage`, `scrollTo`, `focus`, `after`, `log`, `popup`, `closePopup`, `goToPage`, `goToSection`, `getEmbedded`, `getCalc`, `setAnswer`, `setEmbedded`, `setCalc`, `flag`, `error`. Events: `answer`, `change`, `select`, `deselect`, `click`, `hover`, `page`, `complete`, `validate`, `submit`. Aliases: `page_enter` → `page`, `page_load` → `page`, `load` → `page`, `appear` → `page`, `enter` → `page`, `page_complete` → `complete`, `select_option` → `select`, `deselect_option` → `deselect`. It sees a mirror of its page as `document`. `eval`, `Function`, `fetch`, `XMLHttpRequest`, `window`, storage, `setInterval` and changing an answer through the page (`.value`, `.checked`, `dispatchEvent`) are rejected before the script is saved; an answer, embedded field, calculation or flag is written only as a request (`setAnswer`, `setEmbedded`, `setCalc`, `flag`) the engine checks. Loops need braces and are stopped after 100,000 rounds; commands are rate-limited to 200 per second. Logic scripts (`scripts[]`) and Custom Component code run in the same kind of sandboxed frame, and the server runs no author code — see the custom code guide.
+A behaviour's `script` runs in a sandboxed iframe as `new Function("rs", code)` with a frozen `rs`. Functions: `listen`, `getAnswer`, `getQuestion`, `getBlock`, `getPage`, `addClass`, `removeClass`, `toggleClass`, `animate`, `setStyle`, `clearStyle`, `show`, `hide`, `showMessage`, `hideMessage`, `scrollTo`, `focus`, `after`, `log`, `popup`, `closePopup`, `goToPage`, `goToSection`, `getEmbedded`, `getCalc`, `setAnswer`, `setEmbedded`, `setCalc`, `flag`, `error`, `getTiming`. Events: `answer`, `change`, `select`, `deselect`, `click`, `hover`, `page`, `complete`, `validate`, `submit`. Aliases: `page_enter` → `page`, `page_load` → `page`, `load` → `page`, `appear` → `page`, `enter` → `page`, `page_complete` → `complete`, `select_option` → `select`, `deselect_option` → `deselect`. It sees a mirror of its page as `document`. `eval`, `Function`, `fetch`, `XMLHttpRequest`, `window`, storage, `setInterval` and changing an answer through the page (`.value`, `.checked`, `dispatchEvent`) are rejected before the script is saved; an answer, embedded field, calculation or flag is written only as a request (`setAnswer`, `setEmbedded`, `setCalc`, `flag`) the engine checks. Loops need braces and are stopped after 100,000 rounds; commands are rate-limited to 200 per second. Logic scripts (`scripts[]`) and Custom Component code run in the same kind of sandboxed frame, and the server runs no author code — see the custom code guide.
 
 ## Analysis vocabulary
 
@@ -162,7 +166,7 @@ Roles: `dependent`, `independent`, `mediator`, `moderator`, `control`, `segmenta
 
 Measurement levels: `nominal`, `ordinal`, `interval`, `ratio`, `multi`, `text`, `rank`, `allocation`, `choice`, `date`.
 
-Methods: `frequencies`, `mean`, `median`, `top_box`, `nps`, `crosstab`, `chi_square`, `t_test`, `anova`, `mann_whitney`, `kruskal_wallis`, `correlation`, `regression`, `logistic_regression`, `factor`, `reliability`, `cluster`, `conjoint_utilities`, `maxdiff_scores`, `turf`, `driver_analysis`, `text_themes`, `ranking_scores`, `allocation_shares`, `pricing`, `brand_funnel`, `hb`, `latent_class`, `sem`.
+Methods: `frequencies`, `mean`, `median`, `top_box`, `nps`, `crosstab`, `chi_square`, `t_test`, `anova`, `mann_whitney`, `kruskal_wallis`, `correlation`, `regression`, `logistic_regression`, `factor`, `reliability`, `cluster`, `conjoint_utilities`, `maxdiff_scores`, `turf`, `driver_analysis`, `text_themes`, `ranking_scores`, `allocation_shares`, `pricing`, `brand_funnel`, `hb`, `latent_class`, `sem`, `iat_dscore`, `shelf_share`, `sequential_monadic`.
 
 ## Flow node types
 

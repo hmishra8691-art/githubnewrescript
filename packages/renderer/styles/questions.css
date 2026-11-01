@@ -1123,3 +1123,113 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-submit-gate-list { margin: 0 0 10px; padding-inline-start: 1.2em; }
 .rs-submit-gate-go { background: none; border: 0; padding: 2px 0; font: inherit; color: var(--rs-primary, #2563eb); text-decoration: underline; cursor: pointer; text-align: start; }
 .rs-submit-gate-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* D20 — progress indicator: position (top / bottom) and the "steps" style (Page n of N + dots, capped at 12) */
+.rs-progress-bottom { margin-top: 20px; }
+.rs-progress-bottom .rs-progress-track { margin: 8px 0 12px; }
+.rs-progress-bottom .rs-progress-label { margin-top: -6px; }
+.rs-progress-style-steps { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0 20px; }
+.rs-progress-dots { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; flex-wrap: wrap; }
+.rs-progress-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--rs-border); }
+.rs-progress-dot.done { background: var(--rs-progress); opacity: .55; }
+.rs-progress-dot.current { background: var(--rs-progress); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rs-progress) 25%, transparent); }
+.rs-progress-steps-label { font-size: 12.5px; color: var(--rs-subtle); }
+
+/* AQ-08 — visible option groups: headings and collapsible groups (wrappers are display:contents so grids keep flowing) */
+.rs-optgroup, .rs-optgroup-body { display: contents; }
+.rs-optgroup-body[hidden] { display: none; }
+.rs-optgroup-heading, .rs-optgroup-toggle { grid-column: 1 / -1; font-weight: 600; font-size: .92em; color: var(--rs-heading, var(--rs-text)); margin: 10px 0 2px; }
+.rs-optgroup-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; border-bottom: 1px solid var(--rs-border); padding: 6px 2px; text-align: start; cursor: pointer; font: inherit; font-weight: 600; color: inherit; width: 100%; }
+.rs-optgroup-toggle:focus-visible { outline: 2px solid var(--rs-focus, var(--rs-accent)); outline-offset: 2px; }
+.rs-optgroup-count { color: var(--rs-subtle); font-weight: 400; }
+.rs-matrix tr.rs-matrix-group th { text-align: start; font-weight: 600; padding-top: 12px; }
+.rs-matrix-stack tr.rs-matrix-group { display: block; }
+.rs-cascade { display: flex; flex-direction: column; gap: 10px; max-width: 420px; }
+.rs-cascade label { display: flex; flex-direction: column; gap: 4px; font-size: .92em; }
+
+/* S4b (GA-05): the page clock — a quiet chip; the warning state is a colour change plus a pulse that
+   prefers-reduced-motion turns off (the colour change stays) */
+.rs-timer { display: inline-flex; align-items: baseline; gap: 4px; margin-bottom: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--rs-border, #d0d5dd); background: var(--rs-surface, #fff); color: var(--rs-text, inherit); font-variant-numeric: tabular-nums; }
+.rs-timer-warn { border-color: var(--rs-error); color: var(--rs-error); animation: rs-timer-pulse 1s ease-in-out 3; }
+@keyframes rs-timer-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--rs-error) 20%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .rs-timer-warn { animation: none; } }
+.rs-timer-lock[disabled] { opacity: 0.6; }
+
+/* S5a (MM2-04): image zoom — the lightbox, the zoomable stimulus, the option "Enlarge" button, the hover lens */
+.rs-imgopt, .rs-compare-card { position: relative; }
+.rs-zoomable { position: relative; display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; font: inherit; color: inherit; text-align: inherit; }
+.rs-zoomable:focus-visible, .rs-zoom-btn:focus-visible, .rs-zoomable-inline:focus-visible { outline: 3px solid var(--rs-primary); outline-offset: 2px; }
+.rs-zoomable-inline { cursor: zoom-in; }
+.rs-zoom-hint { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.6); color: #fff; border-radius: 6px; padding: 2px 6px; font-size: 14px; pointer-events: none; }
+.rs-zoom-btn { position: absolute; top: 6px; right: 6px; z-index: 2; min-width: 32px; min-height: 32px; border-radius: 8px; border: 1px solid var(--rs-border); background: rgba(255,255,255,.92); color: #111; cursor: zoom-in; font-size: 16px; line-height: 1; }
+.rs-magnifier { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 2px 12px rgba(0,0,0,.35); background-repeat: no-repeat; pointer-events: none; z-index: 3; }
+.rs-lightbox-backdrop { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.82); display: flex; align-items: center; justify-content: center; padding: 12px; }
+.rs-lightbox { display: flex; flex-direction: column; max-width: min(96vw, 1200px); width: 100%; max-height: 96vh; background: #111; color: #fff; border-radius: 12px; overflow: hidden; }
+.rs-lightbox-bar { display: flex; gap: 6px; align-items: center; justify-content: flex-end; padding: 8px; }
+.rs-lightbox-btn { min-width: 40px; min-height: 40px; border-radius: 8px; border: 1px solid #555; background: #222; color: #fff; font-size: 18px; cursor: pointer; }
+.rs-lightbox-btn:disabled { opacity: .4; cursor: default; }
+.rs-lightbox-btn:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.rs-lightbox-pct { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
+.rs-lightbox-frame { flex: 1; min-height: 200px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.rs-lightbox-frame img { max-width: 100%; max-height: 76vh; object-fit: contain; transform-origin: center center; user-select: none; }
+.rs-lightbox-caption { margin: 0; padding: 8px 12px 12px; font-size: 14px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .rs-lightbox-frame img { transition: none !important; } }
+
+/* S5a (MM2-06): before / after comparison slider */
+.rs-ba-frame { position: relative; width: 100%; max-width: 720px; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 10px; background: var(--rs-border); user-select: none; cursor: ew-resize; }
+.rs-ba-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.rs-ba-clip { position: absolute; inset: 0; }
+.rs-ba-divider { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1.5px; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.5); pointer-events: none; }
+.rs-ba-handle { position: absolute; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: #fff; color: #111; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 6px rgba(0,0,0,.4); cursor: ew-resize; font-size: 18px; }
+.rs-ba-handle:focus-visible { outline: 3px solid var(--rs-primary); outline-offset: 2px; }
+.rs-ba-tag { position: absolute; top: 8px; padding: 2px 8px; border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; pointer-events: none; }
+.rs-ba-tag-before { left: 8px; } .rs-ba-tag-after { right: 8px; }
+.rs-ba-rating { border: 0; padding: 0; margin: 12px 0 0; }
+.rs-ba-rating legend { font-weight: 600; margin-bottom: 6px; }
+.rs-ba-points { display: flex; gap: 6px; flex-wrap: wrap; }
+.rs-ba-point { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border: 2px solid var(--rs-border); border-radius: 8px; cursor: pointer; position: relative; }
+.rs-ba-point input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.rs-ba-point.selected { border-color: var(--rs-primary); background: var(--rs-primary); color: #fff; }
+.rs-ba-point:focus-within { outline: 3px solid var(--rs-primary); outline-offset: 2px; }
+.rs-ba-ends { display: flex; justify-content: space-between; font-size: .85em; margin-top: 4px; max-width: 520px; }
+
+/* S5a (MM2-09): respondent video recording */
+.rs-vrec-consent { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+.rs-vrec-consent input { width: 20px; height: 20px; flex: none; margin-top: 2px; }
+.rs-vrec-preview, .rs-vrec-play { display: block; width: 100%; max-width: 480px; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; margin-bottom: 8px; }
+.rs-vrec-preview { transform: scaleX(-1); }
+@media (prefers-reduced-motion: reduce) { .rs-vrec .rs-rec-live { animation: none; } }
+
+/* S5a (GA-06/07): the points HUD */
+.rs-gam-hud { position: fixed; z-index: 900; display: flex; gap: 6px; align-items: center; padding: 6px 12px; border-radius: 999px; background: var(--rs-surface, #fff); color: var(--rs-text, #111); border: 1px solid var(--rs-border); box-shadow: 0 2px 10px rgba(0,0,0,.15); font-size: 14px; }
+.rs-gam-top-right { top: 12px; right: 12px; } .rs-gam-top-left { top: 12px; left: 12px; }
+.rs-gam-bottom-right { bottom: 12px; right: 12px; } .rs-gam-bottom-left { bottom: 12px; left: 12px; }
+.rs-gam-points b { color: var(--rs-primary); font-variant-numeric: tabular-nums; }
+.rs-gam-badges { display: inline-flex; gap: 2px; font-size: 16px; }
+@media (prefers-reduced-motion: no-preference) { .rs-gam-points { animation: rs-gam-pop .35s ease-out; } }
+@keyframes rs-gam-pop { from { transform: scale(1.25); } to { transform: scale(1); } }
+
+/* S5a (AQ-12): review your answers */
+.rs-review { margin: 0 0 16px; }
+.rs-review-title { font-size: 1.25em; margin: 0 0 8px; }
+.rs-review-group { border: 1px solid var(--rs-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; background: var(--rs-surface); }
+.rs-review-section { font-size: 1em; margin: 0 0 6px; }
+.rs-review-list { margin: 0; }
+.rs-review-item { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; padding: 6px 0; border-top: 1px solid var(--rs-border); }
+.rs-review-item:first-child { border-top: 0; }
+.rs-review-q { font-weight: 600; flex: 1 1 260px; }
+.rs-review-a { margin: 0; display: flex; gap: 8px; align-items: center; flex: 1 1 260px; justify-content: space-between; overflow-wrap: anywhere; }
+.rs-review-change { min-height: 36px; }
+.rs-review-return { margin: 0 0 12px; }
+
+/* S5c: adaptive Gabor–Granger price ladder */
+.rs-ladder { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
+.rs-ladder-q { font-size: 1.15em; margin: 0; }
+.rs-ladder-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.rs-ladder-actions .rs-btn { min-height: 44px; min-width: 120px; }
+
+/* S5c: shelf test */
+.rs-shelf-item { border-color: transparent; background: transparent; }
+.rs-shelf-item:hover, .rs-shelf-item:focus-visible { border-color: var(--rs-accent, #2563eb); background: rgba(37, 99, 235, 0.08); }
+.rs-shelf-item.second { border-color: var(--rs-muted, #64748b); border-style: dashed; }

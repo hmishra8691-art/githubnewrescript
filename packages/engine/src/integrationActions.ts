@@ -56,6 +56,12 @@ export interface ConfigureAlertsAction {
   replace?: boolean;
   /** remove the rules for these events (or every rule, with no events) */
   remove?: boolean;
+  /**
+   * S5b (AP-09): the per-response events — on/off, which statuses, whether the answers (by variable name, likely-PII
+   * fields withheld unless allowed) ride in the webhook payload. Turned on by itself when `events` names a response
+   * event; null turns them off.
+   */
+  responses?: { enabled?: boolean; events?: ("completed" | "screened_out" | "quota_full")[]; includeAnswers?: boolean; allowFields?: string[]; includeTest?: boolean } | null;
 }
 export type IntegrationAction = ConnectPanelAction | DisconnectPanelAction | ConfigureAlertsAction;
 
@@ -149,6 +155,10 @@ const EVENT_WORDS: [RegExp, string[]][] = [
   [/abuse|abusive|harass/, ["ai_interview.abuse"]],
   [/inject|manipulat|jailbreak/, ["ai_interview.injection"]],
   [/safety|flags?$|flagged/, ["ai_interview.distress", "ai_interview.abuse", "ai_interview.injection", "group_session.flag"]],
+  /* S5b (AP-09): per-response events — before "completed" / "quota", which mean the AI-interview / fieldwork alerts */
+  [/^(?:responses?|every response|each response|all responses|per.?response|responses? complet\w*|complet\w* responses?|completes|survey complet\w*)$/, ["response.completed"]],
+  [/screen(?:ed)?.?outs?|disqualif/, ["response.screened_out"]],
+  [/responses?.*quota|quota.?full responses?/, ["response.quota_full"]],
   [/complet|finish/, ["ai_interview.completed"]],
   [/quota/, ["ai_interview.quota_full", "survey.quota_full"]],
   [/target|goal|sample size/, ["study.target_reached", "panel.target_reached"]],
@@ -165,7 +175,7 @@ export function alertEventsOf(words: string[]): string[] | { error: string } {
     const t = w.toLowerCase().trim();
     if ((NOTIFY_EVENT_TYPES as string[]).includes(t) || /^[a-z_]+\.\*$/.test(t)) { out.add(t); continue; }
     const hit = EVENT_WORDS.find(([re]) => re.test(t));
-    if (!hit) return { error: `“${w}” is not an alert event (e.g. distress, abuse, injection, completed, quota full, target reached, cost cap, provider fallback, group flags, no-shows, milestones)` };
+    if (!hit) return { error: `“${w}” is not an alert event (e.g. distress, abuse, injection, completed, quota full, target reached, cost cap, provider fallback, group flags, no-shows, milestones, response completed, screened out)` };
     for (const e of hit[1]) out.add(e);
   }
   return [...out];
@@ -210,8 +220,23 @@ function alertsIn(o: Record<string, unknown>): ConfigureAlertsAction | string {
   if (o.dedupeMinutes !== undefined) { const n = Number(o.dedupeMinutes); if (!Number.isInteger(n) || n < 0 || n > 1440) return `${op}: dedupeMinutes is 0–1440`; a.dedupeMinutes = n; }
   if (o.replace === true) a.replace = true;
   if (o.remove === true || o.off === true) a.remove = true;
-  if (!a.remove && !a.channels && (a.events || a.digest)) return `${op}: where should the alerts go — Slack / Teams / a webhook by its channel name, e-mail (an address, “me” or “the team”) or in-app`;
-  if (!a.remove && a.channels && !a.events) a.events = ["ai_interview.distress"];
+  /* S5b (AP-09): per-response settings */
+  if (o.responses === null) a.responses = null;
+  else {
+    const ro = obj(o.responses) ?? (o.includeAnswers !== undefined || o.allowFields !== undefined ? {} : null);
+    if (ro) {
+      const r: NonNullable<ConfigureAlertsAction["responses"]> = {};
+      if (typeof ro.enabled === "boolean") r.enabled = ro.enabled;
+      const evs = list(ro.events, 3).map((x) => x.toLowerCase().replace(/[^a-z]+/g, "_").replace(/^response_/, "").replace(/^complete$/, "completed").replace(/^screened$|^screenout$/, "screened_out"));
+      if (evs.length) { if (!evs.every((x) => ["completed", "screened_out", "quota_full"].includes(x))) return `${op}: responses.events are completed, screened_out, quota_full`; r.events = evs as NonNullable<typeof r.events>; }
+      const inc = ro.includeAnswers ?? o.includeAnswers; if (typeof inc === "boolean") r.includeAnswers = inc;
+      const allow = list(ro.allowFields ?? o.allowFields, 200); if (allow.length) { if (!allow.every((x) => /^[A-Za-z_$][A-Za-z0-9_.$#@-]{0,79}$/.test(x))) return `${op}: allowFields are variable names`; r.allowFields = allow; }
+      if (typeof ro.includeTest === "boolean") r.includeTest = ro.includeTest;
+      a.responses = r;
+    }
+  }
+  if (!a.remove && !a.channels && (a.events || a.digest) && !(a.responses !== undefined && !a.events)) return `${op}: where should the alerts go — Slack / Teams / a webhook by its channel name, e-mail (an address, “me” or “the team”) or in-app`;
+  if (!a.remove && a.channels && !a.events) a.events = a.responses ? ["response.completed"] : ["ai_interview.distress"];
   if (Object.keys(a).length === 1) return `${op} names nothing to configure`;
   return a;
 }
@@ -333,12 +358,26 @@ export function applyIntegrationAction(def: SurveyDefinition, a: IntegrationActi
   if (a.quietHours === null) { delete next.quietHours; changes.push("no quiet hours"); } else if (a.quietHours) { next.quietHours = { bypassCritical: true, ...a.quietHours }; changes.push(`quiet hours ${a.quietHours.start}–${a.quietHours.end}${a.quietHours.timeZone ? ` ${a.quietHours.timeZone}` : " UTC"}`); }
   if (a.maxPerHour) { next.maxPerHour = a.maxPerHour; changes.push(`at most ${a.maxPerHour} an hour per channel`); }
   if (a.dedupeMinutes !== undefined) { next.dedupeMinutes = a.dedupeMinutes; changes.push(`repeats merged within ${a.dedupeMinutes} min`); }
+  /* S5b (AP-09): per-response events — on when asked, or when a rule now names a response event */
+  const named = (a.events ?? []).filter((e) => e.startsWith("response.")).map((e) => (e === "response.completed" ? "completed" : e === "response.screened_out" ? "screened_out" : "quota_full") as "completed" | "screened_out" | "quota_full");
+  const respWarnings: string[] = [];
+  if (a.responses === null || (a.remove && named.length && !a.responses)) { if (next.responses?.enabled) { next.responses = { ...next.responses, enabled: false }; changes.push("per-response events off"); } }
+  else if (a.responses || (named.length && !a.remove)) {
+    const r = { ...(next.responses ?? { enabled: false, events: ["completed"], includeAnswers: false, allowFields: [], includeTest: false }), ...(a.responses ?? {}) } as NonNullable<AlertSettings["responses"]>;
+    if (a.responses?.enabled === undefined) r.enabled = true;
+    if (!a.responses?.events && named.length) r.events = [...new Set([...(next.responses?.enabled ? next.responses.events : []), ...named])];
+    next.responses = r;
+    changes.push(r.enabled ? `per-response events on (${r.events.join(", ")}${r.includeAnswers ? `; answers by variable name, likely-PII fields withheld${r.allowFields.length ? ` except ${r.allowFields.join(", ")}` : ""}` : "; ids, status and times only"})` : "per-response events off");
+    if (r.enabled && !next.rules.some((x) => x.enabled && x.events.some((e) => e.startsWith("response") ) && x.channels.some((c) => c.kind === "webhook"))) respWarnings.push("per-response events go where a rule names them — add a webhook channel for response events (Settings → Alerts), e.g. configure_alerts {events: [\"response completed\"], webhook: \"<channel name>\"}");
+    if (r.includeAnswers) respWarnings.push("answers are sent to WEBHOOK channels only (Slack, Teams, e-mail and in-app get a one-line notice); typed text, e-mail / phone / postal fields, places, files and embedded data are withheld unless listed in allowFields");
+  }
   const parsed = AlertSettingsSchema.safeParse(next);
   if (!parsed.success) fail(`the alert settings are not valid: ${parsed.error.issues[0]?.path.join(".")} ${parsed.error.issues[0]?.message ?? ""}`);
   def.alerts = parsed.data!;
   const warnings: string[] = [];
   for (const c of a.channels ?? []) if (c.kind === "slack" || c.kind === "teams" || c.kind === "webhook") warnings.push(`${CHANNEL_KIND_LABELS[c.kind]} “${c.to}” is matched by name to a channel added in Settings → Alerts; until one exists, these alerts are logged as “channel not connected”.`);
   if ((a.channels ?? []).some((c) => c.to === "@me")) warnings.push("“me” is the person who claims the rule in Alerts & panels (until then, the project owner).");
+  warnings.push(...respWarnings);
   return { description: `Alerts: ${changes.join("; ") || "no change"}`, warnings, touched: [], ...(destructive ? { destructive } : {}) };
 }
 
@@ -355,7 +394,7 @@ export function panelsWords(panels: PanelConfig[] | undefined): string {
 export function alertsWords(s: AlertSettings | undefined): string {
   if (!s) return "";
   const rules = s.rules.map((r) => `${r.events.join(", ")} → ${r.channels.map((c) => `${c.kind}:${c.to}`).join(", ")}${r.digest !== "immediate" ? ` (${r.digest})` : ""}${r.enabled ? "" : " (off)"}`);
-  return [...rules, s.quietHours ? `quiet ${s.quietHours.start}–${s.quietHours.end}` : "", `≤ ${s.maxPerHour}/h`].filter(Boolean).join(" | ");
+  return [...rules, s.quietHours ? `quiet ${s.quietHours.start}–${s.quietHours.end}` : "", `≤ ${s.maxPerHour}/h`, s.responses?.enabled ? `per-response: ${s.responses.events.join(", ")}${s.responses.includeAnswers ? " + answers" : ""}` : ""].filter(Boolean).join(" | ");
 }
 
 export function integrationsDiff(before: SurveyDefinition, after: SurveyDefinition): string[] {

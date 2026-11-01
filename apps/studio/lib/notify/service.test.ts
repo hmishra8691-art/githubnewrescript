@@ -138,3 +138,51 @@ test("sendNotification (G2's API): invite by e-mail with a dedupe key; templates
   assert.equal((await testChannel(bad.deps, ch2)).status, "failed", "a test is not retried");
   assert.match(bad.state.channels[0].lastStatus!, /failed: the endpoint answered 500/);
 });
+
+/* ------------------------------------------------ S5b item 6 (AP-09): per-response events, to a local stand-in server */
+
+import { createServer } from "node:http";
+
+test("S5b response.completed: delivered to a local stand-in webhook server, signed, with the response record; retried on 503; logged", async () => {
+  const received: { headers: Record<string, string>; body: string }[] = [];
+  const answers = [503, 200];
+  const server = createServer((req, res) => {
+    let b = "";
+    req.on("data", (c) => { b += c; });
+    req.on("end", () => { received.push({ headers: req.headers as Record<string, string>, body: b }); res.statusCode = answers.shift() ?? 200; res.end("ok"); });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const port = (server.address() as { port: number }).port;
+  try {
+    const a = setup();
+    a.deps.post = async (url, body, headers) => { const r = await fetch(url, { method: "POST", body, headers }); return { status: r.status, text: await r.text() }; };
+    a.channel("webhook", "crm-hook", `http://127.0.0.1:${port}/hook`, "whsec_resp");
+    a.channel("slack", "#ops", "https://hooks.slack.com/services/T/B/r");
+    a.state.projects.s1.alerts = AlertSettings.parse({
+      responses: { enabled: true, events: ["completed"], includeAnswers: true },
+      rules: [{ id: "r1", events: ["response.completed"], channels: [{ kind: "webhook", to: "crm-hook" }] }, { id: "r2", events: ["*"], channels: [{ kind: "slack", to: "#ops" }] }],
+    });
+    const response = { responseId: "sess-9", status: "complete", startedAt: "2026-10-22T09:50:00.000Z", completedAt: "2026-10-22T10:00:00.000Z", answers: { Q1: "2", Q3: 41, Q2: ["1", "2"] }, withheld: ["EMAIL"] };
+    const r = await emitNotifyEvent(a.deps, { type: "response.completed", surveyId: "s1", ref: "response:sess-9", idempotencyKey: "response.completed:sess-9", response, detail: { status: "complete" }, source: "runtime" } as never);
+    assert.ok(r.ok);
+    assert.deepEqual(r.ok && r.deliveries.map((d) => [d.channelKind, d.destination]), [["webhook", "webhook:crm-hook"]], "only the rule that names it — the '*' Slack rule does not get every completion");
+    assert.equal(a.state.deliveries[0].status, "retrying", "a 503 from the stand-in server is retried");
+    a.tick(30_000);
+    await runDue(a.deps);
+    assert.equal(a.state.deliveries[0].status, "sent");
+    assert.equal(a.state.deliveries[0].attempts, 2);
+    assert.equal(received.length, 2);
+    const last = received[1];
+    assert.ok(verifySignedHeader("whsec_resp", last.headers["x-rescript-signature"], last.body, T0 + 30_000), "signed over the exact body");
+    assert.equal(last.headers["x-rescript-event"], "response.completed");
+    assert.equal(received[0].headers["idempotency-key"], last.headers["idempotency-key"], "the retry carries the same idempotency key");
+    const body = JSON.parse(last.body);
+    assert.equal(body.type, "response.completed");
+    assert.deepEqual(body.response, response);
+    assert.equal(body.study.id, "s1");
+    // the same response again is one event
+    const again = await emitNotifyEvent(a.deps, { type: "response.completed", surveyId: "s1", ref: "response:sess-9", idempotencyKey: "response.completed:sess-9", response, source: "runtime" } as never);
+    assert.ok(again.ok && !again.inserted);
+    assert.equal(received.length, 2);
+  } finally { server.close(); }
+});

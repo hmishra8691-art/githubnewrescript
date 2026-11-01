@@ -10,6 +10,8 @@ import {
   advance,
   goBack,
   balanceSlotsDue,
+  recordDisplayOrders,
+  applyClaimedArms,
   speechServerOn,
   questionOffersSpeechInput,
   setAnswer,
@@ -62,6 +64,7 @@ import {
   K,
   type VoiceRecord,
   decideListFill,
+  listFillCustomScript,
   listFillVariables,
   listFillRetained,
   type ListFillCounts,
@@ -90,6 +93,8 @@ import {
   punchDerivedQuestions,
   prefillQuestions,
   goToPage,
+  reviewConfig,
+  reviewSummary,
   sectionOutline,
   sectionNavMode,
   submitGate,
@@ -109,6 +114,8 @@ import {
   type LogicStatics,
   type PreparedLogicScript,
   type ScriptWriteResult,
+  /* S4b: native timers and behaviour conditions */
+  pageTimers, timerParadata, timedOutSkips, advanceTimedOut, setBehavior, formatClock,
 } from "@rescript/engine";
 
 /**
@@ -133,7 +140,7 @@ import { QuestionRenderer, showOptionPopup, UxLayer, MediaGateContext, useMediaG
 import { Inspector } from "./Inspector";
 import { useAssessmentResults } from "./AssessmentResults";
 import { RunnerBoundary, FatalCard, fatalOf, type FatalDetail } from "./RunnerBoundary";
-import { MediaEmbed, SafeImage, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
+import { MediaEmbed, SafeImage, ProgressIndicator, GamificationHud, openUxPopup, ReviewPanel, VoiceConsole, QuestionAudio, brandingVars, widthModeClass, brandingClasses, pageThemeVars, brandingResponsiveCss } from "@rescript/renderer";
 import {
   readResume, writeResume, clearResume, resumeLink,
   cachePending, readPending, clearPending, RESUME_MAX_AGE_DAYS,
@@ -141,8 +148,11 @@ import {
   readNavTrail, writeNavTrail, clearNavTrail,
 } from "@/lib/resume";
 import { resumeSeq } from "@/lib/saveSeq";
+import { firstInvalidTarget, focusErrorTarget, prefersReducedMotion } from "@/lib/errorFocus";
 import { SectionNav, SubmitGatePanel } from "./SectionNav";
 import { createTelemetryCollector, detectDevice, type TelemetryCollector } from "@/lib/telemetry";
+import { timingSnapshot } from "@/lib/paradata";
+import { PageClock, usesLiveBehavior, effectiveDevice } from "@/lib/timerClock";
 import { createScriptHealthCollector, sessionScriptHealth, scriptHealthPayload, browserClass, readStoredScriptHealth, writeStoredScriptHealth, type ScriptIssue } from "@/lib/scriptHealth";
 import { runScriptLifecycle, LIFECYCLE_TIMEOUT_MS, type AskFrames } from "@/lib/scriptLifecycle";
 import { runLogicEvent, runCustomScriptRules, logicAsk, onChangeScheduler, LOGIC_RUN_TIMEOUT_MS, type LogicEventOutcome, type SkippedRule } from "@/lib/logicScripts";
@@ -436,6 +446,7 @@ async function runListFills(
       applyListFillDestinations(lf, res, state);
       ran.push(lf.id);
       onTrace?.(`[list fill] ${res.name}: ${res.trace.reason}`);
+      if (res.trace.note) onTrace?.(`[list fill] NOTE ${res.name}: ${res.trace.note}`);
     }
     return ran;
   }
@@ -469,6 +480,7 @@ async function runListFills(
       applyListFillDestinations(lf, { listFillId: lf.id, name: a.name, items: a.items ?? [], preference: [], trace: a.trace }, state);
       ran.push(lf.id);
       if (a.trace?.reason) onTrace?.(`[list fill] ${a.name}: ${a.trace.reason}`);
+      if (a.trace?.note) onTrace?.(`[list fill] NOTE ${a.name}: ${a.trace.note}`);
     }
     return ran;
   } catch (e) {
@@ -675,6 +687,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   );
   const def = React.useMemo(() => localizeDefinition(sourceDef, lang), [sourceDef, lang]);
   const ui = React.useMemo(() => uiStringsFor(sourceDef, lang), [sourceDef, lang]);
+  /* S5b: the idle prompt is opened from the collector's callback, outside React's render — it reads the current words here */
+  const uiRef = React.useRef(ui);
+  uiRef.current = ui;
   const langCfg = surveyLanguages(sourceDef).find((l) => l.code === lang);
   const locale = languageLocale(lang, langCfg);
   const dir = languageDirection(lang, langCfg);
@@ -693,8 +708,34 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   };
   const [steps, setSteps] = React.useState<RuntimeStep[]>([]);
   const [errors, setErrors] = React.useState<ReturnType<typeof validatePage>>([]);
+  /*
+   * D19 — A REFUSED Next/Submit moves focus to the first invalid question's first control (or the banner for a
+   * page-level message), after the errors have rendered. `refuse` is the one way a handler shows blocking or
+   * first-time warning errors; a plain setErrors([]) still clears them without moving anything.
+   */
+  const [errorFocusTick, setErrorFocusTick] = React.useState(0);
+  const errorFocusIdsRef = React.useRef<string[]>([]);
+  const gateLandRef = React.useRef<{ pageId: string; errors: { questionId: string; message: string }[] } | null>(null);
+  const refuse = (errs: ReturnType<typeof validatePage>, pageQuestionIds: string[]) => {
+    errorFocusIdsRef.current = pageQuestionIds;
+    setErrors(errs);
+    setErrorFocusTick((t) => t + 1);
+  };
+  React.useEffect(() => {
+    if (!errorFocusTick || typeof document === "undefined") return;
+    const raf = requestAnimationFrame(() => {
+      // page order as DRAWN (after a gate jump the handler could not know the landed page's questions yet)
+      const drawn = Array.from(document.querySelectorAll<HTMLElement>("#rs-questions [data-qid]")).map((el) => el.dataset.qid ?? "");
+      const ids = drawn.length ? [...new Set(drawn)] : errorFocusIdsRef.current;
+      focusErrorTarget(document, firstInvalidTarget(errors, ids), prefersReducedMotion(window));
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [errorFocusTick]);
   /* SECTION NAVIGATION (2026-10-30): the navigator's last refusal, the Submit gate on screen, and "submit anyway" once agreed */
   const [navNote, setNavNote] = React.useState<string | null>(null);
+  /* S5a (AQ-12): the review page a "Change" left from — the landed page offers "Return to review" */
+  const [reviewReturn, setReviewReturn] = React.useState<string | null>(null);
   const [gate, setGate] = React.useState<SubmitGate | null>(null);
   const gateConfirmedRef = React.useRef(false);
   /** the latest Next handler — "Submit anyway" presses it once the previous Next's latch has opened */
@@ -751,7 +792,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     for (const line of o.logs) if (/^\[[^\]]*\] (refused: |.*\) refused: |.*: no answer within |not run: )/.test(line)) console.warn(`[rescript:script] ${line}`);
   };
   /** the latest jumpTo (a jump clicked while Next is still settling is replayed, not dropped) */
-  const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
+  const jumpRef = React.useRef<((target: string, as: "page" | "section" | "auto", source: "nav" | "script" | "gate" | "review", attempt?: number) => { ok: boolean; reason?: string }) | null>(null);
   const [ended, setEnded] = React.useState<{ status: string; message?: string; redirectUrl?: string } | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   /** the warning set the respondent has already been shown on this page */
@@ -836,6 +877,20 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const telemetryRef = React.useRef<TelemetryCollector | null>(null);
   /** the survey shell — the UX layer's root (scoped styles, animations, behaviours) */
   const shellRef = React.useRef<HTMLDivElement | null>(null);
+  /*
+   * S4b (GA-05, LO-07) — THE PAGE CLOCK: one per page (lib/timerClock.ts), wall time. `onClockRef` is set during a
+   * render that has timers or a time behaviour condition; the interval then calls it (timeouts, announcements) and
+   * re-renders so live conditions (time_on_page > 5) and the countdown follow the clock. No timers → no re-render.
+   */
+  const clockRef = React.useRef(new PageClock());
+  const onClockRef = React.useRef<(() => void) | null>(null);
+  const [, setClockTick] = React.useState(0);
+  const [timerNote, setTimerNote] = React.useState("");
+  const detectedDeviceRef = React.useRef<string | undefined | null>(null);
+  React.useEffect(() => {
+    const id = setInterval(() => { const f = onClockRef.current; if (f) { f(); setClockTick((n) => (n + 1) % 1_000_000); } }, 500);
+    return () => clearInterval(id);
+  }, []);
   const notePage = (allSteps: RuntimeStep[], index: number, via: "start" | "next" | "back" | "reload" | "jump") => {
     const st = allSteps[index];
     if (st?.kind === "page") telemetryRef.current?.enterPage(st.pageId, index, st.questionIds, via);
@@ -1080,6 +1135,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     telemetryRef.current?.dispose();
     telemetryRef.current = createTelemetryCollector(def.quality?.telemetry, session?.sessionId);
     if (mode !== "live" && typeof window !== "undefined") { (window as any).__rescriptTelemetry = telemetryRef.current.data; (window as any).__rescriptScriptHealth = scriptHealth(); }
+    /*
+     * S5b (TE-06): the optional "Are you still there?" — the survey's native popup (centred, a button to close),
+     * opened when an idle period begins and closed by any input. Never in a hidden tab. Off by default.
+     */
+    {
+      const tel = telemetryRef.current;
+      let closeIdle: (() => void) | null = null;
+      if (tel.onIdle(null)) {
+        tel.onIdle((phase) => {
+          if (phase === "active") { closeIdle?.(); closeIdle = null; return; }
+          const root = shellRef.current;
+          if (!root || closeIdle || (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+          tel.idlePrompted();
+          const text = def.quality?.telemetry?.idlePromptText?.trim() || uiText(uiRef.current, "idle_prompt");
+          closeIdle = openUxPopup({ root, owner: "rs-idle-prompt", effect: { text, placement: "center", dismiss: "button" }, labels: { close: uiText(uiRef.current, "idle_prompt_ok") } });
+        });
+      }
+    }
     /*
      * The resume machinery, for the test suites — the same seam
      * `__rescriptState` and `__rescriptTelemetry` already use, and for the
@@ -1368,7 +1441,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    */
   /* recomputed when the step or a stored assignment changes — not on every keystroke */
   const balanceStep = stateRef.current && !booting && !fatal ? steps[stateRef.current.stepIndex] : undefined;
-  const assignmentSig = stateRef.current ? Object.entries(stateRef.current.calculated).filter(([k]) => k.startsWith("RANDOMIZER_") || k.endsWith("_VERSION")).map(([k, v]) => `${k}=${String(v)}`).join("|") : "";
+  const assignmentSig = stateRef.current ? Object.entries(stateRef.current.calculated).filter(([k]) => k.startsWith("RANDOMIZER_") || k.endsWith("_VERSION") || k.endsWith("_ARM")).map(([k, v]) => `${k}=${String(v)}`).join("|") : "";
   const balanceDue = React.useMemo(() => {
     const s = stateRef.current;
     const st = balanceStep;
@@ -1448,6 +1521,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!shownPageId || !s) return;
     const st = steps[s.stepIndex];
     if (st?.kind !== "page") return;
+    /* S4c (RK-04): the order this page is shown in — ORDER_<RANDOMIZER> and opted-in <VAR>_ORDER — stored with the response (the server's replay derives the same) */
+    try { recordDisplayOrders(def, s, st); } catch (e) { console.warn("[rescript:runtime] display order not recorded", e); }
+    /* S4c (RA-08): an exact experiment's claimed arm becomes its answer here, at page entry — not in a renderer effect */
+    try { if (applyClaimedArms(def, s, st).length) force(); } catch (e) { console.warn("[rescript:runtime] experiment arm not applied", e); }
     if (LEGACY_SCRIPTS) {
       const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
       if (!r.ran && !r.logs.length) return;
@@ -1502,8 +1579,32 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * test), each in the hidden-question theme. On a live link the two are the
    * same list.
    */
+  /*
+   * S4b — THE BEHAVIOUR SNAPSHOT the conditions read (state.meta.behavior, never posted): seconds on this page and
+   * since the start, from the page clock, and the device class (detected; the preview's device switch when changed).
+   * Set before the page's questions are decided, so display logic on time_on_page / device applies on this render.
+   */
+  const clockKey = pageStep ? `${state.stepIndex}|${pageStep.pageId}` : "";
+  const clockNow = Date.now();
+  const clockFresh = pageStep ? clockRef.current.enter(clockKey, clockNow) : false;
+  if (detectedDeviceRef.current === null) detectedDeviceRef.current = typeof window !== "undefined" ? detectDevice()?.type : undefined;
+  const behaviorDevice = effectiveDevice(detectedDeviceRef.current ?? undefined, device, mode === "preview");
+  if (pageStep) {
+    const started = Date.parse(state.startedAt);
+    setBehavior(state, {
+      timeOnPage: Math.floor(clockRef.current.elapsed(clockNow)),
+      elapsed: Number.isFinite(started) ? Math.max(0, Math.floor((clockNow - started) / 1000)) : 0,
+      ...(behaviorDevice ? { device: behaviorDevice } : {}),
+    });
+  }
   const questions = pageStep ? visibleQuestions(def, pageStep, state, counts) : [];
   const pageQuestions = pageStep && reveal ? visibleQuestions(def, pageStep, state, counts, view) : questions;
+  /* S4b: the page's timers (its own + each shown question's) on the one clock; a fresh visit resets TIMED_OUT */
+  const timers = pageStep ? pageTimers(def, pageStep, questions) : [];
+  if (clockFresh) for (const t of timers) state.embedded[`${t.key}_TIMED_OUT`] = 0;
+  const clock = clockRef.current.view(timers, clockNow);
+  const timedOutPage = advanceTimedOut(timers, state.embedded);
+  const waitNext = !timedOutPage && clock.minWait > 0;
   const ctx = { def, state, loop: pageStep?.loop ?? null, quotaCounts: counts, ui, locale };
   /** S1b: the page's logic frame is keyed by the page shown (and its iteration) */
   const logicKey = pageStep ? `${state.stepIndex}|${answerKey(pageStep.pageId, pageStep.loop ?? null)}` : "end";
@@ -1610,7 +1711,10 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const b = def.branding;
   const pageIndexAmongPages = steps.filter((s, i) => s.kind === "page" && i <= state.stepIndex).length;
   const totalPages = Math.max(steps.filter((s) => s.kind === "page").length, 1);
-  const progress = ended ? 100 : Math.round((pageIndexAmongPages / (totalPages + 1)) * 100);
+  /* D20: one indicator, placed top or bottom; "steps" = Page n of N with dots (logic-aware: N is the compiled path) */
+  const progressEl = (
+    <ProgressIndicator position={b.layout.progressBar} style={b.layout.progressStyle} current={pageIndexAmongPages} total={totalPages} ended={!!ended} ui={ui} />
+  );
 
   /**
    * The latch, shared by every control that can reach `leavePage`.
@@ -1659,6 +1763,25 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     await handleNextInner();
   });
   nextRef.current = handleNext;
+
+  /*
+   * S4b — WHAT THE CLOCK DOES ON A TICK: a timer that has just run out records TIMED_OUT = 1 at once (so
+   * `timed_out` conditions see it on this page), says "Time is up" politely, and — onTimeout "advance" — presses
+   * Next through the normal path (handleNextInner skips only the questions not yet answered). lock / message are
+   * drawn from the clock's view on the re-render. The warning and "you can continue now" are announced once each.
+   */
+  onClockRef.current = pageStep && !ended && !probe && (timers.length > 0 || usesLiveBehavior(def)) ? () => {
+    if (clockRef.current.key !== clockKey) return;
+    const r = clockRef.current.step(timers, Date.now());
+    for (const t of r.expired) state.embedded[`${t.key}_TIMED_OUT`] = 1;
+    if (r.expired.length) setTimerNote(uiText(ui, "timer_up", {}, "Time is up."));
+    else if (r.warn) setTimerNote(uiText(ui, "timer_warning", { seconds: r.warn.remaining }, `${r.warn.remaining} seconds left.`));
+    else if (r.ready) setTimerNote(uiText(ui, "timer_ready", {}, "You can continue now."));
+    if (r.expired.some((t) => t.timer.onTimeout === "advance")) {
+      const press = (n = 0) => { if (advancingRef.current && n < 60) { setTimeout(() => press(n + 1), 50); return; } void nextRef.current?.(); };
+      press();
+    }
+  } : null;
 
   const handleNextInner = async () => {
     if (!pageStep) return;
@@ -1711,10 +1834,19 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       noteLife(life, "validate");
       fromScripts.push(...life.errors);
     }
-    const allErrs = [...errs, ...fromScripts];
+    /*
+     * S4b — ADVANCE ON TIMEOUT: an advance timer on this page has run out (TIMED_OUT = 1). The questions NOT YET
+     * ANSWERED are skipped (recorded timed out, the same rule the server replay applies); an answered question that
+     * fails its rules still stops the page (an invalid value is never stored because time ran out), and soft
+     * warnings are not shown — time is up. A minimum wait (minSeconds) still holds Next otherwise.
+     */
+    /* read now, not from the render: the clock's tick writes TIMED_OUT and presses Next before the next render */
+    const timedOutNow = advanceTimedOut(timers, state.embedded);
+    if (!timedOutNow && clockRef.current.key === clockKey && clockRef.current.view(timers, Date.now()).minWait > 0) return;
+    const allErrs = timedOutNow ? timedOutSkips([...errs, ...fromScripts], state, pageStep, timers, state.embedded).kept : [...errs, ...fromScripts];
     const blocking = blockingErrors(allErrs);
     if (blocking.length > 0) {
-      setErrors(allErrs);
+      refuse(allErrs, shownQuestions.map((q) => q.id));
       return;
     }
     /*
@@ -1724,11 +1856,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * and the second proceeds. The acknowledgement is keyed to the messages
      * themselves, so changing the answer and re-triggering warns again.
      */
-    const soft = warnings(allErrs);
+    const soft = timedOutNow ? [] : warnings(allErrs);
     const softKey = soft.map((w) => `${w.questionId}:${w.message}`).join("|");
     if (soft.length > 0 && ackWarnRef.current !== softKey) {
       ackWarnRef.current = softKey;
-      setErrors(soft);
+      refuse(soft, shownQuestions.map((q) => q.id));
       return;
     }
     ackWarnRef.current = null;
@@ -1788,6 +1920,12 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * after navigation would show the respondent a page built from an item
      * they had not been given yet.
      */
+    /* S4c (D21 / PU-13): a custom List Fill's named logic script runs first, in the sandbox — it writes the selection (setCalc) the List Fill reads */
+    for (const lf of pendingListFills(def, state, { counts: mode === "preview" ? listFillCounts : undefined })) {
+      const script = listFillCustomScript(def, lf);
+      if (!script) continue;
+      noteLogic(await runLogicEvent(def, state, script.event, { ids: [script.id], loop: pageStep.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: LOGIC_RUN_TIMEOUT_MS }));
+    }
     const allocated = await runListFills(def, state, mode, session, build, (line) => setLogs((l) => [...l, line]), listFillCounts);
     if (allocated.length && mode !== "live") {
       console.info("[rescript:listfill] allocated", allocated.map((id) => ({
@@ -1841,7 +1979,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const handleProbeNext = once(async () => {
     if (!probe) return;
     const errs = [...await validateWithScripts([probe.pq]), ...await frameValidateFor(probe.pq)];
-    if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+    if (blockingErrors(errs).length > 0) { refuse(errs, [probe.pq.id]); return; }
     setErrors([]);
     setProbe(null);
     if (await showNextProbe()) return;
@@ -1917,6 +2055,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
   const leavePage = async () => {
     if (!pageStep) return;
     skippedProbesRef.current = new Set();
+    /* S4b: the timers' paradata — TIMER_<REF>_ELAPSED (seconds on the page) and TIMER_<REF>_TIMED_OUT (0 | 1) */
+    if (timers.length && clockRef.current.key === clockKey) Object.assign(state.embedded, timerParadata(timers, clockRef.current.elapsed(Date.now()), clockRef.current.timedOut));
     telemetryRef.current?.leavePage();
     // name the page being left: a List Fill decided just above may have added steps before it
     let nav: ReturnType<typeof advance>;
@@ -2021,7 +2161,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    * leaves the respondent where they are and says why — never silently.
    */
   const navMode = sectionNavMode(def);
-  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" = "nav", attempt = 0): { ok: boolean; reason?: string } => {
+  const jumpTo = (target: string, as: "page" | "section" | "auto" = "auto", source: "nav" | "script" | "gate" | "review" = "nav", attempt = 0): { ok: boolean; reason?: string } => {
     /*
      * Next holds its latch for a minimum interval (MIN_ADVANCE_MS) after the
      * page has already changed. A section click inside that interval is a
@@ -2035,7 +2175,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!pageStep || ended) return { ok: false, reason: "There is no page to navigate from." };
     let r: ReturnType<typeof goToPage>;
     try {
-      r = goToPage(def, state, target, counts, view, { as });
+      /* S5a (AQ-12): "Return to review" comes forward through the visited-pages rule even when the navigator is off */
+      r = goToPage(def, state, target, counts, view, { as, ...(source === "review" ? { mode: "visited" as const } : {}) });
     } catch (e) {
       console.error("[rescript:runtime] could not jump", e);
       setFatal(fatalOf(e, "navigation"));
@@ -2054,7 +2195,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     setSteps(r.steps);
     notePage(r.steps, r.stepIndex, "jump");
     checkpoint();
-    setErrors([]);
+    /* D19: a jump from the Submit gate's "go" lands with WHY the page was listed, and focus on the first of them */
+    const land = gateLandRef.current;
+    gateLandRef.current = null;
+    if (land && land.pageId === target && land.errors.length) refuse(land.errors, land.errors.map((e) => e.questionId));
+    else setErrors([]);
     setNavNote(null);
     setGate(null);
     gateConfirmedRef.current = false;
@@ -2099,7 +2244,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       await onChangeRef.current?.flush();
       // S1b: custom_script rules in the frame; S1a's sandboxed "validate" handlers asked for THIS question (the page's last question goes through handleNextInner, which asks for the whole page)
       const errs = [...await validateWithScripts([q]), ...(convoIndex < pageQuestions.length - 1 ? await frameValidateFor(q) : [])];
-      if (blockingErrors(errs).length > 0) { setErrors(errs); return; }
+      if (blockingErrors(errs).length > 0) { refuse(errs, [q.id]); return; }
     }
     if (q && q.type !== "html" && !q.settings.hidden) { ackRef.current = { n: ackRef.current.n + 1, text: acknowledgement(ai, ackRef.current.n) }; }
     if (convoIndex < pageQuestions.length - 1) {
@@ -2225,7 +2370,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      */
     <>
       {errors.length > 0 && (
-        <div className="rs-error-banner" role="status" aria-live="polite">{uiText(ui, "review_one")}</div>
+        <div className="rs-error-banner" role="status" aria-live="polite" tabIndex={-1} data-testid="rs-error-banner">{uiText(ui, "review_one")}</div>
       )}
       <div id="rs-questions" tabIndex={-1} data-testid="rs-probe" data-probe-of={probe.q.id} data-probe-n={probe.n}>
         {voice && (
@@ -2289,8 +2434,28 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           <MediaEmbed url={pageStep.mediaUrl} title={pageStep.title} alt={pageStep.title ?? "Block media"} />
         </div>
       )}
+      {/*
+        * S4b — THE PAGE CLOCK, drawn. The visible time is role=timer with aria-live off (a screen reader is not read
+        * every second); the polite status below says the warning, "time is up" and "you can continue now" once each.
+        * The warning state changes colour; its pulse is off under prefers-reduced-motion (globals.css).
+        */}
+      {clock.countdown && (
+        <div className={`rs-timer${clock.countdown.warn ? " rs-timer-warn" : ""}`} data-testid="rs-timer" data-ref={clock.countdown.ref} data-remaining={clock.countdown.remaining}>
+          <span className="rs-timer-label">{uiText(ui, "timer_left", {}, "Time left")}{clock.countdown.scope === "question" ? ` (${def.questions.find((q) => q.id === clock.countdown!.questionId)?.code ?? ""})` : ""}:</span>{" "}
+          <span role="timer" aria-live="off" aria-atomic="true">{formatClock(clock.countdown.remaining)}</span>
+        </div>
+      )}
+      {timers.length > 0 && (
+        <div role="status" aria-live="polite" data-testid="rs-timer-announce" className="rs-sr-only"
+          style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}>{timerNote}</div>
+      )}
+      {timers.filter((t) => t.timer.onTimeout === "message" && clockRef.current.fired.has(t.ref)).map((t) => (
+        <div key={t.ref} className="rs-media-note rs-timer-message" role="status" data-testid="rs-timer-message" data-ref={t.ref}>
+          {t.timer.message ?? uiText(ui, "timer_message", {}, "Time is up for this question. You can still continue.")}
+        </div>
+      ))}
       {errors.length > 0 && (
-        <div className="rs-error-banner" role="status" aria-live="polite">
+        <div className="rs-error-banner" role="status" aria-live="polite" tabIndex={-1} data-testid="rs-error-banner">
           {blockingErrors(errors).length > 0 ? uiText(ui, "review_errors") : uiText(ui, "review_soft")}
           {/* a script's page-level message (rs.error without a question on this page, a logic script's error() without one) */}
           {errors.filter((e) => !e.questionId || !shownQuestions.some((q) => q.id === e.questionId)).map((e, i) => (
@@ -2311,7 +2476,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           errors={Object.fromEntries(errors.map((e) => [e.questionId, e.message]))}
           onChange={(q, v) => {
             setAnswer(def, state, q.id, v, pageStep.loop);
-            telemetryRef.current?.answerChanged(q.id);
+            telemetryRef.current?.answerChanged(q.id, q.type, v);
             recomputePunchesAfterChange(def, state, q.id, questions, ctx, pageStep.loop ?? null);
             scheduleOnChange(q.id);
             force();
@@ -2346,6 +2511,19 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       )}
       <SpeechServiceContext.Provider value={speechService}>
       <MediaGateContext.Provider value={mediaGate.gate}>
+      {/* S5a (AQ-12): a review page lists the answers so far; Change jumps back (visited pages only), Return comes forward */}
+      {(() => {
+        const rc = reviewConfig(def, pageStep.pageId);
+        if (rc) return <ReviewPanel title={rc.title} groups={reviewSummary(def, state, pageStep.pageId, counts)} note={navNote}
+          onChange={(pageId) => { const back = pageStep.pageId; const r = jumpTo(pageId, "page", "nav"); if (r.ok) setReviewReturn(back); }} />;
+        if (reviewReturn && reviewReturn !== pageStep.pageId) return (
+          <div className="rs-review-return">
+            <button type="button" className="rs-btn secondary" data-testid="rs-review-return"
+              onClick={() => { const r = jumpTo(reviewReturn, "page", "review"); if (r.ok) setReviewReturn(null); }}>↩ Return to review</button>
+          </div>
+        );
+        return null;
+      })()}
       <div id="rs-questions" tabIndex={-1} className={conversational ? "rs-convo-current" : undefined} data-convo-index={conversational ? convoIndex : undefined}>
       {shownQuestions.map((q) => {
         // the full iteration path, so nested loops key separately (see loopKeySuffix)
@@ -2354,6 +2532,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           <React.Fragment key={key}>
           {/* language-specific audio for this question (a recording, approved AI audio or a hosted file, by the survey's priority) — the play button appears only when one exists */}
           <QuestionAudio def={sourceDef} q={q} language={lang} />
+          {/* S4b: a page with timers wraps each question in a fieldset — `disabled` once a lock timer has run out (every control inside is disabled natively) */}
+          <TimerLock on={timers.length > 0} locked={clock.pageLocked || clock.lockedQuestions.includes(q.id)} qid={q.id}>
           <QuestionRenderer
             def={def}
             q={q}
@@ -2380,7 +2560,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
             programmerView={reveal ? { mode: mode as "preview" | "test", hidden: !!q.settings.hidden, autoPunch: explainAutoPunch(def, q, ctx, pageStep.loop ?? null) } : undefined}
             onChange={(v) => {
               setAnswer(def, state, q.id, v, pageStep.loop);
-              telemetryRef.current?.answerChanged(q.id);
+              telemetryRef.current?.answerChanged(q.id, q.type, v);
               /*
                * Auto punch on the SAME page: "if Q1.A is selected → select
                * Q2.B" with Q1 and Q2 side by side must react as the respondent
@@ -2421,7 +2601,13 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
               telemetryRef.current?.answerChanged(q.id);
               force();
             }}
+            onParadata={(name, v) => {
+              /* S5a: renderer paradata (ZOOMED_<CODE>, BA_<CODE>_*) — embedded data, saved and exported with the response */
+              if (!/^[A-Z][A-Z0-9_]{0,80}$/.test(name)) return;
+              (state.embedded as Record<string, unknown>)[name] = v;
+            }}
           />
+          </TimerLock>
           </React.Fragment>
         );
       })}
@@ -2431,9 +2617,24 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
       {mediaGate.held && (
         <div className="rs-media-note" role="status" data-testid="rs-next-held">{mediaGate.reason}</div>
       )}
+      {/* S4b minSeconds: why Next is disabled — the ticking number is hidden from screen readers, the sentence is not */}
+      {waitNext && (
+        <div className="rs-media-note" id="rs-min-wait" data-testid="rs-min-wait">
+          <span aria-hidden="true">{uiText(ui, "timer_wait", { seconds: clock.minWait }, `You can continue in ${clock.minWait} s.`)}</span>
+          <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" }}>
+            {uiText(ui, "timer_wait_sr", { seconds: Math.max(...timers.map((t) => t.timer.minSeconds ?? 0)) }, `Next becomes available after ${Math.max(...timers.map((t) => t.timer.minSeconds ?? 0))} seconds on this page.`)}
+          </span>
+        </div>
+      )}
       {gate && (
         <SubmitGatePanel gate={gate}
-          onGo={(pageId) => { setGate(null); jumpTo(pageId, "page", "gate"); }}
+          onGo={(pageId) => {
+            const g = gate;
+            setGate(null);
+            /* D19: arriving from the gate, the landed page shows WHY it was listed (read by jumpTo once it has landed — it may be deferred behind the latch) */
+            gateLandRef.current = { pageId, errors: [...g.missing, ...g.invalid].filter((m) => m.pageId === pageId).map((m) => ({ questionId: m.questionId, message: m.message })) };
+            jumpTo(pageId, "page", "gate");
+          }}
           onCancel={() => { setGate(null); force(); }}
           onConfirm={() => {
       gateConfirmedRef.current = true;
@@ -2457,8 +2658,9 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           /* the ref above is what actually prevents the second submit; this
              is so the respondent can see why the button stopped responding —
              and a clip that must be watched first holds it too */
-          disabled={advancing || mediaGate.held}
+          disabled={advancing || mediaGate.held || waitNext}
           aria-busy={advancing || undefined}
+          aria-describedby={waitNext ? "rs-min-wait" : undefined}
           onClick={conversational ? convoNext : handleNext}
         >
           {pageIndexAmongPages >= totalPages && (!conversational || convoIndex >= pageQuestions.length - 1) ? b.buttons.submitLabel : b.buttons.nextLabel}
@@ -2543,8 +2745,11 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           blockId={uxBlockId} pageId={pageStep?.pageId} pageIndex={pageIndexAmongPages}
           onLog={mode === "live" ? undefined : (line) => setLogs((l) => [...l, line])}
           onNavigate={(target, as) => jumpTo(target, as, "script")}
-          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue} />
+          onScriptWrite={onScriptWrite} lifecycleRef={lifecycleRef} onScriptIssue={noteIssue}
+          timing={() => timingSnapshot(telemetryRef.current?.data, (id) => def.questions.find((q) => q.id === id)?.code)} />
       )}
+      {/* S5a (GA-06/07): points HUD + the native badge popup — reads POINTS / LEVEL_NAME / BADGES the engine computes */}
+      {def.gamification && !ended && <GamificationHud def={def} state={state} rootRef={shellRef} tick={state.calculated.POINTS} />}
       {showLanguageSelector && !ended && (
         <div className="rs-language" data-testid="rs-language-bar">
           <label>
@@ -2572,17 +2777,14 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
           )}
         </div>
       )}
-      {b.layout.progressBar !== "none" && !ended && (
-        <>
-          <div className="rs-progress-track"><div className="rs-progress-fill" style={{ width: `${progress}%` }} /></div>
-          {b.layout.progressStyle === "percent" && <div className="rs-progress-label">{progress}%</div>}
-        </>
-      )}
+      {b.layout.progressBar === "top" && !ended && progressEl}
       {outline.length > 1 && (
         <SectionNav outline={outline} position={def.navigation?.position ?? "top"} note={navNote}
           onJump={(id) => { jumpTo(id, "section", "nav"); }} />
       )}
       {content}
+      {/* D20: "bottom" — after the page body (and its Next), before the footer; not sticky (see ProgressIndicator) */}
+      {b.layout.progressBar === "bottom" && !ended && progressEl}
       {b.footerHtml && (
         <div className="rs-footer" dangerouslySetInnerHTML={{ __html: resolveAuthorHtml(b.footerHtml, ctx) }} />
       )}
@@ -2660,5 +2862,17 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
         body
       )}
     </>
+  );
+}
+
+
+/** S4b: the per-question fieldset of a timed page — present for the page's lifetime (so the question never remounts), `disabled` when locked */
+function TimerLock({ on, locked, qid, children }: { on: boolean; locked: boolean; qid: string; children: React.ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <fieldset disabled={locked} className="rs-timer-lock" data-testid="rs-timer-lock" data-qid-lock={qid} data-locked={locked ? "true" : "false"}
+      style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+      {children}
+    </fieldset>
   );
 }

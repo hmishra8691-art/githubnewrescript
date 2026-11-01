@@ -94,7 +94,9 @@ export function defaultAnswer(def: SurveyDefinition, q: Question, ctx: { state: 
   switch (q.type) {
     case "single_select": case "dropdown": case "experiment": return first;
     case "multi_select": case "multi_dropdown": case "image_select": return some;
-    case "numeric": return s.minValue != null && s.maxValue != null ? Math.round((s.minValue + s.maxValue) / 2) : 10;
+    /* S5c: a price ladder's answer is one of its prices (or 0) — the middle one, the ladder's own start */
+    case "numeric": if (q.variant === "numeric.price_ladder") { const ps = ((s as { priceLadder?: { prices?: number[] } }).priceLadder?.prices ?? []).slice().sort((x, y) => x - y); return ps.length ? ps[Math.floor((ps.length - 1) / 2)] : 0; }
+      return s.minValue != null && s.maxValue != null ? Math.round((s.minValue + s.maxValue) / 2) : 10;
     case "slider": case "nps": return s.maxValue ?? 10;
     case "open_text": return q.variant === "text.email" ? "demo@example.com" : q.variant === "text.zip" ? "98101" : q.variant === "text.phone" ? "+1 206 555 0100" : q.variant === "text.url" ? "https://example.com" : "Demo answer";
     case "long_text": return "Demo open-ended answer with enough text.";

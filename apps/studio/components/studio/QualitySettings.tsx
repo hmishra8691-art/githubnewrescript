@@ -43,6 +43,9 @@ const TELEMETRY: [keyof QualityConfig["telemetry"], string, string][] = [
   ["interaction", "Pointer / key / scroll counts", "totals only — never positions or keys"],
   ["device", "Device class", "browser, OS, screen, timezone, language"],
   ["network", "Hashed IP address", "salted hash for duplicate detection — never the address"],
+  ["visibility", "Question visibility & scroll depth", "time each question was on screen, deepest scroll per page — never positions"],
+  ["answerHistory", "Answer-change history", "successive codes / numbers of closed answers (latest 20); typed text: length only"],
+  ["idle", "Inactivity periods", "when and how long nothing was touched on a page — durations only"],
 ];
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -210,6 +213,24 @@ export function QualitySettings() {
               </label>
             ))}
           </div>
+          {cfg.telemetry.idle !== false && (
+            <div className="qs-grid2" data-testid="qtel-idle-settings">
+              <label className="f"><span>Idle after (seconds without input)</span>
+                <CountInput className="input" min={10} max={3600} width={140} allowEmpty={false} data-testid="qtel-idle-seconds" value={cfg.telemetry.idleSeconds}
+                  onChange={(v) => set("edit idle threshold", (q) => { q.telemetry.idleSeconds = v ?? 60; })} />
+              </label>
+              <label className="qs-check" title="A gentle prompt through the survey's own popup; closes on any input">
+                <input type="checkbox" data-testid="qtel-idle-prompt" checked={cfg.telemetry.idlePrompt === true}
+                  onChange={(e) => set("idle prompt", (q) => { q.telemetry.idlePrompt = e.target.checked; })} />
+                <span>Ask “Are you still there?” when idle<span className="qs-help">off by default — the survey's native popup, closed by any input</span></span>
+              </label>
+              {cfg.telemetry.idlePrompt && (
+                <label className="f"><span>Prompt text (optional)</span>
+                  <input className="input" data-testid="qtel-idle-text" maxLength={300} value={cfg.telemetry.idlePromptText ?? ""} placeholder="Are you still there? Take your time — your answers so far are kept."
+                    onChange={(e) => set("edit idle prompt", (q) => { q.telemetry.idlePromptText = e.target.value || undefined; })} /></label>
+              )}
+            </div>
+          )}
           <label className="f"><span>Disclosure shown to respondents (optional)</span>
             <input className="input" data-testid="qtel-disclosure" value={cfg.telemetry.disclosure ?? ""}
               placeholder="This survey records response timing and navigation to protect data quality."
@@ -526,7 +547,7 @@ function CustomRuleRow({ rule, onChange, onRemove }: { rule: CustomQualityRule; 
       </div>
       <div className="qs-custom-when">
         <span className="flabel">IF</span>
-        <ConditionEditor value={rule.when} onChange={(when) => onChange({ ...rule, when })}
+        <ConditionEditor systemVariables value={rule.when} onChange={(when) => onChange({ ...rule, when })}
           workspace={{ title: "Custom quality rule", description: "Flag the response when the following condition is met:" }} />
       </div>
       <div className="qs-custom-then">

@@ -1,6 +1,6 @@
 import type { FlagDraft, RuleContext, ResponseTelemetry } from "../types.js";
 import { fnv1a, pct } from "../metrics.js";
-import { isOpen, screenerQuestionIds } from "../survey.js";
+import { isOpen, isRespondentQuestion, screenerQuestionIds } from "../survey.js";
 
 /**
  * Interaction, navigation, device, network, screener and history rules — the
@@ -13,6 +13,50 @@ export function navigationFingerprint(t: ResponseTelemetry | null): string | nul
   const seq = [...t.pages].sort((a, b) => a.enteredAt - b.enteredAt)
     .map((v) => `${v.pageId}${v.via === "back" ? "<" : v.via === "reload" ? "~" : v.via === "jump" ? "^" : ">"}`);
   return fnv1a(seq.join(""));
+}
+
+/**
+ * S5b (TE-04): questions the respondent changed (their own input — a punch or a script write is not a change) whose
+ * card was never at least half inside the viewport. Only meaningful when the collector measured visibility.
+ */
+export function unseenAnswered(ctx: Pick<RuleContext, "def" | "telemetry" | "applies">): string[] {
+  const t = ctx.telemetry;
+  if (!t) return [];
+  const out: string[] = [];
+  for (const q of ctx.def.questions) {
+    if (!isRespondentQuestion(q) || q.type === "html" || q.settings?.hidden) continue;
+    const qt = t.questions[q.id];
+    if (!qt || !(qt.changes > 0)) continue;
+    if (qt.firstSeenAt !== undefined || (qt.visibleMs ?? 0) > 0) continue;
+    if (!ctx.applies("interaction.answered_unseen", q.id)) continue;
+    out.push(q.id);
+  }
+  return out;
+}
+
+/** a stable comparison key for a history value (object keys sorted; list order kept — a ranking's order matters) */
+function historyKey(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) return JSON.stringify(Object.keys(v).sort().map((k) => [k, (v as Record<string, unknown>)[k]]));
+  return JSON.stringify(v ?? null);
+}
+
+/**
+ * S5b (TE-02): how many times an answer went BACK to a value it had held before (not merely the one just left):
+ * A→B→A is one reversal, A→B→A→B two. Filling a grid row by row or ticking more boxes never reverses.
+ */
+export function valueReversals(history: [number, unknown][] | undefined): number {
+  if (!history || history.length < 3) return 0;
+  const seen = new Set<string>();
+  let prev: string | null = null;
+  let n = 0;
+  for (const [, v] of history) {
+    const k = historyKey(v);
+    if (k === prev) continue;
+    if (prev !== null && seen.has(k)) n++;
+    if (prev !== null) seen.add(prev);
+    prev = k;
+  }
+  return n;
 }
 
 export function behaviourRules(ctx: RuleContext): FlagDraft[] {
@@ -53,6 +97,43 @@ export function behaviourRules(ctx: RuleContext): FlagDraft[] {
           questionIds: hits.flatMap((v) => v.questionIds),
         });
       }
+    }
+  }
+
+  /* ------------------------------------------------- visibility (S5b TE-04) */
+  if (t && !ctx.disabledTelemetry.has("visibility") && ctx.enabled("interaction.answered_unseen")) {
+    const min = ctx.param<number>("interaction.answered_unseen", "minQuestions");
+    const unseen = unseenAnswered(ctx);
+    if (unseen.length >= Math.max(1, min)) {
+      out.push({
+        ruleId: "interaction.answered_unseen",
+        observed: `${unseen.length} question${unseen.length === 1 ? " was" : "s were"} answered without ever being on screen`,
+        expected: `fewer than ${Math.max(1, min)}`,
+        explanation: "An answer changed while its question had never been at least half visible — a person answers what they can see; a script does not need to.",
+        questionIds: unseen,
+      });
+    }
+  }
+
+  /* ---------------------------------------------- answer history (S5b TE-02) */
+  if (t && !ctx.disabledTelemetry.has("answerHistory") && ctx.enabled("interaction.flip_flop")) {
+    const minRev = ctx.param<number>("interaction.flip_flop", "reversals");
+    const minQs = ctx.param<number>("interaction.flip_flop", "questions");
+    const hits: { id: string; n: number }[] = [];
+    for (const q of def.questions) {
+      if (!isRespondentQuestion(q) || isOpen(q)) continue;
+      const n = valueReversals(t.questions[q.id]?.history);
+      if (n >= minRev && ctx.applies("interaction.flip_flop", q.id)) hits.push({ id: q.id, n });
+    }
+    if (hits.length >= Math.max(1, minQs)) {
+      const code = (id: string) => def.questions.find((q) => q.id === id)?.code ?? id;
+      out.push({
+        ruleId: "interaction.flip_flop",
+        observed: `${hits.length} question${hits.length === 1 ? "" : "s"} switched back and forth (${hits.map((h) => `${code(h.id)} ×${h.n}`).join(", ")})`,
+        expected: `fewer than ${minQs} questions with ${minRev}+ reversals`,
+        explanation: "Answers were changed back to values already given, again and again — indecision, or probing what each answer does.",
+        questionIds: hits.map((h) => h.id),
+      });
     }
   }
 

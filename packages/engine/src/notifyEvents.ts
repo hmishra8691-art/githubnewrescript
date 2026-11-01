@@ -37,6 +37,10 @@ export const NOTIFY_EVENTS = {
   "survey.milestone": { label: "Fieldwork milestone", severity: "low", digest: false, category: "survey" },
   "panel.target_reached": { label: "Panel completes target reached", severity: "normal", digest: false, category: "panel" },
   "panel.duplicate_entry": { label: "Duplicate panel entry refused", severity: "low", digest: true, category: "panel" },
+  /* S5b (AP-09): per-response events — emitted only when the study turns them on (alerts.responses.enabled) */
+  "response.completed": { label: "Response completed", severity: "low", digest: false, category: "response" },
+  "response.screened_out": { label: "Response screened out", severity: "low", digest: false, category: "response" },
+  "response.quota_full": { label: "Response ended on a full quota", severity: "low", digest: false, category: "response" },
   "notify.test": { label: "Test alert", severity: "normal", digest: false, category: "notify" },
 } as const satisfies Record<string, { label: string; severity: NotifySeverity; digest: boolean; category: string }>;
 export type NotifyEventType = keyof typeof NOTIFY_EVENTS;
@@ -59,8 +63,23 @@ export interface NotifyEvent {
   /** a Studio path ("/studio/…") or an absolute https link */
   link?: string | null;
   detail?: Record<string, string | number | boolean | null>;
+  /** S5b (AP-09): a response.* event's record — sent to webhook channels only */
+  response?: ResponseEventData | null;
   at: string;
   isTest?: boolean;
+}
+
+/** S5b (AP-09): what a response.* event carries */
+export interface ResponseEventData {
+  responseId: string;
+  status: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  isTest?: boolean;
+  /** by variable name — only when the study's `includeAnswers` is on; PII left out unless allowed */
+  answers?: Record<string, string | number | boolean | null | (string | number)[]>;
+  /** the variable names left out as likely PII (so the receiver knows they exist) */
+  withheld?: string[];
 }
 
 export const severityOf = (t: NotifyEventType): NotifySeverity => NOTIFY_EVENTS[t]?.severity ?? "normal";
@@ -90,7 +109,9 @@ export function redactExcerpt(text: string | null | undefined, max = 160): strin
 
 export interface RoutedTarget { ref: AlertChannelRef; digest: "immediate" | "hourly" | "daily"; ruleId: string; scope: "org" | "study" | "default" }
 
-const ruleMatches = (r: AlertRule, type: NotifyEventType) => r.enabled && r.events.some((e) => e === "*" || e === type || (e.endsWith(".*") && type.startsWith(e.slice(0, -1))) || e === NOTIFY_EVENTS[type].category);
+/* S5b: per-response events go only where a rule NAMES them (the type, "response.*" or "response") — never to a "*" rule,
+   which was written for operational alerts and would otherwise receive every completion */
+const ruleMatches = (r: AlertRule, type: NotifyEventType) => r.enabled && r.events.some((e) => (e === "*" && !type.startsWith("response.")) || e === type || (e.endsWith(".*") && type.startsWith(e.slice(0, -1))) || e === NOTIFY_EVENTS[type].category);
 
 /** the default when NO rule anywhere names this event: the team's bell for anything that matters */
 export const DEFAULT_ROUTE: AlertRule = { id: "default", events: ["*"], channels: [{ kind: "in_app", to: "@team" }], digest: "immediate", enabled: true };
@@ -162,7 +183,8 @@ export function deliveryDecision(event: Pick<NotifyEvent, "type" | "at">, target
   if (history.lastSameAt && s.dedupeMinutes > 0 && at.getTime() - new Date(history.lastSameAt).getTime() < s.dedupeMinutes * 60_000) return { action: "skip", reason: "duplicate" };
   if (target.digest !== "immediate") return { action: "digest", reason: "digest" };
   if (inQuietHours(s.quietHours, at) && !(critical && s.quietHours?.bypassCritical !== false)) return { action: "digest", reason: "quiet_hours" };
-  if (!critical && history.sentLastHour >= s.maxPerHour) return { action: "digest", reason: "rate_limited" };
+  /* S5b: a per-response event is one delivery per response by design — the hourly cap (meant for alert storms) does not batch it */
+  if (!critical && !event.type.startsWith("response.") && history.sentLastHour >= s.maxPerHour) return { action: "digest", reason: "rate_limited" };
   return { action: "send" };
 }
 
@@ -254,6 +276,8 @@ export function renderWebhook(e: NotifyEvent, ctx: RenderContext = {}): Record<s
     subject: e.ref ?? null, participant: e.participant ? cleanLine(e.participant, 40) : null,
     title: r.title, text: r.text, excerpt: r.excerpt, link: r.link,
     detail: Object.fromEntries(Object.entries(e.detail ?? {}).slice(0, 20).map(([k, v]) => [k.slice(0, 40), typeof v === "string" ? cleanLine(v, 200) : v])),
+    /* S5b (AP-09): the response record — the generic webhook only (Slack / Teams / e-mail / in-app never carry answers) */
+    ...(e.type.startsWith("response.") && e.response ? { response: e.response } : {}),
   };
 }
 
@@ -279,7 +303,7 @@ export function renderDigest(events: NotifyEvent[], ctx: RenderContext = {}): { 
 /* ------------------------------------------------------------ an event as it is stored */
 
 /** what the outbox keeps of an event: the excerpt already redacted, the participant only as a pseudonym */
-export interface NotifyPayload { studyTitle?: string | null; participant?: string | null; excerpt?: string | null; link?: string | null; detail?: Record<string, string | number | boolean | null>; at: string }
+export interface NotifyPayload { studyTitle?: string | null; participant?: string | null; excerpt?: string | null; link?: string | null; detail?: Record<string, string | number | boolean | null>; response?: ResponseEventData | null; at: string }
 
 export interface NotifyEmitInput {
   type: NotifyEventType | string;
@@ -292,6 +316,8 @@ export interface NotifyEmitInput {
   excerpt?: string | null;
   link?: string | null;
   detail?: Record<string, string | number | boolean | null>;
+  /** S5b: a response.* event's record (validated and bounded here; dropped for any other type) */
+  response?: ResponseEventData | null;
   /** idempotency: the same key is one event (default: type + survey + ref) */
   idempotencyKey?: string;
   source?: "studio" | "runtime" | "cron";
@@ -311,8 +337,89 @@ export function normaliseNotifyInput(input: NotifyEmitInput, nowMs: number): { e
   return {
     type: input.type,
     idempotencyKey: (input.idempotencyKey ?? `${input.type}:${input.surveyId}:${input.ref ?? new Date(nowMs).toISOString()}`).slice(0, 200),
-    payload: { studyTitle: input.studyTitle ? String(input.studyTitle).slice(0, 200) : null, participant, excerpt: input.excerpt ? redactExcerpt(input.excerpt) || null : null, link, detail, at: input.at ?? new Date(nowMs).toISOString() },
+    payload: { studyTitle: input.studyTitle ? String(input.studyTitle).slice(0, 200) : null, participant, excerpt: input.excerpt ? redactExcerpt(input.excerpt) || null : null, link, detail, ...(String(input.type).startsWith("response.") && input.response ? { response: boundResponseData(input.response) } : {}), at: input.at ?? new Date(nowMs).toISOString() },
   };
+}
+
+/* ------------------------------------------------------------ per-response events (S5b AP-09) */
+
+const SCALAR = (v: unknown): v is string | number | boolean | null => v === null || typeof v === "boolean" || typeof v === "string" || (typeof v === "number" && Number.isFinite(v));
+/** a response record as stored / sent: scalar answers (strings ≤ 2000), lists of scalars (≤ 200), at most 1000 variables */
+export function boundResponseData(r: ResponseEventData): ResponseEventData {
+  const out: ResponseEventData = {
+    responseId: String(r.responseId ?? "").slice(0, 80), status: String(r.status ?? "").slice(0, 40),
+    startedAt: typeof r.startedAt === "string" ? r.startedAt.slice(0, 40) : null, completedAt: typeof r.completedAt === "string" ? r.completedAt.slice(0, 40) : null,
+    ...(r.isTest ? { isTest: true } : {}),
+  };
+  if (r.answers && typeof r.answers === "object") {
+    const a: NonNullable<ResponseEventData["answers"]> = {};
+    for (const [k, v] of Object.entries(r.answers).slice(0, 1000)) {
+      if (!/^[A-Za-z_$][A-Za-z0-9_.$#@-]{0,79}$/.test(k)) continue;
+      if (SCALAR(v)) a[k] = typeof v === "string" ? v.slice(0, 2000) : v;
+      else if (Array.isArray(v) && v.length <= 200 && v.every((x) => typeof x === "string" || (typeof x === "number" && Number.isFinite(x)))) a[k] = v.map((x) => (typeof x === "string" ? x.slice(0, 200) : x));
+    }
+    out.answers = a;
+  }
+  if (Array.isArray(r.withheld)) out.withheld = r.withheld.map(String).slice(0, 1000);
+  return out;
+}
+
+/** response statuses → the response.* event they emit */
+export const RESPONSE_EVENT_OF: Record<string, { type: NotifyEventType; key: "completed" | "screened_out" | "quota_full" }> = {
+  complete: { type: "response.completed", key: "completed" },
+  screened: { type: "response.screened_out", key: "screened_out" },
+  terminated: { type: "response.screened_out", key: "screened_out" },
+  quota_full: { type: "response.quota_full", key: "quota_full" },
+};
+
+const PII_TYPES = new Set(["open_text", "long_text", "text_list", "matrix_text", "geo", "upload", "video_interview", "annotation", "repeating_group", "composite", "custom_table", "custom_component", "embedded_data", "hidden"]);
+const PII_SEMANTIC = new Set(["email", "phone", "postal", "url"]);
+
+/**
+ * Whether a question's answer is LIKELY PII (and so withheld from a response webhook unless allowed by name):
+ * typed text of any kind, places, files and recordings, free-form tables, embedded / hidden fields (panel ids, URL
+ * parameters), and any field validated or tagged as an e-mail, phone, postal code or URL. Closed answers — codes,
+ * numbers, ranks — are not.
+ */
+export function isLikelyPiiQuestion(q: { type: string; variant?: string | null; settings?: Record<string, unknown> | null; validation?: unknown; fields?: unknown }): boolean {
+  if (PII_TYPES.has(q.type)) return true;
+  if (/email|phone|contact|address|postal|zip|signature|name|audio|video|voice|record/i.test(String(q.variant ?? ""))) return true;
+  const st = (q.settings ?? {}) as Record<string, unknown>;
+  if (typeof st.semantic === "string" && PII_SEMANTIC.has(st.semantic)) return true;
+  const rules = JSON.stringify(q.validation ?? "") + JSON.stringify(q.fields ?? "");
+  return /"(?:kind|type)":"(?:email|phone|zip|postal|url)"/.test(rules);
+}
+
+/**
+ * The record a response.* event carries — the response id, survey status and timestamps, and (when the study asks)
+ * the answers by variable name, from the engine's own flattening (`flat` = flattenVariables(def, state)) with every
+ * likely-PII variable withheld unless named in `allowFields`. "Other — please specify" text columns are typed text.
+ */
+export function responseEventData(
+  def: { questions: { id: string; type: string; variant?: string | null; settings?: Record<string, unknown> | null; validation?: unknown; fields?: unknown }[] },
+  dictionary: { name: string; questionId?: string; responseType: string; dataType?: string }[],
+  flat: Record<string, unknown>,
+  r: { sessionId: string; status: string; startedAt: string | null; completedAt: string | null; isTest?: boolean },
+  cfg: { includeAnswers?: boolean; allowFields?: string[] } | null | undefined,
+): ResponseEventData {
+  const base: ResponseEventData = { responseId: r.sessionId, status: r.status, startedAt: r.startedAt, completedAt: r.completedAt, ...(r.isTest ? { isTest: true } : {}) };
+  if (!cfg?.includeAnswers) return base;
+  const allow = new Set((cfg.allowFields ?? []).map((x) => x.toUpperCase()));
+  const byId = new Map(def.questions.map((q) => [q.id, q]));
+  const answers: NonNullable<ResponseEventData["answers"]> = {};
+  const withheld: string[] = [];
+  for (const v of dictionary) {
+    if (v.responseType === "system") continue;
+    const value = flat[v.name];
+    if (value === undefined || value === null || value === "") continue;
+    const q = v.questionId ? byId.get(v.questionId) : undefined;
+    const pii = !q || isLikelyPiiQuestion(q) || /_OTHER(?:_|$)|_TEXT$|_COMMENT$/i.test(v.name) || (v.dataType === "text" && v.responseType !== "single" && v.responseType !== "multi" && !/select|dropdown|nps|matrix_single|matrix_multi|matrix_dropdown|ranking/.test(q?.type ?? ""));
+    if (pii && !allow.has(v.name.toUpperCase())) { withheld.push(v.name); continue; }
+    if (SCALAR(value)) answers[v.name] = value;
+    else if (Array.isArray(value)) answers[v.name] = value.filter((x): x is string | number => typeof x === "string" || typeof x === "number");
+    else answers[v.name] = JSON.stringify(value).slice(0, 2000);
+  }
+  return boundResponseData({ ...base, answers, withheld });
 }
 
 

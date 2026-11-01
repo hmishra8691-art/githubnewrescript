@@ -18,7 +18,7 @@ export { QuestionRenderer, ctxOf, optionsClass, gridColumnsStyle, useOptionFilte
 export type { QRProps } from "./QuestionRenderer";
 export { programmerCardClass, autoPunchCss, HiddenQuestionHead, ProgrammerFoot, HIDDEN_BANNER_TEXT, HIDDEN_FOOTER_TEXT, type ProgrammerView } from "./programmerView";
 export { UxLayer, uxElements } from "./UxLayer";
-export type { UxLayerProps, UxAskFrames, UxFrameAnswer, UxScriptIssue, UxTrace } from "./UxLayer";
+export type { UxLayerProps, UxAskFrames, UxFrameAnswer, UxScriptIssue, UxTrace, UxTimingSnapshot } from "./UxLayer";
 export { LogicFrameHost, logicFrameDoc, type LogicRunRequest, type LogicRunAnswer } from "./logicFrame";
 /*
  * Re-exported from the engine, where the table now lives: the lint needs the
@@ -46,3 +46,9 @@ export { MediaGateContext, useMediaHold, useMediaGateState, type MediaGate } fro
 export { showOptionPopup, announceSelection } from "./optionPopup";
 /* assessments (ported 2026-10-29): the respondent's results report, rendered from the server's score */
 export { AssessmentReport, type AssessmentReportProps } from "./AssessmentReport";
+export { ProgressIndicator } from "./ProgressIndicator";
+export { GamificationHud } from "./Gamification";
+/* S5b (TE-06): the native popup, for the Runner's optional idle prompt */
+export { openUxPopup } from "./uxPopup";
+export { ReviewPanel } from "./ReviewPanel";
+export { progressModel, STEP_DOTS_MAX, type ProgressModel, type ProgressPosition, type ProgressStyle } from "./progress";

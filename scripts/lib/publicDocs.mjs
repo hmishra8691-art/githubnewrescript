@@ -92,6 +92,8 @@ function logicReference(engine, schema) {
   out.push(table(["operator", "spellings", "operand"], Object.entries(words).map(([op, ws]) => [code(op), [...new Set(ws)].map(code).join(", "), operand(op)])));
   out.push("", "Connectives: `AND` / `&&`, `OR` / `||`, `NOT` / `!`, `NOR` (= NOT (A OR B)), `BUT NOT` (= AND NOT), parentheses. `NOT` binds tighter than `AND`, `AND` tighter than `OR`; mixing `AND` and `OR` without brackets is accepted with a warning.", "");
   out.push("## Operators by answer kind", "", table(["kind", "operators"], Object.entries(schema.OPERATORS_BY_KIND).map(([k, ops]) => [code(k), ops.map(code).join(", ")])), "");
+  /* S4b (LO-07) */
+  out.push("## Behaviour conditions", "", `What the runtime measures about the respondent, usable in every condition (display, skip, branch, validation \`when\`, punch \`when\`, UX \`when\`): ${schema.BEHAVIOR_SOURCES.map(code).join(", ")}. \`time_on_page\` and \`elapsed\` are seconds (on the current page; since the start) and are re-evaluated as the page clock ticks; \`device\` is one of ${schema.DEVICE_CLASSES.map(code).join(", ")}; \`timed_out\` is true once a timer has run out (\`timed_out.Q5\` / \`timed_out.<page id>\` names one). Examples: \`time_on_page > 20\`, \`device = mobile\`, \`timed_out.Q5\`. A question with the same code keeps the bare word — write \`behavior.device\` then. The server replay treats time as client-asserted (a soft note, never a refusal) and replays \`device\` from the stored device class. The quality engine's \`SYSTEM_*\` metrics are computed after the interview for custom quality rules only; anywhere else the logic check warns.`, "");
   out.push("## Calculation functions", "", `${engine.CALC_FUNCTION_NAMES.length} functions, usable in calculations, in \`{{expr: …}}\` piping and inside conditions (an expression in a condition compiles to an \`expr\` source). Names are case-insensitive.`, "");
   const groups = [
     ["Aggregates", ["sum", "avg", "mean", "average", "min", "max", "count", "countif"], "`sum(Q1, Q2)`, `avg(ALLOC_*)` (a `*` wildcard over variable names), `countif(Q5_1, Q5_2, \">\", 3)`"],
@@ -136,6 +138,13 @@ function actionsReference(engine) {
   block("Option and design actions", "packages/engine/src/optionActions.ts", /^export type OptionAction =/, /;\s*$/);
   block("Question media (set_question_media)", "packages/engine/src/mediaActions.ts", /^export type MediaAction =/, /^\};\s*$/);
   block("Scripts-panel (logic) scripts", "packages/engine/src/logicScriptActions.ts", /^export type LogicScriptAction =/, /;\s*$/);
+  block("Option groups (set_option_groups)", "packages/engine/src/optionGroupActions.ts", /^export type OptionGroupAction =/, /;\s*$/);
+  out.push("Supporting types:", "", "```ts", sourceBlock("packages/engine/src/optionGroupActions.ts", /^export interface GroupSpec/, /\}\s*$/), "```", "");
+  block("Timers (set_timer)", "packages/engine/src/timerActions.ts", /^export type TimerAction = \{/, /^\};\s*$/);
+  block("Gamification (set_gamification)", "packages/engine/src/gamificationActions.ts", /^export type GamificationAction = \{/, /^\};\s*$/);
+  block("Review your answers (set_review_page)", "packages/engine/src/reviewActions.ts", /^export type ReviewAction =/, /;\s*$/);
+  block("Response quality and paradata (set_quality_settings)", "packages/engine/src/qualityActions.ts", /^export type QualitySettingsAction = \{/, /^\};\s*$/);
+  block("Research-method templates (add_method_template)", "packages/engine/src/methodTemplates.ts", /^export type MethodTemplateAction = \{/, /^\};\s*$/);
   block("UX actions", "packages/engine/src/uxActions.ts", /^export type UxAction =/, /;\s*$/);
   block("Analysis actions", "packages/engine/src/analysisActions.ts", /^export type AnalysisAction =/, /;\s*$/);
   block("Localization actions", "packages/engine/src/localizationActions.ts", /^export type LocalizationAction =/, /;\s*$/);

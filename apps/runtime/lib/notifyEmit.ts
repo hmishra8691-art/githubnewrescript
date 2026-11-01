@@ -1,5 +1,6 @@
 import "server-only";
-import { normaliseNotifyInput, type NotifyEmitInput } from "@rescript/engine";
+import { normaliseNotifyInput, responseEventData, RESPONSE_EVENT_OF, buildVariableDictionary, flattenVariables, type NotifyEmitInput } from "@rescript/engine";
+import type { SurveyDefinition } from "@rescript/schema";
 import { aiProviderName, deriveKey, signedHeader } from "@rescript/ai";
 import { supabaseAdmin } from "@/lib/admin";
 
@@ -75,4 +76,32 @@ export async function surveyFieldworkEvents(db: any, a: { surveyId: string; stat
       if (n === Math.ceil((a.sampleSize * pct) / 100)) await emitFromRuntime({ type: "survey.milestone", surveyId: a.surveyId, studyTitle: a.title ?? null, ref: `milestone:${pct}`, idempotencyKey: `survey.milestone:${a.surveyId}:${pct}`, link, detail: { completes: n, target: a.sampleSize, percent: pct } });
     }
   } catch { /* an alert is never worth a failed save */ }
+}
+
+/**
+ * S5b (AP-09) — PER-RESPONSE EVENTS. Off unless the study's alert settings turn them on (`alerts.responses.enabled`):
+ * a finished response (complete; screened / terminated; quota full — the statuses listed) is handed over as
+ * `response.completed` / `response.screened_out` / `response.quota_full`, one per session (the idempotency key is the
+ * session's), through the same outbox, routing, signed webhook, retries and delivery log as every alert. The record
+ * is the response id, status and timestamps; with `includeAnswers` the answers by variable name, likely-PII fields
+ * withheld unless allowed (engine `responseEventData`). TEST responses only with `includeTest`. Never throws.
+ */
+export async function responseEvents(a: { def: SurveyDefinition | null | undefined; surveyId: string; sessionId: string; status: string; startedAt: string | null; completedAt: string | null; isTest: boolean; state: { answers: Record<string, unknown>; calculated?: Record<string, unknown>; embedded?: Record<string, unknown> } }): Promise<void> {
+  try {
+    const cfg = a.def?.alerts?.responses;
+    if (!a.def || !cfg?.enabled) return;
+    const ev = RESPONSE_EVENT_OF[a.status];
+    if (!ev || !cfg.events.includes(ev.key)) return;
+    if (a.isTest && !cfg.includeTest) return;
+    let data;
+    if (cfg.includeAnswers) {
+      const st = { surveyId: a.surveyId, surveyVersion: a.def.meta.version, sessionId: a.sessionId, seed: 0, startedAt: a.startedAt ?? "", status: a.status, answers: a.state.answers ?? {}, embedded: a.state.embedded ?? {}, calculated: a.state.calculated ?? {}, flags: [] } as never;
+      data = responseEventData(a.def, buildVariableDictionary(a.def), flattenVariables(a.def, st) as Record<string, unknown>, { sessionId: a.sessionId, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, isTest: a.isTest }, cfg);
+    } else {
+      data = responseEventData(a.def, [], {}, { sessionId: a.sessionId, status: a.status, startedAt: a.startedAt, completedAt: a.completedAt, isTest: a.isTest }, cfg);
+    }
+    await emitFromRuntime({ type: ev.type, surveyId: a.surveyId, studyTitle: a.def.meta.title ?? null, ref: `response:${a.sessionId}`, idempotencyKey: `${ev.type}:${a.sessionId}`, link: studioPath(a.surveyId, { tab: "responses" }), detail: { status: a.status }, response: data, isTest: a.isTest });
+  } catch (e) {
+    console.warn("[rescript:notify] response event not built", JSON.stringify({ status: a.status, error: (e as Error).message.slice(0, 160) }));
+  }
 }

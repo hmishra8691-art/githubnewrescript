@@ -5,7 +5,7 @@ import type {
 import { getQuestionByCodeOrVar } from "./state.js";
 import { findNamedExpression } from "./namedExpressions.js";
 import { stripHtmlText } from "./html.js";
-import { isOptionValueRef, isQuestionValueRef, isPipedValueRef } from "@rescript/schema";
+import { isOptionValueRef, isQuestionValueRef, isPipedValueRef, BEHAVIOR_SOURCES } from "@rescript/schema";
 import { CALC_FUNCTION_NAMES } from "./calc.js";
 import { embeddedCatalog } from "./embedded.js";
 import { isCategoricalGrid, normalizeGridRule } from "./gridCell.js";
@@ -661,6 +661,19 @@ export function parseLogicExpression(
       return { source: { kind: "loop", ref: fixedAlias[head] }, segments };
     }
     /*
+     * S4b (LO-07) — BEHAVIOUR: `time_on_page > 20`, `elapsed >= 600`, `device = mobile`, `timed_out`,
+     * `timed_out.Q5`; `behavior.device` / `behaviour.device` when a question has the bare name (a question
+     * with that code keeps meaning the question).
+     */
+    if ((ns === "behavior" || ns === "behaviour") && segments[1] && (BEHAVIOR_SOURCES as readonly string[]).includes(segments[1].toLowerCase())) {
+      const ref = segments[1].toLowerCase();
+      return { source: { kind: "behavior", ref, ...(ref === "timed_out" && segments[2] ? { scope: segments.slice(2).join(".") } : {}) } as DraftSource, segments };
+    }
+    if ((BEHAVIOR_SOURCES as readonly string[]).includes(ns) && !getQuestionByCodeOrVar(def, head)) {
+      if (ns !== "timed_out" && segments.length > 1) fail(`${ns} has no “.${segments.slice(1).join(".")}”`, tok!.pos);
+      return { source: { kind: "behavior", ref: ns, ...(ns === "timed_out" && segments[1] ? { scope: segments.slice(1).join(".") } : {}) } as DraftSource, segments };
+    }
+    /*
      * `brand.Category` — an OUTER loop addressed by its loopVar (§32). A loop's
      * name is only taken as such when no question has that code, so a survey
      * with a question called `brand` keeps meaning the question.
@@ -1098,6 +1111,11 @@ export function parseLogicExpression(
        * operator, which is the whole reason to give a condition a name.
        */
       if (source.kind === "rule") return { type: "rule", source: strip(source), operator: "eq", value: true };
+      /* S4b: a bare `timed_out` is "a timer has run out" */
+      if (source.kind === "behavior") {
+        if (source.ref !== "timed_out") fail(`${source.ref} needs a comparison — e.g. ${source.ref === "device" ? "device = mobile" : `${source.ref} > 20`}`, tokens[opStart - 1]?.pos ?? 0);
+        return { type: "rule", source: strip(source), operator: "eq", value: true };
+      }
       // a bare reference: the natural reading depends on what it points at
       return bareCondition(source, question);
     }
@@ -1186,7 +1204,10 @@ export function parseLogicExpression(
       || isWord(peek(), "and") || isWord(peek(), "or") || isWord(peek(), "nor")) {
       fail(`${OPERATOR_SPELLING(operator)} needs a value`, tokens[opStart]?.pos);
     }
-    return { type: "rule", source: strip(source), operator, value: readOperand(lhs) };
+    const value = readOperand(lhs);
+    /* S4b: timed_out is yes / no — `timed_out = true` stores the boolean the bare `timed_out` stores */
+    if (source.kind === "behavior" && source.ref === "timed_out" && (value === "true" || value === "false")) return { type: "rule", source: strip(source), operator, value: value === "true" };
+    return { type: "rule", source: strip(source), operator, value };
   };
 
   const parseNot = (): Condition => {
@@ -1498,6 +1519,11 @@ function referenceText(def: SurveyDefinition, rule: ConditionRule): string {
   if (source.kind === "loop") return `${source.scope ?? "loop"}.${source.ref || "code"}`;
   if (source.kind === "quota") return `quota.${source.ref}`;
   if (source.kind === "option") return `@option.${source.ref || "code"}`;
+  /* S4b: behaviour prints bare (`device`), or `behavior.device` when a question has that code */
+  if (source.kind === "behavior") {
+    const bare = getQuestionByCodeOrVar(def, source.ref) ? `behavior.${source.ref}` : source.ref;
+    return source.ref === "timed_out" && source.scope ? `${bare}.${source.scope}` : bare;
+  }
 
   const q = getQuestionByCodeOrVar(def, source.ref);
   let out = q?.code ?? source.ref;

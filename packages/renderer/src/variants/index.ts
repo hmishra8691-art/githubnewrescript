@@ -3,6 +3,7 @@
  * renderer keys.
  */
 import "./singleSelect";
+import "./cascade";
 import "./text";
 import "./numeric";
 import "./list";
@@ -11,11 +12,15 @@ import "./ranking";
 import "./slider";
 import "./image";
 import "./media";
+import "./videoRecording";
 import "./dragdrop";
 import "./swipe";
 import "./carousel";
 import "./card";
 import "./comparison";
+import "./beforeAfter";
+import "./priceLadder";
+import "./shelf";
 import "./allocation";
 import "./hotspot";
 import "./datetime";

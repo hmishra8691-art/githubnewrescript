@@ -6,9 +6,9 @@ Intelligent mode changes a survey only through ACTIONS: a closed vocabulary of o
 
 ## The operations
 
-**Survey** (29): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
+**Survey** (30): `create_block`, `rename_block`, `delete_block`, `create_question`, `update_question`, `delete_question`, `move_question`, `set_display_logic`, `add_skip`, `clear_skips`, `set_validation`, `page_break`, `create_embedded`, `create_calculation`, `create_randomizer`, `set_randomizer`, `create_branch`, `create_loop`, `set_research`, `add_punch`, `remove_punches`, `create_qual_guide`, `update_qual_guide`, `configure_ai_interviews`, `connect_panel`, `disconnect_panel`, `configure_alerts`, `set_answer_key`, `clear_answer_key`, `set_assessment`
 
-**Options and design** (18): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`
+**Options and design** (24): `update_option`, `reorder_options`, `set_option_randomization`, `set_mask`, `clear_mask`, `duplicate_question`, `set_survey_settings`, `update_embedded`, `remove_embedded`, `add_hypothesis`, `remove_hypothesis`, `set_hypothesis`, `set_custom_code`, `set_question_media`, `create_logic_script`, `update_logic_script`, `remove_logic_script`, `set_logic_script_enabled`, `set_option_groups`, `set_timer`, `set_gamification`, `set_review_page`, `set_quality_settings`, `add_method_template`
 
 **Look and behaviour (UX)** (13): `create_style`, `update_style`, `remove_style`, `create_animation`, `update_animation`, `remove_animation`, `create_behavior`, `update_behavior`, `remove_behavior`, `set_theme`, `set_custom_html`, `set_default_value`, `set_navigation`
 
@@ -50,7 +50,15 @@ export type SurveyAction =
   | { op: "page_break"; after: string; remove?: boolean }
   | { op: "create_embedded"; name: string; source?: "url" | "static" | "panel" | "expression"; value?: string }
   | { op: "create_calculation"; name: string; expression: string; label?: string; dataType?: "numeric" | "text" | "boolean" }
-  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string }
+  | { op: "create_randomizer"; blocks: string[]; show?: number; title?: string;
+      /** S4c: relative weight per block (title or id → weight > 0; absent = 1), the order design, exact balance */
+      weights?: Record<string, number>; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean }
+  /**
+   * S4c: change an existing randomizer — `randomizer` is its id, its title, or a block inside it (only one randomizer:
+   * may be omitted). `weights` by child title or id (null clears); `order` random | rotation | latin_square | williams;
+   * `exact` claims least-filled (weighted / by design row); `recordOrder` false stops ORDER_<ID> (default on).
+   */
+  | { op: "set_randomizer"; randomizer?: string; show?: number | null; weights?: Record<string, number> | null; order?: "random" | "rotation" | "latin_square" | "williams"; exact?: boolean; recordOrder?: boolean; title?: string }
   | { op: "create_branch"; blocks: string[]; when: CondInput; title?: string; arms?: { blocks: string[]; when: CondInput; label?: string }[]; otherwise?: string[] }
   | { op: "create_loop"; from: string; to: string; over?: string; items?: string[]; loopVar?: string; title?: string }
   | { op: "set_research"; strict?: boolean; objective?: string; hypotheses?: string[]; population?: string; sampleSize?: number; methodology?: string; constructs?: { name: string; role?: string; definition?: string; questions?: string[] }[]; analysis?: string[]; assumptions?: string[]; sources?: string[];
@@ -77,7 +85,7 @@ export type SurveyAction =
 Supporting types:
 
 ```ts
-export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean };
+export type OptionSpec = string | { label: string; code?: string | number; exclusive?: boolean; other?: boolean; anchor?: boolean; /** AQ-08: a cascading dropdown child names its parent (stored as meta.parent) */ parent?: string | number };
 export interface ScaleSpec { points: number; start?: number; low?: string; high?: string; mid?: string; labels?: string[] }
 export interface ValidationSpec {
   kind: string;
@@ -100,7 +108,7 @@ From `packages/engine/src/optionActions.ts`:
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half"; /** S4c (RK-04): store the order shown in <VAR>_ORDER (_ROW_ORDER / _COL_ORDER) — opt-in */ recordOrder?: boolean }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -115,7 +123,19 @@ export type OptionAction =
   /* S2b: a question's stimulus and option images — see mediaActions.ts */
   | MediaAction
   /* S2b: Scripts-panel (logic) scripts — see logicScriptActions.ts; every code change through codeGate(code, "logic") */
-  | LogicScriptAction;
+  | LogicScriptAction
+  /* S4a AQ-08: option groups and their headings — see optionGroupActions.ts */
+  | OptionGroupAction
+  /* S4b GA-05 / IM-19: a native timer on a question or a page — see timerActions.ts */
+  | TimerAction
+  /* S5a GA-06 / GA-07: points, badges, levels and the HUD — see gamificationActions.ts */
+  | GamificationAction
+  /* S5a AQ-12: a review-your-answers page — see reviewActions.ts */
+  | ReviewAction
+  /* S5b TE-13: response-quality settings (telemetry switches, strictness, rule thresholds) — see qualityActions.ts */
+  | QualitySettingsAction
+  /* S5c: a programmed research-method block (pricing, ladder, sequential monadic, shelf, funnel, ad test) — see methodTemplates.ts */
+  | MethodTemplateAction;
 ```
 
 ## Question media (set_question_media)
@@ -126,7 +146,7 @@ From `packages/engine/src/mediaActions.ts`:
 export type MediaAction = {
   op: "set_question_media"; target: string;
   items?: MediaItemSpec[]; layout?: "horizontal" | "vertical"; altText?: string; decorative?: boolean;
-  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean;
+  requireComplete?: boolean; options?: OptionImageSpec[]; clear?: boolean; zoom?: ZoomMode;
 };
 ```
 
@@ -140,6 +160,117 @@ export type LogicScriptAction =
   | { op: "update_logic_script"; script: string; name?: string; scope?: "survey" | "page" | "question"; ref?: string; event?: LogicScriptEvent; code?: string; edits?: ScriptEdit[]; notes?: string; expect?: ScriptExpect }
   | { op: "remove_logic_script"; script: string }
   | { op: "set_logic_script_enabled"; script: string; enabled: boolean };
+```
+
+## Option groups (set_option_groups)
+
+From `packages/engine/src/optionGroupActions.ts`:
+
+```ts
+export type OptionGroupAction = { op: "set_option_groups"; target: string; scope?: "options" | "rows" | "columns"; groups?: GroupSpec[]; clear?: boolean };
+```
+
+Supporting types:
+
+```ts
+export interface GroupSpec { name: string; label?: string; display?: "heading" | "collapsible" | "none"; members: (string | number)[] }
+```
+
+## Timers (set_timer)
+
+From `packages/engine/src/timerActions.ts`:
+
+```ts
+export type TimerAction = {
+  op: "set_timer";
+  /** a question code — the question's own timer, or with scope "page" the timer of the page that holds it */
+  target?: string;
+  scope?: "question" | "page";
+  /** a flow page node id or title — the page's timer */
+  page?: string;
+  limitSeconds?: number; show?: "countdown" | "hidden"; onTimeout?: "advance" | "lock" | "message";
+  warnAtSeconds?: number; minSeconds?: number; message?: string;
+  clear?: boolean;
+};
+```
+
+## Gamification (set_gamification)
+
+From `packages/engine/src/gamificationActions.ts`:
+
+```ts
+export type GamificationAction = {
+  op: "set_gamification";
+  enabled?: boolean; perAnswer?: number; perCorrect?: number; customVariable?: string | null;
+  badges?: BadgeSpec[]; addBadges?: BadgeSpec[]; removeBadges?: string[];
+  levels?: { name: string; minPoints: number }[];
+  hud?: { show?: boolean; position?: "top-right" | "top-left" | "bottom-right" | "bottom-left" };
+  clear?: boolean;
+};
+```
+
+## Review your answers (set_review_page)
+
+From `packages/engine/src/reviewActions.ts`:
+
+```ts
+export type ReviewAction = { op: "set_review_page"; page?: string; add?: boolean; title?: string; textLimit?: number; exclude?: string[]; clear?: boolean };
+```
+
+## Response quality and paradata (set_quality_settings)
+
+From `packages/engine/src/qualityActions.ts`:
+
+```ts
+export type QualitySettingsAction = {
+  op: "set_quality_settings";
+  enabled?: boolean;
+  strictness?: "relaxed" | "standard" | "strict" | "very_strict" | "custom";
+  telemetry?: QualityTelemetryPatch;
+  rules?: Record<string, QualityRulePatch>;
+};
+```
+
+## Research-method templates (add_method_template)
+
+From `packages/engine/src/methodTemplates.ts`:
+
+```ts
+export type MethodTemplateAction = {
+  op: "add_method_template";
+  template: MethodTemplateKey;
+  /** what is being priced / tested, used in the question texts */
+  product?: string;
+  /** currency symbol shown in the price questions ("$", "€", "₹") */
+  currency?: string;
+  /** pricing_psm: add the Newton–Miller–Smith likelihood pair (default true) */
+  nms?: boolean;
+  /** pricing_psm: which Van Westendorp end-point definition the plan item uses (default proxy) */
+  vwCurves?: "proxy" | "textbook";
+  /** price_ladder: the ladder (3–20 positive prices; default 5, 10, 15, 20, 25) */
+  prices?: number[];
+  /** price_ladder: where the ladder starts (default middle) */
+  start?: "middle" | "lowest" | "highest" | "random";
+  /** sequential_monadic: the concepts (2–8 short names; default Concept A, B, C) */
+  concepts?: string[];
+  /** iat: the two target categories and the two attribute categories (good first), each with 2–8 stimulus words */
+  targets?: [string, string];
+  attributes?: [string, string];
+  targetWords?: [string[], string[]];
+  attributeWords?: [string[], string[]];
+  /** shelf_test: the shelf image (https or the media library) and the products on it (2–12) */
+  imageUrl?: string;
+  products?: string[];
+  secondPick?: boolean;
+  /** brand_funnel / ad_test: the brand list (2–15; the advertised brand first for ad_test) */
+  brands?: string[];
+  /** ad_test: the ad (https or the media library) — the guide asks for it; absent, set it in the editor */
+  videoUrl?: string;
+  /** prepended to every code and variable name — for a second copy of a template */
+  prefix?: string;
+  /** add the plan items (default true) */
+  plan?: boolean;
+};
 ```
 
 ## UX actions

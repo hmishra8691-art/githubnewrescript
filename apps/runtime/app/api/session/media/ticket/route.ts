@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionForMedia } from "@/lib/aiSession";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
-import { beginUpload, MediaError, stageLogger, type MediaKind } from "@rescript/media";
+import { beginUpload, MediaError, stageLogger, answerVideoRule, type MediaKind } from "@rescript/media";
+import { isVideoRecording, videoRecordingConfig } from "@rescript/engine";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,6 +35,16 @@ export async function POST(req: NextRequest) {
   if (!KINDS.includes(kind)) return NextResponse.json({ error: `a respondent cannot store ${kind}` }, { status: 400 });
   const questionId = String(body.questionId ?? "").trim();
   if (!questionId) return NextResponse.json({ error: "questionId required" }, { status: 400 });
+  /*
+   * S5a (MM2-09): a respondent VIDEO — a file answer with the video rules: WebM / MP4 / MOV only and the question's
+   * size cap (≤ 50 MB), refused here before a URL is handed out; the stored bytes are sniffed again on confirm.
+   */
+  const q = gate.def.questions.find((x) => x.id === questionId);
+  if (q && isVideoRecording(q)) {
+    if (kind !== "answer_upload") return NextResponse.json({ error: "a video answer is stored as a respondent file" }, { status: 400 });
+    const verdict = answerVideoRule(typeof body.mimeType === "string" ? body.mimeType : null, Number(body.bytes) || null, videoRecordingConfig(q).maxSizeMb);
+    if (!verdict.ok) return NextResponse.json({ error: verdict.message }, { status: /MB/.test(verdict.message ?? "") ? 413 : 415 });
+  }
 
   const handle = mediaDbOrResponse();
   if ("response" in handle) return handle.response;

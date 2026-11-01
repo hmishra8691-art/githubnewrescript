@@ -1,5 +1,5 @@
 import type {
-  SurveyDefinition, QualityCategory, QualityClass, Severity, Strictness, QualityConfig, RuleRole, QualityVerdict,
+  SurveyDefinition, TelemetryCategory, QualityCategory, QualityClass, Severity, Strictness, QualityConfig, RuleRole, QualityVerdict,
 } from "@rescript/schema";
 
 /** How much one firing says on its own. Derived from the rule's design points; see `strengthOf`. */
@@ -27,6 +27,10 @@ export interface PageVisit {
   pointerEvents: number;
   keyEvents: number;
   scrollEvents: number;
+  /** S5b (TE-04): deepest point of the page reached on this visit, % of the page height (100 = the page fits / was scrolled to the end) */
+  scrollDepth?: number;
+  /** S5b (TE-06): ms of this visit spent in idle periods (no input for the survey's idle threshold) */
+  idleMs?: number;
 }
 
 export interface QuestionTiming {
@@ -41,6 +45,17 @@ export interface QuestionTiming {
   /** characters typed (key events) into text inputs of this question */
   typedChars: number;
   copies: number;
+  /** S5b (TE-04): total ms the question's card was at least half inside the viewport (all visits) */
+  visibleMs?: number;
+  /** S5b (TE-04): when the card first became at least half visible (epoch ms, like firstChangeAt) */
+  firstSeenAt?: number;
+  /**
+   * S5b (TE-02): the answer's successive values, `[ms since the survey started, value]`, the latest 20. A closed
+   * question keeps its codes / numbers / grid cells; typed text keeps `{ len }` only; other types keep nothing.
+   */
+  history?: [number, unknown][];
+  /** entries dropped from the front of `history` by the cap */
+  historyDropped?: number;
 }
 
 export interface DeviceInfo {
@@ -75,6 +90,13 @@ export interface ResponseTelemetry {
   device?: DeviceInfo;
   /** telemetry categories the survey disabled — recorded so the engine knows a zero is "not measured" */
   disabled: string[];
+  /**
+   * S5b: the newer categories (visibility, answerHistory, idle) this collector actually measured. Telemetry recorded
+   * before S5b has no such list, so those categories read as "not measured" rather than as zero.
+   */
+  measured?: string[];
+  /** S5b (TE-06): idle periods — page, start (ms since the survey started), duration; whether the prompt was shown */
+  idle?: { thresholdMs: number; periods: { pageId: string; at: number; ms: number; prompted?: boolean }[]; totalMs: number; longestMs: number; prompts: number; dropped?: number };
 }
 
 /* ============================================================ inputs */
@@ -365,7 +387,7 @@ export interface RuleDef {
   /** rules off in relaxed / standard etc. */
   enabledIn: Record<Exclude<Strictness, "custom">, boolean>;
   /** does this rule need telemetry of a given kind (skipped, not failed, when absent) */
-  needs?: ("timing" | "focus" | "clipboard" | "navigation" | "interaction" | "device" | "network" | "peers")[];
+  needs?: (TelemetryCategory | "peers")[];
   /** informational by design: shown, costs quality, never moves the verdict alone. Default classifying. */
   role?: RuleRole;
 }

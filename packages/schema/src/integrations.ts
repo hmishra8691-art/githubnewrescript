@@ -134,8 +134,29 @@ export const AlertQuietHours = z.object({
 });
 export type AlertQuietHours = z.infer<typeof AlertQuietHours>;
 
+/**
+ * S5b (AP-09) — PER-RESPONSE EVENTS. Off by default: with `enabled`, each finished response emits
+ * `response.completed` (and, when listed, `response.screened_out` / `response.quota_full`), routed by the rules
+ * like any alert — the generic signed webhook is the channel meant for it. The payload is the response id, survey,
+ * status and timestamps; `includeAnswers` adds the answers by variable name, with every likely-PII field (typed
+ * text, e-mail / phone / postal fields, places, files, embedded data) left out unless named in `allowFields`.
+ * Answers go to webhook channels only — Slack, Teams, e-mail and the in-app bell get the one-line notice.
+ */
+export const ResponseEventSettings = z.object({
+  enabled: z.boolean().default(false),
+  events: z.array(z.enum(["completed", "screened_out", "quota_full"])).min(1).default(["completed"]),
+  includeAnswers: z.boolean().default(false),
+  /** variable names sent even though they look like PII (explicitly allowed) */
+  allowFields: z.array(z.string().min(1).max(80)).max(200).default([]),
+  /** TEST-mode responses (sandbox / test links) too — off by default */
+  includeTest: z.boolean().default(false),
+});
+export type ResponseEventSettings = z.infer<typeof ResponseEventSettings>;
+
 export const AlertSettings = z.object({
   rules: z.array(AlertRule).default([]),
+  /** S5b (AP-09): per-response events (off by default) */
+  responses: ResponseEventSettings.optional(),
   quietHours: AlertQuietHours.optional(),
   /** per channel destination, at most this many immediate messages an hour; the rest wait for the hourly digest */
   maxPerHour: z.number().int().min(1).max(500).default(30),

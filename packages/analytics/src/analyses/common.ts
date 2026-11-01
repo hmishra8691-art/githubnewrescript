@@ -89,7 +89,7 @@ export function refused(def: AnalysisDefinition, ds: Dataset, totalCases: number
 export const isOrdered = (ds: Dataset, name: string): boolean => { const r = ds.byName.get(name)?.role; return r === "numeric" || r === "scale"; };
 
 /** the kinds whose tests and models do not use the weights */
-export const UNWEIGHTED_KINDS: ReadonlySet<string> = new Set(["test", "correlation", "regression", "factor", "reliability", "cluster", "conjoint", "maxdiff", "hb", "lca", "sem"]);
+export const UNWEIGHTED_KINDS: ReadonlySet<string> = new Set(["test", "correlation", "regression", "factor", "reliability", "cluster", "conjoint", "maxdiff", "hb", "lca", "sem", "sequential_monadic", "iat"]);
 const UNWEIGHTED_WORDS: Record<string, string> = { test: "test", correlation: "correlation", regression: "model", factor: "factor analysis", reliability: "reliability analysis", cluster: "cluster analysis", conjoint: "conjoint analysis", maxdiff: "MaxDiff analysis", hb: "hierarchical Bayes model", lca: "latent class model", sem: "structural equation model" };
 
 export function makeResult(

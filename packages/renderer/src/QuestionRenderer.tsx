@@ -2,8 +2,10 @@
 import React from "react";
 import type { Question, Option, SurveyDefinition, QuestionColumn, QuestionRow } from "@rescript/schema";
 import { resolveVariant, questionTypeRegistry } from "@rescript/schema";
+import { resolveMediaUrl, zoomModeFor, questionZooms, zoomParadataKey } from "@rescript/engine";
 import {
   effectiveQuestion,
+  groupSegments,
   resolveQuestionMedia, questionMediaList,
   designRowsFor,
   shuffleAlternatives,
@@ -57,9 +59,11 @@ import { announceSelection } from "./optionPopup";
 import { CellMultiDropdown } from "./cellMultiDropdown";
 import { TimeSelects } from "./TimeSelects";
 import { enhanceMediaCarousels } from "./mediaCarousel";
+import { ZoomProvider, Zoomable, ZoomButton, useZoom, enhanceZoomableImages } from "./Lightbox";
 import { CardFace, cardFrameClass } from "./CardFace";
 import { programmerCardClass, HiddenQuestionHead, ProgrammerFoot, type ProgrammerView } from "./programmerView";
 import { DefaultsNote } from "./defaultsNote";
+import { GroupedItems, useGroupOpen } from "./OptionGroups";
 // side-effect: every family registers its renderers
 import "./variants";
 
@@ -121,6 +125,11 @@ export interface QRProps {
    */
   onExtraChange?(suffix: string, value: unknown): void;
   /**
+   * S5a: PARADATA a renderer measures (ZOOMED_<CODE>, the before/after divider) — stored as embedded data, so it
+   * travels with every save and export like the timers' TIMER_<REF>_*. Absent outside a Runner.
+   */
+  onParadata?(name: string, value: number | string): void;
+  /**
    * PROGRAMMER CHROME — preview and test only (brief 19/10/2026). The Runner
    * passes it when the page is a preview, the runtime's test mode or a test
    * link: the hidden-question theme for a `settings.hidden` question and the
@@ -172,6 +181,15 @@ function ValidationBlock({ id, errors }: { id: string; errors: ValidationError[]
       {errors.map((e, i) => <ValidationMessageText key={i} error={e} />)}
     </div>
   );
+}
+
+/**
+ * D19: an author's own aria-describedby used to REPLACE the error id, so a question with an accessibility
+ * description was marked aria-invalid with nothing pointing at its message. Both now: the error first.
+ */
+export function describedByWithErrors(authored: string | undefined, errId: string | undefined): string | undefined {
+  const ids = [errId, ...(authored ?? "").split(/\s+/)].filter((x): x is string => !!x);
+  return ids.length ? [...new Set(ids)].join(" ") : undefined;
 }
 
 export const OTHER = (o: Option) => o.flags?.includes("other_specify");
@@ -446,7 +464,8 @@ export function SingleSelect(p: QRProps) {
     <div>
     {searchBox}
     <div className={optionsClass(p)} role="radiogroup">
-      {filtered.map((o) => {
+      {/* AQ-08: option groups with a heading / disclosure (none = the flat list, as before) */}
+      <GroupedItems q={p.q} scope="options" items={filtered} selected={p.value == null ? [] : [p.value as string | number]} render={(o) => {
         const sel = String(p.value) === String(o.code);
         return (
           <label key={String(o.code)} className={`rs-option ${sel ? "selected" : ""} ${o.meta?.disabled ? "disabled" : ""}`} {...anchor("option", o.code)}>
@@ -462,7 +481,7 @@ export function SingleSelect(p: QRProps) {
             {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
-      })}
+      }} />
     </div>
     </div>
   );
@@ -478,7 +497,7 @@ export function MultiSelect(p: QRProps) {
     <div>
     {searchBox}
     <div className={optionsClass(p)}>
-      {filtered.map((o) => {
+      <GroupedItems q={p.q} scope="options" items={filtered} selected={vals} render={(o) => {
         const sel = vals.some((v) => String(v) === String(o.code));
         const atMax =
           !sel &&
@@ -498,7 +517,7 @@ export function MultiSelect(p: QRProps) {
             {OTHER(o) && sel && <OtherInput {...p} option={o} />}
           </label>
         );
-      })}
+      }} />
     </div>
     </div>
   );
@@ -519,9 +538,15 @@ export function Dropdown(p: QRProps) {
       disabled={p.q.settings.readOnly}
     >
       <option value="">— Select —</option>
-      {options.map((o) => (
-        <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
-      ))}
+      {/* AQ-08: a native select cannot collapse — a heading or collapsible group is an <optgroup> */}
+      {groupSegments(p.q, "options", options).map((seg, i) => {
+        const opts = seg.items.map((o) => (
+          <option key={String(o.code)} value={String(o.code)} {...anchor("option", o.code)}>{o.label.replace(/<[^>]*>/g, "")}</option>
+        ));
+        return seg.display === "none" || !seg.groupId
+          ? <React.Fragment key={`n${i}`}>{opts}</React.Fragment>
+          : <optgroup key={`${seg.groupId}_${i}`} label={(seg.label ?? "").replace(/<[^>]*>/g, "")} data-testid="rs-optgroup" data-group={seg.groupId}>{opts}</optgroup>;
+      })}
     </select>
     {/* a dropdown selects one option, so at most one box — but it is still
         THAT option's box, addressed by its own code */}
@@ -1540,6 +1565,7 @@ export function ImageSelect(p: QRProps & { multi?: boolean; ranking?: boolean })
         const sel = idx >= 0;
         return (
           <div key={String(o.code)} className={`rs-imgopt ${sel ? "selected" : ""}`} onClick={() => click(o)} {...anchor("option", o.code)}>
+            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
@@ -1604,6 +1630,11 @@ export function Matrix(p: QRProps) {
   const stack = categorical && colOpts.length <= MATRIX_STACK_MAX;
   const plainLabel = (s: string) => s.replace(/<[^>]*>/g, "");
   const cellLabel = (rowLabel: string, o: Option) => `${plainLabel(rowLabel)}: ${plainLabel(o.label)}`;
+  /* AQ-08: row groups the respondent sees (a group with a label and display heading | collapsible) */
+  const matrixRowSegments = groupSegments(p.q, "rows", view.rows);
+  const answeredRows = view.rows.filter((r) => { const v = vals[String(r.code)]; return v != null && v !== "" && !(Array.isArray(v) && !v.length); }).map((r) => r.code);
+  const rowGroups = useGroupOpen(p.q, "rows", answeredRows);
+  const matrixColCount = 1 + (type === "matrix_numeric" || type === "matrix_text" || type === "matrix_dropdown" ? 1 : colOpts.length);
   return (
     <div className="rs-table-wrap" data-matrix-scroll={categorical && !stack ? "hint" : undefined}>
       {categorical && !stack && <div className="rs-scrollhint" aria-hidden="true" data-testid="matrix-scroll-hint">Scroll sideways to see every option →</div>}
@@ -1612,7 +1643,31 @@ export function Matrix(p: QRProps) {
           <tr>{headCells(false)}</tr>
         </thead>
         <tbody>
-          {view.rows.map((row, ri) => {
+          {matrixRowSegments.map((seg, si) => {
+            /* AQ-08: a row group with a heading / disclosure gets a header row spanning the grid */
+            const groupRow = seg.display === "none" || !seg.groupId ? null : (() => {
+              const hid = `${p.q.id}__rgrp_${seg.groupId}_${si}`;
+              const open = rowGroups.isOpen(seg);
+              return (
+                <tr key={hid} className="rs-matrix-group" data-testid="rs-optgroup" data-group={seg.groupId} data-display={seg.display} data-open={open ? "1" : "0"}>
+                  <th scope="rowgroup" colSpan={matrixColCount} id={hid}>
+                    {seg.display === "collapsible" ? (
+                      <button type="button" className="rs-optgroup-toggle" aria-expanded={open} data-testid="rs-optgroup-toggle"
+                        onClick={() => rowGroups.toggle(seg.groupId!, open)}>
+                        <span className="rs-optgroup-caret" aria-hidden="true">{open ? "▾" : "▸"}</span> {plainLabel(seg.label ?? "")}
+                        <span className="rs-optgroup-count">{` (${seg.items.length})`}</span>
+                      </button>
+                    ) : plainLabel(seg.label ?? "")}
+                  </th>
+                </tr>
+              );
+            })();
+            const shownRows = seg.display === "collapsible" && !rowGroups.isOpen(seg) ? [] : seg.items;
+            return (
+            <React.Fragment key={`seg${si}`}>
+            {groupRow}
+            {shownRows.map((row) => {
+            const ri = view.rows.indexOf(row);
             const rc = String(row.code);
             const rowVal = vals[rc];
             return (
@@ -1684,6 +1739,9 @@ export function Matrix(p: QRProps) {
                 )}
               </tr>
               </React.Fragment>
+            );
+          })}
+            </React.Fragment>
             );
           })}
         </tbody>
@@ -2726,6 +2784,7 @@ export function CompareImages(p: QRProps) {
             role="radio" aria-checked={sel} tabIndex={0}
             onClick={() => p.onChange(sel ? null : o.code)}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); p.onChange(sel ? null : o.code); } }}>
+            <ZoomButton src={o.imageUrl} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} />
             {o.imageUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <SafeImage src={o.imageUrl} display={o.imageDisplay} alt={o.imageAlt ?? o.label.replace(/<[^>]*>/g, "")} style={{ height: 220 }}/>
@@ -2796,12 +2855,14 @@ function QuestionMedia({ q, anchor: a, decorative, altText }: {
     <div className={`rs-qmedia rs-qmedia-${layout}`} data-testid="rs-qmedia" data-count={list.length} {...a}>
       {list.map((m, i) => (
         <div key={`${i}:${m.url}`} className="rs-qmedia-item" data-testid="rs-qmedia-item">
-          <MediaEmbed
-            url={m.url}
-            display={q.settings.mediaDisplay}
-            title={m.title ?? stripHtmlText(q.text)}
-            alt={m.alt ?? fallbackAlt}
-          />
+          <Zoomable mode={resolveMediaUrl(m.url).kind === "image" ? zoomModeFor(q, m) : "off"} src={resolveMediaUrl(m.url).url ?? m.url} alt={m.alt ?? fallbackAlt}>
+            <MediaEmbed
+              url={m.url}
+              display={q.settings.mediaDisplay}
+              title={m.title ?? stripHtmlText(q.text)}
+              alt={m.alt ?? fallbackAlt}
+            />
+          </Zoomable>
         </div>
       ))}
     </div>
@@ -2813,7 +2874,7 @@ function QuestionMedia({ q, anchor: a, decorative, altText }: {
  * (the media family tracks playback on it); every other question shows the
  * media under its text through one MediaEmbed.
  */
-const MEDIA_OWNING_RENDERERS = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline", "videointerview", "base:video_interview"]);
+const MEDIA_OWNING_RENDERERS = new Set(["beforeafter", "videorecording", "videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline", "videointerview", "base:video_interview"]);
 
 /**
  * The question with its media URLs piped.
@@ -2831,7 +2892,33 @@ function withPipedMedia(p: QRProps, ctx: EvalContext): QRProps {
 }
 
 /* ------------------------------------------------------------------ shell */
+/**
+ * S5a (MM2-04): the question's zoom. With `settings.zoom` (or any stimulus item's zoom) on, the card is wrapped in
+ * one ZoomProvider — its stimulus images, option images and the images inserted in its text open the lightbox, and
+ * each open adds one to ZOOMED_<CODE> (paradata, through `onParadata`). Off — every existing survey — renders
+ * exactly the markup it always did.
+ */
 export function QuestionRenderer(props: QRProps) {
+  if (!questionZooms(props.q)) return <QuestionRendererCard {...props} />;
+  const key = zoomParadataKey(props.q.code || props.q.id);
+  return (
+    <ZoomProvider mode={zoomModeFor(props.q)}
+      onZoomed={() => props.onParadata?.(key, (Number((props.state.embedded as Record<string, unknown> | undefined)?.[key]) || 0) + 1)}>
+      <QuestionRendererCard {...props} />
+    </ZoomProvider>
+  );
+}
+
+/** the images inserted in the question text become zoom targets (only inside a ZoomProvider whose mode is on) */
+function TextZoom({ deps }: { deps: unknown[] }) {
+  const z = useZoom();
+  const ref = React.useRef<HTMLSpanElement>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => enhanceZoomableImages(ref.current?.closest<HTMLElement>(".rs-card") ?? null, z && z.mode !== "off" ? z.open : null), [z, ...deps]);
+  return <span ref={ref} hidden aria-hidden />;
+}
+
+function QuestionRendererCard(props: QRProps) {
   /*
    * A MESSAGE WHEN AN OPTION IS SELECTED, FOR EVERY CHOICE RENDERER AT ONCE.
    * The change handler is wrapped here, once, so a radio list, a checkbox
@@ -2985,12 +3072,13 @@ export function QuestionRenderer(props: QRProps) {
       data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
-      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-describedby={describedByWithErrors(a11y?.describedBy, p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
       {...pvData}
       {...anchor("question", p.q.id)}
     >
           {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
+          <TextZoom deps={[text]} />
           {/* the block's content IS its text (`normalizeQuestionContent` moved any legacy HTML Content there) */}
           <div {...anchor("text")} className="rs-qhtml" ref={cardRef} {...{ [SCOPE_ATTR]: textScope }} dangerouslySetInnerHTML={{ __html: text }} />
           {/* a content block's media was configured in the builder and never drawn (Prince 11 §4) */}
@@ -3025,13 +3113,14 @@ export function QuestionRenderer(props: QRProps) {
       data-rs-required={p.q.required ? "1" : undefined}
       role="group"
       aria-label={a11y?.ariaLabel}
-      aria-describedby={a11y?.describedBy ?? (p.errors.length ? `${p.q.id}__err` : undefined)}
+      aria-describedby={describedByWithErrors(a11y?.describedBy, p.errors.length ? `${p.q.id}__err` : undefined)}
       aria-invalid={p.errors.length > 0 || undefined}
       {...pvData}
       {...anchor("question", p.q.id)}
     >
       {p.q.customCss && <style dangerouslySetInnerHTML={{ __html: p.q.customCss }} />}
       <span ref={cardRef} hidden aria-hidden />
+      <TextZoom deps={[text, instruction]} />
       {/* preview / test only: the hidden-question banner and header — nothing on a live link (`programmerView.tsx`) */}
       {pv && <HiddenQuestionHead q={p.q} pv={pv} />}
       {/* preview / test only: a default / piped value that resolved to nothing (A63, `defaultsNote.tsx`) */}

@@ -221,6 +221,26 @@ export function OptionGroupsEditor({ q, patch }: {
                       {ITEM_ORDERS.map((o) => <option key={o} value={o}>{ORDER_LABEL[o]}</option>)}
                     </select>
                   </label>
+                  {/* AQ-08: what the respondent sees of the group (schema OptionGroup.label / display) */}
+                  {useScope !== "columns" && (
+                    <label className="f" style={{ minWidth: 190 }} title="None keeps the group invisible (order and visibility only). Heading draws the respondent label above the members; Collapsible draws a button that shows / hides them.">
+                      <span>Respondents see</span>
+                      <select className="select" data-testid={`group-display-${g.id}`} value={g.display ?? "none"}
+                        onChange={(e) => {
+                          const display = e.target.value as "none" | "heading" | "collapsible";
+                          updateGroup(g.id, display === "none" ? { display: undefined } : { display, label: g.label ?? g.name });
+                        }}>
+                        <option value="none">no heading</option>
+                        <option value="heading">a heading</option>
+                        <option value="collapsible">a collapsible group</option>
+                      </select>
+                    </label>
+                  )}
+                  {useScope !== "columns" && (g.display ?? "none") !== "none" && (
+                    <label className="f" style={{ minWidth: 200 }}><span>Heading shown to respondents</span>
+                      <input className="input" data-testid={`group-label-${g.id}`} value={g.label ?? ""} placeholder={g.name}
+                        onChange={(e) => updateGroup(g.id, { label: e.target.value })} /></label>
+                  )}
                   {ordering.groupOrder === "custom" && (
                     <label className="f" style={{ maxWidth: 110 }}><span>Position</span>
                       <input className="input" type="number" value={g.order ?? ""}

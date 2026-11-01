@@ -18,6 +18,14 @@ decides *which rows* are exported. This is about *what the file contains*.
 | SPSS | `format=sav` | An SPSS system file with the dictionary as metadata |
 | SAS | `format=sas` | A zip: transport file, CSV, and a `.sas` program |
 | Stata | `format=dta` | A `.dta`, format 118 (Stata 14+) |
+| Timing (long) | `format=timing` | S5b: one row per respondent × page and × question — visits, seconds, visible seconds, changes, idle seconds, scroll depth |
+
+**Timing columns (S5b, TE-10).** `timing=1` appends `PAGE_<ID>_SEC` (seconds on the page: every visit, out-of-focus
+time excluded) and `Q_<VAR>_SEC` (page entry → last change on the answering visit, else an equal share of the page)
+after every other column — after `SYSTEM_*` — in the CSV, Excel (Main Data, explained on About), SPSS, SAS and Stata
+files; numeric with labels in the statistical files. Both shapes read `responses.telemetry` with the quality engine's
+own arithmetic (`pageSeconds` / `questionSeconds`), so an export and the quality review agree. A blank is "not
+measured" (no telemetry, timing switched off, page never reached), never zero. `packages/exporters/src/paradataExport.ts`.
 
 All six export **the same columns in the same order**, because they are all
 built from one shared matrix (`buildResponseMatrix`, in

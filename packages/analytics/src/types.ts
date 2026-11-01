@@ -57,7 +57,7 @@ export type AnalysisKind =
   | "nps" | "csat" | "turf" | "gap" | "pricing" | "brand" | "ranking" | "allocation"
   | "text" | "quality" | "weighting" | "conjoint" | "maxdiff"
   /* advanced models (2026-10-18): hierarchical Bayes, latent class, structural equations */
-  | "hb" | "lca" | "sem";
+  | "hb" | "lca" | "sem" | "iat" | "sequential_monadic" | "shelf";
 
 export const ANALYSIS_KINDS: { kind: AnalysisKind; label: string; group: string; description: string }[] = [
   { kind: "descriptive", label: "Descriptive", group: "Basics", description: "Frequencies, means, medians, spread, percentiles and confidence intervals" },
@@ -75,6 +75,9 @@ export const ANALYSIS_KINDS: { kind: AnalysisKind; label: string; group: string;
   { kind: "csat", label: "CSAT / CES", group: "KPIs", description: "Satisfaction and effort scores, top-box, segments and drivers" },
   { kind: "turf", label: "TURF", group: "Choice", description: "Total unduplicated reach and frequency, best combinations, incremental reach" },
   { kind: "gap", label: "Importance × Performance", group: "Choice", description: "Gaps, opportunity scores and the priority matrix" },
+  { kind: "sequential_monadic", label: "Sequential monadic", group: "Choice", description: "Concepts rated by every respondent: within-respondent tests (paired t / Friedman, Holm) and the order effect from the stored order" },
+  { kind: "iat", label: "IAT D-score", group: "Choice", description: "Implicit association: the per-respondent D-score (improved algorithm, D600) — mean, t against 0, strength bands" },
+  { kind: "shelf", label: "Shelf test", group: "Choice", description: "Share of choice per product on a shelf image, second choice, products examined and time to find" },
   { kind: "pricing", label: "Pricing", group: "Choice", description: "Van Westendorp price sensitivity and Gabor-Granger demand" },
   { kind: "brand", label: "Brand", group: "Brand", description: "Funnel (awareness → consideration → usage → preference), conversion, image and equity" },
   { kind: "ranking", label: "Ranking", group: "Basics", description: "Average rank, rank distribution, first/last-place shares and rank scores" },

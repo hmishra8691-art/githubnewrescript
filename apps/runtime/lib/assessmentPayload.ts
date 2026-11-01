@@ -1,5 +1,5 @@
 import type { SurveyDefinition } from "@rescript/schema";
-import { isAssessment, respondentAssessmentReport, scoreAssessment, stripAssessmentForRespondent, type AssessmentResult, type RespondentAssessmentReport } from "@rescript/engine";
+import { isAssessment, migrateQuizKeys, respondentAssessmentReport, scoreAssessment, stripAssessmentForRespondent, type AssessmentResult, type RespondentAssessmentReport } from "@rescript/engine";
 
 /**
  * ASSESSMENTS ON THE RUNTIME (K4 2026-10-25, ported 2026-10-29 — docs/ASSESSMENTS-2026-10-29.md).
@@ -14,7 +14,9 @@ import { isAssessment, respondentAssessmentReport, scoreAssessment, stripAssessm
 export function respondentDefinition<T>(def: T): T {
   const d = def as unknown as SurveyDefinition;
   if (!d || !Array.isArray(d.questions)) return def;
-  return stripAssessmentForRespondent(d) as unknown as T;
+  /* D14: a legacy quiz's meta.correct becomes the one key (question.assessment) first, so it is stripped — or kept for
+     instant feedback — by the same rule as every other key */
+  return stripAssessmentForRespondent(migrateQuizKeys(d).def) as unknown as T;
 }
 
 export interface SubmissionScore {
@@ -26,6 +28,7 @@ export interface SubmissionScore {
 /** Score a completed submission against the SERVER's definition; null when the survey is not an assessment. */
 export function scoreForSubmission(def: SurveyDefinition | null | undefined, answers: Record<string, unknown> | null | undefined): SubmissionScore | null {
   if (!def || !isAssessment(def)) return null;
+  def = migrateQuizKeys(def).def; // D14: a quiz keyed the legacy way is graded like the rest
   const result = scoreAssessment(def, answers ?? {});
   return { result, report: respondentAssessmentReport(def, result) };
 }

@@ -1564,7 +1564,7 @@ export function resolveQuestionMedia(
  * otherwise the single `mediaUrl`. One answer for the renderer, the preview
  * and the exports, so the builder and the respondent never disagree.
  */
-export function questionMediaList(q: Pick<Question, "settings">): { url: string; alt?: string; title?: string }[] {
+export function questionMediaList(q: Pick<Question, "settings">): { url: string; alt?: string; title?: string; zoom?: "off" | "click" | "hover-magnifier" }[] {
   const items = (q.settings.mediaItems ?? []).filter((m) => m.url?.trim());
   if (items.length) return items;
   return q.settings.mediaUrl?.trim() ? [{ url: q.settings.mediaUrl }] : [];

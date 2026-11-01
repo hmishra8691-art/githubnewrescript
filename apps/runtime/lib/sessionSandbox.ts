@@ -22,6 +22,8 @@ export interface SandboxRow {
   script_writes?: { script: string; kind: string; target: string; at: string }[];
   /** S1c: the session's script failures (engine ScriptHealthEntry, sanitised) — `telemetry.scriptHealth` on the database path */
   script_health?: ScriptHealthEntry[];
+  /** S5b: the sanitised telemetry, as `responses.telemetry` would hold it (sandbox only — the browser suite reads it back) */
+  telemetry?: unknown;
 }
 
 const G = globalThis as unknown as { __rescriptSessionSandbox?: { surveys: Map<string, SandboxSurvey>; rows: Map<string, SandboxRow> } };

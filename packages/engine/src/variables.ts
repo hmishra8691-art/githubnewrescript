@@ -1,4 +1,8 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
+import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
+import { beforeAfterKeys } from "./beforeAfter.js";
+import { ladderParadataKeys } from "./priceLadder.js";
+import { shelfParadataKeys } from "./shelf.js";
 import {
   directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
   possibleLoopItems, type LoopFlowNode,
@@ -10,6 +14,8 @@ import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
 import { stripHtmlText } from "./html.js";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
+import { randomizerOrderVariable, questionOrderVariable, recordedAxes } from "./displayOrder.js";
+import { randomizerVariable, armVariableBase } from "./exactBalance.js";
 
 /*
  * VALUE LABELS ARE PLAIN TEXT. A code's label goes into the CSV dictionary,
@@ -604,7 +610,7 @@ export function questionVariables(
   // Side data stored beside the answer under `<id>__<suffix>` (see
   // variants/shared.tsx setSide) needs a column of its own, or a quiz score
   // and a reaction time would be captured and then never exported.
-  if (q.options.some((o) => o.meta?.correct)) {
+  if (q.options.some((o) => o.meta?.correct) || (q.variant === "gamified.quiz" && ((q.assessment?.correct?.length ?? 0) > 0 || !!q.assessment?.withheld))) {
     push({
       name: `${q.variableName}_CORRECT`, label: `${q.code} — answered correctly`,
       dataType: "numeric", valueCodes: [0, 1], valueLabels: { "0": "Incorrect", "1": "Correct" },
@@ -648,6 +654,12 @@ export function questionVariables(
    * `Q5_PROBE_n_Q` the wording that was asked — which the analyst must see
    * when the wording was generated per respondent (probe.ts).
    */
+  /* AQ-08 cascading dropdown: the parent of the answered child, derived from the definition (cascade.ts) */
+  if (q.variant === "single_select.cascading_dropdown") {
+    const parents = ((q.settings as { cascadeParents?: { code: string | number; label: string }[] }).cascadeParents ?? []);
+    push({ name: `${q.variableName}_PARENT`, label: `${q.code} — ${(q.settings as { cascadeParentLabel?: string }).cascadeParentLabel ?? "parent"}`, dataType: typeof parents[0]?.code === "number" ? "numeric" : "text", derived: true,
+      notes: `The first list's choice the answer belongs to: ${parents.slice(0, 8).map((p) => `${p.code} = ${p.label}`).join(", ")}${parents.length > 8 ? ", …" : ""}` });
+  }
   /* a rating's optional comment ("Allow Additional Comment" — Video Rating, October 2026 review) */
   if (q.settings?.allowComment) {
     push({ name: `${q.variableName}_COMMENT`, label: `${q.code} — comment`, dataType: "text",
@@ -831,6 +843,10 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       notes: `= ${calc.expression}`,
     });
   }
+  /* S4c (RK-04 / RA-06 / RA-08): the stored display orders, design rows and experiment arms — columns in every export */
+  out.push(...displayOrderVariables(def));
+  /* S5a: gamification (POINTS, LEVEL, BADGES …) and the media paradata (ZOOMED_<CODE>, BA_<CODE>_*) — export columns */
+  out.push(...s5aVariables(def));
   /*
    * SURVEY_LANGUAGE — which language version the respondent answered in.
    * Declared whenever the survey has more than its source language, stored in
@@ -1061,4 +1077,82 @@ export function nextQuestionNaming(def: SurveyDefinition, prefix = "Q"): { code:
   let n = (def.questions?.length ?? 0) + 1;
   while (taken.has(`${prefix}${n}`.toUpperCase())) n++;
   return { code: `${prefix}${n}`, variableName: `${prefix}${n}` };
+}
+
+
+/**
+ * S4c — the variables a randomizer or a question writes about what was SHOWN (displayOrder.ts): `ORDER_<ID>` for every
+ * randomizer that records (default), `RANDOMIZER_<ID>_ROW` for an exact Latin square / Williams randomizer,
+ * `<VAR>_ORDER` / `_ROW_ORDER` / `_COL_ORDER` for a question with `settings.recordOrder`, `<VAR>_ARM` for an experiment
+ * with exact arm balance. Declared for elements outside loops (inside a loop the names carry the iteration's codes and
+ * are exported from the response like any other calculated value, unlabelled).
+ */
+function s5aVariables(def: SurveyDefinition): VariableDef[] {
+  const out: VariableDef[] = [];
+  const mk = (name: string, label: string, dataType: "numeric" | "text", responseType: "calculation" | "embedded_data", notes: string, valueLabels: Record<string, string> = {}): VariableDef =>
+    ({ name, label, dataType, responseType, derived: true, hidden: true, valueCodes: Object.keys(valueLabels), valueLabels, notes } as VariableDef);
+  const g = def.gamification;
+  if (g && g.enabled !== false) {
+    const levels = [...g.levels].sort((a, b) => a.minPoints - b.minPoints);
+    out.push(mk("POINTS", "Gamification — points", "numeric", "calculation", `${g.points.perAnswer} per answer + ${g.points.perCorrect} per correct answer${g.points.customVariable ? ` + ${g.points.customVariable}` : ""}`));
+    out.push(mk("POINTS_ANSWERED", "Gamification — questions answered", "numeric", "calculation", "answered respondent-facing questions"));
+    out.push(mk("POINTS_CORRECT", "Gamification — correct answers", "numeric", "calculation", "correct by the answer key"));
+    out.push(mk("LEVEL", "Gamification — level", "numeric", "calculation", "1-based index of the level reached (0 = none)", Object.fromEntries([["0", "none"], ...levels.map((l, i) => [String(i + 1), l.name])])));
+    out.push(mk("LEVEL_NAME", "Gamification — level name", "text", "calculation", "the level reached"));
+    out.push(mk("BADGES", "Gamification — badges earned", "text", "calculation", `badge ids, comma-separated (${g.badges.map((b) => b.id).join(", ") || "none defined"})`));
+  }
+  /* S5c (SM-18): the IAT D-score of the tagged reaction-time blocks */
+  if (def.questions.some((q) => (q.settings as { iatBlock?: { role?: string } }).iatBlock?.role)) {
+    out.push(mk("IAT_D", "IAT D-score (Greenwald et al. 2003, D600)", "numeric", "calculation", "(incompatible − compatible) / inclusive SD, averaged over the practice and test pairs; positive = faster on the compatible pairing; empty when excluded"));
+    out.push(mk("IAT_TRIALS", "IAT — trials scored", "numeric", "calculation", "trials ≤ 10,000 ms in the four blocks"));
+    out.push(mk("IAT_FAST_SHARE", "IAT — share of trials under 300 ms", "numeric", "calculation", "above 0.10 the respondent is excluded"));
+    out.push(mk("IAT_EXCLUDED", "IAT — excluded (too many fast trials)", "numeric", "calculation", "1 = excluded, 0 = scored", { "0": "scored", "1": "excluded" }));
+  }
+  for (const q of def.questions) {
+    if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));
+    if (q.variant === "hotspot.shelf") {
+      const k = shelfParadataKeys(q.code || q.id);
+      out.push(mk(k.time, `${q.code} — shelf: seconds to find`, "numeric", "embedded_data", "from the shelf first shown to the pick (browser clock)"));
+      out.push(mk(k.examined, `${q.code} — shelf: products examined`, "text", "embedded_data", "product codes in the order first looked at (hover / focus), comma-separated"));
+      if ((q.settings as { shelf?: { secondPick?: boolean } }).shelf?.secondPick) out.push(mk(k.pick2, `${q.code} — shelf: second choice`, "text", "embedded_data", "the product chosen if the first were not there"));
+    }
+    if (q.variant === "numeric.price_ladder") {
+      const k = ladderParadataKeys(q.code || q.id);
+      out.push(mk(k.start, `${q.code} — price ladder: first price shown`, "numeric", "embedded_data", "the start price (middle, lowest, highest or random)"));
+      out.push(mk(k.path, `${q.code} — price ladder: path`, "text", "embedded_data", "price:accepted (1/0) in the order asked, e.g. 15:1,20:0"));
+    }
+    if (q.variant === "comparison.before_after" && q.settings.recordPosition) {
+      const k = beforeAfterKeys(q.code || q.id);
+      out.push(mk(k.position, `${q.code} — before/after divider (last, %)`, "numeric", "embedded_data", "0 = all after, 100 = all before"));
+      out.push(mk(k.dwellBefore, `${q.code} — seconds with the divider on the before side`, "numeric", "embedded_data", "divider at ≥ 50 %"));
+      out.push(mk(k.dwellAfter, `${q.code} — seconds with the divider on the after side`, "numeric", "embedded_data", "divider below 50 %"));
+    }
+  }
+  return out;
+}
+
+function displayOrderVariables(def: SurveyDefinition): VariableDef[] {
+  const out: VariableDef[] = [];
+  const mk = (name: string, label: string, notes: string): VariableDef => ({ name, label, dataType: "text", responseType: "calculation", derived: true, hidden: true, valueCodes: [], valueLabels: {}, notes } as VariableDef);
+  const inLoop = new Set<string>();
+  const walk = (nodes: readonly FlowNode[], loop: boolean) => {
+    for (const n of nodes) {
+      if (n.type === "page") { if (loop) for (const q of n.questionIds) inLoop.add(q); continue; }
+      if (n.type === "randomizer" && !loop) {
+        const kids = n.children.map((c) => `${c.id}${(c as { title?: string }).title ? `=${(c as { title?: string }).title}` : ""}`).join(", ");
+        if (n.recordOrder !== false) out.push(mk(randomizerOrderVariable(n.id, null), `Order shown — randomizer ${n.title ?? n.id}`, `child ids in the order shown (${kids})`));
+        if ((n.order === "latin_square" || n.order === "williams") && n.balance?.exact) out.push(mk(`${randomizerVariable(n.id, null)}_ROW`, `Design row — randomizer ${n.title ?? n.id} (${n.order})`, "the claimed row of the design, 1-based"));
+      }
+      const kids = (n as { children?: FlowNode[] }).children;
+      if (kids) walk(kids, loop || n.type === "loop");
+      if (n.type === "branch") { for (const b of n.branches) walk(b.children, loop); if (n.otherwise) walk(n.otherwise, loop); }
+    }
+  };
+  walk(def.flow ?? [], false);
+  for (const q of def.questions) {
+    if (inLoop.has(q.id)) continue;
+    for (const axis of recordedAxes(q)) out.push(mk(questionOrderVariable(q, axis), `${q.code} — ${axis} order shown`, `${axis === "options" ? "option" : axis === "rows" ? "row" : "column"} codes in displayed order`));
+    if (q.type === "experiment" && (q.settings as { armBalance?: { exact?: boolean } } | undefined)?.armBalance?.exact) out.push(mk(`${armVariableBase(q)}_ARM`, `${q.code} — experiment arm (claimed)`, "the arm code claimed least-filled (weighted by the arms' weights)"));
+  }
+  return out;
 }

@@ -15,8 +15,10 @@ import { LoopScopeProvider, loopsAroundQuestion } from "./loopScope";
 import { MaskingBuilder, PunchRules } from "./MaskingBuilder";
 import { QualitySettings } from "./QualitySettings";
 import { AssessmentSettingsCard } from "./AssessmentSettingsCard";
+import { GamificationSettingsCard } from "./GamificationSettingsCard";
 import { ResearchDesignEditor } from "./ResearchDesignEditor";
 import { OptionGroupsEditor } from "./OptionGroupsEditor";
+import { TimerEditor } from "./TimerEditor";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { HeaderRepeatEditor } from "./HeaderRepeatEditor";
 import { QuestionAnalysisSection } from "./QuestionAnalysisSection";
@@ -1249,6 +1251,8 @@ export function SurveySettings() {
 
       {/* ASSESSMENT (K4 2026-10-25, ported 2026-10-29): one "this survey is a test or quiz" checkbox; marking, pass mark, results policy and report sections only once ticked */}
       <AssessmentSettingsCard />
+      {/* S5a (GA-06/07): points, badges, levels */}
+      <GamificationSettingsCard />
 
       {/* the research design, editable by hand (Research Engine audit, Phase 1) — the Analysis tab reads it */}
       <h3 className="sec" id="research-design">Research design</h3>
@@ -1450,6 +1454,32 @@ function PropertiesPanelBody() {
       </CollapsibleSection>
       )}
 
+      {/* S4b (GA-05): a native timer on any question — one clock per page */}
+      {showSec("Timer") && (
+      <CollapsibleSection id="timer" title="Timer" active={!!q.timer}>
+      <TimerEditor value={q.timer} what="question" testId="question-timer" onChange={(t) => patch({ timer: t } as Partial<Question>)} />
+      </CollapsibleSection>
+      )}
+
+      {/* S5a (MM2-04): image zoom — the question's images (stimulus, text, options) open in an accessible lightbox */}
+      {showSec("Image zoom") && (
+      <CollapsibleSection id="image-zoom" title="Image zoom" active={!!q.settings.zoom && q.settings.zoom !== "off"}>
+        <div className="card" style={{ padding: 10 }} data-testid="question-zoom">
+          <label className="f"><span>Respondents can enlarge this question's images</span>
+            <select className="select" data-testid="question-zoom-mode" value={q.settings.zoom ?? "off"}
+              onChange={(e) => patchSettings({ zoom: e.target.value === "off" ? undefined : (e.target.value as "click" | "hover-magnifier") })}>
+              <option value="off">Off</option>
+              <option value="click">Click to open a zoomable lightbox</option>
+              <option value="hover-magnifier">Hover magnifier (click still opens the lightbox)</option>
+            </select></label>
+          <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+            Applies to the stimulus, images inserted in the text and option images. Each opening is counted in
+            <code> ZOOMED_{q.code}</code> (embedded data, exported). Zoom 1–5×, pan, Esc closes; keyboard and touch work too.
+          </div>
+        </div>
+      </CollapsibleSection>
+      )}
+
       {/*
         * LOCATION — the `geo` response model's one configuration block. The
         * mode picks the renderer (pin / address / radius) over one stored shape;
@@ -1631,6 +1661,12 @@ function PropertiesPanelBody() {
               <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
               <option value="reverse_half">reverse for half</option><option value="none">keep order</option>
             </select>
+            {/* S4c (RK-04): opt-in — the order each respondent saw, stored as <VAR>_ORDER (exported) */}
+            <label className="row" style={{ gap: 4, fontSize: 13 }} title={`Stores the order shown in ${q.variableName || q.code}_ORDER (rows: _ROW_ORDER, columns: _COL_ORDER) — a column in every export`}>
+              <input type="checkbox" data-testid="record-order" checked={!!(q.settings as { recordOrder?: boolean }).recordOrder}
+                onChange={(e) => patch({ settings: { ...q.settings, recordOrder: e.target.checked || undefined } as any })} />
+              store the order shown
+            </label>
             <label className="row" style={{ gap: 4, fontSize: 13 }}>
               show only
               <CountInput min={1} width={64}

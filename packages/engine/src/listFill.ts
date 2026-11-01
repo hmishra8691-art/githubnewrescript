@@ -107,6 +107,32 @@ export interface ListFillTrace {
   steps: string[];
   /** a human sentence for the final outcome */
   reason: string;
+  /**
+   * S4c (D21 / PU-13): `method: "custom"` — the calculated list the script wrote, the codes it named that were
+   * dropped (foreign to the eligible set, or rejected), and whether it produced nothing so priority + quota decided
+   */
+  custom?: { list: string; codes: string[]; dropped: { code: string; why: string }[]; fallback: boolean };
+  /** a note to show in preview / test (and stored softly with the response): e.g. the custom script produced nothing */
+  note?: string;
+}
+
+/**
+ * S4c (D21): the calculated variable a custom List Fill reads — `selection.customList`, else
+ * `LISTFILL_<NAME>_CUSTOM`. The named logic script (`selection.scriptId`, run in the sandbox just before the List
+ * Fill decides) writes it: `setCalc("LISTFILL_BRANDS_CUSTOM", ["3", "1"])` (an array, or "3,1").
+ */
+export function customListVariable(lf: ListFill): string {
+  const own = (lf.selection as { customList?: string }).customList?.trim();
+  return own || `LISTFILL_${nameOf(lf).toUpperCase()}_CUSTOM`;
+}
+function customCodes(v: unknown): string[] | null {
+  if (v == null || v === "") return null;
+  let list: unknown[] = [];
+  if (Array.isArray(v)) list = v;
+  else if (typeof v === "string") { const t = v.trim(); if (t.startsWith("[")) { try { const j = JSON.parse(t); list = Array.isArray(j) ? j : [t]; } catch { list = t.split(","); } } else list = t.split(","); }
+  else if (typeof v === "number") list = [v];
+  const out = list.map((x) => String(x ?? "").trim()).filter(Boolean);
+  return out.length ? [...new Set(out)] : null;
 }
 
 export interface ListFillItem {
@@ -538,7 +564,36 @@ export function decideListFill(input: ListFillInput): ListFillResult {
     steps.push(`Kept from the earlier allocation (still eligible): ${heldFirst.map((t) => t.code).join(", ")}.`);
     for (const t of heldFirst) t.selectedBy = "kept from the earlier allocation";
   }
-  const order = [...heldFirst, ...orderCandidates(usable.filter((t) => !heldFirst.includes(t)), lf, sel.method, rng, steps)];
+  /*
+   * S4c (D21 / PU-13) — METHOD "custom": the selection is the list the named logic script wrote (sandboxed, S1 —
+   * it ran just before this, never here). Its codes are checked against the eligible set: a code that is not a
+   * candidate, or was rejected (ineligible, quota full, at its maximum), is DROPPED and logged; quotas and
+   * position-sensitive limits still apply below; the fill-to-count fallback does not add to a script's selection.
+   * Only when the script produced NOTHING (no list, or an empty one) does priority + quota decide — with a note.
+   */
+  let custom: ListFillTrace["custom"];
+  let customOrder: ListFillOptionTrace[] | null = null;
+  if (sel.method === "custom") {
+    const list = customListVariable(lf);
+    const codes = customCodes(state.calculated[list]);
+    if (codes) {
+      const dropped: { code: string; why: string }[] = [];
+      customOrder = [];
+      for (const c of codes) {
+        const t = usable.find((x) => x.code === c);
+        if (t) { if (!heldFirst.includes(t)) customOrder.push(t); continue; }
+        const tr = traces.find((x) => x.code === c);
+        dropped.push({ code: c, why: !tr || !tr.candidate ? "not one of this respondent's candidates" : explainRejection(tr) });
+      }
+      for (const t of customOrder) t.selectedBy = `the custom script (${list})`;
+      custom = { list, codes, dropped, fallback: false };
+      steps.push(`Custom: ${list} = ${codes.join(", ")}${dropped.length ? ` — dropped ${dropped.map((d) => `${d.code} (${d.why})`).join("; ")}` : ""}.`);
+    } else {
+      custom = { list, codes: [], dropped: [], fallback: true };
+      steps.push(`Custom: the script${sel.scriptId ? ` “${sel.scriptId}”` : ""} wrote nothing to ${list} — priority + quota decided instead.`);
+    }
+  }
+  const order = [...heldFirst, ...(customOrder ?? orderCandidates(usable.filter((t) => !heldFirst.includes(t)), lf, sel.method, rng, steps))];
   const items: ListFillItem[] = [];
   const preference: string[] = order.map((t) => t.code);
   const takenCapacity: Record<string, number> = {};
@@ -576,8 +631,8 @@ export function decideListFill(input: ListFillInput): ListFillResult {
     steps.push(`${t.code}: SELECTED at position ${position} (priority ${t.priority ?? "—"}, ${t.held ? "already held" : t.remaining === null ? "unlimited" : `${t.remaining - used} left`}${sel.method === "least_filled" && !t.held ? `, count ${t.fill ?? 0}` : ""}).`);
   }
 
-  // still short: the fallback pool, when one is configured
-  if (items.length < requested && sel.fillToCount && sel.fallback !== "none") {
+  // still short: the fallback pool, when one is configured (never on top of a custom script's selection)
+  if (items.length < requested && sel.fillToCount && sel.fallback !== "none" && !customOrder) {
     const rest = usable.filter((t) => !items.some((i) => i.code === t.code) && (t.remaining === null || (t.remaining - (takenCapacity[t.code] ?? 0)) > 0));
     if (rest.length) {
       steps.push(`Short of ${requested} — fallback (${sel.fallback}) over ${rest.map((t) => t.code).join(", ")}.`);
@@ -614,6 +669,8 @@ export function decideListFill(input: ListFillInput): ListFillResult {
       : items.length < requested
         ? `Allocated ${items.length} of ${requested} — nothing eligible was left for the remaining ${requested - items.length}.`
         : `Allocated ${items.length}: ${items.map((i) => i.code).join(", ")}. ${describeWhy(traces, items)}`,
+    ...(custom ? { custom } : {}),
+    ...(custom?.fallback ? { note: `The custom script${sel.scriptId ? ` “${sel.scriptId}”` : ""} produced no list (${custom.list}) — priority + quota was used instead.` } : custom?.dropped.length ? { note: `The custom script named ${custom.dropped.map((d) => d.code).join(", ")}, which ${custom.dropped.length === 1 ? "was" : "were"} dropped (${custom.dropped.map((d) => d.why).join("; ")}).` } : {}),
   };
   steps.push(trace.reason);
 
@@ -758,7 +815,7 @@ function orderCandidates(
       // a custom script supplies the order via the runtime; without it the
       // engine falls back to its most conservative documented behaviour
       // rather than inventing one
-      steps.push("Method is `custom` and no script order was supplied — using priority + quota.");
+      steps.push("Method is `custom` and the script supplied no list — using priority + quota.");
       ordered = byPriorityBands(usable);
       break;
     case "priority_random":
@@ -915,6 +972,8 @@ export function listFillVariables(lf: ListFill, result: ListFillResult): Record<
   // a compact, exportable summary of the whole list
   out[`${key}_CODES`] = result.items.map((i) => i.code).join(",");
   out[`${key}_LABELS`] = result.items.map((i) => i.label).join(", ");
+  /* S4c (D21): the soft note — a custom List Fill whose script produced nothing (1) or not (0) */
+  if (lf.selection.method === "custom" && result.trace.custom) out[`${key}_CUSTOM_FALLBACK`] = result.trace.custom.fallback ? 1 : 0;
   return out;
 }
 
@@ -932,6 +991,7 @@ export function listFillVariableNames(lf: ListFill, def?: SurveyDefinition): { n
   }
   out.push({ name: `${key}_CODES`, kind: "summary" });
   out.push({ name: `${key}_LABELS`, kind: "summary" });
+  if (lf.selection.method === "custom") out.push({ name: `${key}_CUSTOM_FALLBACK`, kind: "summary" });
   return out;
 }
 
@@ -1537,4 +1597,16 @@ export function listFillsForQuestion(def: SurveyDefinition, questionId: string):
 /** Every List Fill that can run once this question has been answered. */
 export function listFillsReadyAfter(def: SurveyDefinition, answeredQuestionIds: string[]): ListFill[] {
   return def.listFills.filter((lf) => lf.enabled && lf.source.kind === "question" && answeredQuestionIds.includes(lf.source.questionId));
+}
+
+/**
+ * S4c (D21): the Scripts-panel (logic) script a custom List Fill names (`selection.scriptId`, by id or name; enabled
+ * only), or null. The Runner runs it in the sandbox (S1) just before the List Fill decides.
+ */
+export function listFillCustomScript(def: SurveyDefinition, lf: ListFill): SurveyDefinition["scripts"][number] | null {
+  if (lf.selection.method !== "custom") return null;
+  const ref = lf.selection.scriptId?.trim();
+  if (!ref) return null;
+  const s = (def.scripts ?? []).find((x) => x.id === ref) ?? (def.scripts ?? []).find((x) => (x.name ?? "").toLowerCase() === ref.toLowerCase());
+  return s && s.enabled !== false ? s : null;
 }

@@ -45,6 +45,8 @@ export * from "./qualityCheck.js";
 export * from "./objectStatus.js";
 export * from "./designVersion.js";
 export * from "./exactBalance.js";
+export * from "./randomizerDesign.js";
+export * from "./displayOrder.js";
 export * from "./choiceData.js";
 export * from "./conjointSuite.js";
 export * from "./sampleSource.js";
@@ -106,6 +108,11 @@ export * from "./quotaDashboard.js";
 export * from "./countCondition.js";
 export * from "./elementIds.js";
 export * from "./optionGroups.js";
+export * from "./cascade.js";
+export * from "./quizKey.js";
+export * from "./optionGroupActions.js";
+export * from "./timers.js";
+export * from "./timerActions.js";
 export * from "./calcContext.js";
 export * from "./namedExpressions.js";
 export * from "./punchChain.js";
@@ -170,9 +177,30 @@ import type { ObjectKey as __ObjectKey } from "./dependencyIndex.js";
 __registerSurveyLint((def) => __lintEmbeddedPiping(def).map((i) => ({
   level: "warning" as const, questionCode: "Flow", path: `flow.${i.nodeId}.fields.${i.field}`, message: i.message, objectKey: `flowNode:${i.nodeId}` as __ObjectKey,
 })));
+/* S4b: native timers and behaviour conditions — their checks join the survey's logic check */
+import { lintTimers as __lintTimers } from "./timers.js";
+import { lintBehaviorConditions as __lintBehavior } from "./behaviorLint.js";
+__registerSurveyLint((def) => __lintTimers(def).map((i) => ({
+  level: i.level, questionId: i.questionId, questionCode: i.questionCode ?? "Flow", path: i.path, message: i.message,
+  ...(i.pageId ? { objectKey: `flowNode:${i.pageId}` as __ObjectKey } : {}),
+})));
+__registerSurveyLint((def) => __lintBehavior(def).map((i) => ({ level: i.level, questionId: i.questionId, questionCode: i.questionCode ?? "Logic", path: i.path, message: i.message })));
+export * from "./behaviorLint.js";
 export * from "./capabilities.js";
 export * from "./capabilityRegistry.js";
 export * from "./mediaActions.js";
+export * from "./mediaZoom.js";
+export * from "./beforeAfter.js";
+export * from "./methodTemplates.js";
+export * from "./priceLadder.js";
+export * from "./iatScore.js";
+export * from "./shelf.js";
+export * from "./videoRecording.js";
+export * from "./gamification.js";
+export * from "./gamificationActions.js";
+export * from "./qualityActions.js";
+export * from "./reviewPage.js";
+export * from "./reviewActions.js";
 export * from "./logicScriptActions.js";
 export * from "./scriptRefs.js";
 export * from "./researchActions.js";

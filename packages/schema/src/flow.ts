@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Condition } from "./conditions.js";
 import { SetExpr } from "./setExpression.js";
 import { ExactBalance } from "./balance.js";
+import { Timer } from "./timer.js";
 
 /**
  * Survey Flow — the ordered structure the runtime walks (requirement §7).
@@ -77,6 +78,10 @@ export type EmbeddedDataType = z.infer<typeof EmbeddedDataType>;
  */
 
 /** How a reference column's values are typed, for comparison and export. */
+/** S4c (RA-06): how a flow randomizer orders its children — see `FlowNode` randomizer `order` */
+export const RandomizerOrder = z.enum(["random", "rotation", "latin_square", "williams"]);
+export type RandomizerOrder = z.infer<typeof RandomizerOrder>;
+
 export const LoopReferenceType = z.enum(["text", "number", "boolean"]);
 export type LoopReferenceType = z.infer<typeof LoopReferenceType>;
 
@@ -282,6 +287,10 @@ export type FlowNode =
       mediaUrl?: string;
       questionIds: string[];
       visibleIf?: Condition;
+      /** S4b: a native page timer (schema timer.ts) */
+      timer?: Timer;
+      /** S5a (AQ-12): review-your-answers page — see the zod object below */
+      review?: { enabled: boolean; title?: string; textLimit?: number; excludeQuestionIds?: string[] };
     }
   | {
       type: "section";
@@ -308,6 +317,19 @@ export type FlowNode =
       evenPresentation?: boolean;
       /** exact balance across respondents (an atomic least-filled claim) — see balance.ts; absent = seed-derived */
       balance?: ExactBalance;
+      /**
+       * S4c (RA-05): relative weight per child id (positive, default 1). `show` N of M draws without replacement
+       * in proportion to the weights; with `balance.exact` the claim targets weight / total per child.
+       */
+      weights?: Record<string, number>;
+      /**
+       * S4c (RA-06): how the children are ordered. `random` (seeded shuffle), `rotation` (= `evenPresentation`, kept
+       * for old surveys), `latin_square` (cyclic) or `williams` (carryover-balanced; 2n rows for odd n). Absent =
+       * `rotation` when `evenPresentation`, else `random`.
+       */
+      order?: RandomizerOrder;
+      /** S4c (RK-04): store the order shown in `ORDER_<ID>` — default on; `false` turns it off */
+      recordOrder?: boolean;
       children: FlowNode[];
       /** Only run this randomizer (and show any of its children) when this holds. */
       visibleIf?: Condition;
@@ -459,6 +481,19 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       mediaUrl: z.string().optional(),
       questionIds: z.array(z.string()),
       visibleIf: Condition.optional(),
+      /** S4b (GA-05): a native page timer — one clock for the page; see timer.ts */
+      timer: Timer.optional(),
+      /**
+       * S5a (AQ-12) REVIEW YOUR ANSWERS: this page lists the respondent's answers so far (visited pages before it),
+       * grouped by section, with "Change" links back (section navigation's goToPage — visited pages only) and a
+       * "Return to review". Hidden questions are never listed; open-end text is cut at `textLimit` characters.
+       */
+      review: z.object({
+        enabled: z.boolean().default(true),
+        title: z.string().max(200).optional(),
+        textLimit: z.number().int().min(20).max(2000).optional(),
+        excludeQuestionIds: z.array(z.string()).max(500).optional(),
+      }).optional(),
     }),
     z.object({
       type: z.literal("section"),
@@ -483,6 +518,9 @@ export const FlowNode: z.ZodType<FlowNode> = z.lazy(() =>
       show: z.number().optional(),
       evenPresentation: z.boolean().optional(),
       balance: ExactBalance.optional(),
+      weights: z.record(z.string(), z.number().positive().max(1_000_000)).optional(),
+      order: RandomizerOrder.optional(),
+      recordOrder: z.boolean().optional(),
       children: z.array(FlowNode),
       visibleIf: Condition.optional(),
     }),

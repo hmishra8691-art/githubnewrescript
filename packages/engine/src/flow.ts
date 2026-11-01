@@ -1,4 +1,6 @@
+import { hasIatBlocks, iatVariables } from "./iatScore.js";
 import type { Condition, FlowNode, SurveyDefinition, Question, SkipRule } from "@rescript/schema";
+import { gamificationVariables } from "./gamification.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 import type { EvalContext } from "./evaluate.js";
 import { evaluateCondition } from "./evaluate.js";
@@ -20,7 +22,9 @@ import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
-import { designSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
+import { designSlot, designRowSlot, experimentArmSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
+import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
+import { randomizerOrderVariable } from "./displayOrder.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -53,6 +57,11 @@ export type RuntimeStep =
        * setting). The Runner claims the unassigned ones before showing it.
        */
       balance?: string[];
+      /**
+       * S4c (RK-04): the display orders of the randomizers this page sits inside (outermost first) —
+       * `ORDER_<ID>` = the children's ids in the order shown. Absent when none records (`recordOrder: false`).
+       */
+      orders?: { variable: string; value: string }[];
     }
   /** `loop`: the iteration the element runs in, so a piped value can read `{{loop.label}}` */
   | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[]; loop?: LoopContext | null }
@@ -70,6 +79,8 @@ export function compileFlow(
   const steps: RuntimeStep[] = [];
   /* the exact-balance slots enclosing the node being walked (outermost first) */
   const balanceStack: string[] = [];
+  /* S4c: the display orders of the randomizers enclosing the node being walked */
+  const orderStack: { variable: string; value: string }[] = [];
   const ctxFor = (loop: LoopContext | null): EvalContext => ({
     def,
     state,
@@ -116,6 +127,12 @@ export function compileFlow(
           const pageBalance = [...balanceStack];
           for (const qid of node.questionIds) {
             const q = def.questions.find((x) => x.id === qid);
+            /* S4c (RA-08): an experiment whose arm is balanced exactly — claimed at page entry by the Runner */
+            if (q && q.type === "experiment" && (q.settings as { armBalance?: { exact?: boolean } } | undefined)?.armBalance?.exact) {
+              const arm = experimentArmSlot(def, state, q, loop);
+              if (arm) { opts.onBalance?.(arm); if (!pageBalance.includes(arm.key)) pageBalance.push(arm.key); }
+              continue;
+            }
             if (!q || !(q.settings as { versionBalance?: { exact?: boolean } } | undefined)?.versionBalance?.exact) continue;
             const slot = designSlot(def, state, q);
             if (!slot) continue;
@@ -133,6 +150,7 @@ export function compileFlow(
             sectionPath,
             nodePath: [...nodePath],
             ...(pageBalance.length ? { balance: pageBalance } : {}),
+            ...(orderStack.length ? { orders: orderStack.map((o) => ({ ...o })) } : {}),
           });
           break;
         }
@@ -208,40 +226,65 @@ export function compileFlow(
            * markedly more even than a shuffle, with no shared state.)
            */
           let children = seededShuffle(eligible, seed);
+          const nodeKey = `${node.id}${loopKeySuffix(loop)}`;
+          const orderKind = randomizerOrderKind(node);
+          const rows = designRows(orderKind, node.children.length);
           /*
            * EXACT BALANCE (#15): the children were CLAIMED for this respondent
            * (least-filled, atomically, across the sample) and stored in
            * `RANDOMIZER_<ID>`. Shown in a seeded order, so position effects are
            * not baked in. Not claimed yet: the seed-derived window below stands
            * in — the Runner claims before any page of it is shown.
+           *
+           * S4c: a Latin square / Williams randomizer claims its ROW instead
+           * (`RANDOMIZER_<ID>_ROW`); weighted children are claimed weighted.
            */
           let exactSlot: BalanceSlot | null = null;
-          if (node.balance?.exact) {
-            const nodeKey = `${node.id}${loopKeySuffix(loop)}`;
-            const show = node.show ?? eligible.length;
-            const fallbackIds = show < eligible.length ? seedWindow(eligible, show, state.seed, nodeKey, !!node.evenPresentation).map((c) => c.id) : [];
-            exactSlot = randomizerSlot(def, state, node, eligible.map((c) => c.id), loop, fallbackIds);
-            if (exactSlot) opts.onBalance?.(exactSlot);
-          }
-          if (exactSlot?.assigned) {
-            const chosen = new Set(exactSlot.assigned);
-            /* a child the respondent can no longer see (Back + a changed answer) is not shown; nothing is re-claimed */
-            children = seededShuffle(eligible.filter((c) => chosen.has(c.id)), seed);
-          } else if (node.show != null && node.show < children.length) {
-            if (node.evenPresentation) {
-              const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
-              const inOrder = eligible;
-              children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
-              // the WINDOW is rotated for balance; the order within it is
-              // still rolled, so position effects are not baked in
-              children = seededShuffle(children, seed);
-            } else {
-              children = children.slice(0, node.show);
+          if (rows) {
+            /* S4c (RA-06): the respondent's row of the design — claimed (exact) or seeded — gives order AND window */
+            const fallbackRow = seededDesignRow(state.seed, nodeKey, rows.length);
+            if (node.balance?.exact) {
+              exactSlot = designRowSlot(def, state, node, rows.length, loop, fallbackRow);
+              if (exactSlot) opts.onBalance?.(exactSlot);
+            }
+            const rowNo = Number(exactSlot?.assigned?.[0] ?? fallbackRow);
+            const row = rows[(Number.isInteger(rowNo) && rowNo >= 1 && rowNo <= rows.length ? rowNo : fallbackRow) - 1]!;
+            const ok = new Set(eligible.map((c) => c.id));
+            const inRow = row.map((i) => node.children[i]!).filter((c) => ok.has(c.id));
+            children = node.show != null && node.show < inRow.length ? inRow.slice(0, node.show) : inRow;
+          } else {
+            const weights = randomizerWeights(node, eligible.map((c) => c.id));
+            if (node.balance?.exact) {
+              const show = node.show ?? eligible.length;
+              const fallbackIds = show < eligible.length ? seedWindow(eligible, show, state.seed, nodeKey, orderKind === "rotation", weights).map((c) => c.id) : [];
+              exactSlot = randomizerSlot(def, state, node, eligible.map((c) => c.id), loop, fallbackIds, weights);
+              if (exactSlot) opts.onBalance?.(exactSlot);
+            }
+            if (exactSlot?.assigned) {
+              const chosen = new Set(exactSlot.assigned);
+              /* a child the respondent can no longer see (Back + a changed answer) is not shown; nothing is re-claimed */
+              children = seededShuffle(eligible.filter((c) => chosen.has(c.id)), seed);
+            } else if (node.show != null && node.show < children.length) {
+              if (weights) {
+                /* S4c (RA-05): N of M in proportion to the weights, without replacement; then a seeded order */
+                children = seededShuffle(seedWindow(eligible, node.show, state.seed, nodeKey, false, weights), seed);
+              } else if (orderKind === "rotation") {
+                const offset = Math.abs(subSeed(state.seed, `even:${node.id}${loopKeySuffix(loop)}`)) % eligible.length;
+                const inOrder = eligible;
+                children = Array.from({ length: node.show }, (_, i) => inOrder[(offset + i) % inOrder.length]);
+                // the WINDOW is rotated for balance; the order within it is
+                // still rolled, so position effects are not baked in
+                children = seededShuffle(children, seed);
+              } else {
+                children = children.slice(0, node.show);
+              }
             }
           }
           if (exactSlot) balanceStack.push(exactSlot.key);
+          const recordsOrder = node.recordOrder !== false && children.length > 0;
+          if (recordsOrder) orderStack.push({ variable: randomizerOrderVariable(node.id, loop), value: children.map((c) => c.id).join(",") });
           try { walk(children, loop, sectionPath, blockTitle); }
-          finally { if (exactSlot) balanceStack.pop(); }
+          finally { if (exactSlot) balanceStack.pop(); if (recordsOrder) orderStack.pop(); }
           break;
         }
         case "branch": {
@@ -450,6 +493,13 @@ export function runCalculations(
       }
     }
   }
+  /*
+   * S5a (GA-06, GA-07): POINTS / LEVEL / BADGES — after the calculations, so a custom points variable is this pass's
+   * value; here, so the Runner and the server replay compute them the same way (gamification.ts).
+   */
+  if (def.gamification) Object.assign(state.calculated, gamificationVariables(def, state));
+  /* S5c (SM-18): the IAT D-score of the tagged reaction-time blocks — the same pass, so Runner and replay agree (iatScore.ts) */
+  if (hasIatBlocks(def)) Object.assign(state.calculated, iatVariables(def, state));
 }
 
 export interface NavigationResult {

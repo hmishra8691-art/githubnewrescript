@@ -5,7 +5,7 @@ import { SurveyDefinition } from "@rescript/schema";
 import { newSurveyDefinition } from "@/lib/defaults";
 import { Studio } from "@/components/studio/Studio";
 import { ProjectOverview } from "@/components/project/ProjectOverview";
-import { ensureElementIds, migrateRetiredVariants } from "@rescript/engine";
+import { ensureElementIds, migrateQuizKeys, migrateRetiredVariants } from "@rescript/engine";
 import { projectPageGate } from "@/lib/guard";
 import { SESSION_COOKIE_NAME } from "@/lib/authServer";
 
@@ -118,7 +118,7 @@ export default async function StudioPage({ params, searchParams }: { params: { i
          * rewritten. Deterministic, so the editor and the runtime agree about
          * what every element is called.
          */
-        definition = migrateRetiredVariants(ensureElementIds(parsed.data).def).def;
+        definition = migrateQuizKeys(migrateRetiredVariants(ensureElementIds(parsed.data).def).def).def; /* D14: one answer key */
         versionId = ver.id;
       } else {
         loadError =
@@ -148,7 +148,7 @@ export default async function StudioPage({ params, searchParams }: { params: { i
        * is where the stored id catches up with it. A survey holding none is
        * untouched.
        */
-      definition = migrateRetiredVariants(ensureElementIds(draft.data).def).def;
+      definition = migrateQuizKeys(migrateRetiredVariants(ensureElementIds(draft.data).def).def).def;
       draftSavedAt = (survey.draft_updated_at as string) ?? null;
     } else {
       loadError =

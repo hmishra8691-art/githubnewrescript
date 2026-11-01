@@ -75,6 +75,12 @@ export interface ListFillSpec {
   tieBreak?: "random" | "sequential" | "priority";
   /** what a stored allocation does when the respondent goes Back and changes its source */
   onChange?: "keep_valid" | "redecide" | "freeze";
+  /**
+   * S4c (D21): method "custom" — the Scripts-panel (logic) script that decides (by name or id; it runs in the sandbox
+   * just before the List Fill and writes setCalc(customList, [codes])); `customList` defaults to LISTFILL_<NAME>_CUSTOM
+   */
+  script?: string;
+  customList?: string;
 }
 
 export type ListFillAction =
@@ -201,8 +207,10 @@ function specOf(o: Record<string, unknown>, partial: boolean): ListFillSpec | st
   if (o.fillToCount === false) return "fillToCount: false has no effect in the engine (it always fills to the count from what is eligible) — leave it out";
   if (o.afterMaximum !== undefined || o.fallback !== undefined) return "afterMaximum and fallback are not settable here: the engine does not act on them yet — leave them out";
   if (o.repeatBlock !== undefined || o.repeatBlockId !== undefined) return "repeating a block per item is a loop over the List Fill, not a List Fill setting (repeatBlockId is not read by the flow) — create the list, then loop over LISTFILL(<name>)";
-  if (o.scriptId !== undefined) return "a custom script method is not supported: nothing runs the script in the engine";
   const spec: ListFillSpec = {};
+  /* S4c (D21): the custom method's script (by name or id) and the list it writes */
+  const script = str(o.script ?? o.scriptId ?? o.scriptName, 120); if (script) spec.script = script;
+  const customList = str(o.customList, 80); if (customList) { if (!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(customList)) return "customList is a variable name (letters, digits, _)"; spec.customList = customList; }
   const label = str(o.label ?? o.title, 200); if (label) spec.label = label;
   if (typeof o.enabled === "boolean") spec.enabled = o.enabled;
   const src = sourceOf(o.source ?? o.from);
@@ -235,8 +243,7 @@ function specOf(o: Record<string, unknown>, partial: boolean): ListFillSpec | st
   }
   const m = str(o.method ?? o.strategy)?.toLowerCase().replace(/[\s-]+/g, "_");
   if (m) {
-    if (m === "custom") return "method custom needs a script and nothing in the engine runs one — choose priority_random, random, highest_priority or least_fill";
-    const method = METHOD_ALIASES[m];
+    const method = m === "custom" || m === "script" || m === "custom_script" ? "custom" : METHOD_ALIASES[m];
     if (!method) return `“${m}” is not a List Fill method — random, priority_random, highest_priority, lowest_priority, least_fill (fewest allocated first), balanced (furthest below target), selection_order, weighted_random`;
     spec.method = method;
   }
@@ -591,6 +598,11 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
   if (spec.tieBreak === "priority" && !prioritised) fail("tieBreak priority needs a priority per item (priority: {item: n})");
   if (prioritised && IGNORES_PRIORITY.has(method)) fail(`method ${method} ignores priority, so the priority given would do nothing — use priority_random (priority first, random among the rest) or highest_priority`);
   if (method === "weighted_random" && !options.some((o) => o.weight != null)) fail("weighted_random needs weights (weight: {item: n})");
+  /* S4c (D21): a custom list names its logic script — it must exist (the Scripts panel); the gate already checked its code */
+  const scriptRef = spec.script ?? (method === "custom" ? prevSel?.scriptId : undefined);
+  if (spec.script && method !== "custom") fail(`script goes with method custom, and this list's method is ${method.replace(/_/g, " ")}`);
+  const customScript = method === "custom" ? ((def.scripts ?? []).find((x) => x.id === scriptRef) ?? (def.scripts ?? []).find((x) => (x.name ?? "").toLowerCase() === String(scriptRef ?? "").toLowerCase())) : undefined;
+  if (method === "custom" && !customScript) fail(scriptRef ? `there is no logic script “${scriptRef}” — create it first (create_logic_script), writing setCalc("${spec.customList ?? `LISTFILL_${name.toUpperCase()}_CUSTOM`}", [codes])` : "method custom needs a script: the logic script (create_logic_script) that writes setCalc(\"LISTFILL_<NAME>_CUSTOM\", [codes])");
   const caps = options.some((o) => o.maximum != null || o.target != null || o.minimum != null);
   // a per-respondent selector needs no counters; caps, targets and least-fill do
   const sampleLevel = spec.trackSample ?? (caps || NEEDS_COUNTS.has(method) || (prev?.tracking.sampleLevel ?? false));
@@ -679,6 +691,7 @@ function build(def: SurveyDefinition, env: ListFillEnv, name: string, spec: List
       equalPriority: prevSel?.equalPriority ?? "random",
       ...(method === "least_filled" ? { leastFilled: { basis: spec.basis ?? prevSel?.leastFilled?.basis ?? "auto", tieBreak: spec.tieBreak ?? (prioritised ? "priority" : prevSel?.leastFilled?.tieBreak ?? "random") } } : {}),
       ...(spec.onChange ? { onChange: spec.onChange } : {}),
+      ...(method === "custom" ? { scriptId: customScript!.id, ...(spec.customList ?? prevSel?.customList ? { customList: spec.customList ?? prevSel?.customList } : {}) } : {}),
     },
     tracking: { ...(prev?.tracking ?? {}), sampleLevel, respectQuotas: sampleLevel ? prev?.tracking.respectQuotas ?? true : false },
     options,

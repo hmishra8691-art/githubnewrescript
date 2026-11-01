@@ -366,6 +366,21 @@ export const RULES: RuleDef[] = [
     params: [p("withinMs", "Submitted within this many ms of a paste", lvl(500, 1000, 1500, 2000), "ms")],
   },
   {
+    id: "interaction.answered_unseen", category: "interaction", title: "Answered without being seen",
+    description: "Questions answered while their card had never been at least half inside the viewport (S5b visibility paradata).",
+    defaultSeverity: "medium", riskPoints: 12, qualityPenalty: 4, enabledIn: STD_UP, needs: ["visibility", "timing"], role: "informational",
+    params: [p("minQuestions", "Flag when at least this many questions were answered unseen", lvl(3, 2, 1, 1))],
+  },
+  {
+    id: "interaction.flip_flop", category: "interaction", title: "Excessive flip-flopping",
+    description: "Closed answers switched back to values already given, repeatedly (S5b answer-value history).",
+    defaultSeverity: "low", riskPoints: 6, qualityPenalty: 5, enabledIn: STD_UP, needs: ["answerHistory", "timing"], role: "informational",
+    params: [
+      p("reversals", "A question counts when its answer went back to an earlier value this many times", lvl(4, 3, 3, 2)),
+      p("questions", "Flag when at least this many questions count", lvl(3, 2, 1, 1)),
+    ],
+  },
+  {
     id: "interaction.out_of_focus", category: "interaction", title: "Long time out of focus",
     description: "The survey tab was hidden for a large share of the session.",
     defaultSeverity: "low", riskPoints: 4, qualityPenalty: 6, enabledIn: STRICT_UP, needs: ["focus"], role: "informational",

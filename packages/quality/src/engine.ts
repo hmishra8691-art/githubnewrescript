@@ -1,5 +1,5 @@
 import type { QualityConfig, QualityClass, Severity, Strictness, SurveyDefinition } from "@rescript/schema";
-import { QualityConfig as QualityConfigSchema } from "@rescript/schema";
+import { QualityConfig as QualityConfigSchema, TELEMETRY_CATEGORIES } from "@rescript/schema";
 import { conditionFires } from "@rescript/engine";
 import type {
   Benchmarks, FlagDraft, HistoryRecord, PeerRecord, QualityAssessment, QualityInput, ResponseRecord, ResponseTelemetry,
@@ -112,7 +112,7 @@ export function summarizeConfig(def: SurveyDefinition): QualityConfigSummary {
     rulesTotal: RULES.length,
     rulesCustomised: Object.values(config.rules).filter((s) => s && Object.keys(s).length > 0).length,
     customRules: config.customRules.filter((r) => r.enabled).length,
-    telemetryOff: (["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"] as const).filter((k) => config.telemetry[k] === false),
+    telemetryOff: TELEMETRY_CATEGORIES.filter((k) => (config.telemetry as Record<string, unknown>)[k] === false),
     maxPeers: config.maxPeers,
     evidence: config.evidence,
     rolesChanged: Object.entries(config.rules).filter(([id, s]) => s?.role && s.role !== (RULES.find((r) => r.id === id)?.role ?? "classifying")).length,
@@ -120,12 +120,17 @@ export function summarizeConfig(def: SurveyDefinition): QualityConfigSummary {
   };
 }
 
+/** the categories added in S5b — present only when the collector lists them in `measured` */
+const MEASURED_CATEGORIES: readonly string[] = TELEMETRY_CATEGORIES.filter((k) => !["timing", "focus", "clipboard", "navigation", "interaction", "device", "network"].includes(k));
+
 export function makeContext(input: QualityInput, config: QualityConfig, bench: Benchmarks): RuleContext {
   const level = presetLevel(config.strictness);
   const telemetry = input.response.telemetry ?? null;
   const disabled = new Set<string>(telemetry?.disabled ?? []);
-  for (const [k, v] of Object.entries(config.telemetry)) if (v === false) disabled.add(k);
-  if (!telemetry) for (const k of ["timing", "focus", "clipboard", "navigation", "interaction", "device"]) disabled.add(k);
+  for (const k of TELEMETRY_CATEGORIES) if ((config.telemetry as Record<string, unknown>)[k] === false) disabled.add(k);
+  if (!telemetry) for (const k of TELEMETRY_CATEGORIES) if (k !== "network") disabled.add(k);
+  // S5b categories count only when the collector says it measured them (older telemetry, or no IntersectionObserver)
+  if (telemetry) for (const k of MEASURED_CATEGORIES) if (!telemetry.measured?.includes(k)) disabled.add(k);
   return {
     def: input.def, config, strictness: config.strictness,
     response: input.response, telemetry, peers: input.peers, history: input.history ?? [], bench,

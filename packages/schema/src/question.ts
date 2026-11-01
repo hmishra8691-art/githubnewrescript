@@ -8,6 +8,7 @@ import { MediaDisplay } from "./mediaDisplay.js";
 import { QuestionAnalysis } from "./analysisPlan.js";
 import { normalizeQuestion } from "./questionContent.js";
 import { ExactBalance } from "./balance.js";
+import { Timer } from "./timer.js";
 import { QuestionAssessment } from "./assessment.js";
 
 /**
@@ -449,6 +450,18 @@ export const OptionGroup = z.object({
   itemOrder: OptionOrder.optional(),
   /** Editor state only; the runtime ignores it. */
   collapsed: z.boolean().optional(),
+  /**
+   * AQ-08 (2026-10-31) — WHAT THE RESPONDENT SEES OF THE GROUP. `name` is the author's handle; `label` is the
+   * respondent-facing heading (piping allowed, like an option label). `display`:
+   *   none (default, = every survey before this)   the group decides order and visibility only;
+   *   heading                                     a heading above the group's members;
+   *   collapsible                                 a disclosure button (aria-expanded) that shows / hides the members —
+   *                                               starts closed unless a member is selected.
+   * Drawn by single / multi choice, the plain dropdown (as an <optgroup>; a native select cannot collapse, so
+   * collapsible reads as heading there) and matrix rows. A group without a label draws nothing.
+   */
+  label: z.string().optional(),
+  display: z.enum(["heading", "collapsible", "none"]).optional(),
 });
 export type OptionGroup = z.infer<typeof OptionGroup>;
 
@@ -1144,6 +1157,10 @@ const QuestionObject = z.object({
       allowAnswerPause: z.boolean().optional(),
       /** How many times they may discard and start again. 0 = one take only. */
       maxRetakes: z.number().int().min(0).optional(),
+      /** S5a (MM2-09) respondent video: what the respondent agrees to before the camera turns on (shown with a checkbox) */
+      consentText: z.string().max(1000).optional(),
+      /** S5a: offer "Upload a video file" beside the camera (default true; always offered when there is no camera) */
+      allowFileUpload: z.boolean().optional(),
       /** Offer playback of their own answer before they move on. */
       reviewBeforeSubmit: z.boolean().optional(),
 
@@ -1173,6 +1190,10 @@ const QuestionObject = z.object({
       designRef: z.string().optional(), // conjoint/maxdiff design file id
       /** which design VERSION a respondent answers: absent = derived from the seed; `{ exact: true }` = an atomic least-filled claim (balance.ts) */
       versionBalance: ExactBalance.optional(),
+      /** S4c (RA-08): an experiment question's ARM claimed exactly (weighted by the arms' weights) at page entry, stored in `<VAR>_ARM` */
+      armBalance: ExactBalance.optional(),
+      /** S4c (RK-04): store the displayed order of randomized options / rows / columns in `<VAR>_ORDER` / `_ROW_ORDER` / `_COL_ORDER` (opt-in) */
+      recordOrder: z.boolean().optional(),
 
       /* ---- 2026-09 variant batch. Every field optional; absent = old behaviour. */
       /** Video / audio stimulus URL (video rating, timeline, watch-time). */
@@ -1193,7 +1214,72 @@ const QuestionObject = z.object({
         alt: z.string().optional(),
         /** a caption / name shown in the builder */
         title: z.string().optional(),
+        /** S5a (MM2-04): this item's zoom — overrides the question's `zoom`; see `zoom` below */
+        zoom: z.enum(["off", "click", "hover-magnifier"]).optional(),
       })).optional(),
+      /**
+       * S5a (MM2-04) IMAGE ZOOM: how a respondent enlarges the question's images (its stimulus images, the images
+       * inserted in its text, its option images). "click" — a click / Enter opens an accessible lightbox (zoom
+       * 1–5×, pan, Esc closes); "hover-magnifier" — a lens follows the pointer, and a click / Enter still opens the
+       * lightbox (keyboard and touch users get the same zoom). Absent = "off": every existing survey is unchanged;
+       * the image variants' defaults set "click", so a NEW image question zooms. Each open counts in the paradata
+       * field ZOOMED_<CODE> (embedded data, exported).
+       */
+      zoom: z.enum(["off", "click", "hover-magnifier"]).optional(),
+      /**
+       * S5a (MM2-06) BEFORE / AFTER COMPARISON SLIDER (`comparison.before_after`). The two images are the question's
+       * stimulus, in order: `mediaItems[0]` = before (left of the divider), `mediaItems[1]` = after. The respondent
+       * drags the divider (keyboard: arrows move 5 %, Home / End). `askRating` (default true) asks a rating after
+       * (minValue..maxValue, the answer); false makes the final divider position 0–100 the answer.
+       */
+      beforeAfter: z.object({
+        beforeLabel: z.string().max(80).optional(),
+        afterLabel: z.string().max(80).optional(),
+        /** where the divider starts, % from the left (default 50) */
+        startPosition: z.number().min(0).max(100).optional(),
+        askRating: z.boolean().optional(),
+        ratingPrompt: z.string().max(300).optional(),
+        minLabel: z.string().max(80).optional(),
+        maxLabel: z.string().max(80).optional(),
+      }).optional(),
+      /**
+       * S5a: store the before/after divider as paradata — BA_<CODE>_POSITION (the last position, 0–100) and
+       * BA_<CODE>_DWELL_BEFORE / _DWELL_AFTER (seconds the divider sat on each side of the middle). Off by default.
+       */
+      recordPosition: z.boolean().optional(),
+      /**
+       * S5c (SM-07) ADAPTIVE GABOR–GRANGER PRICE LADDER (`numeric.price_ladder`). One price at a time, "would you
+       * buy at this price?": yes moves one step up, no one step down, stopping at the first boundary (engine
+       * priceLadder.ts). The answer is the highest price accepted (0 = none); GG_<CODE>_START and GG_<CODE>_PATH
+       * are kept as paradata.
+       */
+      /**
+       * S5c (SM-18) IAT BLOCK: tags an `experimental.reaction_time` question as one of the four combined IAT blocks
+       * (B3 compatible practice, B4 compatible test, B6 incompatible practice, B7 incompatible test) with its answer
+       * key (row code → the correct category's option code). The engine scores the tagged blocks with Greenwald et
+       * al.'s (2003) improved D (D600) into IAT_D / IAT_TRIALS / IAT_FAST_SHARE / IAT_EXCLUDED (iatScore.ts).
+       */
+      iatBlock: z.object({
+        role: z.enum(["compatible_practice", "compatible_test", "incompatible_practice", "incompatible_test"]),
+        key: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+      }).optional(),
+      /**
+       * S5c (SM-16) SHELF TEST (`hotspot.shelf`): the products are the regions of the shelf image; the answer is the
+       * product picked. `secondPick` asks a second choice ("if that one were not there") into SHELF_<CODE>_PICK2;
+       * SHELF_<CODE>_TIME and SHELF_<CODE>_EXAMINED are always recorded (engine shelf.ts).
+       */
+      shelf: z.object({
+        secondPick: z.boolean().optional(),
+        secondPrompt: z.string().max(300).optional(),
+      }).optional(),
+      priceLadder: z.object({
+        prices: z.array(z.number().positive()).max(20).default([]),
+        start: z.enum(["middle", "lowest", "highest", "random"]).optional(),
+        prompt: z.string().max(300).optional(),
+        yesLabel: z.string().max(80).optional(),
+        noLabel: z.string().max(80).optional(),
+        currency: z.string().max(4).optional(),
+      }).optional(),
       /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
       mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
       /** Respondent must reach the end of the media before answering. */
@@ -1212,6 +1298,16 @@ const QuestionObject = z.object({
       /** Pen colour and width for drawing variants. */
       penColor: z.string().optional(),
       penWidth: z.number().optional(),
+      /**
+       * AQ-08 — CASCADING DROPDOWN (single_select.cascading_dropdown): the PARENT list. The child list is the
+       * question's own `options`, each naming its parent in `meta.parent` (a parent code). The stored answer is the
+       * child code; the parent is derived (`<id>__parent` beside the answer, re-derived from the definition on
+       * export as VAR_PARENT) and validated: the child must belong to the chosen parent.
+       */
+      cascadeParents: z.array(z.object({ code: z.union([z.string(), z.number()]), label: z.string() })).optional(),
+      /** The two prompts of a cascading dropdown ("Country", "State"); defaults are the localized "— Select —". */
+      cascadeParentLabel: z.string().optional(),
+      cascadeChildLabel: z.string().optional(),
       /** Timed question: seconds allowed; what happens when they run out. */
       timeLimitSeconds: z.number().optional(),
       onTimeout: z.enum(["lock", "advance"]).optional(),
@@ -1517,6 +1613,8 @@ const QuestionObject = z.object({
 
   displayLogic: Condition.optional(),
   skipLogic: z.array(SkipRule).default([]),
+  /** S4b (GA-05): a native timer on this question — counted on the page's one clock; see timer.ts */
+  timer: Timer.optional(),
 
   customJs: z.string().optional(),
   customCss: z.string().optional(),

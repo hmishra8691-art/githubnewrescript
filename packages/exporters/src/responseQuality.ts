@@ -5,6 +5,7 @@ import type { ResponseStateLike } from "./csv.js";
 import { renderValue, renderHeader, type ValueMode, type HeaderMode } from "./valueRendering.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { definitionHash } from "./stamp.js";
+import { timingCells, timingColumns, type TimingTelemetry } from "./paradataExport.js";
 
 /**
  * Response data with the quality assessment — two sheets, as the researcher
@@ -61,6 +62,8 @@ export interface QualityExportRow {
   };
   quality: QualityLike | null;
   review: { status: string | null; reason?: string | null; by?: string | null; at?: string | null };
+  /** S5b (TE-10): the stored telemetry (`responses.telemetry`), read only for the timing columns */
+  telemetry?: TimingTelemetry | null;
 }
 
 export type DatasetFilter =
@@ -124,6 +127,8 @@ export interface ResponseXlsxOptions {
    * is the same as no warning.
    */
   versionNote?: { versions: string[]; warnings: string[] };
+  /** S5b (TE-10): append PAGE_<id>_SEC / Q_<VAR>_SEC (from each row's telemetry) to Main Data, last */
+  timingColumns?: boolean;
 }
 
 export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityExportRow[], opts: ResponseXlsxOptions = {}): Promise<Buffer> {
@@ -151,7 +156,8 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
   const sampleCols = rows.some((r) => r.state.sampleSource) ? [...SAMPLE_COLUMNS] : [];
   const mixed = rows.some((r) => r.state.isTest) && rows.some((r) => !r.state.isTest);
   const envCols = (opts.environmentColumn ?? mixed) ? [...ENVIRONMENT_COLUMNS] : [];
-  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols];
+  const timingCols = opts.timingColumns ? timingColumns(def) : [];
+  const header = ["Response ID", "Status", "Start Time", "End Time", ...varNames.map((n) => renderHeader(defs.get(n), n, headerMode)), ...qualityCols, ...sampleCols, ...envCols, ...timingCols.map((c) => (headerMode === "name" ? c.name : c.label))];
   main.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
   /*
    * The dataset filter removes rows, so the position in `included` is NOT
@@ -174,6 +180,7 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     }
     if (sampleCols.length) line.push(...sampleCells(r));
     if (envCols.length) line.push(...environmentCells(r));
+    if (timingCols.length) line.push(...timingCells(timingCols, r.telemetry));
     main.addRow(line);
   }
   styleHeader(main);
@@ -234,6 +241,10 @@ export async function exportResponsesXlsx(def: SurveyDefinition, rows: QualityEx
     /* DOC-13: which questionnaire this file was written against — same hash as the questionnaire document's stamp */
     ["Definition", `${def.meta.code} v${def.meta.version} · definition #${definitionHash(def)}`],
   ]);
+  if (timingCols.length) {
+    info.addRow(["Timing columns", "PAGE_<id>_SEC: seconds on the page (all visits, out-of-focus time excluded). Q_<VAR>_SEC: page entry → last change on the answering visit, else an equal share of the page. Blank = not measured."]);
+    for (const c of timingCols) info.addRow([c.name, c.label]);
+  }
 
   /*
    * MULTI-VERSION DELIVERIES SAY SO, ON THE SHEET SOMEBODY READS.

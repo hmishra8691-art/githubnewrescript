@@ -1123,3 +1123,113 @@ test("CSV: the BOM is opt-in — off by default the first bytes are the header, 
   const accented = [{ ...states[0], answers: { ...states[0].answers, q_open: "Café Škoda 丰田 क्यों" } }];
   assert.ok(Buffer.from(responsesToCSV(def, accented as any, undefined, { bom: true }), "utf8").toString("utf8").includes("Café Škoda 丰田 क्यों"));
 });
+
+/* ------------------------------------------------ S5b item 4: per-page / per-question timing (TE-10) */
+
+import { timingColumns, timingCells, timingLongCSV, timingLongRows, TIMING_LONG_HEADER, exportResponsesXlsx } from "./index.js";
+import ExcelJS from "exceljs";
+
+/** two pages so both levels show: p1 = gender + brands, p2 = age + comment */
+function timingSurvey(): SurveyDefinition {
+  const d = makeSurvey();
+  d.flow = [{ type: "page", id: "p1", questionIds: ["q_gender", "q_brands"] } as any, { type: "page", id: "p2", questionIds: ["q_age", "q_open"] } as any];
+  return d;
+}
+const T0 = 1_700_000_000_000;
+const timingTel = (): any => ({
+  v: 1, startedAt: T0, submittedAt: T0 + 40_000,
+  pages: [
+    { pageId: "p1", step: 0, enteredAt: T0, leftAt: T0 + 12_000, via: "start", questionIds: ["q_gender", "q_brands"], outOfFocusMs: 2_000, blurs: 1, pointerEvents: 3, keyEvents: 0, scrollEvents: 0, scrollDepth: 80, idleMs: 0 },
+    { pageId: "p2", step: 1, enteredAt: T0 + 12_000, leftAt: T0 + 30_000, via: "next", questionIds: ["q_age", "q_open"], outOfFocusMs: 0, blurs: 0, pointerEvents: 2, keyEvents: 9, scrollEvents: 0, scrollDepth: 100, idleMs: 11_000 },
+    { pageId: "p1", step: 0, enteredAt: T0 + 30_000, leftAt: T0 + 35_000, via: "back", questionIds: ["q_gender", "q_brands"], outOfFocusMs: 0, blurs: 0, pointerEvents: 1, keyEvents: 0, scrollEvents: 0, scrollDepth: 100 },
+  ],
+  questions: {
+    q_gender: { firstChangeAt: T0 + 3_000, lastChangeAt: T0 + 4_000, changes: 2, pastes: 0, pasteChars: 0, typedChars: 0, copies: 0, visibleMs: 11_500 },
+    q_brands: { firstChangeAt: T0 + 6_000, lastChangeAt: T0 + 9_000, changes: 2, pastes: 0, pasteChars: 0, typedChars: 0, copies: 0 },
+    q_age: { firstChangeAt: T0 + 15_000, lastChangeAt: T0 + 15_500, changes: 1, pastes: 0, pasteChars: 0, typedChars: 2, copies: 0 },
+  },
+  focus: { blurs: 1, totalOutOfFocusMs: 2000, longestOutOfFocusMs: 2000 }, clipboard: { copies: 0, pastes: 0, pasteChars: 0, largePastes: 0, pasteQuestions: 0 },
+  navigation: { back: 1, forward: 1, reloads: 0, jumps: 0, sequence: [] }, interaction: { pointerEvents: 6, keyEvents: 9, scrollEvents: 0 },
+  disabled: [], measured: ["visibility", "idle"],
+});
+
+test("S5b timingColumns: PAGE_<id>_SEC per page then Q_<VAR>_SEC per question, flow order, labelled", () => {
+  const cols = timingColumns(timingSurvey());
+  assert.deepEqual(cols.map((c) => c.name), ["PAGE_P1_SEC", "PAGE_P2_SEC", "Q_GENDER_SEC", "Q_BRANDS_SEC", "Q_AGE_SEC", "Q_COMMENT_SEC"]);
+  assert.equal(cols[0].label, "Seconds on page p1");
+  assert.equal(cols[2].label, "Seconds on GENDER: What is your gender?");
+});
+
+test("S5b timingCells: page seconds summed over visits minus out of focus; question = entry → last change; blank = not measured", () => {
+  const def = timingSurvey();
+  const cols = timingColumns(def);
+  const cells = timingCells(cols, timingTel());
+  const at = (n: string) => cells[cols.findIndex((c) => c.name === n)];
+  assert.equal(at("PAGE_P1_SEC"), 15, "12 s − 2 s out of focus + 5 s on the back visit");
+  assert.equal(at("PAGE_P2_SEC"), 18);
+  assert.equal(at("Q_GENDER_SEC"), 4);
+  assert.equal(at("Q_BRANDS_SEC"), 9);
+  assert.equal(at("Q_AGE_SEC"), 3.5);
+  assert.equal(at("Q_COMMENT_SEC"), 9, "never changed: an equal share of its page");
+  assert.deepEqual(timingCells(cols, null), cols.map(() => ""), "no telemetry: blanks, never zeros");
+  assert.deepEqual(timingCells(cols, { ...timingTel(), disabled: ["timing"] }), cols.map(() => ""));
+});
+
+test("S5b timing=… appends the wide columns LAST in the CSV, numeric and labelled in the .sav, the same in .dta", () => {
+  const def = timingSurvey();
+  const rows: QualityExportRow[] = [{ ...qualityRows[0], telemetry: timingTel() }, { ...qualityRows[1], telemetry: null }];
+  const without = buildExportExtra(rows, { quality: true, system: true })!;
+  const extra = buildExportExtra(rows, { quality: true, system: true, timing: def })!;
+  assert.deepEqual(extra.columns.slice(0, without.columns.length), without.columns, "no earlier column moves");
+  assert.deepEqual(extra.columns.slice(-6), ["PAGE_P1_SEC", "PAGE_P2_SEC", "Q_GENDER_SEC", "Q_BRANDS_SEC", "Q_AGE_SEC", "Q_COMMENT_SEC"]);
+  const csv = responsesToCSV(def, states, extra).split("\n");
+  const header = csv[0].split(",");
+  assert.equal(header[header.length - 6], "PAGE_P1_SEC");
+  assert.equal(csv[1].split(",").slice(-6).join(","), "15,18,4,9,3.5,9");
+  assert.equal(csv[2].split(",").slice(-6).join(","), ",,,,,");
+  const sav = readSav(responsesToSav(def, states, { extra }));
+  assert.equal(sav.cases[0].PAGE_P1_SEC, 15);
+  assert.equal(sav.widths.Q_AGE_SEC, undefined, "numeric, not string");
+  assert.equal(sav.labels.Q_AGE_SEC, "Seconds on AGE: How old are you?");
+  assert.equal(sav.labels.PAGE_P2_SEC, "Seconds on page p2");
+  assert.equal(readDta(responsesToDta(def, states, { extra })).names.slice(-6).join(), "PAGE_P1_SEC,PAGE_P2_SEC,Q_GENDER_SEC,Q_BRANDS_SEC,Q_AGE_SEC,Q_COMMENT_SEC");
+});
+
+test("S5b Excel: timingColumns appends the columns to Main Data and explains them on About", async () => {
+  const def = timingSurvey();
+  const rows: QualityExportRow[] = [{ ...qualityRows[0], state: { ...qualityRows[0].state, ...states[0] } as any, telemetry: timingTel() }];
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await exportResponsesXlsx(def, rows, { timingColumns: true })) as any);
+  const main = wb.getWorksheet("Main Data")!;
+  const header = (main.getRow(1).values as unknown[]).slice(1);
+  assert.deepEqual(header.slice(-6), ["PAGE_P1_SEC", "PAGE_P2_SEC", "Q_GENDER_SEC", "Q_BRANDS_SEC", "Q_AGE_SEC", "Q_COMMENT_SEC"]);
+  assert.deepEqual((main.getRow(2).values as unknown[]).slice(-6), [15, 18, 4, 9, 3.5, 9]);
+  const about = wb.getWorksheet("About")!;
+  const aboutText = JSON.stringify(about.getSheetValues());
+  assert.match(aboutText, /Seconds on AGE: How old are you\?/);
+  const plain = new ExcelJS.Workbook();
+  await plain.xlsx.load((await exportResponsesXlsx(def, rows, {})) as any);
+  assert.ok(!(plain.getWorksheet("Main Data")!.getRow(1).values as unknown[]).includes("PAGE_P1_SEC"), "off by default");
+});
+
+test("S5b long timing file: one row per respondent × page and × question, visits, visible / idle seconds, scroll depth", () => {
+  const def = timingSurvey();
+  const rows = timingLongRows(def, [{ sessionId: "s1", respondentId: "r1", status: "complete", telemetry: timingTel() }, { sessionId: "s2", status: "complete", telemetry: null }]);
+  const H = [...TIMING_LONG_HEADER];
+  const get = (r: (string | number)[], k: string) => r[H.indexOf(k as any)];
+  assert.equal(rows.length, 6, "2 pages + 4 questions for s1; nothing for s2 (no telemetry)");
+  const p1 = rows.find((r) => get(r, "LEVEL") === "page" && get(r, "PAGE_ID") === "p1")!;
+  assert.equal(get(p1, "VISITS"), 2);
+  assert.equal(get(p1, "SECONDS"), 15);
+  assert.equal(get(p1, "SCROLL_DEPTH_PCT"), 100);
+  assert.equal(get(p1, "IDLE_SECONDS"), 0);
+  const p2 = rows.find((r) => get(r, "PAGE_ID") === "p2" && get(r, "LEVEL") === "page")!;
+  assert.equal(get(p2, "IDLE_SECONDS"), 11);
+  const g = rows.find((r) => get(r, "QUESTION_ID") === "q_gender")!;
+  assert.deepEqual([get(g, "VARIABLE"), get(g, "PAGE_ID"), get(g, "SECONDS"), get(g, "VISIBLE_SECONDS"), get(g, "CHANGES")], ["GENDER", "p1", 4, 11.5, 2]);
+  assert.equal(get(rows.find((r) => get(r, "QUESTION_ID") === "q_brands")!, "VISIBLE_SECONDS"), "", "not measured: blank");
+  const csv = timingLongCSV(def, [{ sessionId: "=cmd()", telemetry: timingTel() }], { bom: true });
+  assert.ok(csv.startsWith("﻿SESSION_ID,RESPONDENT_ID,STATUS,LEVEL,"));
+  assert.ok(!csv.includes("\n=cmd()"), "formula-guarded cells");
+  assert.equal(csv.trim().split("\n").length, 7);
+});

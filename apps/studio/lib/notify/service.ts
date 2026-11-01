@@ -53,7 +53,7 @@ export type { NotifyEmitInput as EmitInput } from "@rescript/engine";
 export { normaliseNotifyInput as normaliseEvent } from "@rescript/engine";
 type EmitInput = NotifyEmitInput;
 
-const asEvent = (e: EventRec): NotifyEvent => ({ id: e.id, type: e.type, surveyId: e.surveyId ?? "", customerId: e.customerId, studyTitle: e.payload.studyTitle ?? null, ref: e.ref, participant: e.payload.participant ?? null, excerpt: e.payload.excerpt ?? null, link: e.payload.link ?? null, detail: e.payload.detail ?? {}, at: e.payload.at, isTest: e.isTest });
+const asEvent = (e: EventRec): NotifyEvent => ({ id: e.id, type: e.type, surveyId: e.surveyId ?? "", customerId: e.customerId, studyTitle: e.payload.studyTitle ?? null, ref: e.ref, participant: e.payload.participant ?? null, excerpt: e.payload.excerpt ?? null, link: e.payload.link ?? null, detail: e.payload.detail ?? {}, response: e.payload.response ?? null, at: e.payload.at, isTest: e.isTest });
 
 export async function emitNotifyEvent(deps: NotifyDeps, input: EmitInput): Promise<{ ok: true; eventId: string; inserted: boolean; deliveries: DeliveryRec[] } | { ok: false; error: string }> {
   const n = normaliseNotifyInput(input, deps.now());

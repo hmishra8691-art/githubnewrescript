@@ -31,7 +31,7 @@
  *
  * ## What a script sees
  *
- *   · `rs` — the survey api (`rs.listen`, `rs.getAnswer`, `rs.addClass`…).
+ *   · `rs` — the survey api (`rs.listen`, `rs.getAnswer`, `rs.addClass`, S5b's read-only `rs.getTiming()`…).
  *   · `document` — a MIRROR of the survey page, built from a sanitised
  *     snapshot the host sends. It is a real DOM, so `querySelector`,
  *     `closest`, `classList`, `dataset`, `getAttribute`, `textContent`,
@@ -123,6 +123,8 @@ const SANDBOX_HTML = String.raw`<!doctype html><html><head><meta charset="utf-8"
   var CFG = __CFG__;
   var host = window.parent;
   var handlers = [], answers = {}, byKey = {}, vars = { embedded: {}, calculated: {} }, meta = { questions: {} };
+  /* S5b (TE-12): the host's timing snapshot ({ startedAt, pageEnteredAt, pageOutOfFocusMs, questions }) or null */
+  var timing = null;
   /* S1a: requests the host answers (writes, validate/submit replies) — id -> resolve */
   var pending = {}, reqN = 0;
   var validating = null; /* the errors a "validate" handler raises with rs.error, while it runs */
@@ -170,6 +172,21 @@ __MICRO__
     getQuestion: function (code) { return meta.questions[code] || null; },
     getBlock: function () { return meta.block || null; },
     getPage: function () { return meta.page || null; },
+    /*
+     * S5b (TE-12): READ-ONLY timing — seconds since the survey started, on this page (out-of-focus time excluded,
+     * as of the host's last update), and per question code (page entry → its last change). Null when the survey
+     * does not record timing (or outside the survey). There is no write path: nothing here goes back to the host.
+     */
+    getTiming: function () {
+      var t = timing; if (!t) return null;
+      var now = Date.now(), q = t.questions || {};
+      var r1 = function (ms) { return Math.max(0, Math.round(ms / 100) / 10); };
+      return Object.freeze({
+        elapsedSeconds: r1(now - t.startedAt),
+        pageSeconds: t.pageEnteredAt == null ? null : r1(now - t.pageEnteredAt - (t.pageOutOfFocusMs || 0)),
+        questionSeconds: function (code) { var v = q[String(code)]; return typeof v === "number" ? v : null; }
+      });
+    },
     after: function (ms, fn) { setTimeout(fn, Math.max(0, Math.min(60000, Number(ms) || 0))); },
     /* the survey's own popup (one per script; the next replaces it) — never a hand-built overlay */
     popup: function (text, opts) {
@@ -435,7 +452,7 @@ __MICRO__
     if (e.source !== host) return;
     var m = e.data; if (!m || m.__rsux !== 1) return;
     if (m.type === "init") {
-      answers = m.answers || {}; byKey = m.byKey || {}; vars = m.vars || vars; meta = m.meta || meta;
+      answers = m.answers || {}; byKey = m.byKey || {}; vars = m.vars || vars; meta = m.meta || meta; timing = m.timing || null;
       applyTree(m.tree);
       observer = new MutationObserver(onMutations);
       observer.observe(document, { subtree: true, attributes: true, childList: true, characterData: true });
@@ -444,7 +461,7 @@ __MICRO__
       try { (new Function("rs", m.code))(Object.freeze(rs)); } catch (err) { fail(err); }
     }
     else if (m.type === "sync") { if (ready) applyTree(m.tree); }
-    else if (m.type === "answers") { answers = m.answers || {}; byKey = m.byKey || byKey; vars = m.vars || vars; }
+    else if (m.type === "answers") { answers = m.answers || {}; byKey = m.byKey || byKey; vars = m.vars || vars; if ("timing" in m) timing = m.timing || null; }
     else if (m.type === "lifecycle") {
       /*
        * S1a: "validate" / "submit" on Next. Every handler for the event runs; a validate handler raises errors with

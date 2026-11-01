@@ -87,6 +87,41 @@ export function AlertsPanelsTab() {
 
 const EVENT_TYPES = (Object.keys(NOTIFY_EVENTS) as (keyof typeof NOTIFY_EVENTS)[]).filter((t) => t !== "notify.test");
 
+/**
+ * S5b (AP-09): PER-RESPONSE EVENTS — off by default. On, each finished response (the statuses ticked) emits a
+ * response.* event that goes wherever a rule names it (a signed webhook is the channel meant for it); the answers by
+ * variable name ride only when asked, likely-PII fields withheld unless listed. Saved through configure_alerts.
+ */
+function ResponseEvents({ cur, act }: { cur: AlertSettings; act: (a: unknown[], label: string) => boolean }) {
+  const r = cur.responses;
+  const [on, setOn] = React.useState(!!r?.enabled);
+  const [evs, setEvs] = React.useState<string[]>(r?.events ?? ["completed"]);
+  const [answers, setAnswers] = React.useState(!!r?.includeAnswers);
+  const [allow, setAllow] = React.useState((r?.allowFields ?? []).join(", "));
+  const [test, setTest] = React.useState(!!r?.includeTest);
+  const save = () => act([{ op: "configure_alerts", responses: on ? { enabled: true, events: evs.length ? evs : ["completed"], includeAnswers: answers, allowFields: allow.split(/[\s,]+/).filter(Boolean), includeTest: test } : null }], "Per-response events");
+  return (
+    <div data-testid="al-responses" style={{ borderTop: "1px solid var(--line, #eee)", marginTop: 10, paddingTop: 8 }}>
+      <div className="eyebrow">Per-response events (webhook)</div>
+      <label className="chip"><input type="checkbox" data-testid="al-resp-on" checked={on} onChange={(e) => setOn(e.target.checked)} /> Send an event for each finished response</label>
+      {on && (
+        <div className="ql-row" style={{ flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+          {([["completed", "completed"], ["screened_out", "screened out"], ["quota_full", "quota full"]] as const).map(([k, label]) => (
+            <label key={k} className="chip"><input type="checkbox" data-testid={`al-resp-ev-${k}`} checked={evs.includes(k)} onChange={(e) => setEvs(e.target.checked ? [...evs, k] : evs.filter((x) => x !== k))} /> {label}</label>
+          ))}
+          <label className="chip" title="by variable name; typed text, e-mail / phone / postal fields, places, files and embedded data are withheld unless listed below"><input type="checkbox" data-testid="al-resp-answers" checked={answers} onChange={(e) => setAnswers(e.target.checked)} /> include the answers</label>
+          {answers && <label className="f"><span>Send these likely-PII fields anyway</span><input className="input" data-testid="al-resp-allow" value={allow} onChange={(e) => setAllow(e.target.value)} placeholder="variable names, e.g. AGE_TEXT" /></label>}
+          <label className="chip"><input type="checkbox" data-testid="al-resp-test" checked={test} onChange={(e) => setTest(e.target.checked)} /> test responses too</label>
+        </div>
+      )}
+      <div className="ql-row" style={{ gap: 8, marginTop: 6 }}>
+        <button type="button" className="btn small" data-testid="al-resp-save" onClick={save}>Save</button>
+        <span className="ql-muted" style={{ fontSize: 12 }}>Then add a rule for “Response completed” to a webhook channel. Answers go to webhook channels only — Slack, Teams, e-mail and the bell get a one-line notice.</span>
+      </div>
+    </div>
+  );
+}
+
 function Rules({ settings, channels, me, act, update, onTry }: { settings: AlertSettings | undefined; channels: ChannelsInfo | null; me: string | null; act: (a: unknown[], label: string) => boolean; update: (fn: (d: { alerts?: AlertSettings }) => void) => void; onTry: (type: string) => void }) {
   const cur = AlertSettingsSchema.parse(settings ?? {});
   const [events, setEvents] = React.useState<string[]>(["ai_interview.distress"]);
@@ -136,6 +171,7 @@ function Rules({ settings, channels, me, act, update, onTry }: { settings: Alert
         <button type="button" className="btn" data-testid="al-try" onClick={() => onTry(events[0] ?? "ai_interview.distress")}>Try the rules (sample)</button>
       </div>
       <p className="ql-muted" style={{ fontSize: 12 }}>Distress alerts always go out immediately, even in quiet hours. A channel receives the study, the participant's pseudonymous id (P3), a short redacted excerpt and a link — never their full words or identity.</p>
+      <ResponseEvents cur={cur} act={act} />
     </div>
   );
 }

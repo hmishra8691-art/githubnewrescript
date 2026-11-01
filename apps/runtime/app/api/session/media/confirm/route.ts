@@ -3,8 +3,8 @@ import { sessionForMedia } from "@/lib/aiSession";
 import { mediaDbOrResponse } from "@/lib/mediaRoute";
 import { recordSessionUsage } from "@/lib/metering";
 import { sttConfigured } from "@/lib/ai";
-import { transcribes, savesAudio } from "@rescript/engine";
-import { confirmUpload, queueTranscript, MediaError, stageLogger } from "@rescript/media";
+import { transcribes, savesAudio, isVideoRecording, videoRecordingConfig } from "@rescript/engine";
+import { confirmUpload, queueTranscript, MediaError, stageLogger, verifyAnswerVideo } from "@rescript/media";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,6 +52,11 @@ export async function POST(req: NextRequest) {
       durationSeconds: Number(body.durationSeconds) || null,
     }, readParts(body.parts));
     log("storage_confirmed", { mediaId, questionId, bytes: stored.bytes, seconds: stored.durationSeconds });
+    /* S5a (MM2-09): a respondent video is proven by its bytes (type, size, container sniffed) or removed */
+    const vq = questionId ? gate.def.questions.find((x) => x.id === questionId) : undefined;
+    if (vq && isVideoRecording(vq)) {
+      await verifyAnswerVideo(db, stored, videoRecordingConfig(vq).maxSizeMb);
+    }
 
     if (gate.billing) {
       void recordSessionUsage(gate.billing, {

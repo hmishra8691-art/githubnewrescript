@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { pickArm, sanitizeHtml } from "@rescript/engine";
+import { claimedExperimentArm, pickArm, sanitizeHtml } from "@rescript/engine";
 import type { QRProps } from "../QuestionRenderer";
 import { SingleSelect } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
@@ -207,16 +207,24 @@ export function ExperimentArm(p: QRProps) {
    * page redraw, coming Back — cannot silently re-randomise a treatment
    * they have already seen.
    */
+  /*
+   * S4c (RA-08): with `armBalance.exact` the arm is CLAIMED by the Runner at page entry (least-filled, weighted, the
+   * same claim as an exact randomizer) and stored in `<VAR>_ARM` before this page is drawn — this renderer only shows
+   * it. No claim yet (a preview of the question alone): nothing is drawn here, the seed never decides.
+   */
+  const exact = !!(p.q.settings as { armBalance?: { exact?: boolean } }).armBalance?.exact;
+  const claimed = exact ? claimedExperimentArm(p.state, p.q, p.loop) : null;
   React.useEffect(() => {
     if (done.current) return;
-    if (assigned) { done.current = true; return; }
+    if (assigned && (!claimed || assigned === claimed)) { done.current = true; return; }
+    if (exact) { if (claimed) { done.current = true; p.onChange(claimed); } return; }
     const arm = pickArm(arms, rng(seedFor(p, "arm"))());
     if (!arm) return;
     done.current = true;
     p.onChange(arm.code);
   });
 
-  const arm = arms.find((a) => String(a.code) === assigned);
+  const arm = arms.find((a) => String(a.code) === (claimed ?? assigned));
 
   if (arms.length === 0) {
     return (

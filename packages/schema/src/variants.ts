@@ -564,6 +564,27 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["options", "search", "sorting", "randomization", "carry_forward", "list_logic"],
     validations: VAL_SINGLE,
   }),
+  /*
+   * AQ-08 (2026-10-31): parent list → child list filtered by the parent's code. Children are the question's options
+   * (`meta.parent` = a parent code); the parents are `settings.cascadeParents`. Answer = the child code.
+   */
+  stable(F.single, "cascading_dropdown", "Cascading Dropdown", "Two linked dropdowns: pick a parent (country), then a child filtered to it (state); stores the child code and derives the parent.", {
+    baseType: "dropdown", renderer: "cascading_dropdown", responseModel: "single_choice",
+    capabilities: ["options", "sorting", "carry_forward", "list_logic"],
+    validations: VAL_SINGLE,
+    defaults: {
+      settings: {
+        cascadeParents: [{ code: "A", label: "Group A" }, { code: "B", label: "Group B" }],
+        cascadeParentLabel: "Choose a group",
+        cascadeChildLabel: "Choose an item",
+      },
+      options: [
+        { code: 1, label: "A — first", meta: { parent: "A" } },
+        { code: 2, label: "A — second", meta: { parent: "A" } },
+        { code: 3, label: "B — first", meta: { parent: "B" } },
+      ],
+    },
+  }),
   stable(F.single, "buttons", "Button Select", "Large tap-friendly buttons — one per option.", {
     baseType: "single_select", renderer: "buttons", responseModel: "single_choice",
     capabilities: CAP_SINGLE, validations: VAL_SINGLE,
@@ -590,7 +611,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.single, "image", "Image Select", "Pick one image from a grid.", {
     baseType: "image_select", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
-    defaults: { settings: { maxSelections: 1 } },
+    defaults: { settings: { zoom: "click", maxSelections: 1 } },
   }),
   // Retired duplicates — the rating scales live in the Slider / Rating family.
   // Kept registered so existing surveys keep rendering; hidden from the picker.
@@ -779,7 +800,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.multi, "image", "Image Multi-Select / Image Grid", "Pick several images from a grid.", {
     baseType: "image_select", responseModel: "multiple_choice",
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
-    defaults: { settings: { maxSelections: 99 } },
+    defaults: { settings: { zoom: "click", maxSelections: 99 } },
   }),
   /*
    * RETIRED. "Checkbox with Min = 3 and Max = 3 already forces respondents to
@@ -1003,6 +1024,20 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     capabilities: ["numeric_bounds", "scale_labels"], validations: VAL_NUM,
     defaults: { settings: { minValue: 0, maxValue: 100, sliderRightLabel: "100%" } },
     supersededBy: "slider.single",
+  }),
+  /*
+   * S5c (SM-07): ADAPTIVE GABOR–GRANGER — one "would you buy at <price>?" at a time, up after yes, down after no,
+   * stopping at the first boundary (engine priceLadder.ts). The answer is the highest price accepted (0 = none),
+   * a plain numeric the pricing analysis reads with method gabor_granger, ladder: true.
+   */
+  stable(F.numeric, "price_ladder", "Price Ladder (adaptive Gabor–Granger)", "Would you buy at this price? Yes moves up the ladder, no moves down — the answer is the highest price accepted.", {
+    baseType: "numeric", renderer: "priceladder", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: ["required", "custom_expression"],
+    builder: { hide: ["bounds"] },
+    defaults: {
+      settings: { minValue: 0, maxValue: 1_000_000, priceLadder: { prices: [5, 10, 15, 20, 25], start: "middle", yesLabel: "Yes, I would buy it", noLabel: "No" } },
+      instruction: "Answer for each price shown.",
+    },
   }),
   stable(F.numeric, "numeric_range", "Numeric Range", "A from–to pair of numbers.", {
     // Two labelled numeric fields — exactly what a numeric list stores — so
@@ -1416,6 +1451,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.ranking, "image", "Image Ranking", "Rank images by tapping them in order.", {
     baseType: "image_ranking", responseModel: "rank_order",
     capabilities: ["options", "images", "randomization", "carry_forward"], validations: ["required"],
+    defaults: { settings: { zoom: "click" } },
   }),
   /*
    * RETIRED FROM RANKING, not from the product: the same question now lives
@@ -1623,13 +1659,13 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.image, "choice", "Image Choice", "Pick one image.", {
     baseType: "image_select", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
-    defaults: { settings: { maxSelections: 1 } },
+    defaults: { settings: { zoom: "click", maxSelections: 1 } },
     supersededBy: "single_select.image",
   }),
   stable(F.image, "grid", "Image Grid (Multi)", "Pick several images.", {
     baseType: "image_select", responseModel: "multiple_choice",
     capabilities: [...CAP_MULTI, "images"], validations: VAL_MULTI,
-    defaults: { settings: { maxSelections: 99 } },
+    defaults: { settings: { zoom: "click", maxSelections: 99 } },
     supersededBy: "multi_select.image",
   }),
   stable(F.image, "ranking", "Image Ranking", "Rank images in order.", {
@@ -1646,6 +1682,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.image, "comparison", "Image Comparison (Side-by-Side)", "Two or more large images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { zoom: "click" } },
     supersededBy: "comparison.side_by_side",
   }),
   /*
@@ -1805,6 +1842,22 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         maxAnswerSeconds: 120,
       },
       instruction: "Watch the clip, then tell us what you think.",
+    },
+  }),
+  /*
+   * S5a (MM2-09): RESPONDENT VIDEO — camera + microphone (getUserMedia), a live preview, a duration limit
+   * (maxAnswerSeconds), re-record (maxRetakes), consent text before the camera turns on, and a video file input when
+   * there is no camera. Stored through the session's resumable media pipeline as a respondent file (answer_upload,
+   * WebM / MP4 / MOV only, sniffed on the server, ≤ maxSizeMb ≤ 50 MB); the answer is the upload's [{url, name, size,
+   * type}].
+   */
+  stable(F.media, "video_recording", "Video Recording / Video Response", "Record a video answer with the camera (or upload a video).", {
+    baseType: "upload", renderer: "videorecording", responseModel: "media",
+    capabilities: [], validations: ["required"],
+    defaults: {
+      settings: { accept: "video/webm,video/mp4,video/quicktime", maxFiles: 1, maxSizeMb: 50, maxAnswerSeconds: 60, maxRetakes: 3, allowFileUpload: true,
+        consentText: "I agree to be recorded on video. The recording is used only for this research and is stored securely." },
+      instruction: "Turn on your camera and record your answer.",
     },
   }),
   stable(F.media, "audio_recording", "Audio Recording / Voice Response", "Record a spoken answer.", {
@@ -2109,6 +2162,7 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
   stable(F.comparison, "side_by_side", "Side-by-Side Comparison", "Large option cards/images side by side — pick one.", {
     baseType: "single_select", renderer: "compare", responseModel: "single_choice",
     capabilities: [...CAP_SINGLE, "images"], validations: VAL_SINGLE,
+    defaults: { settings: { zoom: "click" } },
     supersededBy: "single_select.product_choice",
   }),
   /* Same duels, same `tournament` renderer, same rank_order answer as
@@ -2127,6 +2181,21 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Pick the one you prefer in each pair.",
     },
     supersededBy: "ranking.tournament",
+  }),
+  /*
+   * S5a (MM2-06): BEFORE / AFTER — two images stacked under one draggable divider (a "wipe"). The images are the
+   * question's stimulus (mediaItems[0] before, [1] after — set_question_media with two items); the answer is the
+   * optional rating after (numeric, minValue..maxValue), or the final divider position 0–100 when askRating is
+   * false. recordPosition stores BA_<CODE>_POSITION / _DWELL_BEFORE / _DWELL_AFTER as paradata.
+   */
+  stable(F.comparison, "before_after", "Before / After Slider", "Two images under a draggable divider — wipe between before and after, then rate.", {
+    baseType: "numeric", renderer: "beforeafter", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    builder: { hide: ["bounds"] },
+    defaults: {
+      settings: { minValue: 1, maxValue: 5, beforeAfter: { beforeLabel: "Before", afterLabel: "After", startPosition: 50, askRating: true }, recordPosition: false },
+      instruction: "Drag the divider to compare, then rate the change.",
+    },
   }),
   /**
    * A comparison table: the options are the columns (items), `rows` are the
@@ -2297,6 +2366,25 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
         { code: "bottom", label: "Bottom half", meta: { region: { x: 5, y: 53, w: 90, h: 42 } } },
       ],
       instruction: "Select the region you mean.",
+    },
+  }),
+  /*
+   * S5c (SM-16): SHELF TEST — the regions machinery with a task: pick the product you would buy on a shelf image.
+   * The answer is the product's code; time to find, the products examined (hover / focus order) and an optional
+   * second choice are paradata (engine shelf.ts).
+   */
+  stable(F.hotspot, "shelf", "Shelf Test", "Pick the product you would buy from a shelf image — with time to find and the products looked at.", {
+    baseType: "image_select", renderer: "shelf", responseModel: "multiple_choice",
+    capabilities: ["options", "images", "randomization"],
+    validations: ["required"],
+    defaults: {
+      settings: { maxSelections: 1, shelf: { secondPick: false } },
+      options: [
+        { code: "p1", label: "Product 1", meta: { region: { x: 4, y: 10, w: 28, h: 80 } } },
+        { code: "p2", label: "Product 2", meta: { region: { x: 36, y: 10, w: 28, h: 80 } } },
+        { code: "p3", label: "Product 3", meta: { region: { x: 68, y: 10, w: 28, h: 80 } } },
+      ],
+      instruction: "Look at the shelf and click the product you would buy.",
     },
   }),
   stable(F.hotspot, "draw", "Draw-on-Image", "Free-form marking.", {

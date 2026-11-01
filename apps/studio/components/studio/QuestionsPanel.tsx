@@ -79,7 +79,7 @@ export const BLOCK_COMMANDS = {
 } as const;
 
 /** Variants whose stimulus IS `settings.mediaUrl` (their own settings edit it). */
-const MEDIA_OWNING = new Set(["videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
+const MEDIA_OWNING = new Set(["beforeafter", "videorecording", "videorating", "videotimeline", "watchtime", "audiorec", "base:media_timeline"]);
 import { InsertPipingButton } from "./PipingPicker";
 import {
   FIELD_TYPES, nextCode, nextQuestionNaming, resequenceQuestionCodes, recodeOptionCode, recodeRowCode, renameQuestionCode,

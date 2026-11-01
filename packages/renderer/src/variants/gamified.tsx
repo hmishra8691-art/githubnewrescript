@@ -5,6 +5,7 @@ import { SingleSelect } from "../QuestionRenderer";
 import { registerVariantRenderer } from "./registry";
 import { activate, getSide, metaText, rng, seedFor, setSide, useOptions, useRows } from "./shared";
 import { anchor } from "../authoring";
+import { quizKey } from "@rescript/engine";
 
 /**
  * Gamified / Assessment family — Quiz, Timed Question, Matching.
@@ -18,14 +19,24 @@ import { anchor } from "../authoring";
  *   matching  matrix_single  → {row: option}   + __correct (pairs right)
  */
 
-const truthy = (v: unknown) =>
-  v === true || v === 1 || v === "1" || v === "true" || v === "yes";
 
 /* ------------------------------------------------------------------- quiz */
 export function Quiz(p: QRProps) {
+  /*
+   * D14: ONE KEY — question.assessment first, the legacy option.meta.correct as a fallback (engine quizKey). A
+   * respondent copy whose key was withheld (a scored paper not on per_question results) is a plain single choice:
+   * no feedback, no __correct guess (the server grades `_CORRECT`), and never the author hint.
+   */
+  const key = quizKey(p.q);
+  if (key.withheld) return <SingleSelect {...p} />;
+  return <QuizWithKey {...p} correct={key.codes} />;
+}
+
+function QuizWithKey(p: QRProps & { correct: string[] }) {
   const options = useOptions(p);
-  const feedback = p.q.settings.showFeedback !== false;
-  const correct = options.filter((o) => truthy(o.meta?.correct)).map((o) => String(o.code));
+  const correct = p.correct;
+  // no key at all: nothing to reveal or score — never a "Not quite" against an empty key
+  const feedback = p.q.settings.showFeedback !== false && correct.length > 0;
   const answered = p.value != null && p.value !== "";
   // with feedback on, the answer is final — seeing which one was right and
   // then being allowed to change it is not a knowledge test
@@ -33,7 +44,7 @@ export function Quiz(p: QRProps) {
 
   const pick = (code: string | number) => {
     if (locked || p.q.settings.readOnly) return;
-    setSide(p, "correct", correct.includes(String(code)) ? 1 : 0);
+    if (correct.length) setSide(p, "correct", correct.includes(String(code)) ? 1 : 0);
     p.onChange(code);
   };
 
@@ -79,7 +90,8 @@ export function Quiz(p: QRProps) {
           {gotItRight ? "✓ Correct" : "✗ Not quite — the correct answer is highlighted."}
         </div>
       )}
-      {correct.length === 0 && (
+      {/* the author hint: preview / test only (programmerView), never on a live link */}
+      {correct.length === 0 && !!p.programmerView && (
         <div className="rs-quiz-note" data-testid="quiz-nokey">
           No correct answer is marked yet — tick “correct” on an option in the editor.
         </div>

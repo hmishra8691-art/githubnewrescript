@@ -118,7 +118,8 @@ export function uxSelector(t: UxTarget, opts: { state?: (typeof UX_STATES)[numbe
     case "column": inner = `${q} [data-rs-el="column"]${code}`; break;
     case "component": inner = q + (t.selector ? ` ${t.selector}` : ""); break;
     case "button": inner = t.button === "back" ? '[data-rs-button="back"]' : t.button === "submit" ? '[data-rs-button="submit"]' : t.button === "any" || !t.button ? ".rs-nav .rs-btn" : ':is([data-rs-button="next"],[data-rs-button="submit"])'; break;
-    case "progress": inner = t.part === "fill" ? ".rs-progress-fill" : t.part === "label" ? ".rs-progress-label" : ".rs-progress-track"; break;
+    /* D20: the "steps" style has dots and a "Page n of N" label instead of a track — the same target reaches both */
+    case "progress": inner = t.part === "fill" ? ":is(.rs-progress-fill,.rs-progress-dot.current)" : t.part === "label" ? ":is(.rs-progress-label,.rs-progress-steps-label)" : ":is(.rs-progress-track,.rs-progress-dots)"; break;
     case "navigation": inner = ".rs-nav"; break;
   }
   const state = (opts.state ? STATE_SELECTOR[opts.state] : "") + (opts.whenClass ? `[data-rs-ux-on~="${uxToken(opts.whenClass)}"]` : "");
@@ -683,7 +684,9 @@ export function compileUxCss(def: SurveyDefinition, live?: { state?: ResponseSta
 /** what a sandboxed script can call — and nothing else */
 export const UX_SCRIPT_API = ["listen", "getAnswer", "getQuestion", "getBlock", "getPage", "addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus", "after", "log", "popup", "closePopup", "goToPage", "goToSection",
   /* S1a: the engine-checked write channel (requests the host decides — scriptWrites.ts) and the reads beside it; rs.error inside a "validate" handler */
-  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error"] as const;
+  "getEmbedded", "getCalc", "setAnswer", "setEmbedded", "setCalc", "flag", "error",
+  /* S5b (TE-12): read-only timing */
+  "getTiming"] as const;
 /** S1a: the rs calls that ask the host to write (each returns a promise of { ok, reason }) */
 export const UX_SCRIPT_WRITES = ["setAnswer", "setEmbedded", "setCalc", "flag"] as const;
 const TARGET_FIRST = new Set(["addClass", "removeClass", "toggleClass", "animate", "setStyle", "clearStyle", "show", "hide", "showMessage", "hideMessage", "scrollTo", "focus"]);

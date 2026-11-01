@@ -31,7 +31,7 @@ const METHOD_KIND: Record<AnalysisMethod, AnalysisKind> = {
   chi_square: "test", t_test: "test", anova: "test", mann_whitney: "test", kruskal_wallis: "test",
   correlation: "correlation", regression: "regression", logistic_regression: "regression", factor: "factor", reliability: "reliability", cluster: "cluster",
   conjoint_utilities: "conjoint", maxdiff_scores: "maxdiff", turf: "turf", driver_analysis: "regression", text_themes: "text",
-  ranking_scores: "ranking", allocation_shares: "allocation", pricing: "pricing", brand_funnel: "brand",
+  ranking_scores: "ranking", allocation_shares: "allocation", pricing: "pricing", brand_funnel: "brand", sequential_monadic: "sequential_monadic", iat_dscore: "iat", shelf_share: "shelf",
   hb: "hb", latent_class: "lca", sem: "sem",
 };
 
@@ -47,7 +47,10 @@ const PLAN_OPTION_KEYS: Partial<Record<AnalysisMethod, readonly string[]>> = {
   sem: ["syntax", "scaling", "hypothesisPaths"],
   regression: ["bootstrap", "seed"],
   reliability: ["omega"],
-  pricing: ["method", "prices", "acceptCodes"],
+  sequential_monadic: ["order", "blocks"],
+  iat_dscore: ["variable", "excluded"],
+  shelf_share: ["time", "examined", "pick2"],
+  pricing: ["method", "prices", "acceptCodes", "vwCurves", "nmsCheap", "nmsExpensive", "calibration", "ladder"],
 };
 export function plannedOptions(t: Pick<PlannedTest, "method" | "options">): Record<string, unknown> {
   const keys = PLAN_OPTION_KEYS[t.method];

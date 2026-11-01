@@ -1,3 +1,4 @@
+import type { ResponseEventData } from "@rescript/engine";
 import type { AlertSettings, AlertChannelKind } from "@rescript/schema";
 import type { NotifyEventType } from "@rescript/engine";
 
@@ -39,6 +40,8 @@ export interface EventPayload {
   excerpt?: string | null;
   link?: string | null;
   detail?: Record<string, string | number | boolean | null>;
+  /** S5b (AP-09): a response.* event's record (webhook channels only) */
+  response?: ResponseEventData | null;
   at: string;
 }
 export interface EventRec {

@@ -110,10 +110,37 @@ export const TelemetryConfig = z.object({
   device: z.boolean().default(true),
   /** hash the respondent's IP (salted) — never the raw address */
   network: z.boolean().default(true),
+  /**
+   * S5b (TE-04): per-question viewport visibility (ms at least half on screen, first-seen time — an
+   * IntersectionObserver) and the deepest scroll per page visit (% of the page height). Times and percentages only.
+   */
+  visibility: z.boolean().default(true),
+  /**
+   * S5b (TE-02): the successive VALUES of closed answers (codes, numbers, grid cells; the latest 20 per question,
+   * with times relative to the start). Typed text keeps its length only, never the text. Needs `timing`.
+   */
+  answerHistory: z.boolean().default(true),
+  /**
+   * S5b (TE-06): idle periods in the page — no input, pointer, key or scroll for `idleSeconds` — as page, start
+   * (relative) and duration. Durations only.
+   */
+  idle: z.boolean().default(true),
+  /** the gap, in seconds, that counts as idle */
+  idleSeconds: z.number().int().min(10).max(3600).default(60),
+  /** a gentle "Are you still there?" through the survey's native popup when an idle period begins — off by default */
+  idlePrompt: z.boolean().default(false),
+  /** the prompt's own words (absent: the built-in text in the respondent's language) */
+  idlePromptText: z.string().max(300).optional(),
   /** text shown in the runtime footer, e.g. "This survey records response timing to protect data quality." */
   disclosure: z.string().optional(),
 });
 export type TelemetryConfig = z.infer<typeof TelemetryConfig>;
+/**
+ * The telemetry CATEGORIES — the on/off switches of `TelemetryConfig` (its other fields are settings). A category
+ * that is off is listed in the telemetry's `disabled`, so a zero reads as "not measured".
+ */
+export const TELEMETRY_CATEGORIES = ["timing", "focus", "clipboard", "navigation", "interaction", "device", "network", "visibility", "answerHistory", "idle"] as const;
+export type TelemetryCategory = (typeof TELEMETRY_CATEGORIES)[number];
 
 export const PrivacyConfig = z.object({
   /** days to keep raw telemetry after completion; 0 = keep (scores are kept regardless) */
@@ -204,3 +231,83 @@ export const AttentionCheck = z.object({
   qualityPenalty: z.number().min(0).max(100).default(20),
 });
 export type AttentionCheck = z.infer<typeof AttentionCheck>;
+
+/**
+ * S5b (TE-13): every built-in quality rule id and the threshold keys it takes — what `set_quality_settings` may set,
+ * without the engine importing the quality package (which depends on it). `packages/quality` asserts this equals its
+ * catalogue (engine.test.ts), so a rule added there and not here fails a test.
+ */
+export const QUALITY_RULE_PARAMS: Readonly<Record<string, readonly string[]>> = {
+  "timing.overall_speeding": ["ratio"],
+  "timing.page_speeding": ["ratio", "share"],
+  "timing.question_speeding": ["minLatencyMs", "share"],
+  "timing.matrix_speeding": ["secPerRow"],
+  "timing.openend_speeding": ["charsPerSec"],
+  "timing.reading_time": ["wordsPerMin", "share"],
+  "timing.uniform": ["maxCv", "minPages"],
+  "timing.short_dwell": ["minMs", "share"],
+  "timing.idle_then_rush": ["idleSec", "rushRatio"],
+  "timing.entropy": ["minEntropy"],
+  "timing.acceleration": ["ratio"],
+  "timing.pattern_match": ["tolerance", "minPages"],
+  "matrix.straightline": ["minRows", "sameShare", "gridShare"],
+  "matrix.reverse_straightline": [],
+  "matrix.diagonal": ["minRows"],
+  "matrix.alternating": ["minRows"],
+  "matrix.low_variance": ["maxEntropy"],
+  "matrix.midpoint": ["share"],
+  "matrix.extremes": ["share"],
+  "matrix.signature_match": ["minRows"],
+  "consistency.impossible_path": [],
+  "consistency.attention_pair": ["tolerance"],
+  "consistency.frequency_quantity": [],
+  "consistency.piping": [],
+  "pattern.low_entropy": ["minQuestions", "maxEntropy"],
+  "pattern.high_entropy": ["minEntropy"],
+  "pattern.nonsubstantive": ["share", "minOffered"],
+  "pattern.middle_bias": ["share"],
+  "pattern.extreme_bias": ["share"],
+  "pattern.acquiescence": ["share", "minItems"],
+  "pattern.mechanical": ["minQuestions"],
+  "pattern.rare_options": ["peerShare", "count"],
+  "attention.failed": [],
+  "attention.multiple_failed": ["count"],
+  "attention.knowledge_gap": [],
+  "openend.too_short": ["minChars", "share"],
+  "openend.gibberish": ["score"],
+  "openend.repeated": ["score"],
+  "openend.generic": ["share"],
+  "openend.irrelevant": [],
+  "openend.contradiction": [],
+  "openend.duplicate": ["similarity", "minWords"],
+  "openend.ai_like": ["score"],
+  "openend.pasted": ["share"],
+  "openend.probe_ignored": ["count"],
+  "openend.probe_echo": ["similarity"],
+  "interaction.paste_ratio": ["ratio", "minPastes"],
+  "interaction.rapid_paste_submit": ["withinMs"],
+  "interaction.answered_unseen": ["minQuestions"],
+  "interaction.flip_flop": ["reversals", "questions"],
+  "interaction.out_of_focus": ["share"],
+  "navigation.cycling": ["backs", "withinSec"],
+  "navigation.reloads": ["count"],
+  "navigation.fingerprint_match": ["minBacks"],
+  "navigation.screener_edits": [],
+  "device.duplicate": ["count"],
+  "device.webdriver": [],
+  "device.locale_timezone": ["expectedTimezonePrefix"],
+  "network.duplicate_ip": ["count"],
+  "network.ip_density": ["share", "minCount"],
+  "network.risk_provider": ["minRisk"],
+  "bot.machine_timing": ["maxPageMs"],
+  "bot.no_interaction": ["share"],
+  "bot.impossible_sequence": [],
+  "duplicate.answers": ["similarity", "minQuestions"],
+  "duplicate.multi_signal": ["similarity"],
+  "cluster.coordinated": ["minSize", "linkSimilarity"],
+  "cluster.burst": ["windowSec", "count"],
+  "screener.repeat_attempts": ["count"],
+  "screener.inconsistent": [],
+  "screener.fast": ["ratio"],
+  "history.poor_record": ["count"],
+};

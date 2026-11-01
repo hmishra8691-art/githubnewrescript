@@ -16,7 +16,7 @@ const add = (script: string) => applySurveyActions(def, [{ op: "create_behavior"
 test("pressing Next / Back or an option from a script is refused with the native route; a script's own button may be clicked", () => {
   const next = add(`rs.after(30000, function(){ document.querySelector('[data-testid="rs-next"]').click(); });`);
   assert.equal(next.ok, false);
-  assert.match(next.error ?? "", /cannot press Next or Back.*rs\.goToPage.*gamified\.timed/);
+  assert.match(next.error ?? "", /cannot press Next or Back.*rs\.goToPage.*set_timer/); // S4b: the native timer is the route
   const viaVar = add(`var b = document.querySelector('[data-testid="rs-back"]'); rs.after(500, function(){ b.click(); });`);
   assert.match(viaVar.error ?? "", /cannot press Next or Back/);
   const option = add(`document.querySelectorAll('[data-qid="${id("Q2")}"] [data-rs-el="option"]')[0].click();`);

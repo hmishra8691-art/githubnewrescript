@@ -30,7 +30,18 @@ export async function POST(req: NextRequest) {
     // S1a: the script-write paradata, and what the row holds for those targets (sandbox only: the browser suite checks a script-made value was saved)
     const sw = row.script_writes ?? [];
     const scriptValues = Object.fromEntries(sw.map((w) => [w.target, w.kind === "answer" ? row.answers[w.target] ?? null : w.kind === "embedded" ? row.embedded[w.target] ?? null : w.kind === "calculated" ? row.calculated[w.target] ?? null : row.flags.includes(w.target)]));
-    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length, saveSeq: row.save_seq, scriptWrites: sw, scriptValues, scriptHealth: row.script_health ?? [] }, noStore);
+    /* S5a: named stored values (sandbox only — the browser suite checks a video answer, POINTS / BADGES were saved); a file answer is summarised, never its bytes */
+    const pick = (body.pick ?? {}) as { answers?: unknown; calculated?: unknown; embedded?: unknown; telemetry?: unknown };
+    const names = (v: unknown) => (Array.isArray(v) ? v.map(String).slice(0, 50) : []);
+    const summary = (v: unknown): unknown => Array.isArray(v) ? v.map(summary) : v && typeof v === "object" && "url" in (v as object) ? { name: (v as { name?: unknown }).name, type: (v as { type?: unknown }).type, size: (v as { size?: unknown }).size } : v;
+    const picked = body.pick ? {
+      answers: Object.fromEntries(names(pick.answers).map((k) => [k, summary(row.answers[k] ?? null)])),
+      calculated: Object.fromEntries(names(pick.calculated).map((k) => [k, row.calculated[k] ?? null])),
+      embedded: Object.fromEntries(names(pick.embedded).map((k) => [k, row.embedded[k] ?? null])),
+      /* S5b: the stored (server-sanitised) telemetry, when asked for */
+      ...(pick.telemetry ? { telemetry: row.telemetry ?? null } : {}),
+    } : undefined;
+    return NextResponse.json({ ok: true, status: row.status, stepIndex: row.step_index, nav: row.nav, lastSavedAt: row.last_saved_at, answers: Object.keys(row.answers).length, saveSeq: row.save_seq, scriptWrites: sw, scriptValues, scriptHealth: row.script_health ?? [], ...(picked ? { picked } : {}) }, noStore);
   }
   if (body.action === "health") {
     const token = String(body.token ?? "");

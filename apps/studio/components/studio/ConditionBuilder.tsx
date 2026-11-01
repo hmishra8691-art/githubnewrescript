@@ -3,6 +3,7 @@ import React from "react";
 import type { Condition, ConditionGroup, ConditionRule, ComparisonOperator, Question, SurveyDefinition } from "@rescript/schema";
 import {
   VALUELESS_OPERATORS,
+  BEHAVIOR_SOURCES, DEVICE_CLASSES,
   TWO_VALUE_OPERATORS,
   LIST_VALUE_OPERATORS,
   isOptionValueRef,
@@ -180,7 +181,12 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
    */
   const srcQuestion = view ?? q;
   const axes = gridAxes(srcQuestion);
-  const valueChoices = authoringValueChoicesFor(q, s.def, { rowCode: rule.source.rowCode, columnId: rule.source.columnId });
+  /* S4b (LO-07): a device rule picks one of the three device classes */
+  const valueChoices = rule.source.kind === "behavior" && rule.source.ref === "device"
+    ? DEVICE_CLASSES.map((d) => ({ ref: d, label: d }))
+    : authoringValueChoicesFor(q, s.def, { rowCode: rule.source.rowCode, columnId: rule.source.columnId });
+  /* D15 / TE-11: SYSTEM_* metrics only where the quality engine computes them (the custom-rule editor) */
+  const systemVars = React.useContext(SystemVariablesContext);
   const listOps = LIST_VALUE_OPERATORS.includes(rule.operator);
   /*
    * ROW + ANSWER COLUMN: on a single- or multi-select matrix the answer column
@@ -452,7 +458,7 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
         {/* a source this build does not list still displays as itself, never as
             the placeholder — the rule stays readable and a re-save keeps it */}
         {rule.source.kind !== "question" && rule.source.kind !== "option" && rule.source.kind !== "expr"
-          && !knownSource(sourceValue, s.def, loopScope) && (
+          && !knownSource(sourceValue, s.def, loopScope, systemVars) && (
           <optgroup label="Other">
             <option value={sourceValue}>{rule.source.kind}: {rule.source.ref}</option>
           </optgroup>
@@ -497,11 +503,21 @@ function RuleEditor({ rule: storedRule, onChange, onRemove, perOption }: {
             OR-06: LAST, under its own heading — about forty-five of them used
             to sit between the calculations and the loop items, in the middle of
             the list a programmer scans for a question. */}
+        {/* S4b (LO-07): what the runtime measures about the respondent — evaluated live, in every builder */}
+        <optgroup label="Respondent behaviour" data-testid="behavior-group">
+          <option value="behavior:time_on_page">time on this page (seconds)</option>
+          <option value="behavior:elapsed">time since the survey started (seconds)</option>
+          <option value="behavior:device">device (mobile / tablet / desktop)</option>
+          <option value="behavior:timed_out">a timer has run out</option>
+        </optgroup>
+        {/* D15 / TE-11 (S4b): computed only after the interview, for custom quality rules — offered only there */}
+        {systemVars && (
         <optgroup label="Quality scores (SYSTEM_*)" data-testid="quality-scores-group">
           {SYSTEM_VARIABLE_HELP.map((v) => (
             <option key={v.name} value={`calculation:${v.name}`} title={v.hint}>{v.name}</option>
           ))}
         </optgroup>
+        )}
       </select>
       {/*
         * THE COUNT TOGGLE, on the rule itself.
@@ -1093,8 +1109,21 @@ export interface ConditionWorkspace {
   description?: React.ReactNode;
 }
 
-export function ConditionEditor(props: {
+/**
+ * D15 / TE-11 (S4b): the quality engine's SYSTEM_* metrics exist only for custom quality rules (computed after the
+ * interview). A builder offers them only inside this scope — `ConditionEditor systemVariables` sets it.
+ */
+const SystemVariablesContext = React.createContext(false);
+
+export function ConditionEditor(props: React.ComponentProps<typeof ConditionEditorBody>) {
+  const inner = <ConditionEditorBody {...props} />;
+  return props.systemVariables ? <SystemVariablesContext.Provider value>{inner}</SystemVariablesContext.Provider> : inner;
+}
+
+function ConditionEditorBody(props: {
   value: Condition; onChange(c: Condition): void; perOption?: boolean;
+  /** offer the quality engine's SYSTEM_* metrics as sources — the custom quality-rule editor only */
+  systemVariables?: boolean;
   /** what the condition decides, to read it as a sentence: "Display Q4 if" */
   purpose?: string;
   /** `wide` inside the workspace: source, operator and value on one row, deeper indents (CSS only — same data, same behaviour) */
@@ -1443,7 +1472,9 @@ function knownSource(
   value: string,
   def: { calculations: { targetVariable: string }[]; flow: unknown[]; listFills?: unknown[] },
   loopScope: { loopVar: string; references?: { columns: { name: string }[] } }[] = [],
+  systemVars = false,
 ): boolean {
+  if (value.startsWith("behavior:")) return (BEHAVIOR_SOURCES as readonly string[]).includes(value.slice("behavior:".length));
   if (value.startsWith("loopscope:")) {
     const [, scope, ...rest] = value.split(":");
     const outer = loopScope.find((l) => l.loopVar === scope);
@@ -1458,7 +1489,7 @@ function knownSource(
   if (value.startsWith("calculation:")) {
     const ref = value.slice("calculation:".length);
     if (def.calculations.some((c) => c.targetVariable === ref)) return true;
-    if (SYSTEM_VARIABLE_HELP.some((v) => v.name === ref)) return true;
+    if (systemVars && SYSTEM_VARIABLE_HELP.some((v) => v.name === ref)) return true;
     return (def.listFills ?? []).some((lf) => listFillVariableNames(lf as never).some((v) => v.name === ref));
   }
   if (value.startsWith("embedded:")) return embeddedCatalog(def as any).some((e) => `embedded:${e.name}` === value);
