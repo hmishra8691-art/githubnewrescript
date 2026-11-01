@@ -2152,6 +2152,21 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     },
     supersededBy: "ranking.tournament",
   }),
+  /*
+   * S5a (MM2-06): BEFORE / AFTER — two images stacked under one draggable divider (a "wipe"). The images are the
+   * question's stimulus (mediaItems[0] before, [1] after — set_question_media with two items); the answer is the
+   * optional rating after (numeric, minValue..maxValue), or the final divider position 0–100 when askRating is
+   * false. recordPosition stores BA_<CODE>_POSITION / _DWELL_BEFORE / _DWELL_AFTER as paradata.
+   */
+  stable(F.comparison, "before_after", "Before / After Slider", "Two images under a draggable divider — wipe between before and after, then rate.", {
+    baseType: "numeric", renderer: "beforeafter", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: VAL_NUM,
+    builder: { hide: ["bounds"] },
+    defaults: {
+      settings: { minValue: 1, maxValue: 5, beforeAfter: { beforeLabel: "Before", afterLabel: "After", startPosition: 50, askRating: true }, recordPosition: false },
+      instruction: "Drag the divider to compare, then rate the change.",
+    },
+  }),
   /**
    * A comparison table: the options are the columns (items), `rows` are the
    * attributes compared, and each cell's text lives in

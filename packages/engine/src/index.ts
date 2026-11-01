@@ -190,6 +190,7 @@ export * from "./capabilities.js";
 export * from "./capabilityRegistry.js";
 export * from "./mediaActions.js";
 export * from "./mediaZoom.js";
+export * from "./beforeAfter.js";
 export * from "./logicScriptActions.js";
 export * from "./scriptRefs.js";
 export * from "./researchActions.js";

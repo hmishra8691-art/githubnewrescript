@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-174 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+175 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -261,6 +261,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 |---|---|---|---|---|---|
 | `comparison.side_by_side` | Side-by-Side Comparison | `single_select` | options, sorting, randomization, layout_columns, carry_forward, list_logic, other_specify, images | required, custom_expression | retired → single_select.product_choice; renderer compare |
 | `comparison.tournament` | Pairwise / Tournament Comparison | `ranking` | options, randomization, carry_forward, list_logic | required | retired → ranking.tournament; renderer tournament |
+| `comparison.before_after` | Before / After Slider | `numeric` | numeric_bounds | required, min_value, max_value, integer, custom_expression | renderer beforeafter |
 | `comparison.attributes` | Multi-Item / Attribute Comparison | `single_select` | options, rows, images, sorting, randomization, carry_forward, list_logic | required, custom_expression | renderer attrcompare |
 
 ### Conjoint / Choice Modeling (`conjoint`)

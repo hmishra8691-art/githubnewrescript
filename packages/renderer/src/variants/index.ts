@@ -17,6 +17,7 @@ import "./swipe";
 import "./carousel";
 import "./card";
 import "./comparison";
+import "./beforeAfter";
 import "./allocation";
 import "./hotspot";
 import "./datetime";

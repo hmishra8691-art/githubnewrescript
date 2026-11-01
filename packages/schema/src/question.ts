@@ -1222,6 +1222,27 @@ const QuestionObject = z.object({
        * field ZOOMED_<CODE> (embedded data, exported).
        */
       zoom: z.enum(["off", "click", "hover-magnifier"]).optional(),
+      /**
+       * S5a (MM2-06) BEFORE / AFTER COMPARISON SLIDER (`comparison.before_after`). The two images are the question's
+       * stimulus, in order: `mediaItems[0]` = before (left of the divider), `mediaItems[1]` = after. The respondent
+       * drags the divider (keyboard: arrows move 5 %, Home / End). `askRating` (default true) asks a rating after
+       * (minValue..maxValue, the answer); false makes the final divider position 0–100 the answer.
+       */
+      beforeAfter: z.object({
+        beforeLabel: z.string().max(80).optional(),
+        afterLabel: z.string().max(80).optional(),
+        /** where the divider starts, % from the left (default 50) */
+        startPosition: z.number().min(0).max(100).optional(),
+        askRating: z.boolean().optional(),
+        ratingPrompt: z.string().max(300).optional(),
+        minLabel: z.string().max(80).optional(),
+        maxLabel: z.string().max(80).optional(),
+      }).optional(),
+      /**
+       * S5a: store the before/after divider as paradata — BA_<CODE>_POSITION (the last position, 0–100) and
+       * BA_<CODE>_DWELL_BEFORE / _DWELL_AFTER (seconds the divider sat on each side of the middle). Off by default.
+       */
+      recordPosition: z.boolean().optional(),
       /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
       mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
       /** Respondent must reach the end of the media before answering. */

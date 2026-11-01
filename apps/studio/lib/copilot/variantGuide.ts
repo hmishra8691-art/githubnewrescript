@@ -31,7 +31,7 @@ export const INTERACTION_WORDS: readonly [RegExp, readonly string[]][] = [
   [/\bdate\b|\bcalendar\b|\btime ?slots?\b|\bdate picker\b/i, ["datetime"]],
   [/\bmatri(?:x|ces)\b|\bgrids?\b/i, ["matrix"]],
   [/\bconstant sum\b|\ballocat\w*|\bdistribute \d+\b/i, ["allocation"]],
-  [/\bcompar\w*|\bpairwise\b|\bhead[- ]to[- ]head\b/i, ["comparison"]],
+  [/\bcompar\w*|\bpairwise\b|\bhead[- ]to[- ]head\b|\bbefore[\s/-]+(?:and[\s-]+)?after\b|\bwipe slider\b/i, ["comparison"]],
   [/\bchat\w*|\bconversational\b/i, ["conversational"]],
   [/\battention check\b|\bimplicit\b|\bexperiment\w*|\ba\/b\b/i, ["experimental"]],
   [/\bimages?\b|\bpictures?\b|\bphotos?\b|\blogos?\b|\bstimul\w*|\bpack ?shots?\b/i, ["image", "content"]],
@@ -59,7 +59,7 @@ export function variantGuide(families: readonly string[]): string {
   const fams = [...new Set(all.map((v) => v.family))];
   const named = families.filter((f) => fams.includes(f));
   const lines = [
-    `QUESTION VARIANTS (from the capability registry) — create_question / update_question take "type": <variant id> and "settings": {<key>: value} with ONLY the keys listed for that variant (type and limits shown; every variant also takes validationPosition above|below). An undeclared key is refused with the variant's list. The stimulus (image / video / audio, alt text, watch-to-continue) and option images are set_question_media, not settings: {"op":"set_question_media","target":"Q3","items":[{"url":"https://…","alt":"…"}],"requireComplete":true (media variants only),"options":[{"option":1,"imageUrl":"https://…"}]} — https or /api/media/… only. Prefer a variant's own setting to a script.`,
+    `QUESTION VARIANTS (from the capability registry) — create_question / update_question take "type": <variant id> and "settings": {<key>: value} with ONLY the keys listed for that variant (type and limits shown; every variant also takes validationPosition above|below). An undeclared key is refused with the variant's list. The stimulus (image / video / audio, alt text, watch-to-continue) and option images are set_question_media, not settings: {"op":"set_question_media","target":"Q3","items":[{"url":"https://…","alt":"…"}],"requireComplete":true (media variants only),"options":[{"option":1,"imageUrl":"https://…"}]} — https or /api/media/… only; "zoom":"click"|"hover-magnifier"|"off" gives the question's images the accessible lightbox. A BEFORE / AFTER wipe is create_question type "comparison.before_after" then set_question_media with TWO items (before first, then after); settings beforeAfter {beforeLabel, afterLabel, startPosition, askRating} and recordPosition. Prefer a variant's own setting to a script.`,
     variantCatalogueText({ families: named }).replace(/; validationPosition:enum above\|below\]/g, "]").replace(/ \[validationPosition:enum above\|below\]/g, ""),
     `OTHER FAMILIES (ids only): ${fams.filter((f) => !named.includes(f)).map((f) => `${f}: ${all.filter((v) => v.family === f).map((v) => v.id.slice(f.length + 1)).join(" ")}`).join(" · ")}`,
   ];
