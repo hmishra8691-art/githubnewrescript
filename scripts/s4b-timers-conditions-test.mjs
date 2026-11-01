@@ -210,6 +210,10 @@ if (SECTIONS.has("C")) {
     assert.deepEqual(def.questions.find((q) => q.id === "q2").timer, { limitSeconds: 45, show: "countdown", onTimeout: "lock", warnAtSeconds: 10 });
     ok("Properties → Timer: on, 45 s, lock, warn 10 → question.timer; a warning ≥ the limit shows the lint chip");
 
+    /* readDef visits the JSON tab: select the question again before its logic */
+    await h.goTab("Questions");
+    await h.page.click('[data-testid="qcard"][data-qid="q2"]');
+    await h.page.waitForTimeout(250);
     const body = await openSectionWorkspace(h.page, "display-logic");
     await h.page.click(`${body} [data-testid="lb-add-condition"] >> nth=0`);
     await h.page.waitForSelector(`${body} select.ref-select`);
@@ -226,16 +230,18 @@ if (SECTIONS.has("C")) {
       { type: "rule", source: { kind: "behavior", ref: "device" }, operator: "eq", value: "mobile" });
     ok("display logic: the source list has “Respondent behaviour” and no SYSTEM_* group; device → mobile is stored as a behaviour rule");
 
-    await h.goTab("Flow");
-    const pageRow = await h.page.waitForSelector('text=Page one', { timeout: 15000 });
-    await pageRow.click();
-    await h.page.waitForSelector('[data-testid="page-timer-on"]', { timeout: 15000 });
-    await h.page.click('[data-testid="page-timer-on"]');
-    await h.page.fill('[data-testid="page-timer-min"]', "10");
+    await h.goTab("Survey Flow");
+    const card = '[data-testid="flow-block"][data-node-id="p1"]';
+    await h.page.waitForSelector(card, { timeout: 15000 });
+    await h.page.click(`${card} .block-toggle >> nth=0`);
+    await h.page.click('[data-testid="page-timer-toggle-p1"] summary');
+    await h.page.waitForSelector('[data-testid="page-timer-p1-on"]', { timeout: 15000 });
+    await h.page.click('[data-testid="page-timer-p1-on"]');
+    await h.page.fill('[data-testid="page-timer-p1-min"]', "10");
     await h.page.waitForTimeout(300);
     def = await h.readDef();
     assert.equal(def.flow.find((n) => n.id === "p1").timer?.minSeconds, 10);
-    ok("Flow → page: the page Timer writes flow page.timer (minimum 10 s before Next)");
+    ok("Flow → block → page Timer writes flow page.timer (minimum 10 s before Next)");
   } finally { await h.close(); }
 }
 

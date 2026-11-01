@@ -222,3 +222,103 @@ No existing suite exercised `progressBar` / `progressStyle` (grep). `theme-voice
   - The per-option explanation stays in `option.meta.explanation`. It is not merged into `assessment.optionExplanations`.
   - `migrateQuizKeys` runs on Studio load and on respondent payloads. The Studio `/sandbox` page does not load through the migrating route, so a quiz there keeps a legacy `meta.correct` until its tick is used. The renderer's fallback covers it.
 - Item 4's live check uses the sandbox **test link** (`/n/<token>`, mode test, the same `respondentDefinition` as live). A `/s/` live link needs a database and was not run here.
+
+---
+
+# S4b — Native features, part B: timers and behaviour conditions (2026-11-01)
+
+Branch `feat/persistent-execution-engine`, from `6183cee`. Audit: `SCRIPT-STUDIO-AUDIT-2026-10-30.md` §4 D15 and rows GA-05, IM-19, LO-07, TE-06, TE-11.
+
+- No new npm dependencies. No migrations.
+- Schema changes are optional fields only (`question.timer`, flow `page.timer`, condition source kind `behavior`).
+
+## 1. GA-05 / IM-19 — native timers on any question and any page
+
+**Schema** (`packages/schema/src/timer.ts`): `timer { limitSeconds?, show: countdown | hidden, onTimeout: advance | lock | message, warnAtSeconds?, minSeconds?, message? }` on a question and on a flow page node. A timer needs a limit or a minimum (else it does nothing and the lint says so).
+
+**One clock per page, kept by the Runner** (`apps/runtime/lib/timerClock.ts` `PageClock`; the pure half in `packages/engine/src/timers.ts`):
+- every timer on a page (the page's own and each shown question's) counts from the page's arrival on the same clock — never one clock per renderer;
+- **decision: it keeps counting while the tab is hidden** (wall clock, the research norm for timed tasks); a hidden tab gets no ticks, the next tick sees the real time;
+- a reload restarts the page's clock (honest limit, below);
+- the Runner ticks every 500 ms only when the page has a timer or the survey has a time behaviour condition.
+
+| onTimeout | what happens |
+|---|---|
+| `advance` | the normal Next path (`handleNextInner`). **Defined for an invalid page:** questions *not yet answered* are skipped (their errors dropped, `timed_out` recorded); an *answered* question that fails its rules **still stops the page** — the error is shown and focused (D19); once fixed, Next goes through (the unanswered ones are still skipped). Soft warnings are not shown at timeout. An invalid value is never stored because time ran out. |
+| `lock` | the question (or, for a page timer, every question on the page) is wrapped in a `<fieldset disabled>` — every control inside is disabled natively; Next works as usual |
+| `message` | the timer's `message` (else the localized default) is shown as a status note |
+
+**minSeconds**: Next is `disabled` until the page has been open that long, with `aria-describedby` to a note: the ticking "You can continue in N s." is `aria-hidden`; the sentence "Next becomes available after N seconds on this page." is for screen readers; "You can continue now." is announced once.
+
+**Accessibility**: the visible clock is `role=timer` with `aria-live=off` (not read every second). One polite `role=status` region says the warning ("N seconds left.", once per timer at `warnAtSeconds`), "Time is up." and "You can continue now." The warning state is a colour change plus a 3-cycle pulse that `prefers-reduced-motion: reduce` turns off.
+
+**Paradata** (in the response and every export — embedded data, no new column): `TIMER_<REF>_ELAPSED` (seconds on the page when it was left by Next, one decimal) and `TIMER_<REF>_TIMED_OUT` (0 | 1, written the moment the timer runs out). `<REF>` is the question code or the page node id, upper-cased, with the loop iteration appended (`p1@apple` → `TIMER_P1_APPLE`). A fresh visit to the page resets `_TIMED_OUT` to 0 — the paradata describe the last visit.
+
+**Server replay** (`serverValidation.ts`): a page whose advance timer posted `TIMER_<REF>_TIMED_OUT = 1` is not refused for missing answers (soft `timed_out` per question); an invalid answer is still a hard `invalid_answer`; a *lock* timer never excuses a missing answer. The timeout itself is client-asserted (the server cannot see the clock) — the soft line lets an analyst see it.
+
+**`gamified.timed` — left as it is** (its own renderer clock and `__rt`): it is the reaction-time single choice. A `timer` on the same question runs on the page clock beside it; `lintTimers` warns that two clocks run.
+
+**Studio**: Properties → **Timer** (`question-timer-*`); Survey Flow → a block → each page's **Timer** (`page-timer-<page id>-*`); the flow page node editor too (`page-timer-*`). The engine lint is shown as chips.
+
+**IM**: `set_timer {target, scope question | page, page, limitSeconds, show, onTimeout, warnAtSeconds, minSeconds, message, clear}` (`engine/timerActions.ts`, in the Options and design vocabulary, public docs "Timers (set_timer)"). Recognisers without a model: "give respondents 30 seconds on this page", "allow 2 minutes on this page and lock the answers", "at least 10 seconds before Next", "keep Next disabled for 5 seconds on the page of Q1"; "add a 30-second countdown to Q4" on a non-single-choice question is now `set_timer` (it was a script). Registry: `timers` → `set_timer`, the `press_next` and `long_timer` routes name the native timer; UX guide line updated (no growth of the system prompt).
+
+## 2. LO-07 — behaviour conditions
+
+A condition source `{ kind: "behavior", ref, scope? }`:
+
+| ref | value | live in the browser | server replay |
+|---|---|---|---|
+| `time_on_page` | seconds on the current page (the page clock) | re-evaluated every tick | client-asserted: unknown, soft `client_asserted` |
+| `elapsed` | seconds since the interview started | re-evaluated every tick | client-asserted |
+| `device` | `mobile` / `tablet` / `desktop` (`detectDevice`; in the preview the device switch when it is not the default) | yes | replayed from the stored device class (the save's telemetry device type); none stored → client-asserted |
+| `timed_out` | a timer ran out; `scope` names one (`timed_out.Q5`, `timed_out.p1`), absent = any so far | yes | replayed from the posted `TIMER_*_TIMED_OUT` |
+
+- **Where**: every caller of `evaluateCondition` — display, skip, branch, validation `when`, punch `when`, UX `when`, option logic, quotas — because the value is read from `state.meta.behavior` (set by the Runner before the page's questions are decided; `meta` is never posted).
+- **Replay rule**: a question decided by a behaviour value the server cannot know is never refused for a missing answer (soft `client_asserted`), and the survey-level note says which values are client-asserted.
+- **Text grammar**: `time_on_page > 20`, `elapsed >= 600`, `device = mobile`, `device in [mobile, tablet]`, `timed_out`, `timed_out.Q5`; `behavior.device` when a question owns the bare word. Round-trips through `formatCondition`.
+- **Studio**: every condition builder lists **Respondent behaviour** (time on this page, time since the start, device with a mobile/tablet/desktop picker, a timer has run out). Operators follow the type (seconds numeric, timed out yes/no, device a word).
+- **IM**: registry feature `behaviour_conditions`; the UX guide line names the grammar.
+
+## 3. D15 / TE-11 — `SYSTEM_*` only where computed
+
+- `ConditionEditor` takes `systemVariables` (a context): the "Quality scores (SYSTEM_*)" group is offered **only** in Quality → Custom rules (`QualitySettings`). Everywhere else a stored `SYSTEM_*` rule is shown under "Other" (readable, kept on re-save).
+- **Lint** (`engine/behaviorLint.ts`, registered in the survey logic check): a display / skip / quota / UX / punch / flow / calculation / named-expression condition that reads `SYSTEM_*` is a review warning naming it, with the behaviour condition that fits — speeder / duration → `time_on_page` or `elapsed`; device / browser / OS → `device`; out-of-focus / tab switch → `time_on_page`; otherwise "move it to Quality → Custom rules". Custom quality rules themselves are not flagged. The same lint flags an unknown behaviour ref and a device value that is not a device class.
+
+## Verification (S4b)
+
+Units:
+
+| suite | command | result |
+|---|---|---|
+| engine | `cd packages/engine && pnpm -s build && node --test dist/*.test.js` | 2550/2550 (new `s4bTimers.test` 9; `ownerIntents.test` and `gateAccuracy.test` updated: a countdown on a non-single question and the press-Next route now name `set_timer`) |
+| schema | `node --test dist/*.test.js` | 18/18 |
+| templates | `node --test dist/*.test.js` | 111/111 |
+| quality | `node --test dist/*.test.js` | 61/61 |
+| renderer | `node --experimental-strip-types --test packages/renderer/test/*.test.ts` | 11/11 |
+| runtime lib | `node --experimental-strip-types --test 'lib/*.test.ts'` | 72/72 (new `timerClock.test` 7) |
+| studio lib | `node --experimental-strip-types --test 'lib/**/*.test.ts'` | 1132/1132 |
+
+Typechecks and checks: `npx tsc --noEmit -p .` runtime, renderer, studio — 0 errors each; `gen-public-docs.mjs --check` current; `dependency-boundaries.mjs` 0 violations (2071 files); `auth-guard-audit.mjs` 0 problems (259 handlers).
+
+Browser (`flock -o /tmp/p0/heavy.lock /tmp/p0/fresh.sh <suite>`, Studio from `studio-sup-4600.sh`):
+
+| suite | result |
+|---|---|
+| `scripts/s4b-timers-conditions-test.mjs` (new) | 10 passed: A timers 5 (advance with an unanswered required question + paradata; invalid at timeout stays with focus, then goes through; lock / message / timed_out note; minSeconds; warning once + reduced motion), B behaviour 2 (message after 5 s; mobile-only at a phone viewport, not on desktop), C Studio 3. The first full run passed A and B and failed C at `page.goto` — the Studio next-server was OOM-killed (dmesg uptime 3146); section C then passed alone and the full suite passed on the next run |
+| `s4a-respondent-test.mjs` | 24 passed |
+| `section-nav-test.mjs` | 20 passed |
+| `validation-kinds-test.mjs` | all passed |
+| `quality-test.mjs` | all passed (the custom rule still shows its SYSTEM_* source) |
+| `logic-builder-test.mjs` (the condition-builder suite) | all passed |
+| `variants-g6-test.mjs` | all passed |
+
+## Honest limits (S4b)
+
+- **The clock restarts on a reload** (a fresh page visit); the time already spent is not carried across a reload, and `TIMER_*_TIMED_OUT` is reset to 0 on each fresh visit (the paradata describe the last visit). `_ELAPSED` is written when the page is left by Next — not by Back or a section jump.
+- **Timeouts are client-asserted.** The server sees `TIMER_<REF>_TIMED_OUT = 1` and believes it for missing answers on an advance page (soft `timed_out` lines show it); it cannot verify the clock. `time_on_page` / `elapsed` likewise.
+- Advance-on-timeout in **conversational mode** presses the conversational Next path of the page as a whole; it was not browser-tested there. A follow-up probe pauses the clock's actions (no auto-advance while a probe is on screen).
+- A **question** timer's `advance` advances the whole page (one clock per page).
+- `device` in the preview: the device switch wins when it is not "desktop"; otherwise the detected class (user agent).
+- The new respondent strings ("Time left", "N seconds left.", "Time is up.", "You can continue now.", the minimum-wait sentence) use `uiText` with English fallbacks — they are **not yet in the translation catalogue**.
+- `gamified.timed` is unchanged (its own clock); it is not mapped onto the page clock.
+- The flow page node editor and the Survey Flow block card both edit `page.timer`; a page created implicitly inside a block by page breaks is a page node too and is covered.
