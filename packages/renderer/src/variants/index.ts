@@ -19,6 +19,7 @@ import "./carousel";
 import "./card";
 import "./comparison";
 import "./beforeAfter";
+import "./priceLadder";
 import "./allocation";
 import "./hotspot";
 import "./datetime";

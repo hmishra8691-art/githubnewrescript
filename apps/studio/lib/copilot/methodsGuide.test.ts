@@ -61,7 +61,7 @@ const exampleLines = (guide: string) => guide.split("\n").filter((l) => l.starts
 
 test("the guide's worked examples pass the engine's gate and apply as written, with the measured diagnostics", () => {
   const examples = exampleLines(COPILOT_METHODS_GUIDE);
-  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template"]);
+  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template", "add_method_template"]);
   const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_")).slice(0, 2);
   const c1 = coerceSurveyActions(creates);
   assert.deepEqual(c1.rejected, []);
@@ -144,5 +144,6 @@ test("method templates: the guide's add_method_template lines apply, and pricing
   const made = applySurveyActions(empty(), c.actions);
   assert.deepEqual(made.errors, []);
   assert.ok(made.def.questions.some((q) => q.variableName === "PSM_TOO_CHEAP"));
-  for (const m of ["add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
+  assert.ok(made.def.questions.some((q) => q.variant === "numeric.price_ladder"));
+  for (const m of ["an adaptive Gabor-Granger ladder for the plan", "add a price ladder from $5 to $20", "add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
 });

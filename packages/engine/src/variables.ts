@@ -1,6 +1,7 @@
 import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescript/schema";
 import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
 import { beforeAfterKeys } from "./beforeAfter.js";
+import { ladderParadataKeys } from "./priceLadder.js";
 import {
   directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
   possibleLoopItems, type LoopFlowNode,
@@ -1101,6 +1102,11 @@ function s5aVariables(def: SurveyDefinition): VariableDef[] {
   }
   for (const q of def.questions) {
     if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));
+    if (q.variant === "numeric.price_ladder") {
+      const k = ladderParadataKeys(q.code || q.id);
+      out.push(mk(k.start, `${q.code} — price ladder: first price shown`, "numeric", "embedded_data", "the start price (middle, lowest, highest or random)"));
+      out.push(mk(k.path, `${q.code} — price ladder: path`, "text", "embedded_data", "price:accepted (1/0) in the order asked, e.g. 15:1,20:0"));
+    }
     if (q.variant === "comparison.before_after" && q.settings.recordPosition) {
       const k = beforeAfterKeys(q.code || q.id);
       out.push(mk(k.position, `${q.code} — before/after divider (last, %)`, "numeric", "embedded_data", "0 = all after, 100 = all before"));

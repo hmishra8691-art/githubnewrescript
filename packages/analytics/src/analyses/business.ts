@@ -363,6 +363,25 @@ export function pricing(def: AnalysisDefinition, ds: Dataset, totalCases: number
   const method = opt(def, "method", "van_westendorp") as "van_westendorp" | "gabor_granger";
   const w = weights(ds);
   if (method === "gabor_granger") {
+    /* S5c: the adaptive ladder (numeric.price_ladder) — one numeric variable, the highest accepted price (0 = none) */
+    if (opt<boolean>(def, "ladder", false)) {
+      const v = def.variables[0];
+      const q = v ? ds.byName.get(v) : undefined;
+      const prices = (opt(def, "prices", []) as number[]).map(Number).filter((p) => p > 0);
+      if (!v || !q) return refused(def, ds, totalCases, "The price-ladder analysis needs the ladder question (its variable).", ["table"]);
+      if (prices.length < 2) return refused(def, ds, totalCases, `The price-ladder analysis needs the ladder's prices (prices) — “${labelOf(ds, v)}” stores only the highest price accepted.`, ["table"]);
+      const r = ladderDemand(numericColumn(ds, v), prices, w);
+      const best = [...r.rows].sort((a, b) => b.revenue - a.revenue)[0];
+      const insights = [`Revenue-maximising price on the ladder: ${fmtNum(best.price, 2)} (${fmtPct(best.demand, 0)} would buy at it or more, revenue index ${fmtNum(best.revenue, 2)}).`,
+        `Demand falls from ${fmtPct(r.rows[0].demand, 0)} at ${fmtNum(r.rows[0].price, 2)} to ${fmtPct(r.rows[r.rows.length - 1].demand, 0)} at ${fmtNum(r.rows[r.rows.length - 1].price, 2)} (n = ${r.n}).`];
+      return makeResult(def, ds, {
+        tables: [{ id: "gg", title: "Gabor–Granger demand (adaptive ladder)", columns: [{ key: "price", label: "Price", type: "number", decimals: 2 }, { key: "probability", label: "Would buy at this price %", type: "pct", decimals: 1 }, { key: "revenue", label: "Revenue index", type: "number", decimals: 2 }],
+          rows: r.rows.map((x) => ({ price: x.price, probability: pct(x.demand), revenue: round(x.revenue) })), base: { n: r.n },
+          notes: ["Each respondent's answer is the highest ladder price they accepted; demand at a price counts everyone whose highest accepted price is at or above it (the method's monotonicity assumption). 0 = accepted none."] }],
+        chart: { categories: r.rows.map((x) => String(x.price)), series: [{ name: "Purchase probability %", values: r.rows.map((x) => pct(x.demand)) }, { name: "Revenue index", values: r.rows.map((x) => round(x.revenue)), meta: { axis: "secondary" } }], points: r.rows.map((x) => ({ x: x.price, y: x.demand, label: String(x.price) })) },
+        insights, warnings: [], recommendedCharts: ["demand_curve", "revenue_curve", "purchase_probability", "line"], variablesUsed: [v], totalCases,
+      });
+    }
     // variables: purchase-intent items at ascending price points; options.prices: number[]; options.acceptCodes: codes counted as "would buy"
     const items = expandBattery(ds, def.variables);
     const prices = (opt(def, "prices", []) as number[]).length ? (opt(def, "prices", []) as number[]) : items.map((_, i) => i + 1);

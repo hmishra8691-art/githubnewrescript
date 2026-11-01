@@ -247,6 +247,10 @@ export type MethodTemplateAction = {
   nms?: boolean;
   /** pricing_psm: which Van Westendorp end-point definition the plan item uses (default proxy) */
   vwCurves?: "proxy" | "textbook";
+  /** price_ladder: the ladder (3–20 positive prices; default 5, 10, 15, 20, 25) */
+  prices?: number[];
+  /** price_ladder: where the ladder starts (default middle) */
+  start?: "middle" | "lowest" | "highest" | "random";
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */

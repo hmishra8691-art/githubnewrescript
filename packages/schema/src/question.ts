@@ -1247,6 +1247,20 @@ const QuestionObject = z.object({
        * BA_<CODE>_DWELL_BEFORE / _DWELL_AFTER (seconds the divider sat on each side of the middle). Off by default.
        */
       recordPosition: z.boolean().optional(),
+      /**
+       * S5c (SM-07) ADAPTIVE GABOR–GRANGER PRICE LADDER (`numeric.price_ladder`). One price at a time, "would you
+       * buy at this price?": yes moves one step up, no one step down, stopping at the first boundary (engine
+       * priceLadder.ts). The answer is the highest price accepted (0 = none); GG_<CODE>_START and GG_<CODE>_PATH
+       * are kept as paradata.
+       */
+      priceLadder: z.object({
+        prices: z.array(z.number().positive()).max(20).default([]),
+        start: z.enum(["middle", "lowest", "highest", "random"]).optional(),
+        prompt: z.string().max(300).optional(),
+        yesLabel: z.string().max(80).optional(),
+        noLabel: z.string().max(80).optional(),
+        currency: z.string().max(4).optional(),
+      }).optional(),
       /** how several media items sit: side by side (wrapping on narrow screens) or stacked */
       mediaLayout: z.enum(["horizontal", "vertical"]).optional(),
       /** Respondent must reach the end of the media before answering. */

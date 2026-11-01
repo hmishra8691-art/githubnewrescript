@@ -127,3 +127,15 @@ test("pricing analysis: textbook option, NMS tables and the proxy note, end to e
   const bad = runAnalysis({ name: "nms", kind: "pricing", dataset: spec, variables: ["TC", "C", "E", "TE"], options: { nmsCheap: "NMS_C" } }, buildDataset(def, nRows, { spec }));
   assert.ok(bad.warnings.some((w) => /needs both likelihood questions/.test(w)));
 });
+
+/* the adaptive ladder through runAnalysis: the same eight answers as the ladderDemand reference above */
+test("pricing analysis, gabor_granger ladder: demand and revenue from the stored highest accepted price", () => {
+  const ldef = SurveyDefinition.parse({ meta: { id: "l", code: "L", title: "L", version: "1.0" }, questions: [{ id: "q_l", code: "PRICE_LADDER", variableName: "PRICE_LADDER", type: "numeric", variant: "numeric.price_ladder", text: "x", settings: { minValue: 0, maxValue: 25, priceLadder: { prices: [10, 15, 20, 25] } } }], flow: [] });
+  const rows = [25, 20, 15, 15, 10, 0, null, 20].map((v, i) => row(i, v == null ? {} : { q_l: v }));
+  const res = runAnalysis({ name: "gg", kind: "pricing", dataset: spec, variables: ["PRICE_LADDER"], options: { method: "gabor_granger", ladder: true, prices: [10, 15, 20, 25] } }, buildDataset(ldef, rows, { spec }));
+  assert.deepEqual(res.tables[0].rows.map((r) => [r.price, r.probability, r.revenue]), [[10, 85.7, 8.57], [15, 71.4, 10.71], [20, 42.9, 8.57], [25, 14.3, 3.57]]);
+  assert.equal(res.tables[0].base?.n, 7);
+  assert.match(res.insights[0], /Revenue-maximising price on the ladder: 15/);
+  const none = runAnalysis({ name: "gg", kind: "pricing", dataset: spec, variables: ["PRICE_LADDER"], options: { method: "gabor_granger", ladder: true } }, buildDataset(ldef, rows, { spec }));
+  assert.ok(none.error || none.warnings.some((w) => /needs the ladder's prices/.test(w)));
+});

@@ -29,3 +29,6 @@ export function buildMethodSurvey(surveyId: string, meta: { code: string; title:
 
 export const buildPricingPsmSurvey = (surveyId = "pricing-psm") =>
   buildMethodSurvey(surveyId, { code: "PSM", title: "Price sensitivity (Van Westendorp + NMS)" }, { template: "pricing_psm", product: "the product" });
+
+export const buildPriceLadderSurvey = (surveyId = "price-ladder") =>
+  buildMethodSurvey(surveyId, { code: "GGL", title: "Adaptive Gabor–Granger price ladder" }, { template: "price_ladder", product: "the product", prices: [5, 10, 15, 20, 25] });

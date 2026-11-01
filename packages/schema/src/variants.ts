@@ -1025,6 +1025,20 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
     defaults: { settings: { minValue: 0, maxValue: 100, sliderRightLabel: "100%" } },
     supersededBy: "slider.single",
   }),
+  /*
+   * S5c (SM-07): ADAPTIVE GABOR–GRANGER — one "would you buy at <price>?" at a time, up after yes, down after no,
+   * stopping at the first boundary (engine priceLadder.ts). The answer is the highest price accepted (0 = none),
+   * a plain numeric the pricing analysis reads with method gabor_granger, ladder: true.
+   */
+  stable(F.numeric, "price_ladder", "Price Ladder (adaptive Gabor–Granger)", "Would you buy at this price? Yes moves up the ladder, no moves down — the answer is the highest price accepted.", {
+    baseType: "numeric", renderer: "priceladder", responseModel: "numeric",
+    capabilities: ["numeric_bounds"], validations: ["required", "custom_expression"],
+    builder: { hide: ["bounds"] },
+    defaults: {
+      settings: { minValue: 0, maxValue: 1_000_000, priceLadder: { prices: [5, 10, 15, 20, 25], start: "middle", yesLabel: "Yes, I would buy it", noLabel: "No" } },
+      instruction: "Answer for each price shown.",
+    },
+  }),
   stable(F.numeric, "numeric_range", "Numeric Range", "A from–to pair of numbers.", {
     // Two labelled numeric fields — exactly what a numeric list stores — so
     // the pair exports as VAR_from / VAR_to and needs no new response model.

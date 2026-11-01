@@ -97,6 +97,7 @@ import "./variantConfig/carousel";
 import "./variantConfig/card";
 import "./variantConfig/comparison";
 import "./variantConfig/beforeAfter";
+import "./variantConfig/priceLadder";
 import "./variantConfig/videoRecording";
 import "./variantConfig/pairwise";
 import "./variantConfig/allocation";

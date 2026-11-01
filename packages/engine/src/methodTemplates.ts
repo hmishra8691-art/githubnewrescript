@@ -16,11 +16,14 @@ import type { IdMinter } from "./questionOps.js";
  *                        own "cheap" and "expensive" price (piped), 5-point, calibrated in the analysis.
  *                        Plan: pricing (van_westendorp, vwCurves, nmsCheap / nmsExpensive).
  *
+ *   price_ladder         an adaptive Gabor–Granger ladder (numeric.price_ladder, `prices`, `start`), the answer the
+ *                        highest price accepted. Plan: pricing (gabor_granger, ladder: true, prices).
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -34,6 +37,10 @@ export type MethodTemplateAction = {
   nms?: boolean;
   /** pricing_psm: which Van Westendorp end-point definition the plan item uses (default proxy) */
   vwCurves?: "proxy" | "textbook";
+  /** price_ladder: the ladder (3–20 positive prices; default 5, 10, 15, 20, 25) */
+  prices?: number[];
+  /** price_ladder: where the ladder starts (default middle) */
+  start?: "middle" | "lowest" | "highest" | "random";
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -61,6 +68,12 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
   if (typeof o.nms === "boolean") a.nms = o.nms;
   if (o.vwCurves !== undefined) { if (o.vwCurves !== "proxy" && o.vwCurves !== "textbook") return "add_method_template vwCurves must be proxy or textbook"; a.vwCurves = o.vwCurves; }
   if (o.prefix !== undefined) { const p = str(o.prefix, 12); if (!p || !/^[A-Za-z][A-Za-z0-9_]*$/.test(p)) return "add_method_template prefix must be letters, digits and _ (start with a letter)"; a.prefix = p.toUpperCase(); }
+  if (o.prices !== undefined) {
+    const ps = Array.isArray(o.prices) ? o.prices.map(Number) : [];
+    if (ps.length < 3 || ps.length > 20 || ps.some((p) => !(Number.isFinite(p) && p > 0)) || new Set(ps).size !== ps.length) return "add_method_template prices must be 3–20 different positive numbers";
+    a.prices = [...ps].sort((x, y) => x - y);
+  }
+  if (o.start !== undefined) { if (!["middle", "lowest", "highest", "random"].includes(String(o.start))) return "add_method_template start must be middle, lowest, highest or random"; a.start = o.start as MethodTemplateAction["start"]; }
   if (o.plan === false) a.plan = false;
   return a;
 }
@@ -98,6 +111,21 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         tests: [{ method: "pricing", variables: vw.map((x) => String(x.variableName)), priority: 1, tier: "essential", hypotheses: [], reason: "Van Westendorp price sensitivity" + (nms.length ? " with the Newton–Miller–Smith trial / revenue optimum" : ""),
           options: { method: "van_westendorp", vwCurves: a.vwCurves ?? "proxy", ...(nms.length ? { nmsCheap: `${P}NMS_CHEAP`, nmsExpensive: `${P}NMS_EXPENSIVE` } : {}) } }],
         notes: [nms.length ? "NMS likelihood is calibrated 0.7 / 0.5 / 0.3 / 0.1 / 0 (top box first) unless the plan item sets calibration." : "Van Westendorp only (nms: false)."],
+      };
+    }
+    case "price_ladder": {
+      const prices = a.prices ?? [5, 10, 15, 20, 25];
+      const ladder = q("PRICE_LADDER", "numeric", `Would you buy ${product} at the price shown?`, {
+        variant: "numeric.price_ladder",
+        settings: { minValue: 0, maxValue: prices[prices.length - 1], priceLadder: { prices, start: a.start ?? "middle", currency: cur, prompt: `Would you buy ${product} at {price}?`, yesLabel: "Yes, I would buy it", noLabel: "No" } },
+        instruction: "Answer for each price shown.",
+      });
+      return {
+        title: "Adaptive Gabor–Granger price ladder",
+        questions: [ladder],
+        block: { type: "block", id: ids("b"), title: "Price ladder", children: [page("Price ladder", [ladder])] } as FlowNode,
+        tests: [{ method: "pricing", variables: [`${P}PRICE_LADDER`], priority: 1, tier: "essential", hypotheses: [], reason: "Gabor–Granger demand and revenue curves from the adaptive ladder", options: { method: "gabor_granger", ladder: true, prices } }],
+        notes: [`Ladder ${prices.map((p) => `${cur}${p}`).join(" / ")}, starting ${a.start ?? "middle"}; the answer is the highest price accepted (0 = none), the path is kept as GG_${P}PRICE_LADDER_PATH.`],
       };
     }
   }

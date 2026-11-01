@@ -348,6 +348,13 @@ export function advancedSuitability(def: SurveyDefinition, t: Pick<PlannedTest, 
     case "pricing": {
       if (o.method !== "gabor_granger") break;
       const prices = Array.isArray(o.prices) ? o.prices : [];
+      /* S5c: the adaptive ladder — one numeric.price_ladder question holding the highest price accepted */
+      if (o.ladder === true) {
+        const q = t.variables.length === 1 ? byVar(def, t.variables[0]) : undefined;
+        if (!q || q.variant !== "numeric.price_ladder") blocking.push("An adaptive Gabor–Granger item reads ONE price-ladder question (numeric.price_ladder).");
+        if (prices.length < 3 || prices.some((p) => !(typeof p === "number" && p > 0))) blocking.push("An adaptive Gabor–Granger item needs the ladder's prices (three or more positive numbers).");
+        break;
+      }
       if (t.variables.length < ADVANCED_RULES.ggPointsMin) blocking.push("Gabor–Granger needs a purchase-intent question at two or more price points.");
       if (prices.length !== t.variables.length) blocking.push(`Gabor–Granger needs one price per purchase-intent question (${prices.length} price${prices.length === 1 ? "" : "s"} for ${t.variables.length} question${t.variables.length === 1 ? "" : "s"}).`);
       if (prices.some((p) => !(typeof p === "number" && p > 0))) blocking.push("Every Gabor–Granger price must be a positive number.");

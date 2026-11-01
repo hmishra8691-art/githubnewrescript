@@ -27,6 +27,7 @@ import { bucketProblems, hasBucketRules } from "./bucketRules.js";
 import { unfinishedClips } from "./videos.js";
 import { designRowsFor } from "./designVersion.js";
 import { isCascading, cascadeProblems, CASCADE_PARENT_SUFFIX } from "./cascade.js";
+import { ladderAnswerValid } from "./priceLadder.js";
 
 /**
  * Whether a failed check stops the respondent.
@@ -1264,6 +1265,9 @@ export function validateQuestion(
     const several = (q.rows ?? []).some((r) => /^completed_\d+$/.test(String(r.code)));
     for (const i of left) push(several ? uiText(ctx.ui, "watch_clip_n", { n: i + 1 }) : uiText(ctx.ui, "watch_clip"));
   }
+
+  // ---- S5c price ladder: the answer is 0 or one of the ladder's own prices (priceLadder.ts) ----
+  if (q.variant === "numeric.price_ladder" && value != null && value !== "" && !ladderAnswerValid(q, value)) push("Please answer the price questions shown.");
 
   // ---- AQ-08 cascading dropdown: the child must exist and belong to its parent (cascade.ts) ----
   if (isCascading(q)) {

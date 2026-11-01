@@ -192,6 +192,7 @@ export * from "./mediaActions.js";
 export * from "./mediaZoom.js";
 export * from "./beforeAfter.js";
 export * from "./methodTemplates.js";
+export * from "./priceLadder.js";
 export * from "./videoRecording.js";
 export * from "./gamification.js";
 export * from "./gamificationActions.js";

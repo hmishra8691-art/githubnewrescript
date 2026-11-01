@@ -14,3 +14,12 @@ test("pricing_psm starter: VW + NMS questions, NMS texts piped, the pricing plan
   const run = simulateRespondent(def, { seed: 3, answers: {} });
   assert.equal(run.endStatus, "complete");
 });
+
+test("price_ladder starter: one ladder question, the gabor_granger ladder plan item, a respondent completes it", () => {
+  const def = findSurveyTemplate("price_ladder")!.build("x");
+  assert.equal(def.questions[0].variant, "numeric.price_ladder");
+  assert.deepEqual(def.research!.analysisPlan!.tests[0].options, { method: "gabor_granger", ladder: true, prices: [5, 10, 15, 20, 25] });
+  const run = simulateRespondent(def, { seed: 3, answers: {} });
+  assert.equal(run.endStatus, "complete");
+  assert.equal(run.state.answers[def.questions[0].id], 15, "the simulated respondent answers a ladder price (the middle one)");
+});

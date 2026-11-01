@@ -1222,3 +1222,9 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-review-a { margin: 0; display: flex; gap: 8px; align-items: center; flex: 1 1 260px; justify-content: space-between; overflow-wrap: anywhere; }
 .rs-review-change { min-height: 36px; }
 .rs-review-return { margin: 0 0 12px; }
+
+/* S5c: adaptive Gabor–Granger price ladder */
+.rs-ladder { display: flex; flex-direction: column; gap: 12px; max-width: 560px; }
+.rs-ladder-q { font-size: 1.15em; margin: 0; }
+.rs-ladder-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.rs-ladder-actions .rs-btn { min-height: 44px; min-width: 120px; }
