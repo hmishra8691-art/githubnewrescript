@@ -194,7 +194,8 @@ export function hasExactBalance(def: SurveyDefinition): boolean {
     if (n.type === "branch") return n.branches.some((b) => walk(b.children)) || (n.otherwise ? walk(n.otherwise) : false);
     return false;
   });
-  return walk(def.flow ?? []) || (def.questions ?? []).some((q) => !!(q.settings as { versionBalance?: ExactBalance } | undefined)?.versionBalance?.exact && !!q.settings?.designRef);
+  return walk(def.flow ?? []) || (def.questions ?? []).some((q) => (!!(q.settings as { versionBalance?: ExactBalance } | undefined)?.versionBalance?.exact && !!q.settings?.designRef)
+    || (q.type === "experiment" && !!(q.settings as { armBalance?: ExactBalance } | undefined)?.armBalance?.exact));
 }
 
 /** the slot of a design question with exact version balance, or null */
@@ -387,4 +388,94 @@ export function seedWindow<T>(eligible: readonly T[], show: number, seed: number
     return Array.from({ length: show }, (_, i) => eligible[(offset + i) % eligible.length]);
   }
   return seededShuffle([...eligible], subSeed(seed, `flow:${nodeKey}`)).slice(0, show);
+}
+
+/* ------------------------------------------------------------ S4c item 4: experiment arms (RA-08) */
+
+type ArmDef = { code: string | number; weight?: number };
+const armsOf = (q: Question): ArmDef[] => ((q.settings as { arms?: ArmDef[] } | undefined)?.arms ?? []).filter((a) => a && a.code != null && String(a.code) !== "");
+const armWeight = (a: ArmDef) => { const n = a.weight == null ? 1 : Number(a.weight); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+/** `<VAR>[_<loop codes>]_ARM` — where an experiment's claimed arm is stored */
+export function experimentArmVariable(q: Pick<Question, "id"> & { variableName?: string }, loop?: LoopContext | null): string {
+  const suffix = loopKeySuffix(loop ?? null);
+  return `${armVariableBase(q)}${suffix ? suffix.split("@").filter(Boolean).map((c) => `_${ident(c)}`).join("") : ""}_ARM`;
+}
+
+/**
+ * The seed-derived arm — EXACTLY the renderer's draw (`pickArm(arms, rng(seedFor(p, "arm"))())`: FNV-1a of
+ * `<seed>:<question id>:arm`, mulberry32, weighted pick), so a survey that turns exact balance on keeps the same
+ * fallback, and one without it is untouched.
+ */
+export function seededExperimentArm(q: Question, seed: number | string | undefined): string | null {
+  const arms = armsOf(q);
+  if (!arms.length) return null;
+  const s = `${seed ?? ""}:${q.id}:arm`;
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  let a = h >>> 0;
+  a = (a + 0x6d2b79f5) | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  const rand = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  let total = arms.reduce((n, x) => n + armWeight(x), 0);
+  const w = total > 0 ? armWeight : () => 1;
+  if (total <= 0) total = arms.length;
+  let r = Math.min(Math.max(rand, 0), 0.999999999) * total;
+  for (const x of arms) { r -= w(x); if (r < 0) return String(x.code); }
+  return String(arms[arms.length - 1]!.code);
+}
+
+/**
+ * The slot of an experiment question with `settings.armBalance.exact`: its arms (codes), WEIGHTED by the arms'
+ * weights, one per respondent, claimed by the Runner before the page is shown (never in a renderer effect) and
+ * stored in `<VAR>_ARM`; the question's answer is that arm.
+ */
+export function experimentArmSlot(def: SurveyDefinition, state: ResponseState, q: Question, loop: LoopContext | null = null): BalanceSlot | null {
+  if (q.type !== "experiment") return null;
+  const cfg = balanceSettings((q.settings as { armBalance?: ExactBalance } | undefined)?.armBalance);
+  if (!cfg) return null;
+  const all = armsOf(q);
+  /* a weight of 0 parks an arm (the editor's rule): it is never claimed — unless no arm has a positive weight */
+  const arms = all.some((a) => armWeight(a) > 0) ? all.filter((a) => armWeight(a) > 0) : all;
+  const codes = [...new Set(arms.map((a) => String(a.code)))];
+  if (codes.length < 2) return null;
+  const cell = balanceCell(def, state, cfg.byQuota);
+  const variable = experimentArmVariable(q, loop);
+  const ws = codes.map((c) => armWeight(arms.find((a) => String(a.code) === c)!) || 1);
+  const assigned = readAssignment(state, variable, codes);
+  return {
+    key: `arm:${q.id}${loopKeySuffix(loop)}${cell ? `|cell:${cell}` : ""}`, kind: "arm", nodeId: q.id, questionId: q.id,
+    arms: codes, count: 1, basis: cfg.basis, tieBreak: cfg.tieBreak, holdMinutes: cfg.holdMinutes,
+    variable, cell, assigned: assigned && assigned.length ? assigned.slice(0, 1) : null,
+    fallback: [seededExperimentArm(q, state.seed) ?? codes[0]!],
+    ...(ws.every((x) => x === ws[0]) ? {} : { weights: ws }),
+  };
+}
+
+/** the claimed arm of an experiment question, if its arm is balanced and claimed — what the renderer shows */
+export function claimedExperimentArm(state: Pick<ResponseState, "calculated">, q: Question, loop?: LoopContext | null): string | null {
+  if (!(q.settings as { armBalance?: ExactBalance } | undefined)?.armBalance?.exact) return null;
+  const v = readAssignment(state, experimentArmVariable(q, loop), armsOf(q).map((a) => String(a.code)));
+  return v?.[0] ?? null;
+}
+
+/**
+ * The Runner, at page entry, after the claims: each exact experiment on the page whose arm is claimed gets that arm
+ * as its answer (the answer IS the arm) — so the arm never depends on a renderer effect. Returns the questions set.
+ */
+export function applyClaimedArms(def: SurveyDefinition, state: ResponseState, step: RuntimeStep | null | undefined): string[] {
+  if (!step || step.kind !== "page") return [];
+  const out: string[] = [];
+  for (const qid of step.questionIds) {
+    const q = def.questions.find((x) => x.id === qid);
+    if (!q || q.type !== "experiment") continue;
+    const arm = claimedExperimentArm(state, q, step.loop ?? null);
+    if (!arm) continue;
+    const key = `${q.id}${loopKeySuffix(step.loop ?? null)}`;
+    if (String(state.answers[key] ?? "") === arm) continue;
+    state.answers[key] = arm;
+    out.push(q.id);
+  }
+  return out;
 }

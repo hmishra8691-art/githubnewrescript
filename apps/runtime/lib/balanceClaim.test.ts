@@ -101,3 +101,22 @@ test("S4c: an exact Williams randomizer's row is claimed through the server path
   }
   assert.deepEqual(Object.values(m.counts("rl:LIVE", "latin:wl")).map((x) => x.active), [2, 2, 2, 2]);
 });
+
+test("S4c (RA-08): an exact experiment's arm is claimed through the server path (arm:<qid> → <VAR>_ARM), weighted; a client-written _ARM is not evidence", async () => {
+  const d = SurveyDefinition.parse({
+    meta: { id: "ra", code: "RA", title: "Arms", version: "1" },
+    questions: [{ id: "qx", code: "Q1", variableName: "EXP", type: "experiment", text: "e", settings: { arms: [{ code: "A", label: "A", weight: 3 }, { code: "B", label: "B", weight: 1 }], armBalance: { exact: true } } }],
+    flow: [page("p1", "qx"), { type: "end", id: "end", status: "complete" }],
+  });
+  assert.ok(isBalanceVariable(d, "EXP_ARM"));
+  assert.ok(!isBalanceVariable(d, "OTHER_ARM"));
+  const m = new MemoryBalanceStore();
+  for (let i = 0; i < 40; i++) {
+    const st = createResponseState(d, { seed: 300 + i, sessionId: `ra-session-${i}` });
+    if (i === 0) st.calculated.EXP_ARM = "B"; // forged by the client: cleared and re-claimed
+    const out = await claimBalances(d, st, ["arm:qx"], "ra:LIVE", memory(m));
+    assert.equal(out.assignments[0]!.variable, "EXP_ARM");
+  }
+  const c = m.counts("ra:LIVE", "arm:qx");
+  assert.equal(c.A!.active, 30); assert.equal(c.B!.active, 10);
+});

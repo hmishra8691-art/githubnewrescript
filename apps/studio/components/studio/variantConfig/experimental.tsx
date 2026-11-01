@@ -4,6 +4,7 @@ import { MediaUrlInput } from "../MediaUrlInput";
 import type { Question } from "@rescript/schema";
 import { registerVariantSettings } from "./registry";
 import { CountInput } from "../CountInput";
+import { BalanceSettings } from "../FlowNodeEditors";
 
 /**
  * Studio authoring for the experimental family.
@@ -133,10 +134,13 @@ registerVariantSettings("experiment", ({ q, patchSettings }) => {
     <>
       <h3 className="sec">Experiment arms</h3>
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
-        One arm is assigned per respondent from their seed, so the same
-        respondent always sees the same arm and the assignment is reproducible.
-        A weight of 0 parks an arm without deleting it.
+        {q.settings.armBalance?.exact
+          ? <>Each respondent&apos;s arm is CLAIMED when the page is entered — the arm furthest below its weighted share first — and stored in <span className="mono">{q.variableName}_ARM</span>.</>
+          : <>One arm is assigned per respondent from their seed, so the same respondent always sees the same arm and the assignment is reproducible.</>}
+        {" "}A weight of 0 parks an arm without deleting it.
       </div>
+      {/* S4c (RA-08): the same exact claim as a randomizer, weighted by the arms' weights */}
+      <BalanceSettings value={q.settings.armBalance} onChange={(b) => patchSettings({ armBalance: b })} what="each arm" testId="arm-balance" />
 
       {arms.map((a, i) => (
         <div key={i} data-testid={`arm-${i}`}

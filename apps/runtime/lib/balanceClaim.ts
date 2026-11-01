@@ -1,5 +1,5 @@
 import {
-  exactBalanceSlots, claimRequestFor, writeAssignment, designVersionVariable, MemoryBalanceStore,
+  exactBalanceSlots, claimRequestFor, writeAssignment, designVersionVariable, MemoryBalanceStore, experimentArmVariable, armVariableBase,
   type BalanceClaimRequest, type ResponseState,
 } from "@rescript/engine";
 import type { SurveyDefinition } from "@rescript/schema";
@@ -74,6 +74,8 @@ export async function claimBalances(
 /** a calculated variable that holds an exact-balance assignment (`RANDOMIZER_*`, or `<VAR>_VERSION` of an exact design question) */
 export function isBalanceVariable(def: SurveyDefinition, name: string): boolean {
   if (name.startsWith("RANDOMIZER_")) return true;
+  /* S4c (RA-08): an experiment's claimed arm, `<VAR>[_<loop codes>]_ARM` */
+  if (name.endsWith("_ARM") && def.questions.some((q) => q.type === "experiment" && !!(q.settings as { armBalance?: { exact?: boolean } } | undefined)?.armBalance?.exact && (name === experimentArmVariable(q) || name.startsWith(`${armVariableBase(q)}_`)))) return true;
   return def.questions.some((q) => !!(q.settings as { versionBalance?: { exact?: boolean } } | undefined)?.versionBalance?.exact && name === designVersionVariable(q));
 }
 

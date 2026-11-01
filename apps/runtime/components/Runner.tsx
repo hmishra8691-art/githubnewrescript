@@ -11,6 +11,7 @@ import {
   goBack,
   balanceSlotsDue,
   recordDisplayOrders,
+  applyClaimedArms,
   speechServerOn,
   questionOffersSpeechInput,
   setAnswer,
@@ -1411,7 +1412,7 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
    */
   /* recomputed when the step or a stored assignment changes — not on every keystroke */
   const balanceStep = stateRef.current && !booting && !fatal ? steps[stateRef.current.stepIndex] : undefined;
-  const assignmentSig = stateRef.current ? Object.entries(stateRef.current.calculated).filter(([k]) => k.startsWith("RANDOMIZER_") || k.endsWith("_VERSION")).map(([k, v]) => `${k}=${String(v)}`).join("|") : "";
+  const assignmentSig = stateRef.current ? Object.entries(stateRef.current.calculated).filter(([k]) => k.startsWith("RANDOMIZER_") || k.endsWith("_VERSION") || k.endsWith("_ARM")).map(([k, v]) => `${k}=${String(v)}`).join("|") : "";
   const balanceDue = React.useMemo(() => {
     const s = stateRef.current;
     const st = balanceStep;
@@ -1493,6 +1494,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (st?.kind !== "page") return;
     /* S4c (RK-04): the order this page is shown in — ORDER_<RANDOMIZER> and opted-in <VAR>_ORDER — stored with the response (the server's replay derives the same) */
     try { recordDisplayOrders(def, s, st); } catch (e) { console.warn("[rescript:runtime] display order not recorded", e); }
+    /* S4c (RA-08): an exact experiment's claimed arm becomes its answer here, at page entry — not in a renderer effect */
+    try { if (applyClaimedArms(def, s, st).length) force(); } catch (e) { console.warn("[rescript:runtime] experiment arm not applied", e); }
     if (LEGACY_SCRIPTS) {
       const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
       if (!r.ran && !r.logs.length) return;

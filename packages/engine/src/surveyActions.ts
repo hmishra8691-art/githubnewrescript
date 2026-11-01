@@ -176,12 +176,14 @@ export const SURVEY_ACTION_OPS = [
  * slots): at most 12 keys, plain values only. Which keys and values are allowed is decided when applied, against the
  * variant (capabilityRegistry.settingProblem).
  */
+/** S4c: the only settings whose value is one shallow record (anything else nested is dropped at coercion) */
+const RECORD_SETTINGS = new Set(["armBalance"]);
 export function settingsIn(raw: unknown): Record<string, unknown> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const plain = (v: unknown) => typeof v === "number" ? Number.isFinite(v) : typeof v === "boolean" || (typeof v === "string" && v.length <= 200);
-  /* S4a AQ-08: a list of shallow records (a cascading dropdown's parents [{code, label}]) — plain values only, bounded; the schema field decides the shape when applied */
+  /* S4a AQ-08: a list of shallow records (a cascading dropdown's parents [{code, label}]) — plain values only, bounded; the schema field decides the shape when applied. S4c: one shallow record for a key in RECORD_SETTINGS (armBalance {exact, basis…}) */
   const record = (v: unknown) => !!v && typeof v === "object" && !Array.isArray(v) && Object.keys(v).length <= 8 && Object.values(v as Record<string, unknown>).every(plain);
-  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (Array.isArray(v) && v.length <= 20 && v.every(plain)) || (Array.isArray(v) && v.length > 0 && v.length <= 200 && v.every(record)))).slice(0, 12));
+  const st = Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(k) && (plain(v) || (RECORD_SETTINGS.has(k) && record(v)) || (Array.isArray(v) && v.length <= 20 && v.every(plain)) || (Array.isArray(v) && v.length > 0 && v.length <= 200 && v.every(record)))).slice(0, 12));
   return Object.keys(st).length ? st : undefined;
 }
 

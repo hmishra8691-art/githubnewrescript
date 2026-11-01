@@ -20,7 +20,7 @@ import { resolveUrlTemplate } from "./redirect.js";
 import { listFillHiddenDestinations } from "./listFill.js";
 import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
-import { designSlot, designRowSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
+import { designSlot, designRowSlot, experimentArmSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
 import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
 import { randomizerOrderVariable } from "./displayOrder.js";
 
@@ -125,6 +125,12 @@ export function compileFlow(
           const pageBalance = [...balanceStack];
           for (const qid of node.questionIds) {
             const q = def.questions.find((x) => x.id === qid);
+            /* S4c (RA-08): an experiment whose arm is balanced exactly — claimed at page entry by the Runner */
+            if (q && q.type === "experiment" && (q.settings as { armBalance?: { exact?: boolean } } | undefined)?.armBalance?.exact) {
+              const arm = experimentArmSlot(def, state, q, loop);
+              if (arm) { opts.onBalance?.(arm); if (!pageBalance.includes(arm.key)) pageBalance.push(arm.key); }
+              continue;
+            }
             if (!q || !(q.settings as { versionBalance?: { exact?: boolean } } | undefined)?.versionBalance?.exact) continue;
             const slot = designSlot(def, state, q);
             if (!slot) continue;

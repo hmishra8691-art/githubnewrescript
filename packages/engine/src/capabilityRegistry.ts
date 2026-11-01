@@ -166,7 +166,7 @@ export const NATIVE_FEATURES: readonly NativeFeature[] = [
   { id: "skip_logic", name: "Skip / terminate", need: /\bskip\w*|\bterminat\w*|\bscreen out\b|\bjump\b|\bend the survey\b|\bdisqualif\w*/i, actions: ["add_skip", "clear_skips"],
     summary: "add_skip {from, when, to} — to a question, a block or end/terminate; clear_skips" },
   { id: "randomizer", name: "Randomizer", need: /\brandomi[sz]\w*|\bshuffle\w*|\brotat\w*|\bequally\b|\bevenly\b|\bbalanc\w*|\blatin square\b|\bshow (?:only )?\d+ of\b/i, actions: ["create_randomizer", "set_randomizer", "set_option_randomization", "update_question"],
-    summary: "set_option_randomization {target, method shuffle|rotate|reverse_half} (rotate = each option in each position equally often); create_randomizer {blocks, show, weights, order, exact} / set_randomizer {randomizer, show, weights {child: n}, order random|rotation|latin_square|williams, exact, recordOrder}: weighted N-of-M (exact claim aims at weight/total), cyclic Latin square or Williams (carryover-balanced; respondent's ROW claimed exactly), the order shown stored in ORDER_<ID>" },
+    summary: "set_option_randomization {target, method shuffle|rotate|reverse_half} (rotate = each option in each position equally often); create_randomizer {blocks, show, weights, order, exact} / set_randomizer {randomizer, show, weights {child: n}, order random|rotation|latin_square|williams, exact, recordOrder}: weighted N-of-M (exact claim aims at weight/total), cyclic Latin square or Williams (carryover-balanced; respondent's ROW claimed exactly), the order shown stored in ORDER_<ID>; an A/B experiment question's arm claimed exactly (weighted by arm weights) at page entry: update_question settings {armBalance: {exact: true}} → <VAR>_ARM" },
   { id: "option_groups", name: "Option groups (headings, collapsible lists)", need: /\boption groups?\b|\bgroup(?:ed)? (?:the )?(?:options|choices|answers|rows)\b|\b(?:sub-?)?headings? (?:above|for|over) (?:the )?(?:options|choices|groups?)\b|\bcollaps\w+ (?:group|list|section|options)\b|\bexpandable (?:group|list|options)\b|\bnested options\b/i, actions: ["set_option_groups"],
     summary: "set_option_groups {target, scope options|rows|columns, groups [{name, label, display heading|collapsible|none, members [codes]}] | clear}: groups keep their members together under randomization; display heading draws the label above the members, collapsible a keyboard-accessible disclosure button (single, multi, dropdown as optgroup, matrix rows)" },
   { id: "cascading_dropdown", name: "Cascading dropdown", need: /\bcascad\w*|\bdependent (?:drop-?down|list|select)\w*|\b(?:country|state|region|brand)\b[^.]{0,30}\bthen\b[^.]{0,30}\b(?:state|city|district|model|sub-?\w+)\b|\bparent[- ]child (?:drop-?down|list)\b|\blinked drop-?downs?\b/i, actions: ["create_question"],
@@ -338,6 +338,8 @@ const FAMILY_SETTINGS: Record<string, string[]> = {
   maxdiff: ["showItemLabels"],
   conjoint: ["showItemLabels"],
   content: ["mediaLayout"],
+  /* S4c (RA-08): an experiment's arm claimed exactly — update_question settings {"armBalance":{"exact":true}} */
+  experimental: ["armBalance"],
 };
 /** bounds the schema field itself does not state */
 export const SETTING_BOUNDS: Record<string, [number, number]> = {
