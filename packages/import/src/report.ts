@@ -1,3 +1,4 @@
+import { classifyMapping, mappingSummary, type MappingDecision, type MappingClass } from "./mappingDecision.js";
 import type { CanonicalSurvey, CanonicalStats, Issue, InventoryFeature, InventoryItem, CanonicalAsset } from "./canonical.js";
 import { canonicalStats } from "./canonical.js";
 import type { MapResult, ImportScope, UnresolvedReference } from "./map.js";
@@ -36,7 +37,7 @@ export const FEATURE_LABELS: Record<InventoryFeature, string> = {
   question: "Questions", option: "Choices", row: "Rows", validation: "Validation rules", display_logic: "Display logic", option_logic: "Choice / row display logic",
   skip_logic: "Skip logic", branch: "Flow branches", randomizer: "Randomizers", block_randomizer: "Block randomizers", loop: "Loops (Loop & Merge)", embedded: "Embedded data fields",
   quota: "Quotas", quota_logic: "Quota conditions", carry_forward: "Carry-forward choices", randomization: "Choice randomization", piping: "Piped text", translation: "Translations",
-  asset: "Images and files", custom_js: "Custom JavaScript", flow_element: "Other flow elements", survey_option: "Survey options", default_value: "Default answers",
+  asset: "Images and files", custom_js: "Custom JavaScript", flow_element: "Other flow elements", survey_option: "Survey options", default_value: "Default answers", timer: "Page timers",
 };
 
 export function fidelity(c: CanonicalSurvey, m: MapResult): ImportFidelity {
@@ -93,6 +94,8 @@ export interface MigrationReport {
   ok: boolean;
   /** measured per-feature fidelity — see ImportFidelity */
   fidelity: ImportFidelity;
+  /** how close each imported question is to its source (mappingDecision.ts) — one entry per source question */
+  mapping: { decisions: MappingDecision[]; summary: Record<MappingClass, number> };
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -107,6 +110,8 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
   for (const q of m.confidence) confidence[q.level] = (confidence[q.level] ?? 0) + 1;
   const cr = m.created;
   const fid = fidelity(c, m);
+  const decisions = c.questions.map(classifyMapping);
+  const mapping = { decisions, summary: mappingSummary(decisions) };
   const lines = (s: CanonicalStats | null): string[] => !s ? [] : [
     plural(s.questions, "question"), plural(s.blocks, "block"), s.pageBreaks ? plural(s.pageBreaks, "page break") : "",
     s.embeddedFields ? plural(s.embeddedFields, "embedded variable") : "", s.hiddenVariables ? plural(s.hiddenVariables, "hidden variable") : "",
@@ -129,6 +134,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     /* the measured line: items, not a feeling */
     const f = fid.totals;
     if (f.detected) summary.push(`Of ${plural(f.detected, "source element")} checked, ${f.imported} came across as they were${f.partial ? `, ${f.partial} with a change` : ""}${f.unsupported ? `, ${f.unsupported} could not be reproduced` : ""} (${fid.importedPct}% as-is).`);
+    { const ms = mapping.summary; const notExact = ms.components + ms.needs_runtime + ms.needs_js + ms.unsupported; if (notExact) summary.push(`Question types: ${ms.exact} native${ms.components ? `, ${ms.components} rebuilt from Studio components` : ""}${ms.needs_js ? `, ${ms.needs_js} needing their custom script reviewed` : ""}${ms.needs_runtime ? `, ${ms.needs_runtime} needing a feature Rescript does not have` : ""}${ms.unsupported ? `, ${ms.unsupported} with no equivalent (placeholders)` : ""}.`); }
     if (fid.unresolved.length) summary.push(`${plural(fid.unresolved.length, "reference")} point${fid.unresolved.length === 1 ? "s" : ""} at something that is not in the imported survey.`);
     if (fid.assets.some((a) => a.risk !== "ok")) summary.push(`${plural(fid.assets.filter((a) => a.risk !== "ok").length, "image")} ${fid.assets.filter((a) => a.risk !== "ok").length === 1 ? "is" : "are"} still hosted by Qualtrics or named only by a library id — re-upload them here.`);
     if (fid.languages.length) summary.push(`Translations in ${fid.languages.map((l) => l.code).join(", ")} were imported for review.`);
@@ -146,7 +152,7 @@ export function buildReport(detection: Detection, c: CanonicalSurvey, m: MapResu
     source: { platform: c.source.platform, format: c.source.format, fileName: c.source.fileName, title: c.source.title, label: detection.label, reasons: detection.reasons },
     scope, detected, created: m.def ? cr : null, converted, review, risks, confidence,
     validation: m.quality ? { errors: m.quality.errors.length, warnings: m.quality.warnings.length, deployable: m.quality.deployable } : null,
-    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid,
+    merge: m.merge, summary, audit, ok: !!m.def, fidelity: fid, mapping,
   };
 }
 

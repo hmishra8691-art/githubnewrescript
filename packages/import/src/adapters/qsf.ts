@@ -1,3 +1,4 @@
+import { QSF_TYPE_GUIDANCE } from "../mappingDecision.js";
 import type {
   CanonicalSurvey, CanonicalQuestion, CanonicalOption, CanonicalRow, CanonicalValidation, CanonicalSkip, CanonicalCustom,
   CanonicalEmbeddedField, CanonicalQuota, CFlow, CExpr, CRef, COp, CLoop, CanonicalKind, Issue, InventoryItem, CanonicalAsset,
@@ -408,6 +409,15 @@ function readQuestion(qid: string, p: Json, issues: Issue[], inventory: Inventor
     case "HeatMap": case "HotSpot": set("hotspot"); confidence = "review"; notes.push(`a Qualtrics ${type} — the image regions must be redrawn`); break;
     case "Timing": case "Meta":
       set("hidden"); q.required = false; confidence = "review";
+      if (type === "Timing") {
+        /* "enable submit after" / "auto-advance after" — S4b's native page timer carries both; 0 means off in Qualtrics */
+        const cfg: Json = p.Configuration ?? {};
+        const minS = Math.round(Number(cfg.MinSeconds ?? 0)), maxS = Math.round(Number(cfg.MaxSeconds ?? 0));
+        const pageTimer: Record<string, number> = {};
+        if (Number.isFinite(minS) && minS >= 1) pageTimer.minSeconds = Math.min(minS, 3600);
+        if (Number.isFinite(maxS) && maxS >= 1) pageTimer.limitSeconds = Math.min(maxS, 3600);
+        if (Object.keys(pageTimer).length) { q.settings = { ...(q.settings ?? {}), pageTimer }; notes.push(`a page timer with ${pageTimer.minSeconds ? `Next after ${pageTimer.minSeconds} s` : ""}${pageTimer.minSeconds && pageTimer.limitSeconds ? " and " : ""}${pageTimer.limitSeconds ? `auto-advance after ${pageTimer.limitSeconds} s` : ""} — a native page timer; the hidden variable keeps its place in the data map`); }
+      }
       notes.push(type === "Timing" ? "a page timer — Rescript records page timings itself; kept as a hidden variable for the data map" : "browser metadata — Rescript records user agent and device itself; kept as a hidden variable");
       break;
     case "SBS": {
@@ -434,6 +444,10 @@ function readQuestion(qid: string, p: Json, issues: Issue[], inventory: Inventor
       notes.push(`a side-by-side question with ${aq.length} column${aq.length === 1 ? "" : "s"} — imported as a mixed grid; data columns are <variable>_<column>_<row>`);
       break;
     }
+    case "Captcha": case "DD": case "HL":
+      set("unknown"); confidence = "unsupported";
+      issues.push({ location: qid, type: "unsupported", severity: "high", message: `${q.variable} is a Qualtrics ${q.sourceType} question. ${QSF_TYPE_GUIDANCE[type].note}`, suggestion: type === "DD" ? "Rebuild it as single.cascade (two levels) or one dropdown per level." : "Rebuild it in Studio, or remove it if it is not needed.", autoAttempted: false, refs: [qid] });
+      break;
     default:
       set("unknown"); confidence = "unsupported";
       issues.push({ location: qid, type: "unsupported", severity: "high", message: `${q.variable} is a Qualtrics ${q.sourceType} question, which has no Rescript equivalent.`, suggestion: "Rebuild it in Studio; a placeholder keeps its position.", autoAttempted: false, refs: [qid] });

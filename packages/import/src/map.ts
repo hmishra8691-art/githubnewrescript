@@ -562,6 +562,24 @@ export function mapCanonical(c: CanonicalSurvey, opts: MapOptions): MapResult {
     else issues.push({ location: "flow", type: "structure", severity: "low", message: `${loose.length} question${loose.length === 1 ? " is" : "s are"} not placed on any page by the source flow: ${loose.slice(0, 8).map((q) => q.code).join(", ")}${loose.length > 8 ? "…" : ""}.`, suggestion: "Place them in Architect, or delete them.", autoAttempted: false });
   }
 
+  /*
+   * A source PAGE TIMER (a Qualtrics Timing question with "enable submit after"
+   * or "auto-advance after") becomes S4b's native timer on the page that holds
+   * it: minSeconds = submit after, limitSeconds + advance = auto-advance. The
+   * clock is hidden (Qualtrics shows none unless the survey adds one). The
+   * hidden variable stays for the data map.
+   */
+  for (const cq of c.questions) {
+    const pt = cq.settings?.pageTimer as { minSeconds?: number; limitSeconds?: number } | undefined;
+    const rid = idOf.get(cq.sourceId);
+    if (!pt || !rid) continue;
+    const page = findPage(flow, rid);
+    if (!page) { inventory.push({ feature: "timer", sourceId: cq.sourceId, status: "unsupported", note: "the timing question is not on a page" }); continue; }
+    if ((page as { timer?: unknown }).timer) { issues.push({ location: cq.sourceId, type: "converted", severity: "low", message: `${cq.variable} is a second page timer on one page; the first one was kept.`, autoAttempted: true, refs: [cq.sourceId] }); inventory.push({ feature: "timer", sourceId: cq.sourceId, status: "partial", note: "second timer on one page" }); continue; }
+    (page as { timer?: unknown }).timer = { show: "hidden", onTimeout: "advance", ...(pt.limitSeconds ? { limitSeconds: pt.limitSeconds } : {}), ...(pt.minSeconds ? { minSeconds: pt.minSeconds } : {}) };
+    inventory.push({ feature: "timer", sourceId: cq.sourceId, status: "imported", note: `page timer${pt.minSeconds ? ` · Next after ${pt.minSeconds} s` : ""}${pt.limitSeconds ? ` · advances after ${pt.limitSeconds} s` : ""}` });
+  }
+
   /* ------------------------------------------------------------ quotas */
   const quotas: Quota[] = [];
   if (logic) {
@@ -779,3 +797,15 @@ const SEV = { high: 0, medium: 1, low: 2, info: 3 } as const;
 export function sortIssues(xs: Issue[]): Issue[] { return [...xs].sort((a, b) => SEV[a.severity] - SEV[b.severity]); }
 
 export type { CanonicalStats };
+
+/** the page node (anywhere in the tree) whose questionIds hold this question */
+function findPage(nodes: FlowNode[], qid: string): FlowNode | null {
+  for (const n of nodes) {
+    const k = n as { type: string; questionIds?: string[]; children?: FlowNode[]; branches?: { children: FlowNode[] }[]; otherwise?: FlowNode[] };
+    if (k.type === "page" && k.questionIds?.includes(qid)) return n;
+    if (k.children) { const f = findPage(k.children, qid); if (f) return f; }
+    if (k.branches) for (const b of k.branches) { const f = findPage(b.children, qid); if (f) return f; }
+    if (k.otherwise) { const f = findPage(k.otherwise, qid); if (f) return f; }
+  }
+  return null;
+}

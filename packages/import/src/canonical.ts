@@ -254,7 +254,7 @@ export interface CanonicalQuota {
 export type InventoryFeature =
   | "question" | "option" | "row" | "validation" | "display_logic" | "option_logic" | "skip_logic" | "branch" | "randomizer"
   | "block_randomizer" | "loop" | "embedded" | "quota" | "quota_logic" | "carry_forward" | "randomization" | "piping" | "translation"
-  | "asset" | "custom_js" | "flow_element" | "survey_option" | "default_value";
+  | "asset" | "custom_js" | "flow_element" | "survey_option" | "default_value" | "timer";
 export type InventoryStatus = "imported" | "partial" | "unsupported";
 export interface InventoryItem {
   feature: InventoryFeature;
