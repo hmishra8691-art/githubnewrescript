@@ -35,3 +35,9 @@ export const buildPriceLadderSurvey = (surveyId = "price-ladder") =>
 
 export const buildSequentialMonadicSurvey = (surveyId = "sequential-monadic") =>
   buildMethodSurvey(surveyId, { code: "SMT", title: "Sequential monadic concept test" }, { template: "sequential_monadic", concepts: ["Concept A", "Concept B", "Concept C"] });
+
+export const buildBrandFunnelSurvey = (surveyId = "brand-funnel") =>
+  buildMethodSurvey(surveyId, { code: "BFN", title: "Brand funnel" }, { template: "brand_funnel", product: "coffee", brands: ["Alpha", "Beta", "Gamma", "Delta"] });
+
+export const buildAdTestSurvey = (surveyId = "ad-test") =>
+  buildMethodSurvey(surveyId, { code: "ADT", title: "Ad test" }, { template: "ad_test", brands: ["Alpha", "Beta", "Gamma"] });

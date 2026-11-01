@@ -262,6 +262,10 @@ export type MethodTemplateAction = {
   imageUrl?: string;
   products?: string[];
   secondPick?: boolean;
+  /** brand_funnel / ad_test: the brand list (2–15; the advertised brand first for ad_test) */
+  brands?: string[];
+  /** ad_test: the ad (https or the media library) — the guide asks for it; absent, set it in the editor */
+  videoUrl?: string;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */

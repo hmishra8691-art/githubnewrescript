@@ -18,8 +18,8 @@ import {
   buildBrandTrackerSurvey, buildEmployeeSurvey,
 } from "./starters.js";
 import type { SurveyDefinition } from "@rescript/schema";
-import { buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey } from "./methods.js";
-export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey } from "./methods.js";
+import { buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
+export { buildMethodSurvey, buildPricingPsmSurvey, buildPriceLadderSurvey, buildSequentialMonadicSurvey, buildBrandFunnelSurvey, buildAdTestSurvey } from "./methods.js";
 
 export interface SurveyTemplate {
   key: string;
@@ -82,6 +82,18 @@ export const SURVEY_TEMPLATES: SurveyTemplate[] = [
     name: "Sequential monadic concept test",
     description: "Every respondent rates every concept in a Williams-balanced order (stored per respondent), with the planned within-respondent comparison and order-effect check",
     build: buildSequentialMonadicSurvey,
+  },
+  {
+    key: "brand_funnel",
+    name: "Brand funnel (unaided → aided → consideration → purchase → preference)",
+    description: "Top-of-mind coded by the AI classification, then the aided funnel by carry-forward, with the planned funnel and conversion analysis",
+    build: buildBrandFunnelSurvey,
+  },
+  {
+    key: "ad_test",
+    name: "Ad test (forced exposure)",
+    description: "The ad must play to the end, then likeability, unaided (AI-coded) and aided recall, a diagnostics grid and purchase intent — analyses planned",
+    build: buildAdTestSurvey,
   },
   {
     key: "master_demo_2026",

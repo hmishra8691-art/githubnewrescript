@@ -33,3 +33,24 @@ test("sequential_monadic starter: three concept blocks rotated, the plan item re
   assert.equal(run.endStatus, "complete");
   assert.equal(run.pages.length, 3, "one page per concept");
 });
+
+test("brand_funnel starter: unaided coded by ai_classify, the aided funnel carried forward, the brand_funnel plan item over the four stages", () => {
+  const def = findSurveyTemplate("brand_funnel")!.build("x");
+  const coded = def.questions.find((q) => q.variableName === "UNAIDED_CODED")!;
+  assert.match(String(coded.settings.expression), /^ai_classify\(UNAIDED, "Alpha\|Beta\|Gamma\|Delta\|Other\|None"\)$/);
+  assert.equal(def.questions.find((q) => q.variableName === "CONSIDER")!.carryForward?.sourceQuestionId, def.questions.find((q) => q.variableName === "AWARE")!.id);
+  const t = def.research!.analysisPlan!.tests;
+  assert.deepEqual(t[0].variables, ["AWARE", "CONSIDER", "PURCHASED", "PREFER"]);
+  assert.equal(t[0].method, "brand_funnel");
+  const run = simulateRespondent(def, { seed: 2, answers: {} });
+  assert.equal(run.endStatus, "complete");
+});
+
+test("ad_test starter: forced exposure (video_rating, requireComplete), recall coded and aided, diagnostics, intent — and the planned analyses", () => {
+  const def = findSurveyTemplate("ad_test")!.build("x");
+  const ad = def.questions.find((q) => q.variableName === "AD_LIKE")!;
+  assert.equal(ad.variant, "media.video_rating");
+  assert.equal(ad.settings.requireComplete, true);
+  assert.deepEqual(def.research!.analysisPlan!.tests.map((t) => t.method), ["frequencies", "mean", "top_box"]);
+  assert.equal(def.questions.find((q) => q.variableName === "AD_DIAG")!.rows.length, 5);
+});

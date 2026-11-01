@@ -36,11 +36,20 @@ import { randomizerOrderVariable } from "./displayOrder.js";
  *                        product (products, laid out evenly left to right — adjust them in the regions editor),
  *                        optional second choice. Plan: shelf_share.
  *
+ *   brand_funnel         unaided awareness (open end) coded by the AI classification (a calculated ai_classify over
+ *                        the brand list — the runtime resolves it, fake provider in tests), then aided awareness →
+ *                        consideration → purchase (carried forward stage to stage) → preference. Plan: brand_funnel
+ *                        over the four stages + frequencies of the coded first mention.
+ *   ad_test              forced exposure (media.video_rating: the video must play to the end, then likeability),
+ *                        unaided brand recall (open end → ai_classify), aided recall, a diagnostics grid (5-point
+ *                        agreement) and post-exposure purchase intent. Plan: frequencies of recall, mean
+ *                        likeability, top-2 box of the diagnostics and of intent.
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat", "shelf_test"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat", "shelf_test", "brand_funnel", "ad_test"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -69,6 +78,10 @@ export type MethodTemplateAction = {
   imageUrl?: string;
   products?: string[];
   secondPick?: boolean;
+  /** brand_funnel / ad_test: the brand list (2–15; the advertised brand first for ad_test) */
+  brands?: string[];
+  /** ad_test: the ad (https or the media library) — the guide asks for it; absent, set it in the editor */
+  videoUrl?: string;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -129,6 +142,12 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
     a.products = ps;
   }
   if (typeof o.secondPick === "boolean") a.secondPick = o.secondPick;
+  if (o.brands !== undefined) {
+    const bs = Array.isArray(o.brands) ? o.brands.map((x) => str(x, 80)).filter((x): x is string => !!x && !/[|"]/.test(x)) : [];
+    if (bs.length < 2 || bs.length > 15 || new Set(bs.map((x) => x.toLowerCase())).size !== bs.length) return "add_method_template brands must be 2–15 different names (no | or \")";
+    a.brands = bs;
+  }
+  if (o.videoUrl !== undefined) { const u = str(o.videoUrl, 2000); if (!u || !/^(?:https:\/\/|\/api\/media\/)/.test(u)) return "add_method_template videoUrl must be https or the survey's media library (/api/media/…)"; a.videoUrl = u; }
   if (a.template === "shelf_test" && !a.imageUrl) return "add_method_template shelf_test needs imageUrl — the shelf photo (ask for it; never invent one)";
   if (o.plan === false) a.plan = false;
   return a;
@@ -250,6 +269,52 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         block: { type: "block", id: ids("b"), title: "Shelf", children: [page("Shelf", [shelfQ])] } as FlowNode,
         tests: [{ method: "shelf_share", variables: [`${P}SHELF`], priority: 1, tier: "essential", hypotheses: [], reason: "share of choice and time to find per product" }],
         notes: ["The product regions are laid out evenly left to right — move them onto the products in the regions editor."],
+      };
+    }
+    case "brand_funnel": {
+      const brands = a.brands ?? ["Brand A", "Brand B", "Brand C", "Brand D"];
+      const opts = brands.map((b, i) => ({ code: i + 1, label: b }));
+      const cat = `${product === "this product" ? "this category" : product}`;
+      const unaided = q("UNAIDED", "open_text", `When you think of ${cat}, which brand comes to mind first?`);
+      const coded = q("UNAIDED_CODED", "calculated", "Unaided first mention, coded", { required: false, settings: { expression: `ai_classify(${P}UNAIDED, "${[...brands, "Other", "None"].join("|")}")` } });
+      const answered = (x: Record<string, unknown>) => ({ type: "rule", source: { kind: "question", ref: String(x.id) }, operator: "answered" });
+      const cf = (x: Record<string, unknown>) => ({ sourceQuestionId: String(x.id), filter: "selected", into: "options" });
+      const aware = q("AWARE", "multi_select", `Which of these brands of ${cat} have you heard of?`, { options: [...opts, { code: 98, label: "None of these", flags: ["exclusive", "anchor_bottom"] }] });
+      const consider = q("CONSIDER", "multi_select", "Which of them would you consider buying?", { carryForward: cf(aware), displayLogic: answered(aware) });
+      const bought = q("PURCHASED", "multi_select", "Which of them have you bought in the last 3 months?", { carryForward: cf(consider), displayLogic: answered(consider) });
+      const prefer = q("PREFER", "single_select", "And which one do you prefer most?", { carryForward: cf(aware), displayLogic: answered(aware) });
+      return {
+        title: `Brand funnel over ${brands.length} brands`,
+        questions: [unaided, coded, aware, consider, bought, prefer],
+        block: { type: "block", id: ids("b"), title: "Brand funnel", children: [page("Unaided awareness", [unaided, coded]), page("Aided awareness", [aware]), page("Consideration", [consider]), page("Purchase", [bought]), page("Preference", [prefer])] } as FlowNode,
+        tests: [
+          { method: "brand_funnel", variables: [`${P}AWARE`, `${P}CONSIDER`, `${P}PURCHASED`, `${P}PREFER`], priority: 1, tier: "essential", hypotheses: [], reason: "aided awareness → consideration → purchase → preference, and the conversion between stages, by brand" },
+          { method: "frequencies", variables: [`${P}UNAIDED_CODED`], priority: 2, tier: "recommended", hypotheses: [], reason: "unaided first mention (top of mind), coded by the AI classification" },
+        ],
+        notes: ["UNAIDED_CODED is resolved by the AI classification at runtime (needs the AI service); every other stage is plain data."],
+      };
+    }
+    case "ad_test": {
+      const brands = a.brands ?? ["Our brand", "Competitor 1", "Competitor 2"];
+      const ad = q("AD_LIKE", "numeric", "Please watch this ad to the end. How much did you like it?", { variant: "media.video_rating", settings: { minValue: 1, maxValue: 5, requireComplete: true, ratingType: "stars", ...(a.videoUrl ? { mediaUrl: a.videoUrl } : {}) } });
+      const recallOpen = q("RECALL_OPEN", "open_text", "Which brand was the ad for?");
+      const recallCoded = q("RECALL_CODED", "calculated", "Unaided brand recall, coded", { required: false, settings: { expression: `ai_classify(${P}RECALL_OPEN, "${[...brands, "Other", "Don't know"].join("|")}")` } });
+      const recallAided = q("RECALL_AIDED", "single_select", "And which of these brands was it?", { options: [...brands.map((b, i) => ({ code: i + 1, label: b })), { code: 99, label: "Don't know" }] });
+      const diag = q("AD_DIAG", "matrix_single", "How much do you agree with each statement about the ad?", {
+        rows: [["relevant", "It is relevant to me"], ["believable", "It is believable"], ["different", "It is different from other ads"], ["clear", "Its message is clear"], ["brand_fit", "It fits the brand"]].map(([code, label]) => ({ code, label })),
+        options: [{ code: 1, label: "Strongly disagree" }, { code: 2, label: "Disagree" }, { code: 3, label: "Neither" }, { code: 4, label: "Agree" }, { code: 5, label: "Strongly agree" }],
+      });
+      const intent = q("AD_INTENT", "single_select", `After seeing the ad, how likely are you to buy ${brands[0]}?`, { options: LIKELY_5 });
+      return {
+        title: "Ad test (forced exposure, recall, likeability, diagnostics)",
+        questions: [ad, recallOpen, recallCoded, recallAided, diag, intent],
+        block: { type: "block", id: ids("b"), title: "Ad test", children: [page("The ad", [ad]), page("Recall", [recallOpen, recallCoded]), page("Aided recall", [recallAided]), page("Diagnostics", [diag, intent])] } as FlowNode,
+        tests: [
+          { method: "frequencies", variables: [`${P}RECALL_CODED`, `${P}RECALL_AIDED`], priority: 1, tier: "essential", hypotheses: [], reason: "correct brand recall, unaided (AI-coded) and aided" },
+          { method: "mean", variables: [`${P}AD_LIKE`], priority: 1, tier: "essential", hypotheses: [], reason: "likeability" },
+          { method: "top_box", variables: [`${P}AD_DIAG`, `${P}AD_INTENT`], priority: 1, tier: "essential", hypotheses: [], reason: "top-2 box of the diagnostics and of purchase intent" },
+        ],
+        notes: [a.videoUrl ? "The ad must play to the end before the rating (requireComplete)." : "Set the ad video on AD_LIKE (Properties → media) — it must play to the end before the rating."],
       };
     }
   }

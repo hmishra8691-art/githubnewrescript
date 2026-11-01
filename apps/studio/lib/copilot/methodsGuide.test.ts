@@ -47,7 +47,7 @@ test("the brief's three requests: MaxDiff and CBC get the methods guide, LEAST L
 test("sizes and caching: the system prompt is unchanged and under its cap; the guide is small and rides in the cached prefix", () => {
   assert.ok(COPILOT_SYSTEM_PROMPT.length < 14_800, `${COPILOT_SYSTEM_PROMPT.length}`);
   /* F4 2026-10-22: + CVA, dual-response None, labelled / brand-specific CBC, summed price, menu sections, simulate_conjoint (was < 4,600) */
-  assert.ok(COPILOT_METHODS_GUIDE.length < 8_600, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
+  assert.ok(COPILOT_METHODS_GUIDE.length < 9_000, `methods guide ${COPILOT_METHODS_GUIDE.length}`);
   assert.ok(COPILOT_LIST_FILL_GUIDE.length < 4_200, `List Fill guide ${COPILOT_LIST_FILL_GUIDE.length}`);
   const prompt = copilotUserPrompt({ ...base, message: BRIEF[0], methods: true, listFill: true });
   const [system, user] = copilotCall(prompt);
@@ -61,7 +61,7 @@ const exampleLines = (guide: string) => guide.split("\n").filter((l) => l.starts
 
 test("the guide's worked examples pass the engine's gate and apply as written, with the measured diagnostics", () => {
   const examples = exampleLines(COPILOT_METHODS_GUIDE);
-  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template"]);
+  assert.deepEqual(examples.map((a) => a.op), ["create_maxdiff", "update_maxdiff", "create_conjoint", "update_conjoint", "create_conjoint", "create_conjoint", "create_conjoint", "update_conjoint", "simulate_conjoint", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template", "add_method_template"]);
   const creates = examples.filter((a) => a.op.startsWith("create_")), updates = examples.filter((a) => a.op.startsWith("update_")).slice(0, 2);
   const c1 = coerceSurveyActions(creates);
   assert.deepEqual(c1.rejected, []);
@@ -148,5 +148,6 @@ test("method templates: the guide's add_method_template lines apply, and pricing
   assert.ok(made.def.research!.analysisPlan!.tests.some((t) => t.method === "sequential_monadic"));
   assert.ok(made.def.questions.some((q) => q.variableName === "IAT_B7"));
   assert.ok(made.def.questions.some((q) => q.variant === "hotspot.shelf"));
-  for (const m of ["a virtual shelf test for our cereal", "an implicit association test of coffee vs tea", "a sequential monadic test of three concepts", "an adaptive Gabor-Granger ladder for the plan", "add a price ladder from $5 to $20", "add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
+  assert.ok(made.def.questions.some((q) => q.variableName === "UNAIDED_CODED") && made.def.questions.some((q) => q.variableName === "AD_DIAG"));
+  for (const m of ["build a brand funnel for coffee brands", "an ad test for our new TV commercial", "a virtual shelf test for our cereal", "an implicit association test of coffee vs tea", "a sequential monadic test of three concepts", "an adaptive Gabor-Granger ladder for the plan", "add a price ladder from $5 to $20", "add a Van Westendorp price sensitivity block", "price sensitivity meter with Newton-Miller-Smith", "PSM for the new kettle"]) assert.ok(methodsIntent(m), m);
 });

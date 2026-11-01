@@ -71,3 +71,19 @@ test("add_method_template sequential_monadic: a block per concept under a Willia
   assert.equal(qc.deployable, true, JSON.stringify(qc.areas.filter((a) => a.status === "fail")));
   assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "sequential_monadic", concepts: ["One"] }]).rejected), /2–8 different names/);
 });
+
+test("add_method_template brand_funnel and ad_test: the AI-coded open ends, carry-forward stages, forced exposure, plan items; refusals", () => {
+  const r = act(base(), [{ op: "add_method_template", template: "brand_funnel", product: "coffee", brands: ["Alpha", "Beta", "Gamma"] }, { op: "add_method_template", template: "ad_test", brands: ["Alpha", "Beta"], videoUrl: "https://example.com/ad.mp4" }]);
+  const by = (v: string) => r.def.questions.find((q) => q.variableName === v)!;
+  assert.equal(by("UNAIDED_CODED").type, "calculated");
+  assert.match(String(by("UNAIDED_CODED").settings.expression), /ai_classify\(UNAIDED, "Alpha\|Beta\|Gamma\|Other\|None"\)/);
+  assert.equal(by("PURCHASED").carryForward?.sourceQuestionId, by("CONSIDER").id);
+  assert.equal(by("AD_LIKE").settings.mediaUrl, "https://example.com/ad.mp4");
+  assert.equal(by("AD_LIKE").settings.requireComplete, true);
+  const methods = r.def.research!.analysisPlan!.tests.map((t) => t.method);
+  assert.deepEqual(methods, ["brand_funnel", "frequencies", "frequencies", "mean", "top_box"]);
+  const qc = runQualityCheck(r.def);
+  assert.equal(qc.deployable, true, JSON.stringify(qc.areas.filter((a) => a.status === "fail")));
+  assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "ad_test", videoUrl: "http://x" }]).rejected), /videoUrl must be https/);
+  assert.match(JSON.stringify(coerce([{ op: "add_method_template", template: "brand_funnel", brands: ["A|B", "C"] }]).rejected), /2–15 different names/);
+});
