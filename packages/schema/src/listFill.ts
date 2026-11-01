@@ -319,8 +319,10 @@ export const ListFillSelection = z.object({
    * order; off means "return fewer rather than reach".
    */
   fillToCount: z.boolean().default(true),
-  /** a registered script implementing `method: "custom"` (§34) */
+  /** a registered script implementing `method: "custom"` (§34): a Scripts-panel (logic) script, by id or name, run in the sandbox just before the List Fill decides */
   scriptId: z.string().optional(),
+  /** S4c (D21): the calculated list the custom script writes (`setCalc(name, [codes])`); absent = `LISTFILL_<NAME>_CUSTOM` */
+  customList: z.string().max(80).optional(),
   /** settings of `method: "least_filled"`; absent = basis auto, random tie-break */
   leastFilled: LeastFilledSettings.optional(),
   /** Back + changed answers; absent = keep_valid (sample-counted) / redecide (per respondent) */

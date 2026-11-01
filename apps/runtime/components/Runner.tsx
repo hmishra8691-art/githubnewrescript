@@ -64,6 +64,7 @@ import {
   K,
   type VoiceRecord,
   decideListFill,
+  listFillCustomScript,
   listFillVariables,
   listFillRetained,
   type ListFillCounts,
@@ -442,6 +443,7 @@ async function runListFills(
       applyListFillDestinations(lf, res, state);
       ran.push(lf.id);
       onTrace?.(`[list fill] ${res.name}: ${res.trace.reason}`);
+      if (res.trace.note) onTrace?.(`[list fill] NOTE ${res.name}: ${res.trace.note}`);
     }
     return ran;
   }
@@ -475,6 +477,7 @@ async function runListFills(
       applyListFillDestinations(lf, { listFillId: lf.id, name: a.name, items: a.items ?? [], preference: [], trace: a.trace }, state);
       ran.push(lf.id);
       if (a.trace?.reason) onTrace?.(`[list fill] ${a.name}: ${a.trace.reason}`);
+      if (a.trace?.note) onTrace?.(`[list fill] NOTE ${a.name}: ${a.trace.note}`);
     }
     return ran;
   } catch (e) {
@@ -1891,6 +1894,12 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
      * after navigation would show the respondent a page built from an item
      * they had not been given yet.
      */
+    /* S4c (D21 / PU-13): a custom List Fill's named logic script runs first, in the sandbox — it writes the selection (setCalc) the List Fill reads */
+    for (const lf of pendingListFills(def, state, { counts: mode === "preview" ? listFillCounts : undefined })) {
+      const script = listFillCustomScript(def, lf);
+      if (!script) continue;
+      noteLogic(await runLogicEvent(def, state, script.event, { ids: [script.id], loop: pageStep.loop ?? null, runner: logicFrame(logicKey), apply: applyLogicWrite, timeoutMs: LOGIC_RUN_TIMEOUT_MS }));
+    }
     const allocated = await runListFills(def, state, mode, session, build, (line) => setLogs((l) => [...l, line]), listFillCounts);
     if (allocated.length && mode !== "live") {
       console.info("[rescript:listfill] allocated", allocated.map((id) => ({

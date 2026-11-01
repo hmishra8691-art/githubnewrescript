@@ -46,7 +46,7 @@ const METHODS: { value: ListFillMethod; label: string; hint: string }[] = [
   { value: "least_filled", label: "Least filled", hint: "Prefer whichever eligible option the FEWEST respondents have been given so far (no target needed); ties broken as set below. Needs counting across the sample." },
   { value: "balanced_random", label: "Balanced to target", hint: "Prefer whichever option is furthest below its TARGET (as a share of it). Without targets this is plain random — use Least filled to balance counts." },
   { value: "quota_aware_random", label: "Most remaining capacity", hint: "Prefer whichever option has the most room left." },
-  { value: "custom", label: "Custom script", hint: "A script supplies the order; falls back to priority if it does not." },
+  { value: "custom", label: "Custom script", hint: "A logic script (Scripts panel, sandboxed) writes the selection with setCalc(list, [codes]) just before the List Fill decides; foreign or rejected codes are dropped, quotas and limits still apply. Only when it writes nothing does priority + quota decide — with a note in preview / test and LISTFILL_<NAME>_CUSTOM_FALLBACK = 1 in the response." },
 ];
 
 /** methods that order a priority band with the equal-priority rule — the only ones it changes */
@@ -339,6 +339,24 @@ export function ListFillPanel() {
                 <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>
                   {METHODS.find((m) => m.value === lf.selection.method)?.hint}
                 </p>
+                {lf.selection.method === "custom" && (
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 6 }} data-testid={`lf-custom-${lf.id}`}>
+                    <label className="row" style={{ gap: 4 }}>script
+                      <select className="select" style={{ width: 220 }} value={lf.selection.scriptId ?? ""} data-testid={`lf-custom-script-${lf.id}`}
+                        onChange={(e) => setLf(i, (x) => { x.selection.scriptId = e.target.value || undefined; })}>
+                        <option value="">— choose a logic script —</option>
+                        {(s.def.scripts ?? []).map((sc) => <option key={sc.id} value={sc.id}>{sc.name || sc.id}{sc.enabled === false ? " (off)" : ""}</option>)}
+                      </select>
+                    </label>
+                    <label className="row" style={{ gap: 4 }}>writes
+                      <input className="input mono" style={{ width: 230 }} data-testid={`lf-custom-list-${lf.id}`}
+                        placeholder={`LISTFILL_${(lf.name ?? lf.id).toUpperCase()}_CUSTOM`} value={(lf.selection as { customList?: string }).customList ?? ""}
+                        onChange={(e) => setLf(i, (x) => { (x.selection as { customList?: string }).customList = e.target.value.trim() || undefined; })} />
+                    </label>
+                    {!(s.def.scripts ?? []).length && <span className="muted" style={{ fontSize: 12 }}>No logic scripts yet — add one in the Scripts panel.</span>}
+                    {lf.selection.scriptId && !(s.def.scripts ?? []).some((sc) => sc.id === lf.selection.scriptId && sc.enabled !== false) && <span className="warn" style={{ fontSize: 12 }} data-testid={`lf-custom-missing-${lf.id}`}>the chosen script is missing or off — priority + quota will decide</span>}
+                  </div>
+                )}
 
                 {lf.selection.method === "least_filled" && (
                   <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 6 }} data-testid={`lf-least-${lf.id}`}>
@@ -526,6 +544,7 @@ export function ListFillPanel() {
                 {sim?.listFillId === lf.id && sim.kind === "one" && (
                   <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid={`lf-trace-${lf.id}`}>
                     <div className="row"><strong style={{ fontSize: 13 }}>{sim.trace.reason}</strong></div>
+                    {sim.trace.note && <div className="warn" style={{ fontSize: 12.5 }} data-testid="lf-sim-note">{sim.trace.note}</div>}
                     <table className="grid" style={{ marginTop: 8 }}>
                       <thead><tr><th>option</th><th>priority</th><th>allocated</th><th>left</th><th>outcome</th></tr></thead>
                       <tbody>

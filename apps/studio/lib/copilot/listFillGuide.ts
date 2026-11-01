@@ -20,7 +20,8 @@ Example — "Q37 rates 10 brands 1 Never heard of … 5 Very familiar; brands ra
 {"op":"update_list_fill","listFill":"BRANDS","count":3,"allIfAtMost":null}   // also newName, priority (replaces all), eligible, destinations (replaces all), whenUnused, runWhen (null clears), method, basis, tieBreak, onChange
 {"op":"update_list_fill","listFill":"BRANDS","method":"least_fill","basis":"completed"}   // "use least fill counted on completes": only these change (least fill takes no "always"; a priority then breaks ties)
 {"op":"remove_list_fill","listFill":"BRANDS"}   // destructive; refused while piping, logic or a loop still reads it
-Refused by the engine (do not propose): allowDuplicates, fillToCount false, afterMaximum/fallback, a custom/script method or source, an expression count, repeatBlock (use a loop), a per-item rule written as "eligible.when", caps without sample counts (trackSample false).`;
+CUSTOM rule: create_logic_script writing setCalc("LISTFILL_<NAME>_CUSTOM", [codes]), then "method":"custom","script":"<name>": foreign codes dropped, caps apply; nothing written → priority + quota.
+Refused by the engine (do not propose): allowDuplicates, fillToCount false, afterMaximum/fallback, a script SOURCE, an expression count, repeatBlock (use a loop), a per-item rule written as "eligible.when", caps without sample counts (trackSample false).`;
 
 /**
  * A request about choosing N items from earlier answers — the guide goes with
