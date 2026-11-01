@@ -1263,6 +1263,15 @@ const QuestionObject = z.object({
         role: z.enum(["compatible_practice", "compatible_test", "incompatible_practice", "incompatible_test"]),
         key: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
       }).optional(),
+      /**
+       * S5c (SM-16) SHELF TEST (`hotspot.shelf`): the products are the regions of the shelf image; the answer is the
+       * product picked. `secondPick` asks a second choice ("if that one were not there") into SHELF_<CODE>_PICK2;
+       * SHELF_<CODE>_TIME and SHELF_<CODE>_EXAMINED are always recorded (engine shelf.ts).
+       */
+      shelf: z.object({
+        secondPick: z.boolean().optional(),
+        secondPrompt: z.string().max(300).optional(),
+      }).optional(),
       priceLadder: z.object({
         prices: z.array(z.number().positive()).max(20).default([]),
         start: z.enum(["middle", "lowest", "highest", "random"]).optional(),

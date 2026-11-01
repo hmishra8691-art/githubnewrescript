@@ -53,7 +53,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 
 ## Variants by family
 
-177 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
+178 variants in 31 families. *retired → X* means the variant is hidden from the picker but still renders (use X for new questions); *preset of X* means it is X with defaults applied.
 
 ### Single Select (`single_select`)
 
@@ -294,6 +294,7 @@ Every question in a ReScript definition has a `type` (the base type, which decid
 |---|---|---|---|---|---|
 | `hotspot.click` | Image Hotspot / Click Heatmap | `hotspot` | min_max_selections | required, min_selections, max_selections | renderer hotspotclick |
 | `hotspot.regions` | Region / Area Selection | `image_select` | options, images, min_max_selections, randomization, list_logic | required, min_selections, max_selections, custom_expression | renderer regions |
+| `hotspot.shelf` | Shelf Test | `image_select` | options, images, randomization | required | renderer shelf |
 | `hotspot.draw` | Draw-on-Image | `annotation` | min_max_selections, images | required, min_selections, max_selections | renderer annotate |
 
 ### Location / Map (`location`)

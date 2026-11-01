@@ -2368,6 +2368,25 @@ export const QUESTION_VARIANTS: QuestionVariantDef[] = [
       instruction: "Select the region you mean.",
     },
   }),
+  /*
+   * S5c (SM-16): SHELF TEST — the regions machinery with a task: pick the product you would buy on a shelf image.
+   * The answer is the product's code; time to find, the products examined (hover / focus order) and an optional
+   * second choice are paradata (engine shelf.ts).
+   */
+  stable(F.hotspot, "shelf", "Shelf Test", "Pick the product you would buy from a shelf image — with time to find and the products looked at.", {
+    baseType: "image_select", renderer: "shelf", responseModel: "multiple_choice",
+    capabilities: ["options", "images", "randomization"],
+    validations: ["required"],
+    defaults: {
+      settings: { maxSelections: 1, shelf: { secondPick: false } },
+      options: [
+        { code: "p1", label: "Product 1", meta: { region: { x: 4, y: 10, w: 28, h: 80 } } },
+        { code: "p2", label: "Product 2", meta: { region: { x: 36, y: 10, w: 28, h: 80 } } },
+        { code: "p3", label: "Product 3", meta: { region: { x: 68, y: 10, w: 28, h: 80 } } },
+      ],
+      instruction: "Look at the shelf and click the product you would buy.",
+    },
+  }),
   stable(F.hotspot, "draw", "Draw-on-Image", "Free-form marking.", {
     baseType: "annotation", renderer: "annotate", responseModel: "coordinates",
     capabilities: ["min_max_selections", "images"],

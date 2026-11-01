@@ -91,3 +91,22 @@ test("iat analysis: mean D, SD, t against 0, Cohen's d and the bands — the han
   assert.equal(bands["slight — compatible faster"], 1);
   assert.equal(bands["little or none"], 1);
 });
+
+/*
+ * SHELF — four shoppers picked (one did not answer):
+ *   p1 4.0 s examined p2,p1 second p2 | p1 6.0 s p1 → p3 | p2 3.0 s p3,p2 → p1 | p3 10.0 s p1,p2,p3 → p1
+ *   share p1 50 / p2 25 / p3 25; second p1 50 / p2 25 / p3 25; examined p1 75 / p2 75 / p3 50;
+ *   time to find: p1 median 5.0 mean 5.0, p2 3.0, p3 10.0
+ */
+test("shelf analysis: share of choice, second choice, examined and time to find — the hand-computed values", () => {
+  const sdef = SurveyDefinition.parse({ meta: { id: "sh", code: "SH", title: "SH", version: "1.0" }, questions: [{ id: "q_s", code: "SHELF", variableName: "SHELF", type: "image_select", variant: "hotspot.shelf", text: "x", settings: { imageUrl: "https://example.com/s.jpg", maxSelections: 1, shelf: { secondPick: true } }, options: ["p1", "p2", "p3"].map((c, i) => ({ code: c, label: `Brand ${i + 1}`, meta: { region: { x: i * 30, y: 0, w: 25, h: 50 } } })) }], flow: [] });
+  const R: [string | null, number | null, string | null, string | null][] = [["p1", 4, "p2,p1", "p2"], ["p1", 6, "p1", "p3"], ["p2", 3, "p3,p2", "p1"], ["p3", 10, "p1,p2,p3", "p1"], [null, null, null, null]];
+  const ds = buildDataset(sdef, R.map(([pk, t, ex, s2], i) => row(i, pk ? { q_s: [pk] } : {}, {}, pk ? { SHELF_SHELF_TIME: t, SHELF_SHELF_EXAMINED: ex, SHELF_SHELF_PICK2: s2 } : {})), { spec });
+  const res = runAnalysis({ name: "shelf", kind: "shelf", dataset: spec, variables: ["SHELF"] }, ds);
+  assert.equal(res.error, undefined, JSON.stringify(res.warnings));
+  assert.equal(res.tables[0].base?.n, 4);
+  assert.deepEqual(res.tables[0].rows.map((r) => [r.product, r.n, r.share, r.second, r.examined, r.medianTime, r.meanTime]), [
+    ["Brand 1", 2, 50, 50, 75, 5, 5], ["Brand 2", 1, 25, 25, 75, 3, 3], ["Brand 3", 1, 25, 25, 50, 10, 10],
+  ]);
+  assert.match(res.insights[0], /Brand 1 wins the shelf: 50% of first choices/);
+});

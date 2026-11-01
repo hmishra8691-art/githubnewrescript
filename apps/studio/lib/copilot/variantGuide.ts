@@ -34,6 +34,7 @@ export const INTERACTION_WORDS: readonly [RegExp, readonly string[]][] = [
   [/\bcompar\w*|\bpairwise\b|\bhead[- ]to[- ]head\b|\bbefore[\s/-]+(?:and[\s-]+)?after\b|\bwipe slider\b/i, ["comparison"]],
   [/\bchat\w*|\bconversational\b/i, ["conversational"]],
   [/\battention check\b|\bimplicit\b|\bexperiment\w*|\ba\/b\b/i, ["experimental"]],
+  [/\bshelf\b|\bplanogram\b/i, ["hotspot"]],
   [/\bimages?\b|\bpictures?\b|\bphotos?\b|\blogos?\b|\bstimul\w*|\bpack ?shots?\b/i, ["image", "content"]],
   [/\binteractive\b|\binteraction\b|\bwidget\b/i, ["hotspot", "swipe", "dragdrop", "card"]],
 ];

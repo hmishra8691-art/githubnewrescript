@@ -32,11 +32,15 @@ import { randomizerOrderVariable } from "./displayOrder.js";
  *                        counterbalancing of which pairing comes first are NOT added (add them by hand).
  *                        Plan: iat_dscore.
  *
+ *   shelf_test           a hotspot.shelf question on the shelf image (imageUrl, required) with one region per
+ *                        product (products, laid out evenly left to right — adjust them in the regions editor),
+ *                        optional second choice. Plan: shelf_share.
+ *
  * Variable names are fixed per template (PSM_TOO_CHEAP, …) so the plan can name them; a survey that already has
  * one of them is refused with the clash named — pass `prefix` ("A_" → A_PSM_TOO_CHEAP) to add a second copy.
  */
 
-export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat"] as const;
+export const METHOD_TEMPLATE_KEYS = ["pricing_psm", "price_ladder", "sequential_monadic", "iat", "shelf_test"] as const;
 export type MethodTemplateKey = (typeof METHOD_TEMPLATE_KEYS)[number];
 
 export type MethodTemplateAction = {
@@ -61,6 +65,10 @@ export type MethodTemplateAction = {
   attributes?: [string, string];
   targetWords?: [string[], string[]];
   attributeWords?: [string[], string[]];
+  /** shelf_test: the shelf image (https or the media library) and the products on it (2–12) */
+  imageUrl?: string;
+  products?: string[];
+  secondPick?: boolean;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */
@@ -114,6 +122,14 @@ export function coerceMethodTemplateAction(o: Record<string, unknown>): MethodTe
     if (typeof r === "string") return r;
     if (r !== undefined) (a as Record<string, unknown>)[k] = r;
   }
+  if (o.imageUrl !== undefined) { const u = str(o.imageUrl, 2000); if (!u || !/^(?:https:\/\/|\/api\/media\/)/.test(u)) return "add_method_template imageUrl must be https or the survey's media library (/api/media/…)"; a.imageUrl = u; }
+  if (o.products !== undefined) {
+    const ps = Array.isArray(o.products) ? o.products.map((x) => str(x, 80)).filter((x): x is string => !!x) : [];
+    if (ps.length < 2 || ps.length > 12 || new Set(ps.map((x) => x.toLowerCase())).size !== ps.length) return "add_method_template products must be 2–12 different names";
+    a.products = ps;
+  }
+  if (typeof o.secondPick === "boolean") a.secondPick = o.secondPick;
+  if (a.template === "shelf_test" && !a.imageUrl) return "add_method_template shelf_test needs imageUrl — the shelf photo (ask for it; never invent one)";
   if (o.plan === false) a.plan = false;
   return a;
 }
@@ -217,6 +233,23 @@ export function methodTemplateFragment(a: Omit<MethodTemplateAction, "op">, ids:
         block: { type: "block", id: ids("b"), title: "Implicit association", children: qs.map((x, i) => page(["Combined practice", "Combined test", "Reversed practice", "Reversed test"][i], [x])) } as FlowNode,
         tests: [{ method: "iat_dscore", variables: ["IAT_D"], priority: 1, tier: "essential", hypotheses: [], reason: "the implicit association: mean D-score against 0 and its strength", options: { variable: "IAT_D", excluded: "IAT_EXCLUDED" } }],
         notes: ["The four combined blocks are scored (IAT_D, D600); the single-category practice blocks and pairing-order counterbalancing are not added."],
+      };
+    }
+    case "shelf_test": {
+      const products = a.products ?? ["Product 1", "Product 2", "Product 3"];
+      const w = 96 / products.length;
+      const shelfQ = q("SHELF", "image_select", `Imagine you are shopping for ${product}. Which one would you buy?`, {
+        variant: "hotspot.shelf",
+        options: products.map((name, i) => ({ code: `p${i + 1}`, label: name, meta: { region: { x: Math.round((2 + i * w + w * 0.05) * 10) / 10, y: 10, w: Math.round(w * 0.9 * 10) / 10, h: 80 } } })),
+        settings: { imageUrl: a.imageUrl, maxSelections: 1, shelf: { secondPick: !!a.secondPick } },
+        instruction: "Look at the shelf and click the product you would buy.",
+      });
+      return {
+        title: `Shelf test of ${products.length} products`,
+        questions: [shelfQ],
+        block: { type: "block", id: ids("b"), title: "Shelf", children: [page("Shelf", [shelfQ])] } as FlowNode,
+        tests: [{ method: "shelf_share", variables: [`${P}SHELF`], priority: 1, tier: "essential", hypotheses: [], reason: "share of choice and time to find per product" }],
+        notes: ["The product regions are laid out evenly left to right — move them onto the products in the regions editor."],
       };
     }
   }

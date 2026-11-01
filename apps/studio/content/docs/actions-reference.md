@@ -258,6 +258,10 @@ export type MethodTemplateAction = {
   attributes?: [string, string];
   targetWords?: [string[], string[]];
   attributeWords?: [string[], string[]];
+  /** shelf_test: the shelf image (https or the media library) and the products on it (2–12) */
+  imageUrl?: string;
+  products?: string[];
+  secondPick?: boolean;
   /** prepended to every code and variable name — for a second copy of a template */
   prefix?: string;
   /** add the plan items (default true) */

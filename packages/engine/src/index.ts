@@ -194,6 +194,7 @@ export * from "./beforeAfter.js";
 export * from "./methodTemplates.js";
 export * from "./priceLadder.js";
 export * from "./iatScore.js";
+export * from "./shelf.js";
 export * from "./videoRecording.js";
 export * from "./gamification.js";
 export * from "./gamificationActions.js";

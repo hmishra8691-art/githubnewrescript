@@ -2,6 +2,7 @@ import type { SurveyDefinition, Question, VariableDef, FlowNode } from "@rescrip
 import { questionZooms, zoomParadataKey } from "./mediaZoom.js";
 import { beforeAfterKeys } from "./beforeAfter.js";
 import { ladderParadataKeys } from "./priceLadder.js";
+import { shelfParadataKeys } from "./shelf.js";
 import {
   directChildLoops, directQuestionIdsInLoop, loopNodes, loopVariableNames, maxLoopIterations,
   possibleLoopItems, type LoopFlowNode,
@@ -1109,6 +1110,12 @@ function s5aVariables(def: SurveyDefinition): VariableDef[] {
   }
   for (const q of def.questions) {
     if (questionZooms(q)) out.push(mk(zoomParadataKey(q.code || q.id), `${q.code} — image zoom opens`, "numeric", "embedded_data", "times the respondent opened the lightbox"));
+    if (q.variant === "hotspot.shelf") {
+      const k = shelfParadataKeys(q.code || q.id);
+      out.push(mk(k.time, `${q.code} — shelf: seconds to find`, "numeric", "embedded_data", "from the shelf first shown to the pick (browser clock)"));
+      out.push(mk(k.examined, `${q.code} — shelf: products examined`, "text", "embedded_data", "product codes in the order first looked at (hover / focus), comma-separated"));
+      if ((q.settings as { shelf?: { secondPick?: boolean } }).shelf?.secondPick) out.push(mk(k.pick2, `${q.code} — shelf: second choice`, "text", "embedded_data", "the product chosen if the first were not there"));
+    }
     if (q.variant === "numeric.price_ladder") {
       const k = ladderParadataKeys(q.code || q.id);
       out.push(mk(k.start, `${q.code} — price ladder: first price shown`, "numeric", "embedded_data", "the start price (middle, lowest, highest or random)"));

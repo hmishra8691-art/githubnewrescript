@@ -139,3 +139,55 @@ export function iat(def: AnalysisDefinition, ds: Dataset, totalCases: number): A
     recommendedCharts: ["bar_horizontal", "histogram", "table"], variablesUsed: [dv, ...(ds.byName.has(ev) ? [ev] : [])], totalCases, validN: scored.length,
   });
 }
+
+/* ============================================================ shelf test (S5c, SM-16) */
+
+/**
+ * SHELF TEST (variant hotspot.shelf): share of first choice per product, the second choice when asked, how often
+ * each product was examined before the pick, and the time to find (seconds to the pick) per product picked —
+ * median and mean. variables[0] = the shelf question; options time / examined / pick2 name the paradata variables
+ * (default SHELF_<VAR>_TIME / _EXAMINED / _PICK2). Shares are weighted when the study is; times are not.
+ */
+export function shelf(def: AnalysisDefinition, ds: Dataset, totalCases: number): AnalysisResult {
+  const v = def.variables[0];
+  const meta = v ? ds.byName.get(v) : undefined;
+  if (!v || !meta) return refused(def, ds, totalCases, "The shelf analysis needs the shelf question (its variable).", ["table"]);
+  const K = v.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase();
+  const tv = opt<string>(def, "time", `SHELF_${K}_TIME`), ev = opt<string>(def, "examined", `SHELF_${K}_EXAMINED`), sv = opt<string>(def, "pick2", `SHELF_${K}_PICK2`);
+  const cats = (meta.categories ?? []).map((c) => ({ code: String(c.code), label: c.label }));
+  const w = ds.weighted ? ds.cases.map((c) => c.weight) : null;
+  const firstOf = (x: unknown): string | null => { const a = Array.isArray(x) ? x[0] : x; return a == null || a === "" ? null : String(a); };
+  const picks = ds.cases.map((c) => firstOf(c.vars[v]));
+  const times = numericColumn(ds, tv);
+  const examined = textColumn(ds, ev).map((s) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : null));
+  const second = textColumn(ds, sv);
+  const base = picks.map((p, i) => (p ? i : -1)).filter((i) => i >= 0);
+  const W = base.reduce((t, i) => t + (w?.[i] ?? 1), 0);
+  const secondBase = base.filter((i) => second[i]);
+  const W2 = secondBase.reduce((t, i) => t + (w?.[i] ?? 1), 0);
+  const exBase = base.filter((i) => examined[i]);
+  const median = (xs: number[]) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const codes = cats.length ? cats : [...new Set(base.map((i) => picks[i]!))].map((code) => ({ code, label: code }));
+  const rows = codes.map((c) => {
+    const mine = base.filter((i) => picks[i] === c.code);
+    const t = mine.map((i) => times[i]).filter((x): x is number => x != null && Number.isFinite(x));
+    return {
+      product: c.label, code: c.code, n: mine.length,
+      share: W ? round((mine.reduce((s, i) => s + (w?.[i] ?? 1), 0) / W) * 100, 1) : null,
+      second: W2 ? round((secondBase.filter((i) => second[i] === c.code).reduce((s, i) => s + (w?.[i] ?? 1), 0) / W2) * 100, 1) : null,
+      examined: exBase.length ? round((exBase.filter((i) => examined[i]!.includes(c.code)).length / exBase.length) * 100, 1) : null,
+      medianTime: round(median(t), 1), meanTime: round(describe(t).mean, 1),
+    };
+  });
+  const allT = base.map((i) => times[i]).filter((x): x is number => x != null && Number.isFinite(x));
+  const top = [...rows].sort((a, b) => (b.share ?? 0) - (a.share ?? 0))[0];
+  const insights = top ? [`${top.product} wins the shelf: ${top.share}% of first choices (n = ${base.length}); median time to find ${fmtNum(median(allT), 1)} s overall.`] : [];
+  const slow = rows.filter((r) => r.n >= 5 && r.medianTime != null).sort((a, b) => (b.medianTime ?? 0) - (a.medianTime ?? 0))[0];
+  if (slow) insights.push(`Slowest to find among products picked by 5+: ${slow.product} (median ${fmtNum(slow.medianTime, 1)} s).`);
+  return makeResult(def, ds, {
+    tables: [{ id: "shelf", title: "Shelf test — choice and findability", columns: [{ key: "product", label: "Product" }, { key: "n", label: "Picked (n)", type: "count" }, { key: "share", label: "Share of choice %", type: "pct", decimals: 1 }, ...(secondBase.length ? [{ key: "second", label: "Second choice %", type: "pct" as const, decimals: 1 }] : []), ...(exBase.length ? [{ key: "examined", label: "Examined before the pick %", type: "pct" as const, decimals: 1 }] : []), { key: "medianTime", label: "Median time to find (s)", type: "number", decimals: 1 }, { key: "meanTime", label: "Mean time to find (s)", type: "number", decimals: 1 }],
+      rows: rows.map(({ code: _c, ...r }) => r), base: { n: base.length }, notes: ["Time to find and products examined are measured in the respondent's browser (hover or keyboard focus before the pick). Times are per product among the respondents who picked it."] }],
+    chart: { categories: rows.map((r) => r.product), series: [{ name: "Share of choice %", values: rows.map((r) => r.share) }, { name: "Median time to find (s)", values: rows.map((r) => r.medianTime), meta: { axis: "secondary" } }], valueFormat: "pct" },
+    insights, warnings: [], recommendedCharts: ["bar_horizontal", "bar_vertical", "table"], variablesUsed: [v, ...[tv, ev, sv].filter((x) => ds.byName.has(x))], totalCases, validN: base.length,
+  });
+}

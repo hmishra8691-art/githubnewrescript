@@ -1228,3 +1228,8 @@ table.rs-matrix { border-collapse: collapse; width: 100%; font-size: 0.95em; }
 .rs-ladder-q { font-size: 1.15em; margin: 0; }
 .rs-ladder-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .rs-ladder-actions .rs-btn { min-height: 44px; min-width: 120px; }
+
+/* S5c: shelf test */
+.rs-shelf-item { border-color: transparent; background: transparent; }
+.rs-shelf-item:hover, .rs-shelf-item:focus-visible { border-color: var(--rs-accent, #2563eb); background: rgba(37, 99, 235, 0.08); }
+.rs-shelf-item.second { border-color: var(--rs-muted, #64748b); border-style: dashed; }

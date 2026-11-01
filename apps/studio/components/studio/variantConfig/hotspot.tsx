@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { registerVariantSettings, type VariantSettingsProps } from "./registry";
+import { lintShelf } from "@rescript/engine";
 
 /**
  * Studio authoring for the hotspot family — see docs/VARIANT-BATCH.md §4.
@@ -170,3 +171,28 @@ function RegionSettings({ q, patch, patchSettings }: VariantSettingsProps) {
 }
 
 registerVariantSettings("regions", (p) => <RegionSettings {...p} />);
+
+/*
+ * S5c (SM-16): the Shelf Test reuses the regions editor (the shelf image, one region per product) and adds the
+ * second choice. Time to find and the products examined are always recorded (SHELF_<CODE>_TIME / _EXAMINED).
+ */
+function ShelfSettings(p: VariantSettingsProps) {
+  const { q, patchSettings } = p;
+  const s = (q.settings as { shelf?: { secondPick?: boolean; secondPrompt?: string } }).shelf ?? {};
+  const problems = lintShelf(q).map((m) => m.replace(/^[^:]+:\s*/, ""));
+  return (
+    <>
+      <RegionSettings {...p} />
+      <div className="card" style={{ padding: 10, marginTop: 8 }} data-testid="shelf-editor">
+        <label className="row" style={{ gap: 6 }}>
+          <input type="checkbox" data-testid="shelf-second" checked={!!s.secondPick} onChange={(e) => patchSettings({ shelf: { ...s, secondPick: e.target.checked || undefined } })} />
+          Ask a second choice (“if that one were not on the shelf”) — SHELF_{q.code}_PICK2
+        </label>
+        {s.secondPick && <input className="input" style={{ marginTop: 6 }} placeholder="If that product were not on the shelf, which would you buy instead?" value={s.secondPrompt ?? ""} onChange={(e) => patchSettings({ shelf: { ...s, secondPrompt: e.target.value || undefined } })} />}
+        <p className="muted" style={{ fontSize: 12.5, margin: "6px 0 0" }}>Recorded with every pick: SHELF_{q.code}_TIME (seconds to find) and SHELF_{q.code}_EXAMINED (products hovered or focused before the pick, in order). Analyse with Shelf test (share of choice, find time per product).</p>
+        {problems.length > 0 && <ul className="muted" data-testid="shelf-problems" style={{ fontSize: 12.5, color: "var(--warn, #b45309)", margin: "6px 0 0 16px" }}>{problems.map((m) => <li key={m}>{m}</li>)}</ul>}
+      </div>
+    </>
+  );
+}
+registerVariantSettings("shelf", (p) => <ShelfSettings {...p} />);

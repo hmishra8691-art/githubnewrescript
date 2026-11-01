@@ -20,6 +20,7 @@ import "./card";
 import "./comparison";
 import "./beforeAfter";
 import "./priceLadder";
+import "./shelf";
 import "./allocation";
 import "./hotspot";
 import "./datetime";
