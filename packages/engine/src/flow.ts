@@ -22,6 +22,7 @@ import { containerVisibleByRules, visibleByRules } from "./displayRules.js";
 import { calcOptionsFor, noteCalcOutcome } from "./calcContext.js";
 import { designSlot, designRowSlot, randomizerSlot, seedWindow, type BalanceSlot } from "./exactBalance.js";
 import { designRows, randomizerOrderKind, randomizerWeights, seededDesignRow } from "./randomizerDesign.js";
+import { randomizerOrderVariable } from "./displayOrder.js";
 
 /**
  * Survey Flow interpreter (requirement §7).
@@ -54,6 +55,11 @@ export type RuntimeStep =
        * setting). The Runner claims the unassigned ones before showing it.
        */
       balance?: string[];
+      /**
+       * S4c (RK-04): the display orders of the randomizers this page sits inside (outermost first) —
+       * `ORDER_<ID>` = the children's ids in the order shown. Absent when none records (`recordOrder: false`).
+       */
+      orders?: { variable: string; value: string }[];
     }
   /** `loop`: the iteration the element runs in, so a piped value can read `{{loop.label}}` */
   | { kind: "embedded_data"; nodeId: string; fields: EmbeddedField[]; loop?: LoopContext | null }
@@ -71,6 +77,8 @@ export function compileFlow(
   const steps: RuntimeStep[] = [];
   /* the exact-balance slots enclosing the node being walked (outermost first) */
   const balanceStack: string[] = [];
+  /* S4c: the display orders of the randomizers enclosing the node being walked */
+  const orderStack: { variable: string; value: string }[] = [];
   const ctxFor = (loop: LoopContext | null): EvalContext => ({
     def,
     state,
@@ -134,6 +142,7 @@ export function compileFlow(
             sectionPath,
             nodePath: [...nodePath],
             ...(pageBalance.length ? { balance: pageBalance } : {}),
+            ...(orderStack.length ? { orders: orderStack.map((o) => ({ ...o })) } : {}),
           });
           break;
         }
@@ -264,8 +273,10 @@ export function compileFlow(
             }
           }
           if (exactSlot) balanceStack.push(exactSlot.key);
+          const recordsOrder = node.recordOrder !== false && children.length > 0;
+          if (recordsOrder) orderStack.push({ variable: randomizerOrderVariable(node.id, loop), value: children.map((c) => c.id).join(",") });
           try { walk(children, loop, sectionPath, blockTitle); }
-          finally { if (exactSlot) balanceStack.pop(); }
+          finally { if (exactSlot) balanceStack.pop(); if (recordsOrder) orderStack.pop(); }
           break;
         }
         case "branch": {

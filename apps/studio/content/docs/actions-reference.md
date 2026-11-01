@@ -108,7 +108,7 @@ From `packages/engine/src/optionActions.ts`:
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half"; /** S4c (RK-04): store the order shown in <VAR>_ORDER (_ROW_ORDER / _COL_ORDER) — opt-in */ recordOrder?: boolean }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }

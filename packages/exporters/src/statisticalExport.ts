@@ -1,5 +1,5 @@
 import type { SurveyDefinition, VariableDef } from "@rescript/schema";
-import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
+import { buildVariableDictionary, flattenVariables, displayOrderLabel } from "@rescript/engine";
 import { buildSav, savVariableFor, type SavVariable } from "./spss.js";
 import { buildXpt, buildSasSyntax, sasVariableFor, type SasVariable } from "./sas.js";
 import { buildDta, stataVariableFor, type StataVariable } from "./stata.js";
@@ -168,9 +168,12 @@ const EXTRA: { name: string; label: string; numeric: boolean }[] = [
   ...SYSTEM_EXPORT_COLUMNS,
 ];
 
-function systemVariable(name: string): { label: string; numeric: boolean } | undefined {
+function systemVariable(name: string, def?: SurveyDefinition): { label: string; numeric: boolean } | undefined {
   const s = SYSTEM.find((x) => x.name === name) ?? EXTRA.find((x) => x.name === name);
-  return s ? { label: s.label, numeric: s.numeric } : undefined;
+  if (s) return { label: s.label, numeric: s.numeric };
+  /* S4c (RK-04): a stored display order (ORDER_<RANDOMIZER>, <VAR>_ORDER …) gets a label saying what it lists */
+  const order = def ? displayOrderLabel(def, name) : null;
+  return order ? { label: order, numeric: false } : undefined;
 }
 
 /** The extra columns the platform appends are the numeric ones where a blank must stay a missing value, not a string. */
@@ -234,7 +237,7 @@ export function responsesToSav(
 
   const variables: SavVariable[] = names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = savVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 32767);
@@ -254,10 +257,10 @@ export function responsesToSav(
 }
 
 /** The SAS variable list, shared by the transport file and the syntax. */
-function sasVariables(names: string[], defs: Map<string, VariableDef>, rows: Record<string, unknown>[]): SasVariable[] {
+function sasVariables(names: string[], defs: Map<string, VariableDef>, rows: Record<string, unknown>[], def?: SurveyDefinition): SasVariable[] {
   return names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = sasVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 200);
@@ -275,7 +278,7 @@ export function responsesToXpt(
   opts: MatrixOptions = {},
 ): Buffer {
   const { names, defs, rows } = buildResponseMatrix(def, states, opts);
-  const variables = sasVariables(names, defs, rows);
+  const variables = sasVariables(names, defs, rows, def);
   const scalarRows = rekey(names, defs, rows);
   return buildXpt({
     variables,
@@ -303,7 +306,7 @@ export function responsesToDta(
 
   const variables: StataVariable[] = names.map((name) => {
     const d = defs.get(name);
-    const sys = systemVariable(name);
+    const sys = systemVariable(name, def);
     if (d) {
       const v = stataVariableFor(d);
       if (v.type === "string") v.stringWidth = widthOf(rows, name, 2045);
@@ -340,7 +343,7 @@ export function responsesToSasSyntax(
   opts: MatrixOptions & { csvName?: string } = {},
 ): string {
   const { names, defs, rows } = buildResponseMatrix(def, states, opts);
-  return buildSasSyntax(sasVariables(names, defs, rows), {
+  return buildSasSyntax(sasVariables(names, defs, rows, def), {
     csvName: opts.csvName ?? `${def.meta.code}_responses.csv`,
     datasetName: (def.meta.code ?? "SURVEY").replace(/[^A-Za-z0-9_]/g, "").slice(0, 32) || "SURVEY",
   });

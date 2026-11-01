@@ -11,6 +11,7 @@ import { assessmentSettings } from "./assessment.js";
 import { scriptMayWriteAnswer, scriptMayWriteVariable } from "./scriptWrites.js";
 import { isServerResolvedExpression } from "./aiFunctions.js";
 import { deviceClass, pageTimers, setBehavior, timedOutSkips } from "./timers.js";
+import { recordDisplayOrders } from "./displayOrder.js";
 
 /** S4b: does this object (a question, a page node) read a behaviour value the replay cannot know? */
 function readsBehavior(o: unknown, refs: ReadonlySet<string>, depth = 0): boolean {
@@ -222,6 +223,8 @@ export function checkSubmission(input: SubmissionInput): SubmissionCheck {
   while (!nav.done && pages < maxPages) {
     const step = nav.steps[nav.stepIndex] as RuntimeStep | undefined;
     if (!step || step.kind !== "page") break;
+    /* S4c (RK-04): the order the respondent was shown here, as the server derives it — compared with the posted one (D7) */
+    recordDisplayOrders(def, state, step);
     const visible = visibleQuestions(def, step, state, counts);
     for (const q of visible) askedBases.add(q.id);
     // the page the client is still on is being filled in — it is not validated until it is left

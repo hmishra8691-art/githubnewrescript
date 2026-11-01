@@ -10,6 +10,7 @@ import {
   advance,
   goBack,
   balanceSlotsDue,
+  recordDisplayOrders,
   speechServerOn,
   questionOffersSpeechInput,
   setAnswer,
@@ -1490,6 +1491,8 @@ function RunnerInner({ definition: loadedDef, mode, session: initialSession, ses
     if (!shownPageId || !s) return;
     const st = steps[s.stepIndex];
     if (st?.kind !== "page") return;
+    /* S4c (RK-04): the order this page is shown in — ORDER_<RANDOMIZER> and opted-in <VAR>_ORDER — stored with the response (the server's replay derives the same) */
+    try { recordDisplayOrders(def, s, st); } catch (e) { console.warn("[rescript:runtime] display order not recorded", e); }
     if (LEGACY_SCRIPTS) {
       const r = runScripts(def, s, "on_load", { scopeRef: st.pageId.split("@")[0], loop: st.loop ?? null, only: "scoped" });
       if (!r.ran && !r.logs.length) return;

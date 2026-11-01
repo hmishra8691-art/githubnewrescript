@@ -10,6 +10,8 @@ import { questionAi, voiceOn } from "./aiConversation.js";
 import { embeddedCatalog } from "./embedded.js";
 import { stripHtmlText } from "./html.js";
 import { optionColumn, rowColumn, cellColumn, indexColumn, type SuffixPatterns } from "./derivedNames.js";
+import { randomizerOrderVariable, questionOrderVariable, recordedAxes } from "./displayOrder.js";
+import { randomizerVariable, armVariableBase } from "./exactBalance.js";
 
 /*
  * VALUE LABELS ARE PLAIN TEXT. A code's label goes into the CSV dictionary,
@@ -837,6 +839,8 @@ export function buildDerivedVariables(def: SurveyDefinition): VariableDef[] {
       notes: `= ${calc.expression}`,
     });
   }
+  /* S4c (RK-04 / RA-06 / RA-08): the stored display orders, design rows and experiment arms — columns in every export */
+  out.push(...displayOrderVariables(def));
   /*
    * SURVEY_LANGUAGE — which language version the respondent answered in.
    * Declared whenever the survey has more than its source language, stored in
@@ -1067,4 +1071,38 @@ export function nextQuestionNaming(def: SurveyDefinition, prefix = "Q"): { code:
   let n = (def.questions?.length ?? 0) + 1;
   while (taken.has(`${prefix}${n}`.toUpperCase())) n++;
   return { code: `${prefix}${n}`, variableName: `${prefix}${n}` };
+}
+
+
+/**
+ * S4c — the variables a randomizer or a question writes about what was SHOWN (displayOrder.ts): `ORDER_<ID>` for every
+ * randomizer that records (default), `RANDOMIZER_<ID>_ROW` for an exact Latin square / Williams randomizer,
+ * `<VAR>_ORDER` / `_ROW_ORDER` / `_COL_ORDER` for a question with `settings.recordOrder`, `<VAR>_ARM` for an experiment
+ * with exact arm balance. Declared for elements outside loops (inside a loop the names carry the iteration's codes and
+ * are exported from the response like any other calculated value, unlabelled).
+ */
+function displayOrderVariables(def: SurveyDefinition): VariableDef[] {
+  const out: VariableDef[] = [];
+  const mk = (name: string, label: string, notes: string): VariableDef => ({ name, label, dataType: "text", responseType: "calculation", derived: true, hidden: true, valueCodes: [], valueLabels: {}, notes } as VariableDef);
+  const inLoop = new Set<string>();
+  const walk = (nodes: readonly FlowNode[], loop: boolean) => {
+    for (const n of nodes) {
+      if (n.type === "page") { if (loop) for (const q of n.questionIds) inLoop.add(q); continue; }
+      if (n.type === "randomizer" && !loop) {
+        const kids = n.children.map((c) => `${c.id}${(c as { title?: string }).title ? `=${(c as { title?: string }).title}` : ""}`).join(", ");
+        if (n.recordOrder !== false) out.push(mk(randomizerOrderVariable(n.id, null), `Order shown — randomizer ${n.title ?? n.id}`, `child ids in the order shown (${kids})`));
+        if ((n.order === "latin_square" || n.order === "williams") && n.balance?.exact) out.push(mk(`${randomizerVariable(n.id, null)}_ROW`, `Design row — randomizer ${n.title ?? n.id} (${n.order})`, "the claimed row of the design, 1-based"));
+      }
+      const kids = (n as { children?: FlowNode[] }).children;
+      if (kids) walk(kids, loop || n.type === "loop");
+      if (n.type === "branch") { for (const b of n.branches) walk(b.children, loop); if (n.otherwise) walk(n.otherwise, loop); }
+    }
+  };
+  walk(def.flow ?? [], false);
+  for (const q of def.questions) {
+    if (inLoop.has(q.id)) continue;
+    for (const axis of recordedAxes(q)) out.push(mk(questionOrderVariable(q, axis), `${q.code} — ${axis} order shown`, `${axis === "options" ? "option" : axis === "rows" ? "row" : "column"} codes in displayed order`));
+    if (q.type === "experiment" && (q.settings as { armBalance?: { exact?: boolean } } | undefined)?.armBalance?.exact) out.push(mk(`${armVariableBase(q)}_ARM`, `${q.code} — experiment arm (claimed)`, "the arm code claimed least-filled (weighted by the arms' weights)"));
+  }
+  return out;
 }

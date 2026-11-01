@@ -60,7 +60,7 @@ export type EmbeddedSource = "url" | "static" | "panel" | "expression";
 export type OptionAction =
   | { op: "update_option"; target: string; option: OptionRef; label?: string; code?: string | number; value?: string | number | null; exclusive?: boolean; other?: boolean; anchor?: "top" | "bottom" | "none"; visibleIf?: CondInput | null; position?: OptionPosition }
   | { op: "reorder_options"; target: string; order?: OptionRef[]; sort?: "alphabetical" | "alphabetical_desc" | "numeric" | "reverse" }
-  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half" }
+  | { op: "set_option_randomization"; target: string; enabled: boolean; anchors?: OptionRef[]; keepLast?: OptionRef[]; keepFirst?: OptionRef[]; pick?: number; scope?: MaskDimension; /** S2a D16: how — shuffle (default), rotate (each item in each position equally often: "equally", "balanced"), reverse_half */ method?: "shuffle" | "rotate" | "reverse_half"; /** S4c (RK-04): store the order shown in <VAR>_ORDER (_ROW_ORDER / _COL_ORDER) — opt-in */ recordOrder?: boolean }
   | { op: "set_mask"; target: string; expression: string; action?: OptionMask["action"]; dimension?: MaskDimension }
   | { op: "clear_mask"; target: string; dimension?: MaskDimension }
   | { op: "duplicate_question"; target: string; after?: string }
@@ -174,7 +174,7 @@ export function coerceOptionAction(op: string, o: Record<string, unknown>): Opti
       const methodRaw = str(o.method ?? o.order ?? o.mode)?.toLowerCase().replace(/[\s-]+/g, "_");
       const method = methodRaw === undefined ? undefined : methodRaw === "rotate" || methodRaw === "rotation" || methodRaw === "balanced" || methodRaw === "latin_square" ? "rotate" : methodRaw === "reverse_half" || methodRaw === "reverse" ? "reverse_half" : methodRaw === "shuffle" || methodRaw === "random" ? "shuffle" : null;
       if (method === null) return "method is shuffle, rotate or reverse_half";
-      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}) };
+      return { op, target, enabled, ...(anchors?.length ? { anchors } : {}), ...(keepLast?.length ? { keepLast } : {}), ...(keepFirst?.length ? { keepFirst } : {}), ...(pick !== undefined ? { pick } : {}), ...(scope ? { scope: scope as MaskDimension } : {}), ...(method ? { method } : {}), ...(typeof o.recordOrder === "boolean" ? { recordOrder: o.recordOrder } : {}) };
     }
     case "set_mask": {
       const target = str(o.target ?? o.question, 120), expression = str(o.expression ?? o.mask ?? o.set ?? o.source, 2000);
@@ -637,7 +637,9 @@ export function applyOptionAction(def: SurveyDefinition, a: OptionAction, env: O
       const next = [...allTop, ...list.filter((o) => !allTop.includes(o) && !allBottom.includes(o)), ...allBottom];
       (q as unknown as Record<string, unknown>)[axis] = next;
       q.randomization = { ...(q.randomization ?? {}), enabled: a.enabled, scope: axis, method: a.method ?? "shuffle", ...(a.pick !== undefined ? { pick: a.pick } : {}) } as never;
+      if (a.recordOrder !== undefined) { const st = (q.settings ?? {}) as Record<string, unknown>; if (a.recordOrder) st.recordOrder = true; else delete st.recordOrder; q.settings = st as never; }
       const pins = [...tops.map((o) => `“${plain(o.label, 30)}” stays first`), ...bottoms.map((o) => `“${plain(o.label, 30)}” stays last`)];
+      if (a.recordOrder) pins.push(`the order shown is stored in ${q.variableName || q.id}${axis === "options" ? "" : axis === "rows" ? "_ROW" : "_COL"}_ORDER`);
       return { description: `${q.code} ${axis} ${a.enabled ? (a.method === "rotate" ? "rotated (each in each position equally often across respondents)" : a.method === "reverse_half" ? "shown in order for half the respondents, reversed for the other half" : "randomized") : "not randomized"}${a.pick !== undefined ? ` — each respondent sees ${a.pick} of ${list.length}` : ""}${pins.length ? `; ${pins.join(", ")}` : ""}`, warnings, touched: [q.id] };
     }
     case "set_mask": {

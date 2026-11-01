@@ -46,6 +46,7 @@ export * from "./objectStatus.js";
 export * from "./designVersion.js";
 export * from "./exactBalance.js";
 export * from "./randomizerDesign.js";
+export * from "./displayOrder.js";
 export * from "./choiceData.js";
 export * from "./conjointSuite.js";
 export * from "./sampleSource.js";

@@ -1639,6 +1639,12 @@ function PropertiesPanelBody() {
               <option value="shuffle">shuffle</option><option value="rotate">rotate</option>
               <option value="reverse_half">reverse for half</option><option value="none">keep order</option>
             </select>
+            {/* S4c (RK-04): opt-in — the order each respondent saw, stored as <VAR>_ORDER (exported) */}
+            <label className="row" style={{ gap: 4, fontSize: 13 }} title={`Stores the order shown in ${q.variableName || q.code}_ORDER (rows: _ROW_ORDER, columns: _COL_ORDER) — a column in every export`}>
+              <input type="checkbox" data-testid="record-order" checked={!!(q.settings as { recordOrder?: boolean }).recordOrder}
+                onChange={(e) => patch({ settings: { ...q.settings, recordOrder: e.target.checked || undefined } as any })} />
+              store the order shown
+            </label>
             <label className="row" style={{ gap: 4, fontSize: 13 }}>
               show only
               <CountInput min={1} width={64}
