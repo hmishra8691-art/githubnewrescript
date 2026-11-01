@@ -22,5 +22,6 @@ export * from "./spssBases.js";
 export * from "./stamp.js";
 export * from "./cleaningPlan.js";
 export * from "./maxdiffLong.js";
+export * from "./paradataExport.js";
 /* assessments (ported 2026-10-29): the Word answer-key sheet and results report */
 export * from "./assessmentDocx.js";

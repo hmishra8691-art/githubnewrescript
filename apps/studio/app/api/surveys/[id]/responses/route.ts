@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertNotReadOnly, getMeter, projectContext, recordUsage } from "@/lib/metering";
 import { supabaseAdmin } from "@/lib/admin";
 import { SurveyDefinition } from "@rescript/schema";
-import { choiceDataToCSV, maxdiffChoiceCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
+import { choiceDataToCSV, maxdiffChoiceCSV, timingLongCSV, responsesToCSV, exportResponsesXlsx, responsesToSav, responsesToSavBundle, responsesToDta, responsesToDtaBundle, responsesToSasBundle, inDataset, ENVIRONMENT_COLUMNS, environmentCells, buildExportExtra, VALUE_MODES, renderValue, dictionaryIndex, type DatasetFilter, type QualityExportRow, type ValueMode } from "@rescript/exporters";
 import { buildVariableDictionary, flattenVariables } from "@rescript/engine";
 import { audit, isFailure, requireProject } from "@/lib/guard";
 import { resolveExportVersions } from "@/lib/exportVersions";
@@ -38,6 +38,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const format = req.nextUrl.searchParams.get("format") ?? "summary";
   // DOC-09: the SYSTEM_* quality variables, last in the column order, when asked for
   const withSystem = req.nextUrl.searchParams.get("system") === "1";
+  /*
+   * S5b (TE-10): `timing=1` appends PAGE_<ID>_SEC / Q_<VAR>_SEC (seconds, from each response's telemetry) last in
+   * the CSV / SPSS / SAS / Stata / Excel files; `format=timing` is the LONG timing file (one row per respondent ×
+   * page and × question). Only then is `responses.telemetry` read at all.
+   */
+  const withTiming = req.nextUrl.searchParams.get("timing") === "1";
+  const needTelemetry = withTiming || format === "timing";
 
   const db = supabaseAdmin();
   // include=live|test|all ("test=1" kept for backwards compatibility)
@@ -208,7 +215,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     return { rows, error: null, capped: true };
   };
 
-  let { rows: resp, error: qerr, capped } = await readAll(COLUMNS, true);
+  let { rows: resp, error: qerr, capped } = await readAll(needTelemetry ? `${COLUMNS}, telemetry` : COLUMNS, true);
   if (qerr && /quality|review_status|sample_source|deleted_at|does not exist|schema cache/i.test(qerr.message)) {
     /*
      * A column the database has not got yet — migration 0005 (quality), 0006
@@ -317,6 +324,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     state: { sessionId: r.session_id, respondentId: r.respondent_id ?? undefined, seed: r.seed == null ? undefined : Number(r.seed), surveyVersion: versioned.forSession(r.session_id).version, startedAt: r.started_at, completedAt: r.completed_at, status: r.status, answers: r.answers ?? {}, embedded: r.embedded ?? {}, calculated: r.calculated ?? {}, isTest: !!r.is_test, sampleSource: r.sample_source ?? null, sampleSourceRespondent: r.sample_source_respondent ?? null },
     quality: r.quality ?? null,
     review: { status: r.review_status ?? null, reason: r.review_reason ?? null, by: r.reviewed_by ?? null, at: r.reviewed_at ?? null },
+    ...(needTelemetry ? { telemetry: r.telemetry ?? null } : {}),
   }));
   /*
    * `include=all` runs neither `is_test` branch above, so the file carries
@@ -327,7 +335,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
    */
   const withEnvironment = include === "all";
   if (format === "xlsx") {
-    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode, versioned: versioned.sourceFor(resp ?? []), versionNote: { versions: versioned.union.versions, warnings: versioned.warnings } });
+    const buf = await exportResponsesXlsx(parsed.data, exportRows, { dataset, timingColumns: withTiming, environmentColumn: withEnvironment, qualityColumns: withQuality || dataset.kind !== "all" || exportRows.some((r) => r.quality), valueMode, versioned: versioned.sourceFor(resp ?? []), versionNote: { versions: versioned.union.versions, warnings: versioned.warnings } });
     return new NextResponse(new Uint8Array(buf), {
       headers: {
         "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -426,6 +434,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       },
     });
   }
+  /* S5b (TE-10): the LONG timing file — one row per respondent × page and × question, the kept rows only */
+  if (format === "timing") {
+    const csv = timingLongCSV(parsed.data, kept.map((r) => ({ sessionId: r.state.sessionId, respondentId: (r.state as { respondentId?: string }).respondentId ?? null, status: r.state.status, telemetry: r.telemetry ?? null })), { bom: req.nextUrl.searchParams.get("bom") === "1" });
+    return new NextResponse(csv, {
+      headers: {
+        ...versionHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}_timing_long.csv"`,
+      },
+    });
+  }
   if (format === "sav" || format === "sas" || format === "dta") {
     /*
      * DOC-08 / CLEAN-08. The statistical files used to carry only the
@@ -436,7 +455,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
      * after the variables, and the SAS CSV and syntax get the same set so the
      * three never disagree.
      */
-    const statExtra = buildExportExtra(kept, { quality: withQuality, statusWhenMarked: true, environment: withEnvironment, dataset, system: withSystem });
+    const statExtra = buildExportExtra(kept, { quality: withQuality, statusWhenMarked: true, environment: withEnvironment, dataset, system: withSystem, timing: withTiming ? parsed.data : undefined });
     const fileBase = `${parsed.data.meta.code}_${include}${dataset.kind !== "all" ? `_${dataset.kind}` : ""}`;
     const mediaBaseUrl = process.env.STUDIO_PUBLIC_URL ?? null;
     if (format === "sav") {
@@ -561,6 +580,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     environment: withEnvironment,
     dataset,
     system: withSystem,
+    timing: withTiming ? parsed.data : undefined,
   });
   /*
    * DOC-10. Excel on Windows opens a BOM-less UTF-8 file as the system code

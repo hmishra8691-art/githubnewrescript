@@ -79,6 +79,8 @@ export function DataPanel() {
   const [presetName, setPresetName] = React.useState("");
   const [presetNote, setPresetNote] = React.useState<string | null>(null);
   const [withDictionary, setWithDictionary] = React.useState(false);
+  /* S5b (TE-10): PAGE_<ID>_SEC / Q_<VAR>_SEC timing columns, last, in CSV / Excel / SPSS / SAS / Stata */
+  const [withTiming, setWithTiming] = React.useState(false);
   const [format, setFormat] = React.useState<"csv" | "xlsx" | "json" | "sav" | "sas" | "dta">("csv");
   const [meta, setMeta] = React.useState<{ total: number; included: number } | null>(null);
   const datasetParam = dataset === "custom" ? `custom:${exclude.join(",")}` : dataset;
@@ -177,10 +179,11 @@ export function DataPanel() {
    * ask for those formats at all; passing the parameter to them would imply
    * a choice that does not exist there.
    */
-  const valuesParam = values === "code" ? "" : `&values=${values}`;
+  const timingParam = withTiming ? "&timing=1" : "";
+  const valuesParam = (values === "code" ? "" : `&values=${values}`) + timingParam;
   const csvHref = exportUrl("csv", `${hasQuality || dataset !== "all" ? "&quality=1" : ""}${valuesParam}`);
   const xlsxHref = exportUrl("xlsx", `&quality=1${valuesParam}`);
-  const dictParam = withDictionary ? "&dictionary=1" : "";
+  const dictParam = (withDictionary ? "&dictionary=1" : "") + timingParam;
   const savHref = exportUrl("sav", dictParam);
   const sasHref = exportUrl("sas", dictParam);
   const dtaHref = exportUrl("dta", dictParam);
@@ -267,6 +270,11 @@ export function DataPanel() {
                 checked={withDictionary} onChange={(e) => setWithDictionary(e.target.checked)} />
               Include the data dictionary
             </label>
+            <label className="row" style={{ gap: 6, fontSize: 12.5 }} title="PAGE_<ID>_SEC and Q_<VAR>_SEC — seconds per page and per question from the response telemetry, appended after every other column (blank = not measured)">
+              <input type="checkbox" data-testid="export-with-timing"
+                checked={withTiming} onChange={(e) => setWithTiming(e.target.checked)} />
+              Per-page / per-question timing columns
+            </label>
           </div>
           {presetNote && (
             <div className="muted" data-testid="export-preset-note" style={{ fontSize: 12, marginBottom: 10 }}>{presetNote}</div>
@@ -290,6 +298,9 @@ export function DataPanel() {
               <a className="btn small" href={exportUrl("cbc")} target="_blank" data-testid="export-cbc"
                 title="One row per respondent × task × alternative shown (None included): version, task, design alternative, concept id, on-screen position, every attribute level and code, chosen 0/1 — the layout MNL / HB tools read">⬇ Conjoint choice file (.csv)</a>
             )}
+            {/* S5b (TE-10): the long timing file — one row per respondent × page and × question */}
+            <a className="btn small" href={exportUrl("timing")} target="_blank" data-testid="export-timing-long"
+              title="One row per respondent × page and per respondent × question: visits, seconds, visible seconds, changes, idle seconds, scroll depth — from the response telemetry">⬇ Timing, long format (.csv)</a>
             {/* MD-P1: the long choice file a MaxDiff model reads — only when the survey has one */}
             {s.def.questions.some((q) => q.type === "maxdiff_task") && (
               <a className="btn small" href={exportUrl("maxdiff")} target="_blank" data-testid="export-maxdiff"

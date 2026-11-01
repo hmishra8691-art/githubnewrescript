@@ -10,6 +10,7 @@ import { variableDictionaryToCSV } from "./csv.js";
 import { dictionaryFor, defForRow, type VersionedSource } from "./versionedSource.js";
 import { spssBasesSyntax } from "./spssBases.js";
 import { QUALITY_CSV_COLUMNS, SAMPLE_COLUMNS, ENVIRONMENT_COLUMNS, SYSTEM_EXPORT_COLUMNS, qualityCsvCells, sampleCells, environmentCells, systemCells, type DatasetFilter, type QualityExportRow } from "./responseQuality.js";
+import { timingCells, timingColumns, timingLabel } from "./paradataExport.js";
 
 /**
  * ONE MATRIX, EVERY FORMAT (§44).
@@ -82,7 +83,7 @@ export function buildResponseMatrix(
     if (opts.extra) {
       const cells = opts.extra.cells(i);
       /* a blank in a numeric extra (an unscored response) is a missing value, never an empty string */
-      extraColumns.forEach((c, j) => { row[c] = NUMERIC_EXTRA.has(c) && cells[j] === "" ? null : cells[j]; });
+      extraColumns.forEach((c, j) => { row[c] = (NUMERIC_EXTRA.has(c) || TIMING_COLUMN.test(c)) && cells[j] === "" ? null : cells[j]; });
     }
     return row;
   });
@@ -171,6 +172,9 @@ const EXTRA: { name: string; label: string; numeric: boolean }[] = [
 function systemVariable(name: string, def?: SurveyDefinition): { label: string; numeric: boolean } | undefined {
   const s = SYSTEM.find((x) => x.name === name) ?? EXTRA.find((x) => x.name === name);
   if (s) return { label: s.label, numeric: s.numeric };
+  /* S5b (TE-10): PAGE_<id>_SEC / Q_<VAR>_SEC — seconds, numeric, labelled with the page / question */
+  const timing = timingLabel(def, name);
+  if (timing) return { label: timing, numeric: true };
   /* S4c (RK-04): a stored display order (ORDER_<RANDOMIZER>, <VAR>_ORDER …) gets a label saying what it lists */
   const order = def ? displayOrderLabel(def, name) : null;
   return order ? { label: order, numeric: false } : undefined;
@@ -178,10 +182,13 @@ function systemVariable(name: string, def?: SurveyDefinition): { label: string; 
 
 /** The extra columns the platform appends are the numeric ones where a blank must stay a missing value, not a string. */
 const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name));
+/** S5b: the wide timing columns are numeric too (a blank is a missing value) */
+const TIMING_COLUMN = /^(PAGE|Q)_.*_SEC$/;
 
 /**
  * The extra columns for one delivery, composed in the one order every format
- * uses (quality, sample, environment, then SYSTEM_* when `system` asks), so the CSV, the .sav, the SAS bundle
+ * uses (quality, sample, environment, then SYSTEM_* when `system` asks, then S5b's PAGE_/Q_…_SEC timing when
+ * `timing` names the definition), so the CSV, the .sav, the SAS bundle
  * and the .dta carry the same columns in the same positions.
  *
  * `rows` must be the rows being delivered, in delivery order. Quality /
@@ -192,7 +199,7 @@ const NUMERIC_EXTRA = new Set(EXTRA.filter((e) => e.numeric).map((e) => e.name))
  */
 export function buildExportExtra(
   rows: QualityExportRow[],
-  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean; system?: boolean } = {},
+  opts: { quality?: boolean; environment?: boolean; dataset?: DatasetFilter; statusWhenMarked?: boolean; system?: boolean; timing?: SurveyDefinition } = {},
 ): { columns: string[]; cells: (index: number) => unknown[] } | undefined {
   const marked = rows.some((r) => !!r.quality || !!r.review.status);
   const withQuality = !!opts.quality || (!!opts.statusWhenMarked && (marked || (opts.dataset?.kind ?? "all") !== "all"));
@@ -200,11 +207,14 @@ export function buildExportExtra(
   const withEnvironment = !!opts.environment;
   // DOC-09: the SYSTEM_* block goes LAST, so a file asked for without it keeps every column position it had
   const withSystem = !!opts.system;
+  const timingCols = opts.timing ? timingColumns(opts.timing) : [];
   const columns = [
     ...(withQuality ? QUALITY_CSV_COLUMNS : []),
     ...(withSample ? SAMPLE_COLUMNS : []),
     ...(withEnvironment ? ENVIRONMENT_COLUMNS : []),
     ...(withSystem ? SYSTEM_EXPORT_COLUMNS.map((c) => c.name) : []),
+    // S5b (TE-10): PAGE_<id>_SEC / Q_<VAR>_SEC after everything else, so no earlier column moves
+    ...timingCols.map((c) => c.name),
   ];
   if (!columns.length) return undefined;
   return {
@@ -214,6 +224,7 @@ export function buildExportExtra(
       ...(withSample ? sampleCells(rows[i]) : []),
       ...(withEnvironment ? environmentCells(rows[i]) : []),
       ...(withSystem ? systemCells(rows[i]) : []),
+      ...(timingCols.length ? timingCells(timingCols, rows[i].telemetry) : []),
     ],
   };
 }
